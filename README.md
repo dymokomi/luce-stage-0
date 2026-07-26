@@ -1,63 +1,36 @@
 # Lucia
 
-Hosted foundation for a document-native OS.
+A document-native OS, built slowly from the storage up.
 
-This repository starts deliberately small. The first layer is **durable
-page storage** — not a filesystem, not documents, not encryption.
+## Right now
 
-## Current scope
+One idea: a `Volume` is a store of fixed 4 KiB pages.
 
 ```text
 Volume
- ├─ read page
- ├─ write page
- ├─ flush
- └─ geometry
-      ↓
-MemoryVolume / FileVolume / FaultyVolume
+  read(page) / write(page) / flush()
+       ↓
+MemoryVolume    FileVolume
+(tests)         (lucia.img)
 ```
 
-A page is a 4 KiB physical persistence unit. Higher layers (segments,
-immutable objects, signed commits, document graph) will sit above
-`Volume` and must never leak page addresses into document identity.
-
-**Not in this layer yet**
-
-- volume headers / checkpoints
-- segments and object records
-- document forest / paths
-- encryption and key slots
-- journal and acceptance rules
-
-## Build
-
-Requires C++23 (Clang 18+ or GCC 13+) and CMake 3.28+.
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
+No filesystem, documents, segments, or encryption yet.
 
 ## Layout
 
 ```text
-include/lucia/storage/     Volume contract and in-process backends
-include/lucia/platform/    Host OS adapters (posix FileVolume)
-src/                       Implementations
-tests/storage/             Page I/O and fault-injection tests
+storage/
+  volume.hpp          contract
+  memory_volume.*     in-memory backend
+  file_volume.*       host-file backend
+tests/
+  volume_test.cpp
 ```
 
-Dependency rule: Lucia core depends on the `Volume` interface.
-Platform code implements that interface. Core code does not include
-OS headers.
+## Build
 
-## Language profile
-
-Disciplined C++23:
-
-- `std::span` for borrowed bytes
-- `std::expected` for explicit errors
-- value types, RAII, narrow virtual boundaries
-- no exceptions as routine control flow
-- no `shared_ptr` unless ownership is genuinely shared
+```bash
+cmake -S . -B build -DCMAKE_CXX_COMPILER=g++
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
