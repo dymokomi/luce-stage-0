@@ -8,9 +8,9 @@ A `Volume` is a store of fixed 4 KiB pages.
 
 ```text
 Volume
-  read / write / flush
-       |
-MemoryVolume     FileVolume
+  read_page / write_page / flush_writes
+              |
+     MemoryVolume       FileVolume
 ```
 
 No filesystem yet.
@@ -19,9 +19,9 @@ No filesystem yet.
 
 ```text
 storage/
-  volume.hpp
-  memory_volume.*
-  file_volume.*
+  volume.hpp           contract
+  memory_volume.*      in-memory pages
+  file_volume.*        host-file pages (lucia.img)
 tests/
   volume_test.cpp
 ```

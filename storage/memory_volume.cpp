@@ -5,30 +5,45 @@
 namespace lucia {
 
 MemoryVolume::MemoryVolume(uint64_t page_count)
-    : pages_(page_count),
-      data_(static_cast<size_t>(page_count) * PAGE_SIZE, 0) {}
-
-uint64_t MemoryVolume::pages() const {
-  return pages_;
+    : page_count_(page_count),
+      bytes_(static_cast<size_t>(page_count) * PAGE_SIZE, 0)
+{
 }
 
-bool MemoryVolume::read(uint64_t page, void* buf) {
-  if (!buf || page >= pages_) {
+uint64_t MemoryVolume::page_count() const
+{
+  return page_count_;
+}
+
+bool MemoryVolume::contains_page(uint64_t page_index) const
+{
+  return page_index < page_count_;
+}
+
+bool MemoryVolume::read_page(uint64_t page_index, void* destination)
+{
+  if (destination == 0 || !contains_page(page_index)) {
     return false;
   }
-  memcpy(buf, data_.data() + page * PAGE_SIZE, PAGE_SIZE);
+
+  const size_t byte_offset = static_cast<size_t>(page_index) * PAGE_SIZE;
+  memcpy(destination, bytes_.data() + byte_offset, PAGE_SIZE);
   return true;
 }
 
-bool MemoryVolume::write(uint64_t page, const void* buf) {
-  if (!buf || page >= pages_) {
+bool MemoryVolume::write_page(uint64_t page_index, const void* source)
+{
+  if (source == 0 || !contains_page(page_index)) {
     return false;
   }
-  memcpy(data_.data() + page * PAGE_SIZE, buf, PAGE_SIZE);
+
+  const size_t byte_offset = static_cast<size_t>(page_index) * PAGE_SIZE;
+  memcpy(bytes_.data() + byte_offset, source, PAGE_SIZE);
   return true;
 }
 
-bool MemoryVolume::flush() {
+bool MemoryVolume::flush_writes()
+{
   return true;
 }
 
