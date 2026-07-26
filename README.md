@@ -1,28 +1,27 @@
 # Lucia
 
-A document-native OS, built slowly from the storage up.
+Document-native OS, built from storage upward.
 
 ## Right now
 
-One idea: a `Volume` is a store of fixed 4 KiB pages.
+A `Volume` is a store of fixed 4 KiB pages.
 
 ```text
 Volume
-  read(page) / write(page) / flush()
-       ↓
-MemoryVolume    FileVolume
-(tests)         (lucia.img)
+  read / write / flush
+       |
+MemoryVolume     FileVolume
 ```
 
-No filesystem, documents, segments, or encryption yet.
+No filesystem yet.
 
 ## Layout
 
 ```text
 storage/
-  volume.hpp          contract
-  memory_volume.*     in-memory backend
-  file_volume.*       host-file backend
+  volume.hpp
+  memory_volume.*
+  file_volume.*
 tests/
   volume_test.cpp
 ```

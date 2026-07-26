@@ -1,47 +1,35 @@
 #include "memory_volume.hpp"
 
-#include <cstring>
+#include <string.h>
 
-namespace lucia::storage {
+namespace lucia {
 
-MemoryVolume::MemoryVolume(std::uint64_t page_count) {
-  geo_.page_count = page_count;
-  data_.assign(static_cast<std::size_t>(page_count) * kPageSize, std::byte{0});
+MemoryVolume::MemoryVolume(uint64_t page_count)
+    : pages_(page_count),
+      data_(static_cast<size_t>(page_count) * PAGE_SIZE, 0) {}
+
+uint64_t MemoryVolume::pages() const {
+  return pages_;
 }
 
-Geometry MemoryVolume::geometry() const {
-  return geo_;
-}
-
-Result<void> MemoryVolume::check(std::uint64_t page, std::size_t size) const {
-  if (size != kPageSize) {
-    return std::unexpected(Error::WrongSize);
+bool MemoryVolume::read(uint64_t page, void* buf) {
+  if (!buf || page >= pages_) {
+    return false;
   }
-  if (page >= geo_.page_count) {
-    return std::unexpected(Error::OutOfRange);
+  memcpy(buf, data_.data() + page * PAGE_SIZE, PAGE_SIZE);
+  return true;
+}
+
+bool MemoryVolume::write(uint64_t page, const void* buf) {
+  if (!buf || page >= pages_) {
+    return false;
   }
-  return {};
+  memcpy(data_.data() + page * PAGE_SIZE, buf, PAGE_SIZE);
+  return true;
 }
 
-Result<void> MemoryVolume::read(std::uint64_t page, std::span<std::byte> out) {
-  if (auto s = check(page, out.size()); !s) {
-    return s;
-  }
-  std::memcpy(out.data(), data_.data() + page * kPageSize, kPageSize);
-  return {};
+bool MemoryVolume::flush() {
+  return true;
 }
 
-Result<void> MemoryVolume::write(std::uint64_t page,
-                                 std::span<const std::byte> in) {
-  if (auto s = check(page, in.size()); !s) {
-    return s;
-  }
-  std::memcpy(data_.data() + page * kPageSize, in.data(), kPageSize);
-  return {};
-}
-
-Result<void> MemoryVolume::flush() {
-  return {};
-}
-
-}  // namespace lucia::storage
+}  // namespace lucia

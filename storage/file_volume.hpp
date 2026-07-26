@@ -1,37 +1,30 @@
 #pragma once
 
-#include <filesystem>
-
 #include "volume.hpp"
 
-namespace lucia::storage {
+namespace lucia {
 
-/// Page store backed by a host file (e.g. lucia.img).
-class FileVolume final : public Volume {
- public:
-  static Result<FileVolume> create(const std::filesystem::path& path,
-                                   std::uint64_t page_count);
-  static Result<FileVolume> open(const std::filesystem::path& path);
+// Page store backed by a host file (lucia.img).
+class FileVolume : public Volume {
+public:
+  FileVolume();
+  ~FileVolume();
 
-  FileVolume(FileVolume&& other) noexcept;
-  FileVolume& operator=(FileVolume&& other) noexcept;
-  ~FileVolume() override;
+  bool create(const char* path, uint64_t page_count);
+  bool open(const char* path);
+  void close();
 
-  Geometry geometry() const override;
-  Result<void> read(std::uint64_t page, std::span<std::byte> out) override;
-  Result<void> write(std::uint64_t page,
-                     std::span<const std::byte> in) override;
-  Result<void> flush() override;
+  uint64_t pages() const;
+  bool read(uint64_t page, void* buf);
+  bool write(uint64_t page, const void* buf);
+  bool flush();
 
- private:
-  FileVolume(std::filesystem::path path, int fd, Geometry geo);
+private:
+  FileVolume(const FileVolume&);
+  FileVolume& operator=(const FileVolume&);
 
-  Result<void> check(std::uint64_t page, std::size_t size) const;
-  void close() noexcept;
-
-  std::filesystem::path path_;
-  int fd_ = -1;
-  Geometry geo_{};
+  int fd_;
+  uint64_t pages_;
 };
 
-}  // namespace lucia::storage
+}  // namespace lucia
