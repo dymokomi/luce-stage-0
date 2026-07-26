@@ -1,8 +1,3 @@
 /build/
-/cmake-build-*/
-/.cache/
-compile_commands.json
 *.img
-*.o
-*.a
 .DS_Store
