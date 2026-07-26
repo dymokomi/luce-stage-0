@@ -5,93 +5,124 @@
 
 namespace lucia {
 
-FileVolume::FileVolume() : fd_(-1), pages_(0) {}
-
-FileVolume::~FileVolume() {
-  close();
+FileVolume::FileVolume()
+    : file_handle(-1),
+      pages(0)
+{
 }
 
-void FileVolume::close() {
-  if (fd_ >= 0) {
-    ::close(fd_);
-    fd_ = -1;
-  }
-  pages_ = 0;
+FileVolume::~FileVolume()
+{
+  close_image();
 }
 
-bool FileVolume::create(const char* path, uint64_t page_count) {
-  if (!path || page_count == 0) {
+bool FileVolume::is_open() const
+{
+  return file_handle >= 0;
+}
+
+bool FileVolume::contains_page(U64 page_index) const
+{
+  return page_index < pages;
+}
+
+S64 FileVolume::byte_offset_for_page(U64 page_index) const
+{
+  return static_cast<S64>(page_index) * PAGE_SIZE;
+}
+
+void FileVolume::close_image()
+{
+  if (is_open()) {
+    ::close(file_handle);
+    file_handle = -1;
+  }
+  pages = 0;
+}
+
+bool FileVolume::create_image(const char* path, U64 pages)
+{
+  if (path == 0 || pages == 0) {
     return false;
   }
 
-  close();
+  close_image();
 
-  fd_ = ::open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-  if (fd_ < 0) {
+  file_handle = ::open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (!is_open()) {
     return false;
   }
 
-  off_t bytes = static_cast<off_t>(page_count) * PAGE_SIZE;
-  if (ftruncate(fd_, bytes) != 0) {
-    close();
+  const S64 image_bytes = static_cast<S64>(pages) * PAGE_SIZE;
+  if (ftruncate(file_handle, image_bytes) != 0) {
+    close_image();
     return false;
   }
 
-  pages_ = page_count;
+  this->pages = pages;
   return true;
 }
 
-bool FileVolume::open(const char* path) {
-  if (!path) {
+bool FileVolume::open_image(const char* path)
+{
+  if (path == 0) {
     return false;
   }
 
-  close();
+  close_image();
 
-  fd_ = ::open(path, O_RDWR | O_CLOEXEC);
-  if (fd_ < 0) {
+  file_handle = ::open(path, O_RDWR | O_CLOEXEC);
+  if (!is_open()) {
     return false;
   }
 
-  off_t end = lseek(fd_, 0, SEEK_END);
-  if (end <= 0 || (end % PAGE_SIZE) != 0 || lseek(fd_, 0, SEEK_SET) < 0) {
-    close();
+  const S64 image_bytes = lseek(file_handle, 0, SEEK_END);
+  if (image_bytes <= 0 ||
+      (image_bytes % PAGE_SIZE) != 0 ||
+      lseek(file_handle, 0, SEEK_SET) < 0) {
+    close_image();
     return false;
   }
 
-  pages_ = static_cast<uint64_t>(end) / PAGE_SIZE;
+  pages = static_cast<U64>(image_bytes) / PAGE_SIZE;
   return true;
 }
 
-uint64_t FileVolume::pages() const {
-  return pages_;
+U64 FileVolume::count_pages() const
+{
+  return pages;
 }
 
-bool FileVolume::read(uint64_t page, void* buf) {
-  if (fd_ < 0 || !buf || page >= pages_) {
+bool FileVolume::read_page(U64 page_index, void* destination)
+{
+  if (!is_open() || destination == 0 || !contains_page(page_index)) {
     return false;
   }
 
-  off_t off = static_cast<off_t>(page) * PAGE_SIZE;
-  ssize_t n = pread(fd_, buf, PAGE_SIZE, off);
-  return n == PAGE_SIZE;
+  const S64 byte_offset = byte_offset_for_page(page_index);
+  const S64 bytes_read  = pread(file_handle, destination, PAGE_SIZE,
+                                byte_offset);
+  return bytes_read == PAGE_SIZE;
 }
 
-bool FileVolume::write(uint64_t page, const void* buf) {
-  if (fd_ < 0 || !buf || page >= pages_) {
+bool FileVolume::write_page(U64 page_index, const void* source)
+{
+  if (!is_open() || source == 0 || !contains_page(page_index)) {
     return false;
   }
 
-  off_t off = static_cast<off_t>(page) * PAGE_SIZE;
-  ssize_t n = pwrite(fd_, buf, PAGE_SIZE, off);
-  return n == PAGE_SIZE;
+  const S64 byte_offset   = byte_offset_for_page(page_index);
+  const S64 bytes_written = pwrite(file_handle, source, PAGE_SIZE,
+                                   byte_offset);
+  return bytes_written == PAGE_SIZE;
 }
 
-bool FileVolume::flush() {
-  if (fd_ < 0) {
+bool FileVolume::flush_writes()
+{
+  if (!is_open()) {
     return false;
   }
-  return fsync(fd_) == 0;
+  return fsync(file_handle) == 0;
 }
 
 }  // namespace lucia

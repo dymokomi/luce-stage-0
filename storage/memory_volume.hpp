@@ -1,23 +1,31 @@
 #pragma once
 
-#include <vector>
-
 #include "volume.hpp"
 
 namespace lucia {
 
+// ---------------------------------------------------------------------------
+// MemoryVolume
+// ---------------------------------------------------------------------------
+//
+// In-process page store.  Useful for tests.  flush_writes() always succeeds
+// because memory is already as durable as the process itself.
+//
 class MemoryVolume : public Volume {
 public:
-  explicit MemoryVolume(uint64_t page_count);
+  explicit MemoryVolume(U64 pages);
 
-  uint64_t pages() const;
-  bool read(uint64_t page, void* buf);
-  bool write(uint64_t page, const void* buf);
-  bool flush();
+  U64 count_pages() const override;
+
+  bool read_page (U64 page_index, void*       destination) override;
+  bool write_page(U64 page_index, const void* source)      override;
+  bool flush_writes() override;
 
 private:
-  uint64_t pages_;
-  std::vector<unsigned char> data_;
+  bool contains_page(U64 page_index) const;
+
+  U64   pages;
+  Bytes bytes;
 };
 
 }  // namespace lucia
