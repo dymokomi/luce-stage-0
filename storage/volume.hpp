@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include "types.hpp"
 
 namespace lucia {
 
@@ -27,10 +27,10 @@ class Volume {
 public:
   virtual ~Volume() {}
 
-  virtual uint64_t count_pages() const = 0;
+  virtual U64 count_pages() const = 0;
 
-  virtual bool read_page (uint64_t page_index, void*       destination) = 0;
-  virtual bool write_page(uint64_t page_index, const void* source)      = 0;
+  virtual bool read_page (U64 page_index, void*       destination) = 0;
+  virtual bool write_page(U64 page_index, const void* source)      = 0;
   virtual bool flush_writes() = 0;
 };
 

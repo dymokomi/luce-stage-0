@@ -21,14 +21,14 @@ bool FileVolume::is_open() const
   return file_handle >= 0;
 }
 
-bool FileVolume::contains_page(uint64_t page_index) const
+bool FileVolume::contains_page(U64 page_index) const
 {
   return page_index < pages;
 }
 
-int64_t FileVolume::byte_offset_for_page(uint64_t page_index) const
+S64 FileVolume::byte_offset_for_page(U64 page_index) const
 {
-  return static_cast<int64_t>(page_index) * PAGE_SIZE;
+  return static_cast<S64>(page_index) * PAGE_SIZE;
 }
 
 void FileVolume::close_image()
@@ -40,7 +40,7 @@ void FileVolume::close_image()
   pages = 0;
 }
 
-bool FileVolume::create_image(const char* path, uint64_t pages)
+bool FileVolume::create_image(const char* path, U64 pages)
 {
   if (path == 0 || pages == 0) {
     return false;
@@ -53,7 +53,7 @@ bool FileVolume::create_image(const char* path, uint64_t pages)
     return false;
   }
 
-  const int64_t image_bytes = static_cast<int64_t>(pages) * PAGE_SIZE;
+  const S64 image_bytes = static_cast<S64>(pages) * PAGE_SIZE;
   if (ftruncate(file_handle, image_bytes) != 0) {
     close_image();
     return false;
@@ -76,7 +76,7 @@ bool FileVolume::open_image(const char* path)
     return false;
   }
 
-  const int64_t image_bytes = lseek(file_handle, 0, SEEK_END);
+  const S64 image_bytes = lseek(file_handle, 0, SEEK_END);
   if (image_bytes <= 0 ||
       (image_bytes % PAGE_SIZE) != 0 ||
       lseek(file_handle, 0, SEEK_SET) < 0) {
@@ -84,36 +84,36 @@ bool FileVolume::open_image(const char* path)
     return false;
   }
 
-  pages = static_cast<uint64_t>(image_bytes) / PAGE_SIZE;
+  pages = static_cast<U64>(image_bytes) / PAGE_SIZE;
   return true;
 }
 
-uint64_t FileVolume::count_pages() const
+U64 FileVolume::count_pages() const
 {
   return pages;
 }
 
-bool FileVolume::read_page(uint64_t page_index, void* destination)
+bool FileVolume::read_page(U64 page_index, void* destination)
 {
   if (!is_open() || destination == 0 || !contains_page(page_index)) {
     return false;
   }
 
-  const int64_t byte_offset = byte_offset_for_page(page_index);
-  const int64_t bytes_read  = pread(file_handle, destination, PAGE_SIZE,
-                                    byte_offset);
+  const S64 byte_offset = byte_offset_for_page(page_index);
+  const S64 bytes_read  = pread(file_handle, destination, PAGE_SIZE,
+                                byte_offset);
   return bytes_read == PAGE_SIZE;
 }
 
-bool FileVolume::write_page(uint64_t page_index, const void* source)
+bool FileVolume::write_page(U64 page_index, const void* source)
 {
   if (!is_open() || source == 0 || !contains_page(page_index)) {
     return false;
   }
 
-  const int64_t byte_offset   = byte_offset_for_page(page_index);
-  const int64_t bytes_written = pwrite(file_handle, source, PAGE_SIZE,
-                                       byte_offset);
+  const S64 byte_offset   = byte_offset_for_page(page_index);
+  const S64 bytes_written = pwrite(file_handle, source, PAGE_SIZE,
+                                   byte_offset);
   return bytes_written == PAGE_SIZE;
 }
 

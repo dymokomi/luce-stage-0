@@ -19,6 +19,7 @@ No filesystem yet.
 
 ```text
 storage/
+  types.hpp            Byte, U64, S64, Size, Bytes
   volume.hpp           contract
   memory_volume.*      in-memory pages
   file_volume.*        host-file pages (lucia.img)

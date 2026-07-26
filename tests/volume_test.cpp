@@ -16,10 +16,10 @@ static int failures = 0;
     }                                                                        \
   } while (0)
 
-static void fill_page(unsigned char* page, unsigned char seed)
+static void fill_page(Byte* page, Byte seed)
 {
   for (int i = 0; i < PAGE_SIZE; ++i) {
-    page[i] = static_cast<unsigned char>(seed + i);
+    page[i] = static_cast<Byte>(seed + i);
   }
 }
 
@@ -27,9 +27,9 @@ static void test_memory_volume()
 {
   MemoryVolume volume(8);
 
-  unsigned char page_a[PAGE_SIZE];
-  unsigned char page_b[PAGE_SIZE];
-  unsigned char page_got[PAGE_SIZE];
+  Byte page_a[PAGE_SIZE];
+  Byte page_b[PAGE_SIZE];
+  Byte page_got[PAGE_SIZE];
 
   fill_page(page_a, 0x10);
   fill_page(page_b, 0x20);
@@ -51,9 +51,9 @@ static void test_memory_volume()
 
 static void test_file_volume()
 {
-  const char*   image_path = "/tmp/lucia-test.img";
-  unsigned char page[PAGE_SIZE];
-  unsigned char page_got[PAGE_SIZE];
+  const char* image_path = "/tmp/lucia-test.img";
+  Byte        page[PAGE_SIZE];
+  Byte        page_got[PAGE_SIZE];
 
   fill_page(page, 0x33);
 

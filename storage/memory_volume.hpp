@@ -1,7 +1,5 @@
 #pragma once
 
-#include <vector>
-
 #include "volume.hpp"
 
 namespace lucia {
@@ -15,19 +13,19 @@ namespace lucia {
 //
 class MemoryVolume : public Volume {
 public:
-  explicit MemoryVolume(uint64_t pages);
+  explicit MemoryVolume(U64 pages);
 
-  uint64_t count_pages() const override;
+  U64 count_pages() const override;
 
-  bool read_page (uint64_t page_index, void*       destination) override;
-  bool write_page(uint64_t page_index, const void* source)      override;
+  bool read_page (U64 page_index, void*       destination) override;
+  bool write_page(U64 page_index, const void* source)      override;
   bool flush_writes() override;
 
 private:
-  bool contains_page(uint64_t page_index) const;
+  bool contains_page(U64 page_index) const;
 
-  uint64_t                   pages;
-  std::vector<unsigned char> bytes;
+  U64   pages;
+  Bytes bytes;
 };
 
 }  // namespace lucia
