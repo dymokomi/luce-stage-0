@@ -8,9 +8,9 @@ A `Volume` is a store of fixed 4 KiB pages.
 
 ```text
 Volume
-  read_page / write_page / flush_writes
-              |
-     MemoryVolume       FileVolume
+  count_pages / read_page / write_page / flush_writes
+                     |
+            MemoryVolume       FileVolume
 ```
 
 No filesystem yet.

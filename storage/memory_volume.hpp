@@ -15,9 +15,9 @@ namespace lucia {
 //
 class MemoryVolume : public Volume {
 public:
-  explicit MemoryVolume(uint64_t page_count);
+  explicit MemoryVolume(uint64_t pages);
 
-  uint64_t page_count() const override;
+  uint64_t count_pages() const override;
 
   bool read_page (uint64_t page_index, void*       destination) override;
   bool write_page(uint64_t page_index, const void* source)      override;
@@ -26,8 +26,8 @@ public:
 private:
   bool contains_page(uint64_t page_index) const;
 
-  uint64_t                   page_count_;
-  std::vector<unsigned char> bytes_;
+  uint64_t                   pages;
+  std::vector<unsigned char> bytes;
 };
 
 }  // namespace lucia

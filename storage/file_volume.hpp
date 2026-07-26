@@ -23,7 +23,7 @@ public:
   ~FileVolume();
 
   // Open a brand-new zero-filled image, replacing any existing file.
-  bool create_image(const char* path, uint64_t page_count);
+  bool create_image(const char* path, uint64_t pages);
 
   // Open an existing image.  File size must be a multiple of PAGE_SIZE.
   bool open_image(const char* path);
@@ -31,7 +31,7 @@ public:
   // Release the host file.  Safe to call more than once.
   void close_image();
 
-  uint64_t page_count() const override;
+  uint64_t count_pages() const override;
 
   bool read_page (uint64_t page_index, void*       destination) override;
   bool write_page(uint64_t page_index, const void* source)      override;
@@ -45,8 +45,8 @@ private:
   bool contains_page(uint64_t page_index) const;
   int64_t byte_offset_for_page(uint64_t page_index) const;
 
-  int      file_handle_;
-  uint64_t page_count_;
+  int      file_handle;
+  uint64_t pages;
 };
 
 }  // namespace lucia

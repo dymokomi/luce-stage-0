@@ -6,8 +6,8 @@
 namespace lucia {
 
 FileVolume::FileVolume()
-    : file_handle_(-1),
-      page_count_(0)
+    : file_handle(-1),
+      pages(0)
 {
 }
 
@@ -18,12 +18,12 @@ FileVolume::~FileVolume()
 
 bool FileVolume::is_open() const
 {
-  return file_handle_ >= 0;
+  return file_handle >= 0;
 }
 
 bool FileVolume::contains_page(uint64_t page_index) const
 {
-  return page_index < page_count_;
+  return page_index < pages;
 }
 
 int64_t FileVolume::byte_offset_for_page(uint64_t page_index) const
@@ -34,32 +34,32 @@ int64_t FileVolume::byte_offset_for_page(uint64_t page_index) const
 void FileVolume::close_image()
 {
   if (is_open()) {
-    ::close(file_handle_);
-    file_handle_ = -1;
+    ::close(file_handle);
+    file_handle = -1;
   }
-  page_count_ = 0;
+  pages = 0;
 }
 
-bool FileVolume::create_image(const char* path, uint64_t page_count)
+bool FileVolume::create_image(const char* path, uint64_t pages)
 {
-  if (path == 0 || page_count == 0) {
+  if (path == 0 || pages == 0) {
     return false;
   }
 
   close_image();
 
-  file_handle_ = ::open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  file_handle = ::open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
   if (!is_open()) {
     return false;
   }
 
-  const int64_t image_bytes = static_cast<int64_t>(page_count) * PAGE_SIZE;
-  if (ftruncate(file_handle_, image_bytes) != 0) {
+  const int64_t image_bytes = static_cast<int64_t>(pages) * PAGE_SIZE;
+  if (ftruncate(file_handle, image_bytes) != 0) {
     close_image();
     return false;
   }
 
-  page_count_ = page_count;
+  this->pages = pages;
   return true;
 }
 
@@ -71,26 +71,26 @@ bool FileVolume::open_image(const char* path)
 
   close_image();
 
-  file_handle_ = ::open(path, O_RDWR | O_CLOEXEC);
+  file_handle = ::open(path, O_RDWR | O_CLOEXEC);
   if (!is_open()) {
     return false;
   }
 
-  const int64_t image_bytes = lseek(file_handle_, 0, SEEK_END);
+  const int64_t image_bytes = lseek(file_handle, 0, SEEK_END);
   if (image_bytes <= 0 ||
       (image_bytes % PAGE_SIZE) != 0 ||
-      lseek(file_handle_, 0, SEEK_SET) < 0) {
+      lseek(file_handle, 0, SEEK_SET) < 0) {
     close_image();
     return false;
   }
 
-  page_count_ = static_cast<uint64_t>(image_bytes) / PAGE_SIZE;
+  pages = static_cast<uint64_t>(image_bytes) / PAGE_SIZE;
   return true;
 }
 
-uint64_t FileVolume::page_count() const
+uint64_t FileVolume::count_pages() const
 {
-  return page_count_;
+  return pages;
 }
 
 bool FileVolume::read_page(uint64_t page_index, void* destination)
@@ -100,7 +100,7 @@ bool FileVolume::read_page(uint64_t page_index, void* destination)
   }
 
   const int64_t byte_offset = byte_offset_for_page(page_index);
-  const int64_t bytes_read  = pread(file_handle_, destination, PAGE_SIZE,
+  const int64_t bytes_read  = pread(file_handle, destination, PAGE_SIZE,
                                     byte_offset);
   return bytes_read == PAGE_SIZE;
 }
@@ -112,7 +112,7 @@ bool FileVolume::write_page(uint64_t page_index, const void* source)
   }
 
   const int64_t byte_offset   = byte_offset_for_page(page_index);
-  const int64_t bytes_written = pwrite(file_handle_, source, PAGE_SIZE,
+  const int64_t bytes_written = pwrite(file_handle, source, PAGE_SIZE,
                                        byte_offset);
   return bytes_written == PAGE_SIZE;
 }
@@ -122,7 +122,7 @@ bool FileVolume::flush_writes()
   if (!is_open()) {
     return false;
   }
-  return fsync(file_handle_) == 0;
+  return fsync(file_handle) == 0;
 }
 
 }  // namespace lucia

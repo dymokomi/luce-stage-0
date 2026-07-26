@@ -6,13 +6,13 @@
 
 using namespace lucia;
 
-static int g_failures = 0;
+static int failures = 0;
 
 #define CHECK(condition)                                                     \
   do {                                                                       \
     if (!(condition)) {                                                      \
       fprintf(stderr, "fail: %s (%s:%d)\n", #condition, __FILE__, __LINE__); \
-      ++g_failures;                                                          \
+      ++failures;                                                            \
     }                                                                        \
   } while (0)
 
@@ -34,7 +34,7 @@ static void test_memory_volume()
   fill_page(page_a, 0x10);
   fill_page(page_b, 0x20);
 
-  CHECK(volume.page_count() == 8);
+  CHECK(volume.count_pages() == 8);
   CHECK(volume.write_page(0, page_a));
   CHECK(volume.write_page(7, page_b));
   CHECK(volume.flush_writes());
@@ -67,7 +67,7 @@ static void test_file_volume()
   {
     FileVolume volume;
     CHECK(volume.open_image(image_path));
-    CHECK(volume.page_count() == 16);
+    CHECK(volume.count_pages() == 16);
     CHECK(volume.read_page(3, page_got));
     CHECK(memcmp(page_got, page, PAGE_SIZE) == 0);
   }
@@ -80,8 +80,8 @@ int main()
   test_memory_volume();
   test_file_volume();
 
-  if (g_failures != 0) {
-    fprintf(stderr, "%d failure(s)\n", g_failures);
+  if (failures != 0) {
+    fprintf(stderr, "%d failure(s)\n", failures);
     return 1;
   }
 
