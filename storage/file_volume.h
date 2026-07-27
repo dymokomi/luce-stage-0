@@ -1,6 +1,6 @@
 #pragma once
 
-#include "volume.hpp"
+#include "volume.h"
 
 namespace lucia {
 

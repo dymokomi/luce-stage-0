@@ -85,8 +85,8 @@ Implemented:
 
 ```text
 storage/
-  types.hpp
-  volume.hpp
+  types.h
+  volume.h
   memory_volume.*
   file_volume.*      (POSIX host file; will move under platform later)
 tests/

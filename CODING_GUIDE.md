@@ -18,6 +18,7 @@ If a change makes the architecture harder to see, do not merge it.
 ## Language
 
 - C++17
+- Headers use `.h`, not `.hpp`
 - No exceptions for ordinary control flow
 - No `[[nodiscard]]`, attributes, or similar noise
 - No `std::expected`, `std::optional`, `std::span`, or heavy template machinery unless there is a clear local need
@@ -27,7 +28,7 @@ If a change makes the architecture harder to see, do not merge it.
 
 ## Types
 
-Use the shared aliases in `storage/types.hpp`:
+Use the shared aliases in `storage/types.h`:
 
 ```cpp
 Byte   // uint8_t
@@ -39,7 +40,7 @@ Bytes  // std::vector<Byte>
 ```
 
 Do not scatter raw `std::uint64_t`, `unsigned char`, or `std::vector<...>` through new code.
-If a new common type is needed, add an alias in `types.hpp` first.
+If a new common type is needed, add an alias in `types.h` first.
 
 ## Naming
 
