@@ -2,6 +2,8 @@
 
 Document-native OS, built from storage upward.
 
+Style rules for new code: [CODING_GUIDE.md](CODING_GUIDE.md).
+
 ## Right now
 
 A `Volume` is a store of fixed 4 KiB pages.
