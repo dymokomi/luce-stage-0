@@ -151,8 +151,8 @@ Bad:
 Top-level packages:
 
 ```text
-storage/   document/   crypto/   auth/   network/   view/
-platform/  ai/         gpu/      ui/     apps/      tests/
+platform/  storage/  crypto/  auth/  document/  network/  view/
+gpu/       ui/       ai/      runtime/  apps/   tests/
 ```
 
 Rules:
@@ -168,16 +168,14 @@ Rules:
 Dependency rule:
 
 ```text
-apps / ui / ai / view
-        ↓
-   document / auth / network
-        ↓
-      crypto
-        ↓
-     storage
-        ↓
-     platform
+apps → runtime → ui → gpu → platform
+                  ai
+                  view → document → crypto → storage → platform
+                  auth → crypto
+                  network → platform
 ```
+
+`platform` is the bottom. `runtime` is what apps run inside.
 
 ## Classes and APIs
 

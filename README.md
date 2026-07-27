@@ -20,7 +20,8 @@ platform/    OS adapters so the rest stays portable
 ai/          AI / LLM code
 gpu/         Fast compute and rendering surface
 ui/          User interface
-apps/        CLI tools that manage the system
+runtime/     Environment that loads and runs Lucia apps
+apps/        Programs written for Lucia
   realm/
   terminal/
   system/
@@ -31,31 +32,52 @@ tests/       Unit and integration tests
 
 | Package    | Responsibility |
 | ---------- | -------------- |
-| `storage`  | Fixed pages. No documents, paths, or encryption. |
-| `document` | Document graph identity, versions, containment, connections. |
+| `platform` | macOS / Linux / Windows adapters: files, clocks, entropy, sockets, windows. |
+| `storage`  | Durable pages, built on platform I/O. No documents or encryption. |
 | `crypto`   | Keys, encrypt/decrypt, sign/verify for document bytes. |
 | `auth`     | Who is acting; unlocks and authorizes crypto use. |
-| `network`  | Transports and sync protocols. |
+| `document` | Document graph identity, versions, containment, connections. |
+| `network`  | Transports and sync protocols, built on platform sockets. |
 | `view`     | Read-time filtering, composition, and mutation over documents. |
-| `platform` | macOS / Linux / Windows adapters (files, clocks, entropy, etc.). |
+| `gpu`      | GPU compute and rendering, built on platform graphics. |
+| `ui`       | Interactive UI, built on gpu (and usually view/document). |
 | `ai`       | Model clients, prompts, and AI-assisted flows. |
-| `gpu`      | GPU compute and rendering abstraction. |
-| `ui`       | Interactive UI built on documents, views, and gpu. |
-| `apps`     | User-facing CLI programs: `realm`, `terminal`, `system`. |
+| `runtime`  | App environment: launch, services, lifecycle, capabilities. |
+| `apps`     | Lucia programs: `realm`, `terminal`, `system`. |
+
+### Why `runtime`
+
+`apps/` are the programs. `runtime/` is the OS-side environment that runs them:
+
+- start and stop apps
+- hand them storage, document, network, ui, ai services
+- enforce auth/capabilities
+- own the main loop / process model as Lucia becomes more OS-like
+
+Without `runtime`, that wiring tends to leak into `apps/` or `platform/`.
 
 ### Dependency direction
 
 ```text
-apps → ui / ai / view / document / auth / network
-         ↓
-   document → crypto → storage
-         ↓
-      platform → (macos | linux | windows)
+apps
+  ↓
+runtime
+  ↓
+ui --------→ gpu --------→ platform
+ai
+view ------→ document → crypto → storage → platform
+auth ------→ crypto
+network ------------------------------→ platform
 ```
 
-Higher packages may depend on lower ones.
-`storage` and `platform` must not depend on `document`, `ui`, or `apps`.
-Core packages should not include OS headers; that stays in `platform/`.
+Rules:
+
+- Higher packages may depend on lower ones.
+- `platform` depends on nothing else in Lucia.
+- `storage`, `network`, and `gpu` depend on `platform`.
+- `ui` depends on `gpu` (not the other way around).
+- `runtime` wires services for apps; apps should not reach into `platform` directly.
+- Core packages do not include OS headers; that stays in `platform/`.
 
 ## Right now
 
