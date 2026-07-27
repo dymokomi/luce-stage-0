@@ -148,22 +148,35 @@ Bad:
 
 ## Organization
 
-- Keep the tree flat and obvious
-- Put headers next to their `.cpp` files when the package is small
-- One clear idea per file
-- Do not invent `include/`, `platform/posix/`, or deep namespace nesting until a real boundary needs it
-- Public contracts stay small; implementation details stay private
-
-Current shape:
+Top-level packages:
 
 ```text
-storage/
-  types.hpp
-  volume.hpp
-  memory_volume.*
-  file_volume.*
-tests/
-  volume_test.cpp
+storage/   document/   crypto/   auth/   network/   view/
+platform/  ai/         gpu/      ui/     apps/      tests/
+```
+
+Rules:
+
+- One package, one job (see `README.md`)
+- Put headers next to their `.cpp` files while a package is small
+- One clear idea per file
+- OS-specific code goes under `platform/macos`, `platform/linux`, or `platform/windows`
+- Core packages do not include OS headers
+- Public contracts stay small; implementation details stay private
+- Do not add deeper nesting until a real boundary needs it
+
+Dependency rule:
+
+```text
+apps / ui / ai / view
+        ↓
+   document / auth / network
+        ↓
+      crypto
+        ↓
+     storage
+        ↓
+     platform
 ```
 
 ## Classes and APIs
