@@ -10,19 +10,19 @@ MemoryVolume::MemoryVolume(U64 pages)
 {
 }
 
-U64 MemoryVolume::count_pages() const
+U64 MemoryVolume::size() const
 {
   return pages;
 }
 
-bool MemoryVolume::contains_page(U64 page_index) const
+bool MemoryVolume::contains(U64 page_index) const
 {
   return page_index < pages;
 }
 
-bool MemoryVolume::read_page(U64 page_index, void* destination)
+bool MemoryVolume::read(U64 page_index, void* destination)
 {
-  if (destination == 0 || !contains_page(page_index)) {
+  if (destination == 0 || !contains(page_index)) {
     return false;
   }
 
@@ -31,9 +31,9 @@ bool MemoryVolume::read_page(U64 page_index, void* destination)
   return true;
 }
 
-bool MemoryVolume::write_page(U64 page_index, const void* source)
+bool MemoryVolume::write(U64 page_index, const void* source)
 {
-  if (source == 0 || !contains_page(page_index)) {
+  if (source == 0 || !contains(page_index)) {
     return false;
   }
 
@@ -42,7 +42,7 @@ bool MemoryVolume::write_page(U64 page_index, const void* source)
   return true;
 }
 
-bool MemoryVolume::flush_writes()
+bool MemoryVolume::flush()
 {
   return true;
 }

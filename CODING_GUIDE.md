@@ -1,9 +1,10 @@
-# Lucia Coding Guide
+# LuciaOS Coding Guide
 
 Write code that a tired reader can understand a week later.
 Prefer plain, old-school C++ over clever modern ceremony.
 
 `storage/` is the reference style. Match it.
+North star for architecture: [planning/LOOM.md](planning/LOOM.md) (LuciaOS = OS; Loom = the software everyone runs).
 
 ## Goals
 
@@ -31,34 +32,74 @@ If a change makes the architecture harder to see, do not merge it.
 Use the shared aliases in `storage/types.h`:
 
 ```cpp
-Byte   // uint8_t
-U32    // uint32_t
-U64    // uint64_t
-S64    // int64_t
-Size   // size_t
-Bytes  // std::vector<Byte>
+Byte     // uint8_t
+U32      // uint32_t
+U64      // uint64_t
+S64      // int64_t
+Size     // size_t
+String   // text
+Bytes    // byte buffer
+Strings  // list of strings
 ```
 
-Do not scatter raw `std::uint64_t`, `unsigned char`, or `std::vector<...>` through new code.
-If a new common type is needed, add an alias in `types.h` first.
+Do not write `std::` in ordinary Lucia code.  Wrap standard containers once with `typedef`, then use the alias:
+
+```cpp
+typedef std::map<String, Port> PortMap;
+```
+
+Those typedef lines are the only place `std::map` / `std::string` / `std::vector` should appear.  Everywhere else, say `PortMap`, `String`, `Bytes`.
+
+Do not scatter raw `std::uint64_t`, `unsigned char`, or bare `std::vector<...>` through new code.  If a new common type is needed, add an alias in `types.h` first.
 
 ## Naming
 
-### Functions are verbs
+### Drop the type noun when context already has it
+
+The type or receiver already says what you are dealing with.  Do not repeat it in the function name:
 
 ```cpp
-count_pages()
-read_page(...)
-write_page(...)
-flush_writes()
-create_image(...)
-open_image(...)
-close_image()
-contains_page(...)
-byte_offset_for_page(...)
+volume.read(page_index, destination);
+volume.write(page_index, source);
+volume.flush();
+volume.create("lucia.img", 1024);
+volume.open("lucia.img");
+Value(true);                  // not Value::make_bool
+value.boolean();              // not as_bool
+port.set_value(Value("hello"));
+node.put(port);
 ```
 
-Getters that answer a question may also read as verbs: `count_pages()`, `is_open()`.
+### Collections use a small verb set
+
+For tables and lists of items:
+
+```cpp
+size()
+has(...)
+get(...)
+put(...)
+remove(...)
+at(...)
+```
+
+Prefer short names: `size()` not `count_elements()`, `put(...)` not `put_element(...)`.
+
+### Other functions are short verbs
+
+```cpp
+read(...)
+write(...)
+flush()
+create(...)
+open(...)
+close()
+parse(...)
+encode(...)
+decode(...)
+```
+
+Getters that answer a question may read as verbs: `is_open()`, `is_unset()`, `has(...)`.
 
 ### Names are plain English
 
@@ -104,16 +145,15 @@ If a parameter would shadow a member, rename the parameter (`image_pages`) or us
 - Keep related declarations lined up when it helps scanning:
 
 ```cpp
-bool read_page (U64 page_index, void*       destination);
-bool write_page(U64 page_index, const void* source);
+bool read (U64 page_index, void*       destination);
+bool write(U64 page_index, const void* source);
 ```
 
 - Align nearby local declarations when natural:
 
 ```cpp
-const S64 byte_offset = byte_offset_for_page(page_index);
-const S64 bytes_read  = pread(file_handle, destination, PAGE_SIZE,
-                              byte_offset);
+const S64 offset     = byte_offset(page_index);
+const S64 bytes_read = pread(file_handle, destination, PAGE_SIZE, offset);
 ```
 
 - Two spaces of indent
@@ -137,7 +177,7 @@ Explain assumptions and ownership, not narration of obvious code.
 Good:
 
 ```cpp
-// write_page is not durable until flush_writes succeeds
+// write is not durable until flush succeeds
 ```
 
 Bad:
@@ -149,12 +189,16 @@ Bad:
 
 ## Organization
 
-Top-level packages:
+Top-level packages (LuciaOS) — names match [planning/LOOM.md](planning/LOOM.md):
 
 ```text
-platform/  storage/  crypto/  auth/  document/  network/  view/
-gpu/       ui/       ai/      runtime/  apps/   tests/
+platform/  storage/  crypto/  realm/  fabric/  braid/  view/
+gpu/       ui/       ai/      loom/   tests/
 ```
+
+Durable graph work belongs in `fabric/` (sealed store on page `storage/`).
+There is no `apps/` package — programs are subgraphs; Loom is the process.
+`loom/` holds Shuttle, Spool, and the main loop.
 
 Rules:
 
@@ -169,14 +213,14 @@ Rules:
 Dependency rule:
 
 ```text
-apps → runtime → ui → gpu → platform
-                  ai
-                  view → document → crypto → storage → platform
-                  auth → crypto
-                  network → platform
+loom → ui → gpu → platform
+       ai
+       view → fabric → realm → crypto → storage → platform
+       realm → crypto
+       braid → platform
 ```
 
-`platform` is the bottom. `runtime` is what apps run inside.
+`platform` is the bottom. `loom` is the process that wires the rest.
 
 ## Classes and APIs
 
@@ -184,28 +228,32 @@ apps → runtime → ui → gpu → platform
 - Virtual boundaries only where substitution is real (`Volume`)
 - No framework-style managers, factories, or abstract clutter
 - Not copyable by default for resource owners
-- Construction/setup methods should read clearly: `create_image`, `open_image`
+- Construction/setup methods should read clearly: `create`, `open`
 
 A good API call site looks like:
 
 ```cpp
 FileVolume volume;
-volume.create_image("lucia.img", 1024);
-volume.write_page(0, header_bytes);
-volume.flush_writes();
+volume.create("lucia.img", 1024);
+volume.write(0, header_bytes);
+volume.flush();
+
+Node node;
+node.set_id(id);
+node.put(Port("out", PORT_OUT));
 ```
 
 ## Errors
 
 - Return `bool` for success/failure unless richer errors become necessary
-- Fail early on bad arguments (`path == 0`, out-of-range page)
-- Do not throw through storage code
-- Do not hide durability: callers must call `flush_writes()` when durability matters
+- Fail early on bad arguments (`name == 0`, out-of-range page)
+- Do not throw through storage or fabric code
+- Do not hide durability: callers must call `flush()` when durability matters
 
 ## Performance
 
 - Keep the hot path obvious: `memcpy`, `pread`, `pwrite`, `fsync`
-- No hidden allocations in `read_page` / `write_page`
+- No hidden allocations in `read` / `write`
 - Page size is fixed (`PAGE_SIZE`); do not surprise callers with variable transfer sizes at this layer
 
 ## Tests
@@ -221,13 +269,15 @@ volume.flush_writes();
 - Template metaprogramming
 - Operator overloading for cleverness
 - Codegen / macros beyond simple test helpers
-- Premature abstraction (fault injectors, platform trees, geometry structs) before a caller needs them
+- Premature abstraction before a caller needs it
+- Redundant type nouns in names (`put_port`, `count_pages` on a page volume — prefer `put`, `size`)
+- Leaking `std::map` / `std::vector` / `std::string` in public APIs
 
 ## Checklist for new code
 
 1. Can a reader say what the file is for in one sentence?
-2. Do functions read as verbs?
-3. Are Lucia aliases used instead of raw stdint/std:: names?
+2. Are names short, with no redundant type nouns?
+3. Are Lucia aliases used instead of raw stdint/`std::` names?
 4. Are members free of trailing underscores?
 5. Are docs short and useful?
 6. Is the hot path still visible?

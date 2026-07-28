@@ -13,9 +13,9 @@ namespace lucia {
 // Typical use:
 //
 //   FileVolume volume;
-//   volume.create_image("lucia.img", 1024);
-//   volume.write_page(0, header_bytes);
-//   volume.flush_writes();
+//   volume.create("lucia.img", 1024);
+//   volume.write(0, header_bytes);
+//   volume.flush();
 //
 class FileVolume : public Volume {
 public:
@@ -23,27 +23,27 @@ public:
   ~FileVolume();
 
   // Open a brand-new zero-filled image, replacing any existing file.
-  bool create_image(const char* path, U64 pages);
+  bool create(const char* path, U64 pages);
 
   // Open an existing image.  File size must be a multiple of PAGE_SIZE.
-  bool open_image(const char* path);
+  bool open(const char* path);
 
   // Release the host file.  Safe to call more than once.
-  void close_image();
+  void close();
 
-  U64 count_pages() const override;
+  U64 size() const override;
 
-  bool read_page (U64 page_index, void*       destination) override;
-  bool write_page(U64 page_index, const void* source)      override;
-  bool flush_writes() override;
+  bool read (U64 page_index, void*       destination) override;
+  bool write(U64 page_index, const void* source)      override;
+  bool flush() override;
 
 private:
-  FileVolume(const FileVolume&);             // not copyable
-  FileVolume& operator=(const FileVolume&);  // not copyable
+  FileVolume(const FileVolume&);
+  FileVolume& operator=(const FileVolume&);
 
   bool is_open() const;
-  bool contains_page(U64 page_index) const;
-  S64  byte_offset_for_page(U64 page_index) const;
+  bool contains(U64 page_index) const;
+  S64  byte_offset(U64 page_index) const;
 
   int file_handle;
   U64 pages;
