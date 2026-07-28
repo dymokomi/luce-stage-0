@@ -1,4 +1,4 @@
-#include "platform/file.h"
+#include "platform/io/file.h"
 
 #include <fcntl.h>
 #include <limits.h>
@@ -6,31 +6,24 @@
 
 namespace lucia {
 
-PlatformFile::PlatformFile()
-    : handle(-1)
-{
-}
+PlatformFile::PlatformFile() : handle(-1) {}
 
-PlatformFile::~PlatformFile()
-{
+PlatformFile::~PlatformFile() {
   close();
 }
 
-bool PlatformFile::is_open() const
-{
+bool PlatformFile::is_open() const {
   return handle >= 0;
 }
 
-void PlatformFile::close()
-{
+void PlatformFile::close() {
   if (is_open()) {
     ::close(handle);
     handle = -1;
   }
 }
 
-bool PlatformFile::create(const char* path, uint64_t byte_size)
-{
+bool PlatformFile::create(const char *path, uint64_t byte_size) {
   if (path == 0 || byte_size == 0 || byte_size > (uint64_t)INT64_MAX) {
     return false;
   }
@@ -47,8 +40,7 @@ bool PlatformFile::create(const char* path, uint64_t byte_size)
   return true;
 }
 
-bool PlatformFile::open(const char* path)
-{
+bool PlatformFile::open(const char *path) {
   if (path == 0) {
     return false;
   }
@@ -58,8 +50,7 @@ bool PlatformFile::open(const char* path)
   return is_open();
 }
 
-bool PlatformFile::size(uint64_t* byte_size) const
-{
+bool PlatformFile::size(uint64_t *byte_size) const {
   if (!is_open() || byte_size == 0) {
     return false;
   }
@@ -72,31 +63,24 @@ bool PlatformFile::size(uint64_t* byte_size) const
   return true;
 }
 
-bool PlatformFile::read(uint64_t byte_offset, void* destination,
-                        size_t byte_count)
-{
+bool PlatformFile::read(uint64_t byte_offset, void *destination, size_t byte_count) {
   if (!is_open() || destination == 0 || byte_offset > (uint64_t)INT64_MAX) {
     return false;
   }
-  const ssize_t count =
-      pread(handle, destination, byte_count, (off_t)byte_offset);
+  const ssize_t count = pread(handle, destination, byte_count, (off_t)byte_offset);
   return count >= 0 && (size_t)count == byte_count;
 }
 
-bool PlatformFile::write(uint64_t byte_offset, const void* source,
-                         size_t byte_count)
-{
+bool PlatformFile::write(uint64_t byte_offset, const void *source, size_t byte_count) {
   if (!is_open() || source == 0 || byte_offset > (uint64_t)INT64_MAX) {
     return false;
   }
-  const ssize_t count =
-      pwrite(handle, source, byte_count, (off_t)byte_offset);
+  const ssize_t count = pwrite(handle, source, byte_count, (off_t)byte_offset);
   return count >= 0 && (size_t)count == byte_count;
 }
 
-bool PlatformFile::flush()
-{
+bool PlatformFile::flush() {
   return is_open() && fsync(handle) == 0;
 }
 
-}  // namespace lucia
+} // namespace lucia

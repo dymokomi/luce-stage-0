@@ -3,7 +3,7 @@
 Write code that a tired reader can understand a week later.
 Prefer plain, old-school C++ over clever modern ceremony.
 
-`storage/` is the reference style. Match it.
+`storage/volume/` is the reference style. Match it.
 North star for architecture: [planning/LOOM.md](planning/LOOM.md) (LuciaOS = OS; Loom = its trusted local engine).
 
 ## Goals
@@ -29,7 +29,7 @@ If a change makes the architecture harder to see, do not merge it.
 
 ## Types
 
-Use the shared aliases in `storage/types.h`:
+Use the shared aliases in `base/types.h`:
 
 ```cpp
 Byte     // uint8_t
@@ -141,12 +141,18 @@ If a parameter would shadow a member, rename the parameter (`image_pages`) or us
 
 ## Formatting
 
-- Opening brace for functions goes on its own line
+- Every opening brace stays on the declaration or control-statement line.
+- Use the root `.clang-format`; it specifies two-space indentation, attached
+  braces, and a 92-column limit.
 - Keep related declarations lined up when it helps scanning:
 
 ```cpp
-bool read (U64 page_index, void*       destination);
-bool write(U64 page_index, const void* source);
+bool read(U64 page_index, void* destination) {
+  if (destination == 0) {
+    return false;
+  }
+  // ...
+}
 ```
 
 - Align nearby local declarations when natural:
@@ -189,32 +195,38 @@ Bad:
 
 ## Organization
 
-Current foundation packages:
+Current first-Lucia packages:
 
 ```text
-storage/  fabric/  loom/  tests/
+base/  platform/io/  storage/volume/
+fabric/model/  fabric/persistence/
+realm/authority/
+loom/evaluation/  loom/effects/  loom/organization/  loom/cli/
+view/runtime/  projection/file/  tests/
 ```
 
-Durable Texels, typed Ports, Fibers, and evaluation contracts belong in `fabric/`.
-Page storage, transactions, recovery, and durability mechanics belong in `storage/`.
-`loom/` is the local process that opens, evaluates, and persists the Fabric.
+Durable Texels, typed Ports, Fibers, and values belong in `fabric/model/`.
+Encoding and transactional persistence belong in `fabric/persistence/`.
+Page storage and durability mechanics belong in `storage/volume/`.
+Capabilities belong in `realm/authority/`. Evaluation, State/Delay, effects,
+arrangements, and the CLI belong in their narrow `loom/` packages. Views and
+file projection live in `view/runtime/` and `projection/file/`.
 
-Views, effects, capabilities, State/Delay, file projection, Braid, and production
-security are deferred. Do not add packages for them during this milestone.
+Production security, collaboration, Braid, permanent history, replacement
+engines, and the agent remain deferred.
 
 Rules:
 
 - One package, one job
-- Put headers next to their `.cpp` files while a package is small
+- Put headers next to their `.cpp` files
 - One clear idea per file
 - Public contracts stay small; implementation details stay private
-- Do not add deeper nesting until a real boundary needs it
 
 Dependency rule:
 
 ```text
-loom → fabric → storage
-tests → loom / fabric / storage
+projection / view → loom → realm / fabric → storage → platform
+tests → the package under test
 ```
 
 Keep storage independent of Fabric concepts. Keep deferred systems out of this
@@ -256,7 +268,7 @@ texel.put(OutputPort("out", VALUE_TEXT));
 
 ## Tests
 
-- Tests live under `tests/`
+- Tests live under the matching package in `tests/`
 - Name test functions after what they prove: `test_memory_volume`, `test_file_volume`
 - Prefer direct checks over heavy frameworks
 - Cover success, bounds failure, and reopen/persistence where relevant
