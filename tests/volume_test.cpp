@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "file_volume.h"
-#include "memory_volume.h"
+#include "storage/file_volume.h"
+#include "storage/memory_volume.h"
 
 using namespace lucia;
 

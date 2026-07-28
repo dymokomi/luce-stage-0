@@ -2,139 +2,110 @@
 
 namespace lucia {
 
-namespace {
-
-const String empty_string;
-const Bytes  empty_bytes;
-
-}  // namespace
-
 Value::Value()
-    : value_kind(VALUE_EMPTY),
-      int_value(0)
+    : value_type(VALUE_NONE),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0)
 {
 }
 
 Value::Value(bool value)
-    : value_kind(VALUE_BOOL),
-      bool_value(value)
+    : value_type(VALUE_BOOL),
+      bool_value(value),
+      int_value(0),
+      real_value(0.0)
 {
 }
 
 Value::Value(int value)
-    : value_kind(VALUE_INT),
-      int_value(value)
+    : value_type(VALUE_INT),
+      bool_value(false),
+      int_value(value),
+      real_value(0.0)
 {
 }
 
 Value::Value(S64 value)
-    : value_kind(VALUE_INT),
-      int_value(value)
+    : value_type(VALUE_INT),
+      bool_value(false),
+      int_value(value),
+      real_value(0.0)
 {
 }
 
 Value::Value(double value)
-    : value_kind(VALUE_FLOAT),
-      float_value(value)
+    : value_type(VALUE_REAL),
+      bool_value(false),
+      int_value(0),
+      real_value(value)
 {
 }
 
 Value::Value(const char* text)
-    : value_kind(VALUE_STRING),
-      string_value(new String(text != 0 ? text : ""))
+    : value_type(VALUE_TEXT),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0),
+      text_value(text != 0 ? text : "")
 {
 }
 
 Value::Value(const String& text)
-    : value_kind(VALUE_STRING),
-      string_value(new String(text))
+    : value_type(VALUE_TEXT),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0),
+      text_value(text)
 {
 }
 
 Value::Value(const Byte* data, Size size)
-    : value_kind(VALUE_BYTES),
-      bytes_value(new Bytes())
+    : value_type(VALUE_BYTES),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0)
 {
   if (data != 0 && size > 0) {
-    bytes_value->assign(data, data + size);
+    bytes_value.assign(data, data + size);
   }
 }
 
 Value::Value(const Bytes& data)
-    : value_kind(VALUE_BYTES),
-      bytes_value(new Bytes(data))
+    : value_type(VALUE_BYTES),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0),
+      bytes_value(data)
 {
 }
 
-Value::Value(const Value& other)
-    : value_kind(VALUE_EMPTY),
-      int_value(0)
+Value::Value(const TexelId& texel)
+    : value_type(VALUE_TEXEL),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0),
+      texel_value(texel)
 {
-  copy_from(other);
 }
 
-Value& Value::operator=(const Value& other)
+Value::Value(const BlobRef& blob)
+    : value_type(VALUE_BLOB),
+      bool_value(false),
+      int_value(0),
+      real_value(0.0),
+      blob_value(blob)
 {
-  if (this != &other) {
-    clear();
-    copy_from(other);
-  }
-  return *this;
 }
 
-Value::~Value()
+ValueType Value::type() const
 {
-  clear();
-}
-
-void Value::clear()
-{
-  if (value_kind == VALUE_STRING) {
-    delete string_value;
-    string_value = 0;
-  } else if (value_kind == VALUE_BYTES) {
-    delete bytes_value;
-    bytes_value = 0;
-  }
-
-  value_kind = VALUE_EMPTY;
-  int_value = 0;
-}
-
-void Value::copy_from(const Value& other)
-{
-  value_kind = other.value_kind;
-
-  switch (other.value_kind) {
-  case VALUE_EMPTY:
-    int_value = 0;
-    break;
-  case VALUE_BOOL:
-    bool_value = other.bool_value;
-    break;
-  case VALUE_INT:
-    int_value = other.int_value;
-    break;
-  case VALUE_FLOAT:
-    float_value = other.float_value;
-    break;
-  case VALUE_STRING:
-    string_value = new String(*other.string_value);
-    break;
-  case VALUE_BYTES:
-    bytes_value = new Bytes(*other.bytes_value);
-    break;
-  }
-}
-
-ValueKind Value::kind() const
-{
-  return value_kind;
+  return value_type;
 }
 
 bool Value::boolean() const
 {
-  if (value_kind != VALUE_BOOL) {
+  if (value_type != VALUE_BOOL) {
     return false;
   }
   return bool_value;
@@ -142,7 +113,7 @@ bool Value::boolean() const
 
 S64 Value::integer() const
 {
-  if (value_kind != VALUE_INT) {
+  if (value_type != VALUE_INT) {
     return 0;
   }
   return int_value;
@@ -150,47 +121,55 @@ S64 Value::integer() const
 
 double Value::real() const
 {
-  if (value_kind != VALUE_FLOAT) {
+  if (value_type != VALUE_REAL) {
     return 0.0;
   }
-  return float_value;
+  return real_value;
 }
 
 const String& Value::text() const
 {
-  if (value_kind != VALUE_STRING || string_value == 0) {
-    return empty_string;
-  }
-  return *string_value;
+  return text_value;
 }
 
 const Bytes& Value::bytes() const
 {
-  if (value_kind != VALUE_BYTES || bytes_value == 0) {
-    return empty_bytes;
-  }
-  return *bytes_value;
+  return bytes_value;
+}
+
+const TexelId& Value::texel() const
+{
+  return texel_value;
+}
+
+const BlobRef& Value::blob() const
+{
+  return blob_value;
 }
 
 bool Value::equals(const Value& other) const
 {
-  if (value_kind != other.value_kind) {
+  if (value_type != other.value_type) {
     return false;
   }
 
-  switch (value_kind) {
-  case VALUE_EMPTY:
+  switch (value_type) {
+  case VALUE_NONE:
     return true;
   case VALUE_BOOL:
     return bool_value == other.bool_value;
   case VALUE_INT:
     return int_value == other.int_value;
-  case VALUE_FLOAT:
-    return float_value == other.float_value;
-  case VALUE_STRING:
-    return *string_value == *other.string_value;
+  case VALUE_REAL:
+    return real_value == other.real_value;
+  case VALUE_TEXT:
+    return text_value == other.text_value;
   case VALUE_BYTES:
-    return *bytes_value == *other.bytes_value;
+    return bytes_value == other.bytes_value;
+  case VALUE_TEXEL:
+    return texel_value.equals(other.texel_value);
+  case VALUE_BLOB:
+    return blob_value.equals(other.blob_value);
   }
 
   return false;

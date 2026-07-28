@@ -1,12 +1,13 @@
 #include "memory_volume.h"
 
+#include <stdint.h>
 #include <string.h>
 
 namespace lucia {
 
 MemoryVolume::MemoryVolume(U64 pages)
-    : pages(pages),
-      bytes(static_cast<Size>(pages) * PAGE_SIZE, 0)
+    : pages(pages <= (U64)SIZE_MAX / (U64)PAGE_SIZE ? pages : 0),
+      bytes(static_cast<Size>(this->pages) * PAGE_SIZE, 0)
 {
 }
 

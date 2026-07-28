@@ -1,5 +1,6 @@
 #pragma once
 
+#include "platform/file.h"
 #include "volume.h"
 
 namespace lucia {
@@ -43,10 +44,10 @@ private:
 
   bool is_open() const;
   bool contains(U64 page_index) const;
-  S64  byte_offset(U64 page_index) const;
+  U64  byte_offset(U64 page_index) const;
 
-  int file_handle;
-  U64 pages;
+  PlatformFile file;
+  U64          pages;
 };
 
 }  // namespace lucia

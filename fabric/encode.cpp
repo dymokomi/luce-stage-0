@@ -1,14 +1,61 @@
 #include "encode.h"
 
+#include <algorithm>
+#include <limits.h>
 #include <string.h>
 
 namespace lucia {
 
 namespace {
 
-bool write_bytes(Bytes* out, const Byte* data, Size size)
+enum {
+  SNAPSHOT_VERSION = 1,
+  SNAPSHOT_MAGIC_SIZE = 8
+};
+
+const Byte SNAPSHOT_MAGIC[SNAPSHOT_MAGIC_SIZE] = {
+  'L', 'U', 'T', 'E', 'X', 'E', 'L', '\0'
+};
+
+typedef std::map<TexelId, Size> TexelIndexes;
+typedef std::map<String, Size>  BlobIndexes;
+typedef std::map<TexelId, Byte> VisitTable;
+
+bool temporal_evaluator(const String& evaluator)
 {
-  if (out == 0) {
+  return evaluator == "loom.state" || evaluator == "loom.delay";
+}
+
+bool valid_temporal_texel(const Texel& texel)
+{
+  if (!temporal_evaluator(texel.evaluator()) ||
+      texel.input_size() != 1 || texel.output_size() != 1) {
+    return false;
+  }
+
+  InputPort input;
+  OutputPort output;
+  return texel.get_input("next", &input) &&
+         texel.get_output("value", &output) &&
+         input.type() == output.type() &&
+         output.has_source() &&
+         output.source().type() == output.type();
+}
+
+bool add_size(Size left, Size right, Size* result)
+{
+  if (result == 0 || right > SIZE_MAX - left) {
+    return false;
+  }
+  *result = left + right;
+  return true;
+}
+
+bool write_bytes(Bytes* output, const Byte* data, Size size)
+{
+  Size total = 0;
+  if (output == 0 || !add_size(output->size(), size, &total) ||
+      total > output->max_size()) {
     return false;
   }
   if (size == 0) {
@@ -17,502 +64,702 @@ bool write_bytes(Bytes* out, const Byte* data, Size size)
   if (data == 0) {
     return false;
   }
-  out->insert(out->end(), data, data + size);
+  output->insert(output->end(), data, data + size);
   return true;
 }
 
-bool write_u8(Bytes* out, Byte value)
+bool write_u8(Bytes* output, Byte value)
 {
-  if (out == 0) {
-    return false;
-  }
-  out->push_back(value);
-  return true;
+  return write_bytes(output, &value, 1);
 }
 
-bool write_u16(Bytes* out, U32 value)
+bool write_u32(Bytes* output, U32 value)
 {
-  if (value > 0xffffu || out == 0) {
-    return false;
+  Byte data[4];
+  for (int i = 0; i < 4; ++i) {
+    data[i] = static_cast<Byte>((value >> (i * 8)) & 0xffu);
   }
-  out->push_back((Byte)(value & 0xff));
-  out->push_back((Byte)((value >> 8) & 0xff));
-  return true;
+  return write_bytes(output, data, sizeof(data));
 }
 
-bool write_u32(Bytes* out, U32 value)
+bool write_u64(Bytes* output, U64 value)
 {
-  if (out == 0) {
-    return false;
-  }
-  out->push_back((Byte)(value & 0xff));
-  out->push_back((Byte)((value >> 8) & 0xff));
-  out->push_back((Byte)((value >> 16) & 0xff));
-  out->push_back((Byte)((value >> 24) & 0xff));
-  return true;
-}
-
-bool write_u64(Bytes* out, U64 value)
-{
-  if (out == 0) {
-    return false;
-  }
+  Byte data[8];
   for (int i = 0; i < 8; ++i) {
-    out->push_back((Byte)((value >> (8 * i)) & 0xff));
+    data[i] = static_cast<Byte>((value >> (i * 8)) & 0xffu);
   }
-  return true;
+  return write_bytes(output, data, sizeof(data));
 }
 
-bool write_s64(Bytes* out, S64 value)
+bool write_string(Bytes* output, const String& text)
 {
-  return write_u64(out, (U64)value);
+  return write_u64(output, static_cast<U64>(text.size())) &&
+         write_bytes(output, reinterpret_cast<const Byte*>(text.data()),
+                     text.size());
 }
 
-bool write_f64(Bytes* out, double value)
-{
-  U64 bits = 0;
-  memcpy(&bits, &value, sizeof(bits));
-  return write_u64(out, bits);
-}
+class Reader {
+public:
+  Reader(const Byte* bytes, Size byte_size)
+      : data(bytes), size(byte_size), offset(0)
+  {
+  }
 
-bool write_string(Bytes* out, const String& text)
-{
-  if (text.size() > 0xffffu) {
-    return false;
+  bool read(Byte* output, Size count)
+  {
+    if ((data == 0 && size != 0) || count > size - offset ||
+        (output == 0 && count != 0)) {
+      return false;
+    }
+    if (count != 0) {
+      memcpy(output, data + offset, count);
+    }
+    offset += count;
+    return true;
   }
-  return write_u16(out, (U32)text.size()) &&
-         write_bytes(out, (const Byte*)text.data(), text.size());
-}
 
-bool read_bytes(const Byte* data, Size size, Size* offset, Byte* out,
-                Size count)
-{
-  if (data == 0 || offset == 0 || *offset + count > size) {
-    return false;
+  bool u8(Byte* value)
+  {
+    return read(value, 1);
   }
-  if (count != 0 && out == 0) {
-    return false;
-  }
-  if (count != 0) {
-    memcpy(out, data + *offset, count);
-  }
-  *offset += count;
-  return true;
-}
 
-bool read_u8(const Byte* data, Size size, Size* offset, Byte* value)
-{
-  return read_bytes(data, size, offset, value, 1);
-}
+  bool u32(U32* value)
+  {
+    Byte bytes[4];
+    if (value == 0 || !read(bytes, sizeof(bytes))) {
+      return false;
+    }
+    *value = static_cast<U32>(bytes[0]) |
+             (static_cast<U32>(bytes[1]) << 8) |
+             (static_cast<U32>(bytes[2]) << 16) |
+             (static_cast<U32>(bytes[3]) << 24);
+    return true;
+  }
 
-bool read_u16(const Byte* data, Size size, Size* offset, U32* value)
-{
-  Byte raw[2];
-  if (!read_bytes(data, size, offset, raw, 2) || value == 0) {
-    return false;
+  bool u64(U64* value)
+  {
+    Byte bytes[8];
+    if (value == 0 || !read(bytes, sizeof(bytes))) {
+      return false;
+    }
+    U64 result = 0;
+    for (int i = 0; i < 8; ++i) {
+      result |= static_cast<U64>(bytes[i]) << (i * 8);
+    }
+    *value = result;
+    return true;
   }
-  *value = (U32)raw[0] | ((U32)raw[1] << 8);
-  return true;
-}
 
-bool read_u32(const Byte* data, Size size, Size* offset, U32* value)
-{
-  Byte raw[4];
-  if (!read_bytes(data, size, offset, raw, 4) || value == 0) {
-    return false;
+  bool string(String* text)
+  {
+    U64 length = 0;
+    if (text == 0 || !u64(&length) ||
+        length > static_cast<U64>(SIZE_MAX) ||
+        static_cast<Size>(length) > remaining()) {
+      return false;
+    }
+    text->assign(reinterpret_cast<const char*>(data + offset),
+                 static_cast<Size>(length));
+    offset += static_cast<Size>(length);
+    return true;
   }
-  *value = (U32)raw[0] | ((U32)raw[1] << 8) | ((U32)raw[2] << 16) |
-           ((U32)raw[3] << 24);
-  return true;
-}
 
-bool read_u64(const Byte* data, Size size, Size* offset, U64* value)
-{
-  Byte raw[8];
-  if (!read_bytes(data, size, offset, raw, 8) || value == 0) {
-    return false;
+  Size remaining() const
+  {
+    return size - offset;
   }
-  U64 result = 0;
-  for (int i = 0; i < 8; ++i) {
-    result |= ((U64)raw[i] << (8 * i));
-  }
-  *value = result;
-  return true;
-}
 
-bool read_s64(const Byte* data, Size size, Size* offset, S64* value)
-{
-  U64 raw = 0;
-  if (!read_u64(data, size, offset, &raw) || value == 0) {
-    return false;
+  bool done() const
+  {
+    return offset == size;
   }
-  *value = (S64)raw;
-  return true;
-}
 
-bool read_f64(const Byte* data, Size size, Size* offset, double* value)
-{
-  U64 bits = 0;
-  if (!read_u64(data, size, offset, &bits) || value == 0) {
-    return false;
+  const Byte* current() const
+  {
+    return data + offset;
   }
-  memcpy(value, &bits, sizeof(bits));
-  return true;
-}
 
-bool read_string(const Byte* data, Size size, Size* offset, String* text)
-{
-  U32 length = 0;
-  if (!read_u16(data, size, offset, &length) || text == 0) {
-    return false;
+  bool skip(Size count)
+  {
+    if (count > remaining()) {
+      return false;
+    }
+    offset += count;
+    return true;
   }
-  if (*offset + length > size) {
-    return false;
-  }
-  text->assign((const char*)(data + *offset), length);
-  *offset += length;
-  return true;
-}
+
+private:
+  const Byte* data;
+  Size        size;
+  Size        offset;
+};
 
 bool encode_value(const Value& value, Bytes* output)
 {
-  if (!write_u8(output, (Byte)value.kind())) {
+  if (value.type() < VALUE_BOOL || value.type() > VALUE_BLOB ||
+      !write_u8(output, static_cast<Byte>(value.type()))) {
     return false;
   }
 
-  switch (value.kind()) {
-  case VALUE_EMPTY:
-    return true;
+  switch (value.type()) {
   case VALUE_BOOL:
     return write_u8(output, value.boolean() ? 1 : 0);
   case VALUE_INT:
-    return write_s64(output, value.integer());
-  case VALUE_FLOAT:
-    return write_f64(output, value.real());
-  case VALUE_STRING:
+    return write_u64(output, static_cast<U64>(value.integer()));
+  case VALUE_REAL: {
+    U64 bits = 0;
+    double number = value.real();
+    memcpy(&bits, &number, sizeof(bits));
+    return write_u64(output, bits);
+  }
+  case VALUE_TEXT:
     return write_string(output, value.text());
   case VALUE_BYTES:
-    if (value.bytes().size() > 0xffffffffu) {
-      return false;
-    }
-    return write_u32(output, (U32)value.bytes().size()) &&
+    return write_u64(output, static_cast<U64>(value.bytes().size())) &&
            write_bytes(output, value.bytes().data(), value.bytes().size());
+  case VALUE_TEXEL:
+    return !value.texel().is_unset() &&
+           write_bytes(output, value.texel().bytes(), TexelId::SIZE);
+  case VALUE_BLOB:
+    return !value.blob().is_unset() &&
+           write_bytes(output, value.blob().id(), BlobRef::ID_SIZE) &&
+           write_u64(output, value.blob().size());
+  case VALUE_NONE:
+    break;
   }
-
   return false;
 }
 
-bool decode_value(const Byte* data, Size size, Size* offset, Value* value)
+bool decode_value(Reader* reader, Value* value)
 {
-  if (value == 0) {
+  Byte type = 0;
+  if (reader == 0 || value == 0 || !reader->u8(&type) ||
+      type < VALUE_BOOL || type > VALUE_BLOB) {
     return false;
   }
 
-  Byte kind = 0;
-  if (!read_u8(data, size, offset, &kind)) {
-    return false;
-  }
-
-  switch (kind) {
-  case VALUE_EMPTY:
-    *value = Value();
-    return true;
+  switch (type) {
   case VALUE_BOOL: {
     Byte flag = 0;
-    if (!read_u8(data, size, offset, &flag)) {
+    if (!reader->u8(&flag) || flag > 1) {
       return false;
     }
-    *value = Value(flag != 0);
+    *value = Value(flag == 1);
     return true;
   }
   case VALUE_INT: {
+    U64 bits = 0;
     S64 number = 0;
-    if (!read_s64(data, size, offset, &number)) {
+    if (!reader->u64(&bits)) {
       return false;
     }
+    memcpy(&number, &bits, sizeof(number));
     *value = Value(number);
     return true;
   }
-  case VALUE_FLOAT: {
+  case VALUE_REAL: {
+    U64 bits = 0;
     double number = 0.0;
-    if (!read_f64(data, size, offset, &number)) {
+    if (!reader->u64(&bits)) {
       return false;
     }
+    memcpy(&number, &bits, sizeof(number));
     *value = Value(number);
     return true;
   }
-  case VALUE_STRING: {
+  case VALUE_TEXT: {
     String text;
-    if (!read_string(data, size, offset, &text)) {
+    if (!reader->string(&text)) {
       return false;
     }
     *value = Value(text);
     return true;
   }
   case VALUE_BYTES: {
-    U32 length = 0;
-    if (!read_u32(data, size, offset, &length)) {
+    U64 length = 0;
+    if (!reader->u64(&length) ||
+        length > static_cast<U64>(SIZE_MAX) ||
+        static_cast<Size>(length) > reader->remaining()) {
       return false;
     }
-    if (*offset + length > size) {
+    *value = Value(reader->current(), static_cast<Size>(length));
+    return reader->skip(static_cast<Size>(length));
+  }
+  case VALUE_TEXEL: {
+    Byte bytes[TexelId::SIZE];
+    TexelId id;
+    if (!reader->read(bytes, sizeof(bytes))) {
       return false;
     }
-    *value = Value(data + *offset, length);
-    *offset += length;
+    id.set_bytes(bytes);
+    if (id.is_unset()) {
+      return false;
+    }
+    *value = Value(id);
+    return true;
+  }
+  case VALUE_BLOB: {
+    Byte id[BlobRef::ID_SIZE];
+    U64 size = 0;
+    if (!reader->read(id, sizeof(id)) || !reader->u64(&size)) {
+      return false;
+    }
+    BlobRef reference(id, size);
+    if (reference.is_unset()) {
+      return false;
+    }
+    *value = Value(reference);
     return true;
   }
   }
-
   return false;
+}
+
+bool encode_texel_body(const Texel& texel, Bytes* output)
+{
+  if (!texel.valid() || output == 0 ||
+      texel.input_size() > 0xffffffffu ||
+      texel.output_size() > 0xffffffffu) {
+    return false;
+  }
+
+  output->clear();
+  if (!write_bytes(output, texel.id().bytes(), TexelId::SIZE) ||
+      !write_u8(output, texel.has_content() ? 1 : 0) ||
+      (texel.has_content() && !encode_value(texel.content(), output)) ||
+      !write_string(output, texel.evaluator()) ||
+      !write_u64(output, texel.revision()) ||
+      !write_u32(output, static_cast<U32>(texel.input_size()))) {
+    return false;
+  }
+
+  for (Size i = 0; i < texel.input_size(); ++i) {
+    InputPort port;
+    if (!texel.input_at(i, &port) ||
+        !write_string(output, port.name()) ||
+        !write_u8(output, static_cast<Byte>(port.type())) ||
+        !write_u8(output, port.has_binding() ? 1 : 0)) {
+      return false;
+    }
+    if (port.has_binding() &&
+        (!write_bytes(output, port.binding().source().bytes(),
+                      TexelId::SIZE) ||
+         !write_string(output, port.binding().output()))) {
+      return false;
+    }
+  }
+
+  if (!write_u32(output, static_cast<U32>(texel.output_size()))) {
+    return false;
+  }
+  for (Size i = 0; i < texel.output_size(); ++i) {
+    OutputPort port;
+    if (!texel.output_at(i, &port) ||
+        !write_string(output, port.name()) ||
+        !write_u8(output, static_cast<Byte>(port.type())) ||
+        !write_u8(output, port.has_source() ? 1 : 0) ||
+        (port.has_source() && !encode_value(port.source(), output)) ||
+        !write_u64(output, port.revision())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool decode_texel_body(const Byte* data, Size size, Texel* output)
+{
+  if (data == 0 || output == 0) {
+    return false;
+  }
+
+  Reader reader(data, size);
+  Byte id_bytes[TexelId::SIZE];
+  Byte flag = 0;
+  TexelId id;
+  Texel texel;
+  if (!reader.read(id_bytes, sizeof(id_bytes))) {
+    return false;
+  }
+  id.set_bytes(id_bytes);
+  if (id.is_unset()) {
+    return false;
+  }
+  texel.set_id(id);
+
+  if (!reader.u8(&flag) || flag > 1) {
+    return false;
+  }
+  if (flag == 1) {
+    Value content;
+    if (!decode_value(&reader, &content) || !texel.set_content(content)) {
+      return false;
+    }
+  }
+
+  String evaluator;
+  U64 revision = 0;
+  U32 input_count = 0;
+  if (!reader.string(&evaluator) ||
+      (!evaluator.empty() && !texel.set_evaluator(evaluator.c_str())) ||
+      !reader.u64(&revision) || !reader.u32(&input_count) ||
+      static_cast<U64>(input_count) > static_cast<U64>(reader.remaining())) {
+    return false;
+  }
+  texel.set_revision(revision);
+
+  for (U32 i = 0; i < input_count; ++i) {
+    String name;
+    Byte type = 0;
+    Byte bound = 0;
+    if (!reader.string(&name) || name.empty() || texel.has_input(name.c_str()) ||
+        !reader.u8(&type) || type < VALUE_BOOL || type > VALUE_BLOB ||
+        !reader.u8(&bound) || bound > 1) {
+      return false;
+    }
+    InputPort port(name.c_str(), static_cast<ValueType>(type));
+    if (bound == 1) {
+      Byte source_bytes[TexelId::SIZE];
+      String output_name;
+      TexelId source;
+      if (!reader.read(source_bytes, sizeof(source_bytes)) ||
+          !reader.string(&output_name)) {
+        return false;
+      }
+      source.set_bytes(source_bytes);
+      Fiber fiber(source, output_name.c_str());
+      if (!port.bind(fiber)) {
+        return false;
+      }
+    }
+    if (!texel.put_input(port)) {
+      return false;
+    }
+  }
+
+  U32 output_count = 0;
+  if (!reader.u32(&output_count) ||
+      static_cast<U64>(output_count) > static_cast<U64>(reader.remaining())) {
+    return false;
+  }
+  for (U32 i = 0; i < output_count; ++i) {
+    String name;
+    Byte type = 0;
+    Byte has_source = 0;
+    if (!reader.string(&name) || name.empty() ||
+        texel.has_output(name.c_str()) ||
+        !reader.u8(&type) || type < VALUE_BOOL || type > VALUE_BLOB ||
+        !reader.u8(&has_source) || has_source > 1) {
+      return false;
+    }
+    OutputPort port(name.c_str(), static_cast<ValueType>(type));
+    if (has_source == 1) {
+      Value source;
+      if (!decode_value(&reader, &source) || !port.set_source(source)) {
+        return false;
+      }
+    }
+    U64 source_revision = 0;
+    if (!reader.u64(&source_revision)) {
+      return false;
+    }
+    port.set_revision(source_revision);
+    if (!texel.put_output(port)) {
+      return false;
+    }
+  }
+
+  if (!reader.done() || !texel.valid()) {
+    return false;
+  }
+  *output = texel;
+  return true;
+}
+
+String blob_key(const Byte* id)
+{
+  return String(reinterpret_cast<const char*>(id), BlobRef::ID_SIZE);
+}
+
+bool value_references_valid(const Value& value,
+                            const TexelIndexes& texels,
+                            const BlobIndexes& blobs,
+                            const BlobRecords& records)
+{
+  if (value.type() == VALUE_TEXEL) {
+    return !value.texel().is_unset() &&
+           texels.find(value.texel()) != texels.end();
+  }
+  if (value.type() != VALUE_BLOB) {
+    return value.type() >= VALUE_BOOL && value.type() < VALUE_TEXEL;
+  }
+  if (value.blob().is_unset()) {
+    return false;
+  }
+  BlobIndexes::const_iterator found = blobs.find(blob_key(value.blob().id()));
+  return found != blobs.end() &&
+         records[found->second].reference.size() == value.blob().size();
+}
+
+bool visit(const TexelId& id, const Texels& texels,
+           const TexelIndexes& indexes, VisitTable* visits)
+{
+  VisitTable::iterator state = visits->find(id);
+  if (state != visits->end()) {
+    return state->second == 2;
+  }
+  (*visits)[id] = 1;
+
+  const Texel& target = texels[indexes.find(id)->second];
+  if (temporal_evaluator(target.evaluator())) {
+    (*visits)[id] = 2;
+    return true;
+  }
+  for (Size i = 0; i < target.input_size(); ++i) {
+    InputPort input;
+    if (!target.input_at(i, &input)) {
+      return false;
+    }
+    if (!input.has_binding()) {
+      continue;
+    }
+    VisitTable::iterator source_state =
+        visits->find(input.binding().source());
+    if (source_state != visits->end() && source_state->second == 1) {
+      return false;
+    }
+    if (source_state == visits->end() &&
+        !visit(input.binding().source(), texels, indexes, visits)) {
+      return false;
+    }
+  }
+  (*visits)[id] = 2;
+  return true;
+}
+
+bool texel_less(const Texel& left, const Texel& right)
+{
+  return left.id().less_than(right.id());
+}
+
+bool blob_less(const BlobRecord& left, const BlobRecord& right)
+{
+  return memcmp(left.reference.id(), right.reference.id(),
+                BlobRef::ID_SIZE) < 0;
 }
 
 }  // namespace
 
-bool encode_node(const Node& node, Bytes* output)
+bool encode_texel(const Texel& texel, Bytes* output)
 {
-  if (output == 0 || node.id().is_unset()) {
-    return false;
+  return encode_texel_body(texel, output);
+}
+
+bool decode_texel(const Byte* data, Size size, Texel* output)
+{
+  return decode_texel_body(data, size, output);
+}
+
+bool validate_snapshot(const Texels& texels, const BlobRecords& blobs)
+{
+  TexelIndexes texel_indexes;
+  BlobIndexes blob_indexes;
+
+  for (Size i = 0; i < blobs.size(); ++i) {
+    const BlobRecord& blob = blobs[i];
+    String key = blob_key(blob.reference.id());
+    if (blob.reference.is_unset() ||
+        blob.reference.size() != static_cast<U64>(blob.bytes.size()) ||
+        blob_indexes.find(key) != blob_indexes.end()) {
+      return false;
+    }
+    blob_indexes[key] = i;
   }
 
-  output->clear();
-  if (!write_bytes(output, node.id().bytes(), NodeId::SIZE)) {
-    return false;
-  }
-  if (!write_u32(output, (U32)node.size())) {
-    return false;
-  }
-
-  for (Size i = 0; i < node.size(); ++i) {
-    Port port;
-    if (!node.at(i, &port)) {
+  for (Size i = 0; i < texels.size(); ++i) {
+    const Texel& texel = texels[i];
+    if (!texel.valid() ||
+        (temporal_evaluator(texel.evaluator()) &&
+         !valid_temporal_texel(texel)) ||
+        texel_indexes.find(texel.id()) != texel_indexes.end()) {
       return false;
     }
-    if (!write_string(output, port.name())) {
-      return false;
-    }
-    if (!write_u8(output, (Byte)port.direction())) {
-      return false;
-    }
-    if (!encode_value(port.value(), output)) {
-      return false;
-    }
+    texel_indexes[texel.id()] = i;
   }
 
+  for (Size i = 0; i < texels.size(); ++i) {
+    const Texel& texel = texels[i];
+    if (texel.has_content() &&
+        !value_references_valid(texel.content(), texel_indexes,
+                                blob_indexes, blobs)) {
+      return false;
+    }
+    for (Size input_index = 0; input_index < texel.input_size();
+         ++input_index) {
+      InputPort input;
+      if (!texel.input_at(input_index, &input)) {
+        return false;
+      }
+      if (!input.has_binding()) {
+        continue;
+      }
+      TexelIndexes::const_iterator source =
+          texel_indexes.find(input.binding().source());
+      if (source == texel_indexes.end()) {
+        return false;
+      }
+      OutputPort output;
+      if (!texels[source->second].get_output(
+              input.binding().output().c_str(), &output) ||
+          output.type() != input.type()) {
+        return false;
+      }
+    }
+    for (Size output_index = 0; output_index < texel.output_size();
+         ++output_index) {
+      OutputPort output;
+      if (!texel.output_at(output_index, &output) ||
+          (output.has_source() &&
+           !value_references_valid(output.source(), texel_indexes,
+                                   blob_indexes, blobs))) {
+        return false;
+      }
+    }
+  }
+
+  VisitTable visits;
+  for (Size i = 0; i < texels.size(); ++i) {
+    if (visits.find(texels[i].id()) == visits.end() &&
+        !visit(texels[i].id(), texels, texel_indexes, &visits)) {
+      return false;
+    }
+  }
   return true;
 }
 
-bool decode_node(const Byte* data, Size size, Node* output)
+bool encode_snapshot(const Texels& texels, const BlobRecords& blobs,
+                     Bytes* output)
 {
-  if (data == 0 || output == 0) {
+  if (output == 0 || texels.size() > 0xffffffffu ||
+      blobs.size() > 0xffffffffu || !validate_snapshot(texels, blobs)) {
     return false;
   }
 
-  Size offset = 0;
-  Byte id_bytes[NodeId::SIZE];
-  if (!read_bytes(data, size, &offset, id_bytes, NodeId::SIZE)) {
+  Texels sorted_texels = texels;
+  BlobRecords sorted_blobs = blobs;
+  std::sort(sorted_texels.begin(), sorted_texels.end(), texel_less);
+  std::sort(sorted_blobs.begin(), sorted_blobs.end(), blob_less);
+
+  Bytes encoded;
+  if (!write_bytes(&encoded, SNAPSHOT_MAGIC, sizeof(SNAPSHOT_MAGIC)) ||
+      !write_u32(&encoded, SNAPSHOT_VERSION) ||
+      !write_u32(&encoded, static_cast<U32>(sorted_texels.size()))) {
     return false;
   }
+  for (Size i = 0; i < sorted_texels.size(); ++i) {
+    Bytes texel;
+    if (!encode_texel_body(sorted_texels[i], &texel) ||
+        !write_u64(&encoded, static_cast<U64>(texel.size())) ||
+        !write_bytes(&encoded, texel.data(), texel.size())) {
+      return false;
+    }
+  }
 
-  Node node;
-  NodeId id;
-  id.set_bytes(id_bytes);
-  node.set_id(id);
-
-  U32 port_count = 0;
-  if (!read_u32(data, size, &offset, &port_count)) {
+  if (!write_u32(&encoded, static_cast<U32>(sorted_blobs.size()))) {
     return false;
   }
-
-  for (U32 i = 0; i < port_count; ++i) {
-    String name;
-    Byte direction = 0;
-    Value value;
-    if (!read_string(data, size, &offset, &name)) {
-      return false;
-    }
-    if (!read_u8(data, size, &offset, &direction)) {
-      return false;
-    }
-    if (direction != PORT_IN && direction != PORT_OUT) {
-      return false;
-    }
-    if (!decode_value(data, size, &offset, &value)) {
-      return false;
-    }
-    if (!node.put(Port(name.c_str(), (PortDirection)direction, value))) {
+  for (Size i = 0; i < sorted_blobs.size(); ++i) {
+    const BlobRecord& blob = sorted_blobs[i];
+    if (!write_bytes(&encoded, blob.reference.id(), BlobRef::ID_SIZE) ||
+        !write_u64(&encoded, blob.reference.size()) ||
+        !write_bytes(&encoded, blob.bytes.data(), blob.bytes.size())) {
       return false;
     }
   }
-
-  if (offset != size) {
-    return false;
-  }
-
-  *output = node;
+  output->swap(encoded);
   return true;
 }
 
-bool encode_fiber(const Fiber& fiber, Bytes* output)
+bool decode_snapshot(const Byte* data, Size size, Texels* texels,
+                     BlobRecords* blobs)
 {
-  if (output == 0) {
-    return false;
-  }
-  if (fiber.source().is_unset() || fiber.target().is_unset()) {
-    return false;
-  }
-  if (fiber.source_port().empty() || fiber.target_port().empty()) {
+  if (data == 0 || texels == 0 || blobs == 0) {
     return false;
   }
 
-  output->clear();
-  return write_bytes(output, fiber.source().bytes(), NodeId::SIZE) &&
-         write_string(output, fiber.source_port()) &&
-         write_bytes(output, fiber.target().bytes(), NodeId::SIZE) &&
-         write_string(output, fiber.target_port());
-}
-
-bool decode_fiber(const Byte* data, Size size, Fiber* output)
-{
-  if (data == 0 || output == 0) {
-    return false;
-  }
-
-  Size offset = 0;
-  Byte source_bytes[NodeId::SIZE];
-  Byte target_bytes[NodeId::SIZE];
-  String source_port;
-  String target_port;
-
-  if (!read_bytes(data, size, &offset, source_bytes, NodeId::SIZE) ||
-      !read_string(data, size, &offset, &source_port) ||
-      !read_bytes(data, size, &offset, target_bytes, NodeId::SIZE) ||
-      !read_string(data, size, &offset, &target_port)) {
-    return false;
-  }
-  if (offset != size) {
-    return false;
-  }
-
-  NodeId source;
-  NodeId target;
-  source.set_bytes(source_bytes);
-  target.set_bytes(target_bytes);
-
-  Fiber fiber;
-  fiber.set_source(source, source_port.c_str());
-  fiber.set_target(target, target_port.c_str());
-  *output = fiber;
-  return true;
-}
-
-bool encode_graph(const Nodes& nodes, const Fibers& fibers, Bytes* output)
-{
-  if (output == 0) {
-    return false;
-  }
-
-  output->clear();
-  if (!write_bytes(output, (const Byte*)"LUGRF", 6)) {
-    return false;
-  }
-  if (!write_u16(output, 1)) {
-    return false;
-  }
-  if (!write_u32(output, (U32)nodes.size())) {
-    return false;
-  }
-
-  for (Size i = 0; i < nodes.size(); ++i) {
-    Bytes encoded;
-    if (!encode_node(nodes[i], &encoded)) {
-      return false;
-    }
-    if (!write_u32(output, (U32)encoded.size()) ||
-        !write_bytes(output, encoded.data(), encoded.size())) {
-      return false;
-    }
-  }
-
-  if (!write_u32(output, (U32)fibers.size())) {
-    return false;
-  }
-
-  for (Size i = 0; i < fibers.size(); ++i) {
-    Bytes encoded;
-    if (!encode_fiber(fibers[i], &encoded)) {
-      return false;
-    }
-    if (!write_u32(output, (U32)encoded.size()) ||
-        !write_bytes(output, encoded.data(), encoded.size())) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-bool decode_graph(const Byte* data, Size size, Nodes* nodes, Fibers* fibers)
-{
-  if (data == 0 || nodes == 0 || fibers == 0) {
-    return false;
-  }
-
-  Size offset = 0;
-  Byte magic[6];
+  Reader reader(data, size);
+  Byte magic[SNAPSHOT_MAGIC_SIZE];
   U32 version = 0;
-  if (!read_bytes(data, size, &offset, magic, 6) ||
-      memcmp(magic, "LUGRF", 6) != 0 ||
-      !read_u16(data, size, &offset, &version) ||
-      version != 1) {
+  U32 texel_count = 0;
+  Texels decoded_texels;
+  BlobRecords decoded_blobs;
+  TexelIndexes texel_indexes;
+  BlobIndexes blob_indexes;
+
+  if (!reader.read(magic, sizeof(magic)) ||
+      memcmp(magic, SNAPSHOT_MAGIC, sizeof(magic)) != 0 ||
+      !reader.u32(&version) || version != SNAPSHOT_VERSION ||
+      !reader.u32(&texel_count) ||
+      static_cast<U64>(texel_count) >
+          static_cast<U64>(reader.remaining() / 8)) {
     return false;
   }
 
-  nodes->clear();
-  fibers->clear();
+  for (U32 i = 0; i < texel_count; ++i) {
+    U64 encoded_size = 0;
+    if (!reader.u64(&encoded_size) || encoded_size == 0 ||
+        encoded_size > static_cast<U64>(SIZE_MAX) ||
+        static_cast<Size>(encoded_size) > reader.remaining()) {
+      return false;
+    }
+    Texel texel;
+    if (!decode_texel_body(reader.current(),
+                           static_cast<Size>(encoded_size), &texel) ||
+        texel_indexes.find(texel.id()) != texel_indexes.end() ||
+        !reader.skip(static_cast<Size>(encoded_size))) {
+      return false;
+    }
+    texel_indexes[texel.id()] = decoded_texels.size();
+    decoded_texels.push_back(texel);
+  }
 
-  U32 node_count = 0;
-  if (!read_u32(data, size, &offset, &node_count)) {
+  U32 blob_count = 0;
+  if (!reader.u32(&blob_count) ||
+      static_cast<U64>(blob_count) >
+          static_cast<U64>(reader.remaining() /
+                           (BlobRef::ID_SIZE + sizeof(U64)))) {
     return false;
   }
-
-  for (U32 i = 0; i < node_count; ++i) {
-    U32 encoded_size = 0;
-    if (!read_u32(data, size, &offset, &encoded_size)) {
+  for (U32 i = 0; i < blob_count; ++i) {
+    Byte id[BlobRef::ID_SIZE];
+    U64 byte_size = 0;
+    if (!reader.read(id, sizeof(id)) || !reader.u64(&byte_size) ||
+        byte_size > static_cast<U64>(SIZE_MAX) ||
+        static_cast<Size>(byte_size) > reader.remaining()) {
       return false;
     }
-    if (offset + encoded_size > size) {
+    BlobRecord blob;
+    blob.reference = BlobRef(id, byte_size);
+    String key = blob_key(id);
+    if (blob.reference.is_unset() ||
+        blob_indexes.find(key) != blob_indexes.end()) {
       return false;
     }
-    Node node;
-    if (!decode_node(data + offset, encoded_size, &node)) {
+    blob.bytes.assign(reader.current(),
+                      reader.current() + static_cast<Size>(byte_size));
+    if (!reader.skip(static_cast<Size>(byte_size))) {
       return false;
     }
-    offset += encoded_size;
-    nodes->push_back(node);
+    blob_indexes[key] = decoded_blobs.size();
+    decoded_blobs.push_back(blob);
   }
 
-  U32 fiber_count = 0;
-  if (!read_u32(data, size, &offset, &fiber_count)) {
+  if (!reader.done() ||
+      !validate_snapshot(decoded_texels, decoded_blobs)) {
     return false;
   }
-
-  for (U32 i = 0; i < fiber_count; ++i) {
-    U32 encoded_size = 0;
-    if (!read_u32(data, size, &offset, &encoded_size)) {
-      return false;
-    }
-    if (offset + encoded_size > size) {
-      return false;
-    }
-    Fiber fiber;
-    if (!decode_fiber(data + offset, encoded_size, &fiber)) {
-      return false;
-    }
-    offset += encoded_size;
-    fibers->push_back(fiber);
-  }
-
-  return offset == size;
+  texels->swap(decoded_texels);
+  blobs->swap(decoded_blobs);
+  return true;
 }
 
 }  // namespace lucia

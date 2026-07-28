@@ -2,14 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "fiber.h"
-#include "file_volume.h"
-#include "node.h"
-#include "node_id.h"
-#include "port.h"
-#include "principal.h"
-#include "store.h"
-#include "value.h"
+#include "fabric/store.h"
+#include "loom/spool.h"
+#include "storage/file_volume.h"
 
 using namespace lucia;
 
@@ -17,357 +12,309 @@ namespace {
 
 enum { DEFAULT_PAGES = 64 };
 
-const char* default_image = "loom.img";
-const char* default_key   = "loom.key";
+class ConcatEvaluator : public Evaluator {
+public:
+  void evaluate(const Texel&, const ValueOutcomeMap& inputs,
+                ValueOutcomeMap* outputs) override
+  {
+    ValueOutcomeMap::const_iterator left  = inputs.find("left");
+    ValueOutcomeMap::const_iterator right = inputs.find("right");
+    if (left == inputs.end() || right == inputs.end() ||
+        left->second.status() != VALUE_AVAILABLE ||
+        right->second.status() != VALUE_AVAILABLE) {
+      (*outputs)["value"] = ValueOutcome::unavailable();
+      return;
+    }
+    (*outputs)["value"] = ValueOutcome::available(
+        Value(left->second.value().text() + right->second.value().text()));
+  }
+};
 
-void print_usage()
+void usage()
 {
   fprintf(stderr,
           "usage:\n"
-          "  loom init   [--image PATH] [--key PATH] [--pages N]\n"
-          "  loom status [--image PATH] [--key PATH]\n"
-          "  loom list   [--image PATH] [--key PATH]\n"
-          "  loom show   <id> [--image PATH] [--key PATH]\n"
-          "  loom put    <id> <port> <text> [--image PATH] [--key PATH]\n"
-          "  loom demo   [--image PATH] [--key PATH]\n"
-          "\n"
-          "id is two hex digits for the first byte (rest zero), e.g. 01\n"
-          "defaults: --image loom.img --key loom.key --pages %d\n",
-          DEFAULT_PAGES);
+          "  loom init [--image PATH] [--pages N]\n"
+          "  loom status [--image PATH]\n"
+          "  loom list [--image PATH]\n"
+          "  loom show ID [--image PATH]\n"
+          "  loom source TEXT [--image PATH]\n"
+          "  loom concat LEFT_ID RIGHT_ID [--image PATH]\n"
+          "  loom connect TARGET INPUT SOURCE OUTPUT [--image PATH]\n"
+          "  loom pull ID OUTPUT [--image PATH]\n"
+          "  loom demo [--image PATH]\n");
 }
 
-bool parse_hex_byte(const char* text, Byte* value)
+bool parse_id(const char* text, TexelId* id)
 {
-  if (text == 0 || value == 0 || strlen(text) != 2) {
+  return id != 0 && id->parse(text) && !id->is_unset();
+}
+
+bool open_store(const char* path, FileVolume* volume, Store* store)
+{
+  if (!volume->open(path)) {
+    fprintf(stderr, "loom: cannot open image %s\n", path);
     return false;
   }
-
-  unsigned int parsed = 0;
-  if (sscanf(text, "%02x", &parsed) != 1 &&
-      sscanf(text, "%02X", &parsed) != 1) {
-    return false;
-  }
-  *value = (Byte)parsed;
-  return true;
-}
-
-NodeId make_id(Byte marker)
-{
-  Byte raw[NodeId::SIZE];
-  memset(raw, 0, NodeId::SIZE);
-  raw[0] = marker;
-  NodeId id;
-  id.set_bytes(raw);
-  return id;
-}
-
-void print_id(const NodeId& id)
-{
-  const Byte* bytes = id.bytes();
-  for (Size i = 0; i < NodeId::SIZE; ++i) {
-    printf("%02x", bytes[i]);
-  }
-}
-
-void print_value(const Value& value)
-{
-  switch (value.kind()) {
-  case VALUE_EMPTY:
-    printf("(empty)");
-    break;
-  case VALUE_BOOL:
-    printf(value.boolean() ? "true" : "false");
-    break;
-  case VALUE_INT:
-    printf("%lld", (long long)value.integer());
-    break;
-  case VALUE_FLOAT:
-    printf("%g", value.real());
-    break;
-  case VALUE_STRING:
-    printf("\"%s\"", value.text().c_str());
-    break;
-  case VALUE_BYTES:
-    printf("<%zu bytes>", value.bytes().size());
-    break;
-  }
-}
-
-bool save_key(const char* path, const Principal& who)
-{
-  FILE* file = fopen(path, "wb");
-  if (file == 0) {
-    fprintf(stderr, "loom: cannot write key %s\n", path);
-    return false;
-  }
-  const Size wrote = fwrite(who.seal_key(), 1, KEY_SIZE, file);
-  fclose(file);
-  if (wrote != KEY_SIZE) {
-    fprintf(stderr, "loom: short write for key %s\n", path);
+  if (!store->open(volume)) {
+    fprintf(stderr, "loom: cannot open Fabric %s\n", path);
     return false;
   }
   return true;
 }
 
-bool load_key(const char* path, Principal* who)
+Texel make_source(const char* text)
 {
-  if (who == 0) {
-    return false;
-  }
-
-  FILE* file = fopen(path, "rb");
-  if (file == 0) {
-    fprintf(stderr, "loom: cannot read key %s\n", path);
-    return false;
-  }
-
-  Byte secret[KEY_SIZE];
-  const Size read_count = fread(secret, 1, KEY_SIZE, file);
-  fclose(file);
-  if (read_count != KEY_SIZE) {
-    fprintf(stderr, "loom: key %s is not %d bytes\n", path, KEY_SIZE);
-    return false;
-  }
-  return who->set_secret(secret);
+  TexelId id;
+  id.generate();
+  Texel texel(id);
+  OutputPort output("value", VALUE_TEXT);
+  output.set_source(Value(text));
+  texel.put_output(output);
+  return texel;
 }
 
-bool open_store(const char* image_path, const char* key_path,
-                FileVolume* volume, Principal* who, Store* store)
+bool put_texel(Store* store, const Texel& texel)
 {
-  if (!load_key(key_path, who)) {
-    return false;
-  }
-  if (!volume->open(image_path)) {
-    fprintf(stderr, "loom: cannot open image %s\n", image_path);
-    return false;
-  }
-  if (!store->open(volume, *who)) {
-    fprintf(stderr, "loom: cannot open fabric store (wrong key?)\n");
-    return false;
-  }
-  return true;
+  Transaction transaction;
+  return store->begin(&transaction) &&
+         transaction.put(texel) &&
+         transaction.commit();
 }
 
-int cmd_init(const char* image_path, const char* key_path, U64 pages)
+int command_init(const char* path, U64 pages)
 {
-  Principal who;
-  if (!who.create()) {
-    fprintf(stderr, "loom: key generate failed\n");
-    return 1;
-  }
-  if (!save_key(key_path, who)) {
-    return 1;
-  }
-
   FileVolume volume;
-  if (!volume.create(image_path, pages)) {
-    fprintf(stderr, "loom: cannot create image %s\n", image_path);
+  if (!volume.create(path, pages)) {
+    fprintf(stderr, "loom: cannot create image %s\n", path);
     return 1;
   }
-
   Store store;
-  if (!store.create(&volume, who)) {
-    fprintf(stderr, "loom: cannot create fabric store\n");
+  if (!store.create(&volume)) {
+    fprintf(stderr, "loom: cannot initialize Fabric\n");
     return 1;
   }
-
-  printf("created %s (%llu pages) and %s\n", image_path,
-         (unsigned long long)pages, key_path);
+  printf("created %s generation=%llu\n", path,
+         (unsigned long long)store.generation());
   return 0;
 }
 
-int cmd_status(const char* image_path, const char* key_path)
+int command_status(const char* path)
 {
   FileVolume volume;
-  Principal who;
   Store store;
-  if (!open_store(image_path, key_path, &volume, &who, &store)) {
+  if (!open_store(path, &volume, &store)) {
     return 1;
   }
-
-  printf("image:  %s\n", image_path);
-  printf("key:    %s\n", key_path);
-  printf("pages:  %llu\n", (unsigned long long)volume.size());
-  printf("nodes:  %zu\n", store.node_count());
-  printf("fibers: %zu\n", store.fiber_count());
+  printf("image: %s\n", path);
+  printf("generation: %llu\n", (unsigned long long)store.generation());
+  printf("texels: %zu\n", store.size());
   return 0;
 }
 
-int cmd_list(const char* image_path, const char* key_path)
+int command_list(const char* path)
 {
   FileVolume volume;
-  Principal who;
   Store store;
-  if (!open_store(image_path, key_path, &volume, &who, &store)) {
+  if (!open_store(path, &volume, &store)) {
     return 1;
   }
-
-  // Store does not expose node iteration yet — list via known demo ids and
-  // report counts.  Full scan lands with journal/catalog work.
-  printf("%zu nodes, %zu fibers\n", store.node_count(), store.fiber_count());
-
-  for (int marker = 0; marker < 256; ++marker) {
-    NodeId id = make_id((Byte)marker);
-    if (!store.has_node(id)) {
-      continue;
-    }
-    Node node;
-    if (!store.get_node(id, &node)) {
-      continue;
-    }
-    print_id(id);
-    printf("  ports=%zu\n", node.size());
-  }
-  return 0;
-}
-
-int cmd_show(const char* image_path, const char* key_path, Byte marker)
-{
-  FileVolume volume;
-  Principal who;
-  Store store;
-  if (!open_store(image_path, key_path, &volume, &who, &store)) {
-    return 1;
-  }
-
-  NodeId id = make_id(marker);
-  Node node;
-  if (!store.get_node(id, &node)) {
-    fprintf(stderr, "loom: node not found\n");
-    return 1;
-  }
-
-  printf("id ");
-  print_id(id);
-  printf("\n");
-
-  for (Size i = 0; i < node.size(); ++i) {
-    Port port;
-    if (!node.at(i, &port)) {
+  for (Size i = 0; i < store.size(); ++i) {
+    Texel texel;
+    if (!store.at(i, &texel)) {
       return 1;
     }
-    printf("  %s %s ", port.name().c_str(),
-           port.direction() == PORT_OUT ? "out" : "in");
-    print_value(port.value());
-    printf("\n");
+    printf("%s inputs=%zu outputs=%zu evaluator=%s\n",
+           texel.id().format().c_str(), texel.input_size(),
+           texel.output_size(),
+           texel.evaluator().empty() ? "-" : texel.evaluator().c_str());
   }
   return 0;
 }
 
-int cmd_put(const char* image_path, const char* key_path, Byte marker,
-            const char* port_name, const char* text)
+int command_show(const char* path, const TexelId& id)
 {
   FileVolume volume;
-  Principal who;
   Store store;
-  if (!open_store(image_path, key_path, &volume, &who, &store)) {
+  if (!open_store(path, &volume, &store)) {
+    return 1;
+  }
+  Texel texel;
+  if (!store.get(id, &texel)) {
+    fprintf(stderr, "loom: texel not found\n");
+    return 1;
+  }
+  printf("id: %s\n", texel.id().format().c_str());
+  printf("revision: %llu\n", (unsigned long long)texel.revision());
+  printf("evaluator: %s\n",
+         texel.evaluator().empty() ? "-" : texel.evaluator().c_str());
+  for (Size i = 0; i < texel.input_size(); ++i) {
+    InputPort input;
+    texel.input_at(i, &input);
+    printf("input %s type=%d bound=%s\n", input.name().c_str(),
+           (int)input.type(), input.has_binding() ? "yes" : "no");
+  }
+  for (Size i = 0; i < texel.output_size(); ++i) {
+    OutputPort output;
+    texel.output_at(i, &output);
+    printf("output %s type=%d source=%s revision=%llu\n",
+           output.name().c_str(), (int)output.type(),
+           output.has_source() ? "yes" : "no",
+           (unsigned long long)output.revision());
+  }
+  return 0;
+}
+
+int command_source(const char* path, const char* text)
+{
+  FileVolume volume;
+  Store store;
+  if (!open_store(path, &volume, &store)) {
+    return 1;
+  }
+  Texel texel = make_source(text);
+  if (!put_texel(&store, texel)) {
+    fprintf(stderr, "loom: source commit failed\n");
+    return 1;
+  }
+  printf("%s\n", texel.id().format().c_str());
+  return 0;
+}
+
+int command_concat(const char* path, const TexelId& left,
+                   const TexelId& right)
+{
+  FileVolume volume;
+  Store store;
+  if (!open_store(path, &volume, &store)) {
     return 1;
   }
 
-  NodeId id = make_id(marker);
-  Node node;
-  if (store.has_node(id)) {
-    if (!store.get_node(id, &node)) {
-      return 1;
-    }
+  TexelId id;
+  id.generate();
+  Texel texel(id);
+  texel.set_evaluator("concat");
+  texel.put_input(InputPort("left", VALUE_TEXT));
+  texel.put_input(InputPort("right", VALUE_TEXT));
+  texel.put_output(OutputPort("value", VALUE_TEXT));
+
+  Transaction transaction;
+  if (!store.begin(&transaction) ||
+      !transaction.put(texel) ||
+      !transaction.connect(id, "left", left, "value") ||
+      !transaction.connect(id, "right", right, "value") ||
+      !transaction.commit()) {
+    fprintf(stderr, "loom: concat commit failed\n");
+    return 1;
+  }
+  printf("%s\n", id.format().c_str());
+  return 0;
+}
+
+int command_connect(const char* path, const TexelId& target,
+                    const char* input, const TexelId& source,
+                    const char* output)
+{
+  FileVolume volume;
+  Store store;
+  if (!open_store(path, &volume, &store)) {
+    return 1;
+  }
+  Transaction transaction;
+  if (!store.begin(&transaction) ||
+      !transaction.connect(target, input, source, output) ||
+      !transaction.commit()) {
+    fprintf(stderr, "loom: connect failed\n");
+    return 1;
+  }
+  return 0;
+}
+
+int command_pull(const char* path, const TexelId& id, const char* output)
+{
+  FileVolume volume;
+  Store store;
+  if (!open_store(path, &volume, &store)) {
+    return 1;
+  }
+
+  ConcatEvaluator concat;
+  EvaluatorRegistry registry;
+  registry.put("concat", &concat);
+  Spool spool(&store, &registry);
+
+  ValueOutcome outcome;
+  if (!spool.demand(id, output, &outcome)) {
+    return 1;
+  }
+  if (outcome.status() == VALUE_ERROR) {
+    fprintf(stderr, "loom: %s\n", outcome.message().c_str());
+    return 1;
+  }
+  if (outcome.status() == VALUE_UNAVAILABLE) {
+    printf("unavailable\n");
+    return 0;
+  }
+  if (outcome.value().type() == VALUE_TEXT) {
+    printf("%s\n", outcome.value().text().c_str());
   } else {
-    node.set_id(id);
+    printf("available type=%d\n", (int)outcome.value().type());
   }
-
-  if (!node.put(Port(port_name, PORT_OUT, Value(text)))) {
-    fprintf(stderr, "loom: put port failed\n");
-    return 1;
-  }
-  if (!store.put_node(node) || !store.flush()) {
-    fprintf(stderr, "loom: store flush failed\n");
-    return 1;
-  }
-
-  printf("put ");
-  print_id(id);
-  printf(" %s ", port_name);
-  print_value(Value(text));
-  printf("\n");
   return 0;
 }
 
-int cmd_demo(const char* image_path, const char* key_path)
+int command_demo(const char* path)
 {
-  Principal who;
+  if (command_init(path, DEFAULT_PAGES) != 0) {
+    return 1;
+  }
+
   FileVolume volume;
   Store store;
-
-  FILE* key_file = fopen(key_path, "rb");
-  if (key_file == 0) {
-    if (cmd_init(image_path, key_path, DEFAULT_PAGES) != 0) {
-      return 1;
-    }
-  } else {
-    fclose(key_file);
-  }
-
-  if (!open_store(image_path, key_path, &volume, &who, &store)) {
+  if (!open_store(path, &volume, &store)) {
     return 1;
   }
 
-  Node message;
-  message.set_id(make_id(0x01));
-  message.put(Port("body", PORT_OUT, Value("hello bob")));
-  message.put(Port("to", PORT_IN, Value("bob")));
+  Texel left = make_source("hello ");
+  Texel right = make_source("loom");
+  TexelId joined_id;
+  joined_id.generate();
+  Texel joined(joined_id);
+  joined.set_evaluator("concat");
+  joined.put_input(InputPort("left", VALUE_TEXT));
+  joined.put_input(InputPort("right", VALUE_TEXT));
+  joined.put_output(OutputPort("value", VALUE_TEXT));
 
-  Node keyboard;
-  keyboard.set_id(make_id(0x02));
-  keyboard.put(Port("text", PORT_OUT, Value("hello bob")));
-
-  Fiber fiber;
-  fiber.set_source(keyboard.id(), "text");
-  fiber.set_target(message.id(), "body");
-
-  if (!store.put_node(message) || !store.put_node(keyboard)) {
-    fprintf(stderr, "loom: demo write failed\n");
-    return 1;
-  }
-  if (store.fiber_count() == 0) {
-    if (!store.put_fiber(fiber)) {
-      fprintf(stderr, "loom: demo fiber failed\n");
-      return 1;
-    }
-  }
-  if (!store.flush()) {
-    fprintf(stderr, "loom: demo flush failed\n");
+  Transaction transaction;
+  if (!store.begin(&transaction) ||
+      !transaction.put(left) ||
+      !transaction.put(right) ||
+      !transaction.put(joined) ||
+      !transaction.connect(joined.id(), "left", left.id(), "value") ||
+      !transaction.connect(joined.id(), "right", right.id(), "value") ||
+      !transaction.commit()) {
+    fprintf(stderr, "loom: demo commit failed\n");
     return 1;
   }
 
-  Store check;
-  FileVolume reopened;
-  Principal same;
-  if (!open_store(image_path, key_path, &reopened, &same, &check)) {
+  Store reopened;
+  FileVolume reopened_volume;
+  if (!open_store(path, &reopened_volume, &reopened)) {
     return 1;
   }
-
-  Node loaded;
-  if (!check.get_node(message.id(), &loaded)) {
-    fprintf(stderr, "loom: demo reload failed\n");
+  ConcatEvaluator concat;
+  EvaluatorRegistry registry;
+  registry.put("concat", &concat);
+  Spool spool(&reopened, &registry);
+  ValueOutcome outcome;
+  if (!spool.demand(joined.id(), "value", &outcome) ||
+      outcome.status() != VALUE_AVAILABLE ||
+      outcome.value().text() != "hello loom") {
+    fprintf(stderr, "loom: demo demand failed\n");
     return 1;
   }
-
-  Port body;
-  if (!loaded.get("body", &body) || body.value().text() != "hello bob") {
-    fprintf(stderr, "loom: demo body mismatch\n");
-    return 1;
-  }
-
-  printf("demo ok\n");
-  printf("  nodes=%zu fibers=%zu\n", check.node_count(), check.fiber_count());
-  printf("  message 01 body ");
-  print_value(body.value());
-  printf("\n");
+  printf("demo ok: %s\n", outcome.value().text().c_str());
   return 0;
-}
-
-bool match_flag(const char* arg, const char* name)
-{
-  return arg != 0 && strcmp(arg, name) == 0;
 }
 
 }  // namespace
@@ -375,80 +322,67 @@ bool match_flag(const char* arg, const char* name)
 int main(int argc, char** argv)
 {
   if (argc < 2) {
-    print_usage();
+    usage();
     return 1;
   }
 
   const char* command = argv[1];
-  const char* image_path = default_image;
-  const char* key_path = default_key;
+  const char* image = "loom.img";
   U64 pages = DEFAULT_PAGES;
-  Byte id_marker = 0;
-  const char* port_name = 0;
-  const char* text = 0;
-  bool have_id = false;
+  const char* positional[4] = { 0, 0, 0, 0 };
+  int positional_count = 0;
 
   for (int i = 2; i < argc; ++i) {
-    if (match_flag(argv[i], "--image") && i + 1 < argc) {
-      image_path = argv[++i];
-    } else if (match_flag(argv[i], "--key") && i + 1 < argc) {
-      key_path = argv[++i];
-    } else if (match_flag(argv[i], "--pages") && i + 1 < argc) {
+    if (strcmp(argv[i], "--image") == 0 && i + 1 < argc) {
+      image = argv[++i];
+    } else if (strcmp(argv[i], "--pages") == 0 && i + 1 < argc) {
       pages = (U64)strtoull(argv[++i], 0, 10);
-      if (pages < 2) {
-        fprintf(stderr, "loom: --pages must be >= 2\n");
-        return 1;
-      }
-    } else if (!have_id && (strcmp(command, "show") == 0 ||
-                            strcmp(command, "put") == 0)) {
-      if (!parse_hex_byte(argv[i], &id_marker)) {
-        fprintf(stderr, "loom: bad id '%s' (want two hex digits)\n", argv[i]);
-        return 1;
-      }
-      have_id = true;
-    } else if (strcmp(command, "put") == 0 && port_name == 0) {
-      port_name = argv[i];
-    } else if (strcmp(command, "put") == 0 && text == 0) {
-      text = argv[i];
+    } else if (positional_count < 4) {
+      positional[positional_count++] = argv[i];
     } else {
-      fprintf(stderr, "loom: unexpected argument '%s'\n", argv[i]);
-      print_usage();
+      usage();
       return 1;
     }
   }
 
-  if (strcmp(command, "init") == 0) {
-    return cmd_init(image_path, key_path, pages);
+  if (strcmp(command, "init") == 0 && positional_count == 0) {
+    return command_init(image, pages);
   }
-  if (strcmp(command, "status") == 0) {
-    return cmd_status(image_path, key_path);
+  if (strcmp(command, "status") == 0 && positional_count == 0) {
+    return command_status(image);
   }
-  if (strcmp(command, "list") == 0) {
-    return cmd_list(image_path, key_path);
+  if (strcmp(command, "list") == 0 && positional_count == 0) {
+    return command_list(image);
   }
-  if (strcmp(command, "show") == 0) {
-    if (!have_id) {
-      print_usage();
-      return 1;
-    }
-    return cmd_show(image_path, key_path, id_marker);
+  if (strcmp(command, "source") == 0 && positional_count == 1) {
+    return command_source(image, positional[0]);
   }
-  if (strcmp(command, "put") == 0) {
-    if (!have_id || port_name == 0 || text == 0) {
-      print_usage();
-      return 1;
-    }
-    return cmd_put(image_path, key_path, id_marker, port_name, text);
-  }
-  if (strcmp(command, "demo") == 0) {
-    return cmd_demo(image_path, key_path);
-  }
-  if (strcmp(command, "help") == 0 || strcmp(command, "--help") == 0) {
-    print_usage();
-    return 0;
+  if (strcmp(command, "demo") == 0 && positional_count == 0) {
+    return command_demo(image);
   }
 
-  fprintf(stderr, "loom: unknown command '%s'\n", command);
-  print_usage();
+  TexelId first;
+  TexelId second;
+  if (strcmp(command, "show") == 0 && positional_count == 1 &&
+      parse_id(positional[0], &first)) {
+    return command_show(image, first);
+  }
+  if (strcmp(command, "pull") == 0 && positional_count == 2 &&
+      parse_id(positional[0], &first)) {
+    return command_pull(image, first, positional[1]);
+  }
+  if (strcmp(command, "concat") == 0 && positional_count == 2 &&
+      parse_id(positional[0], &first) &&
+      parse_id(positional[1], &second)) {
+    return command_concat(image, first, second);
+  }
+  if (strcmp(command, "connect") == 0 && positional_count == 4 &&
+      parse_id(positional[0], &first) &&
+      parse_id(positional[2], &second)) {
+    return command_connect(image, first, positional[1], second,
+                           positional[3]);
+  }
+
+  usage();
   return 1;
 }

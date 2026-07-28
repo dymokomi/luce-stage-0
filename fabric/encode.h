@@ -1,28 +1,35 @@
 #pragma once
 
-#include "fiber.h"
-#include "node.h"
-#include "types.h"
+#include "blob_ref.h"
+#include "texel.h"
+#include "storage/types.h"
 
 namespace lucia {
 
-typedef std::vector<Node>  Nodes;
-typedef std::vector<Fiber> Fibers;
+struct BlobRecord {
+  BlobRef reference;
+  Bytes   bytes;
+};
+
+typedef std::vector<Texel>      Texels;
+typedef std::vector<BlobRecord> BlobRecords;
 
 // ---------------------------------------------------------------------------
-// Graph binary encoding
+// Snapshot binary encoding
 // ---------------------------------------------------------------------------
 //
-// Deterministic little-endian layout for nodes and fibers.
-// Magic is "LUGRF\0", version 1.
+// Versioned deterministic little-endian encoding for Texels and out-of-line
+// blobs.  Decoding is strict and consumes the complete input.
 //
-bool encode_node(const Node& node, Bytes* output);
-bool decode_node(const Byte* data, Size size, Node* output);
+bool encode_texel(const Texel& texel, Bytes* output);
+bool decode_texel(const Byte* data, Size size, Texel* output);
 
-bool encode_fiber(const Fiber& fiber, Bytes* output);
-bool decode_fiber(const Byte* data, Size size, Fiber* output);
+bool encode_snapshot(const Texels& texels, const BlobRecords& blobs,
+                     Bytes* output);
+bool decode_snapshot(const Byte* data, Size size, Texels* texels,
+                     BlobRecords* blobs);
 
-bool encode_graph(const Nodes& nodes, const Fibers& fibers, Bytes* output);
-bool decode_graph(const Byte* data, Size size, Nodes* nodes, Fibers* fibers);
+// Checks graph bindings, types, blob references, and acyclicity.
+bool validate_snapshot(const Texels& texels, const BlobRecords& blobs);
 
 }  // namespace lucia

@@ -6,44 +6,40 @@ Fiber::Fiber()
 {
 }
 
-const NodeId& Fiber::source() const
+Fiber::Fiber(const TexelId& source, const char* output_name)
 {
-  return source_node;
+  set_source(source, output_name);
 }
 
-const String& Fiber::source_port() const
+const TexelId& Fiber::source() const
 {
-  return source_port_name;
+  return source_texel;
 }
 
-const NodeId& Fiber::target() const
+const String& Fiber::output() const
 {
-  return target_node;
+  return output_name;
 }
 
-const String& Fiber::target_port() const
+bool Fiber::set_source(const TexelId& texel, const char* output_name)
 {
-  return target_port_name;
+  if (texel.is_unset() || output_name == 0 || output_name[0] == '\0') {
+    return false;
+  }
+  source_texel = texel;
+  this->output_name = output_name;
+  return true;
 }
 
-void Fiber::set_source(const NodeId& node, const char* port_name)
+bool Fiber::valid() const
 {
-  source_node = node;
-  source_port_name = (port_name != 0) ? port_name : "";
-}
-
-void Fiber::set_target(const NodeId& node, const char* port_name)
-{
-  target_node = node;
-  target_port_name = (port_name != 0) ? port_name : "";
+  return !source_texel.is_unset() && !output_name.empty();
 }
 
 bool Fiber::equals(const Fiber& other) const
 {
-  return source_node.equals(other.source_node) &&
-         target_node.equals(other.target_node) &&
-         source_port_name == other.source_port_name &&
-         target_port_name == other.target_port_name;
+  return source_texel.equals(other.source_texel) &&
+         output_name == other.output_name;
 }
 
 }  // namespace lucia

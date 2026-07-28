@@ -1,28 +1,31 @@
 #pragma once
 
-#include "types.h"
+#include "blob_ref.h"
+#include "texel_id.h"
+#include "storage/types.h"
 
 namespace lucia {
 
 // ---------------------------------------------------------------------------
-// ValueKind
+// ValueType
 // ---------------------------------------------------------------------------
 //
-enum ValueKind {
-  VALUE_EMPTY  = 0,
-  VALUE_BOOL   = 1,
-  VALUE_INT    = 2,
-  VALUE_FLOAT  = 3,
-  VALUE_STRING = 4,
-  VALUE_BYTES  = 5
+enum ValueType {
+  VALUE_NONE  = 0,
+  VALUE_BOOL  = 1,
+  VALUE_INT   = 2,
+  VALUE_REAL  = 3,
+  VALUE_TEXT  = 4,
+  VALUE_BYTES = 5,
+  VALUE_TEXEL = 6,
+  VALUE_BLOB  = 7
 };
 
 // ---------------------------------------------------------------------------
 // Value
 // ---------------------------------------------------------------------------
 //
-// Typed payload cached on a Port.  Scalars live inline; string and bytes
-// heap-allocate only when that kind is active.  NodeId-as-value comes later.
+// One typed Fabric value.  VALUE_NONE represents no value.
 //
 class Value {
 public:
@@ -35,34 +38,30 @@ public:
   explicit Value(const String& text);
   Value(const Byte* data, Size size);
   explicit Value(const Bytes& data);
+  explicit Value(const TexelId& texel);
+  explicit Value(const BlobRef& blob);
 
-  Value(const Value& other);
-  Value& operator=(const Value& other);
-  ~Value();
-
-  ValueKind kind() const;
+  ValueType type() const;
 
   bool          boolean() const;
   S64           integer() const;
   double        real() const;
   const String& text() const;
   const Bytes&  bytes() const;
+  const TexelId& texel() const;
+  const BlobRef& blob() const;
 
   bool equals(const Value& other) const;
 
 private:
-  void clear();
-  void copy_from(const Value& other);
-
-  ValueKind value_kind;
-
-  union {
-    bool    bool_value;
-    S64     int_value;
-    double  float_value;
-    String* string_value;
-    Bytes*  bytes_value;
-  };
+  ValueType value_type;
+  bool      bool_value;
+  S64       int_value;
+  double    real_value;
+  String    text_value;
+  Bytes     bytes_value;
+  TexelId   texel_value;
+  BlobRef   blob_value;
 };
 
 }  // namespace lucia

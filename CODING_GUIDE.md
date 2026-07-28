@@ -4,7 +4,7 @@ Write code that a tired reader can understand a week later.
 Prefer plain, old-school C++ over clever modern ceremony.
 
 `storage/` is the reference style. Match it.
-North star for architecture: [planning/LOOM.md](planning/LOOM.md) (LuciaOS = OS; Loom = the software everyone runs).
+North star for architecture: [planning/LOOM.md](planning/LOOM.md) (LuciaOS = OS; Loom = its trusted local engine).
 
 ## Goals
 
@@ -45,10 +45,10 @@ Strings  // list of strings
 Do not write `std::` in ordinary Lucia code.  Wrap standard containers once with `typedef`, then use the alias:
 
 ```cpp
-typedef std::map<String, Port> PortMap;
+typedef std::map<String, InputPort> InputPortMap;
 ```
 
-Those typedef lines are the only place `std::map` / `std::string` / `std::vector` should appear.  Everywhere else, say `PortMap`, `String`, `Bytes`.
+Those typedef lines are the only place `std::map` / `std::string` / `std::vector` should appear.  Everywhere else, say `InputPortMap`, `String`, `Bytes`.
 
 Do not scatter raw `std::uint64_t`, `unsigned char`, or bare `std::vector<...>` through new code.  If a new common type is needed, add an alias in `types.h` first.
 
@@ -66,8 +66,8 @@ volume.create("lucia.img", 1024);
 volume.open("lucia.img");
 Value(true);                  // not Value::make_bool
 value.boolean();              // not as_bool
-port.set_value(Value("hello"));
-node.put(port);
+output.set_value(Value("hello"));
+texel.put(output);
 ```
 
 ### Collections use a small verb set
@@ -189,38 +189,36 @@ Bad:
 
 ## Organization
 
-Top-level packages (LuciaOS) — names match [planning/LOOM.md](planning/LOOM.md):
+Current foundation packages:
 
 ```text
-platform/  storage/  crypto/  realm/  fabric/  braid/  view/
-gpu/       ui/       ai/      loom/   tests/
+storage/  fabric/  loom/  tests/
 ```
 
-Durable graph work belongs in `fabric/` (sealed store on page `storage/`).
-There is no `apps/` package — programs are subgraphs; Loom is the process.
-`loom/` holds Shuttle, Spool, and the main loop.
+Durable Texels, typed Ports, Fibers, and evaluation contracts belong in `fabric/`.
+Page storage, transactions, recovery, and durability mechanics belong in `storage/`.
+`loom/` is the local process that opens, evaluates, and persists the Fabric.
+
+Views, effects, capabilities, State/Delay, file projection, Braid, and production
+security are deferred. Do not add packages for them during this milestone.
 
 Rules:
 
-- One package, one job (see `README.md`)
+- One package, one job
 - Put headers next to their `.cpp` files while a package is small
 - One clear idea per file
-- OS-specific code goes under `platform/macos`, `platform/linux`, or `platform/windows`
-- Core packages do not include OS headers
 - Public contracts stay small; implementation details stay private
 - Do not add deeper nesting until a real boundary needs it
 
 Dependency rule:
 
 ```text
-loom → ui → gpu → platform
-       ai
-       view → fabric → realm → crypto → storage → platform
-       realm → crypto
-       braid → platform
+loom → fabric → storage
+tests → loom / fabric / storage
 ```
 
-`platform` is the bottom. `loom` is the process that wires the rest.
+Keep storage independent of Fabric concepts. Keep deferred systems out of this
+dependency chain.
 
 ## Classes and APIs
 
@@ -238,9 +236,9 @@ volume.create("lucia.img", 1024);
 volume.write(0, header_bytes);
 volume.flush();
 
-Node node;
-node.set_id(id);
-node.put(Port("out", PORT_OUT));
+Texel texel;
+texel.set_id(id);
+texel.put(OutputPort("out", VALUE_TEXT));
 ```
 
 ## Errors
