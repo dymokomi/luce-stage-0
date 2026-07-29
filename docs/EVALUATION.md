@@ -209,25 +209,29 @@ raw-mode input later raises the drain rate without changing the model.
    the future thread boundary: an evaluation worker would drain the same
    ring the terminal loop drains today.
 
-## Implementation order
+## Implementation status
 
-1. `Transaction::touched` + `Store::changes_since` ring, with
-   `store_test` cases (delta per commit, span union, overflow).
-2. `FiberIndex` with `fiber_index_test` (build, apply, transitive
-   closure, rewiring via delta, removed texels), registered in
-   CMakeLists.
-3. `Spool::advance` with `spool_test` cases (persistent spool across
-   commits; clean endpoints stay cached; dirty path recomputes; early
-   cutoff still skips evaluators when values did not move).
-4. Terminal: session-owned Spool, the reconcile step above, `watch` /
-   `unwatch`, and a `loom_terminal` script proving a watch fires on
-   `set` and stays quiet on unrelated commits.
-5. `Store::observe` — the volatile observation path with its logical
-   generation, `store_test` cases (observation invisible after reopen,
-   generation advances, delta recorded), and the keyboard boundary
-   switched from durable commits to observations.
-6. Later, in order of need: per-output dirty granularity, bounded event
-   streams beside latest-value observations (the pointer example in
-   LOOM.md), scheduled demand as durable, visible demand Texels compiled
-   into timer wake-ups with occurrence identities, Spool cache budget,
-   threading the drain.
+Steps 1–5 are implemented and tested:
+
+1. Done — `Transaction::touched` + the `Store::changes_since` ring
+   (`store_test`: delta per commit, span union, removal, ring overflow).
+2. Done — `FiberIndex` in `loom/evaluation` (`fiber_index_test`: build,
+   apply, transitive closure, rewiring via delta, removed texels).
+3. Done — `Spool::advance(from, to, dirty)` (`spool_test`: an unrelated
+   commit costs zero evaluator calls after advance; a dirty upstream
+   observation recomputes exactly the stale path).
+4. Done — the terminal reconciles after every line (`changes_since` →
+   dirty closure → `advance` → re-demand dirty watches), `watch` /
+   `unwatch` commands, `pull` on the session Spool, and the
+   `loom_terminal` ctest proves a watch fires through the real binary.
+   Watches print only when the outcome's displayed value moves.
+5. Done — `Store::observe`, the volatile observation path on the logical
+   generation (`store_test`: value visible and delta recorded, stale
+   transactions refused, reopen reverts to durable state).  The keyboard
+   boundary observes instead of committing.
+
+Later, in order of need: per-output dirty granularity, bounded event
+streams beside latest-value observations (the pointer example in
+LOOM.md), scheduled demand as durable, visible demand Texels compiled
+into timer wake-ups with occurrence identities, Spool cache budget,
+threading the drain.

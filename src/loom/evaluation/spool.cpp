@@ -104,6 +104,23 @@ bool Spool::demand(const TexelId &texel, const char *output, ValueOutcome *outco
     return true;
 }
 
+void Spool::advance(U64 from_generation, U64 to_generation, const TexelIdSet &dirty) {
+    SourceCache::iterator source = source_cache.begin();
+    for (; source != source_cache.end(); ++source) {
+        if (source->second.checked_generation == from_generation &&
+            dirty.find(source->first.texel) == dirty.end()) {
+            source->second.checked_generation = to_generation;
+        }
+    }
+    ComputeCache::iterator computed = compute_cache.begin();
+    for (; computed != compute_cache.end(); ++computed) {
+        if (computed->second.checked_generation == from_generation &&
+            dirty.find(computed->first) == dirty.end()) {
+            computed->second.checked_generation = to_generation;
+        }
+    }
+}
+
 void Spool::clear() {
     source_cache.clear();
     compute_cache.clear();

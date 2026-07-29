@@ -33,15 +33,13 @@ These commands close that gap and are prerequisites for everything below.
 
 ## Phase 3 — the live DAG
 
-The engine becomes an explicit push/pull hybrid, designed in
-[EVALUATION.md](EVALUATION.md): commits produce ChangeSets, a disposable
-FiberIndex turns them into a dirty closure, one long-lived Spool is
-advanced past clean records, and `watch` re-demands dirty subscriptions.
-Push notifies; only demand evaluates.
-
-- `watch OUTPUT` / `unwatch OUTPUT` — subscriptions re-demanded from the
-  dirty set after each commit, printing only outputs whose effective
-  revision moved.
+Done — the engine is an explicit push/pull hybrid per
+[EVALUATION.md](EVALUATION.md): commits and volatile observations produce
+ChangeSets, the disposable FiberIndex turns them into a dirty closure,
+the session's long-lived Spool advances past clean records, and
+`watch OUTPUT` / `unwatch OUTPUT` re-demand dirty subscriptions after
+every line, printing only outcomes that moved.  Push invalidates; pull
+evaluates.
 - `view prose|table NAME...` — build View texels with the existing
   `make_prose_view` / `make_table_view`, and render the focused View
   through `Shell::compose` after changes.  The terminal becomes the first

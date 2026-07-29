@@ -19,6 +19,8 @@
 #include "commands/select.h"
 #include "commands/set.h"
 #include "commands/show.h"
+#include "commands/unwatch.h"
+#include "commands/watch.h"
 
 namespace lucia {
 
@@ -33,7 +35,7 @@ namespace lucia {
 //
 class CommandSet {
 public:
-    enum { COMMAND_COUNT = 18 };
+    enum { COMMAND_COUNT = 20 };
 
     CommandSet();
 
@@ -61,6 +63,8 @@ private:
     SetCommand        set_command;
     EvalCommand       eval_command;
     PullCommand       pull_command;
+    WatchCommand      watch_command;
+    UnwatchCommand    unwatch_command;
     ListCommand       list_command;
     HelpCommand       help_command;
     ExitCommand       exit_command;

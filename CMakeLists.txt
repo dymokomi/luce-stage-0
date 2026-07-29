@@ -63,6 +63,7 @@ lucia_target(lucia_realm)
 
 add_library(lucia_loom
     src/loom/effects/effect.cpp
+    src/loom/evaluation/fiber_index.cpp
     src/loom/evaluation/spool.cpp
     src/loom/evaluation/state.cpp
     src/loom/organization/arrangement.cpp
@@ -108,6 +109,7 @@ lucia_test(volume_test tests/storage/volume_test.cpp lucia_storage)
 lucia_test(fabric_test tests/fabric/fabric_test.cpp lucia_fabric)
 lucia_test(store_test tests/fabric/store_test.cpp lucia_fabric)
 lucia_test(spool_test tests/loom/spool_test.cpp lucia_loom)
+lucia_test(fiber_index_test tests/loom/fiber_index_test.cpp lucia_loom)
 lucia_test(effect_test tests/loom/effect_test.cpp lucia_loom)
 lucia_test(state_test tests/loom/state_test.cpp lucia_loom)
 lucia_test(arrangement_test tests/loom/arrangement_test.cpp lucia_loom)
@@ -124,6 +126,7 @@ $<TARGET_FILE:loom> create ${CMAKE_BINARY_DIR}/loom-terminal.img && \
 printf 'new left\\noutput value text\\nset value hello\\n\
 new right\\noutput value text\\nset value world\\n\
 new join\\neval concat\\ninput left text\\ninput right text\\noutput value text\\n\
-connect left left value\\nconnect right right value\\npull value\\nexit\\n' | \
-$<TARGET_FILE:loom> open ${CMAKE_BINARY_DIR}/loom-terminal.img | grep -q helloworld"
+connect left left value\\nconnect right right value\\npull value\\n\
+watch value\\nselect left\\nset value HELLO\\nexit\\n' | \
+$<TARGET_FILE:loom> open ${CMAKE_BINARY_DIR}/loom-terminal.img | grep -q HELLOworld"
 )

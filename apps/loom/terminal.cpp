@@ -11,9 +11,48 @@ namespace lucia {
 
 enum { LINE_SIZE = 1024 };
 
-Terminal::Terminal(Store *store) {
+Terminal::Terminal(Store *store) : spool(store, evaluators.registry()), seen(0) {
     session.store      = store;
     session.evaluators = evaluators.registry();
+    session.spool      = &spool;
+}
+
+// Reconcile the disposable machinery with whatever the last command (or
+// keyboard observation) changed, then re-demand only the dirty watches.
+void Terminal::reconcile() {
+    Store    *store   = session.store;
+    const U64 current = store->generation();
+    if (current == seen) {
+        return;
+    }
+
+    TexelIdList changed;
+    TexelIdSet  dirty;
+    bool        full = false;
+    if (store->changes_since(seen, &changed)) {
+        index.apply(store, changed);
+        index.downstream(changed, &dirty);
+        spool.advance(seen, current, dirty);
+    } else {
+        index.build(store);
+        spool.clear();
+        full = true;
+    }
+    seen = current;
+
+    for (WatchList::iterator watch = session.watches.begin();
+         watch != session.watches.end(); ++watch) {
+        if (!full && dirty.find(watch->texel) == dirty.end()) {
+            continue;
+        }
+        ValueOutcome outcome;
+        if (!spool.demand(watch->texel, watch->output.c_str(), &outcome) ||
+            outcome_equals(outcome, watch->last)) {
+            continue;
+        }
+        watch->last = outcome;
+        print_outcome(store, watch->texel, watch->output, outcome);
+    }
 }
 
 // The prompt names the selection: "loom>", or "loom alpha>" while the texel
@@ -36,6 +75,8 @@ int Terminal::run() {
     if (!ensure_boundary(session.store)) {
         fprintf(stderr, "loom: cannot create boundary texels\n");
     }
+    index.build(session.store);
+    seen = session.store->generation();
 
     for (;;) {
         if (interactive) {
@@ -74,6 +115,7 @@ int Terminal::run() {
         if (result == COMMAND_UNKNOWN) {
             fprintf(stderr, "loom: unknown command %s (try help)\n", words[0].c_str());
         }
+        reconcile();
     }
 }
 

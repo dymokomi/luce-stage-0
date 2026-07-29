@@ -11,8 +11,8 @@ namespace lucia {
 // PullCommand
 // ---------------------------------------------------------------------------
 //
-// pull OUTPUT — demand the selected texel's output through a fresh Spool
-// and print the outcome.  Demand pulls upstream values and runs evaluators
+// pull OUTPUT — one-shot demand on the selected texel's output through
+// the session Spool.  Demand pulls upstream values and runs evaluators
 // only where cached revisions are stale.
 //
 class PullCommand : public Command {
@@ -38,9 +38,8 @@ public:
         if (!selected_texel(*session, &texel)) {
             return COMMAND_ERROR;
         }
-        Spool        spool(session->store, session->evaluators);
         ValueOutcome outcome;
-        if (!spool.demand(session->selected, words[1].c_str(), &outcome)) {
+        if (!session->spool->demand(session->selected, words[1].c_str(), &outcome)) {
             fprintf(stderr, "loom: demand failed (no output named %s?)\n",
                     words[1].c_str());
             return COMMAND_ERROR;

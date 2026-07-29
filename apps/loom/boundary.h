@@ -11,12 +11,11 @@ namespace lucia {
 // ---------------------------------------------------------------------------
 //
 // The host enters the Fabric as observations (LOOM.md): a device pushes a
-// new source value onto a boundary texel's Output Ports, bumping revisions;
-// nothing downstream recomputes until something demands it.  Push
-// invalidates; pull evaluates.  Observations are durably committed here
-// for now — a stopgap until the volatile observation path in
-// docs/EVALUATION.md lands (transient observations should stay volatile
-// unless deliberately captured).
+// new source value onto a boundary texel's Output Ports through the
+// Store's volatile observe path, bumping revisions and the logical
+// generation without touching the volume.  Nothing downstream recomputes
+// until something demands it: push invalidates, pull evaluates.  An
+// observation becomes durable only when a later commit snapshots it.
 //
 // keyboard offers line (text, the last line typed) and count (int).  mouse
 // offers x, y (real) and button (int); it cannot fire while the terminal
@@ -100,18 +99,13 @@ inline bool observe_keyboard(Store *store, const String &line) {
     if (!find_named(store, KEYBOARD_NAME, &id) || !store->get(id, &keyboard)) {
         return false;
     }
-    OutputPort line_port;
-    OutputPort count_port;
-    if (!keyboard.get_output("line", &line_port) ||
-        !keyboard.get_output("count", &count_port)) {
+    OutputPort count;
+    if (!keyboard.get_output("count", &count)) {
         return false;
     }
-    const S64 count = count_port.has_source() ? count_port.source().integer() : 0;
-    line_port.set_source(Value(line));
-    count_port.set_source(Value(count + 1));
-    keyboard.put_output(line_port);
-    keyboard.put_output(count_port);
-    return commit_put(store, keyboard);
+    const S64 counted = count.has_source() ? count.source().integer() : 0;
+    return store->observe(id, "line", Value(line)) &&
+           store->observe(id, "count", Value(counted + 1));
 }
 
 } // namespace lucia

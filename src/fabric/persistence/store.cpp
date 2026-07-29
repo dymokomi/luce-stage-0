@@ -304,6 +304,7 @@ bool Transaction::put_changed(const Texel &texel) {
         ++next_revision;
     }
     texels[changed.id()] = changed;
+    touched.insert(changed.id());
     return true;
 }
 
@@ -343,6 +344,7 @@ bool Transaction::remove(const TexelId &id) {
         return false;
     }
     texels.erase(id);
+    touched.insert(id);
     return true;
 }
 
@@ -468,6 +470,7 @@ bool Store::create(Volume *store_volume) {
     volume = store_volume;
     texels.clear();
     blobs.clear();
+    changes.clear();
     store_generation = 1;
     active_arena     = 0;
     open_flag        = true;
@@ -505,6 +508,7 @@ bool Store::open(Volume *store_volume) {
     volume = store_volume;
     texels.swap(loaded_texels);
     blobs.swap(loaded_blobs);
+    changes.clear();
     store_generation = newest->generation;
     active_arena     = newest->arena;
     open_flag        = true;
@@ -580,6 +584,7 @@ bool Store::begin(Transaction *transaction) {
     transaction->texels          = texels;
     transaction->blobs           = blobs;
     transaction->base_generation = store_generation;
+    transaction->touched.clear();
     transaction->next_revision =
         highest_revision == static_cast<U64>(-1) ? 0 : highest_revision + 1;
     transaction->active = true;
@@ -613,12 +618,84 @@ bool Store::commit(Transaction *transaction) {
     blobs.swap(transaction->blobs);
     store_generation = new_generation;
     active_arena     = inactive_arena;
+    record_changes(transaction->touched);
 
     transaction->store           = 0;
     transaction->base_generation = 0;
     transaction->next_revision   = 0;
     transaction->active          = false;
     return true;
+}
+
+bool Store::observe(const TexelId &id, const char *output_name, const Value &value) {
+    if (!open_flag || output_name == 0 || id.is_unset() ||
+        store_generation == static_cast<U64>(-1)) {
+        return false;
+    }
+    TexelTable::iterator found = texels.find(id);
+    if (found == texels.end()) {
+        return false;
+    }
+
+    Texel      changed = found->second;
+    OutputPort output;
+    if (!changed.get_output(output_name, &output) || !output.set_source(value) ||
+        !changed.put_output(output)) {
+        return false;
+    }
+
+    U64 highest_revision = 0;
+    for (TexelTable::const_iterator texel = texels.begin(); texel != texels.end();
+         ++texel) {
+        if (texel->second.revision() > highest_revision) {
+            highest_revision = texel->second.revision();
+        }
+    }
+    if (highest_revision == static_cast<U64>(-1)) {
+        return false;
+    }
+
+    changed.set_revision(highest_revision + 1);
+    found->second = changed;
+    ++store_generation;
+
+    TexelIdSet observed;
+    observed.insert(id);
+    record_changes(observed);
+    return true;
+}
+
+bool Store::changes_since(U64 generation, TexelIdList *changed) const {
+    if (!open_flag || changed == 0 || generation > store_generation) {
+        return false;
+    }
+    changed->clear();
+    if (generation == store_generation) {
+        return true;
+    }
+    if (changes.empty() || changes.front().generation > generation + 1) {
+        return false;
+    }
+
+    TexelIdSet united;
+    for (ChangeSets::const_iterator set = changes.begin(); set != changes.end(); ++set) {
+        if (set->generation <= generation) {
+            continue;
+        }
+        united.insert(set->changed.begin(), set->changed.end());
+    }
+    changed->assign(united.begin(), united.end());
+    return true;
+}
+
+void Store::record_changes(const TexelIdSet &changed) {
+    ChangeSet set;
+    set.generation = store_generation;
+    set.changed.assign(changed.begin(), changed.end());
+    changes.push_back(set);
+    if (changes.size() > CHANGE_RING) {
+        changes.erase(changes.begin());
+    }
 }
 
 } // namespace lucia

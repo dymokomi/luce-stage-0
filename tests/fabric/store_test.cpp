@@ -202,11 +202,130 @@ static void test_failed_publish_keeps_previous_generation() {
     CHECK(!reopened.has(replacement.id()));
 }
 
+static bool contains(const TexelIdList &list, const TexelId &id) {
+    for (Size i = 0; i < list.size(); ++i) {
+        if (list[i].equals(id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_changes_since_ring() {
+    MemoryVolume volume(32);
+    Store        store;
+    CHECK(store.create(&volume));
+
+    const U64   base = store.generation();
+    TexelIdList changed;
+    CHECK(store.changes_since(base, &changed));
+    CHECK(changed.empty());
+    CHECK(!store.changes_since(base + 1, &changed));
+
+    Texel       one = source("one");
+    Texel       two = source("two");
+    Transaction transaction;
+    CHECK(store.begin(&transaction));
+    CHECK(transaction.put(one));
+    CHECK(transaction.commit());
+    CHECK(store.begin(&transaction));
+    CHECK(transaction.put(two));
+    CHECK(transaction.commit());
+
+    CHECK(store.changes_since(base, &changed));
+    CHECK(changed.size() == 2);
+    CHECK(contains(changed, one.id()));
+    CHECK(contains(changed, two.id()));
+
+    CHECK(store.changes_since(base + 1, &changed));
+    CHECK(changed.size() == 1);
+    CHECK(contains(changed, two.id()));
+
+    // Removal is a change too.
+    CHECK(store.begin(&transaction));
+    CHECK(transaction.remove(two.id()));
+    CHECK(transaction.commit());
+    CHECK(store.changes_since(base + 2, &changed));
+    CHECK(changed.size() == 1);
+    CHECK(contains(changed, two.id()));
+
+    // Push the ring past capacity; the old baseline loses coverage.
+    for (int i = 0; i < Store::CHANGE_RING + 4; ++i) {
+        CHECK(store.begin(&transaction));
+        CHECK(transaction.get(one.id(), &one));
+        OutputPort output;
+        CHECK(one.get_output("value", &output));
+        CHECK(output.set_source(Value("again")));
+        CHECK(one.put_output(output));
+        CHECK(transaction.put(one));
+        CHECK(transaction.commit());
+    }
+    CHECK(!store.changes_since(base, &changed));
+    CHECK(store.changes_since(store.generation() - 1, &changed));
+    CHECK(changed.size() == 1);
+    CHECK(contains(changed, one.id()));
+}
+
+static void test_observe_stays_volatile() {
+    MemoryVolume volume(32);
+    Store        store;
+    CHECK(store.create(&volume));
+
+    Texel       eye = source("seen");
+    Transaction transaction;
+    CHECK(store.begin(&transaction));
+    CHECK(transaction.put(eye));
+    CHECK(transaction.commit());
+
+    Texel before;
+    CHECK(store.get(eye.id(), &before));
+    const U64 durable      = store.generation();
+    const U64 pre_revision = before.revision();
+
+    CHECK(store.observe(eye.id(), "value", Value("newer")));
+    CHECK(store.generation() == durable + 1);
+
+    Texel observed;
+    CHECK(store.get(eye.id(), &observed));
+    OutputPort output;
+    CHECK(observed.get_output("value", &output));
+    CHECK(output.source().text() == "newer");
+    CHECK(observed.revision() > pre_revision);
+
+    TexelIdList changed;
+    CHECK(store.changes_since(durable, &changed));
+    CHECK(changed.size() == 1);
+    CHECK(contains(changed, eye.id()));
+
+    // Wrong type, missing output, and missing texel all refuse.
+    CHECK(!store.observe(eye.id(), "value", Value(true)));
+    CHECK(!store.observe(eye.id(), "missing", Value("x")));
+    TexelId absent;
+    CHECK(absent.generate());
+    CHECK(!store.observe(absent, "value", Value("x")));
+
+    // A transaction begun before an observation cannot commit over it.
+    CHECK(store.begin(&transaction));
+    CHECK(store.observe(eye.id(), "value", Value("race")));
+    CHECK(!transaction.commit());
+    CHECK(transaction.abort());
+
+    // Reopen: the observation is gone, the durable value remains.
+    Store reopened;
+    CHECK(reopened.open(&volume));
+    Texel durable_texel;
+    CHECK(reopened.get(eye.id(), &durable_texel));
+    CHECK(durable_texel.get_output("value", &output));
+    CHECK(output.source().text() == "seen");
+}
+
 int main() {
     test_encode_round_trip();
     test_transaction_blob_fanout_and_reopen();
     test_rejects_cycle_and_dangling_reference();
     test_failed_publish_keeps_previous_generation();
+    test_changes_since_ring();
+    test_observe_stays_volatile();
 
     if (failures != 0) {
         fprintf(stderr, "%d checks failed\n", failures);

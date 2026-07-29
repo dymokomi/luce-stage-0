@@ -20,9 +20,11 @@ CommandSet::CommandSet() : help_command(commands, COMMAND_COUNT) {
     commands[12] = &set_command;
     commands[13] = &eval_command;
     commands[14] = &pull_command;
-    commands[15] = &list_command;
-    commands[16] = &help_command;
-    commands[17] = &exit_command;
+    commands[15] = &watch_command;
+    commands[16] = &unwatch_command;
+    commands[17] = &list_command;
+    commands[18] = &help_command;
+    commands[19] = &exit_command;
 }
 
 CommandResult CommandSet::run(Session *session, const Strings &words) {

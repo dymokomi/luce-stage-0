@@ -10,6 +10,21 @@ namespace lucia {
 typedef std::map<TexelId, Texel>     TexelTable;
 typedef std::map<String, BlobRecord> BlobTable;
 
+// ---------------------------------------------------------------------------
+// ChangeSet
+// ---------------------------------------------------------------------------
+//
+// The texels one commit or observation changed.  Kept in a bounded
+// in-memory ring so interested machinery can ask what moved; never
+// persisted — losing the ring costs a rebuild, not correctness.
+//
+struct ChangeSet {
+    U64         generation;
+    TexelIdList changed;
+};
+
+typedef std::vector<ChangeSet> ChangeSets;
+
 class Store;
 
 // ---------------------------------------------------------------------------
@@ -54,6 +69,7 @@ private:
     Store     *store;
     TexelTable texels;
     BlobTable  blobs;
+    TexelIdSet touched;
     U64        base_generation;
     U64        next_revision;
     bool       active;
@@ -67,6 +83,8 @@ private:
 //
 class Store {
 public:
+    enum { CHANGE_RING = 64 };
+
     Store();
 
     // The Volume must outlive this Store and every Transaction begun from it.
@@ -84,6 +102,18 @@ public:
 
     bool begin(Transaction *transaction);
 
+    // Volatile observation: update an observed Output Port in memory only,
+    // advancing the port, texel, and logical generation and recording the
+    // change.  Nothing reaches the volume; reopen reverts to the last
+    // durable snapshot.  An observation becomes durable only when a later
+    // commit publishes a snapshot that contains it.
+    bool observe(const TexelId &id, const char *output_name, const Value &value);
+
+    // Union of the texels changed in (generation, current].  False when
+    // the ring no longer covers that span; callers must then assume
+    // everything changed and rebuild their disposable machinery.
+    bool changes_since(U64 generation, TexelIdList *changed) const;
+
 private:
     friend class Transaction;
 
@@ -91,10 +121,12 @@ private:
     Store &operator=(const Store &);
 
     bool commit(Transaction *transaction);
+    void record_changes(const TexelIdSet &changed);
 
     Volume    *volume;
     TexelTable texels;
     BlobTable  blobs;
+    ChangeSets changes;
     U64        store_generation;
     int        active_arena;
     bool       open_flag;

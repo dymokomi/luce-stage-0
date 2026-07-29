@@ -2,6 +2,9 @@
 
 #include "base/types.h"
 
+#include <set>
+#include <vector>
+
 namespace lucia {
 
 // ---------------------------------------------------------------------------
@@ -33,5 +36,8 @@ private:
 };
 
 bool operator<(const TexelId &left, const TexelId &right);
+
+typedef std::vector<TexelId> TexelIdList;
+typedef std::set<TexelId>    TexelIdSet;
 
 } // namespace lucia

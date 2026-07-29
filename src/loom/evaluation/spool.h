@@ -59,6 +59,13 @@ public:
 
     bool demand(const TexelId &texel, const char *output, ValueOutcome *outcome);
 
+    // Advance the cache across one reconcile step: records checked at
+    // from_generation whose texel is not dirty are stamped as checked at
+    // to_generation without touching the Store.  The dirty set must be a
+    // conservative transitive closure of everything changed in between;
+    // anything else revalidates lazily on its next demand.
+    void advance(U64 from_generation, U64 to_generation, const TexelIdSet &dirty);
+
     void clear();
     Size cache_size() const;
 

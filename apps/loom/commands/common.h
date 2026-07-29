@@ -231,4 +231,43 @@ inline bool commit_put(Store *store, const Texel &texel) {
     return store->begin(&transaction) && transaction.put(texel) && transaction.commit();
 }
 
+// Short display label for a texel: its name, or the id's first characters.
+inline String texel_label(const Store *store, const TexelId &id) {
+    Texel  texel;
+    String name;
+    if (store->get(id, &texel) && texel_name(texel, &name)) {
+        return name;
+    }
+    return id.format().substr(0, 8);
+}
+
+// True when two outcomes would display identically.
+inline bool outcome_equals(const ValueOutcome &left, const ValueOutcome &right) {
+    if (left.status() != right.status()) {
+        return false;
+    }
+    if (left.status() == VALUE_AVAILABLE) {
+        return left.value().equals(right.value());
+    }
+    if (left.status() == VALUE_ERROR) {
+        return left.message() == right.message();
+    }
+    return true;
+}
+
+// Print one endpoint outcome as label.output = value.
+inline void print_outcome(const Store *store, const TexelId &texel, const String &output,
+                          const ValueOutcome &outcome) {
+    const String label = texel_label(store, texel);
+    if (outcome.status() == VALUE_ERROR) {
+        printf("%s.%s error: %s\n", label.c_str(), output.c_str(),
+               outcome.message().c_str());
+    } else if (outcome.status() == VALUE_UNAVAILABLE) {
+        printf("%s.%s unavailable\n", label.c_str(), output.c_str());
+    } else {
+        printf("%s.%s = %s\n", label.c_str(), output.c_str(),
+               value_text(outcome.value()).c_str());
+    }
+}
+
 } // namespace lucia
