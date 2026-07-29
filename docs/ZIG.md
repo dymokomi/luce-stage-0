@@ -1,24 +1,24 @@
-# The Zig port
+# The Zig engine
 
-Decision: **the Loom engine is written in Zig; LuciaOS is not required to
-be.**  Zig 0.16 is pinned (`build.zig.zon`).  C is the constitutional
-border: the engine exports a stable C ABI (`abi/loom.h`), and platform
-shells (Swift, Objective-C++, Metal-cpp, browser engines) live outside it
-in whatever language the platform speaks best.  The Zig tree is the
-first-class implementation at the repository root; the original C++
-engine is demoted to `reference/`.
+Decision: **Loom is written in Zig; LuciaOS is not required to be.**
+Zig 0.16 is pinned (`build.zig.zon`).  C is the constitutional border:
+the engine exports a stable C ABI (`abi/loom.h`), and platform shells
+(Swift, Objective-C++, Metal-cpp, browser engines) live outside it in
+whatever language the platform speaks best.  The `loom` terminal is
+written in Zig and speaks the engine module directly; the ABI is for
+shells that cannot.
 
 Why Zig fits Loom: no hidden allocation or control flow, explicit
 allocators, tagged unions over class hierarchies, errors as values,
 freestanding-capable, and 0.16's `std.Io` — anything that may block is
 passed an explicit I/O interface, which is LOOM.md's effect-boundary rule
-expressed as a language feature.  `FileVolume` carries its `Io`; the rest
-of the engine never touches the host.
+expressed as a language feature.  `FileVolume` and `FileProjection` carry
+their `Io`; the rest of the engine never touches the host.
 
 ## Layout
 
 ```text
-build.zig              zig build test runs the engine suite + ABI smoke
+build.zig              zig build installs; zig build test proves
 build.zig.zon          pins Zig 0.16
 loom/
   loom.zig             module root, re-exports every package
@@ -29,41 +29,44 @@ loom/
   organization/        arrangement
   effects/             effect intents, boundary, receipts
   authority/           capability tokens and the grant table
+  view/                view evaluators and the shell runtime
+  projection/          manifest and file projection
+  first_lucia_test.zig the acceptance proof from LOOM.md
 abi/
   loom.h               the constitutional C border
   smoke_test.c         drives the client lifecycle from C
-testdata/              golden image fixtures shared by both engines
-reference/             the demoted C++ engine (src/, tests/)
+apps/loom/             the loom terminal
+testdata/              golden image fixtures
 ```
 
 Tests are `test` blocks beside the code they prove, run with
-`zig build test` (any host OS — the engine is platform-free).
+`zig build test` (any host OS — the engine is platform-free; the
+terminal and projection reach the host only through explicit `std.Io`).
 
-## The contract with the C++ tree
+## The format contract
 
-The C++ implementation under `reference/src/` is the reference.  The
-**on-disk image format is the frozen contract**: descriptor pages
-(`LUSTORE`), snapshot encoding (`LUTEXEL`), FNV-style checksums, and
-the four-word blob identifier are byte-identical in both
-implementations, proven by a golden fixture in `testdata/` that the
-C++ binary wrote and the Zig store must open.  Neither implementation
-ever persists raw struct layouts.
+The port began beside a C++ reference implementation, and the **on-disk
+image format was the frozen contract** between the two trees: descriptor
+pages (`LUSTORE`), snapshot encoding (`LUTEXEL`), FNV-style checksums,
+the four-word blob identifier, and the LUCAP/LUAUTH, LARR, and
+LUEFINT/LUEFOBS content encodings, byte-identical in both.  The C++ tree
+is retired (it lives in git history), but the contract survives it: the
+golden fixture `testdata/golden_store.bin` was written by the C++ binary
+and must always open unchanged, and neither the encodings nor the
+checksums may drift.  Nothing ever persists raw struct layouts.
 
 ## Status
 
-**The engine is fully ported** — every C++ package below the ABI border
-now exists in Zig, tested and format-compatible (41 leak-checked tests,
-`zig build test`):
+**The port is complete** — the engine, the view runtime, the file
+projection, and the terminal are all Zig, tested and leak-checked:
 
 - `storage/volume.zig` — MemoryVolume, FileVolume, the Volume union.
 - `fabric/texel_id.zig`, `value.zig`, `texel.zig` — the model; Value is
   a tagged union; ports live in name-sorted tables.
-- `fabric/encode.zig` — LUTEXEL snapshot encoding, byte-identical.
+- `fabric/encode.zig` — LUTEXEL snapshot encoding.
 - `fabric/store.zig` — Store, Transaction, ChangeSet ring, volatile
-  observe, blobs, LUSTORE descriptor pages.  The golden fixture
-  (`testdata/golden_store.bin`, written by the C++ binary) opens in the
-  Zig store; a Zig-written image was verified to open in the C++
-  terminal.
+  observe, blobs, LUSTORE descriptor pages.  The golden fixture opens
+  here in a test.
 - `evaluation/fiber_index.zig`, `evaluation/spool.zig` — the push/pull
   hybrid engine: reverse index, demand with early cutoff, advance,
   cached error outcomes, cycle detection.
@@ -73,12 +76,24 @@ now exists in Zig, tested and format-compatible (41 leak-checked tests,
 - `organization/arrangement.zig` — LARR content encoding,
   inspect/validate, and add/rename/reorder/remove.
 - `authority/capability.zig` — Capability tokens, the Authority grant
-  table (LUCAP/LUAUTH encodings, deterministic by sorted token), issue
-  with entropy through the explicit Io.
-- `effects/effect.zig` — effect intents and observations (LUEFINT/LUEFOBS
-  encodings), the executor registry, and the once-only Boundary: verify
-  the connected capability, run the executor, persist the receipt under
-  the request identity, and replay from it forever after.
+  table (deterministic by sorted token), issue with entropy through the
+  explicit Io.
+- `effects/effect.zig` — effect intents and observations, the executor
+  registry, and the once-only Boundary: verify the connected
+  capability, run the executor, persist the receipt under the request
+  identity, and replay from it forever after.
+- `view/evaluators.zig`, `view/shell.zig` — prose and table interface
+  renderers over name-sorted text inputs, and the trusted,
+  non-persistent shell: surfaces, focus, compose, accessibility
+  labels, and edits routed back as ordinary transactions.
+- `projection/manifest.zig`, `projection/projection.zig` — the
+  validated output-to-filename map and the controlled host boundary:
+  export, tree verification (symlinks, extra hard links, and
+  unexpected files refuse the operation), guarded import as one
+  transaction.
+- `first_lucia_test.zig` — the acceptance proof: material in two
+  arrangements, computation, two Views, shell edits, an outside tool
+  through the projection, restart.
 
 **The C ABI exists**: `abi/loom.h` is the constitutional border,
 implemented by `loom/abi.zig` and built as `libloom.a` (`zig build`
@@ -91,24 +106,15 @@ and blobs surface in the header when a client needs them.
 `abi/smoke_test.c` drives the whole client lifecycle from C and runs
 under `zig build test`.
 
-**The terminal runs on the Zig engine.**  `apps/loom/` speaks only
-`abi/loom.h` (through the thin RAII wrappers in `apps/loom/engine.h`)
-and links `libloom.a`; CMake drives `zig build` automatically, so
-building the app requires a Zig 0.16 toolchain on PATH.  Terminal
-evaluators are C callbacks; declared outputs they do not emit fall back
-to stored sources behind the border, which is how the name port rides
-beside computed outputs.
+**The terminal is Zig** (`apps/loom/`): it imports the engine module
+directly, builds as the `loom` executable, and its read-dispatch loop
+is tested in-process with scripted sessions.
 
-The C++ engine under `reference/` is the **reference implementation**:
-it builds and its tests keep running as the format's second opinion,
-but the terminal no longer links it.  Still C++ and still above the
-border: the view runtime and file projection, which migrate when Views
-reach the terminal.
-
-## Porting rules
+## Porting rules (kept for the next port)
 
 - Port bottom-up along the dependency chain, tests first, one package a
-  commit: storage → fabric model → encode → store → evaluation.
+  commit: storage → fabric model → encode → store → evaluation → the
+  layers above.
 - Zig std is consumed through a thin surface (allocators, ArrayList,
   Io.File); anything volatile gets a Lucia-owned wrapper before it
   spreads.
@@ -117,6 +123,5 @@ reach the terminal.
   leaks.
 - The scheduler and evaluation semantics belong to Loom, never to Zig
   async; `std.Io` implements boundaries, it does not define them.
-- Style carries over from `docs/CODING_GUIDE.md` in spirit: plain names,
-  section comments, small files, one clear idea per file — expressed in
-  Zig's own conventions (camelCase functions, TitleCase types).
+- Style is `docs/CODING_GUIDE.md`: plain names, section comments, small
+  files, one clear idea per file.

@@ -1,5 +1,3 @@
-/build/
-/build-*/
 *.img
 *.key
 .DS_Store

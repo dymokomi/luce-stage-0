@@ -4,7 +4,7 @@
 //! other Texels — a document outline, folder, playlist, or workspace.
 //! The same Texel may live in many arrangements without being copied;
 //! names here are context-local and never identity.  The LARR content
-//! encoding is a frozen contract shared with the C++ tree.
+//! encoding is a frozen contract.
 
 const std = @import("std");
 const store_mod = @import("../fabric/store.zig");

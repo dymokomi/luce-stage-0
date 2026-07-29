@@ -24,38 +24,26 @@ The architecture and longer-term direction are described in
 
 ## Build and test
 
-The Loom engine is written in Zig 0.16 (`loom/`) behind the C ABI in
-`abi/loom.h`; the engine suite and the C ABI smoke test run on any host OS:
+Everything is Zig 0.16 (see [docs/ZIG.md](docs/ZIG.md)) and runs on any
+host OS:
 
 ```sh
-zig build test
+zig build          # installs the loom terminal and libloom.a under zig-out/
+zig build test     # engine suite + terminal suite + C ABI smoke test
 ```
 
-The full build — the C++ reference tree plus the `loom` terminal, which links
-the Zig engine through the ABI — is driven by CMake (it runs `zig build`
-automatically, so Zig 0.16 must be on PATH):
+`loom/first_lucia_test.zig` exercises the full proof flow from
+`docs/LOOM.md`: durable material in multiple arrangements, computation, two
+Views, editing, restart, and an existing tool through a file projection.
+The on-disk image format is frozen; the golden fixture
+`testdata/golden_store.bin` must always open unchanged.
+
+Try it:
 
 ```sh
-cmake -S . -B build/debug
-cmake --build build/debug
-ctest --test-dir build/debug --output-on-failure
+zig-out/bin/loom create fabric.img
+zig-out/bin/loom open fabric.img
 ```
-
-To verify with runtime sanitizers:
-
-```sh
-cmake -S . -B build/sanitize -DLUCIA_SANITIZE=ON
-cmake --build build/sanitize
-ctest --test-dir build/sanitize --output-on-failure
-```
-
-The CMake host boundary supports macOS only and builds with the Apple Clang
-toolchain provided by Xcode Command Line Tools. `first_lucia_test` exercises the
-full proof flow from `docs/LOOM.md`: durable material in multiple arrangements,
-computation, two Views, editing, restart, and an existing tool through a file
-projection. The on-disk image format is the frozen contract between the two
-engine trees; `testdata/golden_store.bin` must open in both (see
-[docs/ZIG.md](docs/ZIG.md)).
 
 ## Deferred scope
 
@@ -66,19 +54,14 @@ described in `docs/LOOM.md`.
 ## Packages
 
 ```text
-loom/                     the Loom engine (Zig): storage, fabric,
-                          evaluation, organization, effects, authority
+loom/                     the Loom engine: storage, fabric, evaluation,
+                          organization, effects, authority, view,
+                          projection
 loom/abi.zig              implementation of the C ABI border
 abi/                      loom.h, the constitutional C border, and its
                           C smoke test
-testdata/                 golden image fixtures shared by both engines
-apps/loom/                the Loom terminal (C++, speaks only abi/loom.h)
-reference/src/            the C++ reference engine, layered as
-                          platform → storage → fabric → realm → loom →
-                          view / projection
-reference/tests/          grouped package and acceptance tests for the
-                          reference engine
+apps/loom/                the loom terminal
+testdata/                 golden image fixtures
 docs/                     architecture and coding documentation
-build.zig                 engine build: zig build test, zig build
-CMakeLists.txt            full build: reference tree + terminal
+build.zig                 zig build installs, zig build test proves
 ```

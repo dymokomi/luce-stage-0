@@ -8,8 +8,8 @@
 //! reopen reverts to the last durable snapshot.  Every change — durable
 //! or volatile — lands in a bounded ChangeSet ring behind changesSince.
 //!
-//! The descriptor page layout (LUSTORE) is the frozen on-disk contract
-//! shared with the reference C++ implementation.
+//! The descriptor page layout (LUSTORE) is the frozen on-disk contract;
+//! the golden fixture test keeps it honest.
 
 const std = @import("std");
 const volume_mod = @import("../storage/volume.zig");

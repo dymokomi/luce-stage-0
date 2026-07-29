@@ -1,9 +1,10 @@
 # LuciaOS Coding Guide
 
 Write code that a tired reader can understand a week later.
-Prefer plain, old-school C++ over clever modern ceremony.
+Prefer plain, old-school code over clever modern ceremony.
 
-`reference/src/storage/volume/` is the reference style for C++. Match it.
+The engine is written in Zig 0.16.  `loom/storage/volume.zig` is the
+reference style. Match it.
 North star for architecture: [LOOM.md](LOOM.md) (LuciaOS = OS; Loom = its
 trusted local engine).
 
@@ -19,65 +20,69 @@ If a change makes the architecture harder to see, do not merge it.
 
 ## Language
 
-- C++17
-- Headers use `.h`, not `.hpp`
-- No exceptions for ordinary control flow
-- No `[[nodiscard]]`, attributes, or similar noise
-- No `std::expected`, `std::optional`, `std::span`, or heavy template machinery unless there is a clear local need
-- Prefer `bool` success/failure at boundaries
-- Prefer `void*` / `const void*` for raw page buffers
-- Prefer C headers where they read cleaner (`stdint.h`, `string.h`, `stdio.h`)
+- Zig 0.16, pinned in `build.zig.zon`
+- `zig fmt` is the formatter; there is nothing to argue about
+- Errors are values: small explicit error sets, `try` at call sites,
+  no panics for ordinary failure
+- Allocation is explicit: functions that allocate take an `Allocator`
+- Anything that may touch the host takes an explicit `std.Io`; the rest
+  of the engine never sees the host
+- Tagged unions over class hierarchies (`Volume`, `Value`, `Outcome`)
+- Function-pointer tables only where substitution is real (`Evaluator`)
+- Zig std is consumed through a thin surface (allocators, ArrayList,
+  Io.File); anything volatile gets a Lucia-owned wrapper before it
+  spreads
 
-## Types
+## Ownership
 
-Use the shared aliases in `reference/src/base/types.h` (the app carries its
-own copy in `apps/loom/types.h`):
+Every heap-holding type has `clone` and `deinit`, and the doc comment
+says who owns what:
 
-```cpp
-Byte     // uint8_t
-U32      // uint32_t
-U64      // uint64_t
-S64      // int64_t
-Size     // size_t
-String   // text
-Bytes    // byte buffer
-Strings  // list of strings
+```zig
+pub fn clone(self: Texel, allocator: Allocator) !Texel
+pub fn deinit(self: *Texel, allocator: Allocator) void
 ```
 
-Do not write `std::` in ordinary Lucia code.  Wrap standard containers once with `typedef`, then use the alias:
+- The caller owns what a function returns unless the doc says borrowed
+- Borrowed results say what invalidates them ("valid until the next
+  commit")
+- Functions that take ownership say so ("takes ownership of the port")
+- Tests run under `std.testing.allocator`, which fails on leaks —
+  keep it that way
 
-```cpp
-typedef std::map<String, InputPort> InputPortMap;
+A type that must not move after setup (because something captured a
+pointer into it) uses the in-place setup pattern, with a comment:
+
+```zig
+/// Fills self in place: the spool keeps pointers into self, so a
+/// Shell must never move once set up.
+pub fn setup(self: *Shell, allocator: Allocator, store: *Store) !void
 ```
-
-Those typedef lines are the only place `std::map` / `std::string` / `std::vector` should appear.  Everywhere else, say `InputPortMap`, `String`, `Bytes`.
-
-Do not scatter raw `std::uint64_t`, `unsigned char`, or bare `std::vector<...>` through new code.  If a new common type is needed, add an alias in `types.h` first.
 
 ## Naming
 
+Zig conventions: TitleCase types, camelCase functions, snake_case
+variables and fields.
+
 ### Drop the type noun when context already has it
 
-The type or receiver already says what you are dealing with.  Do not repeat it in the function name:
+The type or receiver already says what you are dealing with.  Do not
+repeat it in the function name:
 
-```cpp
-volume.read(page_index, destination);
-volume.write(page_index, source);
+```zig
+volume.read(page_index, &destination);
+volume.write(page_index, &source);
 volume.flush();
-volume.create("lucia.img", 1024);
-volume.open("lucia.img");
-Value(true);                  // not Value::make_bool
-value.boolean();              // not as_bool
-output.set_value(Value("hello"));
-texel.put(output);
+store.get(id);
+texel.putOutput(allocator, port);
 ```
 
 ### Collections use a small verb set
 
 For tables and lists of items:
 
-```cpp
-size()
+```zig
+count()
 has(...)
 get(...)
 put(...)
@@ -85,11 +90,12 @@ remove(...)
 at(...)
 ```
 
-Prefer short names: `size()` not `count_elements()`, `put(...)` not `put_element(...)`.
+Prefer short names: `count()` not `countElements()`, `put(...)` not
+`putElement(...)`.
 
 ### Other functions are short verbs
 
-```cpp
+```zig
 read(...)
 write(...)
 flush()
@@ -101,13 +107,14 @@ encode(...)
 decode(...)
 ```
 
-Getters that answer a question may read as verbs: `is_open()`, `is_unset()`, `has(...)`.
+Getters that answer a question may read as verbs: `isUnset()`,
+`hasSelection()`, `has(...)`.
 
 ### Names are plain English
 
 Prefer:
 
-```cpp
+```zig
 file_handle
 byte_offset
 image_bytes
@@ -117,189 +124,157 @@ page_index
 
 Avoid shorthand and platform-looking names in our code:
 
-```cpp
-fd, fd_
-off, off_t
+```zig
+fd
+off
 buf
 n
 ptr
 ```
 
-POSIX calls may still appear in `.cpp` files. Wrap them immediately in clear local names.
-
-### No trailing underscores
-
-Members use plain names:
-
-```cpp
-U64   pages;
-Bytes bytes;
-int   file_handle;
-```
-
-Do not write `pages_`, `bytes_`, `file_handle_`.
-
-If a parameter would shadow a member, rename the parameter (`image_pages`) or use `this->pages`.
+Host calls stay behind `std.Io`; wrap their results immediately in
+clear local names.
 
 ## Formatting
 
-- Every opening brace stays on the declaration or control-statement line.
-- Use the root `.clang-format`; it specifies four-space indentation, attached
-  braces, and a 92-column limit.
-- Keep related declarations lined up when it helps scanning:
-
-```cpp
-bool read(U64 page_index, void* destination) {
-    if (destination == 0) {
-        return false;
-    }
-    // ...
-}
-```
-
-- Align nearby local declarations when natural:
-
-```cpp
-const S64 offset     = byte_offset(page_index);
-const S64 bytes_read = pread(file_handle, destination, PAGE_SIZE, offset);
-```
-
-- Four spaces of indent
+- `zig fmt loom/ apps/loom/ build.zig` before every commit; the test
+  suite and CI assume formatted code
 - Keep functions short and boring
+- Keep related declarations adjacent when it helps scanning
 
 ## Comments and docs
 
-Document types and public methods with short section blocks:
+Files start with a `//!` doc comment saying what the file is for in a
+sentence or two.  Sections inside a file use short dashed headers:
 
-```cpp
+```zig
 // ---------------------------------------------------------------------------
 // FileVolume
 // ---------------------------------------------------------------------------
-//
-// Page store backed by one host file (for example lucia.img).
-//
 ```
 
-Explain assumptions and ownership, not narration of obvious code.
+Public types and methods get `///` doc comments that explain
+assumptions and ownership, not narration of obvious code.
 
 Good:
 
-```cpp
-// write is not durable until flush succeeds
+```zig
+/// write is not durable until flush succeeds.
 ```
 
 Bad:
 
-```cpp
-// increment i
-// set fd to -1
+```zig
+// increment index
 ```
 
 ## Organization
 
 Current first-Lucia packages:
 
-The Zig engine lives at the root (`loom/`, `abi/`, `testdata/`); the C++
-reference tree keeps the layered packages:
-
 ```text
-loom/  abi/  testdata/  apps/loom/  docs/
-reference/src/base/  reference/src/platform/io/  reference/src/storage/volume/
-reference/src/fabric/model/  reference/src/fabric/persistence/
-reference/src/realm/authority/
-reference/src/loom/evaluation/  reference/src/loom/effects/
-reference/src/loom/organization/
-reference/src/view/runtime/  reference/src/projection/file/
-reference/tests/
+build.zig  build.zig.zon        engine build; zig build test runs everything
+loom/storage/                   page volumes and durability mechanics
+loom/fabric/                    Texels, Ports, Fibers, values, encode, Store
+loom/evaluation/                Spool, FiberIndex, State/Delay
+loom/organization/              arrangements
+loom/effects/                   effect intents and the trusted boundary
+loom/authority/                 capabilities
+loom/view/                      View evaluators and the shell runtime
+loom/projection/                manifests and file projection
+loom/abi.zig  abi/              the C border and its smoke test
+apps/loom/                      the loom terminal
+testdata/                       golden image fixtures
+docs/                           architecture and coding documentation
 ```
 
-Durable Texels, typed Ports, Fibers, and values belong in `fabric/model/`.
-Encoding and transactional persistence belong in `fabric/persistence/`.
-Page storage and durability mechanics belong in `storage/volume/`.
-Capabilities belong in `realm/authority/`. Evaluation, State/Delay,
-effects, and arrangements belong in their narrow `loom/` packages. The CLI
-lives in `apps/loom/`. Views and file projection live in `view/runtime/`
-and `projection/file/`. The Zig engine mirrors the same package layout
-under `loom/`.
+Durable Texels, typed Ports, Fibers, and values belong in `fabric/`.
+Page storage and durability mechanics belong in `storage/`.
+Capabilities belong in `authority/`. Evaluation, State/Delay, effects,
+and arrangements belong in their narrow packages. The terminal lives in
+`apps/loom/`. Views and file projection live in `view/` and
+`projection/`.
 
-Production security, collaboration, Braid, permanent history, replacement
-engines, and the agent remain deferred.
+Production security, collaboration, Braid, permanent history,
+replacement engines, and the agent remain deferred.
 
 Rules:
 
 - One package, one job
-- Put headers next to their `.cpp` files
 - One clear idea per file
 - Public contracts stay small; implementation details stay private
 
 Dependency rule:
 
 ```text
-projection / view → loom → realm / fabric → storage → platform
+projection / view → evaluation → organization / fabric → storage
 tests → the package under test
 ```
 
-Keep storage independent of Fabric concepts. Keep deferred systems out of this
-dependency chain.
+Keep storage independent of Fabric concepts. Keep deferred systems out
+of this dependency chain.
 
-## Classes and APIs
+## APIs
 
 - Narrow interfaces
-- Virtual boundaries only where substitution is real (`Volume`)
-- No framework-style managers, factories, or abstract clutter
-- Not copyable by default for resource owners
-- Construction/setup methods should read clearly: `create`, `open`
+- Substitution points are explicit values: the `Volume` union, the
+  `Evaluator` function table — never a hierarchy
+- Resource owners are not copied; they are cloned deliberately or moved
+  once
+- Construction/setup methods read clearly: `create`, `open`, `init`,
+  `setup`
 
-A good API call site looks like:
+A good call site looks like:
 
-```cpp
-FileVolume volume;
-volume.create("lucia.img", 1024);
-volume.write(0, header_bytes);
-volume.flush();
-
-Texel texel;
-texel.set_id(id);
-texel.put(OutputPort("out", VALUE_TEXT));
+```zig
+var file = try FileVolume.create(io, directory, "lucia.img", 1024);
+defer file.close();
+var store = try Store.create(allocator, file.volume());
+defer store.deinit();
 ```
 
 ## Errors
 
-- Return `bool` for success/failure unless richer errors become necessary
-- Fail early on bad arguments (`name == 0`, out-of-range page)
-- Do not throw through storage or fabric code
-- Do not hide durability: callers must call `flush()` when durability matters
+- Small explicit error sets at package borders; do not leak deep
+  internal sets upward
+- Fail early on bad arguments (empty name, out-of-range page)
+- Do not hide durability: callers call `flush()` when durability
+  matters
 
 ## Performance
 
-- Keep the hot path obvious: `memcpy`, `pread`, `pwrite`, `fsync`
+- Keep the hot path obvious: `@memcpy`, positional reads and writes,
+  explicit `sync`
 - No hidden allocations in `read` / `write`
-- Page size is fixed (`PAGE_SIZE`); do not surprise callers with variable transfer sizes at this layer
+- Page size is fixed (`page_size`); do not surprise callers with
+  variable transfer sizes at this layer
 
 ## Tests
 
-- C++ tests live under the matching package in `reference/tests/`; Zig
-  tests are `test` blocks beside the code they prove
-- Name test functions after what they prove: `test_memory_volume`, `test_file_volume`
-- Prefer direct checks over heavy frameworks
+- Tests are `test` blocks beside the code they prove; the acceptance
+  proof lives in `loom/first_lucia_test.zig`
+- Name tests after what they prove:
+  `test "file volume persists across close and reopen"`
+- Prefer direct `std.testing` checks over frameworks
 - Cover success, bounds failure, and reopen/persistence where relevant
+- Everything runs leak-checked under `std.testing.allocator`
 
 ## What not to add casually
 
-- Smart-pointer webs (`shared_ptr` especially)
-- Template metaprogramming
-- Operator overloading for cleverness
-- Codegen / macros beyond simple test helpers
+- Comptime metaprogramming beyond what a reader can hold in their head
+- Async or threads (the scheduler belongs to Loom, never to Zig async)
+- Codegen / build-time tricks beyond simple steps in `build.zig`
 - Premature abstraction before a caller needs it
-- Redundant type nouns in names (`put_port`, `count_pages` on a page volume — prefer `put`, `size`)
-- Leaking `std::map` / `std::vector` / `std::string` in public APIs
+- Redundant type nouns in names (`putPort`, `countPages` on a page
+  volume — prefer `put`, `count`)
+- Wrappers around Zig std that add nothing but indirection
 
 ## Checklist for new code
 
 1. Can a reader say what the file is for in one sentence?
 2. Are names short, with no redundant type nouns?
-3. Are Lucia aliases used instead of raw stdint/`std::` names?
-4. Are members free of trailing underscores?
+3. Is ownership explicit — clone/deinit present, docs say who frees?
+4. Do tests beside the code prove the new behavior, leak-checked?
 5. Are docs short and useful?
 6. Is the hot path still visible?
 7. Did we avoid adding a layer that is not needed yet?

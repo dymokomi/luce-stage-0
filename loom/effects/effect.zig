@@ -7,7 +7,7 @@
 //! registered executor once, and persists the observation under a receipt
 //! identity derived from the request.  Replays return the stored receipt
 //! instead of repeating the action.  The LUEFINT and LUEFOBS encodings
-//! are frozen contracts shared with the C++ tree.
+//! are frozen contracts.
 
 const std = @import("std");
 const store_mod = @import("../fabric/store.zig");

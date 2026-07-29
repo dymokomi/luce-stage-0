@@ -5,7 +5,7 @@
 //! boundary uses process randomness and a local grant table; it is not
 //! production cryptography and is not suitable for authority across
 //! trust domains.  Both encodings (LUCAP for one capability, LUAUTH for
-//! a grant table) are frozen contracts shared with the C++ tree.
+//! a grant table) are frozen contracts.
 
 const std = @import("std");
 const value_mod = @import("../fabric/value.zig");

@@ -472,7 +472,7 @@ test "export, host edits, guarded import, and reopen" {
         try testing.expect(projection.isExported());
         try testing.expectEqual(@as(usize, 2), projection.count());
 
-        // The captured digest is the same SHA-256 the C++ tree computed.
+        // The captured digest is plain SHA-256 of the projected bytes.
         const record = projection.at(0).?;
         try testing.expect(record.revision != 0);
         try testing.expectEqualStrings(

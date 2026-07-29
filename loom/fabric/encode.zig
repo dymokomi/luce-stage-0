@@ -2,9 +2,9 @@
 //!
 //! Versioned deterministic little-endian encoding for Texels and
 //! out-of-line blobs.  Decoding is strict and consumes the complete
-//! input.  This format is the frozen contract shared with the reference
-//! C++ implementation — the golden fixture test proves both read the
-//! same bytes.  Never encode raw struct layouts.
+//! input.  This format is the frozen on-disk contract — the golden
+//! fixture test proves the bytes stay stable.  Never encode raw struct
+//! layouts.
 
 const std = @import("std");
 const texel_id = @import("texel_id.zig");

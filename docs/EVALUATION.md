@@ -34,21 +34,21 @@ commit → ChangeSet ─→ FiberIndex.downstream ─→ Spool.advance ─→ re
 
 ### 1. ChangeSet — the Store tells what a commit touched
 
-`fabric/persistence`.  A Transaction already funnels every mutation
-through `put_changed` and `remove`; both record the touched `TexelId` in
+`fabric/store.zig`.  A Transaction already funnels every mutation
+through `putChanged` and `remove`; both record the touched `TexelId` in
 a `touched` set.  On commit the Store keeps the delta in a small ring of
 recent commits:
 
-```cpp
-struct ChangeSet {
-    U64         generation;   // the generation this commit produced
-    TexelIdList changed;      // texels put or removed by it
+```zig
+pub const ChangeSet = struct {
+    generation: u64,     // the generation this commit produced
+    changed: []TexelId,  // texels put or removed by it
 };
 
-// Union of deltas in (generation, current].  False when the ring no
-// longer covers that span — the caller must then assume everything
-// changed and rebuild.
-bool Store::changes_since(U64 generation, TexelIdList *changed) const;
+/// Union of deltas in (baseline, current].  Null when the ring no
+/// longer covers that span — the caller must then assume everything
+/// changed and rebuild.
+pub fn changesSince(self: *const Store, allocator: Allocator, baseline: u64) !?[]TexelId
 ```
 
 The ring (64 entries) is bounded, in-memory, and never persisted: losing
@@ -61,12 +61,12 @@ LOOM.md: transient observations remain volatile unless a Texel
 deliberately captures them.  A mouse move must not cost a durable
 commit, so the Store gains a second, non-durable way to change:
 
-```cpp
-// Update an observed Output Port in the in-memory table only: set the
-// source value, advance the port, texel, and logical generation, and
-// record a ChangeSet entry.  Nothing reaches the volume; restart
-// reverts to the last durable snapshot.
-bool Store::observe(const TexelId &texel, const char *output, const Value &value);
+```zig
+/// Update an observed Output Port in the in-memory table only: set the
+/// source value, advance the port, texel, and logical generation, and
+/// record a ChangeSet entry.  Nothing reaches the volume; restart
+/// reverts to the last durable snapshot.
+pub fn observe(self: *Store, id: TexelId, output_name: []const u8, source: Value) !void
 ```
 
 `generation()` becomes the *logical* generation — advanced by both
@@ -76,23 +76,19 @@ is exactly right for a stale observation.  Deliberate capture is just an
 ordinary durable commit that copies an observed value into durable
 state (a State texel, or any texel that stores it).
 
-The terminal's keyboard observation uses exactly this path: `boundary.h`
+The terminal's keyboard observation uses exactly this path: `boundary.zig`
 records a volatile observation per line read, never a durable commit.
 
 ### 2. FiberIndex — the reverse index, disposable machinery
 
-`loom/evaluation/fiber_index.zig` (reference:
-`reference/src/loom/evaluation/fiber_index.h`).  LOOM.md: an Output Port does not own a
+`loom/evaluation/fiber_index.zig`.  LOOM.md: an Output Port does not own a
 durable consumer list, but Loom may build the reverse index as
 disposable machinery.  This is that machinery:
 
-```cpp
-class FiberIndex {
-public:
-    bool build(const Store *store);                              // full scan
-    bool apply(const Store *store, const TexelIdList &changed);  // refresh rows
-    bool downstream(const TexelIdList &changed, TexelIdSet *dirty) const;
-};
+```zig
+pub fn build(self: *FiberIndex, store: *const Store) !void      // full scan
+pub fn apply(self: *FiberIndex, store: *const Store, changed: []const TexelId) !void
+pub fn downstream(self: *const FiberIndex, allocator: Allocator, changed: []const TexelId) ![]TexelId
 ```
 
 Granularity is the texel, not the port: a changed texel dirties every
@@ -116,11 +112,11 @@ Today the terminal sidesteps that by building a fresh Spool per pull,
 which throws the cache away.  The session instead keeps **one Spool**,
 and after each commit tells it what survived:
 
-```cpp
-// Stamp every cached record whose texel is not dirty as already checked
-// against the current generation.  Dirty records are left stale and
-// revalidate lazily on next demand.
-void Spool::advance(U64 generation, const TexelIdSet &dirty);
+```zig
+/// Stamp every cached record whose texel is not dirty as already
+/// checked against the current generation.  Dirty records are left
+/// stale and revalidate lazily on next demand.
+pub fn advance(self: *Spool, from_generation: u64, to_generation: u64, dirty: []const TexelId) void
 ```
 
 - A **clean** endpoint demands in O(1): its record is pre-stamped, no
@@ -214,20 +210,23 @@ raw-mode input later raises the drain rate without changing the model.
 
 Steps 1–5 are implemented and tested:
 
-1. Done — `Transaction::touched` + the `Store::changes_since` ring
-   (`store_test`: delta per commit, span union, removal, ring overflow).
-2. Done — `FiberIndex` in `loom/evaluation` (`fiber_index_test`: build,
-   apply, transitive closure, rewiring via delta, removed texels).
-3. Done — `Spool::advance(from, to, dirty)` (`spool_test`: an unrelated
-   commit costs zero evaluator calls after advance; a dirty upstream
-   observation recomputes exactly the stale path).
-4. Done — the terminal reconciles after every line (`changes_since` →
+1. Done — the Transaction `touched` set + the `Store.changesSince` ring
+   (store.zig tests: delta per commit, span union, removal, ring
+   overflow).
+2. Done — `FiberIndex` in `loom/evaluation` (fiber_index.zig tests:
+   build, apply, transitive closure, rewiring via delta, removed
+   texels).
+3. Done — `Spool.advance(from, to, dirty)` (spool.zig tests: an
+   unrelated commit costs zero evaluator calls after advance; a dirty
+   upstream observation recomputes exactly the stale path).
+4. Done — the terminal reconciles after every line (`changesSince` →
    dirty closure → `advance` → re-demand dirty watches), `watch` /
-   `unwatch` commands, `pull` on the session Spool, and the
-   `loom_terminal` ctest proves a watch fires through the real binary.
-   Watches print only when the outcome's displayed value moves.
-5. Done — `Store::observe`, the volatile observation path on the logical
-   generation (`store_test`: value visible and delta recorded, stale
+   `unwatch` commands, `pull` on the session Spool, and the scripted
+   in-process sessions in `apps/loom/terminal.zig` prove a watch fires
+   through the real loop.  Watches print only when the outcome's
+   displayed value moves.
+5. Done — `Store.observe`, the volatile observation path on the logical
+   generation (store.zig tests: value visible and delta recorded, stale
    transactions refused, reopen reverts to durable state).  The keyboard
    boundary observes instead of committing.
 

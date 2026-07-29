@@ -42,8 +42,8 @@ the session's long-lived Spool advances past clean records, and
 every line, printing only outcomes that moved.  Push invalidates; pull
 evaluates.
 - `view prose|table NAME...` — build View texels with the existing
-  `make_prose_view` / `make_table_view`, and render the focused View
-  through `Shell::compose` after changes.  The terminal becomes the first
+  `makeProseView` / `makeTableView`, and render the focused View
+  through `Shell.compose` after changes.  The terminal becomes the first
   real client of the trusted shell instead of growing a rival one.
 
 ## Phase 4 — concurrency where it earns its place
