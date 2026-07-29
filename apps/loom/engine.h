@@ -2,15 +2,15 @@
 
 #include <string.h>
 
-#include "base/types.h"
 #include "loom.h"
+#include "types.h"
 
 // ---------------------------------------------------------------------------
 // engine.h
 // ---------------------------------------------------------------------------
 //
 // The terminal's view of the Loom engine: thin RAII C++ over the C ABI in
-// zig/abi/loom.h.  Everything below the border is Zig; this file and the
+// abi/loom.h.  Everything below the border is Zig; this file and the
 // terminal above it never include engine internals.
 
 namespace lucia {

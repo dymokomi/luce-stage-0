@@ -76,12 +76,13 @@ is exactly right for a stale observation.  Deliberate capture is just an
 ordinary durable commit that copies an observed value into durable
 state (a State texel, or any texel that stores it).
 
-Until `observe` lands, the terminal's keyboard observation commits
-durably per line — a working stopgap, marked as such in `boundary.h`.
+The terminal's keyboard observation uses exactly this path: `boundary.h`
+records a volatile observation per line read, never a durable commit.
 
 ### 2. FiberIndex — the reverse index, disposable machinery
 
-`loom/evaluation/fiber_index.h`.  LOOM.md: an Output Port does not own a
+`loom/evaluation/fiber_index.zig` (reference:
+`reference/src/loom/evaluation/fiber_index.h`).  LOOM.md: an Output Port does not own a
 durable consumer list, but Loom may build the reverse index as
 disposable machinery.  This is that machinery:
 

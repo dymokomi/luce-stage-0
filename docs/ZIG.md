@@ -1,10 +1,12 @@
 # The Zig port
 
 Decision: **the Loom engine is written in Zig; LuciaOS is not required to
-be.**  Zig 0.16 is pinned (`zig/build.zig.zon`).  C is the constitutional
-border: the engine will export a stable C ABI (`abi/loom.h`, forthcoming),
-and platform shells (Swift, Objective-C++, Metal-cpp, browser engines)
-live outside it in whatever language the platform speaks best.
+be.**  Zig 0.16 is pinned (`build.zig.zon`).  C is the constitutional
+border: the engine exports a stable C ABI (`abi/loom.h`), and platform
+shells (Swift, Objective-C++, Metal-cpp, browser engines) live outside it
+in whatever language the platform speaks best.  The Zig tree is the
+first-class implementation at the repository root; the original C++
+engine is demoted to `reference/`.
 
 Why Zig fits Loom: no hidden allocation or control flow, explicit
 allocators, tagged unions over class hierarchies, errors as values,
@@ -16,14 +18,22 @@ of the engine never touches the host.
 ## Layout
 
 ```text
-zig/
-  build.zig            zig build test runs the engine suite
-  src/
-    loom.zig           module root, re-exports every package
-    storage/volume.zig MemoryVolume, FileVolume, the Volume union
-    fabric/            texel_id, value, texel, encode, store
-    loom/              spool, fiber_index
-  testdata/            golden image fixtures written by the C++ tree
+build.zig              zig build test runs the engine suite + ABI smoke
+build.zig.zon          pins Zig 0.16
+loom/
+  loom.zig             module root, re-exports every package
+  abi.zig              implements the C ABI border
+  storage/volume.zig   MemoryVolume, FileVolume, the Volume union
+  fabric/              texel_id, value, texel, encode, store
+  evaluation/          spool, fiber_index, state
+  organization/        arrangement
+  effects/             effect intents, boundary, receipts
+  authority/           capability tokens and the grant table
+abi/
+  loom.h               the constitutional C border
+  smoke_test.c         drives the client lifecycle from C
+testdata/              golden image fixtures shared by both engines
+reference/             the demoted C++ engine (src/, tests/)
 ```
 
 Tests are `test` blocks beside the code they prove, run with
@@ -31,11 +41,11 @@ Tests are `test` blocks beside the code they prove, run with
 
 ## The contract with the C++ tree
 
-The C++ implementation under `src/` remains the reference during the
-port.  The **on-disk image format is the frozen contract**: descriptor
-pages (`LUSTORE`), snapshot encoding (`LUTEXEL`), FNV-style checksums,
-and the four-word blob identifier are byte-identical in both
-implementations, proven by a golden fixture in `zig/testdata/` that the
+The C++ implementation under `reference/src/` is the reference.  The
+**on-disk image format is the frozen contract**: descriptor pages
+(`LUSTORE`), snapshot encoding (`LUTEXEL`), FNV-style checksums, and
+the four-word blob identifier are byte-identical in both
+implementations, proven by a golden fixture in `testdata/` that the
 C++ binary wrote and the Zig store must open.  Neither implementation
 ever persists raw struct layouts.
 
@@ -54,23 +64,24 @@ now exists in Zig, tested and format-compatible (41 leak-checked tests,
   (`testdata/golden_store.bin`, written by the C++ binary) opens in the
   Zig store; a Zig-written image was verified to open in the C++
   terminal.
-- `loom/fiber_index.zig`, `loom/spool.zig` — the push/pull hybrid
-  engine: reverse index, demand with early cutoff, advance, cached
-  error outcomes, cycle detection.
-- `loom/state.zig` — State/Delay creation and TemporalRuntime.advance;
-  the counter test drives a real feedback loop through the Spool.
-- `loom/arrangement.zig` — LARR content encoding, inspect/validate, and
-  add/rename/reorder/remove.
-- `realm/capability.zig` — Capability tokens, the Authority grant table
-  (LUCAP/LUAUTH encodings, deterministic by sorted token), issue with
-  entropy through the explicit Io.
-- `loom/effect.zig` — effect intents and observations (LUEFINT/LUEFOBS
+- `evaluation/fiber_index.zig`, `evaluation/spool.zig` — the push/pull
+  hybrid engine: reverse index, demand with early cutoff, advance,
+  cached error outcomes, cycle detection.
+- `evaluation/state.zig` — State/Delay creation and
+  TemporalRuntime.advance; the counter test drives a real feedback loop
+  through the Spool.
+- `organization/arrangement.zig` — LARR content encoding,
+  inspect/validate, and add/rename/reorder/remove.
+- `authority/capability.zig` — Capability tokens, the Authority grant
+  table (LUCAP/LUAUTH encodings, deterministic by sorted token), issue
+  with entropy through the explicit Io.
+- `effects/effect.zig` — effect intents and observations (LUEFINT/LUEFOBS
   encodings), the executor registry, and the once-only Boundary: verify
   the connected capability, run the executor, persist the receipt under
   the request identity, and replay from it forever after.
 
-**The C ABI exists**: `zig/abi/loom.h` is the constitutional border,
-implemented by `src/abi.zig` and built as `libloom.a` (`zig build`
+**The C ABI exists**: `abi/loom.h` is the constitutional border,
+implemented by `loom/abi.zig` and built as `libloom.a` (`zig build`
 installs it under `zig-out/lib/`).  Version 0 covers identity, store
 lifecycle and inspection, operation-style transactions, volatile
 observation, the change feed, the fiber index, and demand through the
@@ -88,11 +99,11 @@ evaluators are C callbacks; declared outputs they do not emit fall back
 to stored sources behind the border, which is how the name port rides
 beside computed outputs.
 
-The C++ engine under `src/` is now the **reference implementation**: it
-builds and its tests keep running as the format's second opinion, but
-the terminal no longer links it.  Still C++ and still above the border:
-the view runtime and file projection, which migrate when Views reach
-the terminal.
+The C++ engine under `reference/` is the **reference implementation**:
+it builds and its tests keep running as the format's second opinion,
+but the terminal no longer links it.  Still C++ and still above the
+border: the view runtime and file projection, which migrate when Views
+reach the terminal.
 
 ## Porting rules
 

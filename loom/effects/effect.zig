@@ -11,8 +11,8 @@
 
 const std = @import("std");
 const store_mod = @import("../fabric/store.zig");
-const spool_mod = @import("spool.zig");
-const capability_mod = @import("../realm/capability.zig");
+const spool_mod = @import("../evaluation/spool.zig");
+const capability_mod = @import("../authority/capability.zig");
 const texel_id = @import("../fabric/texel_id.zig");
 const value_mod = @import("../fabric/value.zig");
 const texel_mod = @import("../fabric/texel.zig");

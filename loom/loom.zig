@@ -12,12 +12,12 @@ pub const value = @import("fabric/value.zig");
 pub const texel = @import("fabric/texel.zig");
 pub const encode = @import("fabric/encode.zig");
 pub const store = @import("fabric/store.zig");
-pub const fiber_index = @import("loom/fiber_index.zig");
-pub const spool = @import("loom/spool.zig");
-pub const state = @import("loom/state.zig");
-pub const arrangement = @import("loom/arrangement.zig");
-pub const effect = @import("loom/effect.zig");
-pub const capability = @import("realm/capability.zig");
+pub const fiber_index = @import("evaluation/fiber_index.zig");
+pub const spool = @import("evaluation/spool.zig");
+pub const state = @import("evaluation/state.zig");
+pub const arrangement = @import("organization/arrangement.zig");
+pub const effect = @import("effects/effect.zig");
+pub const capability = @import("authority/capability.zig");
 
 test {
     _ = volume;

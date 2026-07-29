@@ -24,6 +24,17 @@ The architecture and longer-term direction are described in
 
 ## Build and test
 
+The Loom engine is written in Zig 0.16 (`loom/`) behind the C ABI in
+`abi/loom.h`; the engine suite and the C ABI smoke test run on any host OS:
+
+```sh
+zig build test
+```
+
+The full build — the C++ reference tree plus the `loom` terminal, which links
+the Zig engine through the ABI — is driven by CMake (it runs `zig build`
+automatically, so Zig 0.16 must be on PATH):
+
 ```sh
 cmake -S . -B build/debug
 cmake --build build/debug
@@ -38,11 +49,13 @@ cmake --build build/sanitize
 ctest --test-dir build/sanitize --output-on-failure
 ```
 
-The current host boundary supports macOS only and builds with the Apple Clang
+The CMake host boundary supports macOS only and builds with the Apple Clang
 toolchain provided by Xcode Command Line Tools. `first_lucia_test` exercises the
 full proof flow from `docs/LOOM.md`: durable material in multiple arrangements,
 computation, two Views, editing, restart, and an existing tool through a file
-projection.
+projection. The on-disk image format is the frozen contract between the two
+engine trees; `testdata/golden_store.bin` must open in both (see
+[docs/ZIG.md](docs/ZIG.md)).
 
 ## Deferred scope
 
@@ -53,18 +66,19 @@ described in `docs/LOOM.md`.
 ## Packages
 
 ```text
-src/base/                 shared primitive and container aliases
-src/platform/io/          host file boundary
-src/storage/volume/       page-volume contracts and implementations
-src/fabric/model/         Texels, ports, fibers, values, and identities
-src/fabric/persistence/   encoding and transactional durable store
-src/realm/authority/      capabilities and authorization
-src/loom/evaluation/      demand evaluation, State, and Delay
-src/loom/effects/         effect protocol and trusted boundary
-src/loom/organization/    arrangements
-src/view/runtime/         evaluators and shell
-src/projection/file/      manifests and file projection
-apps/loom/                Loom command-line application
-tests/                    grouped package and acceptance tests
+loom/                     the Loom engine (Zig): storage, fabric,
+                          evaluation, organization, effects, authority
+loom/abi.zig              implementation of the C ABI border
+abi/                      loom.h, the constitutional C border, and its
+                          C smoke test
+testdata/                 golden image fixtures shared by both engines
+apps/loom/                the Loom terminal (C++, speaks only abi/loom.h)
+reference/src/            the C++ reference engine, layered as
+                          platform → storage → fabric → realm → loom →
+                          view / projection
+reference/tests/          grouped package and acceptance tests for the
+                          reference engine
 docs/                     architecture and coding documentation
+build.zig                 engine build: zig build test, zig build
+CMakeLists.txt            full build: reference tree + terminal
 ```

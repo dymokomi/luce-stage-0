@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const loom = b.addModule("loom", .{
-        .root_source_file = b.path("src/loom.zig"),
+        .root_source_file = b.path("loom/loom.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     // The C ABI: libloom.a plus abi/loom.h, and a C smoke test that
     // drives the engine across the border.
     const abi = b.createModule(.{
-        .root_source_file = b.path("src/abi.zig"),
+        .root_source_file = b.path("loom/abi.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,

@@ -19,7 +19,8 @@ These commands close that gap and are prerequisites for everything below.
   observations; demand pulls them — that is the whole reconciliation.
   The mouse cannot fire until raw-mode input arrives (Phase 2).
 - `state NAME TYPE VALUE` / `tick` — create State/Delay texels via
-  `loom/evaluation/state.h` and advance them with `TemporalRuntime`,
+  `loom/evaluation/state.zig` (surfaced through the ABI) and advance
+  them with `TemporalRuntime`,
   so recurrence is visible in the terminal.
 
 ## Phase 2 — shell ergonomics
