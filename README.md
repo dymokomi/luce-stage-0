@@ -18,7 +18,10 @@ The first Lucia scope provides:
 - durable arrangements;
 - manifest-driven file projection; and
 - Luce, the small native language that makes Texels compute
-  ([docs/LUCE.md](docs/LUCE.md)).
+  ([docs/LUCE.md](docs/LUCE.md)) — including fabric builtins, so
+  template texels can weave new texels; and
+- a full-screen texel editor (`edit`): ports on one pane, syntax-lit
+  Luce on the other.
 
 The architecture and longer-term direction are described in
 [docs/LOOM.md](docs/LOOM.md). Coding conventions are in
@@ -44,7 +47,8 @@ Try it:
 
 ```sh
 build/lucia create fabric.img
-build/lucia open fabric.img
+build/lucia open fabric.img                      # interactive terminal
+build/lucia open fabric.img --luce bootstrap.luc # headless bootstrap script
 ```
 
 Inside the terminal, a Texel computes with Luce source:

@@ -1491,3 +1491,27 @@ integer and `F32` types, fixed arrays and borrowed slices, the durable
 cache envelope with version/target hashing (today's cache is in-memory
 per session, keyed by texel revision), worker-process isolation and the
 macOS JIT entitlement path, and two-tier compilation.
+
+### Since the first cut
+
+- **Fabric builtins** (`luce/fabric.zig`): `create_texel`, `texel_input`,
+  `texel_output`, `texel_content`, `texel_evaluator`, `texel_set`.  The
+  language stays pure — the builtins record texel-creation *intents* in
+  the evaluation arena, returned through the backend boundary on
+  success and discarded on trap, exactly the effect-intent shape from
+  section 10.3.  Gated by `CompileOptions.allow_fabric`: only a trusted
+  host enables them.  The lucia terminal applies pending intents as one
+  transaction after each dispatch, in bounded reconcile rounds.  This
+  is the bootstrap loop: template texels whose Luce content writes new
+  texels — including new templates.
+- **`luce ID|NAME`** runs a texel's code once, on demand: inputs
+  resolve through the session spool, outputs print without publishing,
+  intents apply.  Templates are fired by hand as many times as needed.
+- **`lucia open IMAGE --luce FILE`** runs standalone bootstrap source
+  (no ports, fabric enabled) headlessly against an image — the
+  scripting path for populating a Fabric with template texels.
+- **The `edit` command** is the in-terminal editing surface the plan's
+  section 15 anticipates: a ports pane (the schema side) and a code
+  pane (line numbers, real-lexer syntax highlighting, Luce auto-indent)
+  over a private clone, committed atomically with compile diagnostics
+  in the status line.
