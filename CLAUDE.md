@@ -11,12 +11,12 @@ Single-developer project: commit directly to `main` (no PRs, no feature branches
 Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS:
 
 ```sh
-zig build          # installs the loom terminal and libloom.a under zig-out/
+./build.sh         # zig build --prefix build: the terminal lands at build/loom, libloom.a at build/lib/
 zig build test     # engine suite + terminal suite + C ABI smoke test
 zig fmt loom/ apps/loom/ build.zig
 ```
 
-Tests are `test` blocks beside the code they prove, leak-checked under `std.testing.allocator`; `zig build test` discovers them through the module roots (`loom/loom.zig` re-exports every engine package and references `loom/first_lucia_test.zig`; `apps/loom/main.zig` references the app test files). A new engine package must be added to `loom/loom.zig`'s re-exports and test block. `loom/first_lucia_test.zig` is the acceptance test proving the full flow from `docs/LOOM.md`. Note: `zig build test` does not refresh `zig-out/` — run `zig build` for that.
+Tests are `test` blocks beside the code they prove, leak-checked under `std.testing.allocator`; `zig build test` discovers them through the module roots (`loom/loom.zig` re-exports every engine package and references `loom/first_lucia_test.zig`; `apps/loom/main.zig` references the app test files). A new engine package must be added to `loom/loom.zig`'s re-exports and test block. `loom/first_lucia_test.zig` is the acceptance test proving the full flow from `docs/LOOM.md`. Note: `zig build test` does not refresh installed binaries — run `./build.sh` for that (a bare `zig build` installs under `zig-out/` instead; both install trees are gitignored).
 
 ## What this project is
 

@@ -18,7 +18,8 @@ their `Io`; the rest of the engine never touches the host.
 ## Layout
 
 ```text
-build.zig              zig build installs; zig build test proves
+build.sh               zig build --prefix build; the terminal lands at build/loom
+build.zig              the build graph; zig build test proves
 build.zig.zon          pins Zig 0.16
 loom/
   loom.zig             module root, re-exports every package

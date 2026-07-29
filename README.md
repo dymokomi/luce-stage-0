@@ -28,7 +28,7 @@ Everything is Zig 0.16 (see [docs/ZIG.md](docs/ZIG.md)) and runs on any
 host OS:
 
 ```sh
-zig build          # installs the loom terminal and libloom.a under zig-out/
+./build.sh         # installs the loom terminal at build/loom and libloom.a at build/lib/
 zig build test     # engine suite + terminal suite + C ABI smoke test
 ```
 
@@ -41,8 +41,8 @@ The on-disk image format is frozen; the golden fixture
 Try it:
 
 ```sh
-zig-out/bin/loom create fabric.img
-zig-out/bin/loom open fabric.img
+build/loom create fabric.img
+build/loom open fabric.img
 ```
 
 ## Deferred scope
@@ -63,5 +63,5 @@ abi/                      loom.h, the constitutional C border, and its
 apps/loom/                the loom terminal
 testdata/                 golden image fixtures
 docs/                     architecture and coding documentation
-build.zig                 zig build installs, zig build test proves
+build.sh  build.zig       ./build.sh installs, zig build test proves
 ```

@@ -29,7 +29,10 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "loom", .module = loom }},
     });
     const terminal = b.addExecutable(.{ .name = "loom", .root_module = app });
-    b.installArtifact(terminal);
+    const install_terminal = b.addInstallArtifact(terminal, .{
+        .dest_dir = .{ .override = .prefix },
+    });
+    b.getInstallStep().dependOn(&install_terminal.step);
 
     const app_tests = b.addTest(.{ .root_module = app });
     const run_app_tests = b.addRunArtifact(app_tests);
