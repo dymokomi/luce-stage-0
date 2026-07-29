@@ -40,4 +40,5 @@ test {
     _ = shell;
     _ = manifest;
     _ = projection;
+    _ = @import("first_lucia_test.zig");
 }
