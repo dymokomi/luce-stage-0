@@ -143,16 +143,16 @@ If a parameter would shadow a member, rename the parameter (`image_pages`) or us
 ## Formatting
 
 - Every opening brace stays on the declaration or control-statement line.
-- Use the root `.clang-format`; it specifies two-space indentation, attached
+- Use the root `.clang-format`; it specifies four-space indentation, attached
   braces, and a 92-column limit.
 - Keep related declarations lined up when it helps scanning:
 
 ```cpp
 bool read(U64 page_index, void* destination) {
-  if (destination == 0) {
-    return false;
-  }
-  // ...
+    if (destination == 0) {
+        return false;
+    }
+    // ...
 }
 ```
 
@@ -163,7 +163,7 @@ const S64 offset     = byte_offset(page_index);
 const S64 bytes_read = pread(file_handle, destination, PAGE_SIZE, offset);
 ```
 
-- Two spaces of indent
+- Four spaces of indent
 - Keep functions short and boring
 
 ## Comments and docs

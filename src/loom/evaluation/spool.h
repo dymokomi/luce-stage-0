@@ -21,10 +21,10 @@ typedef std::map<String, ValueOutcome> ValueOutcomeMap;
 //
 class Evaluator {
 public:
-  virtual ~Evaluator();
+    virtual ~Evaluator();
 
-  virtual void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
-                        ValueOutcomeMap *outputs) = 0;
+    virtual void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
+                          ValueOutcomeMap *outputs) = 0;
 };
 
 typedef std::map<String, Evaluator *> EvaluatorTable;
@@ -37,12 +37,12 @@ typedef std::map<String, Evaluator *> EvaluatorTable;
 //
 class EvaluatorRegistry {
 public:
-  bool put(const char *name, Evaluator *evaluator);
-  bool get(const char *name, Evaluator **evaluator) const;
-  Size size() const;
+    bool put(const char *name, Evaluator *evaluator);
+    bool get(const char *name, Evaluator **evaluator) const;
+    Size size() const;
 
 private:
-  EvaluatorTable evaluators;
+    EvaluatorTable evaluators;
 };
 
 typedef std::vector<U64> RevisionList;
@@ -55,67 +55,69 @@ typedef std::vector<U64> RevisionList;
 //
 class Spool {
 public:
-  Spool(const Store *store, const EvaluatorRegistry *registry);
+    Spool(const Store *store, const EvaluatorRegistry *registry);
 
-  bool demand(const TexelId &texel, const char *output, ValueOutcome *outcome);
+    bool demand(const TexelId &texel, const char *output, ValueOutcome *outcome);
 
-  void clear();
-  Size cache_size() const;
+    void clear();
+    Size cache_size() const;
 
 private:
-  struct Endpoint {
-    TexelId texel;
-    String  output;
+    struct Endpoint {
+        TexelId texel;
+        String  output;
 
-    bool operator<(const Endpoint &other) const;
-  };
+        bool operator<(const Endpoint &other) const;
+    };
 
-  struct CachedOutput {
-    ValueOutcome outcome;
-    U64          effective_revision;
-  };
+    struct CachedOutput {
+        ValueOutcome outcome;
+        U64          effective_revision;
+    };
 
-  typedef std::map<String, CachedOutput> CachedOutputMap;
+    typedef std::map<String, CachedOutput> CachedOutputMap;
 
-  struct SourceRecord {
-    U64          checked_generation;
-    U64          texel_revision;
-    U64          output_revision;
-    CachedOutput output;
-  };
+    struct SourceRecord {
+        U64          checked_generation;
+        U64          texel_revision;
+        U64          output_revision;
+        CachedOutput output;
+    };
 
-  struct ComputeRecord {
-    U64             checked_generation;
-    U64             texel_revision;
-    RevisionList    input_revisions;
-    CachedOutputMap outputs;
-  };
+    struct ComputeRecord {
+        U64             checked_generation;
+        U64             texel_revision;
+        RevisionList    input_revisions;
+        CachedOutputMap outputs;
+    };
 
-  struct DemandResult {
-    ValueOutcome outcome;
-    U64          effective_revision;
-  };
+    struct DemandResult {
+        ValueOutcome outcome;
+        U64          effective_revision;
+    };
 
-  typedef std::map<Endpoint, SourceRecord> SourceCache;
-  typedef std::map<TexelId, ComputeRecord> ComputeCache;
-  typedef std::set<TexelId>                ActiveTexels;
+    typedef std::map<Endpoint, SourceRecord> SourceCache;
+    typedef std::map<TexelId, ComputeRecord> ComputeCache;
+    typedef std::set<TexelId>                ActiveTexels;
 
-  DemandResult demand_internal(const TexelId &texel, const String &output, U64 generation);
-  DemandResult demand_source(const Texel &texel, const OutputPort &output, U64 generation);
-  DemandResult demand_computed(const Texel &texel, const String &output, U64 generation);
-  DemandResult evaluate(const Texel &texel, const String &output, U64 generation,
-                        const ValueOutcomeMap &inputs, const RevisionList &revisions);
-  DemandResult cache_error(const Texel &texel, const String &output, U64 generation,
-                           const RevisionList &revisions, const String &message);
+    DemandResult demand_internal(const TexelId &texel, const String &output,
+                                 U64 generation);
+    DemandResult demand_source(const Texel &texel, const OutputPort &output,
+                               U64 generation);
+    DemandResult demand_computed(const Texel &texel, const String &output, U64 generation);
+    DemandResult evaluate(const Texel &texel, const String &output, U64 generation,
+                          const ValueOutcomeMap &inputs, const RevisionList &revisions);
+    DemandResult cache_error(const Texel &texel, const String &output, U64 generation,
+                             const RevisionList &revisions, const String &message);
 
-  bool next_effective_revision(U64 *revision);
+    bool next_effective_revision(U64 *revision);
 
-  const Store             *store;
-  const EvaluatorRegistry *registry;
-  SourceCache              source_cache;
-  ComputeCache             compute_cache;
-  ActiveTexels             active;
-  U64                      next_revision;
+    const Store             *store;
+    const EvaluatorRegistry *registry;
+    SourceCache              source_cache;
+    ComputeCache             compute_cache;
+    ActiveTexels             active;
+    U64                      next_revision;
 };
 
 } // namespace lucia

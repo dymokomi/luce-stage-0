@@ -13,16 +13,16 @@ namespace lucia {
 // A context-local name and the stable identity it references.
 //
 struct ArrangementEntry {
-  String  name;
-  TexelId texel;
+    String  name;
+    TexelId texel;
 };
 
 typedef std::vector<ArrangementEntry> ArrangementEntries;
 
 enum {
-  ARRANGEMENT_MAX_NAME_SIZE    = 255,
-  ARRANGEMENT_MAX_ENTRIES      = 4096,
-  ARRANGEMENT_MAX_CONTENT_SIZE = 1024 * 1024
+    ARRANGEMENT_MAX_NAME_SIZE    = 255,
+    ARRANGEMENT_MAX_ENTRIES      = 4096,
+    ARRANGEMENT_MAX_CONTENT_SIZE = 1024 * 1024
 };
 
 // Creates an ordinary Texel with empty arrangement content.

@@ -14,22 +14,22 @@ enum ValueOutcomeStatus { VALUE_AVAILABLE = 0, VALUE_UNAVAILABLE = 1, VALUE_ERRO
 //
 class ValueOutcome {
 public:
-  ValueOutcome();
+    ValueOutcome();
 
-  static ValueOutcome available(const Value &value);
-  static ValueOutcome unavailable();
-  static ValueOutcome error(const char *message);
+    static ValueOutcome available(const Value &value);
+    static ValueOutcome unavailable();
+    static ValueOutcome error(const char *message);
 
-  ValueOutcomeStatus status() const;
-  const Value       &value() const;
-  const String      &message() const;
+    ValueOutcomeStatus status() const;
+    const Value       &value() const;
+    const String      &message() const;
 
 private:
-  ValueOutcome(ValueOutcomeStatus status, const Value &value, const char *message);
+    ValueOutcome(ValueOutcomeStatus status, const Value &value, const char *message);
 
-  ValueOutcomeStatus outcome_status;
-  Value              outcome_value;
-  String             error_message;
+    ValueOutcomeStatus outcome_status;
+    Value              outcome_value;
+    String             error_message;
 };
 
 } // namespace lucia

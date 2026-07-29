@@ -12,24 +12,24 @@ namespace lucia {
 //
 class TexelId {
 public:
-  enum { SIZE = 32, TEXT_SIZE = 64 };
+    enum { SIZE = 32, TEXT_SIZE = 64 };
 
-  TexelId();
+    TexelId();
 
-  bool generate();
-  bool parse(const char *text);
+    bool generate();
+    bool parse(const char *text);
 
-  String format() const;
+    String format() const;
 
-  bool is_unset() const;
-  bool equals(const TexelId &other) const;
-  bool less_than(const TexelId &other) const;
+    bool is_unset() const;
+    bool equals(const TexelId &other) const;
+    bool less_than(const TexelId &other) const;
 
-  const Byte *bytes() const;
-  void        set_bytes(const Byte *data);
+    const Byte *bytes() const;
+    void        set_bytes(const Byte *data);
 
 private:
-  Byte id_bytes[SIZE];
+    Byte id_bytes[SIZE];
 };
 
 bool operator<(const TexelId &left, const TexelId &right);

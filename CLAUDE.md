@@ -26,7 +26,7 @@ ctest --test-dir build/sanitize --output-on-failure
 
 Run a single test with `ctest --test-dir build/debug -R spool_test`, or execute the test binary directly (e.g. `./build/debug/spool_test`). Each test is a standalone executable registered via the `lucia_test()` function in `CMakeLists.txt` — a new test file must be added there. `first_lucia_test` is the acceptance test proving the full flow from `docs/LOOM.md`. `loom_demo` runs the CLI (`loom demo`) as a test.
 
-Formatting is enforced by the root `.clang-format` (LLVM base, 2-space indent, attached braces, 92-column limit, aligned consecutive assignments/declarations).
+Formatting is enforced by the root `.clang-format` (LLVM base, 4-space indent, attached braces, 92-column limit, aligned consecutive assignments/declarations).
 
 ## What this project is
 

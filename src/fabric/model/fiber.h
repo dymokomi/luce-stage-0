@@ -13,20 +13,20 @@ namespace lucia {
 //
 class Fiber {
 public:
-  Fiber();
-  Fiber(const TexelId &source, const char *output_name);
+    Fiber();
+    Fiber(const TexelId &source, const char *output_name);
 
-  const TexelId &source() const;
-  const String  &output() const;
+    const TexelId &source() const;
+    const String  &output() const;
 
-  bool set_source(const TexelId &texel, const char *output_name);
+    bool set_source(const TexelId &texel, const char *output_name);
 
-  bool valid() const;
-  bool equals(const Fiber &other) const;
+    bool valid() const;
+    bool equals(const Fiber &other) const;
 
 private:
-  TexelId source_texel;
-  String  output_name;
+    TexelId source_texel;
+    String  output_name;
 };
 
 } // namespace lucia

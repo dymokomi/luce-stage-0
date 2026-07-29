@@ -13,25 +13,25 @@ namespace lucia {
 //
 class InputPort {
 public:
-  InputPort();
-  InputPort(const char *name, ValueType type);
+    InputPort();
+    InputPort(const char *name, ValueType type);
 
-  const String &name() const;
-  ValueType     type() const;
+    const String &name() const;
+    ValueType     type() const;
 
-  bool         has_binding() const;
-  const Fiber &binding() const;
+    bool         has_binding() const;
+    const Fiber &binding() const;
 
-  bool bind(const Fiber &fiber);
-  void unbind();
+    bool bind(const Fiber &fiber);
+    void unbind();
 
-  bool valid() const;
+    bool valid() const;
 
 private:
-  String    port_name;
-  ValueType declared_type;
-  bool      bound;
-  Fiber     source_binding;
+    String    port_name;
+    ValueType declared_type;
+    bool      bound;
+    Fiber     source_binding;
 };
 
 } // namespace lucia

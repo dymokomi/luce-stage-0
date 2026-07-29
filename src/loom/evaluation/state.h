@@ -20,7 +20,7 @@ bool create_delay(const TexelId &id, ValueType type, const Value &initial, Texel
 //
 class TemporalRuntime {
 public:
-  bool advance(Store *store, Spool *spool, const TexelId &id, String *error = 0);
+    bool advance(Store *store, Spool *spool, const TexelId &id, String *error = 0);
 };
 
 } // namespace lucia

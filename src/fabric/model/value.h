@@ -11,14 +11,14 @@ namespace lucia {
 // ---------------------------------------------------------------------------
 //
 enum ValueType {
-  VALUE_NONE  = 0,
-  VALUE_BOOL  = 1,
-  VALUE_INT   = 2,
-  VALUE_REAL  = 3,
-  VALUE_TEXT  = 4,
-  VALUE_BYTES = 5,
-  VALUE_TEXEL = 6,
-  VALUE_BLOB  = 7
+    VALUE_NONE  = 0,
+    VALUE_BOOL  = 1,
+    VALUE_INT   = 2,
+    VALUE_REAL  = 3,
+    VALUE_TEXT  = 4,
+    VALUE_BYTES = 5,
+    VALUE_TEXEL = 6,
+    VALUE_BLOB  = 7
 };
 
 // ---------------------------------------------------------------------------
@@ -29,39 +29,39 @@ enum ValueType {
 //
 class Value {
 public:
-  Value();
-  explicit Value(bool value);
-  explicit Value(int value);
-  explicit Value(S64 value);
-  explicit Value(double value);
-  explicit Value(const char *text);
-  explicit Value(const String &text);
-  Value(const Byte *data, Size size);
-  explicit Value(const Bytes &data);
-  explicit Value(const TexelId &texel);
-  explicit Value(const BlobRef &blob);
+    Value();
+    explicit Value(bool value);
+    explicit Value(int value);
+    explicit Value(S64 value);
+    explicit Value(double value);
+    explicit Value(const char *text);
+    explicit Value(const String &text);
+    Value(const Byte *data, Size size);
+    explicit Value(const Bytes &data);
+    explicit Value(const TexelId &texel);
+    explicit Value(const BlobRef &blob);
 
-  ValueType type() const;
+    ValueType type() const;
 
-  bool           boolean() const;
-  S64            integer() const;
-  double         real() const;
-  const String  &text() const;
-  const Bytes   &bytes() const;
-  const TexelId &texel() const;
-  const BlobRef &blob() const;
+    bool           boolean() const;
+    S64            integer() const;
+    double         real() const;
+    const String  &text() const;
+    const Bytes   &bytes() const;
+    const TexelId &texel() const;
+    const BlobRef &blob() const;
 
-  bool equals(const Value &other) const;
+    bool equals(const Value &other) const;
 
 private:
-  ValueType value_type;
-  bool      bool_value;
-  S64       int_value;
-  double    real_value;
-  String    text_value;
-  Bytes     bytes_value;
-  TexelId   texel_value;
-  BlobRef   blob_value;
+    ValueType value_type;
+    bool      bool_value;
+    S64       int_value;
+    double    real_value;
+    String    text_value;
+    Bytes     bytes_value;
+    TexelId   texel_value;
+    BlobRef   blob_value;
 };
 
 } // namespace lucia

@@ -12,27 +12,27 @@ namespace lucia {
 //
 class OutputPort {
 public:
-  OutputPort();
-  OutputPort(const char *name, ValueType type);
+    OutputPort();
+    OutputPort(const char *name, ValueType type);
 
-  const String &name() const;
-  ValueType     type() const;
+    const String &name() const;
+    ValueType     type() const;
 
-  bool         has_source() const;
-  const Value &source() const;
-  U64          revision() const;
+    bool         has_source() const;
+    const Value &source() const;
+    U64          revision() const;
 
-  bool set_source(const Value &value);
-  void clear_source();
-  void set_revision(U64 revision);
+    bool set_source(const Value &value);
+    void clear_source();
+    void set_revision(U64 revision);
 
-  bool valid() const;
+    bool valid() const;
 
 private:
-  String    port_name;
-  ValueType declared_type;
-  Value     source_value;
-  U64       source_revision;
+    String    port_name;
+    ValueType declared_type;
+    Value     source_value;
+    U64       source_revision;
 };
 
 } // namespace lucia

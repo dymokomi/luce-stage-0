@@ -7,8 +7,8 @@
 namespace lucia {
 
 struct Surface {
-  TexelId view;
-  String  label;
+    TexelId view;
+    String  label;
 };
 
 typedef std::vector<Surface> SurfaceList;
@@ -22,31 +22,31 @@ typedef std::vector<Surface> SurfaceList;
 //
 class Shell {
 public:
-  explicit Shell(Store *store);
+    explicit Shell(Store *store);
 
-  bool is_ready() const;
+    bool is_ready() const;
 
-  bool add(const TexelId &view, const char *accessibility_label);
-  Size size() const;
-  bool focus(Size index);
-  bool focused(Size *index) const;
+    bool add(const TexelId &view, const char *accessibility_label);
+    Size size() const;
+    bool focus(Size index);
+    bool focused(Size *index) const;
 
-  bool interface(const TexelId &view, String *text);
-  bool compose(String *frame);
-  bool accessibility_labels(Strings *labels) const;
+    bool interface(const TexelId &view, String *text);
+    bool compose(String *frame);
+    bool accessibility_labels(Strings *labels) const;
 
-  bool edit(const TexelId &source, const char *output, const char *text);
+    bool edit(const TexelId &source, const char *output, const char *text);
 
 private:
-  Store             *store;
-  ProseViewEvaluator prose;
-  TableViewEvaluator table;
-  EvaluatorRegistry  registry;
-  Spool              spool;
-  SurfaceList        surfaces;
-  bool               has_focus;
-  Size               focus_index;
-  bool               ready;
+    Store             *store;
+    ProseViewEvaluator prose;
+    TableViewEvaluator table;
+    EvaluatorRegistry  registry;
+    Spool              spool;
+    SurfaceList        surfaces;
+    bool               has_focus;
+    Size               focus_index;
+    bool               ready;
 };
 
 } // namespace lucia

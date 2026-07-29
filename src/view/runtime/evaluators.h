@@ -16,8 +16,8 @@ extern const char *VIEW_INTERFACE_OUTPUT;
 //
 class ProseViewEvaluator : public Evaluator {
 public:
-  void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
-                ValueOutcomeMap *outputs) override;
+    void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
+                  ValueOutcomeMap *outputs) override;
 };
 
 // ---------------------------------------------------------------------------
@@ -28,8 +28,8 @@ public:
 //
 class TableViewEvaluator : public Evaluator {
 public:
-  void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
-                ValueOutcomeMap *outputs) override;
+    void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
+                  ValueOutcomeMap *outputs) override;
 };
 
 bool make_prose_view(const TexelId &id, const Strings &inputs, Texel *view);

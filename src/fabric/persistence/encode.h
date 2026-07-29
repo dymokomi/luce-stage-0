@@ -7,8 +7,8 @@
 namespace lucia {
 
 struct BlobRecord {
-  BlobRef reference;
-  Bytes   bytes;
+    BlobRef reference;
+    Bytes   bytes;
 };
 
 typedef std::vector<Texel>      Texels;

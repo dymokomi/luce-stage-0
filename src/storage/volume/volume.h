@@ -25,13 +25,13 @@ enum { PAGE_SIZE = 4096 };
 //
 class Volume {
 public:
-  virtual ~Volume() {}
+    virtual ~Volume() {}
 
-  virtual U64 size() const = 0;
+    virtual U64 size() const = 0;
 
-  virtual bool read(U64 page_index, void *destination)   = 0;
-  virtual bool write(U64 page_index, const void *source) = 0;
-  virtual bool flush()                                   = 0;
+    virtual bool read(U64 page_index, void *destination)   = 0;
+    virtual bool write(U64 page_index, const void *source) = 0;
+    virtual bool flush()                                   = 0;
 };
 
 } // namespace lucia

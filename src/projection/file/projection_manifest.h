@@ -14,22 +14,22 @@ namespace lucia {
 //
 class ProjectionEntry {
 public:
-  ProjectionEntry();
-  ProjectionEntry(const TexelId &texel, const char *output, ValueType type,
-                  const char *filename);
+    ProjectionEntry();
+    ProjectionEntry(const TexelId &texel, const char *output, ValueType type,
+                    const char *filename);
 
-  const TexelId &texel() const;
-  const String  &output() const;
-  ValueType      type() const;
-  const String  &filename() const;
+    const TexelId &texel() const;
+    const String  &output() const;
+    ValueType      type() const;
+    const String  &filename() const;
 
-  bool valid() const;
+    bool valid() const;
 
 private:
-  TexelId   texel_id;
-  String    output_name;
-  ValueType value_type;
-  String    relative_filename;
+    TexelId   texel_id;
+    String    output_name;
+    ValueType value_type;
+    String    relative_filename;
 };
 
 typedef std::vector<ProjectionEntry> ProjectionEntries;
@@ -42,15 +42,15 @@ typedef std::vector<ProjectionEntry> ProjectionEntries;
 //
 class ProjectionManifest {
 public:
-  Size size() const;
-  bool at(Size index, ProjectionEntry *entry) const;
-  bool put(const ProjectionEntry &entry);
+    Size size() const;
+    bool at(Size index, ProjectionEntry *entry) const;
+    bool put(const ProjectionEntry &entry);
 
-  bool has_file(const String &filename) const;
-  bool has_directory(const String &dirname) const;
+    bool has_file(const String &filename) const;
+    bool has_directory(const String &dirname) const;
 
 private:
-  ProjectionEntries entries;
+    ProjectionEntries entries;
 };
 
 } // namespace lucia

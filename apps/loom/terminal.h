@@ -14,12 +14,12 @@ namespace lucia {
 //
 class Terminal {
 public:
-  explicit Terminal(Store *store);
+    explicit Terminal(Store *store);
 
-  int run();
+    int run();
 
 private:
-  Store *fabric;
+    Store *fabric;
 };
 
 } // namespace lucia

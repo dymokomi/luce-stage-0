@@ -17,19 +17,19 @@ enum { DEFAULT_PAGES = 64 };
 //
 class Image {
 public:
-  Image();
+    Image();
 
-  bool create(const char *path, U64 pages);
-  bool open(const char *path);
+    bool create(const char *path, U64 pages);
+    bool open(const char *path);
 
-  Store *store();
+    Store *store();
 
 private:
-  Image(const Image &);
-  Image &operator=(const Image &);
+    Image(const Image &);
+    Image &operator=(const Image &);
 
-  FileVolume volume;
-  Store      fabric;
+    FileVolume volume;
+    Store      fabric;
 };
 
 } // namespace lucia

@@ -1,8 +1,9 @@
 BasedOnStyle: LLVM
 Standard: c++17
-IndentWidth: 2
-TabWidth: 2
+IndentWidth: 4
+TabWidth: 4
 UseTab: Never
+AccessModifierOffset: -4
 ColumnLimit: 92
 BreakBeforeBraces: Attach
 AllowShortBlocksOnASingleLine: Never

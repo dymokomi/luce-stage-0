@@ -12,23 +12,23 @@ namespace lucia {
 //
 class BlobRef {
 public:
-  enum { ID_SIZE = 32 };
+    enum { ID_SIZE = 32 };
 
-  BlobRef();
-  BlobRef(const Byte *identifier, U64 byte_size);
+    BlobRef();
+    BlobRef(const Byte *identifier, U64 byte_size);
 
-  bool is_unset() const;
-  bool equals(const BlobRef &other) const;
+    bool is_unset() const;
+    bool equals(const BlobRef &other) const;
 
-  const Byte *id() const;
-  U64         size() const;
+    const Byte *id() const;
+    U64         size() const;
 
-  void set_id(const Byte *identifier);
-  void set_size(U64 byte_size);
+    void set_id(const Byte *identifier);
+    void set_size(U64 byte_size);
 
 private:
-  Byte blob_id[ID_SIZE];
-  U64  byte_size;
+    Byte blob_id[ID_SIZE];
+    U64  byte_size;
 };
 
 } // namespace lucia

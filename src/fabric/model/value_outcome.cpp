@@ -10,27 +10,27 @@ ValueOutcome::ValueOutcome(ValueOutcomeStatus status, const Value &value,
       error_message(message != 0 ? message : "") {}
 
 ValueOutcome ValueOutcome::available(const Value &value) {
-  return ValueOutcome(VALUE_AVAILABLE, value, "");
+    return ValueOutcome(VALUE_AVAILABLE, value, "");
 }
 
 ValueOutcome ValueOutcome::unavailable() {
-  return ValueOutcome(VALUE_UNAVAILABLE, Value(), "");
+    return ValueOutcome(VALUE_UNAVAILABLE, Value(), "");
 }
 
 ValueOutcome ValueOutcome::error(const char *message) {
-  return ValueOutcome(VALUE_ERROR, Value(), message);
+    return ValueOutcome(VALUE_ERROR, Value(), message);
 }
 
 ValueOutcomeStatus ValueOutcome::status() const {
-  return outcome_status;
+    return outcome_status;
 }
 
 const Value &ValueOutcome::value() const {
-  return outcome_value;
+    return outcome_value;
 }
 
 const String &ValueOutcome::message() const {
-  return error_message;
+    return error_message;
 }
 
 } // namespace lucia

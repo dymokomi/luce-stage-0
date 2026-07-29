@@ -26,9 +26,9 @@ Value::Value(const String &text)
 
 Value::Value(const Byte *data, Size size)
     : value_type(VALUE_BYTES), bool_value(false), int_value(0), real_value(0.0) {
-  if (data != 0 && size > 0) {
-    bytes_value.assign(data, data + size);
-  }
+    if (data != 0 && size > 0) {
+        bytes_value.assign(data, data + size);
+    }
 }
 
 Value::Value(const Bytes &data)
@@ -44,71 +44,71 @@ Value::Value(const BlobRef &blob)
       blob_value(blob) {}
 
 ValueType Value::type() const {
-  return value_type;
+    return value_type;
 }
 
 bool Value::boolean() const {
-  if (value_type != VALUE_BOOL) {
-    return false;
-  }
-  return bool_value;
+    if (value_type != VALUE_BOOL) {
+        return false;
+    }
+    return bool_value;
 }
 
 S64 Value::integer() const {
-  if (value_type != VALUE_INT) {
-    return 0;
-  }
-  return int_value;
+    if (value_type != VALUE_INT) {
+        return 0;
+    }
+    return int_value;
 }
 
 double Value::real() const {
-  if (value_type != VALUE_REAL) {
-    return 0.0;
-  }
-  return real_value;
+    if (value_type != VALUE_REAL) {
+        return 0.0;
+    }
+    return real_value;
 }
 
 const String &Value::text() const {
-  return text_value;
+    return text_value;
 }
 
 const Bytes &Value::bytes() const {
-  return bytes_value;
+    return bytes_value;
 }
 
 const TexelId &Value::texel() const {
-  return texel_value;
+    return texel_value;
 }
 
 const BlobRef &Value::blob() const {
-  return blob_value;
+    return blob_value;
 }
 
 bool Value::equals(const Value &other) const {
-  if (value_type != other.value_type) {
+    if (value_type != other.value_type) {
+        return false;
+    }
+
+    switch (value_type) {
+    case VALUE_NONE:
+        return true;
+    case VALUE_BOOL:
+        return bool_value == other.bool_value;
+    case VALUE_INT:
+        return int_value == other.int_value;
+    case VALUE_REAL:
+        return real_value == other.real_value;
+    case VALUE_TEXT:
+        return text_value == other.text_value;
+    case VALUE_BYTES:
+        return bytes_value == other.bytes_value;
+    case VALUE_TEXEL:
+        return texel_value.equals(other.texel_value);
+    case VALUE_BLOB:
+        return blob_value.equals(other.blob_value);
+    }
+
     return false;
-  }
-
-  switch (value_type) {
-  case VALUE_NONE:
-    return true;
-  case VALUE_BOOL:
-    return bool_value == other.bool_value;
-  case VALUE_INT:
-    return int_value == other.int_value;
-  case VALUE_REAL:
-    return real_value == other.real_value;
-  case VALUE_TEXT:
-    return text_value == other.text_value;
-  case VALUE_BYTES:
-    return bytes_value == other.bytes_value;
-  case VALUE_TEXEL:
-    return texel_value.equals(other.texel_value);
-  case VALUE_BLOB:
-    return blob_value.equals(other.blob_value);
-  }
-
-  return false;
 }
 
 } // namespace lucia

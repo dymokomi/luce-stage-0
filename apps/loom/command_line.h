@@ -20,22 +20,22 @@ typedef std::vector<const char *>      ArgumentList;
 //
 class CommandLine {
 public:
-  CommandLine();
+    CommandLine();
 
-  bool parse(int argc, char **argv);
+    bool parse(int argc, char **argv);
 
-  const char *command() const;
+    const char *command() const;
 
-  const char *option(const char *name, const char *fallback) const;
-  U64         option_u64(const char *name, U64 fallback) const;
+    const char *option(const char *name, const char *fallback) const;
+    U64         option_u64(const char *name, U64 fallback) const;
 
-  Size        positional_size() const;
-  const char *positional(Size index) const;
+    Size        positional_size() const;
+    const char *positional(Size index) const;
 
 private:
-  const char  *command_word;
-  OptionTable  options;
-  ArgumentList positionals;
+    const char  *command_word;
+    OptionTable  options;
+    ArgumentList positionals;
 };
 
 // Split one line into whitespace-separated words; double quotes group words.
