@@ -52,7 +52,7 @@ Each layer is a CMake static library (`lucia_platform`, `lucia_storage`, `lucia_
 
 Direction of demand is opposite to direction of value: a View demands an output, the Spool pulls upstream outputs, runs evaluators, and caches by revision. Nothing recomputes merely because it exists.
 
-The `loom` CLI subcommands: `init`, `status`, `list`, `show`, `source`, `concat`, `connect`, `pull`, `demo`. The app is organized as `command_line.h` (generic option/positional parser), `image.h` (opens one volume + Fabric store per command), `evaluators.h` (the CLI's evaluator set), and `commands.cpp` (one function per command plus a single command table that drives both dispatch and usage — new subcommands are added there).
+The `loom` app has two boundaries: a setup boundary (`loom create IMAGE [--pages N]`) and a load boundary (`loom open IMAGE`) that drops into an interactive terminal (`loom>` prompt) over the opened Fabric. Terminal commands: `new NAME`, `rename ID NAME`, `find TEXT`, `delete ID`, `list`, `help`, `exit`. A texel's name is deliberately not part of identity — it is a text value on the `name` Output Port. The app is organized as `command_line.h` (process-argument parser plus `split_words`, a quote-aware line tokenizer), `image.h` (opens one volume + Fabric store), `terminal.h` (the read-dispatch loop; prompt only when stdin is a tty), and `commands.cpp` (one function per terminal command plus a single command table that drives both dispatch and `help` — new commands are added there). The `loom_terminal` ctest scripts a session through the real binary.
 
 ## Coding conventions
 

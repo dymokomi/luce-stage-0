@@ -5,8 +5,6 @@
 
 namespace lucia {
 
-extern const char DEFAULT_IMAGE[];
-
 enum { DEFAULT_PAGES = 64 };
 
 // ---------------------------------------------------------------------------

@@ -87,9 +87,9 @@ lucia_target(lucia_projection)
 add_executable(loom
   apps/loom/command_line.cpp
   apps/loom/commands.cpp
-  apps/loom/evaluators.cpp
   apps/loom/image.cpp
   apps/loom/main.cpp
+  apps/loom/terminal.cpp
 )
 target_link_libraries(loom PRIVATE lucia_loom lucia_view lucia_projection)
 lucia_target(loom)
@@ -117,6 +117,9 @@ lucia_test(first_lucia_test tests/acceptance/first_lucia_test.cpp
            lucia_view lucia_projection)
 
 add_test(
-  NAME loom_demo
-  COMMAND loom demo --image ${CMAKE_BINARY_DIR}/loom-demo.img
+  NAME loom_terminal
+  COMMAND sh -c "\
+$<TARGET_FILE:loom> create ${CMAKE_BINARY_DIR}/loom-terminal.img && \
+printf 'new hello\\nfind hel\\nexit\\n' | \
+$<TARGET_FILE:loom> open ${CMAKE_BINARY_DIR}/loom-terminal.img | grep -q hello"
 )

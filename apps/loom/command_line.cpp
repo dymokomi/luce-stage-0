@@ -52,4 +52,48 @@ const char *CommandLine::positional(Size index) const {
   return index < positionals.size() ? positionals[index] : 0;
 }
 
+bool split_words(const char *line, Strings *words) {
+  if (line == 0 || words == 0) {
+    return false;
+  }
+  words->clear();
+
+  String word;
+  bool   in_word = false;
+  bool   quoted  = false;
+  for (const char *cursor = line; *cursor != 0; ++cursor) {
+    const char character = *cursor;
+    if (quoted) {
+      if (character == '"') {
+        quoted = false;
+      } else {
+        word += character;
+      }
+      continue;
+    }
+    if (character == '"') {
+      quoted  = true;
+      in_word = true;
+      continue;
+    }
+    if (character == ' ' || character == '\t' || character == '\n' || character == '\r') {
+      if (in_word) {
+        words->push_back(word);
+        word.clear();
+        in_word = false;
+      }
+      continue;
+    }
+    word += character;
+    in_word = true;
+  }
+  if (quoted) {
+    return false;
+  }
+  if (in_word) {
+    words->push_back(word);
+  }
+  return true;
+}
+
 } // namespace lucia

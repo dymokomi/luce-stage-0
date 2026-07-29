@@ -38,4 +38,8 @@ private:
   ArgumentList positionals;
 };
 
+// Split one line into whitespace-separated words; double quotes group words.
+// Fails on an unbalanced quote.
+bool split_words(const char *line, Strings *words);
+
 } // namespace lucia

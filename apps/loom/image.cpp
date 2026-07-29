@@ -4,8 +4,6 @@
 
 namespace lucia {
 
-const char DEFAULT_IMAGE[] = "loom.img";
-
 Image::Image() {}
 
 bool Image::create(const char *path, U64 pages) {
