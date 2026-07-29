@@ -39,13 +39,17 @@ var stateless: u8 = 0;
 // ---------------------------------------------------------------------------
 
 /// Declared outputs the computation did not emit fall back to their
-/// stored sources; outputs with no source stay absent (and the Spool
-/// reports the omission).
-fn passthrough(allocator: Allocator, texel: *const Texel, outputs: *OutcomeMap) Error!void {
+/// stored sources, and anything still missing is unavailable — the
+/// Spool requires every declared output.  Shared by every app
+/// evaluator, including the luce service.
+pub fn passthrough(allocator: Allocator, texel: *const Texel, outputs: *OutcomeMap) Error!void {
     for (texel.outputs.items) |port| {
         if (outputs.contains(port.name)) continue;
-        const source = port.source orelse continue;
-        try outputs.put(allocator, port.name, .{ .available = try source.clone(allocator) });
+        if (port.source) |source| {
+            try outputs.put(allocator, port.name, .{ .available = try source.clone(allocator) });
+        } else {
+            try outputs.put(allocator, port.name, .unavailable);
+        }
     }
 }
 

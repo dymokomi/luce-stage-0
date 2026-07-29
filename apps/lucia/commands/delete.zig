@@ -3,6 +3,7 @@
 
 const command = @import("../command.zig");
 const common = @import("common.zig");
+const ops = @import("../ops.zig");
 
 const Session = command.Session;
 const Error = command.Error;
@@ -20,10 +21,11 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
     _ = words;
     if (!try common.selectedExists(session)) return .err;
 
-    var transaction = session.store.begin() catch return refused(session);
-    defer transaction.deinit();
-    transaction.remove(session.selected) catch return refused(session);
-    transaction.commit() catch return refused(session);
+    ops.removeTexel(session.store, session.selected) catch |mistake|
+        switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return refused(session),
+        };
     session.selected = .unset;
     return .ok;
 }

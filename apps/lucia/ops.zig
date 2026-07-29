@@ -333,3 +333,63 @@ test "edits are typed, guarded, and atomic" {
         addInput(gpa, &rig.store, TexelId.generate(testing.io), "x", .int),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+/// Bind target's input to source's output, one transaction.  The
+/// engine validates existence and types.
+pub fn connect(
+    store: *Store,
+    target: TexelId,
+    input_name: []const u8,
+    source: TexelId,
+    output_name: []const u8,
+) Error!void {
+    var transaction = store.begin() catch return Error.StoreFailed;
+    defer transaction.deinit();
+    transaction.connect(target, input_name, source, output_name) catch
+        return Error.StoreFailed;
+    transaction.commit() catch return Error.StoreFailed;
+}
+
+/// Unbind an input's Fiber, one transaction.
+pub fn disconnect(store: *Store, target: TexelId, input_name: []const u8) Error!void {
+    var transaction = store.begin() catch return Error.StoreFailed;
+    defer transaction.deinit();
+    transaction.disconnect(target, input_name) catch return Error.StoreFailed;
+    transaction.commit() catch return Error.StoreFailed;
+}
+
+/// Remove a texel, one transaction; refused while referenced.
+pub fn removeTexel(store: *Store, id: TexelId) Error!void {
+    var transaction = store.begin() catch return Error.StoreFailed;
+    defer transaction.deinit();
+    transaction.remove(id) catch return Error.StoreFailed;
+    transaction.commit() catch return Error.StoreFailed;
+}
+
+test "connect, disconnect, and remove complete the vocabulary" {
+    const gpa = testing.allocator;
+    var rig: Rig = undefined;
+    try rig.setup(gpa);
+    defer rig.deinit();
+
+    const source_id = try createTexel(gpa, testing.io, &rig.store, .{
+        .name = "src",
+        .outputs = &.{.{ .name = "value", .declared = .int }},
+    });
+    const sink_id = try createTexel(gpa, testing.io, &rig.store, .{
+        .name = "sink",
+        .inputs = &.{.{ .name = "value", .declared = .int }},
+    });
+
+    try connect(&rig.store, sink_id, "value", source_id, "value");
+    try testing.expect(rig.store.get(sink_id).?.getInput("value").?.binding != null);
+    // A referenced texel refuses removal until disconnected.
+    try testing.expectError(Error.StoreFailed, removeTexel(&rig.store, source_id));
+    try disconnect(&rig.store, sink_id, "value");
+    try removeTexel(&rig.store, source_id);
+    try testing.expect(!rig.store.has(source_id));
+}

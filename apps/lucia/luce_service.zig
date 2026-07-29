@@ -17,6 +17,7 @@ const std = @import("std");
 const loom = @import("loom");
 const luce = @import("luce");
 const ops = @import("ops.zig");
+const evaluators = @import("evaluators.zig");
 
 const Allocator = std.mem.Allocator;
 const Texel = loom.texel.Texel;
@@ -280,12 +281,12 @@ pub const LuceService = struct {
 
         const source = sourceOf(texel) orelse {
             try failComputed(allocator, texel, outputs, "no luce source (use code)");
-            try passthrough(allocator, texel, outputs);
+            try evaluators.passthrough(allocator, texel, outputs);
             return;
         };
 
         const program = (try self.cachedProgram(texel, source, allocator, outputs)) orelse {
-            try passthrough(allocator, texel, outputs);
+            try evaluators.passthrough(allocator, texel, outputs);
             return;
         };
 
@@ -328,7 +329,7 @@ pub const LuceService = struct {
                 }
             },
         }
-        try passthrough(allocator, texel, outputs);
+        try evaluators.passthrough(allocator, texel, outputs);
     }
 
     fn cachedProgram(
@@ -595,20 +596,6 @@ pub const LuceService = struct {
             if (portType(port.declared) == null) continue;
             if (port.source != null) continue;
             try outputs.put(allocator, port.name, try Outcome.initError(allocator, message));
-        }
-    }
-
-    /// Declared outputs not produced fall back to stored sources, and
-    /// anything still missing is unavailable — the Spool requires
-    /// every declared output.
-    fn passthrough(allocator: Allocator, texel: *const Texel, outputs: *OutcomeMap) SpoolError!void {
-        for (texel.outputs.items) |port| {
-            if (outputs.contains(port.name)) continue;
-            if (port.source) |stored| {
-                try outputs.put(allocator, port.name, .{ .available = try stored.clone(allocator) });
-            } else {
-                try outputs.put(allocator, port.name, .unavailable);
-            }
         }
     }
 };

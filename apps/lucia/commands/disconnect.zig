@@ -2,6 +2,7 @@
 
 const command = @import("../command.zig");
 const common = @import("common.zig");
+const ops = @import("../ops.zig");
 
 const Session = command.Session;
 const Error = command.Error;
@@ -18,11 +19,11 @@ pub const entry: command.Command = .{
 fn run(session: *Session, words: []const []const u8) Error!Result {
     if (!try common.selectedExists(session)) return .err;
 
-    var transaction = session.store.begin() catch return refused(session, words[1]);
-    defer transaction.deinit();
-    transaction.disconnect(session.selected, words[1]) catch
-        return refused(session, words[1]);
-    transaction.commit() catch return refused(session, words[1]);
+    ops.disconnect(session.store, session.selected, words[1]) catch |mistake|
+        switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return refused(session, words[1]),
+        };
     return .ok;
 }
 

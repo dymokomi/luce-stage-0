@@ -5,6 +5,7 @@
 
 const command = @import("../command.zig");
 const common = @import("common.zig");
+const ops = @import("../ops.zig");
 
 const Session = command.Session;
 const Error = command.Error;
@@ -22,11 +23,11 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
     const source = try common.resolveTexel(session, words[2]) orelse return .err;
     if (!try common.selectedExists(session)) return .err;
 
-    var transaction = session.store.begin() catch return refused(session);
-    defer transaction.deinit();
-    transaction.connect(session.selected, words[1], source, words[3]) catch
-        return refused(session);
-    transaction.commit() catch return refused(session);
+    ops.connect(session.store, session.selected, words[1], source, words[3]) catch |mistake|
+        switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return refused(session),
+        };
     return .ok;
 }
 
