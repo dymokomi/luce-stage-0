@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const loom = @import("loom");
+const luce = @import("luce");
 const command_line = @import("command_line.zig");
 const image = @import("image.zig");
 const ops = @import("ops.zig");
@@ -17,6 +18,7 @@ const command_set = @import("command_set.zig");
 const session_mod = @import("session.zig");
 const evaluators = @import("evaluators.zig");
 const boundary = @import("boundary.zig");
+const luce_file_host = @import("luce_file_host.zig");
 const luce_service = @import("luce_service.zig");
 const common = @import("commands/common.zig");
 
@@ -36,6 +38,7 @@ pub const Terminal = struct {
     spool: Spool,
     index: FiberIndex,
     luce: luce_service.LuceService,
+    files: luce_file_host.FileReader,
     /// Where script-created images land (the create_image intent).
     image_dir: std.Io.Dir,
     session: Session,
@@ -61,6 +64,7 @@ pub const Terminal = struct {
             .spool = undefined,
             .index = FiberIndex.init(allocator),
             .luce = luce_service.LuceService.init(allocator),
+            .files = undefined,
             .image_dir = image_dir,
             .session = undefined,
             .seen = 0,
@@ -81,7 +85,12 @@ pub const Terminal = struct {
             .out = out,
             .err = err,
             .luce = &self.luce,
+            .files = &self.files,
+            .authority = loom.capability.Authority.init(allocator),
         };
+        errdefer self.session.deinit();
+        self.files = luce_file_host.FileReader.init(io, image_dir, &self.session.authority);
+        self.luce.setHost(self.files.host());
         boundary.ensureBoundary(allocator, io, store) catch {
             try err.print("lucia: cannot create boundary texels\n", .{});
         };
@@ -137,8 +146,28 @@ pub const Terminal = struct {
     /// Run standalone Luce source (the --luce bootstrap path): compile
     /// with fabric enabled, execute, report, and settle the intents.
     pub fn script(self: *Terminal, source: []const u8) !void {
+        return self.scriptHosted(source, null);
+    }
+
+    pub fn scriptHosted(
+        self: *Terminal,
+        source: []const u8,
+        host: ?luce.backend.Host,
+    ) !void {
+        try self.evaluateScript(source, host);
+        try self.finishScript();
+    }
+
+    /// Run and report one script evaluation without applying its
+    /// intents yet.  Bootstrap callers use this split to revoke the
+    /// one-run script grant before any ordinary evaluation can settle.
+    pub fn evaluateScript(
+        self: *Terminal,
+        source: []const u8,
+        host: ?luce.backend.Host,
+    ) !void {
         const palette = self.session.palette;
-        switch (try self.luce.runScript(source)) {
+        switch (try self.luce.runScriptHosted(source, host)) {
             .ok => {},
             .diagnostics => |rendered| {
                 defer self.allocator.free(rendered);
@@ -157,6 +186,9 @@ pub const Terminal = struct {
                 });
             },
         }
+    }
+
+    pub fn finishScript(self: *Terminal) !void {
         try self.settle();
         try self.session.out.flush();
     }
@@ -500,14 +532,14 @@ test "luce texels compute, recompile on edit, and fire watches" {
         "output value int",
         "connect value source value",
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    output.value = input.value * 2",
         ".",
         "pull value",
         "watch value",
         // Editing the source recompiles on the next demand.
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    output.value = input.value * 3",
         ".",
         "pull value",
@@ -520,6 +552,71 @@ test "luce texels compute, recompile on edit, and fire watches" {
     try testing.expect(std.mem.indexOf(u8, printed, "63") != null);
     try testing.expect(std.mem.indexOf(u8, printed, "doubler.value = 30") != null);
     try testing.expectEqualStrings("", bench.err.written());
+}
+
+test "ordinary luce reads only through a connected session capability" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.scratch.dir.createDir(testing.io, "allowed", .default_dir);
+    try bench.scratch.dir.createDir(testing.io, "foreign", .default_dir);
+    var allowed = try bench.scratch.dir.openDir(testing.io, "allowed", .{});
+    defer allowed.close(testing.io);
+    const note = try allowed.createFile(testing.io, "note.txt", .{});
+    try note.writePositionalAll(testing.io, "authorized text", 0);
+    note.close(testing.io);
+    var foreign_dir = try bench.scratch.dir.openDir(testing.io, "foreign", .{});
+    defer foreign_dir.close(testing.io);
+    const secret = try foreign_dir.createFile(testing.io, "secret.txt", .{});
+    try secret.writePositionalAll(testing.io, "not authorized", 0);
+    secret.close(testing.io);
+
+    try bench.script(&.{
+        "allow-read allowed files",
+        "new reader",
+        "eval luce",
+        "input capability bytes",
+        "output text text",
+        "connect capability files capability",
+        "code",
+        "func evaluate(input: Input, output: Output):",
+        "    output.text = read_file(input.capability, \"note.txt\")",
+        ".",
+        "pull text",
+    });
+    try testing.expect(std.mem.indexOf(u8, bench.out.written(), "authorized text") != null);
+
+    // A carried directory grant does not authorize escaping that
+    // directory, even when the target exists below the same base.
+    try bench.script(&.{
+        "code",
+        "func evaluate(input: Input, output: Output):",
+        "    output.text = read_file(input.capability, \"../foreign/secret.txt\")",
+        ".",
+        "pull text",
+        "code",
+        "func evaluate(input: Input, output: Output):",
+        "    output.text = read_file(input.capability, \"note.txt\")",
+        ".",
+    });
+
+    // A well-formed capability from another Authority is still foreign
+    // to this terminal and fails at the same boundary.
+    var foreign_authority = loom.capability.Authority.init(allocator);
+    defer foreign_authority.deinit();
+    var foreign_capability = try foreign_authority.issue(testing.io, "file.read", "allowed");
+    defer foreign_capability.deinit(allocator);
+    const foreign_value = try loom.capability.encodeCapability(allocator, foreign_capability);
+    const source_id = common.findNamed(&bench.store, "files").?;
+    try ops.setSource(allocator, &bench.store, source_id, "capability", foreign_value);
+    try bench.script(&.{ "list", "pull text" });
+
+    try testing.expectEqual(
+        @as(usize, 2),
+        std.mem.count(u8, bench.err.written(), "file read capability denied"),
+    );
 }
 
 test "luce boundary slice: keyboard count drives a computed watch" {
@@ -535,7 +632,7 @@ test "luce boundary slice: keyboard count drives a computed watch" {
         "output value int",
         "connect count keyboard count",
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    output.value = input.count * 10",
         ".",
         "watch value",
@@ -562,7 +659,7 @@ test "luce compile diagnostics report at code time and demand time" {
         "eval luce",
         "output value int",
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    output.value = input.ghost",
         ".",
         "pull value",
@@ -588,7 +685,7 @@ test "luce traps surface as error outcomes, never partial output" {
         "output value int",
         "connect value keyboard count",
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    output.value = 100 / (input.value - input.value)",
         ".",
         "pull value",
@@ -615,13 +712,13 @@ test "bootstrap: a luce template texel creates a texel that computes" {
         "eval luce",
         "output made int",
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    let adder = create_texel(\"adder\")",
         "    texel_input(adder, \"left\", \"int\")",
         "    texel_input(adder, \"right\", \"int\")",
         "    texel_output(adder, \"value\", \"int\")",
         "    texel_evaluator(adder, \"luce\")",
-        "    texel_content(adder, \"fn evaluate():\\n    output.value = input.left + input.right\\n\")",
+        "    texel_content(adder, \"func evaluate(input: Input, output: Output):\\n    output.value = input.left + input.right\\n\")",
         "    output.made = 1",
         ".",
         "pull made",
@@ -664,7 +761,7 @@ test "the luce command fires a template by hand, repeatedly" {
         "eval luce",
         "output note text",
         "code",
-        "fn evaluate():",
+        "func evaluate(input: Input, output: Output):",
         "    let t = create_texel(\"stamped\")",
         "    texel_output(t, \"value\", \"int\")",
         "    texel_set(t, \"value\", 9)",
@@ -688,7 +785,7 @@ test "script runs standalone bootstrap source against the fabric" {
     defer bench.deinit();
 
     try bench.terminal.script(
-        \\fn evaluate():
+        \\func main():
         \\    let greeter = create_texel("greeter")
         \\    texel_output(greeter, "text", "text")
         \\    texel_set(greeter, "text", "woven from a script")
@@ -700,7 +797,7 @@ test "script runs standalone bootstrap source against the fabric" {
     try testing.expectEqualStrings("", bench.err.written());
 
     // Broken bootstrap source reports diagnostics, changes nothing.
-    try bench.terminal.script("fn evaluate(:\n");
+    try bench.terminal.script("func main(:\n");
     try testing.expect(std.mem.indexOf(u8, bench.err.written(), "luce compile failed") != null);
 }
 
@@ -711,7 +808,7 @@ test "a script creates an image on the host through the intent path" {
     defer bench.deinit();
 
     try bench.terminal.script(
-        \\fn evaluate():
+        \\func main():
         \\    create_image("side.img", 16)
         \\
     );

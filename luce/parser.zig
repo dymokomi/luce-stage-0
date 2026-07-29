@@ -119,7 +119,7 @@ const Parser = struct {
     fn program(self: *Parser) Error!ast.Program {
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         defer structs.deinit(self.arena);
-        var functions: std.ArrayList(ast.FnDecl) = .empty;
+        var functions: std.ArrayList(ast.FuncDecl) = .empty;
         defer functions.deinit(self.arena);
 
         while (self.peekKind() != .end_of_file) {
@@ -132,8 +132,8 @@ const Parser = struct {
                         self.syncToLine();
                     }
                 },
-                .keyword_fn => {
-                    if (try self.fnDecl()) |declaration| {
+                .keyword_func => {
+                    if (try self.funcDecl()) |declaration| {
                         try functions.append(self.arena, declaration);
                     } else {
                         self.syncToLine();
@@ -143,7 +143,7 @@ const Parser = struct {
                     try self.diagnostics.add(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected fn or struct at top level",
+                        "expected func or struct at top level",
                         .{},
                     );
                     self.syncToLine();
@@ -166,12 +166,22 @@ const Parser = struct {
         const name = (try self.expect(.identifier, "a struct name")) orelse return null;
         if ((try self.expect(.colon, "':'")) == null) return null;
         if ((try self.expect(.newline, "a newline")) == null) return null;
-        if ((try self.expect(.indent, "an indented field list")) == null) return null;
+        if ((try self.expect(.indent, "an indented struct body")) == null) return null;
 
         var fields: std.ArrayList(ast.Field) = .empty;
         defer fields.deinit(self.arena);
+        var functions: std.ArrayList(ast.FuncDecl) = .empty;
+        defer functions.deinit(self.arena);
         while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
             if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .keyword_func) {
+                if (try self.funcDecl()) |declaration| {
+                    try functions.append(self.arena, declaration);
+                } else {
+                    self.syncToLine();
+                }
+                continue;
+            }
             const field_name = (try self.expect(.identifier, "a field name")) orelse {
                 self.syncToLine();
                 continue;
@@ -195,12 +205,13 @@ const Parser = struct {
         return .{
             .name = self.text(name),
             .fields = try fields.toOwnedSlice(self.arena),
+            .functions = try functions.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
     }
 
-    fn fnDecl(self: *Parser) Error!?ast.FnDecl {
-        const start = self.advance(); // fn
+    fn funcDecl(self: *Parser) Error!?ast.FuncDecl {
+        const start = self.advance(); // func
         const name = (try self.expect(.identifier, "a function name")) orelse return null;
         if ((try self.expect(.left_paren, "'('")) == null) return null;
 
@@ -562,6 +573,14 @@ const Parser = struct {
                 if (self.peekKind() == .left_paren) {
                     return self.callExpression(item);
                 }
+                if (self.peekKind() == .dot and
+                    self.peekAhead(1) == .identifier and
+                    self.peekAhead(2) == .left_paren)
+                {
+                    _ = self.advance();
+                    const member = self.advance();
+                    return self.qualifiedCallExpression(item, member);
+                }
                 return self.make(.{ .name = .{ .text = self.text(item), .span = item.span } });
             },
             .left_paren => {
@@ -583,6 +602,18 @@ const Parser = struct {
     }
 
     fn callExpression(self: *Parser, callee: Token) Error!?*ast.Expression {
+        return self.namedCallExpression(self.text(callee), callee.span.start);
+    }
+
+    fn qualifiedCallExpression(self: *Parser, namespace: Token, member: Token) Error!?*ast.Expression {
+        const callee = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+            self.text(namespace),
+            self.text(member),
+        });
+        return self.namedCallExpression(callee, namespace.span.start);
+    }
+
+    fn namedCallExpression(self: *Parser, callee: []const u8, start: usize) Error!?*ast.Expression {
         _ = self.advance(); // (
         var arguments: std.ArrayList(ast.Argument) = .empty;
         defer arguments.deinit(self.arena);
@@ -603,9 +634,9 @@ const Parser = struct {
         }
         const closing = (try self.expect(.right_paren, "')'")) orelse return null;
         return self.make(.{ .call = .{
-            .callee = self.text(callee),
+            .callee = callee,
             .arguments = try arguments.toOwnedSlice(self.arena),
-            .span = .{ .start = callee.span.start, .end = closing.span.end },
+            .span = .{ .start = start, .end = closing.span.end },
         } });
     }
 
@@ -671,13 +702,13 @@ test "the plan's scale example parses" {
         \\    x: Float
         \\    y: Float
         \\
-        \\fn scale_point(point: Point, factor: Float) -> Point:
+        \\func scale_point(point: Point, factor: Float) -> Point:
         \\    return Point(
         \\        x = point.x * factor,
         \\        y = point.y * factor,
         \\    )
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let position = input.position
         \\    let factor = input.scale
         \\    output.position = scale_point(position, factor)
@@ -701,9 +732,30 @@ test "the plan's scale example parses" {
     try testing.expectEqualStrings("position", assign.target.field.?);
 }
 
+test "struct bodies parse fields and namespaced functions" {
+    var parsed = try parseText(
+        \\struct Helpers:
+        \\    value: Int
+        \\    func double(value: Int) -> Int:
+        \\        return value * 2
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    output.value = Helpers.double(input.value)
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].fields.len);
+    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
+    try testing.expectEqualStrings(
+        "Helpers.double",
+        parsed.program.functions[0].body.statements[0].assign.value.call.callee,
+    );
+}
+
 test "control flow, precedence, and elif chains parse" {
     var parsed = try parseText(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    var total = 0
         \\    for index in range(0, 10):
         \\        if index % 2 == 0 and index != 4:
@@ -736,12 +788,12 @@ test "control flow, precedence, and elif chains parse" {
 
 test "malformed statements recover and keep reporting" {
     var parsed = try parseText(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let = 3
         \\    let ok = 1
         \\    output.value = ok +
         \\
-        \\fn helper() -> Int:
+        \\func helper() -> Int:
         \\    return 2
         \\
     );
@@ -753,7 +805,7 @@ test "malformed statements recover and keep reporting" {
 
 test "strings decode escapes" {
     var parsed = try parseText(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    output.text = "line\none\ttab \"quoted\""
         \\
     );

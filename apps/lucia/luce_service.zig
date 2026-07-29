@@ -44,7 +44,18 @@ pub const budget: luce.backend.Budget = .{ .steps = 5_000_000, .call_depth = 128
 
 /// Fabric builtins are enabled here: the terminal is the trusted
 /// boundary that applies computed intents as ordinary transactions.
-const compile_options: luce.types.CompileOptions = .{ .allow_fabric = true };
+const evaluator_compile_options: luce.types.CompileOptions = .{
+    .entry_mode = .evaluator,
+    .allow_fabric = true,
+};
+const view_compile_options: luce.types.CompileOptions = .{
+    .entry_mode = .evaluator,
+    .allow_fabric = false,
+};
+const script_compile_options: luce.types.CompileOptions = .{
+    .entry_mode = .script,
+    .allow_fabric = true,
+};
 
 // ---------------------------------------------------------------------------
 // Pending intents
@@ -101,7 +112,9 @@ pub const PendingTexel = struct {
 
 pub const LuceService = struct {
     allocator: Allocator,
+    host: ?luce.backend.Host = null,
     cache: std.AutoHashMapUnmanaged(IdBytes, Cached) = .empty,
+    view_cache: std.AutoHashMapUnmanaged(IdBytes, Cached) = .empty,
     pending: std.ArrayList(PendingTexel) = .empty,
     pending_images: std.ArrayList(PendingImage) = .empty,
 
@@ -114,10 +127,19 @@ pub const LuceService = struct {
         return .{ .allocator = allocator };
     }
 
+    /// Install the terminal's long-lived trusted services.  The host
+    /// context must outlive this service.
+    pub fn setHost(self: *LuceService, host: luce.backend.Host) void {
+        self.host = host;
+    }
+
     pub fn deinit(self: *LuceService) void {
         var cached = self.cache.valueIterator();
         while (cached.next()) |entry| entry.program.deinit();
         self.cache.deinit(self.allocator);
+        var views = self.view_cache.valueIterator();
+        while (views.next()) |entry| entry.program.deinit();
+        self.view_cache.deinit(self.allocator);
         for (self.pending.items) |*intent| intent.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         for (self.pending_images.items) |*intent| intent.deinit(self.allocator);
@@ -203,6 +225,58 @@ pub const LuceService = struct {
         return &cached.program;
     }
 
+    /// Compile a View with fabric builtins disabled.  The separate
+    /// cache prevents a trusted template compilation from granting the
+    /// same texel ambient fabric operations when it is presented.
+    pub fn checkView(self: *LuceService, texel: *const Texel) error{OutOfMemory}!?[]u8 {
+        const source = sourceOf(texel) orelse return null;
+        var schema = try self.buildSchema(texel);
+        defer schema.deinit(self.allocator);
+
+        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, view_compile_options);
+        switch (compiled) {
+            .success => |program| {
+                try self.replaceViewCached(texel, program);
+                return null;
+            },
+            .failure => |*diagnostics| {
+                defer diagnostics.deinit();
+                return try diagnostics.render(self.allocator, source);
+            },
+        }
+    }
+
+    pub fn cachedViewFor(self: *LuceService, texel: *const Texel) ?*const luce.ir.Program {
+        const cached = self.view_cache.getPtr(texel.id.bytes) orelse return null;
+        if (cached.revision != texel.revision) return null;
+        return &cached.program;
+    }
+
+    /// Evaluate a previously checked View program.  Inputs and outputs
+    /// parallel the program's sorted Port schema.  Returned strings
+    /// borrow from the caller's arena.
+    pub fn evaluateView(
+        self: *LuceService,
+        arena: Allocator,
+        program: *const luce.ir.Program,
+        inputs: []const luce.backend.InputValue,
+        outputs: []?luce.backend.RuntimeValue,
+    ) error{OutOfMemory}!luce.backend.Result {
+        return self.evaluateProgram(arena, program, inputs, outputs);
+    }
+
+    /// Run a checked program through the same capability-gated host as
+    /// ordinary demand and View evaluation.
+    pub fn evaluateProgram(
+        self: *LuceService,
+        arena: Allocator,
+        program: *const luce.ir.Program,
+        inputs: []const luce.backend.InputValue,
+        outputs: []?luce.backend.RuntimeValue,
+    ) error{OutOfMemory}!luce.backend.Result {
+        return luce.backend.evaluateHosted(arena, program, inputs, outputs, budget, self.host);
+    }
+
     pub const ScriptOutcome = union(enum) {
         ok,
         diagnostics: []u8,
@@ -214,7 +288,17 @@ pub const LuceService = struct {
     /// FILE).  Intents land in pending for the host to apply; the
     /// caller owns any returned text.
     pub fn runScript(self: *LuceService, source: []const u8) error{OutOfMemory}!ScriptOutcome {
-        var compiled = try luce.compile.compile(self.allocator, source, .{}, compile_options);
+        return self.runScriptHosted(source, null);
+    }
+
+    /// Hosted script evaluation supplies explicit trusted callbacks
+    /// for boundary builtins such as capability-gated file reads.
+    pub fn runScriptHosted(
+        self: *LuceService,
+        source: []const u8,
+        host: ?luce.backend.Host,
+    ) error{OutOfMemory}!ScriptOutcome {
+        var compiled = try luce.compile.compile(self.allocator, source, .{}, script_compile_options);
         switch (compiled) {
             .failure => |*diagnostics| {
                 defer diagnostics.deinit();
@@ -225,12 +309,13 @@ pub const LuceService = struct {
                 defer owned.deinit();
                 var arena = std.heap.ArenaAllocator.init(self.allocator);
                 defer arena.deinit();
-                const result = try luce.backend.evaluate(
+                const result = try luce.backend.evaluateHosted(
                     arena.allocator(),
                     &owned,
                     &.{},
                     &.{},
                     budget,
+                    host orelse self.host,
                 );
                 switch (result) {
                     .success => |intents| {
@@ -255,7 +340,7 @@ pub const LuceService = struct {
         var schema = try self.buildSchema(texel);
         defer schema.deinit(self.allocator);
 
-        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, compile_options);
+        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, evaluator_compile_options);
         switch (compiled) {
             .success => |program| {
                 try self.replaceCached(texel, program);
@@ -303,7 +388,7 @@ pub const LuceService = struct {
         const output_frame = try scratch.alloc(?luce.backend.RuntimeValue, program.outputs.len);
         @memset(output_frame, null);
 
-        const result = try luce.backend.evaluate(scratch, program, input_frame, output_frame, budget);
+        const result = try self.evaluateProgram(scratch, program, input_frame, output_frame);
         switch (result) {
             .success => |intents| {
                 for (program.outputs, output_frame) |port, written| {
@@ -345,7 +430,7 @@ pub const LuceService = struct {
 
         var schema = try self.buildSchema(texel);
         defer schema.deinit(self.allocator);
-        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, compile_options);
+        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, evaluator_compile_options);
         switch (compiled) {
             .success => |program| {
                 try self.replaceCached(texel, program);
@@ -371,6 +456,18 @@ pub const LuceService = struct {
             return;
         }
         try self.cache.put(self.allocator, texel.id.bytes, .{
+            .revision = texel.revision,
+            .program = program,
+        });
+    }
+
+    fn replaceViewCached(self: *LuceService, texel: *const Texel, program: luce.ir.Program) error{OutOfMemory}!void {
+        if (self.view_cache.getPtr(texel.id.bytes)) |cached| {
+            cached.program.deinit();
+            cached.* = .{ .revision = texel.revision, .program = program };
+            return;
+        }
+        try self.view_cache.put(self.allocator, texel.id.bytes, .{
             .revision = texel.revision,
             .program = program,
         });

@@ -3,12 +3,14 @@
 const std = @import("std");
 const loom = @import("loom");
 const color = @import("color.zig");
+const luce_file_host = @import("luce_file_host.zig");
 const luce_service = @import("luce_service.zig");
 
 const Allocator = std.mem.Allocator;
 const Store = loom.store.Store;
 const Spool = loom.spool.Spool;
 const TexelId = loom.texel_id.TexelId;
+const Authority = loom.capability.Authority;
 
 // ---------------------------------------------------------------------------
 // Watch
@@ -65,6 +67,8 @@ pub const Session = struct {
     out: *std.Io.Writer,
     err: *std.Io.Writer,
     luce: *luce_service.LuceService,
+    files: *luce_file_host.FileReader,
+    authority: Authority,
     selected: TexelId = .unset,
     watches: std.ArrayList(Watch) = .empty,
     collecting: ?Collect = null,
@@ -74,6 +78,7 @@ pub const Session = struct {
         for (self.watches.items) |*watch| watch.deinit(self.allocator);
         self.watches.deinit(self.allocator);
         if (self.collecting) |*collect| collect.deinit(self.allocator);
+        self.authority.deinit();
         self.* = undefined;
     }
 

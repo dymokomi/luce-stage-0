@@ -10,6 +10,7 @@ const command_line = @import("command_line.zig");
 const terminal_mod = @import("terminal.zig");
 const image = @import("image.zig");
 const luce_service = @import("luce_service.zig");
+const luce_file_host = @import("luce_file_host.zig");
 
 const Store = loom.store.Store;
 
@@ -58,7 +59,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             return 1;
         };
         defer gpa.free(source);
-        return runStandalone(gpa, io, .cwd(), &out_writer.interface, err, source);
+        return runStandalone(gpa, io, .cwd(), &out_writer.interface, err, source, path);
     }
     return usage(err);
 }
@@ -123,7 +124,16 @@ fn runOpen(
             return 1;
         };
         defer gpa.free(source);
-        try terminal.script(source);
+        {
+            var file_host: luce_file_host.ScriptHost = undefined;
+            file_host.setup(gpa, &terminal.files, script_path) catch {
+                try err.print("lucia: cannot authorize script directory for {s}\n", .{script_path});
+                return 1;
+            };
+            defer file_host.deinit();
+            try terminal.evaluateScript(source, file_host.host());
+        }
+        try terminal.finishScript();
         if (!interactive) {
             try out.flush();
             return 0;
@@ -147,22 +157,41 @@ pub fn runStandalone(
     out: *std.Io.Writer,
     err: *std.Io.Writer,
     source: []const u8,
+    script_path: ?[]const u8,
 ) !u8 {
+    var authority = loom.capability.Authority.init(gpa);
+    defer authority.deinit();
+    var reader = luce_file_host.FileReader.init(io, base, &authority);
     var service = luce_service.LuceService.init(gpa);
     defer service.deinit();
+    service.setHost(reader.host());
 
-    switch (try service.runScript(source)) {
-        .ok => {},
-        .diagnostics => |rendered| {
-            defer gpa.free(rendered);
-            try err.print("lucia: luce compile failed\n{s}", .{rendered});
-            return 1;
-        },
-        .trap => |message| {
-            defer gpa.free(message);
-            try err.print("lucia: luce trap: {s}\n", .{message});
-            return 1;
-        },
+    {
+        var script_host: luce_file_host.ScriptHost = undefined;
+        var hosted = false;
+        defer if (hosted) script_host.deinit();
+        const host = if (script_path) |path| blk: {
+            script_host.setup(gpa, &reader, path) catch {
+                try err.print("lucia: cannot authorize script directory for {s}\n", .{path});
+                return 1;
+            };
+            hosted = true;
+            break :blk script_host.host();
+        } else null;
+
+        switch (try service.runScriptHosted(source, host)) {
+            .ok => {},
+            .diagnostics => |rendered| {
+                defer gpa.free(rendered);
+                try err.print("lucia: luce compile failed\n{s}", .{rendered});
+                return 1;
+            },
+            .trap => |message| {
+                defer gpa.free(message);
+                try err.print("lucia: luce trap: {s}\n", .{message});
+                return 1;
+            },
+        }
     }
 
     const images = service.takePendingImages();
@@ -239,13 +268,13 @@ test "run mode: a script creates its image and weaves texels into it" {
     defer err.deinit();
 
     const code = try runStandalone(allocator, std.testing.io, scratch.dir, &out.writer, &err.writer,
-        \\fn evaluate():
+        \\func main():
         \\    create_image("woven.img", 32)
         \\    let t = create_texel("greeter")
         \\    texel_output(t, "text", "text")
         \\    texel_set(t, "text", "hello from a script")
         \\
-    );
+    , null);
     try std.testing.expectEqual(@as(u8, 0), code);
     const printed = out.written();
     try std.testing.expect(std.mem.indexOf(u8, printed, "created image woven.img") != null);
@@ -261,10 +290,10 @@ test "run mode: a script creates its image and weaves texels into it" {
     var bad_err: std.Io.Writer.Allocating = .init(allocator);
     defer bad_err.deinit();
     const failed = try runStandalone(allocator, std.testing.io, scratch.dir, &out.writer, &bad_err.writer,
-        \\fn evaluate():
+        \\func main():
         \\    let t = create_texel("orphan")
         \\
-    );
+    , null);
     try std.testing.expectEqual(@as(u8, 1), failed);
     try std.testing.expect(std.mem.indexOf(u8, bad_err.written(), "no image") != null);
 }
@@ -274,8 +303,8 @@ test {
     _ = @import("terminal.zig");
     _ = @import("image.zig");
     _ = @import("ops.zig");
-    _ = @import("editor/key.zig");
-    _ = @import("editor/buffer.zig");
-    _ = @import("editor/highlight.zig");
-    _ = @import("editor/editor.zig");
+    _ = @import("key.zig");
+    _ = @import("view.zig");
+    _ = @import("view_shell.zig");
+    _ = luce_file_host;
 }

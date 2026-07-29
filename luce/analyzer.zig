@@ -1,7 +1,7 @@
 //! Luce semantic analysis and IR lowering.
 //!
 //! Two passes: declaration collection (struct layouts, function
-//! signatures, the evaluate entry) and a checked walk of every
+//! signatures, the selected entry) and a checked walk of every
 //! function body that emits verified-shape Luce IR as it goes.  The
 //! type checker knows Luce types and the Texel's Port schema; nothing
 //! about any backend appears here.
@@ -33,12 +33,13 @@ pub const Error = error{OutOfMemory};
 
 /// Names the language reserves; nothing user-declared may take them.
 const reserved_names = [_][]const u8{
-    "input",        "output",       "range",         "Int",             "Float",
-    "Bool",         "String",       "Bytes",         "abs",             "min",
-    "max",          "clamp",        "sqrt",          "floor",           "ceil",
-    "len",          "assert",       "trap",          "evaluate",        "create_texel",
-    "texel_input",  "texel_output", "texel_content", "texel_evaluator", "texel_set",
-    "create_image",
+    "input",        "output",           "Input",           "Output",       "range",
+    "Int",          "Float",            "Bool",            "String",       "Bytes",
+    "abs",          "min",              "max",             "clamp",        "sqrt",
+    "floor",        "ceil",             "len",             "slice",        "byte_at",
+    "assert",       "trap",             "evaluate",        "create_texel", "texel_input",
+    "texel_output", "texel_content",    "texel_evaluator", "texel_set",    "create_image",
+    "read_file",    "script_directory",
 };
 
 fn isReserved(name: []const u8) bool {
@@ -56,7 +57,7 @@ pub const Analyzed = struct {
     functions: []ir.Function,
     constants: []const []const u8,
     reads: []u32,
-    evaluate_function: u32,
+    entry_function: u32,
 };
 
 /// Check the tree against the schema and lower it to IR.  Returns null
@@ -81,10 +82,12 @@ pub fn analyze(
     return analyzer.run();
 }
 
-const FnInfo = struct {
-    declaration: *const ast.FnDecl,
+const FunctionInfo = struct {
+    declaration: *const ast.FuncDecl,
+    name: []const u8,
     parameter_types: []Type,
     return_type: Type,
+    is_entry: bool,
 };
 
 const LocalInfo = struct {
@@ -109,7 +112,7 @@ const Analyzer = struct {
 
     structs: std.ArrayList(StructLayout) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
-    functions: std.ArrayList(FnInfo) = .empty,
+    functions: std.ArrayList(FunctionInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     constants: std.ArrayList([]const u8) = .empty,
     reads: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -136,10 +139,8 @@ const Analyzer = struct {
         }
         if (self.diagnostics.hasErrors()) return null;
 
-        const evaluate_index = self.function_names.get("evaluate") orelse {
-            try self.fail("luce.sema.evaluate", .{ .start = 0, .end = 0 }, "missing fn evaluate()", .{});
-            return null;
-        };
+        const entry_name = if (self.options.entry_mode == .evaluator) "evaluate" else "main";
+        const entry_index = self.function_names.get(entry_name) orelse return null;
 
         var reads: std.ArrayList(u32) = .empty;
         defer reads.deinit(self.arena);
@@ -152,7 +153,7 @@ const Analyzer = struct {
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.constants.toOwnedSlice(self.arena),
             .reads = try reads.toOwnedSlice(self.arena),
-            .evaluate_function = evaluate_index,
+            .entry_function = entry_index,
         };
     }
 
@@ -212,8 +213,20 @@ const Analyzer = struct {
                     .field_type = field_type,
                 });
             }
-            if (fields.items.len == 0) {
-                try self.fail("luce.sema.struct", declaration.span, "struct {s} has no fields", .{declaration.name});
+            for (declaration.functions) |function| {
+                for (declaration.fields) |field| {
+                    if (std.mem.eql(u8, function.name, field.name)) {
+                        try self.fail(
+                            "luce.sema.duplicate",
+                            function.span,
+                            "struct {s} already has field {s}",
+                            .{ declaration.name, function.name },
+                        );
+                    }
+                }
+            }
+            if (fields.items.len == 0 and declaration.functions.len == 0) {
+                try self.fail("luce.sema.struct", declaration.span, "struct {s} has an empty body", .{declaration.name});
             }
             self.structs.items[index].fields = try fields.toOwnedSlice(self.arena);
         }
@@ -245,51 +258,92 @@ const Analyzer = struct {
 
     fn collectFunctions(self: *Analyzer) Error!void {
         for (self.tree.functions) |*declaration| {
-            if (isReserved(declaration.name)) {
-                try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
-                continue;
+            try self.collectFunction(declaration, declaration.name, true);
+        }
+        for (self.tree.structs) |*declaration| {
+            for (declaration.functions) |*function| {
+                const qualified = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+                    declaration.name,
+                    function.name,
+                });
+                try self.collectFunction(function, qualified, false);
             }
-            if (self.function_names.contains(declaration.name) or
-                self.struct_names.contains(declaration.name))
-            {
-                try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{declaration.name});
-                continue;
-            }
+        }
+        try self.checkEntry();
+    }
 
-            var parameter_types: std.ArrayList(Type) = .empty;
-            defer parameter_types.deinit(self.arena);
+    fn collectFunction(
+        self: *Analyzer,
+        declaration: *const ast.FuncDecl,
+        name: []const u8,
+        top_level: bool,
+    ) Error!void {
+        if (isReserved(declaration.name) and
+            !(top_level and std.mem.eql(u8, declaration.name, "evaluate")))
+        {
+            try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
+            return;
+        }
+        if (self.function_names.contains(name) or
+            (top_level and self.struct_names.contains(name)))
+        {
+            try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{name});
+            return;
+        }
+
+        const entry_name = if (self.options.entry_mode == .evaluator) "evaluate" else "main";
+        const is_entry = top_level and std.mem.eql(u8, declaration.name, entry_name);
+        var parameter_types: std.ArrayList(Type) = .empty;
+        defer parameter_types.deinit(self.arena);
+        if (!is_entry) {
             for (declaration.parameters) |parameter| {
                 const resolved = (try self.resolveType(parameter.type_name)) orelse continue;
                 try parameter_types.append(self.arena, resolved);
             }
-            var return_type: Type = .none;
-            if (declaration.return_type) |written| {
-                return_type = (try self.resolveType(written)) orelse .none;
-            }
-
-            const index: u32 = @intCast(self.functions.items.len);
-            try self.function_names.put(self.temporary, declaration.name, index);
-            try self.functions.append(self.arena, .{
-                .declaration = declaration,
-                .parameter_types = try parameter_types.toOwnedSlice(self.arena),
-                .return_type = return_type,
-            });
+        }
+        var return_type: Type = .none;
+        if (declaration.return_type) |written| {
+            return_type = (try self.resolveType(written)) orelse .none;
         }
 
-        if (self.function_names.get("evaluate")) |index| {
-            const info = self.functions.items[index];
-            if (info.declaration.parameters.len != 0 or info.return_type != .none) {
-                try self.fail(
-                    "luce.sema.evaluate",
-                    info.declaration.span,
-                    "evaluate takes no parameters and returns nothing",
-                    .{},
-                );
+        const index: u32 = @intCast(self.functions.items.len);
+        try self.function_names.put(self.temporary, name, index);
+        try self.functions.append(self.arena, .{
+            .declaration = declaration,
+            .name = try self.arena.dupe(u8, name),
+            .parameter_types = try parameter_types.toOwnedSlice(self.arena),
+            .return_type = return_type,
+            .is_entry = is_entry,
+        });
+    }
+
+    fn checkEntry(self: *Analyzer) Error!void {
+        const mode = self.options.entry_mode;
+        const name = if (mode == .evaluator) "evaluate" else "main";
+        const code = if (mode == .evaluator) "luce.sema.evaluate" else "luce.sema.main";
+        const index = self.function_names.get(name) orelse {
+            try self.fail(code, .{ .start = 0, .end = 0 }, "missing func {s}{s}", .{
+                name,
+                if (mode == .evaluator) "(input: Input, output: Output):" else "():",
+            });
+            return;
+        };
+        const declaration = self.functions.items[index].declaration;
+        var valid = declaration.return_type == null;
+        if (mode == .evaluator) {
+            valid = valid and declaration.parameters.len == 2;
+            if (declaration.parameters.len == 2) {
+                valid = valid and
+                    std.mem.eql(u8, declaration.parameters[0].name, "input") and
+                    std.mem.eql(u8, declaration.parameters[0].type_name.name, "Input") and
+                    std.mem.eql(u8, declaration.parameters[1].name, "output") and
+                    std.mem.eql(u8, declaration.parameters[1].type_name.name, "Output");
             }
-        } else if (self.tree.functions.len > 0 or self.tree.structs.len > 0) {
-            try self.fail("luce.sema.evaluate", .{ .start = 0, .end = 0 }, "missing fn evaluate()", .{});
-        } else {
-            try self.fail("luce.sema.evaluate", .{ .start = 0, .end = 0 }, "empty program: missing fn evaluate()", .{});
+            if (!valid) {
+                try self.fail(code, declaration.span, "evaluator entry must be exactly func evaluate(input: Input, output: Output):", .{});
+            }
+        } else if (declaration.parameters.len != 0 or !valid) {
+            try self.fail(code, declaration.span, "script entry must be exactly func main():", .{});
         }
     }
 
@@ -308,24 +362,27 @@ const Analyzer = struct {
 
     // Function lowering ----------------------------------------------------
 
-    fn lowerFunction(self: *Analyzer, info: FnInfo) Error!ir.Function {
+    fn lowerFunction(self: *Analyzer, info: FunctionInfo) Error!ir.Function {
         var builder: FunctionBuilder = .{
             .analyzer = self,
             .return_type = info.return_type,
+            .has_frames = info.is_entry and self.options.entry_mode == .evaluator,
         };
         defer builder.deinitScratch();
 
         try builder.openBlock();
         try builder.pushScope();
 
-        for (info.declaration.parameters, 0..) |parameter, index| {
-            if (index >= info.parameter_types.len) break;
-            _ = try builder.declareLocal(
-                parameter.name,
-                info.parameter_types[index],
-                false,
-                parameter.span,
-            );
+        if (!info.is_entry) {
+            for (info.declaration.parameters, 0..) |parameter, index| {
+                if (index >= info.parameter_types.len) break;
+                _ = try builder.declareLocal(
+                    parameter.name,
+                    info.parameter_types[index],
+                    false,
+                    parameter.span,
+                );
+            }
         }
 
         try builder.lowerBlock(info.declaration.body);
@@ -343,7 +400,7 @@ const Analyzer = struct {
         try builder.sealOpenBlocks();
 
         return .{
-            .name = try self.arena.dupe(u8, info.declaration.name),
+            .name = info.name,
             .parameter_count = @intCast(info.parameter_types.len),
             .return_type = info.return_type,
             .locals = try builder.locals.toOwnedSlice(self.arena),
@@ -390,6 +447,7 @@ const BlockBuilder = struct {
 const FunctionBuilder = struct {
     analyzer: *Analyzer,
     return_type: Type,
+    has_frames: bool,
     locals: std.ArrayList(ir.Local) = .empty,
     instructions: std.ArrayList(ir.Instruction) = .empty,
     result_types: std.ArrayList(Type) = .empty,
@@ -591,6 +649,10 @@ const FunctionBuilder = struct {
     fn lowerAssign(self: *FunctionBuilder, assign: anytype) Error!void {
         const target = assign.target;
         if (std.mem.eql(u8, target.base, "output")) {
+            if (!self.has_frames) {
+                try self.fail("luce.sema.name", target.span, "output exists only in the evaluator entry", .{});
+                return;
+            }
             const field = target.field orelse {
                 try self.fail("luce.sema.output", target.span, "assign to output.NAME", .{});
                 return;
@@ -613,7 +675,11 @@ const FunctionBuilder = struct {
             return;
         }
         if (std.mem.eql(u8, target.base, "input")) {
-            try self.fail("luce.sema.input", target.span, "input ports are read-only", .{});
+            if (self.has_frames) {
+                try self.fail("luce.sema.input", target.span, "input ports are read-only", .{});
+            } else {
+                try self.fail("luce.sema.name", target.span, "input exists only in the evaluator entry", .{});
+            }
             return;
         }
 
@@ -852,7 +918,11 @@ const FunctionBuilder = struct {
             },
             .name => |name| {
                 if (std.mem.eql(u8, name.text, "input") or std.mem.eql(u8, name.text, "output")) {
-                    try self.fail("luce.sema.port", name.span, "{s} is used as {s}.PORT", .{ name.text, name.text });
+                    if (self.has_frames) {
+                        try self.fail("luce.sema.port", name.span, "{s} is used as {s}.PORT", .{ name.text, name.text });
+                    } else {
+                        try self.fail("luce.sema.name", name.span, "{s} exists only in the evaluator entry", .{name.text});
+                    }
                     return null;
                 }
                 const found = self.findLocal(name.text) orelse {
@@ -874,6 +944,10 @@ const FunctionBuilder = struct {
         if (field.target.* == .name) {
             const base = field.target.name.text;
             if (std.mem.eql(u8, base, "input")) {
+                if (!self.has_frames) {
+                    try self.fail("luce.sema.name", field.span, "input exists only in the evaluator entry", .{});
+                    return null;
+                }
                 const port = self.analyzer.schema.findInput(field.name) orelse {
                     try self.fail("luce.sema.port", field.span, "no input port named {s}", .{field.name});
                     return null;
@@ -883,7 +957,11 @@ const FunctionBuilder = struct {
                 return .{ .register = try self.emit(.{ .input_load = port }, port_type), .value_type = port_type };
             }
             if (std.mem.eql(u8, base, "output")) {
-                try self.fail("luce.sema.output", field.span, "output ports are write-only", .{});
+                if (self.has_frames) {
+                    try self.fail("luce.sema.output", field.span, "output ports are write-only", .{});
+                } else {
+                    try self.fail("luce.sema.name", field.span, "output exists only in the evaluator entry", .{});
+                }
                 return null;
             }
         }
@@ -1083,6 +1161,10 @@ const FunctionBuilder = struct {
             return null;
         };
         const info = self.analyzer.functions.items[function_index];
+        if (info.is_entry) {
+            try self.fail("luce.sema.call", call.span, "entry function {s} cannot be called", .{call.callee});
+            return null;
+        }
         if (call.arguments.len != info.parameter_types.len) {
             try self.fail("luce.sema.call", call.span, "{s} takes {d} arguments, got {d}", .{
                 call.callee,
@@ -1121,6 +1203,15 @@ const FunctionBuilder = struct {
 
     fn lowerConstruct(self: *FunctionBuilder, call: anytype, layout_index: u32) Error!?Value {
         const layout = self.analyzer.structs.items[layout_index];
+        if (layout.fields.len == 0) {
+            try self.fail(
+                "luce.sema.construct",
+                call.span,
+                "{s} is a function namespace and has no value fields",
+                .{layout.name},
+            );
+            return null;
+        }
         const registers = try self.arena().alloc(Register, layout.fields.len);
         var seen = try self.temporary().alloc(bool, layout.fields.len);
         defer self.temporary().free(seen);
@@ -1226,8 +1317,12 @@ const FunctionBuilder = struct {
             .{ .name = "floor", .kind = .floor, .arity = 1 },
             .{ .name = "ceil", .kind = .ceil, .arity = 1 },
             .{ .name = "len", .kind = .len, .arity = 1 },
+            .{ .name = "slice", .kind = .string_slice, .arity = 3 },
+            .{ .name = "byte_at", .kind = .string_byte, .arity = 2 },
             .{ .name = "assert", .kind = .assert_true, .arity = 1 },
             .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+            .{ .name = "read_file", .kind = .read_file, .arity = 2 },
+            .{ .name = "script_directory", .kind = .script_directory, .arity = 0, .fabric = true },
             .{ .name = "create_image", .kind = .fabric_image, .arity = 2, .fabric = true },
             .{ .name = "create_texel", .kind = .fabric_create, .arity = 1, .fabric = true },
             .{ .name = "texel_input", .kind = .fabric_input, .arity = 3, .fabric = true },
@@ -1294,6 +1389,18 @@ const FunctionBuilder = struct {
                     return self.intrinsicType(call, "len takes a String or Bytes");
                 result = .int;
             },
+            .string_slice => {
+                if (arguments[0].value_type != .string or
+                    arguments[1].value_type != .int or
+                    arguments[2].value_type != .int)
+                    return self.intrinsicType(call, "slice takes (String, start Int, end Int)");
+                result = .string;
+            },
+            .string_byte => {
+                if (arguments[0].value_type != .string or arguments[1].value_type != .int)
+                    return self.intrinsicType(call, "byte_at takes (String, index Int)");
+                result = .int;
+            },
             .assert_true => {
                 if (arguments[0].value_type != .boolean)
                     return self.intrinsicType(call, "assert takes a Bool");
@@ -1303,6 +1410,14 @@ const FunctionBuilder = struct {
                 if (arguments[0].value_type != .string)
                     return self.intrinsicType(call, "trap takes a String message");
                 result = .none;
+            },
+            .read_file => {
+                if (arguments[0].value_type != .bytes or arguments[1].value_type != .string)
+                    return self.intrinsicType(call, "read_file takes (capability Bytes, path String)");
+                result = .string;
+            },
+            .script_directory => {
+                result = .bytes;
             },
             .fabric_image => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .int)

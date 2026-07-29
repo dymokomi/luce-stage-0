@@ -24,7 +24,11 @@ pub const Error = error{ OutOfMemory, WriteFailed };
 pub const Command = struct {
     name: []const u8,
     alias: []const u8,
+    /// Minimum accepted argument count.  Commands with a bounded
+    /// overload set maximum_argument_count as well; otherwise this is
+    /// the exact count.
     argument_count: usize,
+    maximum_argument_count: ?usize = null,
     usage: []const u8,
     run: *const fn (session: *Session, words: []const []const u8) Error!Result,
 };

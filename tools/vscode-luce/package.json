@@ -1,0 +1,51 @@
+{
+  "name": "luce-language",
+  "displayName": "Luce Language",
+  "description": "TextMate syntax highlighting and editor configuration for Luce.",
+  "version": "0.1.1",
+  "publisher": "luciaos",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dymokomi/luciaos.git",
+    "directory": "tools/vscode-luce"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "luce",
+    "luciaos",
+    "loom"
+  ],
+  "files": [
+    "language-configuration.json",
+    "syntaxes/luce.tmLanguage.json",
+    "README.md"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "luce",
+        "aliases": [
+          "Luce",
+          "luce"
+        ],
+        "extensions": [
+          ".luc"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "luce",
+        "scopeName": "source.luce",
+        "path": "./syntaxes/luce.tmLanguage.json"
+      }
+    ]
+  }
+}

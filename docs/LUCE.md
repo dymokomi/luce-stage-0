@@ -89,20 +89,22 @@ target description
 runtime ABI version
 ```
 
-The source reads from an implicit `input` value and writes to an implicit `output` value:
+Evaluator mode requires explicit compiler-generated frame parameters. The
+Port schema determines their members; `Input` is read-only and `Output` is
+write-only except for member assignment:
 
 ```luce
 struct Point:
     x: Float
     y: Float
 
-fn scale_point(point: Point, factor: Float) -> Point:
+func scale_point(point: Point, factor: Float) -> Point:
     return Point(
         x = point.x * factor,
         y = point.y * factor,
     )
 
-fn evaluate():
+func evaluate(input: Input, output: Output):
     let position = input.position
     let factor = input.scale
     output.position = scale_point(position, factor)
@@ -116,7 +118,10 @@ The Port schema, not the source, establishes that `input.position`, `input.scale
 - One evaluator can be replaced without reconstructing the Texel.
 - Port names and types can appear in the editor as completion and diagnostics.
 
-`evaluate` is the only required entry function. Other functions are private to the evaluator blob.
+Evaluator mode requires exactly `func evaluate(input: Input, output: Output):`.
+Standalone and bootstrap script mode instead requires exactly `func main():`.
+The compile mode is explicit and independent of Fabric-builtin authority.
+Other functions are private to the compiled program.
 
 When an output is demanded:
 
@@ -195,7 +200,7 @@ This is not an arbitrary limitation. It ensures that Loom can understand when an
 Functions are named, statically dispatched, and local to the evaluator:
 
 ```luce
-fn clamp(value: Float, low: Float, high: Float) -> Float:
+func clamp(value: Float, low: Float, high: Float) -> Float:
     if value < low:
         return low
     if value > high:
@@ -236,12 +241,14 @@ struct Color:
     green: F32
     blue: F32
 
-fn luminance(color: Color) -> F32:
-    return (
-        color.red * 0.2126 +
-        color.green * 0.7152 +
-        color.blue * 0.0722
-    )
+    func luminance(color: Color) -> F32:
+        return (
+            color.red * 0.2126 +
+            color.green * 0.7152 +
+            color.blue * 0.0722
+        )
+
+let light = Color.luminance(color)
 ```
 
 Structures have:
@@ -252,15 +259,23 @@ Structures have:
 - construction by field name;
 - field access;
 - equality when all fields support equality.
+- static namespaced functions in the indented body, called as
+  `Struct.name(args)`.
+- zero fields when the body is used only as a function namespace.
 
 They do not have:
 
 - methods;
+- receivers;
 - inheritance;
 - hidden constructors;
 - virtual tables;
 - identity independent of their containing value;
 - implicit heap allocation.
+
+Namespaced functions do not turn structures into objects. They have no
+receiver and cannot be selected from a structure value. Functions are never
+first-class values.
 
 A structure inside Luce is not a Texel. It is a compact value used during computation or passed through a typed Port. A structure becomes a Texel only when the Fabric needs to address it independently.
 
@@ -413,6 +428,12 @@ pub fn compile(
     options: CompileOptions,
 ) CompileResult
 ```
+
+`CompileOptions.entry_mode` is either `evaluator` (the default for every
+Texel compilation) or `script` (standalone/bootstrap execution).
+`CompileOptions.allow_fabric` is a separate authority switch; a trusted
+template Texel can therefore use Fabric builtins while retaining the
+evaluator entry contract.
 
 No compiler stage may assume that source has a filename. Diagnostics identify the Texel revision and source span. A View may display any friendly label it wants.
 
@@ -1324,13 +1345,13 @@ struct Point:
     x: F32
     y: F32
 
-fn smooth(current: Point, target: Point, amount: F32) -> Point:
+func smooth(current: Point, target: Point, amount: F32) -> Point:
     return Point(
         x = current.x + (target.x - current.x) * amount,
         y = current.y + (target.y - current.y) * amount,
     )
 
-fn evaluate():
+func evaluate(input: Input, output: Output):
     output.position = smooth(
         input.previous,
         input.pointer,
@@ -1393,7 +1414,7 @@ Prevent this organizationally. No LLVM type, handle, target detail, intrinsic na
 
 These decisions are bounded and should be resolved with executable examples:
 
-1. Whether the language keyword is `fn` or the more Python-like `def`.
+1. The function keyword is `func`; `fn` is an ordinary identifier.
 2. Whether trailing commas are required, allowed, or omitted in multiline constructs.
 3. Exact syntax for fixed arrays and typed slices.
 4. Whether local structure fields may be updated directly or only by constructing a new value.
@@ -1457,9 +1478,13 @@ implementation differ, this section is current.
 - Semantic analysis (`types.zig`, `analyzer.zig`): the Port schema, not
   the source, decides input/output members; static types with no
   implicit conversion; immutable `let` and parameters; no shadowing;
-  return-path checking; struct-cycle detection; named, complete struct
+  return-path checking; struct-cycle detection; value structs with
+  static namespaced functions; named, complete struct
   construction; explicit `Int()`/`Float()` conversions; the builtin set
-  (`abs min max clamp sqrt floor ceil len assert trap`).
+  (`abs min max clamp sqrt floor ceil len slice byte_at assert trap`).
+  `slice(String, start, end)` checks byte bounds and rejects endpoints
+  inside a UTF-8 sequence; `byte_at(String, index)` exposes one checked
+  byte as an `Int` for UTF-8-aware state machines.
 - Typed Luce IR (`ir.zig`): functions, basic blocks, virtual registers,
   explicit input loads/output stores/traps, a full verifier, and a
   deterministic readable printer.  Registers never cross blocks —
@@ -1479,7 +1504,7 @@ implementation differ, this section is current.
   outputs the program does not write fall back to stored sources (the
   name port keeps working).
 
-**Decisions taken from section 20:** `fn`; trailing commas allowed;
+**Decisions taken from section 20:** strict `func`; trailing commas allowed;
 struct fields of `var` locals update directly (as functional IR
 updates); `while` ships, guarded by the step budget; recursion is
 permitted under a call-depth budget; `for` iterates `range(start, end)`
@@ -1510,11 +1535,50 @@ macOS JIT entitlement path, and two-tier compilation.
 - **`lucia open IMAGE --luce FILE`** runs standalone bootstrap source
   (no ports, fabric enabled) headlessly against an image — the
   scripting path for populating a Fabric with template texels.
-- **The `edit` command** is the in-terminal editing surface the plan's
-  section 15 anticipates: a ports pane (the schema side) and a code
-  pane (line numbers, real-lexer syntax highlighting, Luce auto-indent)
-  over a private clone, committed atomically with compile diagnostics
-  in the status line.
+- **Capability-gated file builtins** are implemented at the backend
+  boundary. `script_directory() -> Bytes` returns a one-run grant rooted
+  at the executing script's directory; the host revokes it immediately
+  after that script ends. The general
+  `read_file(capability: Bytes, path: String) -> String` reads one regular
+  sibling file through explicit authority. Ordinary demand, direct
+  `luce`, and View evaluation share the terminal's long-lived reader but
+  receive no ambient capability. A trusted `allow-read DIRECTORY NAME`
+  terminal operation can issue a capability texel; its Bytes output must
+  reach the evaluator through an explicit Input Port and Fiber. These
+  grants are session-local: the encoded value may persist, but verification
+  denies after restart. Each read decodes the token, verifies `file.read`
+  against its exact directory scope, opens that scope relative to the
+  terminal's explicit base directory without following links, and accepts
+  only a direct regular sibling. Missing hosts, revoked or foreign
+  capabilities, traversal, links, and read failures trap; intents computed
+  by a failed run are discarded.
+- **Explicit entry contracts:** `CompileOptions.entry_mode` is independent
+  from `allow_fabric`. Script mode requires exactly `func main():`.
+  Evaluator mode always requires exactly
+  `func evaluate(input: Input, output: Output):`, even for a zero-Port
+  Texel. `Input` and `Output` are compiler-generated frame types; their
+  signature parameters are erased before IR execution while existing
+  `input_load` and `output_store` instructions retain the compact runtime
+  frame path.
+- **`bootstrap/editor.luc`** obtains its script-directory authority,
+  reads the readable evaluator in `bootstrap/editor_view.luc`, and
+  installs an ordinary `editor` Texel with that exact source persisted
+  as Luce content.
+  Run `lucia open IMAGE --luce bootstrap/editor.luc` once to install it,
+  then `luce editor TARGET` in an interactive terminal. Its fixed frame
+  inputs are `content`, `cursor`, `dirty`, `key`, `text`, `scroll`,
+  `rows`, `cols`, and `target`; outputs return the carried state,
+  plain-text `interface`, cursor row/column, and `save`/`quit` requests.
+  Luce owns buffer edits, UTF-8 cursor boundaries, movement, scrolling,
+  rendering, and dirty state.
+- **The generic View presenter** (`apps/lucia/view.zig`,
+  `apps/lucia/view_shell.zig`, and `apps/lucia/key.zig`) owns only raw
+  terminal lifecycle, key decoding, terminal sizing, safe plain-text
+  display, and cursor positioning. Interface controls and escape
+  sequences are replaced before output. View frames compile with
+  fabric builtins disabled. The host resolves the target once and
+  grants only a session-local `set_content` capability scoped to that
+  exact Texel; a mismatched target fails closed.
 - **`create_image(path, pages)`** completes the headless story: image
   creation is an intent like texel creation, performed by the host
   through the same `image.zig` code as `lucia create`.  `lucia run

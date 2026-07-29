@@ -401,13 +401,15 @@ fn lexKinds(allocator: Allocator, text: []const u8, expected: []const Kind) !voi
 
 test "lexer produces layout tokens for indented blocks" {
     try lexKinds(testing.allocator,
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let x = 1
         \\
     , &.{
-        .keyword_fn, .identifier,  .left_paren, .right_paren, .colon,       .newline,
-        .indent,     .keyword_let, .identifier, .assign,      .int_literal, .newline,
-        .dedent,     .end_of_file,
+        .keyword_func, .identifier, .left_paren,  .identifier, .colon,
+        .identifier,   .comma,      .identifier,  .colon,      .identifier,
+        .right_paren,  .colon,      .newline,     .indent,     .keyword_let,
+        .identifier,   .assign,     .int_literal, .newline,    .dedent,
+        .end_of_file,
     });
 }
 

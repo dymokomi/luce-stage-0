@@ -11,7 +11,7 @@ pub const Kind = enum {
 
     // Words
     identifier,
-    keyword_fn,
+    keyword_func,
     keyword_struct,
     keyword_let,
     keyword_var,
@@ -62,7 +62,7 @@ pub const Token = struct {
 };
 
 pub const keywords = [_]struct { word: []const u8, kind: Kind }{
-    .{ .word = "fn", .kind = .keyword_fn },
+    .{ .word = "func", .kind = .keyword_func },
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "let", .kind = .keyword_let },
     .{ .word = "var", .kind = .keyword_var },

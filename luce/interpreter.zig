@@ -24,6 +24,7 @@ pub fn run(
     inputs: []const InputValue,
     outputs: []?RuntimeValue,
     budget: Budget,
+    host: ?backend.Host,
 ) error{OutOfMemory}!Result {
     // Gate on availability before executing anything: a program whose
     // read inputs are not all available computes nothing.
@@ -38,8 +39,9 @@ pub fn run(
         .outputs = outputs,
         .steps = budget.steps,
         .depth_left = budget.call_depth,
+        .host = host,
     };
-    switch (try machine.call(program.evaluate_function, &.{})) {
+    switch (try machine.call(program.entry_function, &.{})) {
         .value => return .{ .success = machine.intents },
         .trap => |trap| return .{ .trap = trap },
     }
@@ -57,6 +59,7 @@ const Machine = struct {
     outputs: []?RuntimeValue,
     steps: u64,
     depth_left: u32,
+    host: ?backend.Host,
     /// Intents recorded by the fabric builtins, in order.  Arena-owned;
     /// the caller copies what it applies.
     intents: fabric.Intents = .{},
@@ -371,6 +374,28 @@ const Machine = struct {
                 };
                 return .{ .value = .{ .int = @intCast(measured) } };
             },
+            .string_slice => {
+                const value = registers[arguments[0]].string;
+                const start = registers[arguments[1]].int;
+                const end = registers[arguments[2]].int;
+                if (start < 0 or end < start or end > value.len) {
+                    return self.trap(.string_bounds);
+                }
+                const start_index: usize = @intCast(start);
+                const end_index: usize = @intCast(end);
+                if (!isStringBoundary(value, start_index) or
+                    !isStringBoundary(value, end_index))
+                {
+                    return self.trap(.string_boundary);
+                }
+                return .{ .value = .{ .string = value[start_index..end_index] } };
+            },
+            .string_byte => {
+                const value = registers[arguments[0]].string;
+                const index = registers[arguments[1]].int;
+                if (index < 0 or index >= value.len) return self.trap(.string_bounds);
+                return .{ .value = .{ .int = value[@intCast(index)] } };
+            },
             .assert_true => {
                 if (!registers[arguments[0]].boolean) return self.trap(.assertion_failed);
                 return .{ .value = .none };
@@ -380,6 +405,24 @@ const Machine = struct {
                     .code = .explicit_trap,
                     .message = registers[arguments[0]].string,
                 } };
+            },
+            .read_file => {
+                const host = self.host orelse return self.trap(.file_host_unavailable);
+                const capability = registers[arguments[0]].bytes;
+                const path = registers[arguments[1]].string;
+                return switch (try host.readFileFn(host.context, self.arena, capability, path)) {
+                    .content => |content| .{ .value = .{ .string = content } },
+                    .denied => self.trap(.file_capability_denied),
+                    .failed => self.trap(.file_read_failed),
+                };
+            },
+            .script_directory => {
+                const host = self.host orelse return self.trap(.file_host_unavailable);
+                const callback = host.scriptDirectoryFn orelse
+                    return self.trap(.file_host_unavailable);
+                const capability = (try callback(host.context, self.arena)) orelse
+                    return self.trap(.file_host_unavailable);
+                return .{ .value = .{ .bytes = capability } };
             },
             .fabric_image => {
                 const path = registers[arguments[0]].string;
@@ -451,6 +494,10 @@ const Machine = struct {
     }
 };
 
+fn isStringBoundary(value: []const u8, index: usize) bool {
+    return index == value.len or value[index] & 0xc0 != 0x80;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -498,6 +545,18 @@ const Bench = struct {
             .{ .steps = 200_000, .call_depth = 64 },
         );
     }
+
+    fn evaluateHosted(self: *Bench, inputs: []const InputValue, host: backend.Host) !Result {
+        @memset(self.outputs, null);
+        return backend.evaluateHosted(
+            self.arena.allocator(),
+            &self.program,
+            inputs,
+            self.outputs,
+            .{ .steps = 200_000, .call_depth = 64 },
+            host,
+        );
+    }
 };
 
 test "the plan's vertical slice: smooth pointer transform" {
@@ -506,13 +565,13 @@ test "the plan's vertical slice: smooth pointer transform" {
         \\    x: Float
         \\    y: Float
         \\
-        \\fn smooth(current: Point, target: Point, amount: Float) -> Point:
+        \\func smooth(current: Point, target: Point, amount: Float) -> Point:
         \\    return Point(
         \\        x = current.x + (target.x - current.x) * amount,
         \\        y = current.y + (target.y - current.y) * amount,
         \\    )
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let previous = Point(x = input.previous_x, y = input.previous_y)
         \\    let pointer = Point(x = input.pointer_x, y = input.pointer_y)
         \\    let eased = smooth(previous, pointer, input.amount)
@@ -546,14 +605,43 @@ test "the plan's vertical slice: smooth pointer transform" {
     try testing.expectEqual(@as(f64, -1.0), bench.outputs[1].?.float);
 }
 
+test "namespaced struct functions execute through qualified calls" {
+    var bench = try Bench.setup(
+        \\struct Math:
+        \\    func twice(value: Int) -> Int:
+        \\        return value * 2
+        \\
+        \\    func plus(left: Int, right: Int) -> Int:
+        \\        return left + right
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    output.value = Math.twice(Math.plus(input.left, input.right))
+        \\
+    , .{
+        .inputs = &.{
+            .{ .name = "left", .declared = .int },
+            .{ .name = "right", .declared = .int },
+        },
+        .outputs = &.{.{ .name = "value", .declared = .int }},
+    }, .{});
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{
+        .{ .value = .{ .int = 3 } },
+        .{ .value = .{ .int = 4 } },
+    });
+    try testing.expect(result == .success);
+    try testing.expectEqual(@as(i64, 14), bench.outputs[0].?.int);
+}
+
 test "loops, recursion, strings, and builtins compute" {
     var bench = try Bench.setup(
-        \\fn factorial(value: Int) -> Int:
+        \\func factorial(value: Int) -> Int:
         \\    if value <= 1:
         \\        return 1
         \\    return value * factorial(value - 1)
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    var total = 0
         \\    for index in range(1, 11):
         \\        total = total + index
@@ -581,9 +669,131 @@ test "loops, recursion, strings, and builtins compute" {
     try testing.expectEqual(@as(i64, 3), bench.outputs[3].?.int);
 }
 
+test "checked string intrinsics slice and inspect UTF-8 bytes" {
+    var bench = try Bench.setup(
+        \\func evaluate(input: Input, output: Output):
+        \\    output.prefix = slice(input.text, 0, 2)
+        \\    output.middle = slice(input.text, 2, 6)
+        \\    output.byte = byte_at(input.text, 2)
+        \\
+    , .{
+        .inputs = &.{.{ .name = "text", .declared = .string }},
+        .outputs = &.{
+            .{ .name = "prefix", .declared = .string },
+            .{ .name = "middle", .declared = .string },
+            .{ .name = "byte", .declared = .int },
+        },
+    }, .{});
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{.{ .value = .{ .string = "ab\xF0\x9F\x99\x82cd\nnext" } }});
+    try testing.expect(result == .success);
+    try testing.expectEqualStrings("ab", bench.outputs[0].?.string);
+    try testing.expectEqualStrings("\xF0\x9F\x99\x82", bench.outputs[1].?.string);
+    try testing.expectEqual(@as(i64, 0xf0), bench.outputs[2].?.int);
+}
+
+test "string intrinsics implement multiline UTF-8-safe edits" {
+    var bench = try Bench.setup(
+        \\func continuation(byte: Int) -> Bool:
+        \\    return byte >= 128 and byte < 192
+        \\
+        \\func previous(value: String, cursor: Int) -> Int:
+        \\    var at = cursor - 1
+        \\    while at > 0 and continuation(byte_at(value, at)):
+        \\        at = at - 1
+        \\    return at
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    if input.insert:
+        \\        output.text = slice(input.text, 0, input.cursor) + input.added + slice(input.text, input.cursor, len(input.text))
+        \\        output.cursor = input.cursor + len(input.added)
+        \\    else:
+        \\        let before = previous(input.text, input.cursor)
+        \\        output.text = slice(input.text, 0, before) + slice(input.text, input.cursor, len(input.text))
+        \\        output.cursor = before
+        \\
+    , .{
+        .inputs = &.{
+            .{ .name = "insert", .declared = .boolean },
+            .{ .name = "text", .declared = .string },
+            .{ .name = "cursor", .declared = .int },
+            .{ .name = "added", .declared = .string },
+        },
+        .outputs = &.{
+            .{ .name = "text", .declared = .string },
+            .{ .name = "cursor", .declared = .int },
+        },
+    }, .{});
+    defer bench.deinit();
+
+    const original = "A\xF0\x9F\x99\x82\nB";
+    const inserted = try bench.evaluate(&.{
+        .{ .value = .{ .boolean = true } },
+        .{ .value = .{ .string = original } },
+        .{ .value = .{ .int = 5 } },
+        .{ .value = .{ .string = "x" } },
+    });
+    try testing.expect(inserted == .success);
+    try testing.expectEqualStrings("A\xF0\x9F\x99\x82x\nB", bench.outputs[0].?.string);
+    try testing.expectEqual(@as(i64, 6), bench.outputs[1].?.int);
+
+    const erased = try bench.evaluate(&.{
+        .{ .value = .{ .boolean = false } },
+        .{ .value = .{ .string = original } },
+        .{ .value = .{ .int = 5 } },
+        .{ .value = .{ .string = "" } },
+    });
+    try testing.expect(erased == .success);
+    try testing.expectEqualStrings("A\nB", bench.outputs[0].?.string);
+    try testing.expectEqual(@as(i64, 1), bench.outputs[1].?.int);
+}
+
+test "checked string intrinsics trap on bounds and UTF-8 splits" {
+    var bench = try Bench.setup(
+        \\func evaluate(input: Input, output: Output):
+        \\    if input.mode == 1:
+        \\        output.text = slice(input.text, -1, 0)
+        \\    elif input.mode == 2:
+        \\        output.text = slice(input.text, 0, len(input.text) + 1)
+        \\    elif input.mode == 3:
+        \\        output.text = slice(input.text, 0, 2)
+        \\    else:
+        \\        output.byte = byte_at(input.text, len(input.text))
+        \\
+    , .{
+        .inputs = &.{
+            .{ .name = "mode", .declared = .int },
+            .{ .name = "text", .declared = .string },
+        },
+        .outputs = &.{
+            .{ .name = "text", .declared = .string },
+            .{ .name = "byte", .declared = .int },
+        },
+    }, .{});
+    defer bench.deinit();
+
+    const text: InputValue = .{ .value = .{ .string = "a\xF0\x9F\x99\x82b" } };
+    try expectTrap(&bench, &.{ .{ .value = .{ .int = 1 } }, text }, .string_bounds);
+    try expectTrap(&bench, &.{ .{ .value = .{ .int = 2 } }, text }, .string_bounds);
+    try expectTrap(&bench, &.{ .{ .value = .{ .int = 3 } }, text }, .string_boundary);
+    try expectTrap(&bench, &.{ .{ .value = .{ .int = 4 } }, text }, .string_bounds);
+}
+
+test "string intrinsics reject wrong argument types" {
+    var result = try compile_mod.compile(testing.allocator,
+        \\func evaluate(input: Input, output: Output):
+        \\    output.text = slice(1, 0, 1)
+        \\
+    , .{ .outputs = &.{.{ .name = "text", .declared = .string }} }, .{});
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    try testing.expectEqualStrings("luce.sema.type", result.failure.at(0).?.code);
+}
+
 test "an unavailable read input gates evaluation" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    output.doubled = input.value * 2
         \\
     , .{
@@ -608,7 +818,7 @@ fn expectTrap(bench: *Bench, inputs: []const InputValue, code: ir.TrapCode) !voi
 
 test "checked arithmetic and conversions trap" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    if input.mode == 1:
         \\        output.value = 9223372036854775807 + input.mode
         \\    elif input.mode == 2:
@@ -644,7 +854,7 @@ test "checked arithmetic and conversions trap" {
 
 test "the step budget stops an infinite loop" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    var spinning = 0
         \\    while true:
         \\        spinning = spinning + 1
@@ -657,10 +867,10 @@ test "the step budget stops an infinite loop" {
 
 test "unbounded recursion hits the call depth limit" {
     var bench = try Bench.setup(
-        \\fn dive(depth: Int) -> Int:
+        \\func dive(depth: Int) -> Int:
         \\    return dive(depth + 1)
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    output.value = dive(0)
         \\
     , .{ .outputs = &.{.{ .name = "value", .declared = .int }} }, .{});
@@ -670,7 +880,7 @@ test "unbounded recursion hits the call depth limit" {
 
 test "unwritten outputs stay unwritten; conditional writes land" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    if input.flag:
         \\        output.first = 1
         \\    else:
@@ -693,13 +903,13 @@ test "unwritten outputs stay unwritten; conditional writes land" {
 
 test "fabric builtins record complete texel intents" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let adder = create_texel(input.name)
         \\    texel_input(adder, "left", "int")
         \\    texel_input(adder, "right", "int")
         \\    texel_output(adder, "value", "int")
         \\    texel_evaluator(adder, "luce")
-        \\    texel_content(adder, "fn evaluate():\n    output.value = input.left + input.right\n")
+        \\    texel_content(adder, "func evaluate(input: Input, output: Output):\n    output.value = input.left + input.right\n")
         \\    let label = create_texel("banner")
         \\    texel_output(label, "text", "text")
         \\    texel_set(label, "text", "hello")
@@ -729,7 +939,7 @@ test "fabric builtins record complete texel intents" {
 
 test "create_image records an image intent and validates its shape" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    if input.bad:
         \\        create_image("", 0)
         \\    else:
@@ -752,7 +962,7 @@ test "create_image records an image intent and validates its shape" {
 
 test "fabric builtins trap on bad handles and types, and need the gate" {
     var bench = try Bench.setup(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    if input.mode == 1:
         \\        texel_output(7, "value", "int")
         \\    else:
@@ -768,11 +978,95 @@ test "fabric builtins trap on bad handles and types, and need the gate" {
 
     // Without the gate, the builtins do not exist.
     var gated = try compile_mod.compile(testing.allocator,
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let t = create_texel("x")
         \\
     , .{}, .{});
     defer gated.deinit();
     try testing.expect(gated == .failure);
     try testing.expectEqualStrings("luce.sema.fabric", gated.failure.at(0).?.code);
+}
+
+const TestFileHost = struct {
+    capability: []const u8,
+    content: []const u8,
+    fail_read: bool = false,
+
+    fn read(
+        context: *anyopaque,
+        arena: Allocator,
+        capability: []const u8,
+        path: []const u8,
+    ) error{OutOfMemory}!backend.FileRead {
+        const self: *TestFileHost = @ptrCast(@alignCast(context));
+        if (!std.mem.eql(u8, capability, self.capability)) return .denied;
+        if (self.fail_read) return .failed;
+        if (!std.mem.eql(u8, path, "sibling.luc")) return .failed;
+        return .{ .content = try arena.dupe(u8, self.content) };
+    }
+
+    fn directory(context: *anyopaque, arena: Allocator) error{OutOfMemory}!?[]const u8 {
+        const self: *TestFileHost = @ptrCast(@alignCast(context));
+        return try arena.dupe(u8, self.capability);
+    }
+
+    fn host(self: *TestFileHost) backend.Host {
+        return .{
+            .context = self,
+            .readFileFn = read,
+            .scriptDirectoryFn = directory,
+        };
+    }
+};
+
+test "file read fails closed without a host and reports stable host traps" {
+    var bench = try Bench.setup(
+        \\func evaluate(input: Input, output: Output):
+        \\    output.text = read_file(input.capability, "sibling.luc")
+        \\
+    , .{
+        .inputs = &.{.{ .name = "capability", .declared = .bytes }},
+        .outputs = &.{.{ .name = "text", .declared = .string }},
+    }, .{});
+    defer bench.deinit();
+
+    try expectTrap(&bench, &.{.{ .value = .{ .bytes = "cap" } }}, .file_host_unavailable);
+
+    var host: TestFileHost = .{ .capability = "cap", .content = "loaded" };
+    const denied = try bench.evaluateHosted(
+        &.{.{ .value = .{ .bytes = "foreign" } }},
+        host.host(),
+    );
+    try testing.expectEqual(ir.TrapCode.file_capability_denied, denied.trap.code);
+
+    const loaded = try bench.evaluateHosted(
+        &.{.{ .value = .{ .bytes = "cap" } }},
+        host.host(),
+    );
+    try testing.expect(loaded == .success);
+    try testing.expectEqualStrings("loaded", bench.outputs[0].?.string);
+
+    host.fail_read = true;
+    const failed = try bench.evaluateHosted(
+        &.{.{ .value = .{ .bytes = "cap" } }},
+        host.host(),
+    );
+    try testing.expectEqual(ir.TrapCode.file_read_failed, failed.trap.code);
+}
+
+test "script directory capability is supplied only by a hosted fabric run" {
+    var bench = try Bench.setup(
+        \\func evaluate(input: Input, output: Output):
+        \\    output.capability = script_directory()
+        \\
+    , .{ .outputs = &.{.{ .name = "capability", .declared = .bytes }} }, .{
+        .allow_fabric = true,
+    });
+    defer bench.deinit();
+
+    try expectTrap(&bench, &.{}, .file_host_unavailable);
+    var host: TestFileHost = .{ .capability = "directory-cap", .content = "" };
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expect(result == .success);
+    try testing.expectEqualStrings("directory-cap", bench.outputs[0].?.bytes);
 }

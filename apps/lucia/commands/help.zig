@@ -29,5 +29,9 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
         "EVALUATORS: concat sum upper luce    BOUNDARY TEXELS: keyboard mouse\n",
         .{},
     );
+    try session.out.print(
+        "FILE CAPABILITIES: allow-read grants one directory for this session only\n",
+        .{},
+    );
     return .ok;
 }

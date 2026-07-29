@@ -280,7 +280,7 @@ test "createTexel builds the whole spec in one commit" {
             .{ .name = "value", .declared = .int },
             .{ .name = "state", .declared = .text },
         },
-        .content = "fn evaluate():\n    output.value = input.left\n",
+        .content = "func evaluate(input: Input, output: Output):\n    output.value = input.left\n",
         .evaluator = "luce",
         .sets = &.{.{ .output = "state", .value = initial }},
     });
@@ -320,7 +320,7 @@ test "edits are typed, guarded, and atomic" {
     try rename(gpa, &rig.store, id, "renamed");
     try testing.expectEqualStrings("renamed", rig.store.get(id).?.getOutput(name_port).?.source.?.text);
 
-    try setContent(gpa, &rig.store, id, "fn evaluate():\n    output.value = 1\n");
+    try setContent(gpa, &rig.store, id, "func evaluate(input: Input, output: Output):\n    output.value = 1\n");
     try testing.expect(rig.store.get(id).?.content != null);
     try setContent(gpa, &rig.store, id, "  \n");
     try testing.expect(rig.store.get(id).?.content == null);

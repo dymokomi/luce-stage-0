@@ -121,6 +121,7 @@ pub const Field = struct {
 pub const StructDecl = struct {
     name: []const u8,
     fields: []Field,
+    functions: []FuncDecl,
     span: Span,
 };
 
@@ -130,7 +131,7 @@ pub const Parameter = struct {
     span: Span,
 };
 
-pub const FnDecl = struct {
+pub const FuncDecl = struct {
     name: []const u8,
     parameters: []Parameter,
     return_type: ?TypeName,
@@ -140,5 +141,5 @@ pub const FnDecl = struct {
 
 pub const Program = struct {
     structs: []StructDecl,
-    functions: []FnDecl,
+    functions: []FuncDecl,
 };

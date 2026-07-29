@@ -69,6 +69,29 @@ pub const Budget = struct {
     call_depth: u32 = 256,
 };
 
+/// Optional trusted services for intrinsically host-facing builtins.
+/// Returned slices must remain valid for the evaluation; callbacks may
+/// allocate them from `arena`.  A missing host fails closed.
+pub const Host = struct {
+    context: *anyopaque,
+    readFileFn: *const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        capability: []const u8,
+        path: []const u8,
+    ) error{OutOfMemory}!FileRead,
+    scriptDirectoryFn: ?*const fn (
+        context: *anyopaque,
+        arena: Allocator,
+    ) error{OutOfMemory}!?[]const u8 = null,
+};
+
+pub const FileRead = union(enum) {
+    content: []const u8,
+    denied,
+    failed,
+};
+
 // ---------------------------------------------------------------------------
 // Evaluation
 // ---------------------------------------------------------------------------
@@ -85,7 +108,20 @@ pub fn evaluate(
     outputs: []?RuntimeValue,
     budget: Budget,
 ) error{OutOfMemory}!Result {
-    return interpreter.run(arena, program, inputs, outputs, budget);
+    return evaluateHosted(arena, program, inputs, outputs, budget, null);
+}
+
+/// Hosted evaluation.  The default `evaluate` API remains pure and
+/// supplies no ambient host services.
+pub fn evaluateHosted(
+    arena: Allocator,
+    program: *const ir.Program,
+    inputs: []const InputValue,
+    outputs: []?RuntimeValue,
+    budget: Budget,
+    host: ?Host,
+) error{OutOfMemory}!Result {
+    return interpreter.run(arena, program, inputs, outputs, budget, host);
 }
 
 test {

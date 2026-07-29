@@ -56,9 +56,13 @@ pub const Intrinsic = enum {
     floor,
     ceil,
     len,
+    string_slice,
+    string_byte,
     assert_true,
     trap_message,
+    read_file,
     // Fabric builtins (gated by compile options; see fabric.zig).
+    script_directory,
     fabric_image,
     fabric_create,
     fabric_input,
@@ -80,6 +84,11 @@ pub const TrapCode = enum {
     invalid_handle,
     invalid_port_type,
     invalid_image,
+    string_bounds,
+    string_boundary,
+    file_host_unavailable,
+    file_capability_denied,
+    file_read_failed,
 
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
@@ -94,6 +103,11 @@ pub const TrapCode = enum {
             .invalid_handle => "invalid texel handle",
             .invalid_port_type => "unknown port type (bool int real text bytes)",
             .invalid_image => "create_image needs a path and a positive page count",
+            .string_bounds => "string index out of bounds",
+            .string_boundary => "string slice splits a UTF-8 sequence",
+            .file_host_unavailable => "file host unavailable",
+            .file_capability_denied => "file read capability denied",
+            .file_read_failed => "file read failed",
         };
     }
 };
@@ -167,7 +181,7 @@ pub const Program = struct {
     /// Input port indices the program reads; unavailable reads gate
     /// evaluation before it starts.
     reads: []u32 = &.{},
-    evaluate_function: u32 = 0,
+    entry_function: u32 = 0,
 
     pub fn deinit(self: *Program) void {
         self.arena.deinit();
@@ -202,7 +216,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.functions) |*function| {
         try verifyFunction(allocator, program, function);
     }
-    if (program.evaluate_function >= program.functions.len) return error.BadFunction;
+    if (program.entry_function >= program.functions.len) return error.BadFunction;
 }
 
 fn verifyFunction(allocator: Allocator, program: *const Program, function: *const Function) VerifyError!void {
@@ -400,7 +414,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
     }
 
     for (program.functions) |*function| {
-        try appendPrint(&text, allocator, "fn {s}(", .{function.name});
+        try appendPrint(&text, allocator, "func {s}(", .{function.name});
         for (function.locals[0..function.parameter_count], 0..) |local, index| {
             if (index != 0) try text.appendSlice(allocator, ", ");
             try appendPrint(&text, allocator, "{s}: {s}", .{

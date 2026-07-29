@@ -18,14 +18,7 @@ pub const Style = enum {
     err,
     created,
     prompt,
-    // Editor / syntax roles.
-    keyword,
-    literal,
-    string,
-    comment,
     port,
-    line_number,
-    selected,
 
     fn sequence(self: Style) []const u8 {
         return switch (self) {
@@ -39,13 +32,7 @@ pub const Style = enum {
             .err => "\x1b[31m",
             .created => "\x1b[32m",
             .prompt => "\x1b[36m",
-            .keyword => "\x1b[35m",
-            .literal => "\x1b[33m",
-            .string => "\x1b[32m",
-            .comment => "\x1b[2m",
             .port => "\x1b[36m",
-            .line_number => "\x1b[2m",
-            .selected => "\x1b[7m", // inverse video
         };
     }
 };

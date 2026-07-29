@@ -67,7 +67,7 @@ pub fn compile(
     program.functions = analyzed.functions;
     program.constants = analyzed.constants;
     program.reads = analyzed.reads;
-    program.evaluate_function = analyzed.evaluate_function;
+    program.entry_function = analyzed.entry_function;
     program.inputs = try copyPorts(arena, schema.inputs);
     program.outputs = try copyPorts(arena, schema.outputs);
 
@@ -132,7 +132,16 @@ fn expectCompiles(source: []const u8, schema: PortSchema) !ir.Program {
 }
 
 fn expectFails(source: []const u8, schema: PortSchema, expected_code: []const u8) !void {
-    var result = try compile(testing.allocator, source, schema, .{});
+    return expectFailsOptions(source, schema, .{}, expected_code);
+}
+
+fn expectFailsOptions(
+    source: []const u8,
+    schema: PortSchema,
+    options: types.CompileOptions,
+    expected_code: []const u8,
+) !void {
+    var result = try compile(testing.allocator, source, schema, options);
     defer result.deinit();
     switch (result) {
         .success => return error.TestUnexpectedResult,
@@ -148,19 +157,135 @@ fn expectFails(source: []const u8, schema: PortSchema, expected_code: []const u8
     }
 }
 
+test "func is strict and fn is an ordinary identifier" {
+    try expectFails(
+        \\fn evaluate(input: Input, output: Output):
+        \\    return
+        \\
+    , .{}, "luce.parse.top");
+}
+
+test "entry mode enforces evaluator and script contracts" {
+    try expectFailsOptions(
+        \\func main():
+        \\    return
+        \\
+    , .{}, .{ .entry_mode = .evaluator }, "luce.sema.evaluate");
+    try expectFailsOptions(
+        \\func evaluate(input: Input, output: Output):
+        \\    return
+        \\
+    , .{}, .{ .entry_mode = .script }, "luce.sema.main");
+    try expectFailsOptions(
+        \\func main(value: Int):
+        \\    return
+        \\
+    , .{}, .{ .entry_mode = .script }, "luce.sema.main");
+
+    var script = try compile(testing.allocator,
+        \\func main():
+        \\    return
+        \\
+    , .{}, .{ .entry_mode = .script });
+    defer script.deinit();
+    try testing.expect(script == .success);
+}
+
+test "zero-port evaluators still require exact frame parameters" {
+    try expectFails(
+        \\func evaluate():
+        \\    return
+        \\
+    , .{}, "luce.sema.evaluate");
+    var program = try expectCompiles(
+        \\func evaluate(input: Input, output: Output):
+        \\    return
+        \\
+    , .{});
+    defer program.deinit();
+}
+
+test "struct namespaces collect functions and reject invalid members" {
+    var program = try expectCompiles(
+        \\struct Math:
+        \\    func double(value: Int) -> Int:
+        \\        return value * 2
+        \\
+        \\struct Pair:
+        \\    left: Int
+        \\    func sum(left: Int, right: Int) -> Int:
+        \\        return left + right
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    output.value = Math.double(Pair.sum(input.left, input.right))
+        \\
+    , .{
+        .inputs = &.{
+            .{ .name = "left", .declared = .int },
+            .{ .name = "right", .declared = .int },
+        },
+        .outputs = &.{.{ .name = "value", .declared = .int }},
+    });
+    defer program.deinit();
+    try testing.expectEqualStrings("Math.double", program.functions[1].name);
+
+    try expectFails(
+        \\struct Bad:
+        \\    value: Int
+        \\    func value() -> Int:
+        \\        return 1
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    return
+        \\
+    , .{}, "luce.sema.duplicate");
+    try expectFails(
+        \\struct Helpers:
+        \\    func one() -> Int:
+        \\        return 1
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    let bad = Helpers.missing()
+        \\
+    , .{}, "luce.sema.call");
+    try expectFails(
+        \\struct Helpers:
+        \\    func one() -> Int:
+        \\        return 1
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    let bad = Helpers()
+        \\
+    , .{}, "luce.sema.construct");
+}
+
+test "frame access is scoped to evaluator entry" {
+    try expectFails(
+        \\func helper() -> Int:
+        \\    return input.value
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    output.value = helper()
+        \\
+    , .{
+        .inputs = &.{.{ .name = "value", .declared = .int }},
+        .outputs = &.{.{ .name = "value", .declared = .int }},
+    }, "luce.sema.name");
+}
+
 test "the plan's scale example compiles and verifies" {
     var program = try expectCompiles(
         \\struct Point:
         \\    x: Float
         \\    y: Float
         \\
-        \\fn scale_point(point: Point, factor: Float) -> Point:
+        \\func scale_point(point: Point, factor: Float) -> Point:
         \\    return Point(
         \\        x = point.x * factor,
         \\        y = point.y * factor,
         \\    )
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let position = Point(x = input.x, y = input.y)
         \\    let scaled = scale_point(position, input.scale)
         \\    output.x = scaled.x
@@ -177,7 +302,7 @@ test "the plan's scale example compiles and verifies" {
 
 test "control flow, loops, and builtins compile and verify" {
     var program = try expectCompiles(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    var total = 0
         \\    for index in range(0, 10):
         \\        if index % 2 == 0 and index != 4:
@@ -197,7 +322,7 @@ test "control flow, loops, and builtins compile and verify" {
 
 test "the IR dump is readable and deterministic" {
     const source =
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let doubled = input.value * 2
         \\    output.value = doubled
         \\
@@ -217,7 +342,7 @@ test "the IR dump is readable and deterministic" {
     defer testing.allocator.free(second);
 
     try testing.expectEqualStrings(first, second);
-    try testing.expect(std.mem.indexOf(u8, first, "fn evaluate() -> None") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "func evaluate() -> None") != null);
     try testing.expect(std.mem.indexOf(u8, first, "input_load value") != null);
     try testing.expect(std.mem.indexOf(u8, first, "output_store value") != null);
     try testing.expect(std.mem.indexOf(u8, first, "multiply.Int") != null);
@@ -225,27 +350,27 @@ test "the IR dump is readable and deterministic" {
 
 test "unknown ports and port type mismatches diagnose" {
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    output.ghost = 1
         \\
     , point_schema, "luce.sema.port");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let missing = input.ghost
         \\
     , point_schema, "luce.sema.port");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    output.x = 1
         \\
     , point_schema, "luce.sema.type");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    input.x = 1.0
         \\
     , point_schema, "luce.sema.input");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let peek = output.x
         \\
     , point_schema, "luce.sema.output");
@@ -253,25 +378,25 @@ test "unknown ports and port type mismatches diagnose" {
 
 test "no implicit conversion, no reassigned let, no shadowing" {
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let mixed = 1 + 2.0
         \\
     , .{}, "luce.sema.type");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let once = 1
         \\    once = 2
         \\
     , .{}, "luce.sema.let");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let name = 1
         \\    if true:
         \\        let name = 2
         \\
     , .{}, "luce.sema.duplicate");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let value: Float = 3
         \\
     , .{}, "luce.sema.type");
@@ -279,21 +404,21 @@ test "no implicit conversion, no reassigned let, no shadowing" {
 
 test "return paths and evaluate's shape are checked" {
     try expectFails(
-        \\fn partial(flag: Bool) -> Int:
+        \\func partial(flag: Bool) -> Int:
         \\    if flag:
         \\        return 1
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let unused = partial(true)
         \\
     , .{}, "luce.sema.return");
     try expectFails(
-        \\fn helper() -> Int:
+        \\func helper() -> Int:
         \\    return 1
         \\
     , .{}, "luce.sema.evaluate");
     try expectFails(
-        \\fn evaluate() -> Int:
+        \\func evaluate(input: Input, output: Output) -> Int:
         \\    return 1
         \\
     , .{}, "luce.sema.evaluate");
@@ -307,17 +432,17 @@ test "struct construction is complete, named, and typed" {
         \\
     ;
     try expectFails(source_prefix ++
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let missing = Color(red = 1.0)
         \\
     , .{}, "luce.sema.construct");
     try expectFails(source_prefix ++
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let doubled = Color(red = 1.0, red = 2.0, green = 3.0)
         \\
     , .{}, "luce.sema.construct");
     try expectFails(source_prefix ++
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let wrong = Color(red = 1, green = 2.0)
         \\
     , .{}, "luce.sema.type");
@@ -325,7 +450,7 @@ test "struct construction is complete, named, and typed" {
         \\struct Loop:
         \\    inner: Loop
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let never = 1
         \\
     , .{}, "luce.sema.struct");
@@ -333,28 +458,28 @@ test "struct construction is complete, named, and typed" {
 
 test "calls check arity, types, and none results" {
     try expectFails(
-        \\fn helper(value: Int) -> Int:
+        \\func helper(value: Int) -> Int:
         \\    return value
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let wrong = helper(1, 2)
         \\
     , .{}, "luce.sema.call");
     try expectFails(
-        \\fn nothing():
+        \\func nothing():
         \\    return
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let value = nothing()
         \\
     , .{}, "luce.sema.call");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let bad = sqrt(4)
         \\
     , .{}, "luce.sema.type");
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let bad = unknown_helper(1)
         \\
     , .{}, "luce.sema.call");
@@ -362,7 +487,7 @@ test "calls check arity, types, and none results" {
 
 test "break and continue require a loop" {
     try expectFails(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    break
         \\
     , .{}, "luce.sema.loop");
@@ -374,7 +499,7 @@ test "var struct fields update through functional struct_set" {
         \\    x: Float
         \\    y: Float
         \\
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    var point = Point(x = 0.0, y = 0.0)
         \\    point.x = 4.5
         \\    output.x = point.x
@@ -388,7 +513,7 @@ test "var struct fields update through functional struct_set" {
 
 test "string operations type-check" {
     var program = try expectCompiles(
-        \\fn evaluate():
+        \\func evaluate(input: Input, output: Output):
         \\    let greeting = "hello, " + input.name
         \\    if len(greeting) > 3 and greeting != "":
         \\        output.text = greeting
@@ -400,4 +525,40 @@ test "string operations type-check" {
         .outputs = &.{.{ .name = "text", .declared = .string }},
     });
     defer program.deinit();
+}
+
+test "file builtins type-check and script capability stays fabric-gated" {
+    var ordinary = try expectCompiles(
+        \\func load(capability: Bytes, path: String) -> String:
+        \\    return read_file(capability, path)
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    output.text = load(input.capability, "sibling.luc")
+        \\
+    , .{
+        .inputs = &.{.{ .name = "capability", .declared = .bytes }},
+        .outputs = &.{.{ .name = "text", .declared = .string }},
+    });
+    defer ordinary.deinit();
+
+    try expectFails(
+        \\func evaluate(input: Input, output: Output):
+        \\    let capability = script_directory()
+        \\
+    , .{}, "luce.sema.fabric");
+
+    var gated = try compile(testing.allocator,
+        \\func evaluate(input: Input, output: Output):
+        \\    let capability = script_directory()
+        \\    let text = read_file(capability, "sibling.luc")
+        \\
+    , .{}, .{ .allow_fabric = true });
+    defer gated.deinit();
+    try testing.expect(gated == .success);
+
+    try expectFails(
+        \\func evaluate(input: Input, output: Output):
+        \\    let text = read_file("not bytes", "sibling.luc")
+        \\
+    , .{}, "luce.sema.type");
 }

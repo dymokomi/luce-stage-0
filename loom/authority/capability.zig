@@ -173,6 +173,14 @@ pub const Authority = struct {
             std.mem.eql(u8, grant.scope, capability.scope);
     }
 
+    /// Remove one grant. The caller still owns the Capability value.
+    pub fn revoke(self: *Authority, capability: Capability) bool {
+        const removed = self.grants.fetchRemove(capability.token) orelse return false;
+        self.allocator.free(removed.value.operation);
+        self.allocator.free(removed.value.scope);
+        return true;
+    }
+
     pub fn count(self: *const Authority) usize {
         return self.grants.count();
     }
@@ -333,6 +341,10 @@ test "issue, verify, and reject mismatched or foreign capabilities" {
     var stranger = Authority.init(allocator);
     defer stranger.deinit();
     try testing.expect(!stranger.verify(capability, "write", "notes"));
+
+    try testing.expect(authority.revoke(capability));
+    try testing.expect(!authority.verify(capability, "write", "notes"));
+    try testing.expect(!authority.revoke(capability));
 
     try testing.expectError(Error.InvalidArgument, authority.issue(std.testing.io, "", "x"));
 }

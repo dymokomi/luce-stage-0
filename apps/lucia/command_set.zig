@@ -26,10 +26,10 @@ pub const table = [_]Command{
     @import("commands/connect.zig").entry,
     @import("commands/disconnect.zig").entry,
     @import("commands/set.zig").entry,
+    @import("commands/allow_read.zig").entry,
     @import("commands/eval.zig").entry,
     @import("commands/code.zig").entry,
     @import("commands/luce.zig").entry,
-    @import("commands/edit.zig").entry,
     @import("commands/pull.zig").entry,
     @import("commands/watch.zig").entry,
     @import("commands/unwatch.zig").entry,
@@ -45,11 +45,36 @@ pub fn run(session: *Session, words: []const []const u8) Error!Result {
         {
             continue;
         }
-        if (words.len - 1 != matched.argument_count) {
+        const argument_count = words.len - 1;
+        if (!acceptsArgumentCount(matched.*, argument_count)) {
             try session.err.print("usage: {s}\n", .{matched.usage});
             return .err;
         }
         return matched.run(session, words);
     }
     return .unknown;
+}
+
+fn acceptsArgumentCount(matched: Command, count: usize) bool {
+    const maximum = matched.maximum_argument_count orelse matched.argument_count;
+    return count >= matched.argument_count and count <= maximum;
+}
+
+test "commands accept exact or explicitly bounded arity" {
+    const exact = Command{
+        .name = "exact",
+        .alias = "x",
+        .argument_count = 1,
+        .usage = "exact ARG",
+        .run = undefined,
+    };
+    try std.testing.expect(!acceptsArgumentCount(exact, 0));
+    try std.testing.expect(acceptsArgumentCount(exact, 1));
+    try std.testing.expect(!acceptsArgumentCount(exact, 2));
+
+    var bounded = exact;
+    bounded.maximum_argument_count = 2;
+    try std.testing.expect(acceptsArgumentCount(bounded, 1));
+    try std.testing.expect(acceptsArgumentCount(bounded, 2));
+    try std.testing.expect(!acceptsArgumentCount(bounded, 3));
 }
