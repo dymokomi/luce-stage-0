@@ -12,11 +12,21 @@ namespace lucia {
 //
 class ExitCommand : public Command {
 public:
-    const char *name() const override;
-    Size        argument_count() const override;
-    const char *usage() const override;
+    const char *name() const override {
+        return "exit";
+    }
 
-    CommandResult run(Store *store, const Strings &words) override;
+    Size argument_count() const override {
+        return 0;
+    }
+
+    const char *usage() const override {
+        return "exit           leave the terminal";
+    }
+
+    CommandResult run(Store *, const Strings &) override {
+        return COMMAND_EXIT;
+    }
 };
 
 } // namespace lucia

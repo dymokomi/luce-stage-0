@@ -1,29 +1,46 @@
 #pragma once
 
+#include <stdio.h>
+
 #include "command.h"
 
 namespace lucia {
-
-class CommandSet;
 
 // ---------------------------------------------------------------------------
 // HelpCommand
 // ---------------------------------------------------------------------------
 //
-// help — print the usage line of every command in the set.
+// help — print the usage line of every command in the given list.  Borrows
+// the list; the owner must outlive this command.
 //
 class HelpCommand : public Command {
 public:
-    explicit HelpCommand(const CommandSet *command_set);
+    HelpCommand(const Command *const *command_list, Size command_count)
+        : commands(command_list), count(command_count) {}
 
-    const char *name() const override;
-    Size        argument_count() const override;
-    const char *usage() const override;
+    const char *name() const override {
+        return "help";
+    }
 
-    CommandResult run(Store *store, const Strings &words) override;
+    Size argument_count() const override {
+        return 0;
+    }
+
+    const char *usage() const override {
+        return "help           show this list";
+    }
+
+    CommandResult run(Store *, const Strings &) override {
+        printf("commands:\n");
+        for (Size i = 0; i < count; ++i) {
+            printf("  %s\n", commands[i]->usage());
+        }
+        return COMMAND_OK;
+    }
 
 private:
-    const CommandSet *commands;
+    const Command *const *commands;
+    Size                  count;
 };
 
 } // namespace lucia

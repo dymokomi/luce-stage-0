@@ -4,7 +4,7 @@
 
 namespace lucia {
 
-CommandSet::CommandSet() : help_command(this) {
+CommandSet::CommandSet() : help_command(commands, COMMAND_COUNT) {
     commands[0] = &new_command;
     commands[1] = &rename_command;
     commands[2] = &find_command;

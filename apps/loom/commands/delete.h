@@ -1,6 +1,9 @@
 #pragma once
 
+#include <stdio.h>
+
 #include "command.h"
+#include "commands/common.h"
 
 namespace lucia {
 
@@ -12,11 +15,35 @@ namespace lucia {
 //
 class DeleteCommand : public Command {
 public:
-    const char *name() const override;
-    Size        argument_count() const override;
-    const char *usage() const override;
+    const char *name() const override {
+        return "delete";
+    }
 
-    CommandResult run(Store *store, const Strings &words) override;
+    Size argument_count() const override {
+        return 1;
+    }
+
+    const char *usage() const override {
+        return "delete ID      remove a texel";
+    }
+
+    CommandResult run(Store *store, const Strings &words) override {
+        TexelId id;
+        if (!parse_id(words[1], &id)) {
+            return COMMAND_ERROR;
+        }
+        if (!store->has(id)) {
+            fprintf(stderr, "loom: texel not found\n");
+            return COMMAND_ERROR;
+        }
+        Transaction transaction;
+        if (!store->begin(&transaction) || !transaction.remove(id) ||
+            !transaction.commit()) {
+            fprintf(stderr, "loom: delete failed (texel is still connected)\n");
+            return COMMAND_ERROR;
+        }
+        return COMMAND_OK;
+    }
 };
 
 } // namespace lucia

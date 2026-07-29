@@ -85,17 +85,8 @@ target_link_libraries(lucia_projection PUBLIC lucia_loom)
 lucia_target(lucia_projection)
 
 add_executable(loom
-    apps/loom/command.cpp
     apps/loom/command_line.cpp
     apps/loom/command_set.cpp
-    apps/loom/commands/common.cpp
-    apps/loom/commands/delete.cpp
-    apps/loom/commands/exit.cpp
-    apps/loom/commands/find.cpp
-    apps/loom/commands/help.cpp
-    apps/loom/commands/list.cpp
-    apps/loom/commands/new.cpp
-    apps/loom/commands/rename.cpp
     apps/loom/image.cpp
     apps/loom/main.cpp
     apps/loom/terminal.cpp

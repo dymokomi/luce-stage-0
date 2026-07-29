@@ -22,7 +22,7 @@ enum CommandResult {
 //
 class Command {
 public:
-    virtual ~Command();
+    virtual ~Command() {}
 
     virtual const char *name() const           = 0;
     virtual Size        argument_count() const = 0;
