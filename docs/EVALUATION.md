@@ -120,6 +120,44 @@ a keyboard observation is a commit, so a watch over anything downstream
 of `keyboard.line` fires on every typed line.  That is the whole
 push/pull story working end to end.
 
+## Worked example: mouse to view, in realtime
+
+A code texel T takes inputs from the mouse boundary texel and computes
+outputs X and Y; a view V presents X and Y.  The principle: **the device
+pushes observations, the screen is a standing demand, and the frame loop
+is the metronome — sample, commit, mark, pull, draw.**
+
+```text
+mouse moves (many, push)           host events, free-running
+   ↓ latest wins
+observation buffer (app-side)      transient, no Fabric traffic
+   ↓ once per frame drain
+one commit on the mouse texel      ChangeSet = {mouse}
+   ↓ FiberIndex.downstream
+dirty = {mouse, T, V}              marks only, nothing evaluated
+   ↓ V is presented — a standing demand, like watch
+Spool re-demands V.interface       T evaluates once, V evaluates once
+   ↓ interface revision moved
+shell redraws that surface         the effect, performed once
+```
+
+What this buys:
+
+- A view that is not presented costs nothing: mouse motion re-marks an
+  already-dirty texel and stops there.
+- Coalescing is free.  Thirty mouse events between drains are one
+  commit and one pull that reads the latest observation — push carries
+  no values, so there is no queue of stale frames and no backpressure.
+  The world is sampled at frame rate, not streamed at event rate.
+- Only the dirty path runs; the rest of the Fabric stays stamped clean.
+
+The buffer-then-sample step is required by LOOM.md rule 8: transient
+data stays transient.  Raw mouse events are never durable history; the
+Fabric commits only the sampled current observation, once per drained
+frame.  Today's terminal is this loop at line granularity — each typed
+line is one drained frame; raw-mode input later raises the drain rate
+without changing the model.
+
 ## Invariants
 
 1. **Push never evaluates.**  A dirty-mark marks; only demand computes.
