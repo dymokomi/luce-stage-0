@@ -1,4 +1,4 @@
-#include "commands/rename_command.h"
+#include "commands/rename.h"
 
 #include <stdio.h>
 

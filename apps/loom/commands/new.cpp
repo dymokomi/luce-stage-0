@@ -1,4 +1,4 @@
-#include "commands/new_command.h"
+#include "commands/new.h"
 
 #include <stdio.h>
 

@@ -1,4 +1,4 @@
-#include "commands/help_command.h"
+#include "commands/help.h"
 
 #include <stdio.h>
 

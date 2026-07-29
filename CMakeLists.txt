@@ -89,13 +89,13 @@ add_executable(loom
     apps/loom/command_line.cpp
     apps/loom/command_set.cpp
     apps/loom/commands/common.cpp
-    apps/loom/commands/delete_command.cpp
-    apps/loom/commands/exit_command.cpp
-    apps/loom/commands/find_command.cpp
-    apps/loom/commands/help_command.cpp
-    apps/loom/commands/list_command.cpp
-    apps/loom/commands/new_command.cpp
-    apps/loom/commands/rename_command.cpp
+    apps/loom/commands/delete.cpp
+    apps/loom/commands/exit.cpp
+    apps/loom/commands/find.cpp
+    apps/loom/commands/help.cpp
+    apps/loom/commands/list.cpp
+    apps/loom/commands/new.cpp
+    apps/loom/commands/rename.cpp
     apps/loom/image.cpp
     apps/loom/main.cpp
     apps/loom/terminal.cpp

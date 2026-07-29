@@ -1,4 +1,4 @@
-#include "commands/delete_command.h"
+#include "commands/delete.h"
 
 #include <stdio.h>
 

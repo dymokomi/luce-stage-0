@@ -1,4 +1,4 @@
-#include "commands/exit_command.h"
+#include "commands/exit.h"
 
 namespace lucia {
 

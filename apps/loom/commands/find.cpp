@@ -1,4 +1,4 @@
-#include "commands/find_command.h"
+#include "commands/find.h"
 
 #include <stdio.h>
 

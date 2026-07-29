@@ -1,13 +1,13 @@
 #pragma once
 
 #include "command.h"
-#include "commands/delete_command.h"
-#include "commands/exit_command.h"
-#include "commands/find_command.h"
-#include "commands/help_command.h"
-#include "commands/list_command.h"
-#include "commands/new_command.h"
-#include "commands/rename_command.h"
+#include "commands/delete.h"
+#include "commands/exit.h"
+#include "commands/find.h"
+#include "commands/help.h"
+#include "commands/list.h"
+#include "commands/new.h"
+#include "commands/rename.h"
 
 namespace lucia {
 
