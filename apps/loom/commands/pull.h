@@ -12,7 +12,7 @@ namespace lucia {
 // ---------------------------------------------------------------------------
 //
 // pull OUTPUT — one-shot demand on the selected texel's output through
-// the session Spool.  Demand pulls upstream values and runs evaluators
+// the session spool.  Demand pulls upstream values and runs evaluators
 // only where cached revisions are stale.
 //
 class PullCommand : public Command {
@@ -34,25 +34,24 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        ValueOutcome outcome;
-        if (!session->spool->demand(session->selected, words[1].c_str(), &outcome)) {
-            fprintf(stderr, "loom: demand failed (no output named %s?)\n",
-                    words[1].c_str());
+        Outcome outcome;
+        if (loom_spool_demand(session->spool, session->selected.bytes, words[1].c_str(),
+                              &outcome.raw) != LOOM_OK) {
+            fprintf(stderr, "loom: demand failed\n");
             return COMMAND_ERROR;
         }
-        if (outcome.status() == VALUE_ERROR) {
-            fprintf(stderr, "loom: %s\n", outcome.message().c_str());
+        if (outcome.raw.status == LOOM_OUTCOME_ERROR) {
+            fprintf(stderr, "loom: %s\n", outcome_text(outcome.raw).c_str());
             return COMMAND_ERROR;
         }
-        if (outcome.status() == VALUE_UNAVAILABLE) {
+        if (outcome.raw.status == LOOM_OUTCOME_UNAVAILABLE) {
             printf("unavailable\n");
             return COMMAND_OK;
         }
-        printf("%s\n", value_text(outcome.value()).c_str());
+        printf("%s\n", value_text(outcome.raw.value).c_str());
         return COMMAND_OK;
     }
 };

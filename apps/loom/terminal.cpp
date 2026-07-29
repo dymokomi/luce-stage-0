@@ -11,72 +11,83 @@ namespace lucia {
 
 enum { LINE_SIZE = 1024 };
 
-Terminal::Terminal(Store *store) : spool(store, evaluators.registry()), seen(0) {
-    session.store      = store;
-    session.evaluators = evaluators.registry();
-    session.spool      = &spool;
+Terminal::Terminal(loom_store *store) : spool(0), index(0), seen(0) {
+    session.store = store;
+    loom_spool_new(store, evaluators.get(), &spool);
+    loom_index_new(&index);
+    session.spool = spool;
+}
+
+Terminal::~Terminal() {
+    loom_spool_free(spool);
+    loom_index_free(index);
+}
+
+// The prompt names the selection: "loom>", or "loom alpha>" while the
+// texel named alpha is selected (its short id when it has no name).
+static String prompt_text(const Session &session) {
+    String prompt = "loom";
+    if (session.has_selection() && loom_store_has(session.store, session.selected.bytes)) {
+        prompt += " " + texel_label(session.store, session.selected);
+    }
+    return prompt + "> ";
 }
 
 // Reconcile the disposable machinery with whatever the last command (or
 // keyboard observation) changed, then re-demand only the dirty watches.
 void Terminal::reconcile() {
-    Store    *store   = session.store;
-    const U64 current = store->generation();
+    const U64 current = loom_store_generation(session.store);
     if (current == seen) {
         return;
     }
 
-    TexelIdList changed;
-    TexelIdSet  dirty;
-    bool        full = false;
-    if (store->changes_since(seen, &changed)) {
-        index.apply(store, changed);
-        index.downstream(changed, &dirty);
-        spool.advance(seen, current, dirty);
+    IdListBox   changed;
+    IdListBox   dirty;
+    bool        full   = false;
+    loom_status status = loom_store_changes_since(session.store, seen, changed.out());
+    if (status == LOOM_OK) {
+        loom_index_apply(index, session.store, changed.get());
+        loom_index_downstream(index, changed.get(), dirty.out());
+        loom_spool_advance(spool, seen, current, dirty.get());
     } else {
-        index.build(store);
-        spool.clear();
+        loom_index_build(index, session.store);
+        loom_spool_clear(spool);
         full = true;
     }
     seen = current;
 
     for (WatchList::iterator watch = session.watches.begin();
          watch != session.watches.end(); ++watch) {
-        if (!full && dirty.find(watch->texel) == dirty.end()) {
+        if (!full && !dirty.contains(watch->texel)) {
             continue;
         }
-        ValueOutcome outcome;
-        if (!spool.demand(watch->texel, watch->output.c_str(), &outcome) ||
-            outcome_equals(outcome, watch->last)) {
+        Outcome outcome;
+        if (loom_spool_demand(spool, watch->texel.bytes, watch->output.c_str(),
+                              &outcome.raw) != LOOM_OK) {
             continue;
         }
-        watch->last = outcome;
-        print_outcome(store, watch->texel, watch->output, outcome);
+        const String rendered = outcome_text(outcome.raw);
+        if (rendered == watch->last) {
+            continue;
+        }
+        watch->last = rendered;
+        print_outcome(session.store, watch->texel, watch->output, outcome.raw);
     }
-}
-
-// The prompt names the selection: "loom>", or "loom alpha>" while the texel
-// named alpha is selected (its short id when it has no name).
-static String prompt_text(const Session &session) {
-    String prompt = "loom";
-    Texel  texel;
-    if (session.has_selection() && session.store->get(session.selected, &texel)) {
-        String name;
-        prompt += " ";
-        prompt += texel_name(texel, &name) ? name : session.selected.format().substr(0, 8);
-    }
-    return prompt + "> ";
 }
 
 int Terminal::run() {
     const bool interactive = isatty(0) != 0;
     char       line[LINE_SIZE];
 
+    if (spool == 0 || index == 0) {
+        fprintf(stderr, "loom: cannot start the terminal\n");
+        return 1;
+    }
     if (!ensure_boundary(session.store)) {
         fprintf(stderr, "loom: cannot create boundary texels\n");
     }
-    index.build(session.store);
-    seen = session.store->generation();
+    loom_index_build(index, session.store);
+    seen = loom_store_generation(session.store);
 
     for (;;) {
         if (interactive) {

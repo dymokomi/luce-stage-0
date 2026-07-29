@@ -1,129 +1,144 @@
 #pragma once
 
 #include <ctype.h>
+#include <string.h>
 
-#include "loom/evaluation/spool.h"
+#include "engine.h"
 
 namespace lucia {
 
-// Persisted evaluator names the terminal can assign with eval.
+// Persisted evaluator names the terminal can assign with eval.  Outputs
+// the computation does not emit fall back to their stored sources behind
+// the border, so the name port needs no handling here.
 inline const char EVALUATOR_NAMES[] = "concat sum upper";
+
+inline bool known_evaluator(const String &name) {
+    return name == "concat" || name == "sum" || name == "upper";
+}
 
 // ---------------------------------------------------------------------------
 // Terminal evaluators
 // ---------------------------------------------------------------------------
 //
-// Small pure computations, keyed by persisted name.  Each reads its inputs
-// by port name and offers one "value" output; a missing or unavailable
-// input makes the output unavailable rather than an error.
-//
-// The Spool requires an evaluator to produce every declared output, and
-// terminal texels also carry constant source outputs (the name port).
-// TerminalEvaluator passes those through so computed and constant outputs
-// can live on one texel; subclasses implement compute for the rest.
-//
-class TerminalEvaluator : public Evaluator {
-public:
-    void evaluate(const Texel &texel, const ValueOutcomeMap &inputs,
-                  ValueOutcomeMap *outputs) override {
-        compute(texel, inputs, outputs);
-        for (Size i = 0; i < texel.output_size(); ++i) {
-            OutputPort port;
-            if (!texel.output_at(i, &port) ||
-                outputs->find(port.name()) != outputs->end()) {
-                continue;
-            }
-            (*outputs)[port.name()] = port.has_source()
-                                          ? ValueOutcome::available(port.source())
-                                          : ValueOutcome::unavailable();
+// Pure C-callback computations behind loom_registry_put.  Each reads its
+// inputs by port name and emits one "value" output; a missing or
+// unavailable input emits unavailable rather than an error.
+
+inline const loom_outcome *find_eval_input(const loom_eval_input *inputs, Size count,
+                                           const char *name) {
+    for (Size i = 0; i < count; ++i) {
+        if (strcmp(inputs[i].name, name) == 0) {
+            return inputs[i].outcome;
         }
     }
+    return 0;
+}
 
-    virtual void compute(const Texel &texel, const ValueOutcomeMap &inputs,
-                         ValueOutcomeMap *outputs) = 0;
-};
+inline bool available_text(const loom_outcome *outcome, String *text) {
+    if (outcome == 0 || outcome->status != LOOM_OUTCOME_AVAILABLE ||
+        outcome->value.tag != LOOM_VALUE_TEXT) {
+        return false;
+    }
+    *text = outcome->value.data.data == 0
+                ? String()
+                : String(reinterpret_cast<const char *>(outcome->value.data.data),
+                         outcome->value.data.size);
+    return true;
+}
+
+inline void emit_unavailable(loom_emit_fn emit, void *sink) {
+    loom_outcome outcome;
+    memset(&outcome, 0, sizeof(outcome));
+    outcome.status = LOOM_OUTCOME_UNAVAILABLE;
+    emit(sink, "value", &outcome);
+}
+
+inline void emit_text(loom_emit_fn emit, void *sink, const String &text) {
+    loom_outcome outcome;
+    memset(&outcome, 0, sizeof(outcome));
+    outcome.status    = LOOM_OUTCOME_AVAILABLE;
+    outcome.value.tag = LOOM_VALUE_TEXT;
+    outcome.value.data.data =
+        const_cast<Byte *>(reinterpret_cast<const Byte *>(text.data()));
+    outcome.value.data.size = text.size();
+    emit(sink, "value", &outcome);
+}
 
 // concat: left text + right text -> value text.
-class ConcatEvaluator : public TerminalEvaluator {
-public:
-    void compute(const Texel &, const ValueOutcomeMap &inputs,
-                 ValueOutcomeMap *outputs) override {
-        ValueOutcomeMap::const_iterator left  = inputs.find("left");
-        ValueOutcomeMap::const_iterator right = inputs.find("right");
-        if (left == inputs.end() || right == inputs.end() ||
-            left->second.status() != VALUE_AVAILABLE ||
-            right->second.status() != VALUE_AVAILABLE) {
-            (*outputs)["value"] = ValueOutcome::unavailable();
-            return;
-        }
-        (*outputs)["value"] = ValueOutcome::available(
-            Value(left->second.value().text() + right->second.value().text()));
+inline void concat_evaluator(void *, const loom_eval_input *inputs, Size count,
+                             loom_emit_fn emit, void *sink) {
+    String left;
+    String right;
+    if (!available_text(find_eval_input(inputs, count, "left"), &left) ||
+        !available_text(find_eval_input(inputs, count, "right"), &right)) {
+        emit_unavailable(emit, sink);
+        return;
     }
-};
+    emit_text(emit, sink, left + right);
+}
 
 // sum: left int + right int -> value int.
-class SumEvaluator : public TerminalEvaluator {
-public:
-    void compute(const Texel &, const ValueOutcomeMap &inputs,
-                 ValueOutcomeMap *outputs) override {
-        ValueOutcomeMap::const_iterator left  = inputs.find("left");
-        ValueOutcomeMap::const_iterator right = inputs.find("right");
-        if (left == inputs.end() || right == inputs.end() ||
-            left->second.status() != VALUE_AVAILABLE ||
-            right->second.status() != VALUE_AVAILABLE) {
-            (*outputs)["value"] = ValueOutcome::unavailable();
-            return;
-        }
-        (*outputs)["value"] = ValueOutcome::available(
-            Value(left->second.value().integer() + right->second.value().integer()));
+inline void sum_evaluator(void *, const loom_eval_input *inputs, Size count,
+                          loom_emit_fn emit, void *sink) {
+    const loom_outcome *left  = find_eval_input(inputs, count, "left");
+    const loom_outcome *right = find_eval_input(inputs, count, "right");
+    if (left == 0 || right == 0 || left->status != LOOM_OUTCOME_AVAILABLE ||
+        right->status != LOOM_OUTCOME_AVAILABLE || left->value.tag != LOOM_VALUE_INT ||
+        right->value.tag != LOOM_VALUE_INT) {
+        emit_unavailable(emit, sink);
+        return;
     }
-};
+    loom_outcome outcome;
+    memset(&outcome, 0, sizeof(outcome));
+    outcome.status        = LOOM_OUTCOME_AVAILABLE;
+    outcome.value.tag     = LOOM_VALUE_INT;
+    outcome.value.integer = left->value.integer + right->value.integer;
+    emit(sink, "value", &outcome);
+}
 
 // upper: text text -> value text, uppercased.
-class UpperEvaluator : public TerminalEvaluator {
-public:
-    void compute(const Texel &, const ValueOutcomeMap &inputs,
-                 ValueOutcomeMap *outputs) override {
-        ValueOutcomeMap::const_iterator text = inputs.find("text");
-        if (text == inputs.end() || text->second.status() != VALUE_AVAILABLE) {
-            (*outputs)["value"] = ValueOutcome::unavailable();
-            return;
-        }
-        String raised = text->second.value().text();
-        for (Size i = 0; i < raised.size(); ++i) {
-            raised[i] = (char)toupper((unsigned char)raised[i]);
-        }
-        (*outputs)["value"] = ValueOutcome::available(Value(raised));
+inline void upper_evaluator(void *, const loom_eval_input *inputs, Size count,
+                            loom_emit_fn emit, void *sink) {
+    String text;
+    if (!available_text(find_eval_input(inputs, count, "text"), &text)) {
+        emit_unavailable(emit, sink);
+        return;
     }
-};
+    for (Size i = 0; i < text.size(); ++i) {
+        text[i] = (char)toupper((unsigned char)text[i]);
+    }
+    emit_text(emit, sink, text);
+}
 
 // ---------------------------------------------------------------------------
 // EvaluatorSet
 // ---------------------------------------------------------------------------
 //
-// Evaluators the terminal offers to the Spool, owned together and already
-// registered under their persisted names.
+// Owns the border registry with every terminal evaluator registered
+// under its persisted name.
 //
 class EvaluatorSet {
 public:
-    EvaluatorSet() {
-        table.put("concat", &concat);
-        table.put("sum", &sum);
-        table.put("upper", &upper);
+    EvaluatorSet() : registry(0) {
+        loom_registry_new(&registry);
+        loom_registry_put(registry, "concat", concat_evaluator, 0);
+        loom_registry_put(registry, "sum", sum_evaluator, 0);
+        loom_registry_put(registry, "upper", upper_evaluator, 0);
     }
 
-    const EvaluatorRegistry *registry() const {
-        return &table;
+    ~EvaluatorSet() {
+        loom_registry_free(registry);
+    }
+
+    loom_registry *get() const {
+        return registry;
     }
 
 private:
     EvaluatorSet(const EvaluatorSet &);
     EvaluatorSet &operator=(const EvaluatorSet &);
 
-    ConcatEvaluator   concat;
-    SumEvaluator      sum;
-    UpperEvaluator    upper;
-    EvaluatorRegistry table;
+    loom_registry *registry;
 };
 
 } // namespace lucia

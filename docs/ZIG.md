@@ -80,11 +80,19 @@ and blobs surface in the header when a client needs them.
 `abi/smoke_test.c` drives the whole client lifecycle from C and runs
 under `zig build test`.
 
-Above the border, still C++ only: the view runtime, file projection,
-and the terminal app.  Next step: move the C++ terminal onto
-`abi/loom.h` (replace its Image/Session engine calls with the C API and
-link `libloom.a`), at which point the C++ engine under `src/` retires to
-reference status.
+**The terminal runs on the Zig engine.**  `apps/loom/` speaks only
+`abi/loom.h` (through the thin RAII wrappers in `apps/loom/engine.h`)
+and links `libloom.a`; CMake drives `zig build` automatically, so
+building the app requires a Zig 0.16 toolchain on PATH.  Terminal
+evaluators are C callbacks; declared outputs they do not emit fall back
+to stored sources behind the border, which is how the name port rides
+beside computed outputs.
+
+The C++ engine under `src/` is now the **reference implementation**: it
+builds and its tests keep running as the format's second opinion, but
+the terminal no longer links it.  Still C++ and still above the border:
+the view runtime and file projection, which migrate when Views reach
+the terminal.
 
 ## Porting rules
 

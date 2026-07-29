@@ -33,17 +33,17 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &) override {
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        Transaction transaction;
-        if (!session->store->begin(&transaction) ||
-            !transaction.remove(session->selected) || !transaction.commit()) {
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_remove_texel(txn.get(), session->selected.bytes) != LOOM_OK ||
+            !txn.commit()) {
             fprintf(stderr, "loom: delete failed (texel is still connected)\n");
             return COMMAND_ERROR;
         }
-        session->selected = TexelId();
+        session->selected = Id();
         return COMMAND_OK;
     }
 };

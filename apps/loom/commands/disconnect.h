@@ -32,14 +32,14 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        Transaction transaction;
-        if (!session->store->begin(&transaction) ||
-            !transaction.disconnect(session->selected, words[1].c_str()) ||
-            !transaction.commit()) {
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_disconnect(txn.get(), session->selected.bytes, words[1].c_str()) !=
+                LOOM_OK ||
+            !txn.commit()) {
             fprintf(stderr, "loom: disconnect failed (no bound input named %s)\n",
                     words[1].c_str());
             return COMMAND_ERROR;

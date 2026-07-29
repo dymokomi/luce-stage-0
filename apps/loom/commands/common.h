@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "base/types.h"
 #include "session.h"
 
 namespace lucia {
@@ -13,7 +12,7 @@ namespace lucia {
 inline const char NAME_PORT[] = "name";
 
 // Parse id text typed in the terminal; reports an invalid id on stderr.
-inline bool parse_id(const String &text, TexelId *id) {
+inline bool parse_id(const String &text, Id *id) {
     if (!id->parse(text.c_str()) || id->is_unset()) {
         fprintf(stderr, "loom: invalid texel id %s\n", text.c_str());
         return false;
@@ -22,21 +21,21 @@ inline bool parse_id(const String &text, TexelId *id) {
 }
 
 // Parse a port type name; reports the valid names on stderr.
-inline bool parse_type(const String &text, ValueType *type) {
+inline bool parse_type(const String &text, Byte *type) {
     if (text == "bool") {
-        *type = VALUE_BOOL;
+        *type = LOOM_VALUE_BOOL;
     } else if (text == "int") {
-        *type = VALUE_INT;
+        *type = LOOM_VALUE_INT;
     } else if (text == "real") {
-        *type = VALUE_REAL;
+        *type = LOOM_VALUE_REAL;
     } else if (text == "text") {
-        *type = VALUE_TEXT;
+        *type = LOOM_VALUE_TEXT;
     } else if (text == "bytes") {
-        *type = VALUE_BYTES;
+        *type = LOOM_VALUE_BYTES;
     } else if (text == "texel") {
-        *type = VALUE_TEXEL;
+        *type = LOOM_VALUE_TEXEL;
     } else if (text == "blob") {
-        *type = VALUE_BLOB;
+        *type = LOOM_VALUE_BLOB;
     } else {
         fprintf(stderr, "loom: unknown type %s (bool int real text bytes texel blob)\n",
                 text.c_str());
@@ -45,21 +44,21 @@ inline bool parse_type(const String &text, ValueType *type) {
     return true;
 }
 
-inline const char *type_name(ValueType type) {
+inline const char *type_name(Byte type) {
     switch (type) {
-    case VALUE_BOOL:
+    case LOOM_VALUE_BOOL:
         return "bool";
-    case VALUE_INT:
+    case LOOM_VALUE_INT:
         return "int";
-    case VALUE_REAL:
+    case LOOM_VALUE_REAL:
         return "real";
-    case VALUE_TEXT:
+    case LOOM_VALUE_TEXT:
         return "text";
-    case VALUE_BYTES:
+    case LOOM_VALUE_BYTES:
         return "bytes";
-    case VALUE_TEXEL:
+    case LOOM_VALUE_TEXEL:
         return "texel";
-    case VALUE_BLOB:
+    case LOOM_VALUE_BLOB:
         return "blob";
     default:
         return "none";
@@ -82,124 +81,182 @@ inline bool parse_direction(const String &text, bool *is_input) {
 
 // Parse literal value text against a port's declared type; reports the
 // failure on stderr.  Blobs cannot be written from the terminal.
-inline bool parse_value(const String &text, ValueType type, Value *value) {
+inline bool parse_value(const String &text, Byte type, ValueBox *value) {
     char *end = 0;
     switch (type) {
-    case VALUE_BOOL:
+    case LOOM_VALUE_BOOL:
         if (text == "true" || text == "false") {
-            *value = Value(text == "true");
+            value->set_bool(text == "true");
             return true;
         }
         fprintf(stderr, "loom: bool value must be true or false\n");
         return false;
-    case VALUE_INT: {
+    case LOOM_VALUE_INT: {
         const S64 number = strtoll(text.c_str(), &end, 10);
         if (end == text.c_str() || *end != 0) {
             fprintf(stderr, "loom: %s is not an int\n", text.c_str());
             return false;
         }
-        *value = Value(number);
+        value->set_int(number);
         return true;
     }
-    case VALUE_REAL: {
+    case LOOM_VALUE_REAL: {
         const double number = strtod(text.c_str(), &end);
         if (end == text.c_str() || *end != 0) {
             fprintf(stderr, "loom: %s is not a real\n", text.c_str());
             return false;
         }
-        *value = Value(number);
+        value->set_real(number);
         return true;
     }
-    case VALUE_TEXT:
-        *value = Value(text);
+    case LOOM_VALUE_TEXT:
+        value->set_text(text);
         return true;
-    case VALUE_BYTES: {
-        const Bytes bytes(text.begin(), text.end());
-        *value = Value(bytes);
+    case LOOM_VALUE_BYTES:
+        value->set_bytes(text);
         return true;
-    }
-    case VALUE_TEXEL: {
-        TexelId id;
+    case LOOM_VALUE_TEXEL: {
+        Id id;
         if (!id.parse(text.c_str()) || id.is_unset()) {
             fprintf(stderr, "loom: %s is not a texel id\n", text.c_str());
             return false;
         }
-        *value = Value(id);
+        value->set_texel(id);
         return true;
     }
     default:
         fprintf(stderr, "loom: cannot set a %s value from the terminal\n",
-                type == VALUE_BLOB ? "blob" : "none");
+                type == LOOM_VALUE_BLOB ? "blob" : "none");
         return false;
     }
 }
 
 // Render a value for terminal display.
-inline String value_text(const Value &value) {
+inline String value_text(const loom_value &value) {
     char buffer[64];
-    switch (value.type()) {
-    case VALUE_BOOL:
-        return value.boolean() ? "true" : "false";
-    case VALUE_INT:
-        snprintf(buffer, sizeof(buffer), "%lld", (long long)value.integer());
+    switch (value.tag) {
+    case LOOM_VALUE_BOOL:
+        return value.boolean ? "true" : "false";
+    case LOOM_VALUE_INT:
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)value.integer);
         return buffer;
-    case VALUE_REAL:
-        snprintf(buffer, sizeof(buffer), "%g", value.real());
+    case LOOM_VALUE_REAL:
+        snprintf(buffer, sizeof(buffer), "%g", value.real);
         return buffer;
-    case VALUE_TEXT:
-        return value.text();
-    case VALUE_BYTES:
-        snprintf(buffer, sizeof(buffer), "%zu bytes", value.bytes().size());
+    case LOOM_VALUE_TEXT:
+        return value.data.data == 0
+                   ? String()
+                   : String(reinterpret_cast<const char *>(value.data.data),
+                            value.data.size);
+    case LOOM_VALUE_BYTES:
+        snprintf(buffer, sizeof(buffer), "%zu bytes", value.data.size);
         return buffer;
-    case VALUE_TEXEL:
-        return value.texel().format();
-    case VALUE_BLOB:
+    case LOOM_VALUE_TEXEL: {
+        Id id;
+        memcpy(id.bytes, value.texel, LOOM_ID_SIZE);
+        return id.format();
+    }
+    case LOOM_VALUE_BLOB:
         return "blob";
     default:
         return "none";
     }
 }
 
-// Fetch the selected texel; reports a missing selection on stderr.
-inline bool selected_texel(const Session &session, Texel *texel) {
+// Render an outcome the way watch and pull display it.
+inline String outcome_text(const loom_outcome &outcome) {
+    if (outcome.status == LOOM_OUTCOME_ERROR) {
+        String message =
+            outcome.error_message.data == 0
+                ? String()
+                : String(reinterpret_cast<const char *>(outcome.error_message.data),
+                         outcome.error_message.size);
+        return "error: " + message;
+    }
+    if (outcome.status == LOOM_OUTCOME_UNAVAILABLE) {
+        return "unavailable";
+    }
+    return "= " + value_text(outcome.value);
+}
+
+// Reports a missing selection on stderr.
+inline bool selected_exists(const Session &session) {
     if (!session.has_selection()) {
         fprintf(stderr, "loom: no texel selected (try select ID)\n");
         return false;
     }
-    if (!session.store->get(session.selected, texel)) {
+    if (!loom_store_has(session.store, session.selected.bytes)) {
         fprintf(stderr, "loom: selected texel no longer exists\n");
         return false;
     }
     return true;
 }
 
-// Read a texel's name; false when the texel offers no text name.
-inline bool texel_name(const Texel &texel, String *name) {
-    OutputPort port;
-    if (!texel.get_output(NAME_PORT, &port) || !port.has_source() ||
-        port.source().type() != VALUE_TEXT) {
+// Find a named output on a texel; true fills info.
+inline bool find_output(const loom_store *store, const Id &id, const String &name,
+                        OutputInfo *info) {
+    Size count = 0;
+    if (loom_texel_output_count(store, id.bytes, &count) != LOOM_OK) {
         return false;
     }
-    *name = port.source().text();
+    for (Size i = 0; i < count; ++i) {
+        info->reset();
+        if (loom_texel_output_at(store, id.bytes, i, &info->raw) != LOOM_OK) {
+            return false;
+        }
+        if (info->name() == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool find_input(const loom_store *store, const Id &id, const String &name,
+                       InputInfo *info) {
+    Size count = 0;
+    if (loom_texel_input_count(store, id.bytes, &count) != LOOM_OK) {
+        return false;
+    }
+    for (Size i = 0; i < count; ++i) {
+        info->reset();
+        if (loom_texel_input_at(store, id.bytes, i, &info->raw) != LOOM_OK) {
+            return false;
+        }
+        if (info->name() == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Read a texel's name; false when the texel offers no text name.
+inline bool texel_name(const loom_store *store, const Id &id, String *name) {
+    OutputInfo info;
+    if (!find_output(store, id, NAME_PORT, &info) || !info.raw.has_source ||
+        info.raw.source.tag != LOOM_VALUE_TEXT) {
+        return false;
+    }
+    *name = value_text(info.raw.source);
     return true;
 }
 
 // Resolve id-or-name text to a texel: valid id text wins, otherwise the
 // argument must match exactly one texel's name.  Reports failures on stderr.
-inline bool resolve_texel(const Store *store, const String &text, TexelId *id) {
-    if (id->parse(text.c_str()) && !id->is_unset() && store->has(*id)) {
+inline bool resolve_texel(const loom_store *store, const String &text, Id *id) {
+    if (id->parse(text.c_str()) && !id->is_unset() && loom_store_has(store, id->bytes)) {
         return true;
     }
-    Size    matches = 0;
-    TexelId found;
-    for (Size i = 0; i < store->size(); ++i) {
-        Texel texel;
-        if (!store->at(i, &texel)) {
+    Size       matches = 0;
+    Id         found;
+    const Size count = loom_store_count(store);
+    for (Size i = 0; i < count; ++i) {
+        Id candidate;
+        if (loom_store_id_at(store, i, candidate.bytes) != LOOM_OK) {
             return false;
         }
         String name;
-        if (texel_name(texel, &name) && name == text) {
-            found = texel.id();
+        if (texel_name(store, candidate, &name) && name == text) {
+            found = candidate;
             ++matches;
         }
     }
@@ -215,59 +272,28 @@ inline bool resolve_texel(const Store *store, const String &text, TexelId *id) {
     return false;
 }
 
-// Insert or replace the name Output Port with the given text.
-inline void set_name(Texel *texel, const String &name) {
-    OutputPort port;
-    if (!texel->get_output(NAME_PORT, &port)) {
-        port = OutputPort(NAME_PORT, VALUE_TEXT);
-    }
-    port.set_source(Value(name));
-    texel->put_output(port);
-}
-
-// Put one texel in one committed transaction.
-inline bool commit_put(Store *store, const Texel &texel) {
-    Transaction transaction;
-    return store->begin(&transaction) && transaction.put(texel) && transaction.commit();
+// Give the texel its name value inside an open transaction.
+inline bool set_name(loom_txn *txn, const Id &id, const String &name) {
+    ValueBox value;
+    value.set_text(name);
+    return loom_txn_put_output(txn, id.bytes, NAME_PORT, LOOM_VALUE_TEXT) == LOOM_OK &&
+           loom_txn_set_source(txn, id.bytes, NAME_PORT, &value.raw) == LOOM_OK;
 }
 
 // Short display label for a texel: its name, or the id's first characters.
-inline String texel_label(const Store *store, const TexelId &id) {
-    Texel  texel;
+inline String texel_label(const loom_store *store, const Id &id) {
     String name;
-    if (store->get(id, &texel) && texel_name(texel, &name)) {
+    if (texel_name(store, id, &name)) {
         return name;
     }
     return id.format().substr(0, 8);
 }
 
-// True when two outcomes would display identically.
-inline bool outcome_equals(const ValueOutcome &left, const ValueOutcome &right) {
-    if (left.status() != right.status()) {
-        return false;
-    }
-    if (left.status() == VALUE_AVAILABLE) {
-        return left.value().equals(right.value());
-    }
-    if (left.status() == VALUE_ERROR) {
-        return left.message() == right.message();
-    }
-    return true;
-}
-
 // Print one endpoint outcome as label.output = value.
-inline void print_outcome(const Store *store, const TexelId &texel, const String &output,
-                          const ValueOutcome &outcome) {
-    const String label = texel_label(store, texel);
-    if (outcome.status() == VALUE_ERROR) {
-        printf("%s.%s error: %s\n", label.c_str(), output.c_str(),
-               outcome.message().c_str());
-    } else if (outcome.status() == VALUE_UNAVAILABLE) {
-        printf("%s.%s unavailable\n", label.c_str(), output.c_str());
-    } else {
-        printf("%s.%s = %s\n", label.c_str(), output.c_str(),
-               value_text(outcome.value()).c_str());
-    }
+inline void print_outcome(const loom_store *store, const Id &texel, const String &output,
+                          const loom_outcome &outcome) {
+    printf("%s.%s %s\n", texel_label(store, texel).c_str(), output.c_str(),
+           outcome_text(outcome).c_str());
 }
 
 } // namespace lucia

@@ -33,22 +33,23 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        OutputPort port;
-        if (!texel.get_output(words[1].c_str(), &port)) {
+        OutputInfo port;
+        if (!find_output(session->store, session->selected, words[1], &port)) {
             fprintf(stderr, "loom: no output named %s\n", words[1].c_str());
             return COMMAND_ERROR;
         }
-        Value value;
-        if (!parse_value(words[2], port.type(), &value)) {
+        ValueBox value;
+        if (!parse_value(words[2], port.raw.type, &value)) {
             return COMMAND_ERROR;
         }
-        port.set_source(value);
-        texel.put_output(port);
-        if (!commit_put(session->store, texel)) {
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_set_source(txn.get(), session->selected.bytes, words[1].c_str(),
+                                &value.raw) != LOOM_OK ||
+            !txn.commit()) {
             fprintf(stderr, "loom: set commit failed\n");
             return COMMAND_ERROR;
         }

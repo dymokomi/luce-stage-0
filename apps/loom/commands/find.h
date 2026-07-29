@@ -32,18 +32,19 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Store *store   = session->store;
-        Size   matches = 0;
-        for (Size i = 0; i < store->size(); ++i) {
-            Texel texel;
-            if (!store->at(i, &texel)) {
+        Size       matches = 0;
+        const Size count   = loom_store_count(session->store);
+        for (Size i = 0; i < count; ++i) {
+            Id id;
+            if (loom_store_id_at(session->store, i, id.bytes) != LOOM_OK) {
                 return COMMAND_ERROR;
             }
             String found;
-            if (!texel_name(texel, &found) || found.find(words[1]) == String::npos) {
+            if (!texel_name(session->store, id, &found) ||
+                found.find(words[1]) == String::npos) {
                 continue;
             }
-            printf("%s %s\n", texel.id().format().c_str(), found.c_str());
+            printf("%s %s\n", id.format().c_str(), found.c_str());
             ++matches;
         }
         if (matches == 0) {

@@ -33,11 +33,11 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        if (!texel.has_output(words[1].c_str())) {
+        OutputInfo port;
+        if (!find_output(session->store, session->selected, words[1], &port)) {
             fprintf(stderr, "loom: no output named %s\n", words[1].c_str());
             return COMMAND_ERROR;
         }
@@ -49,14 +49,17 @@ public:
             }
         }
 
-        Watch watch;
+        Watch   watch;
+        Outcome outcome;
         watch.texel  = session->selected;
         watch.output = words[1];
-        if (!session->spool->demand(watch.texel, watch.output.c_str(), &watch.last)) {
+        if (loom_spool_demand(session->spool, watch.texel.bytes, watch.output.c_str(),
+                              &outcome.raw) != LOOM_OK) {
             fprintf(stderr, "loom: demand failed for %s\n", words[1].c_str());
             return COMMAND_ERROR;
         }
-        print_outcome(session->store, watch.texel, watch.output, watch.last);
+        watch.last = outcome_text(outcome.raw);
+        print_outcome(session->store, watch.texel, watch.output, outcome.raw);
         session->watches.push_back(watch);
         return COMMAND_OK;
     }

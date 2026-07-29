@@ -11,8 +11,8 @@ namespace lucia {
 // SelectCommand
 // ---------------------------------------------------------------------------
 //
-// select ID|NAME — make one texel active.  An argument that is not an id is
-// looked up as an exact name; the match must be unique.
+// select ID|NAME — make one texel active.  An argument that is not an id
+// is looked up as an exact name; the match must be unique.
 //
 class SelectCommand : public Command {
 public:
@@ -33,7 +33,7 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        TexelId id;
+        Id id;
         if (!resolve_texel(session->store, words[1], &id)) {
             return COMMAND_ERROR;
         }

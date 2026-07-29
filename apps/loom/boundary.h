@@ -12,100 +12,114 @@ namespace lucia {
 //
 // The host enters the Fabric as observations (LOOM.md): a device pushes a
 // new source value onto a boundary texel's Output Ports through the
-// Store's volatile observe path, bumping revisions and the logical
+// store's volatile observe path, bumping revisions and the logical
 // generation without touching the volume.  Nothing downstream recomputes
 // until something demands it: push invalidates, pull evaluates.  An
 // observation becomes durable only when a later commit snapshots it.
 //
-// keyboard offers line (text, the last line typed) and count (int).  mouse
-// offers x, y (real) and button (int); it cannot fire while the terminal
-// reads whole lines from a tty, and waits for raw-mode input to arrive.
+// keyboard offers line (text, the last line typed) and count (int).
+// mouse offers x, y (real) and button (int); it cannot fire while the
+// terminal reads whole lines from a tty, and waits for raw-mode input.
 //
 inline const char KEYBOARD_NAME[] = "keyboard";
 inline const char MOUSE_NAME[]    = "mouse";
 
 // Find a texel by exact name without reporting; boundary lookups are quiet.
-inline bool find_named(const Store *store, const String &name, TexelId *id) {
-    for (Size i = 0; i < store->size(); ++i) {
-        Texel texel;
-        if (!store->at(i, &texel)) {
+inline bool find_named(const loom_store *store, const String &name, Id *id) {
+    const Size count = loom_store_count(store);
+    for (Size i = 0; i < count; ++i) {
+        Id candidate;
+        if (loom_store_id_at(store, i, candidate.bytes) != LOOM_OK) {
             return false;
         }
         String found;
-        if (texel_name(texel, &found) && found == name) {
-            *id = texel.id();
+        if (texel_name(store, candidate, &found) && found == name) {
+            *id = candidate;
             return true;
         }
     }
     return false;
 }
 
-inline Texel make_boundary(const char *name) {
-    TexelId id;
-    id.generate();
-    Texel texel(id);
-    set_name(&texel, name);
-    return texel;
+// Create one boundary texel with typed, pre-set outputs.
+inline bool make_boundary(loom_txn *txn, const char *name, const char *const *outputs,
+                          const Byte *types, Size output_count) {
+    Id id;
+    if (loom_txn_create_texel(txn, id.bytes) != LOOM_OK || !set_name(txn, id, name)) {
+        return false;
+    }
+    for (Size i = 0; i < output_count; ++i) {
+        if (loom_txn_put_output(txn, id.bytes, outputs[i], types[i]) != LOOM_OK) {
+            return false;
+        }
+        ValueBox initial;
+        switch (types[i]) {
+        case LOOM_VALUE_TEXT:
+            initial.set_text("");
+            break;
+        case LOOM_VALUE_INT:
+            initial.set_int(0);
+            break;
+        default:
+            initial.set_real(0.0);
+            break;
+        }
+        if (loom_txn_set_source(txn, id.bytes, outputs[i], &initial.raw) != LOOM_OK) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Create the boundary texels missing from this Fabric, in one commit.
-inline bool ensure_boundary(Store *store) {
-    Transaction transaction;
-    bool        began = false;
-    TexelId     ignored;
+inline bool ensure_boundary(loom_store *store) {
+    Id         ignored;
+    const bool keyboard = !find_named(store, KEYBOARD_NAME, &ignored);
+    const bool mouse    = !find_named(store, MOUSE_NAME, &ignored);
+    if (!keyboard && !mouse) {
+        return true;
+    }
 
-    if (!find_named(store, KEYBOARD_NAME, &ignored)) {
-        Texel      keyboard = make_boundary(KEYBOARD_NAME);
-        OutputPort line("line", VALUE_TEXT);
-        OutputPort count("count", VALUE_INT);
-        line.set_source(Value(String()));
-        count.set_source(Value((S64)0));
-        keyboard.put_output(line);
-        keyboard.put_output(count);
-        if (!store->begin(&transaction)) {
-            return false;
-        }
-        began = true;
-        if (!transaction.put(keyboard)) {
+    Txn txn(store);
+    if (!txn.ok()) {
+        return false;
+    }
+    if (keyboard) {
+        const char *outputs[] = {"line", "count"};
+        const Byte  types[]   = {LOOM_VALUE_TEXT, LOOM_VALUE_INT};
+        if (!make_boundary(txn.get(), KEYBOARD_NAME, outputs, types, 2)) {
             return false;
         }
     }
-    if (!find_named(store, MOUSE_NAME, &ignored)) {
-        Texel      mouse = make_boundary(MOUSE_NAME);
-        OutputPort x("x", VALUE_REAL);
-        OutputPort y("y", VALUE_REAL);
-        OutputPort button("button", VALUE_INT);
-        x.set_source(Value(0.0));
-        y.set_source(Value(0.0));
-        button.set_source(Value((S64)0));
-        mouse.put_output(x);
-        mouse.put_output(y);
-        mouse.put_output(button);
-        if (!began && !store->begin(&transaction)) {
-            return false;
-        }
-        began = true;
-        if (!transaction.put(mouse)) {
+    if (mouse) {
+        const char *outputs[] = {"x", "y", "button"};
+        const Byte  types[]   = {LOOM_VALUE_REAL, LOOM_VALUE_REAL, LOOM_VALUE_INT};
+        if (!make_boundary(txn.get(), MOUSE_NAME, outputs, types, 3)) {
             return false;
         }
     }
-    return began ? transaction.commit() : true;
+    return txn.commit();
 }
 
 // Record one keyboard interaction: the line just typed, and one more count.
-inline bool observe_keyboard(Store *store, const String &line) {
-    TexelId id;
-    Texel   keyboard;
-    if (!find_named(store, KEYBOARD_NAME, &id) || !store->get(id, &keyboard)) {
+inline bool observe_keyboard(loom_store *store, const String &line) {
+    Id id;
+    if (!find_named(store, KEYBOARD_NAME, &id)) {
         return false;
     }
-    OutputPort count;
-    if (!keyboard.get_output("count", &count)) {
-        return false;
+    OutputInfo count;
+    S64        counted = 0;
+    if (find_output(store, id, "count", &count) && count.raw.has_source &&
+        count.raw.source.tag == LOOM_VALUE_INT) {
+        counted = count.raw.source.integer;
     }
-    const S64 counted = count.has_source() ? count.source().integer() : 0;
-    return store->observe(id, "line", Value(line)) &&
-           store->observe(id, "count", Value(counted + 1));
+
+    ValueBox typed;
+    typed.set_text(line);
+    ValueBox next;
+    next.set_int(counted + 1);
+    return loom_store_observe(store, id.bytes, "line", &typed.raw) == LOOM_OK &&
+           loom_store_observe(store, id.bytes, "count", &next.raw) == LOOM_OK;
 }
 
 } // namespace lucia

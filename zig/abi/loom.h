@@ -234,8 +234,11 @@ typedef struct {
  * emitted values are copied immediately, so stack storage is fine. */
 typedef void (*loom_emit_fn)(void *sink, const char *output, const loom_outcome *outcome);
 
-/* Pure computation: read inputs, emit every declared output.  Must not
- * touch the store; it receives values, never the world. */
+/* Pure computation: read inputs, emit outputs.  Must not touch the
+ * store; it receives values, never the world.  Declared outputs the
+ * evaluator does not emit fall back to their stored source values (so a
+ * name port can sit beside computed outputs); outputs with neither are
+ * reported as an evaluator error. */
 typedef void (*loom_evaluator_fn)(void *context, const loom_eval_input *inputs,
                                   size_t input_count, loom_emit_fn emit, void *sink);
 

@@ -33,16 +33,16 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &) override {
-        Store *store = session->store;
-        for (Size i = 0; i < store->size(); ++i) {
-            Texel texel;
-            if (!store->at(i, &texel)) {
+        const Size count = loom_store_count(session->store);
+        for (Size i = 0; i < count; ++i) {
+            Id id;
+            if (loom_store_id_at(session->store, i, id.bytes) != LOOM_OK) {
                 return COMMAND_ERROR;
             }
             String     found;
-            const bool named    = texel_name(texel, &found);
-            const bool selected = texel.id().equals(session->selected);
-            printf("%s %s%s\n", texel.id().format().c_str(), named ? found.c_str() : "-",
+            const bool named    = texel_name(session->store, id, &found);
+            const bool selected = id.equals(session->selected);
+            printf("%s %s%s\n", id.format().c_str(), named ? found.c_str() : "-",
                    selected ? " *" : "");
         }
         return COMMAND_OK;

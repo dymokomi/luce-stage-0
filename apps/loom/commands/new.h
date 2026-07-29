@@ -32,11 +32,10 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        TexelId id;
-        id.generate();
-        Texel texel(id);
-        set_name(&texel, words[1]);
-        if (!commit_put(session->store, texel)) {
+        Id  id;
+        Txn txn(session->store);
+        if (!txn.ok() || loom_txn_create_texel(txn.get(), id.bytes) != LOOM_OK ||
+            !set_name(txn.get(), id, words[1]) || !txn.commit()) {
             fprintf(stderr, "loom: new commit failed\n");
             return COMMAND_ERROR;
         }

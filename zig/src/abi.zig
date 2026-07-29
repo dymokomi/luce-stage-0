@@ -798,6 +798,17 @@ fn bridgeEvaluate(
         var entries = outputs.valueIterator();
         while (entries.next()) |entry| entry.deinit(gpa);
         outputs.clearRetainingCapacity();
+        return;
+    }
+
+    // Border convention: declared outputs the evaluator did not emit fall
+    // back to their stored source values (a name port beside computed
+    // outputs, for example).  Outputs with neither stay missing and the
+    // Spool reports the omission.
+    for (texel.outputs.items) |port| {
+        if (outputs.contains(port.name)) continue;
+        const source = port.source orelse continue;
+        try outputs.put(gpa, port.name, .{ .available = try source.clone(gpa) });
     }
 }
 

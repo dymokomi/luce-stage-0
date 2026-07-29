@@ -12,7 +12,7 @@ namespace lucia {
 // ---------------------------------------------------------------------------
 //
 // move DIR OLD NEW — rename a port on the selected texel.  Renaming an
-// Output Port rewrites every Fiber bound to it in the same commit, so
+// Output Port rewires every Fiber bound to it in the same commit, so
 // existing connections survive the new name.
 //
 class MoveCommand : public Command {
@@ -38,98 +38,119 @@ public:
         if (!parse_direction(words[1], &is_input)) {
             return COMMAND_ERROR;
         }
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
         const String &old_name = words[2];
         const String &new_name = words[3];
-        const bool    moved    = is_input ? move_input(&texel, old_name, new_name)
-                                          : move_output(&texel, old_name, new_name);
-        if (!moved) {
+        return is_input ? move_input(session, old_name, new_name)
+                        : move_output(session, old_name, new_name);
+    }
+
+private:
+    static CommandResult move_input(Session *session, const String &old_name,
+                                    const String &new_name) {
+        const Id &id = session->selected;
+        InputInfo port;
+        if (!find_input(session->store, id, old_name, &port)) {
+            fprintf(stderr, "loom: no input named %s\n", old_name.c_str());
             return COMMAND_ERROR;
         }
-        if (is_input ? !commit_put(session->store, texel)
-                     : !commit_with_rebinds(session->store, texel, old_name, new_name)) {
+        InputInfo duplicate;
+        if (find_input(session->store, id, new_name, &duplicate)) {
+            fprintf(stderr, "loom: input %s already exists\n", new_name.c_str());
+            return COMMAND_ERROR;
+        }
+
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_remove_input(txn.get(), id.bytes, old_name.c_str()) != LOOM_OK ||
+            loom_txn_put_input(txn.get(), id.bytes, new_name.c_str(), port.raw.type) !=
+                LOOM_OK) {
+            fprintf(stderr, "loom: move commit failed\n");
+            return COMMAND_ERROR;
+        }
+        if (port.raw.bound &&
+            loom_txn_connect(txn.get(), id.bytes, new_name.c_str(), port.raw.source,
+                             port.source_output().c_str()) != LOOM_OK) {
+            fprintf(stderr, "loom: move commit failed\n");
+            return COMMAND_ERROR;
+        }
+        if (!txn.commit()) {
             fprintf(stderr, "loom: move commit failed\n");
             return COMMAND_ERROR;
         }
         return COMMAND_OK;
     }
 
-private:
-    static bool move_input(Texel *texel, const String &old_name, const String &new_name) {
-        InputPort port;
-        if (!texel->get_input(old_name.c_str(), &port)) {
-            fprintf(stderr, "loom: no input named %s\n", old_name.c_str());
-            return false;
-        }
-        if (texel->has_input(new_name.c_str())) {
-            fprintf(stderr, "loom: input %s already exists\n", new_name.c_str());
-            return false;
-        }
-        InputPort renamed(new_name.c_str(), port.type());
-        if (port.has_binding()) {
-            renamed.bind(port.binding());
-        }
-        texel->remove_input(old_name.c_str());
-        texel->put_input(renamed);
-        return true;
-    }
-
-    static bool move_output(Texel *texel, const String &old_name, const String &new_name) {
-        OutputPort port;
-        if (!texel->get_output(old_name.c_str(), &port)) {
+    static CommandResult move_output(Session *session, const String &old_name,
+                                     const String &new_name) {
+        const Id  &id = session->selected;
+        OutputInfo port;
+        if (!find_output(session->store, id, old_name, &port)) {
             fprintf(stderr, "loom: no output named %s\n", old_name.c_str());
-            return false;
+            return COMMAND_ERROR;
         }
-        if (texel->has_output(new_name.c_str())) {
+        OutputInfo duplicate;
+        if (find_output(session->store, id, new_name, &duplicate)) {
             fprintf(stderr, "loom: output %s already exists\n", new_name.c_str());
-            return false;
+            return COMMAND_ERROR;
         }
-        OutputPort renamed(new_name.c_str(), port.type());
-        if (port.has_source()) {
-            renamed.set_source(port.source());
-        }
-        renamed.set_revision(port.revision());
-        texel->remove_output(old_name.c_str());
-        texel->put_output(renamed);
-        return true;
-    }
 
-    // Commit the renamed texel and repoint every Fiber that referenced the
-    // old output name, all in one atomic transaction.
-    static bool commit_with_rebinds(Store *store, const Texel &texel,
-                                    const String &old_name, const String &new_name) {
-        Transaction transaction;
-        if (!store->begin(&transaction) || !transaction.put(texel)) {
-            return false;
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_remove_output(txn.get(), id.bytes, old_name.c_str()) != LOOM_OK ||
+            loom_txn_put_output(txn.get(), id.bytes, new_name.c_str(), port.raw.type) !=
+                LOOM_OK) {
+            fprintf(stderr, "loom: move commit failed\n");
+            return COMMAND_ERROR;
         }
-        for (Size i = 0; i < store->size(); ++i) {
-            Texel other;
-            if (!store->at(i, &other)) {
-                return false;
+        if (port.raw.has_source) {
+            // The border borrows the value; re-point text and bytes at
+            // the inspected copy for the duration of the call.
+            loom_value carried = port.raw.source;
+            if (loom_txn_set_source(txn.get(), id.bytes, new_name.c_str(), &carried) !=
+                LOOM_OK) {
+                fprintf(stderr, "loom: move commit failed\n");
+                return COMMAND_ERROR;
             }
-            if (other.id().equals(texel.id())) {
+        }
+
+        // Repoint every Fiber bound to the old output name, in the same
+        // atomic commit.
+        const Size count = loom_store_count(session->store);
+        for (Size i = 0; i < count; ++i) {
+            Id other;
+            if (loom_store_id_at(session->store, i, other.bytes) != LOOM_OK) {
+                return COMMAND_ERROR;
+            }
+            if (other.equals(id)) {
                 continue;
             }
-            bool changed = false;
-            for (Size j = 0; j < other.input_size(); ++j) {
-                InputPort input;
-                other.input_at(j, &input);
-                if (!input.has_binding() || !input.binding().source().equals(texel.id()) ||
-                    input.binding().output() != old_name) {
+            Size inputs = 0;
+            loom_texel_input_count(session->store, other.bytes, &inputs);
+            for (Size at = 0; at < inputs; ++at) {
+                InputInfo bound;
+                if (loom_texel_input_at(session->store, other.bytes, at, &bound.raw) !=
+                    LOOM_OK) {
+                    return COMMAND_ERROR;
+                }
+                if (!bound.raw.bound || !bound.source().equals(id) ||
+                    bound.source_output() != old_name) {
                     continue;
                 }
-                input.bind(Fiber(texel.id(), new_name.c_str()));
-                other.put_input(input);
-                changed = true;
-            }
-            if (changed && !transaction.put(other)) {
-                return false;
+                if (loom_txn_connect(txn.get(), other.bytes, bound.name().c_str(), id.bytes,
+                                     new_name.c_str()) != LOOM_OK) {
+                    fprintf(stderr, "loom: move commit failed\n");
+                    return COMMAND_ERROR;
+                }
             }
         }
-        return transaction.commit();
+        if (!txn.commit()) {
+            fprintf(stderr, "loom: move commit failed\n");
+            return COMMAND_ERROR;
+        }
+        return COMMAND_OK;
     }
 };
 

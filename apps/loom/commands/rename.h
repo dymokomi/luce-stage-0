@@ -32,12 +32,12 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        set_name(&texel, words[1]);
-        if (!commit_put(session->store, texel)) {
+        Txn txn(session->store);
+        if (!txn.ok() || !set_name(txn.get(), session->selected, words[1]) ||
+            !txn.commit()) {
             fprintf(stderr, "loom: rename commit failed\n");
             return COMMAND_ERROR;
         }

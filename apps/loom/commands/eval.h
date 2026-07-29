@@ -34,18 +34,19 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        Evaluator *evaluator;
-        if (!session->evaluators->get(words[1].c_str(), &evaluator)) {
+        if (!known_evaluator(words[1])) {
             fprintf(stderr, "loom: unknown evaluator %s (%s)\n", words[1].c_str(),
                     EVALUATOR_NAMES);
             return COMMAND_ERROR;
         }
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        texel.set_evaluator(words[1].c_str());
-        if (!commit_put(session->store, texel)) {
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_set_evaluator(txn.get(), session->selected.bytes, words[1].c_str()) !=
+                LOOM_OK ||
+            !txn.commit()) {
             fprintf(stderr, "loom: eval commit failed\n");
             return COMMAND_ERROR;
         }

@@ -85,6 +85,22 @@ add_library(lucia_projection
 target_link_libraries(lucia_projection PUBLIC lucia_loom)
 lucia_target(lucia_projection)
 
+# The loom terminal runs on the Zig engine through the C ABI in
+# zig/abi/loom.h; the C++ engine above stays as the reference tree.
+find_program(ZIG_EXECUTABLE zig)
+if(NOT ZIG_EXECUTABLE)
+    message(FATAL_ERROR "zig not found; the loom terminal links the Zig engine (see docs/ZIG.md)")
+endif()
+
+set(LOOM_ENGINE_LIB ${PROJECT_SOURCE_DIR}/zig/zig-out/lib/libloom.a)
+add_custom_target(loom_engine
+    COMMAND ${ZIG_EXECUTABLE} build
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/zig
+    BYPRODUCTS ${LOOM_ENGINE_LIB}
+    COMMENT "Building the Loom engine (zig build)"
+    VERBATIM
+)
+
 add_executable(loom
     apps/loom/command_line.cpp
     apps/loom/command_set.cpp
@@ -92,8 +108,12 @@ add_executable(loom
     apps/loom/main.cpp
     apps/loom/terminal.cpp
 )
-target_include_directories(loom PRIVATE ${PROJECT_SOURCE_DIR}/apps/loom)
-target_link_libraries(loom PRIVATE lucia_loom lucia_view lucia_projection)
+add_dependencies(loom loom_engine)
+target_include_directories(loom PRIVATE
+    ${PROJECT_SOURCE_DIR}/apps/loom
+    ${PROJECT_SOURCE_DIR}/zig/abi
+)
+target_link_libraries(loom PRIVATE ${LOOM_ENGINE_LIB})
 lucia_target(loom)
 
 enable_testing()

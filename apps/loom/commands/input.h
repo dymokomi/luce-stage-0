@@ -32,20 +32,23 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        ValueType type;
+        Byte type = 0;
         if (!parse_type(words[2], &type)) {
             return COMMAND_ERROR;
         }
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        if (texel.has_input(words[1].c_str())) {
+        InputInfo existing;
+        if (find_input(session->store, session->selected, words[1], &existing)) {
             fprintf(stderr, "loom: input %s already exists\n", words[1].c_str());
             return COMMAND_ERROR;
         }
-        texel.put_input(InputPort(words[1].c_str(), type));
-        if (!commit_put(session->store, texel)) {
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_put_input(txn.get(), session->selected.bytes, words[1].c_str(),
+                               type) != LOOM_OK ||
+            !txn.commit()) {
             fprintf(stderr, "loom: input commit failed\n");
             return COMMAND_ERROR;
         }

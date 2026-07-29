@@ -35,19 +35,18 @@ public:
     }
 
     CommandResult run(Session *session, const Strings &words) override {
-        TexelId source;
+        Id source;
         if (!resolve_texel(session->store, words[2], &source)) {
             return COMMAND_ERROR;
         }
-        Texel texel;
-        if (!selected_texel(*session, &texel)) {
+        if (!selected_exists(*session)) {
             return COMMAND_ERROR;
         }
-        Transaction transaction;
-        if (!session->store->begin(&transaction) ||
-            !transaction.connect(session->selected, words[1].c_str(), source,
-                                 words[3].c_str()) ||
-            !transaction.commit()) {
+        Txn txn(session->store);
+        if (!txn.ok() ||
+            loom_txn_connect(txn.get(), session->selected.bytes, words[1].c_str(),
+                             source.bytes, words[3].c_str()) != LOOM_OK ||
+            !txn.commit()) {
             fprintf(stderr, "loom: connect failed (check both ports exist and "
                             "types match)\n");
             return COMMAND_ERROR;
