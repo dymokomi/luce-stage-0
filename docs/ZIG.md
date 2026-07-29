@@ -69,10 +69,22 @@ now exists in Zig, tested and format-compatible (41 leak-checked tests,
   the connected capability, run the executor, persist the receipt under
   the request identity, and replay from it forever after.
 
+**The C ABI exists**: `zig/abi/loom.h` is the constitutional border,
+implemented by `src/abi.zig` and built as `libloom.a` (`zig build`
+installs it under `zig-out/lib/`).  Version 0 covers identity, store
+lifecycle and inspection, operation-style transactions, volatile
+observation, the change feed, the fiber index, and demand through the
+spool with client-supplied C evaluators (emit-callback style, so no
+allocation crosses the border).  Effects, capabilities, arrangements,
+and blobs surface in the header when a client needs them.
+`abi/smoke_test.c` drives the whole client lifecycle from C and runs
+under `zig build test`.
+
 Above the border, still C++ only: the view runtime, file projection,
-and the terminal app.  Next step: `abi/loom.h` — export the Zig engine
-as a static library with a C ABI and move the C++ terminal onto it, at
-which point the C++ engine under `src/` can retire to reference status.
+and the terminal app.  Next step: move the C++ terminal onto
+`abi/loom.h` (replace its Image/Session engine calls with the C API and
+link `libloom.a`), at which point the C++ engine under `src/` retires to
+reference status.
 
 ## Porting rules
 
