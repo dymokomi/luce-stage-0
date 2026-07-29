@@ -18,7 +18,7 @@ their `Io`; the rest of the engine never touches the host.
 ## Layout
 
 ```text
-build.sh               zig build --prefix build; the terminal lands at build/loom
+build.sh               zig build --prefix build; the terminal lands at build/lucia
 build.zig              the build graph; zig build test proves
 build.zig.zon          pins Zig 0.16
 loom/
@@ -36,7 +36,7 @@ loom/
 abi/
   loom.h               the constitutional C border
   smoke_test.c         drives the client lifecycle from C
-apps/loom/             the loom terminal
+apps/lucia/             the lucia terminal
 testdata/              golden image fixtures
 ```
 
@@ -107,8 +107,8 @@ and blobs surface in the header when a client needs them.
 `abi/smoke_test.c` drives the whole client lifecycle from C and runs
 under `zig build test`.
 
-**The terminal is Zig** (`apps/loom/`): it imports the engine module
-directly, builds as the `loom` executable, and its read-dispatch loop
+**The terminal is Zig** (`apps/lucia/`): it imports the engine module
+directly, builds as the `lucia` executable — Loom is the engine, lucia is the executable, and its read-dispatch loop
 is tested in-process with scripted sessions.
 
 ## Porting rules (kept for the next port)

@@ -29,16 +29,16 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
 
     if (is_input) {
         if (!texel.hasInput(port_name)) {
-            try session.err.print("loom: no input named {s}\n", .{port_name});
+            try session.err.print("lucia: no input named {s}\n", .{port_name});
             return .err;
         }
     } else {
         if (!texel.hasOutput(port_name)) {
-            try session.err.print("loom: no output named {s}\n", .{port_name});
+            try session.err.print("lucia: no output named {s}\n", .{port_name});
             return .err;
         }
         if (outputConnected(session.store, session.selected, port_name)) {
-            try session.err.print("loom: output {s} is still connected\n", .{port_name});
+            try session.err.print("lucia: output {s} is still connected\n", .{port_name});
             return .err;
         }
     }

@@ -1,4 +1,4 @@
-//! Every command available inside the loom terminal, owned as one set.
+//! Every command available inside the lucia terminal, owned as one set.
 //!
 //! Dispatch matches the first word against each command's name or
 //! alias, checks the argument count against the command's declared

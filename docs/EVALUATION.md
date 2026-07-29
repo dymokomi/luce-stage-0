@@ -222,7 +222,7 @@ Steps 1–5 are implemented and tested:
 4. Done — the terminal reconciles after every line (`changesSince` →
    dirty closure → `advance` → re-demand dirty watches), `watch` /
    `unwatch` commands, `pull` on the session Spool, and the scripted
-   in-process sessions in `apps/loom/terminal.zig` prove a watch fires
+   in-process sessions in `apps/lucia/terminal.zig` prove a watch fires
    through the real loop.  Watches print only when the outcome's
    displayed value moves.
 5. Done — `Store.observe`, the volatile observation path on the logical

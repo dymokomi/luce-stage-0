@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// The Loom engine builds as one Zig module, the loom terminal as its
+// The Loom engine builds as one Zig module, the lucia terminal as its
 // first client, and the C ABI as the border for platform shells in
 // other languages.  zig build installs both the terminal and libloom.a;
 // zig build test runs the engine suite, the terminal suite, and the C
@@ -20,15 +20,15 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the Loom engine tests");
     test_step.dependOn(&run_tests.step);
 
-    // The loom terminal: a Zig executable speaking the engine module
-    // directly.
+    // The lucia terminal: a Zig executable speaking the engine module
+    // directly.  Loom is the engine; lucia is the executable.
     const app = b.createModule(.{
-        .root_source_file = b.path("apps/loom/main.zig"),
+        .root_source_file = b.path("apps/lucia/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "loom", .module = loom }},
     });
-    const terminal = b.addExecutable(.{ .name = "loom", .root_module = app });
+    const terminal = b.addExecutable(.{ .name = "lucia", .root_module = app });
     const install_terminal = b.addInstallArtifact(terminal, .{
         .dest_dir = .{ .override = .prefix },
     });

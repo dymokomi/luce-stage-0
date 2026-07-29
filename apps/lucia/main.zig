@@ -1,7 +1,7 @@
-//! The loom app: create a Fabric image, or open one into the terminal.
+//! The lucia app: create a Fabric image, or open one into the terminal.
 //!
-//! Two boundaries: a setup boundary (loom create IMAGE [--pages N]) and
-//! a load boundary (loom open IMAGE) that drops into the interactive
+//! Two boundaries: a setup boundary (lucia create IMAGE [--pages N]) and
+//! a load boundary (lucia open IMAGE) that drops into the interactive
 //! terminal over the opened Fabric.
 
 const std = @import("std");
@@ -50,8 +50,8 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
 fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
-            "  loom create IMAGE [--pages N]\n" ++
-            "  loom open IMAGE\n",
+            "  lucia create IMAGE [--pages N]\n" ++
+            "  lucia open IMAGE\n",
         .{},
     );
     return 1;
@@ -102,7 +102,7 @@ fn runOpen(gpa: std.mem.Allocator, io: std.Io, err: *std.Io.Writer, path: []cons
 }
 
 fn cannot(err: *std.Io.Writer, what: []const u8, path: []const u8) !u8 {
-    try err.print("loom: cannot {s} image {s}\n", .{ what, path });
+    try err.print("lucia: cannot {s} image {s}\n", .{ what, path });
     return 1;
 }
 

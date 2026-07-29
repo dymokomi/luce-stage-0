@@ -17,11 +17,11 @@ pub const entry: command.Command = .{
 
 fn run(session: *Session, words: []const []const u8) Error!Result {
     if (!session.hasSelection()) {
-        try session.err.print("loom: no texel selected (try select ID)\n", .{});
+        try session.err.print("lucia: no texel selected (try select ID)\n", .{});
         return .err;
     }
     const index = session.findWatch(session.selected, words[1]) orelse {
-        try session.err.print("loom: not watching {s}\n", .{words[1]});
+        try session.err.print("lucia: not watching {s}\n", .{words[1]});
         return .err;
     };
     var removed = session.watches.orderedRemove(index);

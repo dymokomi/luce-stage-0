@@ -1,6 +1,6 @@
 # Terminal plan
 
-Where the loom terminal goes next, in order.  The north star stays
+Where the lucia terminal goes next, in order.  The north star stays
 [LOOM.md](LOOM.md): the Fabric is a demand-driven DAG, Views demand
 interfaces, and nothing recomputes merely because it exists.  "Realtime"
 therefore means *re-demand after every change and recompute only what was

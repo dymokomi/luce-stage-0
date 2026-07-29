@@ -25,7 +25,7 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
         .err => {
             const rendered = try common.outcomeText(session.allocator, outcome);
             defer session.allocator.free(rendered);
-            try session.err.print("loom: {s}\n", .{rendered});
+            try session.err.print("lucia: {s}\n", .{rendered});
             return .err;
         },
         .unavailable => try session.out.print("unavailable\n", .{}),

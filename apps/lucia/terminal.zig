@@ -71,7 +71,7 @@ pub const Terminal = struct {
             .err = err,
         };
         boundary.ensureBoundary(allocator, io, store) catch {
-            try err.print("loom: cannot create boundary texels\n", .{});
+            try err.print("lucia: cannot create boundary texels\n", .{});
         };
         try self.index.build(store);
         self.seen = store.generation;
@@ -95,7 +95,7 @@ pub const Terminal = struct {
         boundary.observeKeyboard(self.allocator, self.store, typed) catch {};
 
         const words = try command_line.splitWords(self.allocator, line) orelse {
-            try self.session.err.print("loom: unbalanced quotes\n", .{});
+            try self.session.err.print("lucia: unbalanced quotes\n", .{});
             try self.reconcile();
             return true;
         };
@@ -108,7 +108,7 @@ pub const Terminal = struct {
         const result = try command_set.run(&self.session, words);
         if (result == .exit) return false;
         if (result == .unknown) {
-            try self.session.err.print("loom: unknown command {s} (try help)\n", .{words[0]});
+            try self.session.err.print("lucia: unknown command {s} (try help)\n", .{words[0]});
         }
         try self.reconcile();
         return true;
@@ -152,15 +152,15 @@ pub const Terminal = struct {
         }
     }
 
-    // The prompt names the selection: "loom>", or "loom alpha>" while
+    // The prompt names the selection: "lucia>", or "lucia alpha>" while
     // the texel named alpha is selected (its short id when unnamed).
     fn printPrompt(self: *Terminal) !void {
         if (self.session.hasSelection() and self.store.has(self.session.selected)) {
             const label = try common.texelLabel(self.allocator, self.store, self.session.selected);
             defer self.allocator.free(label);
-            try self.session.out.print("loom {s}> ", .{label});
+            try self.session.out.print("lucia {s}> ", .{label});
         } else {
-            try self.session.out.print("loom> ", .{});
+            try self.session.out.print("lucia> ", .{});
         }
     }
 
@@ -173,7 +173,7 @@ pub const Terminal = struct {
 
             const line = reader.takeDelimiter('\n') catch |mistake| switch (mistake) {
                 error.StreamTooLong => {
-                    try self.session.err.print("loom: line too long\n", .{});
+                    try self.session.err.print("lucia: line too long\n", .{});
                     return;
                 },
                 error.ReadFailed => return,

@@ -137,7 +137,7 @@ clear local names.
 
 ## Formatting
 
-- `zig fmt loom/ apps/loom/ build.zig` before every commit; the test
+- `zig fmt loom/ apps/lucia/ build.zig` before every commit; the test
   suite and CI assume formatted code
 - Keep functions short and boring
 - Keep related declarations adjacent when it helps scanning
@@ -183,7 +183,7 @@ loom/authority/                 capabilities
 loom/view/                      View evaluators and the shell runtime
 loom/projection/                manifests and file projection
 loom/abi.zig  abi/              the C border and its smoke test
-apps/loom/                      the loom terminal
+apps/lucia/                     the lucia terminal
 testdata/                       golden image fixtures
 docs/                           architecture and coding documentation
 ```
@@ -192,7 +192,7 @@ Durable Texels, typed Ports, Fibers, and values belong in `fabric/`.
 Page storage and durability mechanics belong in `storage/`.
 Capabilities belong in `authority/`. Evaluation, State/Delay, effects,
 and arrangements belong in their narrow packages. The terminal lives in
-`apps/loom/`. Views and file projection live in `view/` and
+`apps/lucia/`. Views and file projection live in `view/` and
 `projection/`.
 
 Production security, collaboration, Braid, permanent history,

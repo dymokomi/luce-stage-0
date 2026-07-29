@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build LuciaOS: installs the loom terminal at build/loom and the C
+# Build LuciaOS: installs the lucia terminal at build/lucia and the C
 # border library at build/lib/libloom.a.  Extra arguments pass through
 # to zig build (e.g. ./build.sh -Doptimize=ReleaseSafe).
 set -e

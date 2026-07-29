@@ -28,7 +28,7 @@ Everything is Zig 0.16 (see [docs/ZIG.md](docs/ZIG.md)) and runs on any
 host OS:
 
 ```sh
-./build.sh         # installs the loom terminal at build/loom and libloom.a at build/lib/
+./build.sh         # installs the lucia terminal at build/lucia and libloom.a at build/lib/
 zig build test     # engine suite + terminal suite + C ABI smoke test
 ```
 
@@ -41,8 +41,8 @@ The on-disk image format is frozen; the golden fixture
 Try it:
 
 ```sh
-build/loom create fabric.img
-build/loom open fabric.img
+build/lucia create fabric.img
+build/lucia open fabric.img
 ```
 
 ## Deferred scope
@@ -60,7 +60,7 @@ loom/                     the Loom engine: storage, fabric, evaluation,
 loom/abi.zig              implementation of the C ABI border
 abi/                      loom.h, the constitutional C border, and its
                           C smoke test
-apps/loom/                the loom terminal
+apps/lucia/                the lucia terminal
 testdata/                 golden image fixtures
 docs/                     architecture and coding documentation
 build.sh  build.zig       ./build.sh installs, zig build test proves

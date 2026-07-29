@@ -35,11 +35,11 @@ fn moveInput(session: *Session, old_name: []const u8, new_name: []const u8) Erro
     const allocator = session.allocator;
     const texel = session.store.get(session.selected).?;
     const port = texel.getInput(old_name) orelse {
-        try session.err.print("loom: no input named {s}\n", .{old_name});
+        try session.err.print("lucia: no input named {s}\n", .{old_name});
         return .err;
     };
     if (texel.hasInput(new_name)) {
-        try session.err.print("loom: input {s} already exists\n", .{new_name});
+        try session.err.print("lucia: input {s} already exists\n", .{new_name});
         return .err;
     }
 
@@ -73,11 +73,11 @@ fn moveOutput(session: *Session, old_name: []const u8, new_name: []const u8) Err
     const allocator = session.allocator;
     const texel = session.store.get(session.selected).?;
     const port = texel.getOutput(old_name) orelse {
-        try session.err.print("loom: no output named {s}\n", .{old_name});
+        try session.err.print("lucia: no output named {s}\n", .{old_name});
         return .err;
     };
     if (texel.hasOutput(new_name)) {
-        try session.err.print("loom: output {s} already exists\n", .{new_name});
+        try session.err.print("lucia: output {s} already exists\n", .{new_name});
         return .err;
     }
 

@@ -19,7 +19,7 @@ pub const entry: command.Command = .{
 fn run(session: *Session, words: []const []const u8) Error!Result {
     if (!try common.selectedExists(session)) return .err;
     const port = session.store.get(session.selected).?.getOutput(words[1]) orelse {
-        try session.err.print("loom: no output named {s}\n", .{words[1]});
+        try session.err.print("lucia: no output named {s}\n", .{words[1]});
         return .err;
     };
     var value = try common.parseValue(session, words[2], port.declared) orelse return .err;

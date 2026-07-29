@@ -44,7 +44,7 @@ pub fn parseType(session: *Session, text: []const u8) Error!?ValueType {
         if (std.mem.eql(u8, text, candidate.name)) return candidate.declared;
     }
     try session.err.print(
-        "loom: unknown type {s} (bool int real text bytes texel blob)\n",
+        "lucia: unknown type {s} (bool int real text bytes texel blob)\n",
         .{text},
     );
     return null;
@@ -68,7 +68,7 @@ pub fn typeName(declared: ValueType) []const u8 {
 pub fn parseDirection(session: *Session, text: []const u8) Error!?bool {
     if (std.mem.eql(u8, text, "in")) return true;
     if (std.mem.eql(u8, text, "out")) return false;
-    try session.err.print("loom: direction must be in or out\n", .{});
+    try session.err.print("lucia: direction must be in or out\n", .{});
     return null;
 }
 
@@ -80,19 +80,19 @@ pub fn parseValue(session: *Session, text: []const u8, declared: ValueType) Erro
         .boolean => {
             if (std.mem.eql(u8, text, "true")) return .{ .boolean = true };
             if (std.mem.eql(u8, text, "false")) return .{ .boolean = false };
-            try session.err.print("loom: bool value must be true or false\n", .{});
+            try session.err.print("lucia: bool value must be true or false\n", .{});
             return null;
         },
         .int => {
             const number = std.fmt.parseInt(i64, text, 10) catch {
-                try session.err.print("loom: {s} is not an int\n", .{text});
+                try session.err.print("lucia: {s} is not an int\n", .{text});
                 return null;
             };
             return .{ .int = number };
         },
         .real => {
             const number = std.fmt.parseFloat(f64, text) catch {
-                try session.err.print("loom: {s} is not a real\n", .{text});
+                try session.err.print("lucia: {s} is not a real\n", .{text});
                 return null;
             };
             return .{ .real = number };
@@ -101,18 +101,18 @@ pub fn parseValue(session: *Session, text: []const u8, declared: ValueType) Erro
         .bytes => return try Value.initBytes(session.allocator, text),
         .texel => {
             const id = TexelId.parse(text) orelse {
-                try session.err.print("loom: {s} is not a texel id\n", .{text});
+                try session.err.print("lucia: {s} is not a texel id\n", .{text});
                 return null;
             };
             if (id.isUnset()) {
-                try session.err.print("loom: {s} is not a texel id\n", .{text});
+                try session.err.print("lucia: {s} is not a texel id\n", .{text});
                 return null;
             }
             return .{ .texel = id };
         },
         else => {
             try session.err.print(
-                "loom: cannot set a {s} value from the terminal\n",
+                "lucia: cannot set a {s} value from the terminal\n",
                 .{typeName(declared)},
             );
             return null;
@@ -203,9 +203,9 @@ pub fn resolveTexel(session: *Session, text: []const u8) Error!?TexelId {
     }
     if (matches == 1) return found;
     if (matches == 0) {
-        try session.err.print("loom: no texel named {s}\n", .{text});
+        try session.err.print("lucia: no texel named {s}\n", .{text});
     } else {
-        try session.err.print("loom: {d} texels named {s} (use the id)\n", .{ matches, text });
+        try session.err.print("lucia: {d} texels named {s} (use the id)\n", .{ matches, text });
     }
     return null;
 }
@@ -213,11 +213,11 @@ pub fn resolveTexel(session: *Session, text: []const u8) Error!?TexelId {
 /// Reports a missing selection on the error writer.
 pub fn selectedExists(session: *Session) Error!bool {
     if (!session.hasSelection()) {
-        try session.err.print("loom: no texel selected (try select ID)\n", .{});
+        try session.err.print("lucia: no texel selected (try select ID)\n", .{});
         return false;
     }
     if (!session.store.has(session.selected)) {
-        try session.err.print("loom: selected texel no longer exists\n", .{});
+        try session.err.print("lucia: selected texel no longer exists\n", .{});
         return false;
     }
     return true;
@@ -239,14 +239,14 @@ pub fn setName(allocator: Allocator, texel: *Texel, name: []const u8) !void {
 /// ready to mutate and put back.
 pub fn cloneForEdit(session: *Session, transaction: *Transaction, id: TexelId) Error!?Texel {
     const current = transaction.get(id) orelse {
-        try session.err.print("loom: texel no longer exists\n", .{});
+        try session.err.print("lucia: texel no longer exists\n", .{});
         return null;
     };
     return try current.clone(session.allocator);
 }
 
 pub fn commitFailed(session: *Session, what: []const u8) Error!Result {
-    try session.err.print("loom: {s} commit failed\n", .{what});
+    try session.err.print("lucia: {s} commit failed\n", .{what});
     return .err;
 }
 

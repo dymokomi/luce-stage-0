@@ -29,6 +29,6 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
 }
 
 fn refused(session: *Session) Error!Result {
-    try session.err.print("loom: delete failed (texel is still connected)\n", .{});
+    try session.err.print("lucia: delete failed (texel is still connected)\n", .{});
     return .err;
 }

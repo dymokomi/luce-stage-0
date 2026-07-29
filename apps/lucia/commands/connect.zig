@@ -32,7 +32,7 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
 
 fn refused(session: *Session) Error!Result {
     try session.err.print(
-        "loom: connect failed (check both ports exist and types match)\n",
+        "lucia: connect failed (check both ports exist and types match)\n",
         .{},
     );
     return .err;

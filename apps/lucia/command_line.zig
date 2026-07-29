@@ -1,4 +1,4 @@
-//! Process-argument and terminal-line parsing for the loom app.
+//! Process-argument and terminal-line parsing for the lucia app.
 
 const std = @import("std");
 
@@ -146,7 +146,7 @@ const testing = std.testing;
 
 test "command line separates command, options, and positionals" {
     const allocator = testing.allocator;
-    const arguments = [_][:0]const u8{ "loom", "create", "image.bin", "--pages", "128" };
+    const arguments = [_][:0]const u8{ "lucia", "create", "image.bin", "--pages", "128" };
 
     var line = (try CommandLine.parse(allocator, &arguments)).?;
     defer line.deinit(allocator);
@@ -157,9 +157,9 @@ test "command line separates command, options, and positionals" {
     try testing.expectEqual(@as(u64, 128), line.optionU64("--pages", 64));
     try testing.expectEqual(@as(u64, 64), line.optionU64("--missing", 64));
 
-    const empty = [_][:0]const u8{"loom"};
+    const empty = [_][:0]const u8{"lucia"};
     try testing.expectEqual(@as(?CommandLine, null), try CommandLine.parse(allocator, &empty));
-    const dangling = [_][:0]const u8{ "loom", "create", "--pages" };
+    const dangling = [_][:0]const u8{ "lucia", "create", "--pages" };
     try testing.expectEqual(@as(?CommandLine, null), try CommandLine.parse(allocator, &dangling));
 }
 

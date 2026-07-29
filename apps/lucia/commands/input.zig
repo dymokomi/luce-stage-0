@@ -21,7 +21,7 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
     const declared = try common.parseType(session, words[2]) orelse return .err;
     if (!try common.selectedExists(session)) return .err;
     if (session.store.get(session.selected).?.hasInput(words[1])) {
-        try session.err.print("loom: input {s} already exists\n", .{words[1]});
+        try session.err.print("lucia: input {s} already exists\n", .{words[1]});
         return .err;
     }
 

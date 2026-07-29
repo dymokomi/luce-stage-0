@@ -19,11 +19,11 @@ pub const entry: command.Command = .{
 fn run(session: *Session, words: []const []const u8) Error!Result {
     if (!try common.selectedExists(session)) return .err;
     if (!session.store.get(session.selected).?.hasOutput(words[1])) {
-        try session.err.print("loom: no output named {s}\n", .{words[1]});
+        try session.err.print("lucia: no output named {s}\n", .{words[1]});
         return .err;
     }
     if (session.findWatch(session.selected, words[1]) != null) {
-        try session.err.print("loom: already watching {s}\n", .{words[1]});
+        try session.err.print("lucia: already watching {s}\n", .{words[1]});
         return .err;
     }
 

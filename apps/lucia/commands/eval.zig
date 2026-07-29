@@ -19,7 +19,7 @@ pub const entry: command.Command = .{
 
 fn run(session: *Session, words: []const []const u8) Error!Result {
     if (!evaluators.knownEvaluator(words[1])) {
-        try session.err.print("loom: unknown evaluator {s} ({s})\n", .{
+        try session.err.print("lucia: unknown evaluator {s} ({s})\n", .{
             words[1],
             evaluators.evaluator_names,
         });

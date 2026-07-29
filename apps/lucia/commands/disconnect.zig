@@ -27,6 +27,6 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
 }
 
 fn refused(session: *Session, name: []const u8) Error!Result {
-    try session.err.print("loom: disconnect failed (no bound input named {s})\n", .{name});
+    try session.err.print("lucia: disconnect failed (no bound input named {s})\n", .{name});
     return .err;
 }
