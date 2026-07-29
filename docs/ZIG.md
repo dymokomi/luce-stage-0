@@ -41,7 +41,8 @@ ever persists raw struct layouts.
 
 ## Status
 
-Ported, tested, and format-compatible (29 leak-checked tests,
+**The engine is fully ported** — every C++ package below the ABI border
+now exists in Zig, tested and format-compatible (41 leak-checked tests,
 `zig build test`):
 
 - `storage/volume.zig` — MemoryVolume, FileVolume, the Volume union.
@@ -63,11 +64,15 @@ Ported, tested, and format-compatible (29 leak-checked tests,
 - `realm/capability.zig` — Capability tokens, the Authority grant table
   (LUCAP/LUAUTH encodings, deterministic by sorted token), issue with
   entropy through the explicit Io.
+- `loom/effect.zig` — effect intents and observations (LUEFINT/LUEFOBS
+  encodings), the executor registry, and the once-only Boundary: verify
+  the connected capability, run the executor, persist the receipt under
+  the request identity, and replay from it forever after.
 
-Not yet ported (C++ remains authoritative): effects, the view runtime,
-file projection, and the terminal app.  Next steps: effects.zig — the
-last engine package — then `abi/loom.h` so the existing C++ terminal
-can run on the Zig engine.
+Above the border, still C++ only: the view runtime, file projection,
+and the terminal app.  Next step: `abi/loom.h` — export the Zig engine
+as a static library with a C ABI and move the C++ terminal onto it, at
+which point the C++ engine under `src/` can retire to reference status.
 
 ## Porting rules
 

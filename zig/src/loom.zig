@@ -16,6 +16,7 @@ pub const fiber_index = @import("loom/fiber_index.zig");
 pub const spool = @import("loom/spool.zig");
 pub const state = @import("loom/state.zig");
 pub const arrangement = @import("loom/arrangement.zig");
+pub const effect = @import("loom/effect.zig");
 pub const capability = @import("realm/capability.zig");
 
 test {
@@ -29,5 +30,6 @@ test {
     _ = spool;
     _ = state;
     _ = arrangement;
+    _ = effect;
     _ = capability;
 }
