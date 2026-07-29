@@ -182,11 +182,16 @@ pub const Terminal = struct {
             try self.session.err.print("lucia: fabric intents failed to commit\n", .{});
             return;
         };
+        const palette = self.session.palette;
         for (batch, made.items) |intent, id| {
             var buffer: [TexelId.text_size]u8 = undefined;
-            try self.session.out.print("created {s} {s}\n", .{
+            try self.session.out.print("{s}created {s}{s} {s}{s}{s}\n", .{
+                palette.sgr(.created),
                 intent.name,
+                palette.sgr(.reset),
+                palette.sgr(.identity),
                 id.format(&buffer)[0..8],
+                palette.sgr(.reset),
             });
         }
     }
@@ -292,7 +297,12 @@ pub const Terminal = struct {
         const committed = self.store.get(texel) orelse return;
         if (try self.luce.check(committed)) |rendered| {
             defer self.allocator.free(rendered);
-            try self.session.err.print("lucia: luce compile failed\n{s}", .{rendered});
+            const palette = self.session.palette;
+            try self.session.err.print("lucia: {s}luce compile failed\n{s}{s}", .{
+                palette.sgr(.err),
+                rendered,
+                palette.sgr(.reset),
+            });
         }
     }
 
@@ -307,10 +317,15 @@ pub const Terminal = struct {
             try self.session.out.print("... ", .{});
             return;
         }
+        const palette = self.session.palette;
         if (self.session.hasSelection() and self.store.has(self.session.selected)) {
             const label = try common.texelLabel(self.allocator, self.store, self.session.selected);
             defer self.allocator.free(label);
-            try self.session.out.print("lucia {s}> ", .{label});
+            try self.session.out.print("lucia {s}{s}{s}> ", .{
+                palette.sgr(.prompt),
+                label,
+                palette.sgr(.reset),
+            });
         } else {
             try self.session.out.print("lucia> ", .{});
         }

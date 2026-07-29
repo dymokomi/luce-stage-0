@@ -20,12 +20,17 @@ pub const entry: command.Command = .{
 
 fn run(session: *Session, words: []const []const u8) Error!Result {
     _ = words;
+    const palette = session.palette;
     for (0..session.store.count()) |index| {
         const texel = session.store.at(index).?;
         var buffer: [TexelId.text_size]u8 = undefined;
-        try session.out.print("{s} {s}{s}\n", .{
+        try session.out.print("{s}{s}{s} {s}{s}{s}{s}\n", .{
+            palette.sgr(.identity),
             texel.id.format(&buffer),
+            palette.sgr(.reset),
+            palette.sgr(.name),
             common.texelNameOf(texel) orelse "-",
+            palette.sgr(.reset),
             if (texel.id.eql(session.selected)) " *" else "",
         });
     }

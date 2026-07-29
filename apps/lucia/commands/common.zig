@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const loom = @import("loom");
+const color = @import("../color.zig");
 const command = @import("../command.zig");
 
 const Allocator = std.mem.Allocator;
@@ -262,7 +263,8 @@ pub fn texelLabel(allocator: Allocator, store: *const Store, id: TexelId) Error!
     return try allocator.dupe(u8, id.format(&buffer)[0..8]);
 }
 
-/// Print one endpoint outcome as label.output = value.
+/// Print one endpoint outcome as label.output = value, colored by how
+/// the outcome went.
 pub fn printOutcome(
     session: *Session,
     texel: TexelId,
@@ -273,5 +275,19 @@ pub fn printOutcome(
     defer session.allocator.free(label);
     const rendered = try outcomeText(session.allocator, outcome);
     defer session.allocator.free(rendered);
-    try session.out.print("{s}.{s} {s}\n", .{ label, output, rendered });
+    const palette = session.palette;
+    const style: color.Style = switch (outcome.*) {
+        .available => .value,
+        .unavailable => .unavailable,
+        .err => .err,
+    };
+    try session.out.print("{s}{s}.{s}{s} {s}{s}{s}\n", .{
+        palette.sgr(.name),
+        label,
+        output,
+        palette.sgr(.reset),
+        palette.sgr(style),
+        rendered,
+        palette.sgr(.reset),
+    });
 }

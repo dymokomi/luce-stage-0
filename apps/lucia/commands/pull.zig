@@ -20,19 +20,31 @@ pub const entry: command.Command = .{
 fn run(session: *Session, words: []const []const u8) Error!Result {
     if (!try common.selectedExists(session)) return .err;
 
+    const palette = session.palette;
     const outcome = try session.spool.demand(session.selected, words[1]);
     switch (outcome.*) {
         .err => {
             const rendered = try common.outcomeText(session.allocator, outcome);
             defer session.allocator.free(rendered);
-            try session.err.print("lucia: {s}\n", .{rendered});
+            try session.err.print("lucia: {s}{s}{s}\n", .{
+                palette.sgr(.err),
+                rendered,
+                palette.sgr(.reset),
+            });
             return .err;
         },
-        .unavailable => try session.out.print("unavailable\n", .{}),
+        .unavailable => try session.out.print("{s}unavailable{s}\n", .{
+            palette.sgr(.unavailable),
+            palette.sgr(.reset),
+        }),
         .available => |value| {
             const rendered = try common.valueText(session.allocator, value);
             defer session.allocator.free(rendered);
-            try session.out.print("{s}\n", .{rendered});
+            try session.out.print("{s}{s}{s}\n", .{
+                palette.sgr(.value),
+                rendered,
+                palette.sgr(.reset),
+            });
         },
     }
     return .ok;

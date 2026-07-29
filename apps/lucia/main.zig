@@ -42,7 +42,10 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         return runCreate(gpa, io, err, path, line.optionU64("--pages", default_pages));
     }
     if (std.mem.eql(u8, line.command, "open")) {
-        return runOpen(gpa, io, err, path);
+        var environ_map = try init.environ.createMap(gpa);
+        defer environ_map.deinit();
+        const no_color = environ_map.get("NO_COLOR") != null;
+        return runOpen(gpa, io, err, path, no_color);
     }
     return usage(err);
 }
@@ -76,7 +79,13 @@ fn runCreate(
     return 0;
 }
 
-fn runOpen(gpa: std.mem.Allocator, io: std.Io, err: *std.Io.Writer, path: []const u8) !u8 {
+fn runOpen(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    err: *std.Io.Writer,
+    path: []const u8,
+    no_color: bool,
+) !u8 {
     var file = FileVolume.open(io, .cwd(), path) catch
         return cannot(err, "open", path);
     defer file.close();
@@ -94,6 +103,8 @@ fn runOpen(gpa: std.mem.Allocator, io: std.Io, err: *std.Io.Writer, path: []cons
 
     const stdin = std.Io.File.stdin();
     const interactive = stdin.isTty(io) catch false;
+    const colored = !no_color and (std.Io.File.stdout().isTty(io) catch false);
+    terminal.session.palette = .{ .enabled = colored };
     var in_buffer: [4096]u8 = undefined;
     var reader = stdin.reader(io, &in_buffer);
     try terminal.run(&reader.interface, interactive);

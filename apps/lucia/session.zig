@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const loom = @import("loom");
+const color = @import("color.zig");
 
 const Allocator = std.mem.Allocator;
 const Store = loom.store.Store;
@@ -65,6 +66,7 @@ pub const Session = struct {
     selected: TexelId = .unset,
     watches: std.ArrayList(Watch) = .empty,
     collecting: ?Collect = null,
+    palette: color.Palette = .{},
 
     pub fn deinit(self: *Session) void {
         for (self.watches.items) |*watch| watch.deinit(self.allocator);
