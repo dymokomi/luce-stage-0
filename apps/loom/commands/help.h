@@ -31,14 +31,15 @@ public:
     }
 
     const char *usage() const override {
-        return "help            (?)   show this list";
+        return "help                     (?)   show this list";
     }
 
-    CommandResult run(Store *, const Strings &) override {
+    CommandResult run(Session *, const Strings &) override {
         printf("commands:\n");
         for (Size i = 0; i < count; ++i) {
             printf("  %s\n", commands[i]->usage());
         }
+        printf("\nTYPE: bool int real text bytes texel blob    DIR: in out\n");
         return COMMAND_OK;
     }
 

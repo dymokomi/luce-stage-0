@@ -8,37 +8,45 @@
 namespace lucia {
 
 // ---------------------------------------------------------------------------
-// RenameCommand
+// OutputCommand
 // ---------------------------------------------------------------------------
 //
-// rename NAME — give the selected texel a new name; identity is untouched.
+// output NAME TYPE — add a typed Output Port to the selected texel.
 //
-class RenameCommand : public Command {
+class OutputCommand : public Command {
 public:
     const char *name() const override {
-        return "rename";
+        return "output";
     }
 
     Size argument_count() const override {
-        return 1;
+        return 2;
     }
 
     const char *alias() const override {
-        return "rn";
+        return "out";
     }
 
     const char *usage() const override {
-        return "rename NAME              (rn)  rename the selected texel";
+        return "output NAME TYPE         (out) add an Output Port to the selected texel";
     }
 
     CommandResult run(Session *session, const Strings &words) override {
+        ValueType type;
+        if (!parse_type(words[2], &type)) {
+            return COMMAND_ERROR;
+        }
         Texel texel;
         if (!selected_texel(*session, &texel)) {
             return COMMAND_ERROR;
         }
-        set_name(&texel, words[1]);
+        if (texel.has_output(words[1].c_str())) {
+            fprintf(stderr, "loom: output %s already exists\n", words[1].c_str());
+            return COMMAND_ERROR;
+        }
+        texel.put_output(OutputPort(words[1].c_str(), type));
         if (!commit_put(session->store, texel)) {
-            fprintf(stderr, "loom: rename commit failed\n");
+            fprintf(stderr, "loom: output commit failed\n");
             return COMMAND_ERROR;
         }
         return COMMAND_OK;

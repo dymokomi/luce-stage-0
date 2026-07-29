@@ -11,7 +11,7 @@ namespace lucia {
 // NewCommand
 // ---------------------------------------------------------------------------
 //
-// new NAME — create a texel named NAME and print its id.
+// new NAME — create a texel named NAME, select it, and print its id.
 //
 class NewCommand : public Command {
 public:
@@ -28,18 +28,19 @@ public:
     }
 
     const char *usage() const override {
-        return "new NAME        (n)   create a texel and print its id";
+        return "new NAME                 (n)   create a texel, select it, and print its id";
     }
 
-    CommandResult run(Store *store, const Strings &words) override {
+    CommandResult run(Session *session, const Strings &words) override {
         TexelId id;
         id.generate();
         Texel texel(id);
         set_name(&texel, words[1]);
-        if (!commit_put(store, texel)) {
+        if (!commit_put(session->store, texel)) {
             fprintf(stderr, "loom: new commit failed\n");
             return COMMAND_ERROR;
         }
+        session->selected = id;
         printf("%s\n", id.format().c_str());
         return COMMAND_OK;
     }

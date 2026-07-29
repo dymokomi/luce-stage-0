@@ -25,10 +25,10 @@ public:
     }
 
     const char *usage() const override {
-        return "exit            (q)   leave the terminal";
+        return "exit                     (q)   leave the terminal";
     }
 
-    CommandResult run(Store *, const Strings &) override {
+    CommandResult run(Session *, const Strings &) override {
         return COMMAND_EXIT;
     }
 };

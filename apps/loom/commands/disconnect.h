@@ -8,42 +8,42 @@
 namespace lucia {
 
 // ---------------------------------------------------------------------------
-// DeleteCommand
+// DisconnectCommand
 // ---------------------------------------------------------------------------
 //
-// delete — remove the selected texel; refused while other texels still
-// reference it.  A successful delete clears the selection.
+// disconnect INPUT — unbind the Fiber on the selected texel's INPUT.
 //
-class DeleteCommand : public Command {
+class DisconnectCommand : public Command {
 public:
     const char *name() const override {
-        return "delete";
+        return "disconnect";
     }
 
     Size argument_count() const override {
-        return 0;
+        return 1;
     }
 
     const char *alias() const override {
-        return "rm";
+        return "dc";
     }
 
     const char *usage() const override {
-        return "delete                   (rm)  delete the selected texel";
+        return "disconnect INPUT         (dc)  unbind an input on the selected texel";
     }
 
-    CommandResult run(Session *session, const Strings &) override {
+    CommandResult run(Session *session, const Strings &words) override {
         Texel texel;
         if (!selected_texel(*session, &texel)) {
             return COMMAND_ERROR;
         }
         Transaction transaction;
         if (!session->store->begin(&transaction) ||
-            !transaction.remove(session->selected) || !transaction.commit()) {
-            fprintf(stderr, "loom: delete failed (texel is still connected)\n");
+            !transaction.disconnect(session->selected, words[1].c_str()) ||
+            !transaction.commit()) {
+            fprintf(stderr, "loom: disconnect failed (no bound input named %s)\n",
+                    words[1].c_str());
             return COMMAND_ERROR;
         }
-        session->selected = TexelId();
         return COMMAND_OK;
     }
 };

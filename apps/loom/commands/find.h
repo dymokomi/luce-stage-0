@@ -28,11 +28,12 @@ public:
     }
 
     const char *usage() const override {
-        return "find TEXT       (f)   list texels whose name contains TEXT";
+        return "find TEXT                (f)   list texels whose name contains TEXT";
     }
 
-    CommandResult run(Store *store, const Strings &words) override {
-        Size matches = 0;
+    CommandResult run(Session *session, const Strings &words) override {
+        Store *store   = session->store;
+        Size   matches = 0;
         for (Size i = 0; i < store->size(); ++i) {
             Texel texel;
             if (!store->at(i, &texel)) {

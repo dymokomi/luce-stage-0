@@ -1,7 +1,7 @@
 #pragma once
 
 #include "base/types.h"
-#include "fabric/persistence/store.h"
+#include "session.h"
 
 namespace lucia {
 
@@ -33,7 +33,7 @@ public:
         return 0;
     }
 
-    virtual CommandResult run(Store *store, const Strings &words) = 0;
+    virtual CommandResult run(Session *session, const Strings &words) = 0;
 };
 
 } // namespace lucia

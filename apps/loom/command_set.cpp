@@ -5,16 +5,24 @@
 namespace lucia {
 
 CommandSet::CommandSet() : help_command(commands, COMMAND_COUNT) {
-    commands[0] = &new_command;
-    commands[1] = &rename_command;
-    commands[2] = &find_command;
-    commands[3] = &delete_command;
-    commands[4] = &list_command;
-    commands[5] = &help_command;
-    commands[6] = &exit_command;
+    commands[0]  = &new_command;
+    commands[1]  = &select_command;
+    commands[2]  = &show_command;
+    commands[3]  = &rename_command;
+    commands[4]  = &find_command;
+    commands[5]  = &delete_command;
+    commands[6]  = &input_command;
+    commands[7]  = &output_command;
+    commands[8]  = &move_command;
+    commands[9]  = &drop_command;
+    commands[10] = &connect_command;
+    commands[11] = &disconnect_command;
+    commands[12] = &list_command;
+    commands[13] = &help_command;
+    commands[14] = &exit_command;
 }
 
-CommandResult CommandSet::run(Store *store, const Strings &words) {
+CommandResult CommandSet::run(Session *session, const Strings &words) {
     for (Size i = 0; i < COMMAND_COUNT; ++i) {
         Command   *command = commands[i];
         const bool matched = words[0] == command->name() ||
@@ -26,7 +34,7 @@ CommandResult CommandSet::run(Store *store, const Strings &words) {
             fprintf(stderr, "usage: %s\n", command->usage());
             return COMMAND_ERROR;
         }
-        return command->run(store, words);
+        return command->run(session, words);
     }
     return COMMAND_UNKNOWN;
 }
