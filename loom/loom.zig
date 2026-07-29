@@ -18,6 +18,8 @@ pub const state = @import("evaluation/state.zig");
 pub const arrangement = @import("organization/arrangement.zig");
 pub const effect = @import("effects/effect.zig");
 pub const capability = @import("authority/capability.zig");
+pub const view_evaluators = @import("view/evaluators.zig");
+pub const shell = @import("view/shell.zig");
 
 test {
     _ = volume;
@@ -32,4 +34,6 @@ test {
     _ = arrangement;
     _ = effect;
     _ = capability;
+    _ = view_evaluators;
+    _ = shell;
 }
