@@ -3,8 +3,9 @@
 Write code that a tired reader can understand a week later.
 Prefer plain, old-school C++ over clever modern ceremony.
 
-`storage/volume/` is the reference style. Match it.
-North star for architecture: [planning/LOOM.md](planning/LOOM.md) (LuciaOS = OS; Loom = its trusted local engine).
+`src/storage/volume/` is the reference style. Match it.
+North star for architecture: [LOOM.md](LOOM.md) (LuciaOS = OS; Loom = its
+trusted local engine).
 
 ## Goals
 
@@ -29,7 +30,7 @@ If a change makes the architecture harder to see, do not merge it.
 
 ## Types
 
-Use the shared aliases in `base/types.h`:
+Use the shared aliases in `src/base/types.h`:
 
 ```cpp
 Byte     // uint8_t
@@ -198,19 +199,21 @@ Bad:
 Current first-Lucia packages:
 
 ```text
-base/  platform/io/  storage/volume/
-fabric/model/  fabric/persistence/
-realm/authority/
-loom/evaluation/  loom/effects/  loom/organization/  loom/cli/
-view/runtime/  projection/file/  tests/
+src/base/  src/platform/io/  src/storage/volume/
+src/fabric/model/  src/fabric/persistence/
+src/realm/authority/
+src/loom/evaluation/  src/loom/effects/  src/loom/organization/
+src/view/runtime/  src/projection/file/
+apps/loom/  tests/  docs/
 ```
 
-Durable Texels, typed Ports, Fibers, and values belong in `fabric/model/`.
-Encoding and transactional persistence belong in `fabric/persistence/`.
-Page storage and durability mechanics belong in `storage/volume/`.
-Capabilities belong in `realm/authority/`. Evaluation, State/Delay, effects,
-arrangements, and the CLI belong in their narrow `loom/` packages. Views and
-file projection live in `view/runtime/` and `projection/file/`.
+Durable Texels, typed Ports, Fibers, and values belong in `src/fabric/model/`.
+Encoding and transactional persistence belong in `src/fabric/persistence/`.
+Page storage and durability mechanics belong in `src/storage/volume/`.
+Capabilities belong in `src/realm/authority/`. Evaluation, State/Delay,
+effects, and arrangements belong in their narrow `src/loom/` packages. The CLI
+lives in `apps/loom/`. Views and file projection live in `src/view/runtime/`
+and `src/projection/file/`.
 
 Production security, collaboration, Braid, permanent history, replacement
 engines, and the agent remain deferred.

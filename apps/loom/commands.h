@@ -1,6 +1,6 @@
 #pragma once
 
-#include "loom/cli/arguments.h"
+#include "arguments.h"
 
 namespace lucia {
 

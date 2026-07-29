@@ -37,20 +37,26 @@ public:
   bool available;
 };
 
-static Texel increment_texel() {
+static TexelId test_id(char digit) {
+  String text(TexelId::TEXT_SIZE, '0');
+  text[TexelId::TEXT_SIZE - 1] = digit;
   TexelId id;
-  id.generate();
-  Texel texel(id);
+  id.parse(text.c_str());
+  return id;
+}
+
+static Texel increment_texel() {
+  TexelId id = test_id('2');
+  Texel   texel(id);
   texel.set_evaluator("increment");
   texel.put_input(InputPort("input", VALUE_INT));
   texel.put_output(OutputPort("value", VALUE_INT));
   return texel;
 }
 
-static Texel copy_texel() {
-  TexelId id;
-  id.generate();
-  Texel texel(id);
+static Texel copy_texel(char digit) {
+  TexelId id = test_id(digit);
+  Texel   texel(id);
   texel.set_evaluator("copy");
   texel.put_input(InputPort("input", VALUE_INT));
   texel.put_output(OutputPort("value", VALUE_INT));
@@ -72,9 +78,8 @@ static void test_state_feedback_and_reopen() {
   Store        store;
   CHECK(store.create(&volume));
 
-  TexelId state_id;
-  CHECK(state_id.generate());
-  Texel state;
+  TexelId state_id = test_id('1');
+  Texel   state;
   CHECK(create_state(state_id, VALUE_INT, Value(0), &state));
   Texel increment = increment_texel();
 
@@ -125,8 +130,8 @@ static void test_ordinary_cycle_rejected() {
   Store        store;
   CHECK(store.create(&volume));
 
-  Texel       first  = copy_texel();
-  Texel       second = copy_texel();
+  Texel       first  = copy_texel('3');
+  Texel       second = copy_texel('4');
   Transaction transaction;
   CHECK(store.begin(&transaction));
   CHECK(transaction.put(first));
@@ -139,8 +144,7 @@ static void test_ordinary_cycle_rejected() {
 }
 
 static void test_delay_creation_validation() {
-  TexelId id;
-  CHECK(id.generate());
+  TexelId id = test_id('5');
 
   Texel delay;
   CHECK(create_delay(id, VALUE_TEXT, Value("first"), &delay));

@@ -12,7 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(LUCIA_SANITIZE "Enable runtime sanitizers" OFF)
 
 function(lucia_target target)
-  target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_include_directories(${target} PUBLIC ${PROJECT_SOURCE_DIR}/src)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
   if(LUCIA_SANITIZE)
     if(APPLE)
@@ -29,65 +29,65 @@ function(lucia_target target)
 endfunction()
 
 if(APPLE)
-  add_library(lucia_platform platform/macos/file.cpp)
+  add_library(lucia_platform src/platform/macos/file.cpp)
 else()
   message(FATAL_ERROR "This foundation currently supports macOS only")
 endif()
 lucia_target(lucia_platform)
 
 add_library(lucia_storage
-  storage/volume/file_volume.cpp
-  storage/volume/memory_volume.cpp
+  src/storage/volume/file_volume.cpp
+  src/storage/volume/memory_volume.cpp
 )
 target_link_libraries(lucia_storage PUBLIC lucia_platform)
 lucia_target(lucia_storage)
 
 add_library(lucia_fabric
-  fabric/model/blob_ref.cpp
-  fabric/model/fiber.cpp
-  fabric/model/input_port.cpp
-  fabric/model/output_port.cpp
-  fabric/model/texel.cpp
-  fabric/model/texel_id.cpp
-  fabric/model/value.cpp
-  fabric/model/value_outcome.cpp
-  fabric/persistence/encode.cpp
-  fabric/persistence/store.cpp
+  src/fabric/model/blob_ref.cpp
+  src/fabric/model/fiber.cpp
+  src/fabric/model/input_port.cpp
+  src/fabric/model/output_port.cpp
+  src/fabric/model/texel.cpp
+  src/fabric/model/texel_id.cpp
+  src/fabric/model/value.cpp
+  src/fabric/model/value_outcome.cpp
+  src/fabric/persistence/encode.cpp
+  src/fabric/persistence/store.cpp
 )
 target_link_libraries(lucia_fabric PUBLIC lucia_storage)
 lucia_target(lucia_fabric)
 
-add_library(lucia_realm realm/authority/capability.cpp)
+add_library(lucia_realm src/realm/authority/capability.cpp)
 target_link_libraries(lucia_realm PUBLIC lucia_fabric)
 lucia_target(lucia_realm)
 
 add_library(lucia_loom
-  loom/effects/effect.cpp
-  loom/evaluation/spool.cpp
-  loom/evaluation/state.cpp
-  loom/organization/arrangement.cpp
+  src/loom/effects/effect.cpp
+  src/loom/evaluation/spool.cpp
+  src/loom/evaluation/state.cpp
+  src/loom/organization/arrangement.cpp
 )
 target_link_libraries(lucia_loom PUBLIC lucia_fabric lucia_realm)
 lucia_target(lucia_loom)
 
 add_library(lucia_view
-  view/runtime/evaluators.cpp
-  view/runtime/shell.cpp
+  src/view/runtime/evaluators.cpp
+  src/view/runtime/shell.cpp
 )
 target_link_libraries(lucia_view PUBLIC lucia_loom)
 lucia_target(lucia_view)
 
 add_library(lucia_projection
-  projection/file/file_projection.cpp
-  projection/file/projection_manifest.cpp
+  src/projection/file/file_projection.cpp
+  src/projection/file/projection_manifest.cpp
 )
 target_link_libraries(lucia_projection PUBLIC lucia_loom)
 lucia_target(lucia_projection)
 
 add_executable(loom
-  loom/cli/arguments.cpp
-  loom/cli/commands.cpp
-  loom/cli/main.cpp
+  apps/loom/arguments.cpp
+  apps/loom/commands.cpp
+  apps/loom/main.cpp
 )
 target_link_libraries(loom PRIVATE lucia_loom lucia_view lucia_projection)
 lucia_target(loom)

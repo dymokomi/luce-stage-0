@@ -1,4 +1,4 @@
-#include "loom/cli/arguments.h"
+#include "arguments.h"
 
 #include <stdio.h>
 #include <stdlib.h>

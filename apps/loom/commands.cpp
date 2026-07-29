@@ -1,4 +1,4 @@
-#include "loom/cli/commands.h"
+#include "commands.h"
 
 #include <stdio.h>
 #include <string.h>

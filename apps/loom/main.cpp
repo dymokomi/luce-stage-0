@@ -1,5 +1,5 @@
-#include "loom/cli/arguments.h"
-#include "loom/cli/commands.h"
+#include "arguments.h"
+#include "commands.h"
 
 int main(int argc, char **argv) {
   lucia::Arguments arguments;
