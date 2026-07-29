@@ -29,6 +29,7 @@ pub const table = [_]Command{
     @import("commands/eval.zig").entry,
     @import("commands/code.zig").entry,
     @import("commands/luce.zig").entry,
+    @import("commands/edit.zig").entry,
     @import("commands/pull.zig").entry,
     @import("commands/watch.zig").entry,
     @import("commands/unwatch.zig").entry,

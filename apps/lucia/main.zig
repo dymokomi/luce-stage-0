@@ -149,4 +149,8 @@ fn cannot(err: *std.Io.Writer, what: []const u8, path: []const u8) !u8 {
 test {
     _ = @import("command_line.zig");
     _ = @import("terminal.zig");
+    _ = @import("editor/key.zig");
+    _ = @import("editor/buffer.zig");
+    _ = @import("editor/highlight.zig");
+    _ = @import("editor/editor.zig");
 }
