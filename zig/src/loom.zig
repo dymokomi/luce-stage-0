@@ -15,6 +15,8 @@ pub const store = @import("fabric/store.zig");
 pub const fiber_index = @import("loom/fiber_index.zig");
 pub const spool = @import("loom/spool.zig");
 pub const state = @import("loom/state.zig");
+pub const arrangement = @import("loom/arrangement.zig");
+pub const capability = @import("realm/capability.zig");
 
 test {
     _ = volume;
@@ -26,4 +28,6 @@ test {
     _ = fiber_index;
     _ = spool;
     _ = state;
+    _ = arrangement;
+    _ = capability;
 }

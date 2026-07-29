@@ -56,11 +56,18 @@ Ported, tested, and format-compatible (29 leak-checked tests,
 - `loom/fiber_index.zig`, `loom/spool.zig` — the push/pull hybrid
   engine: reverse index, demand with early cutoff, advance, cached
   error outcomes, cycle detection.
+- `loom/state.zig` — State/Delay creation and TemporalRuntime.advance;
+  the counter test drives a real feedback loop through the Spool.
+- `loom/arrangement.zig` — LARR content encoding, inspect/validate, and
+  add/rename/reorder/remove.
+- `realm/capability.zig` — Capability tokens, the Authority grant table
+  (LUCAP/LUAUTH encodings, deterministic by sorted token), issue with
+  entropy through the explicit Io.
 
-Not yet ported (C++ remains authoritative): State/Delay and
-TemporalRuntime, effects, capabilities, arrangements, the view runtime,
-file projection, and the terminal app.  Next steps: state.zig, then
-`abi/loom.h` so the existing C++ terminal can run on the Zig engine.
+Not yet ported (C++ remains authoritative): effects, the view runtime,
+file projection, and the terminal app.  Next steps: effects.zig — the
+last engine package — then `abi/loom.h` so the existing C++ terminal
+can run on the Zig engine.
 
 ## Porting rules
 
