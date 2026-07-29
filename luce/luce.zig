@@ -17,6 +17,8 @@ pub const types = @import("types.zig");
 pub const analyzer = @import("analyzer.zig");
 pub const ir = @import("ir.zig");
 pub const compile = @import("compile.zig");
+pub const backend = @import("backend.zig");
+pub const interpreter = @import("interpreter.zig");
 
 test {
     _ = source;
@@ -29,4 +31,6 @@ test {
     _ = analyzer;
     _ = ir;
     _ = compile;
+    _ = backend;
+    _ = interpreter;
 }
