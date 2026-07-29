@@ -12,8 +12,11 @@ namespace lucia {
 //
 // The host enters the Fabric as observations (LOOM.md): a device pushes a
 // new source value onto a boundary texel's Output Ports, bumping revisions;
-// nothing downstream recomputes until something demands it.  Push refreshes
-// the boundary; pull decides what that observation is worth.
+// nothing downstream recomputes until something demands it.  Push
+// invalidates; pull evaluates.  Observations are durably committed here
+// for now — a stopgap until the volatile observation path in
+// docs/EVALUATION.md lands (transient observations should stay volatile
+// unless deliberately captured).
 //
 // keyboard offers line (text, the last line typed) and count (int).  mouse
 // offers x, y (real) and button (int); it cannot fire while the terminal

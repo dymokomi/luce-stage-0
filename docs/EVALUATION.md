@@ -1,15 +1,29 @@
 # The push/pull evaluation engine
 
-How the Fabric becomes a hybrid system: **pull decides what a value is,
-push decides what is now stale.**  Pull stays the value semantics from
-[LOOM.md](LOOM.md) — demand walks upstream, evaluators are pure, caches
-are disposable, nothing recomputes merely because it exists.  Push is a
-*notification* layer only: a commit tells interested parties which texels
-changed, and they decide whether to demand again.  A dirty-mark never
-evaluates anything.
+How the Fabric becomes a hybrid system, in LOOM.md's words: **"Push
+invalidates. Pull evaluates."**  Pull stays the value semantics — demand
+walks upstream, evaluators are pure, caches are disposable, nothing
+recomputes merely because it exists.  Push is a *notification* layer
+only: a change tells interested parties which texels are stale, and they
+decide whether to demand again.  A dirty-mark never evaluates anything,
+and no value ever travels through a Fiber by push.
 
 The engine change is additive.  Demand semantics, evaluator purity,
 acyclicity, and Store atomicity do not change.
+
+## Demand roots
+
+A lazy graph cannot start itself; every evaluation begins at a demand
+root (LOOM.md).  The terminal maps onto that taxonomy directly:
+
+- **One-shot demand** — `pull`: resolve an output once, now.
+- **Event-activated demand** — `watch`: re-demand when a subscribed
+  dependency is marked dirty.
+- **Standing demand** — a presented View: kept current while visible;
+  the shell demands a frame when dirtiness plus a presentation
+  opportunity coincide.
+- **Scheduled demand** — later: durable demand Texels compiled into
+  timer wake-ups (see Later, below).
 
 ## The pieces
 
@@ -40,6 +54,30 @@ bool Store::changes_since(U64 generation, TexelIdList *changed) const;
 The ring (64 entries) is bounded, in-memory, and never persisted: losing
 it costs a rebuild, never correctness.  The Store still knows nothing
 about fibers or evaluation.
+
+### Volatile observations feed the same ring
+
+LOOM.md: transient observations remain volatile unless a Texel
+deliberately captures them.  A mouse move must not cost a durable
+commit, so the Store gains a second, non-durable way to change:
+
+```cpp
+// Update an observed Output Port in the in-memory table only: set the
+// source value, advance the port, texel, and logical generation, and
+// record a ChangeSet entry.  Nothing reaches the volume; restart
+// reverts to the last durable snapshot.
+bool Store::observe(const TexelId &texel, const char *output, const Value &value);
+```
+
+`generation()` becomes the *logical* generation — advanced by both
+durable publishes and volatile observations — which is all the Spool
+ever compares against.  Recovery restores the last durable state, which
+is exactly right for a stale observation.  Deliberate capture is just an
+ordinary durable commit that copies an observed value into durable
+state (a State texel, or any texel that stores it).
+
+Until `observe` lands, the terminal's keyboard observation commits
+durably per line — a working stopgap, marked as such in `boundary.h`.
 
 ### 2. FiberIndex — the reverse index, disposable machinery
 
@@ -130,12 +168,10 @@ is the metronome — sample, commit, mark, pull, draw.**
 ```text
 mouse moves (many, push)           host events, free-running
    ↓ latest wins
-observation buffer (app-side)      transient, no Fabric traffic
-   ↓ once per frame drain
-one commit on the mouse texel      ChangeSet = {mouse}
+one volatile observe per drain     ChangeSet = {mouse}; nothing durable
    ↓ FiberIndex.downstream
 dirty = {mouse, T, V}              marks only, nothing evaluated
-   ↓ V is presented — a standing demand, like watch
+   ↓ V is presented — standing demand
 Spool re-demands V.interface       T evaluates once, V evaluates once
    ↓ interface revision moved
 shell redraws that surface         the effect, performed once
@@ -151,12 +187,13 @@ What this buys:
   The world is sampled at frame rate, not streamed at event rate.
 - Only the dirty path runs; the rest of the Fabric stays stamped clean.
 
-The buffer-then-sample step is required by LOOM.md rule 8: transient
-data stays transient.  Raw mouse events are never durable history; the
-Fabric commits only the sampled current observation, once per drained
-frame.  Today's terminal is this loop at line granularity — each typed
-line is one drained frame; raw-mode input later raises the drain rate
-without changing the model.
+Observe-then-sample is required by LOOM.md rule 8: transient data stays
+transient.  Raw mouse events are never durable history; the observation
+is volatile, and only deliberate capture makes it durable state.  This
+also satisfies the vision's proof criterion of processing high-rate
+pointer input without recomputing an invisible View.  Today's terminal
+is this loop at line granularity — each typed line is one drained frame;
+raw-mode input later raises the drain rate without changing the model.
 
 ## Invariants
 
@@ -185,5 +222,12 @@ without changing the model.
 4. Terminal: session-owned Spool, the reconcile step above, `watch` /
    `unwatch`, and a `loom_terminal` script proving a watch fires on
    `set` and stays quiet on unrelated commits.
-5. Later, in order of need: per-output dirty granularity, Spool cache
-   budget, threading the drain.
+5. `Store::observe` — the volatile observation path with its logical
+   generation, `store_test` cases (observation invisible after reopen,
+   generation advances, delta recorded), and the keyboard boundary
+   switched from durable commits to observations.
+6. Later, in order of need: per-output dirty granularity, bounded event
+   streams beside latest-value observations (the pointer example in
+   LOOM.md), scheduled demand as durable, visible demand Texels compiled
+   into timer wake-ups with occurrence identities, Spool cache budget,
+   threading the drain.

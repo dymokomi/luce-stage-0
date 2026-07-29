@@ -59,6 +59,17 @@ editable while evaluation runs or a Delay ticks on a clock.
   the architecture explicitly permits (batch, fuse, compile) — do it when
   a real workload is slow, not before.
 
+## Phase 5 — demand roots beyond the session
+
+From LOOM.md's demand-root taxonomy (one-shot and event-activated exist
+by Phase 3; standing arrives with presented Views): durable **scheduled
+demand** as visible demand Texels — schedule, retry and missed-occurrence
+policy, budget, the output to demand — compiled into timer wake-ups with
+stable occurrence identities, plus effect-intent identities so recovery
+never repeats an external action.  The vision's proof criteria: a
+scheduled job survives restart; an event-activated automation runs
+without duplicating its effect.
+
 ## Borrowed ideas, and from where
 
 ghostty is a terminal *emulator* — VT parsing, GPU renderers, PTY plumbing

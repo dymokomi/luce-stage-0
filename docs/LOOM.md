@@ -50,7 +50,7 @@ Light travels through Fibers. Fibers form the Fabric. Loom holds it coherent, an
 The user-visible model has seven ideas:
 
 - **LuciaOS** — the complete computing environment.
-- **Loom** — the trusted local engine that stores, connects, evaluates, and protects the Fabric.
+- **Loom** — the trusted local engine that stores, connects, evaluates, schedules, and protects the Fabric.
 - **Fabric** — the persistent computational medium available to a Loom.
 - **Texel** — the only independently identified element in the Fabric.
 - **Port** — a named, typed interface on a Texel. An **Input Port** (`InputPort`) receives a connection; an **Output Port** (`OutputPort`) offers a value.
@@ -112,7 +112,7 @@ An Output Port may feed many Input Ports. An Input Port has at most one active s
 
 An Output Port does not own a durable list of its consumers. Loom may build that reverse index for evaluation and invalidation, but it is disposable machinery rather than part of the Fabric.
 
-Ports are named and typed. A connection is valid only when the offered and expected value types are compatible. An Output Port can yield a value, declare that no value is available yet, or report a structured error. These outcomes travel through the same evaluation model instead of being hidden as process-global state.
+Ports are named and typed. A connection is valid only when the offered and expected value types are compatible. An Output Port's value may be computed by its Texel or supplied as an observation by a trusted boundary. It can yield a value, declare that no value is available yet, or report a structured error. These outcomes travel through the same evaluation model instead of being hidden as process-global state.
 
 Fibers make dependency explicit. A Texel computes from what arrives at its Input Ports; it cannot wander through the Fabric by guessing identities or paths. Sensitive operations require an explicit capability value at an Input Port. The Fiber carries that capability to the Texel, while Loom enforces what the capability permits.
 
@@ -120,7 +120,7 @@ This gives composition and authority the same visible shape without pretending t
 
 ---
 
-## Pull and computation
+## Observation, demand, and computation
 
 Evaluation in Loom is demand-driven.
 
@@ -133,7 +133,42 @@ demand:   View  →  Texel  →  source
 value:    View  ←  Texel  ←  source
 ```
 
-Nothing recomputes merely because it exists. Work happens because a View, a local service, or an explicit request needs an output. A change invalidates only the dependent results that can no longer be trusted.
+Pull describes how computed values are obtained. It does not require the physical world to become pull-based.
+
+A boundary Texel may receive a mouse event, camera frame, network packet, sensor reading, or completed device operation at any time. Its trusted adapter updates an observed Output Port and advances its revision. Loom may use a disposable reverse index to mark dependent caches dirty or to wake an already-authorized local demand. It does not push the new value through Fibers or invoke every downstream evaluator.
+
+> **Push invalidates. Pull evaluates.**
+
+For example, a pointer Texel may offer both a latest `position` value and a bounded `events` stream. Ordinary hovering and cursor presentation pull the newest position and may coalesce many hardware updates into one rendered frame. Drawing and gesture recognition can pull every event since their last stream cursor. Neither requires one Texel per event or one graph evaluation per interrupt.
+
+The trusted shell normally demands a visible View only when it needs a frame. A pointer revision can mark that View dirty and request a frame; at the next presentation opportunity, the shell pulls the View's interface, which pulls only the invalid computations beneath it. An animation can keep frame demand active while visible and release it when it stops or disappears.
+
+### Demand roots
+
+A lazy graph cannot begin evaluating itself. Loom therefore has an internal operation equivalent to:
+
+```text
+demand(OutputPort, context)
+```
+
+The shell creates demand for visible Views. An explicit user action creates a one-shot demand. Lucia's local scheduler can create scheduled, event-activated, or standing demand. These are ways of starting evaluation, not new kinds of Fabric material.
+
+- **One-shot demand** resolves an output once.
+- **Scheduled demand** resolves it at a deadline.
+- **Event-activated demand** resolves it when a subscribed boundary or dependency changes.
+- **Standing demand** keeps it current while a locally authorized lease remains active.
+
+> **A service is not a process that owns time. It is an output for which Lucia has authorized continuing demand.**
+
+Any future demand that survives a restart is represented visibly by a Texel. Its content and connections describe whether it is enabled, its schedule or trigger, its retry and missed-event policy, its resource budget and priority, the output to demand, and the capabilities it may exercise. Loom may compile these Texels into timer queues and subscription indexes, but those structures are disposable.
+
+A cron-like Texel does not emit a tick every second. The scheduler calculates its next deadline and asks the underlying platform for one wake-up. At that deadline it demands the job's output with a stable occurrence identity derived from the job and scheduled time. After completion it calculates the next deadline. The Texel declares whether missed occurrences are skipped, coalesced, run once after waking, or replayed individually.
+
+An autoreply is event-activated demand. The recipient's Loom first polls the Braid under local policy and pulls a message into its Fabric. That local arrival wakes a previously authorized automation, whose output is then demanded with the message as input. It computes a reply intent, and an effect boundary publishes it under a stable identity derived from the rule and incoming message. The sender neither installs the automation nor gains the authority to execute it.
+
+The current activation and completion state required to avoid lost or repeated work is durable. A permanent log of every run remains optional.
+
+Nothing recomputes merely because it exists. Work happens because a View, user action, locally authorized service, or explicit request demands an output. A change invalidates only the dependent results that can no longer be trusted.
 
 The first Loom can require ordinary computation to be acyclic. Recurrence enters through an explicit **State** or **Delay** Texel whose previous value becomes a later input. This keeps evaluation deterministic while still allowing counters, feedback, animation, long-running work, and state machines to emerge as visible structures.
 
@@ -155,12 +190,12 @@ A pure evaluator may be repeated without changing the world. Sending a message, 
 
 1. a Texel computes an **effect intent**;
 2. Loom verifies an explicit connected capability;
-3. a trusted boundary performs the effect once;
+3. a trusted boundary performs it under a stable intent identity;
 4. its result returns as a new observation.
 
-This boundary prevents cache invalidation, recovery, or repeated evaluation from accidentally repeating an external action.
+The intent identity and recorded outcome allow a boundary to reject duplicates or resume an interrupted operation according to its actual guarantees. Cache invalidation, recovery, or repeated evaluation therefore does not silently become permission to repeat an external action.
 
-The same pattern admits the world into the Fabric. A keyboard, clock, camera, network client, filesystem bridge, or sensor is represented by a boundary Texel whose outputs are observations. Loom does not need to pretend that the outside world is pure; it only needs to make the crossing explicit.
+The same pattern admits the world into the Fabric. A keyboard, clock, camera, network client, filesystem bridge, or sensor is represented by a boundary Texel whose outputs are observations. Transient observations remain volatile unless a Texel deliberately captures them as durable state. Loom does not need to pretend that the outside world is pure; it only needs to make the crossing explicit.
 
 ---
 
@@ -194,7 +229,7 @@ The small substrate is useful because larger forms can be expressed as recurring
 
 An **arrangement** is a Texel whose inputs name or order other Texels. It can behave like a document outline, folder, playlist, project, or workspace. The same Texel may be connected into many arrangements without being copied.
 
-A **service** is a durable connected computation whose outputs are demanded by a local rule or schedule. Indexing, backup, automation, and synchronization can be services without giving every Texel a second service ontology.
+A **service** is a connected computation with a locally authorized demand policy. It may run on a schedule, when a source changes, when a subscribed event becomes available, or while standing demand remains active. Indexing, backup, automation, synchronization, and request handling can be services without giving every Texel a second service ontology.
 
 A **package** is a signed bundle of Texels, evaluators, Views, defaults, and requested capabilities. It gives people a practical unit to install and remove. Packages may feel like applications, but they do not become sovereign containers for a person's data.
 
@@ -261,7 +296,7 @@ The Fabric can remain fast if implementations preserve a few hard rules:
 2. **Large values stay out of line.** Ports pass references to immutable blocks, buffers, streams, or engine-owned values.
 3. **Collections stay compact.** Members become Texels only when they need independent identity outside the collection.
 4. **Caches are disposable and separately budgeted.** Durable state never depends on retaining a computed cache.
-5. **Evaluation is incremental and demand-driven.** Unobserved work remains unevaluated.
+5. **Evaluation is incremental and demand-driven.** Undemanded work remains unevaluated.
 6. **Subgraphs may be batched, fused, or compiled.** The conceptual graph does not require one function call per Fiber.
 7. **Specialized runtimes remain welcome.** Databases, browsers, GPUs, and real-time media engines do what they are good at.
 8. **Transient data stays transient.** A video frame or audio buffer is not durable Fabric history unless deliberately captured.
@@ -281,6 +316,8 @@ It is:
 - typed Input Ports and Output Ports;
 - one active Fiber per Input Port and fan-out from Output Ports;
 - demand-driven, cached, acyclic pure computation;
+- asynchronous boundary observations with dirty propagation;
+- one-shot, scheduled, event-activated, and standing local demand;
 - explicit State or Delay Texels where time is required;
 - explicit capabilities and effect boundaries;
 - opaque large content;
@@ -296,7 +333,7 @@ It does not yet require:
 - replacement browser, database, GPU, or media engines;
 - an agent.
 
-The proof should let a person create durable material, connect it into several contexts, compute over it, present it through two genuinely different Views, edit it through either View, restart the system without losing identity, and use one existing tool through a projected file boundary.
+The proof should let a person create durable material, connect it into several contexts, compute over it, present it through two genuinely different Views, edit it through either View, restart the system without losing identity, and use one existing tool through a projected file boundary. It should also process high-rate pointer input without recomputing an invisible View, run one durable scheduled job after a restart, and execute one event-activated automation without duplicating its effect.
 
 If this feels simpler than moving the same work among files and applications—and remains fast under a realistically large Fabric—Loom has established its foundation.
 
@@ -311,10 +348,12 @@ If this feels simpler than moving the same work among files and applications—a
 5. **Make structure of what the Fabric must address; keep the rest as content.**
 6. **Connecting is filing.**
 7. **A View is a Texel. Interface is computation over the Fabric.**
-8. **Computation pulls values; it does not receive ambient access.**
-9. **Current state is durable. History is an explicit service.**
-10. **Pure evaluation and external effects are separate.**
-11. **Specialized machinery may accelerate or contain a Texel without changing the Fabric's meaning.**
-12. **The core remains small enough to understand, implement, and trust.**
+8. **Boundary observations may push revisions and dirtiness. Computation pulls values.**
+9. **Persistent future demand is visible, locally authorized, and bounded.**
+10. **Computation receives no ambient access.**
+11. **Current state is durable. History is an explicit service.**
+12. **Pure evaluation and external effects are separate.**
+13. **Specialized machinery may accelerate or contain a Texel without changing the Fabric's meaning.**
+14. **The core remains small enough to understand, implement, and trust.**
 
 Loom does not replace every machine inside the computer. It gives them one coherent material on which to work.
