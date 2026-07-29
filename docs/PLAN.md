@@ -33,10 +33,15 @@ These commands close that gap and are prerequisites for everything below.
 
 ## Phase 3 — the live DAG
 
-- `watch OUTPUT` / `unwatch OUTPUT` — the session keeps a watch list;
-  after every command that commits, re-demand watched outputs and print
-  only those whose effective revision changed.  Demand-driven liveness,
-  zero new architecture.
+The engine becomes an explicit push/pull hybrid, designed in
+[EVALUATION.md](EVALUATION.md): commits produce ChangeSets, a disposable
+FiberIndex turns them into a dirty closure, one long-lived Spool is
+advanced past clean records, and `watch` re-demands dirty subscriptions.
+Push notifies; only demand evaluates.
+
+- `watch OUTPUT` / `unwatch OUTPUT` — subscriptions re-demanded from the
+  dirty set after each commit, printing only outputs whose effective
+  revision moved.
 - `view prose|table NAME...` — build View texels with the existing
   `make_prose_view` / `make_table_view`, and render the focused View
   through `Shell::compose` after changes.  The terminal becomes the first
