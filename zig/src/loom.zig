@@ -10,10 +10,12 @@ pub const volume = @import("storage/volume.zig");
 pub const texel_id = @import("fabric/texel_id.zig");
 pub const value = @import("fabric/value.zig");
 pub const texel = @import("fabric/texel.zig");
+pub const encode = @import("fabric/encode.zig");
 
 test {
     _ = volume;
     _ = texel_id;
     _ = value;
     _ = texel;
+    _ = encode;
 }
