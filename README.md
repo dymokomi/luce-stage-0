@@ -15,8 +15,10 @@ The first Lucia scope provides:
 - durable State and Delay evaluation;
 - explicit effects guarded by capabilities;
 - Views and a shell runtime;
-- durable arrangements; and
-- manifest-driven file projection.
+- durable arrangements;
+- manifest-driven file projection; and
+- Luce, the small native language that makes Texels compute
+  ([docs/LUCE.md](docs/LUCE.md)).
 
 The architecture and longer-term direction are described in
 [docs/LOOM.md](docs/LOOM.md). Coding conventions are in
@@ -45,6 +47,22 @@ build/lucia create fabric.img
 build/lucia open fabric.img
 ```
 
+Inside the terminal, a Texel computes with Luce source:
+
+```text
+lucia> new doubler
+lucia doubler> input value int
+lucia doubler> output value int
+lucia doubler> eval luce
+lucia doubler> code
+enter luce source; finish with a single .
+... fn evaluate():
+...     output.value = input.value * 2
+... .
+lucia doubler> connect value SOURCE value
+lucia doubler> pull value
+```
+
 ## Deferred scope
 
 Production security, multi-user collaboration, Braid synchronization, permanent
@@ -60,7 +78,9 @@ loom/                     the Loom engine: storage, fabric, evaluation,
 loom/abi.zig              implementation of the C ABI border
 abi/                      loom.h, the constitutional C border, and its
                           C smoke test
-apps/lucia/                the lucia terminal
+luce/                     the Luce compiler: lexer, parser, analyzer,
+                          typed IR, and the execution boundary
+apps/lucia/               the lucia terminal
 testdata/                 golden image fixtures
 docs/                     architecture and coding documentation
 build.sh  build.zig       ./build.sh installs, zig build test proves

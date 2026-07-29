@@ -1438,3 +1438,56 @@ That is the sweet spot: a language capable enough to make Texels genuinely progr
 - [LLVM opaque pointers](https://llvm.org/docs/OpaquePointers.html)
 - [Apple: Porting JIT compilers to Apple silicon](https://developer.apple.com/documentation/Apple-Silicon/porting-just-in-time-compilers-to-apple-silicon)
 - [Apple: Allow execution of JIT-compiled code entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.cs.allow-jit)
+
+---
+
+## Implementation status (LuciaOS)
+
+Luce 0.1 is implemented in `luce/` as its own Zig module, and the lucia
+terminal makes Texels compute with it.  Where this document and the
+implementation differ, this section is current.
+
+**Implemented, per the plan:**
+
+- Frontend (`source.zig`, `lexer.zig`, `parser.zig`, `ast.zig`,
+  `diagnostics.zig`): byte-span source model, indentation-aware lexer
+  (four-space blocks, tabs rejected, parentheses suspend newlines),
+  recursive-descent + Pratt parser with line-level recovery, structured
+  diagnostics with stable codes.
+- Semantic analysis (`types.zig`, `analyzer.zig`): the Port schema, not
+  the source, decides input/output members; static types with no
+  implicit conversion; immutable `let` and parameters; no shadowing;
+  return-path checking; struct-cycle detection; named, complete struct
+  construction; explicit `Int()`/`Float()` conversions; the builtin set
+  (`abs min max clamp sqrt floor ceil len assert trap`).
+- Typed Luce IR (`ir.zig`): functions, basic blocks, virtual registers,
+  explicit input loads/output stores/traps, a full verifier, and a
+  deterministic readable printer.  Registers never cross blocks —
+  mutable locals carry loop/branch state, which lowers directly to
+  stack slots in a native backend.
+- Execution (`backend.zig`, `interpreter.zig`): the backend boundary
+  runs a verified program against an immutable Input frame and a
+  scratch Output frame under an explicit budget; the first engine is a
+  deterministic IR interpreter with checked integer arithmetic, IEEE
+  float semantics, range-checked conversions, a step budget (the
+  deadline analog), and a call-depth limit.  Unavailable read inputs
+  gate evaluation; failure publishes nothing.
+- Loom integration (`apps/lucia/luce_service.zig`, the `code` command):
+  a Texel owns Luce source as content; `eval luce` assigns the
+  evaluator; compilation is cached by texel revision (derived and
+  disposable); diagnostics report at code time and at demand time;
+  outputs the program does not write fall back to stored sources (the
+  name port keeps working).
+
+**Decisions taken from section 20:** `fn`; trailing commas allowed;
+struct fields of `var` locals update directly (as functional IR
+updates); `while` ships, guarded by the step budget; recursion is
+permitted under a call-depth budget; `for` iterates `range(start, end)`
+over Ints; no `Option[T]`.
+
+**Deferred, in plan order of need:** the LLVM native backend (slots in
+behind `backend.zig` without changing anything in front of it), sized
+integer and `F32` types, fixed arrays and borrowed slices, the durable
+cache envelope with version/target hashing (today's cache is in-memory
+per session, keyed by texel revision), worker-process isolation and the
+macOS JIT entitlement path, and two-tier compilation.

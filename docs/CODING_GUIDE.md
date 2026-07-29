@@ -183,6 +183,7 @@ loom/authority/                 capabilities
 loom/view/                      View evaluators and the shell runtime
 loom/projection/                manifests and file projection
 loom/abi.zig  abi/              the C border and its smoke test
+luce/                           the Luce compiler and execution boundary
 apps/lucia/                     the lucia terminal
 testdata/                       golden image fixtures
 docs/                           architecture and coding documentation

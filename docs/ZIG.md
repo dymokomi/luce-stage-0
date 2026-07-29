@@ -36,7 +36,8 @@ loom/
 abi/
   loom.h               the constitutional C border
   smoke_test.c         drives the client lifecycle from C
-apps/lucia/             the lucia terminal
+luce/                  the Luce compiler (docs/LUCE.md)
+apps/lucia/            the lucia terminal
 testdata/              golden image fixtures
 ```
 
