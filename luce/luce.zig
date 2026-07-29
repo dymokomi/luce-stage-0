@@ -13,6 +13,10 @@ pub const lexer = @import("lexer.zig");
 pub const diagnostics = @import("diagnostics.zig");
 pub const ast = @import("ast.zig");
 pub const parser = @import("parser.zig");
+pub const types = @import("types.zig");
+pub const analyzer = @import("analyzer.zig");
+pub const ir = @import("ir.zig");
+pub const compile = @import("compile.zig");
 
 test {
     _ = source;
@@ -21,4 +25,8 @@ test {
     _ = diagnostics;
     _ = ast;
     _ = parser;
+    _ = types;
+    _ = analyzer;
+    _ = ir;
+    _ = compile;
 }
