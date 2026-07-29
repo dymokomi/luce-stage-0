@@ -85,8 +85,10 @@ target_link_libraries(lucia_projection PUBLIC lucia_loom)
 lucia_target(lucia_projection)
 
 add_executable(loom
-  apps/loom/arguments.cpp
+  apps/loom/command_line.cpp
   apps/loom/commands.cpp
+  apps/loom/evaluators.cpp
+  apps/loom/image.cpp
   apps/loom/main.cpp
 )
 target_link_libraries(loom PRIVATE lucia_loom lucia_view lucia_projection)

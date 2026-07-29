@@ -3,46 +3,30 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "fabric/persistence/store.h"
+#include "evaluators.h"
+#include "image.h"
 #include "loom/evaluation/spool.h"
-#include "storage/volume/file_volume.h"
 
 namespace lucia {
 namespace {
 
-class ConcatEvaluator : public Evaluator {
-public:
-  void evaluate(const Texel &, const ValueOutcomeMap &inputs,
-                ValueOutcomeMap *outputs) override {
-    ValueOutcomeMap::const_iterator left  = inputs.find("left");
-    ValueOutcomeMap::const_iterator right = inputs.find("right");
-    if (left == inputs.end() || right == inputs.end() ||
-        left->second.status() != VALUE_AVAILABLE ||
-        right->second.status() != VALUE_AVAILABLE) {
-      (*outputs)["value"] = ValueOutcome::unavailable();
-      return;
-    }
-    (*outputs)["value"] = ValueOutcome::available(
-        Value(left->second.value().text() + right->second.value().text()));
-  }
-};
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
-bool parse_id(const char *text, TexelId *id) {
-  return id != 0 && id->parse(text) && !id->is_unset();
+const char *image_path(const CommandLine &line) {
+  return line.option("--image", DEFAULT_IMAGE);
 }
 
-bool open_store(const char *path, FileVolume *volume, Store *store) {
-  if (!volume->open(path)) {
-    fprintf(stderr, "loom: cannot open image %s\n", path);
-    return false;
-  }
-  if (!store->open(volume)) {
-    fprintf(stderr, "loom: cannot open Fabric %s\n", path);
+bool parse_id(const char *text, TexelId *id) {
+  if (!id->parse(text) || id->is_unset()) {
+    fprintf(stderr, "loom: invalid texel id %s\n", text);
     return false;
   }
   return true;
 }
 
+// Build a source Texel offering constant text on "value".
 Texel make_source(const char *text) {
   TexelId id;
   id.generate();
@@ -58,42 +42,55 @@ bool put_texel(Store *store, const Texel &texel) {
   return store->begin(&transaction) && transaction.put(texel) && transaction.commit();
 }
 
-int command_init(const char *path, U64 pages) {
-  FileVolume volume;
-  if (!volume.create(path, pages)) {
-    fprintf(stderr, "loom: cannot create image %s\n", path);
+// Create a concat Texel wired to two upstream "value" outputs, in one commit.
+bool put_concat(Store *store, const TexelId &left, const TexelId &right, TexelId *id) {
+  id->generate();
+  Texel texel(*id);
+  texel.set_evaluator("concat");
+  texel.put_input(InputPort("left", VALUE_TEXT));
+  texel.put_input(InputPort("right", VALUE_TEXT));
+  texel.put_output(OutputPort("value", VALUE_TEXT));
+
+  Transaction transaction;
+  return store->begin(&transaction) && transaction.put(texel) &&
+         transaction.connect(*id, "left", left, "value") &&
+         transaction.connect(*id, "right", right, "value") && transaction.commit();
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+int run_init(const CommandLine &line) {
+  Image image;
+  if (!image.create(image_path(line), line.option_u64("--pages", DEFAULT_PAGES))) {
     return 1;
   }
-  Store store;
-  if (!store.create(&volume)) {
-    fprintf(stderr, "loom: cannot initialize Fabric\n");
-    return 1;
-  }
-  printf("created %s generation=%llu\n", path, (unsigned long long)store.generation());
+  printf("created %s generation=%llu\n", image_path(line),
+         (unsigned long long)image.store()->generation());
   return 0;
 }
 
-int command_status(const char *path) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_status(const CommandLine &line) {
+  Image image;
+  if (!image.open(image_path(line))) {
     return 1;
   }
-  printf("image: %s\n", path);
-  printf("generation: %llu\n", (unsigned long long)store.generation());
-  printf("texels: %zu\n", store.size());
+  printf("image: %s\n", image_path(line));
+  printf("generation: %llu\n", (unsigned long long)image.store()->generation());
+  printf("texels: %zu\n", image.store()->size());
   return 0;
 }
 
-int command_list(const char *path) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_list(const CommandLine &line) {
+  Image image;
+  if (!image.open(image_path(line))) {
     return 1;
   }
-  for (Size i = 0; i < store.size(); ++i) {
+  const Store *store = image.store();
+  for (Size i = 0; i < store->size(); ++i) {
     Texel texel;
-    if (!store.at(i, &texel)) {
+    if (!store->at(i, &texel)) {
       return 1;
     }
     printf("%s inputs=%zu outputs=%zu evaluator=%s\n", texel.id().format().c_str(),
@@ -103,14 +100,17 @@ int command_list(const char *path) {
   return 0;
 }
 
-int command_show(const char *path, const TexelId &id) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_show(const CommandLine &line) {
+  TexelId id;
+  if (!parse_id(line.positional(0), &id)) {
+    return 1;
+  }
+  Image image;
+  if (!image.open(image_path(line))) {
     return 1;
   }
   Texel texel;
-  if (!store.get(id, &texel)) {
+  if (!image.store()->get(id, &texel)) {
     fprintf(stderr, "loom: texel not found\n");
     return 1;
   }
@@ -133,14 +133,13 @@ int command_show(const char *path, const TexelId &id) {
   return 0;
 }
 
-int command_source(const char *path, const char *text) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_source(const CommandLine &line) {
+  Image image;
+  if (!image.open(image_path(line))) {
     return 1;
   }
-  Texel texel = make_source(text);
-  if (!put_texel(&store, texel)) {
+  Texel texel = make_source(line.positional(0));
+  if (!put_texel(image.store(), texel)) {
     fprintf(stderr, "loom: source commit failed\n");
     return 1;
   }
@@ -148,25 +147,18 @@ int command_source(const char *path, const char *text) {
   return 0;
 }
 
-int command_concat(const char *path, const TexelId &left, const TexelId &right) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_concat(const CommandLine &line) {
+  TexelId left;
+  TexelId right;
+  if (!parse_id(line.positional(0), &left) || !parse_id(line.positional(1), &right)) {
     return 1;
   }
-
+  Image image;
+  if (!image.open(image_path(line))) {
+    return 1;
+  }
   TexelId id;
-  id.generate();
-  Texel texel(id);
-  texel.set_evaluator("concat");
-  texel.put_input(InputPort("left", VALUE_TEXT));
-  texel.put_input(InputPort("right", VALUE_TEXT));
-  texel.put_output(OutputPort("value", VALUE_TEXT));
-
-  Transaction transaction;
-  if (!store.begin(&transaction) || !transaction.put(texel) ||
-      !transaction.connect(id, "left", left, "value") ||
-      !transaction.connect(id, "right", right, "value") || !transaction.commit()) {
+  if (!put_concat(image.store(), left, right, &id)) {
     fprintf(stderr, "loom: concat commit failed\n");
     return 1;
   }
@@ -174,15 +166,19 @@ int command_concat(const char *path, const TexelId &left, const TexelId &right) 
   return 0;
 }
 
-int command_connect(const char *path, const TexelId &target, const char *input,
-                    const TexelId &source, const char *output) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_connect(const CommandLine &line) {
+  TexelId target;
+  TexelId source;
+  if (!parse_id(line.positional(0), &target) || !parse_id(line.positional(2), &source)) {
+    return 1;
+  }
+  Image image;
+  if (!image.open(image_path(line))) {
     return 1;
   }
   Transaction transaction;
-  if (!store.begin(&transaction) || !transaction.connect(target, input, source, output) ||
+  if (!image.store()->begin(&transaction) ||
+      !transaction.connect(target, line.positional(1), source, line.positional(3)) ||
       !transaction.commit()) {
     fprintf(stderr, "loom: connect failed\n");
     return 1;
@@ -190,19 +186,20 @@ int command_connect(const char *path, const TexelId &target, const char *input,
   return 0;
 }
 
-int command_pull(const char *path, const TexelId &id, const char *output) {
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+int run_pull(const CommandLine &line) {
+  TexelId id;
+  if (!parse_id(line.positional(0), &id)) {
     return 1;
   }
-
-  ConcatEvaluator   concat;
-  EvaluatorRegistry registry;
-  registry.put("concat", &concat);
-  Spool        spool(&store, &registry);
+  Image image;
+  if (!image.open(image_path(line))) {
+    return 1;
+  }
+  EvaluatorSet evaluators;
+  Spool        spool(image.store(), evaluators.registry());
   ValueOutcome outcome;
-  if (!spool.demand(id, output, &outcome)) {
+  if (!spool.demand(id, line.positional(1), &outcome)) {
+    fprintf(stderr, "loom: demand failed\n");
     return 1;
   }
   if (outcome.status() == VALUE_ERROR) {
@@ -221,49 +218,34 @@ int command_pull(const char *path, const TexelId &id, const char *output) {
   return 0;
 }
 
-int command_demo(const char *path) {
-  if (command_init(path, DEFAULT_PAGES) != 0) {
-    return 1;
+int run_demo(const CommandLine &line) {
+  const char *path = image_path(line);
+
+  TexelId joined;
+  {
+    Image image;
+    if (!image.create(path, DEFAULT_PAGES)) {
+      return 1;
+    }
+    Texel left  = make_source("hello ");
+    Texel right = make_source("loom");
+    if (!put_texel(image.store(), left) || !put_texel(image.store(), right) ||
+        !put_concat(image.store(), left.id(), right.id(), &joined)) {
+      fprintf(stderr, "loom: demo commit failed\n");
+      return 1;
+    }
   }
 
-  FileVolume volume;
-  Store      store;
-  if (!open_store(path, &volume, &store)) {
+  // Reopen from disk to prove the material survives restart.
+  Image image;
+  if (!image.open(path)) {
     return 1;
   }
-
-  Texel   left  = make_source("hello ");
-  Texel   right = make_source("loom");
-  TexelId joined_id;
-  joined_id.generate();
-  Texel joined(joined_id);
-  joined.set_evaluator("concat");
-  joined.put_input(InputPort("left", VALUE_TEXT));
-  joined.put_input(InputPort("right", VALUE_TEXT));
-  joined.put_output(OutputPort("value", VALUE_TEXT));
-
-  Transaction transaction;
-  if (!store.begin(&transaction) || !transaction.put(left) || !transaction.put(right) ||
-      !transaction.put(joined) ||
-      !transaction.connect(joined.id(), "left", left.id(), "value") ||
-      !transaction.connect(joined.id(), "right", right.id(), "value") ||
-      !transaction.commit()) {
-    fprintf(stderr, "loom: demo commit failed\n");
-    return 1;
-  }
-
-  Store      reopened;
-  FileVolume reopened_volume;
-  if (!open_store(path, &reopened_volume, &reopened)) {
-    return 1;
-  }
-  ConcatEvaluator   concat;
-  EvaluatorRegistry registry;
-  registry.put("concat", &concat);
-  Spool        spool(&reopened, &registry);
+  EvaluatorSet evaluators;
+  Spool        spool(image.store(), evaluators.registry());
   ValueOutcome outcome;
-  if (!spool.demand(joined.id(), "value", &outcome) ||
-      outcome.status() != VALUE_AVAILABLE || outcome.value().text() != "hello loom") {
+  if (!spool.demand(joined, "value", &outcome) || outcome.status() != VALUE_AVAILABLE ||
+      outcome.value().text() != "hello loom") {
     fprintf(stderr, "loom: demo demand failed\n");
     return 1;
   }
@@ -271,49 +253,59 @@ int command_demo(const char *path) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Command table
+// ---------------------------------------------------------------------------
+//
+// One row per subcommand: name, required positional count, usage line, and
+// the function that runs it.  Dispatch and usage both come from this table.
+//
+typedef int (*CommandRun)(const CommandLine &line);
+
+struct Command {
+  const char *name;
+  Size        positional_count;
+  const char *usage;
+  CommandRun  run;
+};
+
+const Command COMMANDS[] = {
+    {"init", 0, "loom init [--image PATH] [--pages N]", run_init},
+    {"status", 0, "loom status [--image PATH]", run_status},
+    {"list", 0, "loom list [--image PATH]", run_list},
+    {"show", 1, "loom show ID [--image PATH]", run_show},
+    {"source", 1, "loom source TEXT [--image PATH]", run_source},
+    {"concat", 2, "loom concat LEFT_ID RIGHT_ID [--image PATH]", run_concat},
+    {"connect", 4, "loom connect TARGET INPUT SOURCE OUTPUT [--image PATH]", run_connect},
+    {"pull", 2, "loom pull ID OUTPUT [--image PATH]", run_pull},
+    {"demo", 0, "loom demo [--image PATH]", run_demo},
+};
+
+enum { COMMAND_COUNT = sizeof(COMMANDS) / sizeof(COMMANDS[0]) };
+
 } // namespace
 
-int run_command(const Arguments &arguments) {
-  if (strcmp(arguments.command, "init") == 0 && arguments.positional_count == 0) {
-    return command_init(arguments.image, arguments.pages);
+int run_command(const CommandLine &line) {
+  for (Size i = 0; i < COMMAND_COUNT; ++i) {
+    const Command &command = COMMANDS[i];
+    if (strcmp(line.command(), command.name) != 0) {
+      continue;
+    }
+    if (line.positional_size() != command.positional_count) {
+      fprintf(stderr, "usage: %s\n", command.usage);
+      return 1;
+    }
+    return command.run(line);
   }
-  if (strcmp(arguments.command, "status") == 0 && arguments.positional_count == 0) {
-    return command_status(arguments.image);
-  }
-  if (strcmp(arguments.command, "list") == 0 && arguments.positional_count == 0) {
-    return command_list(arguments.image);
-  }
-  if (strcmp(arguments.command, "source") == 0 && arguments.positional_count == 1) {
-    return command_source(arguments.image, arguments.positional[0]);
-  }
-  if (strcmp(arguments.command, "demo") == 0 && arguments.positional_count == 0) {
-    return command_demo(arguments.image);
-  }
-
-  TexelId first;
-  TexelId second;
-  if (strcmp(arguments.command, "show") == 0 && arguments.positional_count == 1 &&
-      parse_id(arguments.positional[0], &first)) {
-    return command_show(arguments.image, first);
-  }
-  if (strcmp(arguments.command, "pull") == 0 && arguments.positional_count == 2 &&
-      parse_id(arguments.positional[0], &first)) {
-    return command_pull(arguments.image, first, arguments.positional[1]);
-  }
-  if (strcmp(arguments.command, "concat") == 0 && arguments.positional_count == 2 &&
-      parse_id(arguments.positional[0], &first) &&
-      parse_id(arguments.positional[1], &second)) {
-    return command_concat(arguments.image, first, second);
-  }
-  if (strcmp(arguments.command, "connect") == 0 && arguments.positional_count == 4 &&
-      parse_id(arguments.positional[0], &first) &&
-      parse_id(arguments.positional[2], &second)) {
-    return command_connect(arguments.image, first, arguments.positional[1], second,
-                           arguments.positional[3]);
-  }
-
   print_usage();
   return 1;
+}
+
+void print_usage() {
+  fprintf(stderr, "usage:\n");
+  for (Size i = 0; i < COMMAND_COUNT; ++i) {
+    fprintf(stderr, "  %s\n", COMMANDS[i].usage);
+  }
 }
 
 } // namespace lucia

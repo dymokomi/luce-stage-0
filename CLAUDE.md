@@ -52,7 +52,7 @@ Each layer is a CMake static library (`lucia_platform`, `lucia_storage`, `lucia_
 
 Direction of demand is opposite to direction of value: a View demands an output, the Spool pulls upstream outputs, runs evaluators, and caches by revision. Nothing recomputes merely because it exists.
 
-The `loom` CLI subcommands: `init`, `status`, `list`, `show`, `source`, `concat`, `connect`, `pull`, `demo` (see `apps/loom/arguments.cpp` for usage).
+The `loom` CLI subcommands: `init`, `status`, `list`, `show`, `source`, `concat`, `connect`, `pull`, `demo`. The app is organized as `command_line.h` (generic option/positional parser), `image.h` (opens one volume + Fabric store per command), `evaluators.h` (the CLI's evaluator set), and `commands.cpp` (one function per command plus a single command table that drives both dispatch and usage — new subcommands are added there).
 
 ## Coding conventions
 

@@ -1,9 +1,10 @@
 #pragma once
 
-#include "arguments.h"
+#include "command_line.h"
 
 namespace lucia {
 
-int run_command(const Arguments &arguments);
+int  run_command(const CommandLine &line);
+void print_usage();
 
 } // namespace lucia
