@@ -1,8 +1,10 @@
 const std = @import("std");
 
-// The Loom engine builds as one Zig module plus its test suite.  The
-// platform shells and legacy C++ tree build separately; only the C ABI
-// (abi/loom.h, later) crosses between them.
+// The Loom engine builds as one Zig module, the loom terminal as its
+// first client, and the C ABI as the border for platform shells in
+// other languages.  zig build installs both the terminal and libloom.a;
+// zig build test runs the engine suite, the terminal suite, and the C
+// ABI smoke test.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -17,6 +19,21 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run the Loom engine tests");
     test_step.dependOn(&run_tests.step);
+
+    // The loom terminal: a Zig executable speaking the engine module
+    // directly.
+    const app = b.createModule(.{
+        .root_source_file = b.path("apps/loom/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "loom", .module = loom }},
+    });
+    const terminal = b.addExecutable(.{ .name = "loom", .root_module = app });
+    b.installArtifact(terminal);
+
+    const app_tests = b.addTest(.{ .root_module = app });
+    const run_app_tests = b.addRunArtifact(app_tests);
+    test_step.dependOn(&run_app_tests.step);
 
     // The C ABI: libloom.a plus abi/loom.h, and a C smoke test that
     // drives the engine across the border.
