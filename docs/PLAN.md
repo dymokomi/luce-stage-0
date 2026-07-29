@@ -1,0 +1,72 @@
+# Terminal plan
+
+Where the loom terminal goes next, in order.  The north star stays
+[LOOM.md](LOOM.md): the Fabric is a demand-driven DAG, Views demand
+interfaces, and nothing recomputes merely because it exists.  "Realtime"
+therefore means *re-demand after every change and recompute only what was
+invalidated* — the Spool already gives us that — not a push engine or a
+thread pool.
+
+## Phase 1 — compute from the terminal
+
+The terminal can build and wire texels but cannot yet make them compute.
+These commands close that gap and are prerequisites for everything below.
+
+- `set NAME VALUE` — set a typed source value on a selected output
+  (parse VALUE per the port's declared type).
+- `eval NAME` — assign a persisted evaluator name to the selected texel;
+  reintroduce an app evaluator set (concat, sum, upper, ...) registered on
+  one registry, the way `view/runtime/shell.h` owns its view evaluators.
+- `pull OUTPUT` — demand the selected texel's output through a Spool and
+  print the outcome (value, unavailable, or error).
+- `state NAME TYPE VALUE` / `tick` — create State/Delay texels via
+  `loom/evaluation/state.h` and advance them with `TemporalRuntime`,
+  so recurrence is visible in the terminal.
+
+## Phase 2 — shell ergonomics
+
+- `&&` and `;` between commands on one line: split into segments before
+  word-splitting; `&&` stops the chain on the first failing command, `;`
+  continues.  Quotes already group words and must also protect separators.
+- History and line editing: raw-mode input, arrow-key history, and tab
+  completion of command names, port names, and texel names.  Prior art:
+  linenoise/replxx — a few hundred lines, no dependency needed.
+
+## Phase 3 — the live DAG
+
+- `watch OUTPUT` / `unwatch OUTPUT` — the session keeps a watch list;
+  after every command that commits, re-demand watched outputs and print
+  only those whose effective revision changed.  Demand-driven liveness,
+  zero new architecture.
+- `view prose|table NAME...` — build View texels with the existing
+  `make_prose_view` / `make_table_view`, and render the focused View
+  through `Shell::compose` after changes.  The terminal becomes the first
+  real client of the trusted shell instead of growing a rival one.
+
+## Phase 4 — concurrency where it earns its place
+
+Threading enters for responsiveness, not throughput: keep the prompt
+editable while evaluation runs or a Delay ticks on a clock.
+
+- One evaluation worker beside the input thread.  The Store stays
+  single-writer; each Spool stays thread-confined (it is a disposable
+  cache); results cross back on a queue and print above the prompt.
+- Parallel evaluation of independent subgraphs is a later optimization
+  the architecture explicitly permits (batch, fuse, compile) — do it when
+  a real workload is slow, not before.
+
+## Borrowed ideas, and from where
+
+ghostty is a terminal *emulator* — VT parsing, GPU renderers, PTY plumbing
+— which is the layer our terminal runs inside, not the layer we are
+building.  Worth taking: its thread separation (read/write/render maps to
+our input/evaluate/print split), shell-integration semantic zones (prompt
+vs command vs output regions, which is how watch output can interleave
+cleanly with an editable prompt), and keybinding/config tables.  Not worth
+taking: emulation and rendering internals.  For line editing the closer
+prior art is linenoise/replxx; for structured shells, nushell.
+
+## Non-goals for now
+
+Terminal emulation, GPU or curses UI, an evaluator thread pool, push-based
+recomputation, and any scheduler that runs work nobody demanded.
