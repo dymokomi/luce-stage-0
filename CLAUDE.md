@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow
+
+Single-developer project: commit directly to `main` (no PRs, no feature branches) with git author `Dy Mokomi <dy@dymokomi.com>`.
+
 ## Build and test
 
 The build supports **macOS only** (CMake fails fatally on other platforms) with the Apple Clang toolchain from Xcode Command Line Tools.
