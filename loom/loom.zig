@@ -20,6 +20,8 @@ pub const effect = @import("effects/effect.zig");
 pub const capability = @import("authority/capability.zig");
 pub const view_evaluators = @import("view/evaluators.zig");
 pub const shell = @import("view/shell.zig");
+pub const manifest = @import("projection/manifest.zig");
+pub const projection = @import("projection/projection.zig");
 
 test {
     _ = volume;
@@ -36,4 +38,6 @@ test {
     _ = capability;
     _ = view_evaluators;
     _ = shell;
+    _ = manifest;
+    _ = projection;
 }
