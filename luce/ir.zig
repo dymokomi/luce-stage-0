@@ -58,6 +58,13 @@ pub const Intrinsic = enum {
     len,
     assert_true,
     trap_message,
+    // Fabric builtins (gated by compile options; see fabric.zig).
+    fabric_create,
+    fabric_input,
+    fabric_output,
+    fabric_content,
+    fabric_evaluator,
+    fabric_set,
 };
 
 pub const TrapCode = enum {
@@ -69,6 +76,8 @@ pub const TrapCode = enum {
     missing_return,
     step_budget_exhausted,
     call_depth_exceeded,
+    invalid_handle,
+    invalid_port_type,
 
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
@@ -80,6 +89,8 @@ pub const TrapCode = enum {
             .missing_return => "function ended without returning a value",
             .step_budget_exhausted => "evaluation step budget exhausted",
             .call_depth_exceeded => "call depth exceeded",
+            .invalid_handle => "invalid texel handle",
+            .invalid_port_type => "unknown port type (bool int real text bytes)",
         };
     }
 };

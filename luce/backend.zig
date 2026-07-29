@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const ir = @import("ir.zig");
+const fabric = @import("fabric.zig");
 const interpreter = @import("interpreter.zig");
 
 const Allocator = std.mem.Allocator;
@@ -49,9 +50,12 @@ pub const Trap = struct {
 };
 
 pub const Result = union(enum) {
-    /// The output frame holds every written output.
-    success,
-    /// The evaluator failed; the output frame must not be published.
+    /// The output frame holds every written output; the payload lists
+    /// texel-creation intents the program computed (arena-owned, often
+    /// empty).  The trusted host applies them after publication.
+    success: []const fabric.NewTexel,
+    /// The evaluator failed; the output frame must not be published
+    /// and any intents are discarded.
     trap: Trap,
     /// An input the program reads was unavailable; nothing ran.
     unavailable,

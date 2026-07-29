@@ -103,18 +103,18 @@ pub const Terminal = struct {
         // Code entry swallows whole lines until the closing ".".
         if (self.session.collecting != null) {
             try self.collectCode(typed);
-            try self.reconcile();
+            try self.settle();
             return true;
         }
 
         const words = try command_line.splitWords(self.allocator, line) orelse {
             try self.session.err.print("lucia: unbalanced quotes\n", .{});
-            try self.reconcile();
+            try self.settle();
             return true;
         };
         defer command_line.freeWordSlice(self.allocator, words);
         if (words.len == 0) {
-            try self.reconcile();
+            try self.settle();
             return true;
         }
 
@@ -123,8 +123,103 @@ pub const Terminal = struct {
         if (result == .unknown) {
             try self.session.err.print("lucia: unknown command {s} (try help)\n", .{words[0]});
         }
-        try self.reconcile();
+        try self.settle();
         return true;
+    }
+
+    /// Apply computed fabric intents and reconcile until quiet.  A
+    /// re-demanded watch may evaluate a template that computes more
+    /// intents; the round bound keeps a runaway spawner from wedging
+    /// the terminal.
+    fn settle(self: *Terminal) !void {
+        var rounds: usize = 0;
+        while (true) : (rounds += 1) {
+            try self.applyFabricIntents();
+            try self.reconcile();
+            if (self.luce.pending.items.len == 0) return;
+            if (rounds >= 4) {
+                try self.session.err.print(
+                    "lucia: fabric intents still arriving after {d} rounds; stopping\n",
+                    .{rounds},
+                );
+                const stalled = self.luce.takePending();
+                defer self.allocator.free(stalled);
+                for (stalled) |*intent| {
+                    var dropped = intent.*;
+                    dropped.deinit(self.allocator);
+                }
+                return;
+            }
+        }
+    }
+
+    /// One transaction creates every pending texel: name, typed ports,
+    /// content, evaluator, and initial output sources.
+    fn applyFabricIntents(self: *Terminal) !void {
+        if (self.luce.pending.items.len == 0) return;
+        const batch = self.luce.takePending();
+        defer {
+            for (batch) |*intent| {
+                var owned = intent.*;
+                owned.deinit(self.allocator);
+            }
+            self.allocator.free(batch);
+        }
+
+        var transaction = self.store.begin() catch {
+            try self.session.err.print("lucia: fabric intents failed to apply\n", .{});
+            return;
+        };
+        defer transaction.deinit();
+
+        var made: std.ArrayList(TexelId) = .empty;
+        defer made.deinit(self.allocator);
+        for (batch) |intent| {
+            const id = try self.buildIntent(&transaction, intent);
+            try made.append(self.allocator, id);
+        }
+        transaction.commit() catch {
+            try self.session.err.print("lucia: fabric intents failed to commit\n", .{});
+            return;
+        };
+        for (batch, made.items) |intent, id| {
+            var buffer: [TexelId.text_size]u8 = undefined;
+            try self.session.out.print("created {s} {s}\n", .{
+                intent.name,
+                id.format(&buffer)[0..8],
+            });
+        }
+    }
+
+    fn buildIntent(
+        self: *Terminal,
+        transaction: *loom.store.Transaction,
+        intent: luce_service.PendingTexel,
+    ) !TexelId {
+        const allocator = self.allocator;
+        var texel = loom.texel.Texel.init(TexelId.generate(self.io));
+        defer texel.deinit(allocator);
+
+        try common.setName(allocator, &texel, intent.name);
+        for (intent.inputs) |port| {
+            try texel.putInput(allocator, try loom.texel.InputPort.init(allocator, port.name, port.declared));
+        }
+        for (intent.outputs) |port| {
+            try texel.putOutput(allocator, try loom.texel.OutputPort.init(allocator, port.name, port.declared));
+        }
+        if (intent.content) |source| {
+            try texel.setContent(allocator, try loom.value.Value.initText(allocator, source));
+        }
+        if (intent.evaluator) |name| {
+            try texel.setEvaluator(allocator, name);
+        }
+        for (intent.sets) |set| {
+            const output = texel.mutableOutput(set.output) orelse continue;
+            var cloned = try set.value.clone(allocator);
+            output.setSource(allocator, cloned) catch cloned.deinit(allocator);
+        }
+        try transaction.put(&texel);
+        return texel.id;
     }
 
     /// Reconcile the disposable machinery with whatever the last
@@ -482,6 +577,58 @@ test "luce traps surface as error outcomes, never partial output" {
     const label = try common.texelLabel(allocator, &bench.store, bench.terminal.session.selected);
     defer allocator.free(label);
     try testing.expectEqualStrings("divider", label);
+}
+
+test "bootstrap: a luce template texel creates a texel that computes" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    // newAdd is a template: demanding its output computes an intent
+    // for a fresh adder texel, complete with ports, evaluator, and
+    // Luce content.  The terminal applies the intent after dispatch.
+    try bench.script(&.{
+        "new newAdd",
+        "eval luce",
+        "output made int",
+        "code",
+        "fn evaluate():",
+        "    let adder = create_texel(\"adder\")",
+        "    texel_input(adder, \"left\", \"int\")",
+        "    texel_input(adder, \"right\", \"int\")",
+        "    texel_output(adder, \"value\", \"int\")",
+        "    texel_evaluator(adder, \"luce\")",
+        "    texel_content(adder, \"fn evaluate():\\n    output.value = input.left + input.right\\n\")",
+        "    output.made = 1",
+        ".",
+        "pull made",
+    });
+    try testing.expect(std.mem.indexOf(u8, bench.out.written(), "created adder") != null);
+
+    // The spawned adder is an ordinary texel: wire two sources into it
+    // and demand its sum.
+    try bench.script(&.{
+        "new five",
+        "output value int",
+        "set value 5",
+        "new seven",
+        "output value int",
+        "set value 7",
+        "select adder",
+        "connect left five value",
+        "connect right seven value",
+        "pull value",
+    });
+    try testing.expect(std.mem.indexOf(u8, bench.out.written(), "12") != null);
+    try testing.expectEqualStrings("", bench.err.written());
+
+    // Re-demanding the unchanged template replays the cached outcome
+    // and creates nothing new.
+    try bench.script(&.{ "select newAdd", "pull made", "find adder" });
+    const listing = bench.out.written();
+    const first = std.mem.indexOf(u8, listing, "created adder").?;
+    try testing.expect(std.mem.indexOfPos(u8, listing, first + 1, "created adder") == null);
 }
 
 test "ports move and drop with fibers preserved and guarded" {

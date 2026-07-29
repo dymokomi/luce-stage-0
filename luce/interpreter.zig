@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const ir = @import("ir.zig");
+const fabric = @import("fabric.zig");
 const backend = @import("backend.zig");
 
 const Allocator = std.mem.Allocator;
@@ -39,7 +40,7 @@ pub fn run(
         .depth_left = budget.call_depth,
     };
     switch (try machine.call(program.evaluate_function, &.{})) {
-        .value => return .success,
+        .value => return .{ .success = machine.intents.items },
         .trap => |trap| return .{ .trap = trap },
     }
 }
@@ -56,6 +57,9 @@ const Machine = struct {
     outputs: []?RuntimeValue,
     steps: u64,
     depth_left: u32,
+    /// Texel-creation intents recorded by the fabric builtins, in
+    /// order.  Arena-owned; the caller copies what it applies.
+    intents: std.ArrayList(fabric.NewTexel) = .empty,
 
     fn trap(self: *Machine, code: ir.TrapCode) CallOutcome {
         _ = self;
@@ -377,7 +381,63 @@ const Machine = struct {
                     .message = registers[arguments[0]].string,
                 } };
             },
+            .fabric_create => {
+                const handle: i64 = @intCast(self.intents.items.len);
+                try self.intents.append(self.arena, .{
+                    .name = registers[arguments[0]].string,
+                });
+                return .{ .value = .{ .int = handle } };
+            },
+            .fabric_input, .fabric_output => {
+                const intent = self.intentAt(registers[arguments[0]].int) orelse
+                    return self.trap(.invalid_handle);
+                const declared = fabric.portTypeNamed(registers[arguments[2]].string) orelse
+                    return self.trap(.invalid_port_type);
+                const spec: fabric.PortSpec = .{
+                    .name = registers[arguments[1]].string,
+                    .declared = declared,
+                };
+                if (operation.kind == .fabric_input) {
+                    try intent.inputs.append(self.arena, spec);
+                } else {
+                    try intent.outputs.append(self.arena, spec);
+                }
+                return .{ .value = .none };
+            },
+            .fabric_content => {
+                const intent = self.intentAt(registers[arguments[0]].int) orelse
+                    return self.trap(.invalid_handle);
+                intent.content = registers[arguments[1]].string;
+                return .{ .value = .none };
+            },
+            .fabric_evaluator => {
+                const intent = self.intentAt(registers[arguments[0]].int) orelse
+                    return self.trap(.invalid_handle);
+                intent.evaluator = registers[arguments[1]].string;
+                return .{ .value = .none };
+            },
+            .fabric_set => {
+                const intent = self.intentAt(registers[arguments[0]].int) orelse
+                    return self.trap(.invalid_handle);
+                const value: fabric.SourceValue = switch (registers[arguments[2]]) {
+                    .boolean => |flag| .{ .boolean = flag },
+                    .int => |number| .{ .int = number },
+                    .float => |number| .{ .float = number },
+                    .string => |text| .{ .text = text },
+                    else => unreachable,
+                };
+                try intent.sets.append(self.arena, .{
+                    .output = registers[arguments[1]].string,
+                    .value = value,
+                });
+                return .{ .value = .none };
+            },
         }
+    }
+
+    fn intentAt(self: *Machine, handle: i64) ?*fabric.NewTexel {
+        if (handle < 0 or handle >= self.intents.items.len) return null;
+        return &self.intents.items[@intCast(handle)];
     }
 };
 
@@ -394,8 +454,8 @@ const Bench = struct {
     arena: std.heap.ArenaAllocator,
     outputs: []?RuntimeValue,
 
-    fn setup(source: []const u8, schema: types.PortSchema) !Bench {
-        var result = try compile_mod.compile(testing.allocator, source, schema);
+    fn setup(source: []const u8, schema: types.PortSchema, options: types.CompileOptions) !Bench {
+        var result = try compile_mod.compile(testing.allocator, source, schema, options);
         switch (result) {
             .success => {},
             .failure => |*diagnostics| {
@@ -461,7 +521,7 @@ test "the plan's vertical slice: smooth pointer transform" {
             .{ .name = "x", .declared = .float },
             .{ .name = "y", .declared = .float },
         },
-    });
+    }, .{});
     defer bench.deinit();
 
     const result = try bench.evaluate(&.{
@@ -471,7 +531,7 @@ test "the plan's vertical slice: smooth pointer transform" {
         .{ .value = .{ .float = -4.0 } },
         .{ .value = .{ .float = 0.25 } },
     });
-    try testing.expectEqual(Result.success, result);
+    try testing.expect(result == .success);
     try testing.expectEqual(@as(f64, 2.5), bench.outputs[0].?.float);
     try testing.expectEqual(@as(f64, -1.0), bench.outputs[1].?.float);
 }
@@ -500,11 +560,11 @@ test "loops, recursion, strings, and builtins compute" {
             .{ .name = "label", .declared = .string },
             .{ .name = "small", .declared = .int },
         },
-    });
+    }, .{});
     defer bench.deinit();
 
     const result = try bench.evaluate(&.{.{ .value = .{ .string = "of ten" } }});
-    try testing.expectEqual(Result.success, result);
+    try testing.expect(result == .success);
     try testing.expectEqual(@as(i64, 55), bench.outputs[0].?.int);
     try testing.expectEqual(@as(i64, 3628800), bench.outputs[1].?.int);
     try testing.expectEqualStrings("sum of ten", bench.outputs[2].?.string);
@@ -519,14 +579,14 @@ test "an unavailable read input gates evaluation" {
     , .{
         .inputs = &.{.{ .name = "value", .declared = .int }},
         .outputs = &.{.{ .name = "doubled", .declared = .int }},
-    });
+    }, .{});
     defer bench.deinit();
 
     try testing.expectEqual(Result.unavailable, try bench.evaluate(&.{.unavailable}));
     try testing.expectEqual(@as(?RuntimeValue, null), bench.outputs[0]);
 
     const available = try bench.evaluate(&.{.{ .value = .{ .int = 21 } }});
-    try testing.expectEqual(Result.success, available);
+    try testing.expect(available == .success);
     try testing.expectEqual(@as(i64, 42), bench.outputs[0].?.int);
 }
 
@@ -555,7 +615,7 @@ test "checked arithmetic and conversions trap" {
     , .{
         .inputs = &.{.{ .name = "mode", .declared = .int }},
         .outputs = &.{.{ .name = "value", .declared = .int }},
-    });
+    }, .{});
     defer bench.deinit();
 
     try expectTrap(&bench, &.{.{ .value = .{ .int = 1 } }}, .integer_overflow);
@@ -569,7 +629,7 @@ test "checked arithmetic and conversions trap" {
     try testing.expectEqualStrings("torn seam", explicit.trap.message);
 
     const fine = try bench.evaluate(&.{.{ .value = .{ .int = 0 } }});
-    try testing.expectEqual(Result.success, fine);
+    try testing.expect(fine == .success);
 }
 
 test "the step budget stops an infinite loop" {
@@ -580,7 +640,7 @@ test "the step budget stops an infinite loop" {
         \\        spinning = spinning + 1
         \\    output.value = spinning
         \\
-    , .{ .outputs = &.{.{ .name = "value", .declared = .int }} });
+    , .{ .outputs = &.{.{ .name = "value", .declared = .int }} }, .{});
     defer bench.deinit();
     try expectTrap(&bench, &.{}, .step_budget_exhausted);
 }
@@ -593,7 +653,7 @@ test "unbounded recursion hits the call depth limit" {
         \\fn evaluate():
         \\    output.value = dive(0)
         \\
-    , .{ .outputs = &.{.{ .name = "value", .declared = .int }} });
+    , .{ .outputs = &.{.{ .name = "value", .declared = .int }} }, .{});
     defer bench.deinit();
     try expectTrap(&bench, &.{}, .call_depth_exceeded);
 }
@@ -612,11 +672,74 @@ test "unwritten outputs stay unwritten; conditional writes land" {
             .{ .name = "first", .declared = .int },
             .{ .name = "second", .declared = .int },
         },
-    });
+    }, .{});
     defer bench.deinit();
 
     const result = try bench.evaluate(&.{.{ .value = .{ .boolean = true } }});
-    try testing.expectEqual(Result.success, result);
+    try testing.expect(result == .success);
     try testing.expectEqual(@as(i64, 1), bench.outputs[0].?.int);
     try testing.expectEqual(@as(?RuntimeValue, null), bench.outputs[1]);
+}
+
+test "fabric builtins record complete texel intents" {
+    var bench = try Bench.setup(
+        \\fn evaluate():
+        \\    let adder = create_texel(input.name)
+        \\    texel_input(adder, "left", "int")
+        \\    texel_input(adder, "right", "int")
+        \\    texel_output(adder, "value", "int")
+        \\    texel_evaluator(adder, "luce")
+        \\    texel_content(adder, "fn evaluate():\n    output.value = input.left + input.right\n")
+        \\    let label = create_texel("banner")
+        \\    texel_output(label, "text", "text")
+        \\    texel_set(label, "text", "hello")
+        \\    output.made = 2
+        \\
+    , .{
+        .inputs = &.{.{ .name = "name", .declared = .string }},
+        .outputs = &.{.{ .name = "made", .declared = .int }},
+    }, .{ .allow_fabric = true });
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{.{ .value = .{ .string = "adder" } }});
+    try testing.expect(result == .success);
+    const intents = result.success;
+    try testing.expectEqual(@as(usize, 2), intents.len);
+
+    try testing.expectEqualStrings("adder", intents[0].name);
+    try testing.expectEqual(@as(usize, 2), intents[0].inputs.items.len);
+    try testing.expectEqualStrings("left", intents[0].inputs.items[0].name);
+    try testing.expectEqual(@as(usize, 1), intents[0].outputs.items.len);
+    try testing.expectEqualStrings("luce", intents[0].evaluator.?);
+    try testing.expect(std.mem.indexOf(u8, intents[0].content.?, "input.left + input.right") != null);
+
+    try testing.expectEqualStrings("banner", intents[1].name);
+    try testing.expectEqualStrings("hello", intents[1].sets.items[0].value.text);
+}
+
+test "fabric builtins trap on bad handles and types, and need the gate" {
+    var bench = try Bench.setup(
+        \\fn evaluate():
+        \\    if input.mode == 1:
+        \\        texel_output(7, "value", "int")
+        \\    else:
+        \\        let t = create_texel("x")
+        \\        texel_output(t, "value", "matrix")
+        \\
+    , .{
+        .inputs = &.{.{ .name = "mode", .declared = .int }},
+    }, .{ .allow_fabric = true });
+    defer bench.deinit();
+    try expectTrap(&bench, &.{.{ .value = .{ .int = 1 } }}, .invalid_handle);
+    try expectTrap(&bench, &.{.{ .value = .{ .int = 2 } }}, .invalid_port_type);
+
+    // Without the gate, the builtins do not exist.
+    var gated = try compile_mod.compile(testing.allocator,
+        \\fn evaluate():
+        \\    let t = create_texel("x")
+        \\
+    , .{}, .{});
+    defer gated.deinit();
+    try testing.expect(gated == .failure);
+    try testing.expectEqualStrings("luce.sema.fabric", gated.failure.at(0).?.code);
 }

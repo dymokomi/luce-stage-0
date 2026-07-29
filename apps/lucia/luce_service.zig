@@ -40,9 +40,57 @@ const budget: luce.backend.Budget = .{ .steps = 5_000_000, .call_depth = 128 };
 // LuceService
 // ---------------------------------------------------------------------------
 
+/// Fabric builtins are enabled here: the terminal is the trusted
+/// boundary that applies computed intents as ordinary transactions.
+const compile_options: luce.types.CompileOptions = .{ .allow_fabric = true };
+
+// ---------------------------------------------------------------------------
+// Pending intents
+// ---------------------------------------------------------------------------
+//
+// Texel-creation intents computed by evaluations, copied out of the
+// evaluation arena and owned by the service until the terminal applies
+// them after the dispatch that produced them.
+//
+pub const PendingPort = struct {
+    name: []u8,
+    declared: ValueType,
+};
+
+pub const PendingSet = struct {
+    output: []u8,
+    value: Value,
+};
+
+pub const PendingTexel = struct {
+    name: []u8,
+    inputs: []PendingPort,
+    outputs: []PendingPort,
+    content: ?[]u8,
+    evaluator: ?[]u8,
+    sets: []PendingSet,
+
+    pub fn deinit(self: *PendingTexel, allocator: Allocator) void {
+        allocator.free(self.name);
+        for (self.inputs) |port| allocator.free(port.name);
+        allocator.free(self.inputs);
+        for (self.outputs) |port| allocator.free(port.name);
+        allocator.free(self.outputs);
+        if (self.content) |content| allocator.free(content);
+        if (self.evaluator) |evaluator| allocator.free(evaluator);
+        for (self.sets) |*set| {
+            allocator.free(set.output);
+            set.value.deinit(allocator);
+        }
+        allocator.free(self.sets);
+        self.* = undefined;
+    }
+};
+
 pub const LuceService = struct {
     allocator: Allocator,
     cache: std.AutoHashMapUnmanaged(IdBytes, Cached) = .empty,
+    pending: std.ArrayList(PendingTexel) = .empty,
 
     const Cached = struct {
         revision: u64,
@@ -57,7 +105,18 @@ pub const LuceService = struct {
         var cached = self.cache.valueIterator();
         while (cached.next()) |entry| entry.program.deinit();
         self.cache.deinit(self.allocator);
+        for (self.pending.items) |*intent| intent.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    /// Hand the accumulated intents to the caller, which owns them.
+    pub fn takePending(self: *LuceService) []PendingTexel {
+        const taken = self.pending.toOwnedSlice(self.allocator) catch blk: {
+            break :blk self.pending.items[0..0];
+        };
+        self.pending = .empty;
+        return taken;
     }
 
     pub fn evaluator(self: *LuceService) Evaluator {
@@ -73,7 +132,7 @@ pub const LuceService = struct {
         var schema = try self.buildSchema(texel);
         defer schema.deinit(self.allocator);
 
-        var compiled = try luce.compile.compile(self.allocator, source, schema.schema);
+        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, compile_options);
         switch (compiled) {
             .success => |program| {
                 try self.replaceCached(texel, program);
@@ -123,12 +182,17 @@ pub const LuceService = struct {
 
         const result = try luce.backend.evaluate(scratch, program, input_frame, output_frame, budget);
         switch (result) {
-            .success => {
+            .success => |intents| {
                 for (program.outputs, output_frame) |port, written| {
                     const value = written orelse continue;
                     try outputs.put(allocator, port.name, .{
                         .available = try toValue(allocator, value),
                     });
+                }
+                // Intents outlive the evaluation arena only as copies
+                // the service owns until the terminal applies them.
+                for (intents) |intent| {
+                    try self.pending.append(self.allocator, try self.copyIntent(intent));
                 }
             },
             .unavailable => {
@@ -160,7 +224,7 @@ pub const LuceService = struct {
 
         var schema = try self.buildSchema(texel);
         defer schema.deinit(self.allocator);
-        var compiled = try luce.compile.compile(self.allocator, source, schema.schema);
+        var compiled = try luce.compile.compile(self.allocator, source, schema.schema, compile_options);
         switch (compiled) {
             .success => |program| {
                 try self.replaceCached(texel, program);
@@ -189,6 +253,83 @@ pub const LuceService = struct {
             .revision = texel.revision,
             .program = program,
         });
+    }
+
+    fn copyIntent(self: *LuceService, intent: luce.fabric.NewTexel) error{OutOfMemory}!PendingTexel {
+        const gpa = self.allocator;
+        const name = try gpa.dupe(u8, intent.name);
+        errdefer gpa.free(name);
+
+        const inputs = try copyPorts(gpa, intent.inputs.items);
+        errdefer freePorts(gpa, inputs);
+        const outputs = try copyPorts(gpa, intent.outputs.items);
+        errdefer freePorts(gpa, outputs);
+
+        const content = if (intent.content) |text| try gpa.dupe(u8, text) else null;
+        errdefer if (content) |text| gpa.free(text);
+        const assigned = if (intent.evaluator) |text| try gpa.dupe(u8, text) else null;
+        errdefer if (assigned) |text| gpa.free(text);
+
+        var sets: std.ArrayList(PendingSet) = .empty;
+        errdefer {
+            for (sets.items) |*set| {
+                gpa.free(set.output);
+                set.value.deinit(gpa);
+            }
+            sets.deinit(gpa);
+        }
+        for (intent.sets.items) |set| {
+            const output = try gpa.dupe(u8, set.output);
+            errdefer gpa.free(output);
+            var value: Value = switch (set.value) {
+                .boolean => |flag| .{ .boolean = flag },
+                .int => |number| .{ .int = number },
+                .float => |number| .{ .real = number },
+                .text => |text| try Value.initText(gpa, text),
+            };
+            errdefer value.deinit(gpa);
+            try sets.append(gpa, .{ .output = output, .value = value });
+        }
+
+        return .{
+            .name = name,
+            .inputs = inputs,
+            .outputs = outputs,
+            .content = content,
+            .evaluator = assigned,
+            .sets = try sets.toOwnedSlice(gpa),
+        };
+    }
+
+    fn copyPorts(gpa: Allocator, ports: []const luce.fabric.PortSpec) error{OutOfMemory}![]PendingPort {
+        var copied: std.ArrayList(PendingPort) = .empty;
+        errdefer freePortList(gpa, &copied);
+        for (ports) |port| {
+            const name = try gpa.dupe(u8, port.name);
+            errdefer gpa.free(name);
+            try copied.append(gpa, .{ .name = name, .declared = valueType(port.declared) });
+        }
+        return copied.toOwnedSlice(gpa);
+    }
+
+    fn freePorts(gpa: Allocator, ports: []PendingPort) void {
+        for (ports) |port| gpa.free(port.name);
+        gpa.free(ports);
+    }
+
+    fn freePortList(gpa: Allocator, ports: *std.ArrayList(PendingPort)) void {
+        for (ports.items) |port| gpa.free(port.name);
+        ports.deinit(gpa);
+    }
+
+    fn valueType(declared: luce.types.PortType) ValueType {
+        return switch (declared) {
+            .boolean => .boolean,
+            .int => .int,
+            .float => .real,
+            .string => .text,
+            .bytes => .bytes,
+        };
     }
 
     // Schema and value mapping ----------------------------------------------

@@ -52,6 +52,13 @@ pub const PortSchema = struct {
     }
 };
 
+/// Host-controlled compile options.  Fabric builtins let a program
+/// compute texel-creation intents; only a trusted host (the lucia
+/// terminal) enables them.
+pub const CompileOptions = struct {
+    allow_fabric: bool = false,
+};
+
 // ---------------------------------------------------------------------------
 // Type
 // ---------------------------------------------------------------------------

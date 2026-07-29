@@ -34,7 +34,12 @@ pub const CompileResult = union(enum) {
     }
 };
 
-pub fn compile(gpa: Allocator, source: []const u8, schema: PortSchema) Error!CompileResult {
+pub fn compile(
+    gpa: Allocator,
+    source: []const u8,
+    schema: PortSchema,
+    options: types.CompileOptions,
+) Error!CompileResult {
     var diagnostics = Diagnostics.init(gpa);
     errdefer diagnostics.deinit();
 
@@ -53,7 +58,7 @@ pub fn compile(gpa: Allocator, source: []const u8, schema: PortSchema) Error!Com
         return .{ .failure = diagnostics };
     }
 
-    const analyzed = (try analyzer_mod.analyze(arena, gpa, &tree, schema, &diagnostics)) orelse {
+    const analyzed = (try analyzer_mod.analyze(arena, gpa, &tree, schema, options, &diagnostics)) orelse {
         program.deinit();
         return .{ .failure = diagnostics };
     };
@@ -113,7 +118,7 @@ const point_schema: PortSchema = .{
 };
 
 fn expectCompiles(source: []const u8, schema: PortSchema) !ir.Program {
-    var result = try compile(testing.allocator, source, schema);
+    var result = try compile(testing.allocator, source, schema, .{});
     switch (result) {
         .success => |program| return program,
         .failure => |*diagnostics| {
@@ -127,7 +132,7 @@ fn expectCompiles(source: []const u8, schema: PortSchema) !ir.Program {
 }
 
 fn expectFails(source: []const u8, schema: PortSchema, expected_code: []const u8) !void {
-    var result = try compile(testing.allocator, source, schema);
+    var result = try compile(testing.allocator, source, schema, .{});
     defer result.deinit();
     switch (result) {
         .success => return error.TestUnexpectedResult,

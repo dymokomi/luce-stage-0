@@ -33,9 +33,11 @@ pub const Error = error{OutOfMemory};
 
 /// Names the language reserves; nothing user-declared may take them.
 const reserved_names = [_][]const u8{
-    "input",  "output", "range",    "Int",   "Float", "Bool",  "String", "Bytes",
-    "abs",    "min",    "max",      "clamp", "sqrt",  "floor", "ceil",   "len",
-    "assert", "trap",   "evaluate",
+    "input",       "output",       "range",         "Int",             "Float",
+    "Bool",        "String",       "Bytes",         "abs",             "min",
+    "max",         "clamp",        "sqrt",          "floor",           "ceil",
+    "len",         "assert",       "trap",          "evaluate",        "create_texel",
+    "texel_input", "texel_output", "texel_content", "texel_evaluator", "texel_set",
 };
 
 fn isReserved(name: []const u8) bool {
@@ -63,6 +65,7 @@ pub fn analyze(
     temporary: Allocator,
     tree: *const ast.Program,
     schema: PortSchema,
+    options: types.CompileOptions,
     diagnostics: *Diagnostics,
 ) Error!?Analyzed {
     var analyzer: Analyzer = .{
@@ -70,6 +73,7 @@ pub fn analyze(
         .temporary = temporary,
         .tree = tree,
         .schema = schema,
+        .options = options,
         .diagnostics = diagnostics,
     };
     defer analyzer.deinitScratch();
@@ -99,6 +103,7 @@ const Analyzer = struct {
     temporary: Allocator,
     tree: *const ast.Program,
     schema: PortSchema,
+    options: types.CompileOptions,
     diagnostics: *Diagnostics,
 
     structs: std.ArrayList(StructLayout) = .empty,
@@ -1209,6 +1214,7 @@ const FunctionBuilder = struct {
             name: []const u8,
             kind: ir.Intrinsic,
             arity: usize,
+            fabric: bool = false,
         };
         const builtins = [_]Builtin{
             .{ .name = "abs", .kind = .abs, .arity = 1 },
@@ -1221,11 +1227,26 @@ const FunctionBuilder = struct {
             .{ .name = "len", .kind = .len, .arity = 1 },
             .{ .name = "assert", .kind = .assert_true, .arity = 1 },
             .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+            .{ .name = "create_texel", .kind = .fabric_create, .arity = 1, .fabric = true },
+            .{ .name = "texel_input", .kind = .fabric_input, .arity = 3, .fabric = true },
+            .{ .name = "texel_output", .kind = .fabric_output, .arity = 3, .fabric = true },
+            .{ .name = "texel_content", .kind = .fabric_content, .arity = 2, .fabric = true },
+            .{ .name = "texel_evaluator", .kind = .fabric_evaluator, .arity = 2, .fabric = true },
+            .{ .name = "texel_set", .kind = .fabric_set, .arity = 3, .fabric = true },
         };
         const matched = for (builtins) |builtin| {
             if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
         } else return .not_builtin;
 
+        if (matched.fabric and !self.analyzer.options.allow_fabric) {
+            try self.fail(
+                "luce.sema.fabric",
+                call.span,
+                "{s} is a fabric builtin; this host does not allow fabric intents here",
+                .{matched.name},
+            );
+            return .failed;
+        }
         if (call.arguments.len != matched.arity) {
             try self.fail("luce.sema.call", call.span, "{s} takes {d} arguments", .{ matched.name, matched.arity });
             return .failed;
@@ -1279,6 +1300,33 @@ const FunctionBuilder = struct {
             .trap_message => {
                 if (arguments[0].value_type != .string)
                     return self.intrinsicType(call, "trap takes a String message");
+                result = .none;
+            },
+            .fabric_create => {
+                if (arguments[0].value_type != .string)
+                    return self.intrinsicType(call, "create_texel takes a String name");
+                result = .int;
+            },
+            .fabric_input, .fabric_output => {
+                if (arguments[0].value_type != .int or
+                    arguments[1].value_type != .string or
+                    arguments[2].value_type != .string)
+                    return self.intrinsicType(call, "takes (handle Int, name String, type String)");
+                result = .none;
+            },
+            .fabric_content, .fabric_evaluator => {
+                if (arguments[0].value_type != .int or arguments[1].value_type != .string)
+                    return self.intrinsicType(call, "takes (handle Int, text String)");
+                result = .none;
+            },
+            .fabric_set => {
+                const settable = switch (arguments[2].value_type) {
+                    .boolean, .int, .float, .string => true,
+                    else => false,
+                };
+                if (arguments[0].value_type != .int or
+                    arguments[1].value_type != .string or !settable)
+                    return self.intrinsicType(call, "takes (handle Int, output String, value Bool/Int/Float/String)");
                 result = .none;
             },
         }
