@@ -20,6 +20,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the Loom engine tests");
     test_step.dependOn(&run_tests.step);
 
+    // Luce: the small native language for Texel evaluators.
+    const luce = b.addModule("luce", .{
+        .root_source_file = b.path("luce/luce.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const luce_tests = b.addTest(.{ .root_module = luce });
+    const run_luce_tests = b.addRunArtifact(luce_tests);
+    test_step.dependOn(&run_luce_tests.step);
+
     // The lucia terminal: a Zig executable speaking the engine module
     // directly.  Loom is the engine; lucia is the executable.
     const app = b.createModule(.{
