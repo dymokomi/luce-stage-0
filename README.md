@@ -18,8 +18,8 @@ The first Lucia scope provides:
 - durable arrangements;
 - manifest-driven file projection; and
 - Luce, the small native language that makes Texels compute
-  ([docs/LUCE.md](docs/LUCE.md)) — including fabric builtins, so
-  template texels can weave new texels; and
+  ([docs/LUCE.md](docs/LUCE.md)), with fabric builtins so template
+  texels can weave new texels; and
 - a full-screen texel editor (`edit`): ports on one pane, syntax-lit
   Luce on the other.
 
