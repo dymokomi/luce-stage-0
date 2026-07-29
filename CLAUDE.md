@@ -24,7 +24,9 @@ cmake --build build/sanitize
 ctest --test-dir build/sanitize --output-on-failure
 ```
 
-Run a single test with `ctest --test-dir build/debug -R spool_test`, or execute the test binary directly (e.g. `./build/debug/spool_test`). Each test is a standalone executable registered via the `lucia_test()` function in `CMakeLists.txt` — a new test file must be added there. `first_lucia_test` is the acceptance test proving the full flow from `docs/LOOM.md`. `loom_demo` runs the CLI (`loom demo`) as a test.
+**The Zig port**: the Loom engine is being rewritten in Zig 0.16 under `zig/` (see `docs/ZIG.md` — the on-disk image format is the frozen contract between the two trees; the C++ tree stays authoritative until the port completes). `cd zig && zig build test` runs the engine suite on any host OS; `zig fmt src/ build.zig` formats. The golden fixture `zig/testdata/golden_store.bin` must always open in both implementations.
+
+Run a single C++ test with `ctest --test-dir build/debug -R spool_test`, or execute the test binary directly (e.g. `./build/debug/spool_test`). Each test is a standalone executable registered via the `lucia_test()` function in `CMakeLists.txt` — a new test file must be added there. `first_lucia_test` is the acceptance test proving the full flow from `docs/LOOM.md`. `loom_demo` runs the CLI (`loom demo`) as a test.
 
 Formatting is enforced by the root `.clang-format` (LLVM base, 4-space indent, attached braces, 92-column limit, aligned consecutive assignments/declarations).
 

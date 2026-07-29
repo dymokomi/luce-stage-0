@@ -12,6 +12,8 @@ pub const value = @import("fabric/value.zig");
 pub const texel = @import("fabric/texel.zig");
 pub const encode = @import("fabric/encode.zig");
 pub const store = @import("fabric/store.zig");
+pub const fiber_index = @import("loom/fiber_index.zig");
+pub const spool = @import("loom/spool.zig");
 
 test {
     _ = volume;
@@ -20,4 +22,6 @@ test {
     _ = texel;
     _ = encode;
     _ = store;
+    _ = fiber_index;
+    _ = spool;
 }

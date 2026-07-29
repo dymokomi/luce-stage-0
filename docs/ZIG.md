@@ -39,6 +39,29 @@ implementations, proven by a golden fixture in `zig/testdata/` that the
 C++ binary wrote and the Zig store must open.  Neither implementation
 ever persists raw struct layouts.
 
+## Status
+
+Ported, tested, and format-compatible (29 leak-checked tests,
+`zig build test`):
+
+- `storage/volume.zig` — MemoryVolume, FileVolume, the Volume union.
+- `fabric/texel_id.zig`, `value.zig`, `texel.zig` — the model; Value is
+  a tagged union; ports live in name-sorted tables.
+- `fabric/encode.zig` — LUTEXEL snapshot encoding, byte-identical.
+- `fabric/store.zig` — Store, Transaction, ChangeSet ring, volatile
+  observe, blobs, LUSTORE descriptor pages.  The golden fixture
+  (`testdata/golden_store.bin`, written by the C++ binary) opens in the
+  Zig store; a Zig-written image was verified to open in the C++
+  terminal.
+- `loom/fiber_index.zig`, `loom/spool.zig` — the push/pull hybrid
+  engine: reverse index, demand with early cutoff, advance, cached
+  error outcomes, cycle detection.
+
+Not yet ported (C++ remains authoritative): State/Delay and
+TemporalRuntime, effects, capabilities, arrangements, the view runtime,
+file projection, and the terminal app.  Next steps: state.zig, then
+`abi/loom.h` so the existing C++ terminal can run on the Zig engine.
+
 ## Porting rules
 
 - Port bottom-up along the dependency chain, tests first, one package a
