@@ -45,7 +45,8 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         var environ_map = try init.environ.createMap(gpa);
         defer environ_map.deinit();
         const no_color = environ_map.get("NO_COLOR") != null;
-        return runOpen(gpa, io, err, path, no_color);
+        const script_path = line.option("--luce", "");
+        return runOpen(gpa, io, err, path, no_color, script_path);
     }
     return usage(err);
 }
@@ -54,7 +55,7 @@ fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
             "  lucia create IMAGE [--pages N]\n" ++
-            "  lucia open IMAGE\n",
+            "  lucia open IMAGE [--luce FILE]\n",
         .{},
     );
     return 1;
@@ -85,6 +86,7 @@ fn runOpen(
     err: *std.Io.Writer,
     path: []const u8,
     no_color: bool,
+    script_path: []const u8,
 ) !u8 {
     var file = FileVolume.open(io, .cwd(), path) catch
         return cannot(err, "open", path);
@@ -105,11 +107,38 @@ fn runOpen(
     const interactive = stdin.isTty(io) catch false;
     const colored = !no_color and (std.Io.File.stdout().isTty(io) catch false);
     terminal.session.palette = .{ .enabled = colored };
+
+    // --luce FILE: run bootstrap source against the opened Fabric,
+    // then drop into the terminal only when a person is attached.
+    if (script_path.len != 0) {
+        const source = readScript(gpa, io, script_path) catch {
+            try err.print("lucia: cannot read {s}\n", .{script_path});
+            return 1;
+        };
+        defer gpa.free(source);
+        try terminal.script(source);
+        if (!interactive) {
+            try out.flush();
+            return 0;
+        }
+    }
+
     var in_buffer: [4096]u8 = undefined;
     var reader = stdin.reader(io, &in_buffer);
     try terminal.run(&reader.interface, interactive);
     try out.flush();
     return 0;
+}
+
+fn readScript(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const size: usize = @intCast(try file.length(io));
+    const source = try gpa.alloc(u8, size);
+    errdefer gpa.free(source);
+    const loaded = try file.readPositionalAll(io, source, 0);
+    if (loaded != source.len) return error.ReadFailed;
+    return source;
 }
 
 fn cannot(err: *std.Io.Writer, what: []const u8, path: []const u8) !u8 {

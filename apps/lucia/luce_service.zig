@@ -34,7 +34,7 @@ pub const evaluator_name = "luce";
 /// Evaluation budget for one demanded texel; generous for interactive
 /// work, bounded so a runaway loop traps instead of hanging the
 /// terminal.
-const budget: luce.backend.Budget = .{ .steps = 5_000_000, .call_depth = 128 };
+pub const budget: luce.backend.Budget = .{ .steps = 5_000_000, .call_depth = 128 };
 
 // ---------------------------------------------------------------------------
 // LuceService
@@ -121,6 +121,59 @@ pub const LuceService = struct {
 
     pub fn evaluator(self: *LuceService) Evaluator {
         return .{ .context = self, .evaluateFn = run };
+    }
+
+    /// The verified program cached for a texel, when its revision is
+    /// current — check() warms this.
+    pub fn cachedFor(self: *LuceService, texel: *const Texel) ?*const luce.ir.Program {
+        const cached = self.cache.getPtr(texel.id.bytes) orelse return null;
+        if (cached.revision != texel.revision) return null;
+        return &cached.program;
+    }
+
+    pub const ScriptOutcome = union(enum) {
+        ok,
+        diagnostics: []u8,
+        trap: []u8,
+    };
+
+    /// Compile and run standalone Luce source with no ports and fabric
+    /// enabled — the headless bootstrap path (lucia open IMAGE --luce
+    /// FILE).  Intents land in pending for the host to apply; the
+    /// caller owns any returned text.
+    pub fn runScript(self: *LuceService, source: []const u8) error{OutOfMemory}!ScriptOutcome {
+        var compiled = try luce.compile.compile(self.allocator, source, .{}, compile_options);
+        switch (compiled) {
+            .failure => |*diagnostics| {
+                defer diagnostics.deinit();
+                return .{ .diagnostics = try diagnostics.render(self.allocator, source) };
+            },
+            .success => |program| {
+                var owned = program;
+                defer owned.deinit();
+                var arena = std.heap.ArenaAllocator.init(self.allocator);
+                defer arena.deinit();
+                const result = try luce.backend.evaluate(
+                    arena.allocator(),
+                    &owned,
+                    &.{},
+                    &.{},
+                    budget,
+                );
+                switch (result) {
+                    .success => |intents| {
+                        for (intents) |intent| {
+                            try self.pending.append(self.allocator, try self.copyIntent(intent));
+                        }
+                        return .ok;
+                    },
+                    .trap => |trapped| return .{
+                        .trap = try self.allocator.dupe(u8, trapped.message),
+                    },
+                    .unavailable => return .ok,
+                }
+            },
+        }
     }
 
     /// Compile a texel's content against its ports and render any
@@ -255,7 +308,7 @@ pub const LuceService = struct {
         });
     }
 
-    fn copyIntent(self: *LuceService, intent: luce.fabric.NewTexel) error{OutOfMemory}!PendingTexel {
+    pub fn copyIntent(self: *LuceService, intent: luce.fabric.NewTexel) error{OutOfMemory}!PendingTexel {
         const gpa = self.allocator;
         const name = try gpa.dupe(u8, intent.name);
         errdefer gpa.free(name);
@@ -383,7 +436,7 @@ pub const LuceService = struct {
         };
     }
 
-    fn fromOutcome(outcome: ?Outcome, declared: luce.types.PortType) luce.backend.InputValue {
+    pub fn fromOutcome(outcome: ?Outcome, declared: luce.types.PortType) luce.backend.InputValue {
         const present = outcome orelse return .unavailable;
         if (present != .available) return .unavailable;
         const value = present.available;
@@ -396,7 +449,7 @@ pub const LuceService = struct {
         };
     }
 
-    fn toValue(allocator: Allocator, value: luce.backend.RuntimeValue) error{OutOfMemory}!Value {
+    pub fn toValue(allocator: Allocator, value: luce.backend.RuntimeValue) error{OutOfMemory}!Value {
         return switch (value) {
             .boolean => |flag| .{ .boolean = flag },
             .int => |number| .{ .int = number },

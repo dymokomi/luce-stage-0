@@ -74,6 +74,7 @@ pub const Terminal = struct {
             .spool = &self.spool,
             .out = out,
             .err = err,
+            .luce = &self.luce,
         };
         boundary.ensureBoundary(allocator, io, store) catch {
             try err.print("lucia: cannot create boundary texels\n", .{});
@@ -125,6 +126,33 @@ pub const Terminal = struct {
         }
         try self.settle();
         return true;
+    }
+
+    /// Run standalone Luce source (the --luce bootstrap path): compile
+    /// with fabric enabled, execute, report, and settle the intents.
+    pub fn script(self: *Terminal, source: []const u8) !void {
+        const palette = self.session.palette;
+        switch (try self.luce.runScript(source)) {
+            .ok => {},
+            .diagnostics => |rendered| {
+                defer self.allocator.free(rendered);
+                try self.session.err.print("lucia: {s}luce compile failed\n{s}{s}", .{
+                    palette.sgr(.err),
+                    rendered,
+                    palette.sgr(.reset),
+                });
+            },
+            .trap => |message| {
+                defer self.allocator.free(message);
+                try self.session.err.print("lucia: {s}luce trap: {s}{s}\n", .{
+                    palette.sgr(.err),
+                    message,
+                    palette.sgr(.reset),
+                });
+            },
+        }
+        try self.settle();
+        try self.session.out.flush();
     }
 
     /// Apply computed fabric intents and reconcile until quiet.  A
@@ -644,6 +672,57 @@ test "bootstrap: a luce template texel creates a texel that computes" {
     const listing = bench.out.written();
     const first = std.mem.indexOf(u8, listing, "created adder").?;
     try testing.expect(std.mem.indexOfPos(u8, listing, first + 1, "created adder") == null);
+}
+
+test "the luce command fires a template by hand, repeatedly" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.script(&.{
+        "new stamp",
+        "eval luce",
+        "output note text",
+        "code",
+        "fn evaluate():",
+        "    let t = create_texel(\"stamped\")",
+        "    texel_output(t, \"value\", \"int\")",
+        "    texel_set(t, \"value\", 9)",
+        "    output.note = \"stamped one\"",
+        ".",
+        // Fire the template twice by hand; each run creates a texel.
+        "luce stamp",
+        "luce stamp",
+    });
+    const printed = bench.out.written();
+    try testing.expect(std.mem.indexOf(u8, printed, "note = stamped one") != null);
+    const first = std.mem.indexOf(u8, printed, "created stamped").?;
+    try testing.expect(std.mem.indexOfPos(u8, printed, first + 1, "created stamped") != null);
+    try testing.expectEqualStrings("", bench.err.written());
+}
+
+test "script runs standalone bootstrap source against the fabric" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.terminal.script(
+        \\fn evaluate():
+        \\    let greeter = create_texel("greeter")
+        \\    texel_output(greeter, "text", "text")
+        \\    texel_set(greeter, "text", "woven from a script")
+        \\
+    );
+    try testing.expect(std.mem.indexOf(u8, bench.out.written(), "created greeter") != null);
+    try bench.script(&.{ "select greeter", "pull text" });
+    try testing.expect(std.mem.indexOf(u8, bench.out.written(), "woven from a script") != null);
+    try testing.expectEqualStrings("", bench.err.written());
+
+    // Broken bootstrap source reports diagnostics, changes nothing.
+    try bench.terminal.script("fn evaluate(:\n");
+    try testing.expect(std.mem.indexOf(u8, bench.err.written(), "luce compile failed") != null);
 }
 
 test "ports move and drop with fibers preserved and guarded" {

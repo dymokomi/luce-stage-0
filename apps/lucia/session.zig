@@ -3,6 +3,7 @@
 const std = @import("std");
 const loom = @import("loom");
 const color = @import("color.zig");
+const luce_service = @import("luce_service.zig");
 
 const Allocator = std.mem.Allocator;
 const Store = loom.store.Store;
@@ -63,6 +64,7 @@ pub const Session = struct {
     spool: *Spool,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
+    luce: *luce_service.LuceService,
     selected: TexelId = .unset,
     watches: std.ArrayList(Watch) = .empty,
     collecting: ?Collect = null,
