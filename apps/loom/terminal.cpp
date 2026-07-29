@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include "boundary.h"
 #include "command_line.h"
 #include "commands/common.h"
 
@@ -11,7 +12,8 @@ namespace lucia {
 enum { LINE_SIZE = 1024 };
 
 Terminal::Terminal(Store *store) {
-    session.store = store;
+    session.store      = store;
+    session.evaluators = evaluators.registry();
 }
 
 // The prompt names the selection: "loom>", or "loom alpha>" while the texel
@@ -31,6 +33,10 @@ int Terminal::run() {
     const bool interactive = isatty(0) != 0;
     char       line[LINE_SIZE];
 
+    if (!ensure_boundary(session.store)) {
+        fprintf(stderr, "loom: cannot create boundary texels\n");
+    }
+
     for (;;) {
         if (interactive) {
             printf("%s", prompt_text(session).c_str());
@@ -42,6 +48,15 @@ int Terminal::run() {
             }
             return 0;
         }
+
+        // The keyboard boundary observes every interaction before the
+        // command runs, so keyboard.line always holds the newest line.
+        String typed(line);
+        while (!typed.empty() &&
+               (typed[typed.size() - 1] == '\n' || typed[typed.size() - 1] == '\r')) {
+            typed.erase(typed.size() - 1);
+        }
+        observe_keyboard(session.store, typed);
 
         Strings words;
         if (!split_words(line, &words)) {

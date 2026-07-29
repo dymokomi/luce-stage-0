@@ -12,13 +12,12 @@ thread pool.
 The terminal can build and wire texels but cannot yet make them compute.
 These commands close that gap and are prerequisites for everything below.
 
-- `set NAME VALUE` — set a typed source value on a selected output
-  (parse VALUE per the port's declared type).
-- `eval NAME` — assign a persisted evaluator name to the selected texel;
-  reintroduce an app evaluator set (concat, sum, upper, ...) registered on
-  one registry, the way `view/runtime/shell.h` owns its view evaluators.
-- `pull OUTPUT` — demand the selected texel's output through a Spool and
-  print the outcome (value, unavailable, or error).
+- Done: `set NAME VALUE`, `eval NAME` (registry: concat, sum, upper),
+  `pull OUTPUT`, and boundary texels — `keyboard` (line, count) and
+  `mouse` (x, y, button) are ensured on open, and every line read commits
+  a keyboard observation before dispatch.  Push refreshes boundary
+  observations; demand pulls them — that is the whole reconciliation.
+  The mouse cannot fire until raw-mode input arrives (Phase 2).
 - `state NAME TYPE VALUE` / `tick` — create State/Delay texels via
   `loom/evaluation/state.h` and advance them with `TemporalRuntime`,
   so recurrence is visible in the terminal.

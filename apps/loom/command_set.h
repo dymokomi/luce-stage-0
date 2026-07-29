@@ -5,6 +5,7 @@
 #include "commands/delete.h"
 #include "commands/disconnect.h"
 #include "commands/drop.h"
+#include "commands/eval.h"
 #include "commands/exit.h"
 #include "commands/find.h"
 #include "commands/help.h"
@@ -13,8 +14,10 @@
 #include "commands/move.h"
 #include "commands/new.h"
 #include "commands/output.h"
+#include "commands/pull.h"
 #include "commands/rename.h"
 #include "commands/select.h"
+#include "commands/set.h"
 #include "commands/show.h"
 
 namespace lucia {
@@ -30,7 +33,7 @@ namespace lucia {
 //
 class CommandSet {
 public:
-    enum { COMMAND_COUNT = 15 };
+    enum { COMMAND_COUNT = 18 };
 
     CommandSet();
 
@@ -55,6 +58,9 @@ private:
     DropCommand       drop_command;
     ConnectCommand    connect_command;
     DisconnectCommand disconnect_command;
+    SetCommand        set_command;
+    EvalCommand       eval_command;
+    PullCommand       pull_command;
     ListCommand       list_command;
     HelpCommand       help_command;
     ExitCommand       exit_command;

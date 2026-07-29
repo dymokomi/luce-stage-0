@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "base/types.h"
 #include "session.h"
@@ -79,6 +80,86 @@ inline bool parse_direction(const String &text, bool *is_input) {
     return false;
 }
 
+// Parse literal value text against a port's declared type; reports the
+// failure on stderr.  Blobs cannot be written from the terminal.
+inline bool parse_value(const String &text, ValueType type, Value *value) {
+    char *end = 0;
+    switch (type) {
+    case VALUE_BOOL:
+        if (text == "true" || text == "false") {
+            *value = Value(text == "true");
+            return true;
+        }
+        fprintf(stderr, "loom: bool value must be true or false\n");
+        return false;
+    case VALUE_INT: {
+        const S64 number = strtoll(text.c_str(), &end, 10);
+        if (end == text.c_str() || *end != 0) {
+            fprintf(stderr, "loom: %s is not an int\n", text.c_str());
+            return false;
+        }
+        *value = Value(number);
+        return true;
+    }
+    case VALUE_REAL: {
+        const double number = strtod(text.c_str(), &end);
+        if (end == text.c_str() || *end != 0) {
+            fprintf(stderr, "loom: %s is not a real\n", text.c_str());
+            return false;
+        }
+        *value = Value(number);
+        return true;
+    }
+    case VALUE_TEXT:
+        *value = Value(text);
+        return true;
+    case VALUE_BYTES: {
+        const Bytes bytes(text.begin(), text.end());
+        *value = Value(bytes);
+        return true;
+    }
+    case VALUE_TEXEL: {
+        TexelId id;
+        if (!id.parse(text.c_str()) || id.is_unset()) {
+            fprintf(stderr, "loom: %s is not a texel id\n", text.c_str());
+            return false;
+        }
+        *value = Value(id);
+        return true;
+    }
+    default:
+        fprintf(stderr, "loom: cannot set a %s value from the terminal\n",
+                type == VALUE_BLOB ? "blob" : "none");
+        return false;
+    }
+}
+
+// Render a value for terminal display.
+inline String value_text(const Value &value) {
+    char buffer[64];
+    switch (value.type()) {
+    case VALUE_BOOL:
+        return value.boolean() ? "true" : "false";
+    case VALUE_INT:
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)value.integer());
+        return buffer;
+    case VALUE_REAL:
+        snprintf(buffer, sizeof(buffer), "%g", value.real());
+        return buffer;
+    case VALUE_TEXT:
+        return value.text();
+    case VALUE_BYTES:
+        snprintf(buffer, sizeof(buffer), "%zu bytes", value.bytes().size());
+        return buffer;
+    case VALUE_TEXEL:
+        return value.texel().format();
+    case VALUE_BLOB:
+        return "blob";
+    default:
+        return "none";
+    }
+}
+
 // Fetch the selected texel; reports a missing selection on stderr.
 inline bool selected_texel(const Session &session, Texel *texel) {
     if (!session.has_selection()) {
@@ -101,6 +182,37 @@ inline bool texel_name(const Texel &texel, String *name) {
     }
     *name = port.source().text();
     return true;
+}
+
+// Resolve id-or-name text to a texel: valid id text wins, otherwise the
+// argument must match exactly one texel's name.  Reports failures on stderr.
+inline bool resolve_texel(const Store *store, const String &text, TexelId *id) {
+    if (id->parse(text.c_str()) && !id->is_unset() && store->has(*id)) {
+        return true;
+    }
+    Size    matches = 0;
+    TexelId found;
+    for (Size i = 0; i < store->size(); ++i) {
+        Texel texel;
+        if (!store->at(i, &texel)) {
+            return false;
+        }
+        String name;
+        if (texel_name(texel, &name) && name == text) {
+            found = texel.id();
+            ++matches;
+        }
+    }
+    if (matches == 1) {
+        *id = found;
+        return true;
+    }
+    if (matches == 0) {
+        fprintf(stderr, "loom: no texel named %s\n", text.c_str());
+    } else {
+        fprintf(stderr, "loom: %zu texels named %s (use the id)\n", matches, text.c_str());
+    }
+    return false;
 }
 
 // Insert or replace the name Output Port with the given text.

@@ -17,9 +17,12 @@ CommandSet::CommandSet() : help_command(commands, COMMAND_COUNT) {
     commands[9]  = &drop_command;
     commands[10] = &connect_command;
     commands[11] = &disconnect_command;
-    commands[12] = &list_command;
-    commands[13] = &help_command;
-    commands[14] = &exit_command;
+    commands[12] = &set_command;
+    commands[13] = &eval_command;
+    commands[14] = &pull_command;
+    commands[15] = &list_command;
+    commands[16] = &help_command;
+    commands[17] = &exit_command;
 }
 
 CommandResult CommandSet::run(Session *session, const Strings &words) {

@@ -40,6 +40,7 @@ public:
             printf("  %s\n", commands[i]->usage());
         }
         printf("\nTYPE: bool int real text bytes texel blob    DIR: in out\n");
+        printf("EVALUATORS: concat sum upper    BOUNDARY TEXELS: keyboard mouse\n");
         return COMMAND_OK;
     }
 

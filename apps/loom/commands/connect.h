@@ -12,8 +12,9 @@ namespace lucia {
 // ---------------------------------------------------------------------------
 //
 // connect INPUT ID OUTPUT — bind the selected texel's INPUT to OUTPUT on
-// the source texel ID.  Port types must match; an Input Port holds at most
-// one Fiber, so connecting again replaces the old binding.
+// the source texel (an id or a unique name).  Port types must match; an
+// Input Port holds at most one Fiber, so connecting again replaces the
+// old binding.
 //
 class ConnectCommand : public Command {
 public:
@@ -35,7 +36,7 @@ public:
 
     CommandResult run(Session *session, const Strings &words) override {
         TexelId source;
-        if (!parse_id(words[2], &source)) {
+        if (!resolve_texel(session->store, words[2], &source)) {
             return COMMAND_ERROR;
         }
         Texel texel;

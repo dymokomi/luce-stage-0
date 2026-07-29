@@ -1,6 +1,7 @@
 #pragma once
 
 #include "command_set.h"
+#include "evaluators.h"
 #include "session.h"
 
 namespace lucia {
@@ -21,8 +22,9 @@ public:
     int run();
 
 private:
-    Session    session;
-    CommandSet commands;
+    Session      session;
+    EvaluatorSet evaluators;
+    CommandSet   commands;
 };
 
 } // namespace lucia

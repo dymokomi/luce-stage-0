@@ -121,6 +121,9 @@ add_test(
     NAME loom_terminal
     COMMAND sh -c "\
 $<TARGET_FILE:loom> create ${CMAKE_BINARY_DIR}/loom-terminal.img && \
-printf 'new hello\\nfind hel\\nexit\\n' | \
-$<TARGET_FILE:loom> open ${CMAKE_BINARY_DIR}/loom-terminal.img | grep -q hello"
+printf 'new left\\noutput value text\\nset value hello\\n\
+new right\\noutput value text\\nset value world\\n\
+new join\\neval concat\\ninput left text\\ninput right text\\noutput value text\\n\
+connect left left value\\nconnect right right value\\npull value\\nexit\\n' | \
+$<TARGET_FILE:loom> open ${CMAKE_BINARY_DIR}/loom-terminal.img | grep -q helloworld"
 )
