@@ -33,6 +33,13 @@ pub const SetSource = struct {
     value: SourceValue,
 };
 
+/// One image the program intends to create on the host — the same
+/// storage lucia create makes.  Only the trusted boundary performs it.
+pub const NewImage = struct {
+    path: []const u8,
+    pages: u64,
+};
+
 /// One texel the program intends to create: its name, typed ports,
 /// optional Luce content and evaluator, and initial output sources.
 /// All slices are evaluation-arena-owned.
@@ -43,6 +50,17 @@ pub const NewTexel = struct {
     content: ?[]const u8 = null,
     evaluator: ?[]const u8 = null,
     sets: std.ArrayList(SetSource) = .empty,
+};
+
+/// Everything one evaluation intends to change outside itself, in
+/// order.  Arena-owned; hosts copy what they apply.
+pub const Intents = struct {
+    images: std.ArrayList(NewImage) = .empty,
+    texels: std.ArrayList(NewTexel) = .empty,
+
+    pub fn isEmpty(self: *const Intents) bool {
+        return self.images.items.len == 0 and self.texels.items.len == 0;
+    }
 };
 
 /// The port type names the builtins accept, matching the terminal's

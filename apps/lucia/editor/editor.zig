@@ -13,6 +13,7 @@
 const std = @import("std");
 const loom = @import("loom");
 const color = @import("../color.zig");
+const common = @import("../commands/common.zig");
 const key_mod = @import("key.zig");
 const buffer_mod = @import("buffer.zig");
 const highlight = @import("highlight.zig");
@@ -266,28 +267,8 @@ pub const Editor = struct {
         return null;
     }
 
-    fn parseTypeName(text: []const u8) ?ValueType {
-        const Named = struct {
-            name: []const u8,
-            declared: ValueType,
-        };
-        const named = [_]Named{
-            .{ .name = "bool", .declared = .boolean },
-            .{ .name = "int", .declared = .int },
-            .{ .name = "real", .declared = .real },
-            .{ .name = "text", .declared = .text },
-            .{ .name = "bytes", .declared = .bytes },
-            .{ .name = "texel", .declared = .texel },
-            .{ .name = "blob", .declared = .blob },
-        };
-        for (named) |candidate| {
-            if (std.mem.eql(u8, text, candidate.name)) return candidate.declared;
-        }
-        return null;
-    }
-
     fn addPort(self: *Editor, is_input: bool, name: []const u8, type_text: []const u8) !void {
-        const declared = parseTypeName(type_text) orelse {
+        const declared = common.typeNamed(type_text) orelse {
             try self.setStatus("unknown type {s}", .{type_text});
             return;
         };
@@ -359,7 +340,7 @@ pub const Editor = struct {
     }
 
     fn retypeSelected(self: *Editor, type_text: []const u8) !void {
-        const declared = parseTypeName(type_text) orelse {
+        const declared = common.typeNamed(type_text) orelse {
             try self.setStatus("unknown type {s}", .{type_text});
             return;
         };
@@ -486,7 +467,7 @@ pub const Editor = struct {
                 palette.sgr(.port),
                 input.name,
                 palette.sgr(.reset),
-                typeName(input.declared),
+                common.typeName(input.declared),
             });
             if (input.binding) |binding| {
                 var buffer: [TexelId.text_size]u8 = undefined;
@@ -510,7 +491,7 @@ pub const Editor = struct {
                 palette.sgr(.port),
                 output.name,
                 palette.sgr(.reset),
-                typeName(output.declared),
+                common.typeName(output.declared),
             });
             if (output.source) |source| {
                 const rendered = try valueText(self.allocator, source);
@@ -563,30 +544,13 @@ pub const Editor = struct {
     }
 };
 
-fn typeName(declared: ValueType) []const u8 {
-    return switch (declared) {
-        .none => "none",
-        .boolean => "bool",
-        .int => "int",
-        .real => "real",
-        .text => "text",
-        .bytes => "bytes",
-        .texel => "texel",
-        .blob => "blob",
-    };
-}
-
+/// Values render as the terminal does, except text shows quoted so an
+/// empty string is visible in the ports pane.
 fn valueText(allocator: Allocator, value: Value) ![]u8 {
-    return switch (value) {
-        .none => try allocator.dupe(u8, "none"),
-        .boolean => |flag| try allocator.dupe(u8, if (flag) "true" else "false"),
-        .int => |number| try std.fmt.allocPrint(allocator, "{d}", .{number}),
-        .real => |number| try std.fmt.allocPrint(allocator, "{d}", .{number}),
-        .text => |text| try std.fmt.allocPrint(allocator, "\"{s}\"", .{text}),
-        .bytes => |bytes| try std.fmt.allocPrint(allocator, "{d} bytes", .{bytes.len}),
-        .texel => try allocator.dupe(u8, "texel"),
-        .blob => try allocator.dupe(u8, "blob"),
-    };
+    if (value == .text) {
+        return std.fmt.allocPrint(allocator, "\"{s}\"", .{value.text});
+    }
+    return common.valueText(allocator, value);
 }
 
 // ---------------------------------------------------------------------------

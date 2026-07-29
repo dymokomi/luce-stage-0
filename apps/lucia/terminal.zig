@@ -11,6 +11,8 @@
 const std = @import("std");
 const loom = @import("loom");
 const command_line = @import("command_line.zig");
+const image = @import("image.zig");
+const ops = @import("ops.zig");
 const command_set = @import("command_set.zig");
 const session_mod = @import("session.zig");
 const evaluators = @import("evaluators.zig");
@@ -34,6 +36,8 @@ pub const Terminal = struct {
     spool: Spool,
     index: FiberIndex,
     luce: luce_service.LuceService,
+    /// Where script-created images land (the create_image intent).
+    image_dir: std.Io.Dir,
     session: Session,
     seen: u64,
 
@@ -45,6 +49,7 @@ pub const Terminal = struct {
         allocator: Allocator,
         io: std.Io,
         store: *Store,
+        image_dir: std.Io.Dir,
         out: *std.Io.Writer,
         err: *std.Io.Writer,
     ) !void {
@@ -56,6 +61,7 @@ pub const Terminal = struct {
             .spool = undefined,
             .index = FiberIndex.init(allocator),
             .luce = luce_service.LuceService.init(allocator),
+            .image_dir = image_dir,
             .session = undefined,
             .seen = 0,
         };
@@ -164,7 +170,7 @@ pub const Terminal = struct {
         while (true) : (rounds += 1) {
             try self.applyFabricIntents();
             try self.reconcile();
-            if (self.luce.pending.items.len == 0) return;
+            if (!self.luce.hasPending()) return;
             if (rounds >= 4) {
                 try self.session.err.print(
                     "lucia: fabric intents still arriving after {d} rounds; stopping\n",
@@ -181,78 +187,52 @@ pub const Terminal = struct {
         }
     }
 
-    /// One transaction creates every pending texel: name, typed ports,
-    /// content, evaluator, and initial output sources.
+    /// Apply pending intents: create script-made images on the host,
+    /// then create every pending texel in one transaction (through the
+    /// service, the same path the standalone runner uses).
     fn applyFabricIntents(self: *Terminal) !void {
-        if (self.luce.pending.items.len == 0) return;
-        const batch = self.luce.takePending();
+        const palette = self.session.palette;
+
+        const images = self.luce.takePendingImages();
         defer {
-            for (batch) |*intent| {
+            for (images) |*intent| {
                 var owned = intent.*;
                 owned.deinit(self.allocator);
             }
-            self.allocator.free(batch);
+            self.allocator.free(images);
         }
-
-        var transaction = self.store.begin() catch {
-            try self.session.err.print("lucia: fabric intents failed to apply\n", .{});
-            return;
-        };
-        defer transaction.deinit();
-
-        var made: std.ArrayList(TexelId) = .empty;
-        defer made.deinit(self.allocator);
-        for (batch) |intent| {
-            const id = try self.buildIntent(&transaction, intent);
-            try made.append(self.allocator, id);
-        }
-        transaction.commit() catch {
-            try self.session.err.print("lucia: fabric intents failed to commit\n", .{});
-            return;
-        };
-        const palette = self.session.palette;
-        for (batch, made.items) |intent, id| {
-            var buffer: [TexelId.text_size]u8 = undefined;
-            try self.session.out.print("{s}created {s}{s} {s}{s}{s}\n", .{
+        for (images) |intent| {
+            image.create(self.allocator, self.io, self.image_dir, intent.path, intent.pages) catch {
+                try self.session.err.print("lucia: cannot create image {s}\n", .{intent.path});
+                continue;
+            };
+            try self.session.out.print("{s}created image {s}{s}\n", .{
                 palette.sgr(.created),
-                intent.name,
-                palette.sgr(.reset),
-                palette.sgr(.identity),
-                id.format(&buffer)[0..8],
+                intent.path,
                 palette.sgr(.reset),
             });
         }
-    }
 
-    fn buildIntent(
-        self: *Terminal,
-        transaction: *loom.store.Transaction,
-        intent: luce_service.PendingTexel,
-    ) !TexelId {
-        const allocator = self.allocator;
-        var texel = loom.texel.Texel.init(TexelId.generate(self.io));
-        defer texel.deinit(allocator);
-
-        try common.setName(allocator, &texel, intent.name);
-        for (intent.inputs) |port| {
-            try texel.putInput(allocator, try loom.texel.InputPort.init(allocator, port.name, port.declared));
+        if (self.luce.pending.items.len == 0) return;
+        const applied = self.luce.applyTexels(self.io, self.store) catch {
+            try self.session.err.print("lucia: fabric intents failed to commit\n", .{});
+            return;
+        };
+        defer {
+            for (applied) |made| self.allocator.free(made.name);
+            self.allocator.free(applied);
         }
-        for (intent.outputs) |port| {
-            try texel.putOutput(allocator, try loom.texel.OutputPort.init(allocator, port.name, port.declared));
+        for (applied) |made| {
+            var buffer: [TexelId.text_size]u8 = undefined;
+            try self.session.out.print("{s}created {s}{s} {s}{s}{s}\n", .{
+                palette.sgr(.created),
+                made.name,
+                palette.sgr(.reset),
+                palette.sgr(.identity),
+                made.id.format(&buffer)[0..8],
+                palette.sgr(.reset),
+            });
         }
-        if (intent.content) |source| {
-            try texel.setContent(allocator, try loom.value.Value.initText(allocator, source));
-        }
-        if (intent.evaluator) |name| {
-            try texel.setEvaluator(allocator, name);
-        }
-        for (intent.sets) |set| {
-            const output = texel.mutableOutput(set.output) orelse continue;
-            var cloned = try set.value.clone(allocator);
-            output.setSource(allocator, cloned) catch cloned.deinit(allocator);
-        }
-        try transaction.put(&texel);
-        return texel.id;
     }
 
     /// Reconcile the disposable machinery with whatever the last
@@ -308,17 +288,11 @@ pub const Terminal = struct {
         defer finished.deinit(self.allocator);
         const texel = finished.texel;
 
-        {
-            var transaction = self.store.begin() catch return self.codeFailed();
-            defer transaction.deinit();
-            const current = transaction.get(texel) orelse return self.codeFailed();
-            var changed = try current.clone(self.allocator);
-            defer changed.deinit(self.allocator);
-            const source = try loom.value.Value.initText(self.allocator, finished.text.items);
-            changed.setContent(self.allocator, source) catch return self.codeFailed();
-            transaction.put(&changed) catch return self.codeFailed();
-            transaction.commit() catch return self.codeFailed();
-        }
+        ops.setContent(self.allocator, self.store, texel, finished.text.items) catch |mistake|
+            switch (mistake) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return self.codeFailed(),
+            };
 
         // The source is committed either way; diagnostics tell the
         // user what still needs fixing before demand can compute.
@@ -392,6 +366,7 @@ const volume_mod = loom.volume;
 const Bench = struct {
     memory: volume_mod.MemoryVolume,
     store: Store,
+    scratch: std.testing.TmpDir,
     out: std.Io.Writer.Allocating,
     err: std.Io.Writer.Allocating,
     terminal: Terminal,
@@ -402,12 +377,15 @@ const Bench = struct {
         errdefer self.memory.deinit();
         self.store = try Store.create(allocator, self.memory.volume());
         errdefer self.store.deinit();
+        self.scratch = std.testing.tmpDir(.{});
+        errdefer self.scratch.cleanup();
         self.out = .init(allocator);
         self.err = .init(allocator);
         try self.terminal.setup(
             allocator,
             testing.io,
             &self.store,
+            self.scratch.dir,
             &self.out.writer,
             &self.err.writer,
         );
@@ -417,6 +395,7 @@ const Bench = struct {
         self.terminal.deinit();
         self.err.deinit();
         self.out.deinit();
+        self.scratch.cleanup();
         self.store.deinit();
         self.memory.deinit();
     }
@@ -723,6 +702,26 @@ test "script runs standalone bootstrap source against the fabric" {
     // Broken bootstrap source reports diagnostics, changes nothing.
     try bench.terminal.script("fn evaluate(:\n");
     try testing.expect(std.mem.indexOf(u8, bench.err.written(), "luce compile failed") != null);
+}
+
+test "a script creates an image on the host through the intent path" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.terminal.script(
+        \\fn evaluate():
+        \\    create_image("side.img", 16)
+        \\
+    );
+    try testing.expect(std.mem.indexOf(u8, bench.out.written(), "created image side.img") != null);
+    // The image is a real Fabric on disk, created by the same code as
+    // lucia create.
+    var opened: image.Opened = undefined;
+    try opened.setup(allocator, testing.io, bench.scratch.dir, "side.img");
+    defer opened.deinit();
+    try testing.expectEqual(@as(usize, 0), opened.store.count());
 }
 
 test "ports move and drop with fibers preserved and guarded" {

@@ -48,7 +48,8 @@ Try it:
 ```sh
 build/lucia create fabric.img
 build/lucia open fabric.img                      # interactive terminal
-build/lucia open fabric.img --luce bootstrap.luc # headless bootstrap script
+build/lucia open fabric.img --luce bootstrap.luc # bootstrap an existing image
+build/lucia run bootstrap.luc                    # standalone: the script creates its images
 ```
 
 Inside the terminal, a Texel computes with Luce source:

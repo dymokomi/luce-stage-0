@@ -1,11 +1,10 @@
 //! new NAME — create a texel named NAME, select it, and print its id.
 
-const std = @import("std");
 const loom = @import("loom");
 const command = @import("../command.zig");
 const common = @import("common.zig");
+const ops = @import("../ops.zig");
 
-const Texel = loom.texel.Texel;
 const TexelId = loom.texel_id.TexelId;
 const Session = command.Session;
 const Error = command.Error;
@@ -20,18 +19,14 @@ pub const entry: command.Command = .{
 };
 
 fn run(session: *Session, words: []const []const u8) Error!Result {
-    var transaction = session.store.begin() catch return common.commitFailed(session, "new");
-    defer transaction.deinit();
-
-    var texel = Texel.init(TexelId.generate(session.io));
-    defer texel.deinit(session.allocator);
-    common.setName(session.allocator, &texel, words[1]) catch
-        return common.commitFailed(session, "new");
-    transaction.put(&texel) catch return common.commitFailed(session, "new");
-    transaction.commit() catch return common.commitFailed(session, "new");
-
-    session.selected = texel.id;
+    const id = ops.createTexel(session.allocator, session.io, session.store, .{
+        .name = words[1],
+    }) catch |mistake| switch (mistake) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return common.commitFailed(session, "new"),
+    };
+    session.selected = id;
     var buffer: [TexelId.text_size]u8 = undefined;
-    try session.out.print("{s}\n", .{texel.id.format(&buffer)});
+    try session.out.print("{s}\n", .{id.format(&buffer)});
     return .ok;
 }

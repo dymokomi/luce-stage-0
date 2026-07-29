@@ -26,8 +26,9 @@ pub const name_port = "name";
 // Argument parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a port type name; reports the valid names on the error writer.
-pub fn parseType(session: *Session, text: []const u8) Error!?ValueType {
+/// The type a TYPE word names, or null: the silent form for callers
+/// with their own reporting (the editor's prompts).
+pub fn typeNamed(text: []const u8) ?ValueType {
     const Named = struct {
         name: []const u8,
         declared: ValueType,
@@ -44,6 +45,12 @@ pub fn parseType(session: *Session, text: []const u8) Error!?ValueType {
     for (named) |candidate| {
         if (std.mem.eql(u8, text, candidate.name)) return candidate.declared;
     }
+    return null;
+}
+
+/// Parse a port type name; reports the valid names on the error writer.
+pub fn parseType(session: *Session, text: []const u8) Error!?ValueType {
+    if (typeNamed(text)) |declared| return declared;
     try session.err.print(
         "lucia: unknown type {s} (bool int real text bytes texel blob)\n",
         .{text},
@@ -227,14 +234,6 @@ pub fn selectedExists(session: *Session) Error!bool {
 // ---------------------------------------------------------------------------
 // Editing
 // ---------------------------------------------------------------------------
-
-/// Give the texel its name value: the name output holds a text source.
-pub fn setName(allocator: Allocator, texel: *Texel, name: []const u8) !void {
-    var output = try OutputPort.init(allocator, name_port, .text);
-    errdefer output.deinit(allocator);
-    try output.setSource(allocator, try Value.initText(allocator, name));
-    try texel.putOutput(allocator, output);
-}
 
 /// A private working copy of one texel inside an open transaction,
 /// ready to mutate and put back.

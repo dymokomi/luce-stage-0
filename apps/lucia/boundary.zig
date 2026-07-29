@@ -13,72 +13,49 @@
 
 const std = @import("std");
 const loom = @import("loom");
+const ops = @import("ops.zig");
 const common = @import("commands/common.zig");
 
 const Allocator = std.mem.Allocator;
 const Store = loom.store.Store;
-const Transaction = loom.store.Transaction;
-const Texel = loom.texel.Texel;
-const OutputPort = loom.texel.OutputPort;
-const TexelId = loom.texel_id.TexelId;
 const Value = loom.value.Value;
-const ValueType = loom.value.ValueType;
 
 pub const keyboard_name = "keyboard";
 pub const mouse_name = "mouse";
 
-const BoundaryOutput = struct {
-    name: []const u8,
-    declared: ValueType,
-};
-
-const keyboard_outputs = [_]BoundaryOutput{
-    .{ .name = "line", .declared = .text },
-    .{ .name = "count", .declared = .int },
-};
-
-const mouse_outputs = [_]BoundaryOutput{
-    .{ .name = "x", .declared = .real },
-    .{ .name = "y", .declared = .real },
-    .{ .name = "button", .declared = .int },
-};
-
-/// Create one boundary texel with typed, pre-set outputs.
-fn makeBoundary(
-    allocator: Allocator,
-    io: std.Io,
-    transaction: *Transaction,
-    name: []const u8,
-    outputs: []const BoundaryOutput,
-) !void {
-    var texel = Texel.init(TexelId.generate(io));
-    defer texel.deinit(allocator);
-    try common.setName(allocator, &texel, name);
-    for (outputs) |output| {
-        var port = try OutputPort.init(allocator, output.name, output.declared);
-        errdefer port.deinit(allocator);
-        const initial: Value = switch (output.declared) {
-            .text => try Value.initText(allocator, ""),
-            .int => .{ .int = 0 },
-            else => .{ .real = 0.0 },
-        };
-        try port.setSource(allocator, initial);
-        try texel.putOutput(allocator, port);
-    }
-    try transaction.put(&texel);
-}
-
-/// Create the boundary texels missing from this Fabric, in one commit.
+/// Create the boundary texels missing from this Fabric, one create
+/// each, through the same operations everything else uses.
 pub fn ensureBoundary(allocator: Allocator, io: std.Io, store: *Store) !void {
-    const keyboard = common.findNamed(store, keyboard_name) == null;
-    const mouse = common.findNamed(store, mouse_name) == null;
-    if (!keyboard and !mouse) return;
-
-    var transaction = try store.begin();
-    defer transaction.deinit();
-    if (keyboard) try makeBoundary(allocator, io, &transaction, keyboard_name, &keyboard_outputs);
-    if (mouse) try makeBoundary(allocator, io, &transaction, mouse_name, &mouse_outputs);
-    try transaction.commit();
+    if (common.findNamed(store, keyboard_name) == null) {
+        var empty_line = try Value.initText(allocator, "");
+        defer empty_line.deinit(allocator);
+        _ = try ops.createTexel(allocator, io, store, .{
+            .name = keyboard_name,
+            .outputs = &.{
+                .{ .name = "line", .declared = .text },
+                .{ .name = "count", .declared = .int },
+            },
+            .sets = &.{
+                .{ .output = "line", .value = empty_line },
+                .{ .output = "count", .value = .{ .int = 0 } },
+            },
+        });
+    }
+    if (common.findNamed(store, mouse_name) == null) {
+        _ = try ops.createTexel(allocator, io, store, .{
+            .name = mouse_name,
+            .outputs = &.{
+                .{ .name = "x", .declared = .real },
+                .{ .name = "y", .declared = .real },
+                .{ .name = "button", .declared = .int },
+            },
+            .sets = &.{
+                .{ .output = "x", .value = .{ .real = 0.0 } },
+                .{ .output = "y", .value = .{ .real = 0.0 } },
+                .{ .output = "button", .value = .{ .int = 0 } },
+            },
+        });
+    }
 }
 
 /// Record one keyboard interaction: the line just typed, and one more

@@ -3,6 +3,7 @@
 
 const command = @import("../command.zig");
 const common = @import("common.zig");
+const ops = @import("../ops.zig");
 
 const Session = command.Session;
 const Error = command.Error;
@@ -22,20 +23,11 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
         try session.err.print("lucia: no output named {s}\n", .{words[1]});
         return .err;
     };
-    var value = try common.parseValue(session, words[2], port.declared) orelse return .err;
-    var value_owned = true;
-    defer if (value_owned) value.deinit(session.allocator);
-
-    var transaction = session.store.begin() catch return common.commitFailed(session, "set");
-    defer transaction.deinit();
-    var changed = try common.cloneForEdit(session, &transaction, session.selected) orelse return .err;
-    defer changed.deinit(session.allocator);
-    const output = changed.mutableOutput(words[1]) orelse
-        return common.commitFailed(session, "set");
-    output.setSource(session.allocator, value) catch
-        return common.commitFailed(session, "set");
-    value_owned = false;
-    transaction.put(&changed) catch return common.commitFailed(session, "set");
-    transaction.commit() catch return common.commitFailed(session, "set");
+    const value = try common.parseValue(session, words[2], port.declared) orelse return .err;
+    ops.setSource(session.allocator, session.store, session.selected, words[1], value) catch |mistake|
+        switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return common.commitFailed(session, "set"),
+        };
     return .ok;
 }

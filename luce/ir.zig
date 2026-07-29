@@ -59,6 +59,7 @@ pub const Intrinsic = enum {
     assert_true,
     trap_message,
     // Fabric builtins (gated by compile options; see fabric.zig).
+    fabric_image,
     fabric_create,
     fabric_input,
     fabric_output,
@@ -78,6 +79,7 @@ pub const TrapCode = enum {
     call_depth_exceeded,
     invalid_handle,
     invalid_port_type,
+    invalid_image,
 
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
@@ -91,6 +93,7 @@ pub const TrapCode = enum {
             .call_depth_exceeded => "call depth exceeded",
             .invalid_handle => "invalid texel handle",
             .invalid_port_type => "unknown port type (bool int real text bytes)",
+            .invalid_image => "create_image needs a path and a positive page count",
         };
     }
 };

@@ -16,6 +16,7 @@
 const std = @import("std");
 const loom = @import("loom");
 const luce = @import("luce");
+const ops = @import("ops.zig");
 
 const Allocator = std.mem.Allocator;
 const Texel = loom.texel.Texel;
@@ -62,6 +63,16 @@ pub const PendingSet = struct {
     value: Value,
 };
 
+pub const PendingImage = struct {
+    path: []u8,
+    pages: u64,
+
+    pub fn deinit(self: *PendingImage, allocator: Allocator) void {
+        allocator.free(self.path);
+        self.* = undefined;
+    }
+};
+
 pub const PendingTexel = struct {
     name: []u8,
     inputs: []PendingPort,
@@ -91,6 +102,7 @@ pub const LuceService = struct {
     allocator: Allocator,
     cache: std.AutoHashMapUnmanaged(IdBytes, Cached) = .empty,
     pending: std.ArrayList(PendingTexel) = .empty,
+    pending_images: std.ArrayList(PendingImage) = .empty,
 
     const Cached = struct {
         revision: u64,
@@ -107,16 +119,75 @@ pub const LuceService = struct {
         self.cache.deinit(self.allocator);
         for (self.pending.items) |*intent| intent.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+        for (self.pending_images.items) |*intent| intent.deinit(self.allocator);
+        self.pending_images.deinit(self.allocator);
         self.* = undefined;
     }
 
-    /// Hand the accumulated intents to the caller, which owns them.
+    pub fn hasPending(self: *const LuceService) bool {
+        return self.pending.items.len != 0 or self.pending_images.items.len != 0;
+    }
+
+    /// Hand the accumulated texel intents to the caller, which owns them.
     pub fn takePending(self: *LuceService) []PendingTexel {
         const taken = self.pending.toOwnedSlice(self.allocator) catch blk: {
             break :blk self.pending.items[0..0];
         };
         self.pending = .empty;
         return taken;
+    }
+
+    /// Hand the accumulated image intents to the caller, which owns them.
+    pub fn takePendingImages(self: *LuceService) []PendingImage {
+        const taken = self.pending_images.toOwnedSlice(self.allocator) catch blk: {
+            break :blk self.pending_images.items[0..0];
+        };
+        self.pending_images = .empty;
+        return taken;
+    }
+
+    pub const AppliedTexel = struct {
+        name: []u8, // owned by the caller
+        id: TexelId,
+    };
+
+    /// Create every pending texel in one transaction: name, typed
+    /// ports, Luce content, evaluator, initial output sources.  Returns
+    /// what was made, for the host to report; the caller owns the
+    /// names and the slice.
+    pub fn applyTexels(
+        self: *LuceService,
+        io: std.Io,
+        store: *loom.store.Store,
+    ) ![]AppliedTexel {
+        const batch = self.takePending();
+        defer {
+            for (batch) |*intent| {
+                var owned = intent.*;
+                owned.deinit(self.allocator);
+            }
+            self.allocator.free(batch);
+        }
+        if (batch.len == 0) return &.{};
+
+        var transaction = try store.begin();
+        defer transaction.deinit();
+
+        var applied: std.ArrayList(AppliedTexel) = .empty;
+        errdefer {
+            for (applied.items) |made| self.allocator.free(made.name);
+            applied.deinit(self.allocator);
+        }
+        for (batch) |intent| {
+            const spec = try self.borrowSpec(intent);
+            defer self.freeSpec(spec);
+            const id = try ops.buildTexel(self.allocator, io, &transaction, spec);
+            const name = try self.allocator.dupe(u8, intent.name);
+            errdefer self.allocator.free(name);
+            try applied.append(self.allocator, .{ .name = name, .id = id });
+        }
+        try transaction.commit();
+        return applied.toOwnedSlice(self.allocator);
     }
 
     pub fn evaluator(self: *LuceService) Evaluator {
@@ -162,9 +233,7 @@ pub const LuceService = struct {
                 );
                 switch (result) {
                     .success => |intents| {
-                        for (intents) |intent| {
-                            try self.pending.append(self.allocator, try self.copyIntent(intent));
-                        }
+                        try self.copyIntents(intents);
                         return .ok;
                     },
                     .trap => |trapped| return .{
@@ -243,10 +312,8 @@ pub const LuceService = struct {
                     });
                 }
                 // Intents outlive the evaluation arena only as copies
-                // the service owns until the terminal applies them.
-                for (intents) |intent| {
-                    try self.pending.append(self.allocator, try self.copyIntent(intent));
-                }
+                // the service owns until the host applies them.
+                try self.copyIntents(intents);
             },
             .unavailable => {
                 for (program.outputs) |port| {
@@ -308,7 +375,54 @@ pub const LuceService = struct {
         });
     }
 
-    pub fn copyIntent(self: *LuceService, intent: luce.fabric.NewTexel) error{OutOfMemory}!PendingTexel {
+    pub fn copyIntents(self: *LuceService, intents: luce.fabric.Intents) error{OutOfMemory}!void {
+        for (intents.images.items) |intent| {
+            const copied_path = try self.allocator.dupe(u8, intent.path);
+            errdefer self.allocator.free(copied_path);
+            try self.pending_images.append(self.allocator, .{
+                .path = copied_path,
+                .pages = intent.pages,
+            });
+        }
+        for (intents.texels.items) |intent| {
+            try self.pending.append(self.allocator, try self.copyIntent(intent));
+        }
+    }
+
+    /// An ops.TexelSpec borrowing one pending intent's strings; only
+    /// the small spec arrays are allocated (freeSpec releases them).
+    fn borrowSpec(self: *LuceService, intent: PendingTexel) error{OutOfMemory}!ops.TexelSpec {
+        const inputs = try self.allocator.alloc(ops.PortSpec, intent.inputs.len);
+        errdefer self.allocator.free(inputs);
+        for (intent.inputs, inputs) |port, *slot| {
+            slot.* = .{ .name = port.name, .declared = port.declared };
+        }
+        const outputs = try self.allocator.alloc(ops.PortSpec, intent.outputs.len);
+        errdefer self.allocator.free(outputs);
+        for (intent.outputs, outputs) |port, *slot| {
+            slot.* = .{ .name = port.name, .declared = port.declared };
+        }
+        const sets = try self.allocator.alloc(ops.SetSpec, intent.sets.len);
+        for (intent.sets, sets) |set, *slot| {
+            slot.* = .{ .output = set.output, .value = set.value };
+        }
+        return .{
+            .name = intent.name,
+            .inputs = inputs,
+            .outputs = outputs,
+            .content = intent.content,
+            .evaluator = intent.evaluator,
+            .sets = sets,
+        };
+    }
+
+    fn freeSpec(self: *LuceService, spec: ops.TexelSpec) void {
+        self.allocator.free(spec.inputs);
+        self.allocator.free(spec.outputs);
+        self.allocator.free(spec.sets);
+    }
+
+    fn copyIntent(self: *LuceService, intent: luce.fabric.NewTexel) error{OutOfMemory}!PendingTexel {
         const gpa = self.allocator;
         const name = try gpa.dupe(u8, intent.name);
         errdefer gpa.free(name);

@@ -116,12 +116,7 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
                     palette.sgr(.reset),
                 });
             }
-            for (intents) |intent| {
-                try session.luce.pending.append(
-                    session.allocator,
-                    try session.luce.copyIntent(intent),
-                );
-            }
+            try session.luce.copyIntents(intents);
             return .ok;
         },
     }

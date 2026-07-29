@@ -40,7 +40,7 @@ pub fn run(
         .depth_left = budget.call_depth,
     };
     switch (try machine.call(program.evaluate_function, &.{})) {
-        .value => return .{ .success = machine.intents.items },
+        .value => return .{ .success = machine.intents },
         .trap => |trap| return .{ .trap = trap },
     }
 }
@@ -57,9 +57,9 @@ const Machine = struct {
     outputs: []?RuntimeValue,
     steps: u64,
     depth_left: u32,
-    /// Texel-creation intents recorded by the fabric builtins, in
-    /// order.  Arena-owned; the caller copies what it applies.
-    intents: std.ArrayList(fabric.NewTexel) = .empty,
+    /// Intents recorded by the fabric builtins, in order.  Arena-owned;
+    /// the caller copies what it applies.
+    intents: fabric.Intents = .{},
 
     fn trap(self: *Machine, code: ir.TrapCode) CallOutcome {
         _ = self;
@@ -381,9 +381,19 @@ const Machine = struct {
                     .message = registers[arguments[0]].string,
                 } };
             },
+            .fabric_image => {
+                const path = registers[arguments[0]].string;
+                const pages = registers[arguments[1]].int;
+                if (path.len == 0 or pages <= 0) return self.trap(.invalid_image);
+                try self.intents.images.append(self.arena, .{
+                    .path = path,
+                    .pages = @intCast(pages),
+                });
+                return .{ .value = .none };
+            },
             .fabric_create => {
-                const handle: i64 = @intCast(self.intents.items.len);
-                try self.intents.append(self.arena, .{
+                const handle: i64 = @intCast(self.intents.texels.items.len);
+                try self.intents.texels.append(self.arena, .{
                     .name = registers[arguments[0]].string,
                 });
                 return .{ .value = .{ .int = handle } };
@@ -436,8 +446,8 @@ const Machine = struct {
     }
 
     fn intentAt(self: *Machine, handle: i64) ?*fabric.NewTexel {
-        if (handle < 0 or handle >= self.intents.items.len) return null;
-        return &self.intents.items[@intCast(handle)];
+        if (handle < 0 or handle >= self.intents.texels.items.len) return null;
+        return &self.intents.texels.items[@intCast(handle)];
     }
 };
 
@@ -703,7 +713,7 @@ test "fabric builtins record complete texel intents" {
 
     const result = try bench.evaluate(&.{.{ .value = .{ .string = "adder" } }});
     try testing.expect(result == .success);
-    const intents = result.success;
+    const intents = result.success.texels.items;
     try testing.expectEqual(@as(usize, 2), intents.len);
 
     try testing.expectEqualStrings("adder", intents[0].name);
@@ -715,6 +725,29 @@ test "fabric builtins record complete texel intents" {
 
     try testing.expectEqualStrings("banner", intents[1].name);
     try testing.expectEqualStrings("hello", intents[1].sets.items[0].value.text);
+}
+
+test "create_image records an image intent and validates its shape" {
+    var bench = try Bench.setup(
+        \\fn evaluate():
+        \\    if input.bad:
+        \\        create_image("", 0)
+        \\    else:
+        \\        create_image("fresh.img", 64)
+        \\
+    , .{
+        .inputs = &.{.{ .name = "bad", .declared = .boolean }},
+    }, .{ .allow_fabric = true });
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{.{ .value = .{ .boolean = false } }});
+    try testing.expect(result == .success);
+    const images = result.success.images.items;
+    try testing.expectEqual(@as(usize, 1), images.len);
+    try testing.expectEqualStrings("fresh.img", images[0].path);
+    try testing.expectEqual(@as(u64, 64), images[0].pages);
+
+    try expectTrap(&bench, &.{.{ .value = .{ .boolean = true } }}, .invalid_image);
 }
 
 test "fabric builtins trap on bad handles and types, and need the gate" {

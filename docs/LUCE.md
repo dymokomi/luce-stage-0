@@ -1515,3 +1515,13 @@ macOS JIT entitlement path, and two-tier compilation.
   pane (line numbers, real-lexer syntax highlighting, Luce auto-indent)
   over a private clone, committed atomically with compile diagnostics
   in the status line.
+- **`create_image(path, pages)`** completes the headless story: image
+  creation is an intent like texel creation, performed by the host
+  through the same `image.zig` code as `lucia create`.  `lucia run
+  FILE.luc` (or `lucia --luce FILE.luc`) runs a standalone script that
+  creates its own images and weaves texels into the first one —
+  bootstrap from nothing, no terminal attached.
+- **The operations layer** (`apps/lucia/ops.zig`): the same Fabric
+  operations are reachable from terminal commands, from Luce fabric
+  intents, and from plain Zig code; all three call one tested set of
+  functions, so behavior cannot drift between access directions.

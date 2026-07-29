@@ -3,6 +3,7 @@
 
 const command = @import("../command.zig");
 const common = @import("common.zig");
+const ops = @import("../ops.zig");
 const evaluators = @import("../evaluators.zig");
 
 const Session = command.Session;
@@ -26,14 +27,10 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
         return .err;
     }
     if (!try common.selectedExists(session)) return .err;
-
-    var transaction = session.store.begin() catch return common.commitFailed(session, "eval");
-    defer transaction.deinit();
-    var changed = try common.cloneForEdit(session, &transaction, session.selected) orelse return .err;
-    defer changed.deinit(session.allocator);
-    changed.setEvaluator(session.allocator, words[1]) catch
-        return common.commitFailed(session, "eval");
-    transaction.put(&changed) catch return common.commitFailed(session, "eval");
-    transaction.commit() catch return common.commitFailed(session, "eval");
+    ops.setEvaluator(session.allocator, session.store, session.selected, words[1]) catch |mistake|
+        switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return common.commitFailed(session, "eval"),
+        };
     return .ok;
 }

@@ -33,11 +33,12 @@ pub const Error = error{OutOfMemory};
 
 /// Names the language reserves; nothing user-declared may take them.
 const reserved_names = [_][]const u8{
-    "input",       "output",       "range",         "Int",             "Float",
-    "Bool",        "String",       "Bytes",         "abs",             "min",
-    "max",         "clamp",        "sqrt",          "floor",           "ceil",
-    "len",         "assert",       "trap",          "evaluate",        "create_texel",
-    "texel_input", "texel_output", "texel_content", "texel_evaluator", "texel_set",
+    "input",        "output",       "range",         "Int",             "Float",
+    "Bool",         "String",       "Bytes",         "abs",             "min",
+    "max",          "clamp",        "sqrt",          "floor",           "ceil",
+    "len",          "assert",       "trap",          "evaluate",        "create_texel",
+    "texel_input",  "texel_output", "texel_content", "texel_evaluator", "texel_set",
+    "create_image",
 };
 
 fn isReserved(name: []const u8) bool {
@@ -1227,6 +1228,7 @@ const FunctionBuilder = struct {
             .{ .name = "len", .kind = .len, .arity = 1 },
             .{ .name = "assert", .kind = .assert_true, .arity = 1 },
             .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+            .{ .name = "create_image", .kind = .fabric_image, .arity = 2, .fabric = true },
             .{ .name = "create_texel", .kind = .fabric_create, .arity = 1, .fabric = true },
             .{ .name = "texel_input", .kind = .fabric_input, .arity = 3, .fabric = true },
             .{ .name = "texel_output", .kind = .fabric_output, .arity = 3, .fabric = true },
@@ -1300,6 +1302,11 @@ const FunctionBuilder = struct {
             .trap_message => {
                 if (arguments[0].value_type != .string)
                     return self.intrinsicType(call, "trap takes a String message");
+                result = .none;
+            },
+            .fabric_image => {
+                if (arguments[0].value_type != .string or arguments[1].value_type != .int)
+                    return self.intrinsicType(call, "create_image takes (path String, pages Int)");
                 result = .none;
             },
             .fabric_create => {

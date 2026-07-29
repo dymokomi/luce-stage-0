@@ -50,10 +50,10 @@ pub const Trap = struct {
 };
 
 pub const Result = union(enum) {
-    /// The output frame holds every written output; the payload lists
-    /// texel-creation intents the program computed (arena-owned, often
-    /// empty).  The trusted host applies them after publication.
-    success: []const fabric.NewTexel,
+    /// The output frame holds every written output; the payload holds
+    /// the intents the program computed (arena-owned, often empty).
+    /// The trusted host applies them after publication.
+    success: fabric.Intents,
     /// The evaluator failed; the output frame must not be published
     /// and any intents are discarded.
     trap: Trap,
