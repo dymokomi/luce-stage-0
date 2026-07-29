@@ -26,8 +26,12 @@ public:
         return 0;
     }
 
+    const char *alias() const override {
+        return "?";
+    }
+
     const char *usage() const override {
-        return "help           show this list";
+        return "help            (?)   show this list";
     }
 
     CommandResult run(Store *, const Strings &) override {

@@ -23,8 +23,12 @@ public:
         return 1;
     }
 
+    const char *alias() const override {
+        return "rm";
+    }
+
     const char *usage() const override {
-        return "delete ID      remove a texel";
+        return "delete ID       (rm)  remove a texel";
     }
 
     CommandResult run(Store *store, const Strings &words) override {

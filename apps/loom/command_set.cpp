@@ -16,8 +16,10 @@ CommandSet::CommandSet() : help_command(commands, COMMAND_COUNT) {
 
 CommandResult CommandSet::run(Store *store, const Strings &words) {
     for (Size i = 0; i < COMMAND_COUNT; ++i) {
-        Command *command = commands[i];
-        if (words[0] != command->name()) {
+        Command   *command = commands[i];
+        const bool matched = words[0] == command->name() ||
+                             (command->alias() != 0 && words[0] == command->alias());
+        if (!matched) {
             continue;
         }
         if (words.size() - 1 != command->argument_count()) {

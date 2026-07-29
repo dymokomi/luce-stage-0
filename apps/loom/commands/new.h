@@ -23,8 +23,12 @@ public:
         return 1;
     }
 
+    const char *alias() const override {
+        return "n";
+    }
+
     const char *usage() const override {
-        return "new NAME       create a texel and print its id";
+        return "new NAME        (n)   create a texel and print its id";
     }
 
     CommandResult run(Store *store, const Strings &words) override {

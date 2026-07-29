@@ -23,8 +23,12 @@ public:
         return 0;
     }
 
+    const char *alias() const override {
+        return "ls";
+    }
+
     const char *usage() const override {
-        return "list           list every texel";
+        return "list            (ls)  list every texel";
     }
 
     CommandResult run(Store *store, const Strings &) override {

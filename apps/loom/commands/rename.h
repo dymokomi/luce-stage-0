@@ -23,8 +23,12 @@ public:
         return 2;
     }
 
+    const char *alias() const override {
+        return "rn";
+    }
+
     const char *usage() const override {
-        return "rename ID NAME give a texel a new name";
+        return "rename ID NAME  (rn)  give a texel a new name";
     }
 
     CommandResult run(Store *store, const Strings &words) override {

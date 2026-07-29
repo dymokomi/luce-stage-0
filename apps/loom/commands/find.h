@@ -23,8 +23,12 @@ public:
         return 1;
     }
 
+    const char *alias() const override {
+        return "f";
+    }
+
     const char *usage() const override {
-        return "find TEXT      list texels whose name contains TEXT";
+        return "find TEXT       (f)   list texels whose name contains TEXT";
     }
 
     CommandResult run(Store *store, const Strings &words) override {

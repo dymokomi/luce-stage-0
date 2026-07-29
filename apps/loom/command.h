@@ -28,6 +28,11 @@ public:
     virtual Size        argument_count() const = 0;
     virtual const char *usage() const          = 0;
 
+    // Optional short alias ("ls" for list); 0 when the command has none.
+    virtual const char *alias() const {
+        return 0;
+    }
+
     virtual CommandResult run(Store *store, const Strings &words) = 0;
 };
 

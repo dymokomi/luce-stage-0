@@ -20,8 +20,12 @@ public:
         return 0;
     }
 
+    const char *alias() const override {
+        return "q";
+    }
+
     const char *usage() const override {
-        return "exit           leave the terminal";
+        return "exit            (q)   leave the terminal";
     }
 
     CommandResult run(Store *, const Strings &) override {
