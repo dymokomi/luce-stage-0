@@ -18,11 +18,11 @@ const Outcome = loom.spool.Outcome;
 const OutcomeMap = loom.spool.OutcomeMap;
 const Error = loom.spool.Error;
 
-pub const evaluator_names = "concat sum upper";
+pub const evaluator_names = "concat sum upper luce";
 
 pub fn knownEvaluator(name: []const u8) bool {
     return std.mem.eql(u8, name, "concat") or std.mem.eql(u8, name, "sum") or
-        std.mem.eql(u8, name, "upper");
+        std.mem.eql(u8, name, "upper") or std.mem.eql(u8, name, "luce");
 }
 
 /// Register every terminal evaluator under its persisted name.

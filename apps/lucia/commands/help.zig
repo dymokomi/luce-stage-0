@@ -26,7 +26,7 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
         .{},
     );
     try session.out.print(
-        "EVALUATORS: concat sum upper    BOUNDARY TEXELS: keyboard mouse\n",
+        "EVALUATORS: concat sum upper luce    BOUNDARY TEXELS: keyboard mouse\n",
         .{},
     );
     return .ok;

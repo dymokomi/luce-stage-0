@@ -29,6 +29,13 @@ fn run(session: *Session, words: []const []const u8) Error!Result {
     try session.out.print("revision: {d}\n", .{texel.revision});
     const evaluator = texel.evaluatorName();
     try session.out.print("evaluator: {s}\n", .{if (evaluator.len == 0) "-" else evaluator});
+    if (texel.content) |content| {
+        if (content.tag() == .text) {
+            try session.out.print("content: {d} bytes of source\n", .{content.text.len});
+        } else {
+            try session.out.print("content: present\n", .{});
+        }
+    }
 
     for (texel.inputs.items) |input| {
         try session.out.print("input {s} {s}", .{ input.name, common.typeName(input.declared) });

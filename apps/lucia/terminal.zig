@@ -15,6 +15,7 @@ const command_set = @import("command_set.zig");
 const session_mod = @import("session.zig");
 const evaluators = @import("evaluators.zig");
 const boundary = @import("boundary.zig");
+const luce_service = @import("luce_service.zig");
 const common = @import("commands/common.zig");
 
 const Allocator = std.mem.Allocator;
@@ -32,6 +33,7 @@ pub const Terminal = struct {
     registry: Registry,
     spool: Spool,
     index: FiberIndex,
+    luce: luce_service.LuceService,
     session: Session,
     seen: u64,
 
@@ -53,14 +55,17 @@ pub const Terminal = struct {
             .registry = Registry.init(allocator),
             .spool = undefined,
             .index = FiberIndex.init(allocator),
+            .luce = luce_service.LuceService.init(allocator),
             .session = undefined,
             .seen = 0,
         };
         errdefer {
             self.registry.deinit();
             self.index.deinit();
+            self.luce.deinit();
         }
         try evaluators.registerAll(&self.registry);
+        try self.registry.put(luce_service.evaluator_name, self.luce.evaluator());
         self.spool = Spool.init(allocator, store, &self.registry);
         self.session = .{
             .allocator = allocator,
@@ -81,6 +86,7 @@ pub const Terminal = struct {
         self.session.deinit();
         self.spool.deinit();
         self.index.deinit();
+        self.luce.deinit();
         self.registry.deinit();
         self.* = undefined;
     }
@@ -93,6 +99,13 @@ pub const Terminal = struct {
         // command runs, so keyboard.line always holds the newest line.
         const typed = std.mem.trimEnd(u8, line, "\r\n");
         boundary.observeKeyboard(self.allocator, self.store, typed) catch {};
+
+        // Code entry swallows whole lines until the closing ".".
+        if (self.session.collecting != null) {
+            try self.collectCode(typed);
+            try self.reconcile();
+            return true;
+        }
 
         const words = try command_line.splitWords(self.allocator, line) orelse {
             try self.session.err.print("lucia: unbalanced quotes\n", .{});
@@ -152,9 +165,53 @@ pub const Terminal = struct {
         }
     }
 
+    // One line of code entry: accumulate, or commit on the closing
+    // "." and report compile diagnostics against the texel's ports.
+    fn collectCode(self: *Terminal, typed: []const u8) !void {
+        const collect = &self.session.collecting.?;
+        if (!std.mem.eql(u8, typed, ".")) {
+            try collect.text.appendSlice(self.allocator, typed);
+            try collect.text.append(self.allocator, '\n');
+            return;
+        }
+
+        var finished = self.session.collecting.?;
+        self.session.collecting = null;
+        defer finished.deinit(self.allocator);
+        const texel = finished.texel;
+
+        {
+            var transaction = self.store.begin() catch return self.codeFailed();
+            defer transaction.deinit();
+            const current = transaction.get(texel) orelse return self.codeFailed();
+            var changed = try current.clone(self.allocator);
+            defer changed.deinit(self.allocator);
+            const source = try loom.value.Value.initText(self.allocator, finished.text.items);
+            changed.setContent(self.allocator, source) catch return self.codeFailed();
+            transaction.put(&changed) catch return self.codeFailed();
+            transaction.commit() catch return self.codeFailed();
+        }
+
+        // The source is committed either way; diagnostics tell the
+        // user what still needs fixing before demand can compute.
+        const committed = self.store.get(texel) orelse return;
+        if (try self.luce.check(committed)) |rendered| {
+            defer self.allocator.free(rendered);
+            try self.session.err.print("lucia: luce compile failed\n{s}", .{rendered});
+        }
+    }
+
+    fn codeFailed(self: *Terminal) !void {
+        try self.session.err.print("lucia: code commit failed\n", .{});
+    }
+
     // The prompt names the selection: "lucia>", or "lucia alpha>" while
     // the texel named alpha is selected (its short id when unnamed).
     fn printPrompt(self: *Terminal) !void {
+        if (self.session.collecting != null) {
+            try self.session.out.print("... ", .{});
+            return;
+        }
         if (self.session.hasSelection() and self.store.has(self.session.selected)) {
             const label = try common.texelLabel(self.allocator, self.store, self.session.selected);
             defer self.allocator.free(label);
@@ -308,6 +365,123 @@ test "errors: unknown commands, unbalanced quotes, bad arguments" {
     try testing.expect(std.mem.indexOf(u8, complaints, "usage: new NAME") != null);
     try testing.expect(std.mem.indexOf(u8, complaints, "no texel named nowhere") != null);
     try testing.expect(std.mem.indexOf(u8, complaints, "no texel selected") != null);
+}
+
+test "luce texels compute, recompile on edit, and fire watches" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.script(&.{
+        "new source",
+        "output value int",
+        "set value 21",
+        "new doubler",
+        "eval luce",
+        "input value int",
+        "output value int",
+        "connect value source value",
+        "code",
+        "fn evaluate():",
+        "    output.value = input.value * 2",
+        ".",
+        "pull value",
+        "watch value",
+        // Editing the source recompiles on the next demand.
+        "code",
+        "fn evaluate():",
+        "    output.value = input.value * 3",
+        ".",
+        "pull value",
+        // An upstream change re-fires the watch through reconcile.
+        "select source",
+        "set value 10",
+    });
+    const printed = bench.out.written();
+    try testing.expect(std.mem.indexOf(u8, printed, "42") != null);
+    try testing.expect(std.mem.indexOf(u8, printed, "63") != null);
+    try testing.expect(std.mem.indexOf(u8, printed, "doubler.value = 30") != null);
+    try testing.expectEqualStrings("", bench.err.written());
+}
+
+test "luce boundary slice: keyboard count drives a computed watch" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.script(&.{
+        "new counter",
+        "eval luce",
+        "input count int",
+        "output value int",
+        "connect count keyboard count",
+        "code",
+        "fn evaluate():",
+        "    output.value = input.count * 10",
+        ".",
+        "watch value",
+        "list",
+        "list",
+    });
+    // Every dispatched line observes the keyboard, so the watch keeps
+    // moving: the two list lines each advance count by one.
+    const printed = bench.out.written();
+    const first = std.mem.indexOf(u8, printed, "counter.value = ").?;
+    const second = std.mem.indexOfPos(u8, printed, first + 1, "counter.value = ").?;
+    try testing.expect(std.mem.indexOfPos(u8, printed, second + 1, "counter.value = ") != null);
+    try testing.expectEqualStrings("", bench.err.written());
+}
+
+test "luce compile diagnostics report at code time and demand time" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.script(&.{
+        "new broken",
+        "eval luce",
+        "output value int",
+        "code",
+        "fn evaluate():",
+        "    output.value = input.ghost",
+        ".",
+        "pull value",
+    });
+    const complaints = bench.err.written();
+    // Reported once when the source commits, and again as the error
+    // outcome of the demanded output.
+    try testing.expect(std.mem.indexOf(u8, complaints, "luce compile failed") != null);
+    try testing.expect(std.mem.indexOf(u8, complaints, "no input port named ghost") != null);
+    try testing.expect(std.mem.indexOf(u8, complaints, "error: luce compile failed") != null);
+}
+
+test "luce traps surface as error outcomes, never partial output" {
+    const allocator = testing.allocator;
+    var bench: Bench = undefined;
+    try bench.setup(allocator);
+    defer bench.deinit();
+
+    try bench.script(&.{
+        "new divider",
+        "eval luce",
+        "input value int",
+        "output value int",
+        "connect value keyboard count",
+        "code",
+        "fn evaluate():",
+        "    output.value = 100 / (input.value - input.value)",
+        ".",
+        "pull value",
+    });
+    const complaints = bench.err.written();
+    try testing.expect(std.mem.indexOf(u8, complaints, "luce trap: division by zero") != null);
+    // The name port keeps its passthrough value despite the trap.
+    const label = try common.texelLabel(allocator, &bench.store, bench.terminal.session.selected);
+    defer allocator.free(label);
+    try testing.expectEqualStrings("divider", label);
 }
 
 test "ports move and drop with fibers preserved and guarded" {

@@ -27,6 +27,7 @@ pub const table = [_]Command{
     @import("commands/disconnect.zig").entry,
     @import("commands/set.zig").entry,
     @import("commands/eval.zig").entry,
+    @import("commands/code.zig").entry,
     @import("commands/pull.zig").entry,
     @import("commands/watch.zig").entry,
     @import("commands/unwatch.zig").entry,

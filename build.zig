@@ -36,7 +36,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("apps/lucia/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "loom", .module = loom }},
+        .imports = &.{
+            .{ .name = "loom", .module = loom },
+            .{ .name = "luce", .module = luce },
+        },
     });
     const terminal = b.addExecutable(.{ .name = "lucia", .root_module = app });
     const install_terminal = b.addInstallArtifact(terminal, .{
