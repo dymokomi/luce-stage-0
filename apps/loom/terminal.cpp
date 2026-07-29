@@ -36,7 +36,7 @@ int Terminal::run() {
             continue;
         }
 
-        const CommandResult result = run_command(fabric, words);
+        const CommandResult result = commands.run(fabric, words);
         if (result == COMMAND_EXIT) {
             return 0;
         }

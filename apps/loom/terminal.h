@@ -1,6 +1,6 @@
 #pragma once
 
-#include "commands.h"
+#include "command_set.h"
 
 namespace lucia {
 
@@ -9,8 +9,8 @@ namespace lucia {
 // ---------------------------------------------------------------------------
 //
 // Interactive command loop over one open Fabric.  Reads one command per
-// line, dispatches it, and keeps going until exit or end of input.  The
-// prompt appears only when standard input is a terminal.
+// line, dispatches it through the command set, and keeps going until exit
+// or end of input.  The prompt appears only when standard input is a tty.
 //
 class Terminal {
 public:
@@ -19,7 +19,8 @@ public:
     int run();
 
 private:
-    Store *fabric;
+    Store     *fabric;
+    CommandSet commands;
 };
 
 } // namespace lucia
