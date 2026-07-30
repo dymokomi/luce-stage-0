@@ -22,6 +22,8 @@ pub const fabric = @import("fabric.zig");
 pub const backend = @import("backend.zig");
 pub const interpreter = @import("interpreter.zig");
 pub const ownership_spec = @import("ownership_spec.zig");
+pub const behavior_spec = @import("behavior_spec.zig");
+pub const errors_spec = @import("errors_spec.zig");
 
 test {
     _ = source;
@@ -39,4 +41,6 @@ test {
     _ = backend;
     _ = interpreter;
     _ = ownership_spec;
+    _ = behavior_spec;
+    _ = errors_spec;
 }
