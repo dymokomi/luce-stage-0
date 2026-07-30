@@ -237,6 +237,14 @@ pub const Block = struct {
     items: []Register, // instruction indices, in execution order
 };
 
+/// Where one instruction came from: a 1-based line and byte column in
+/// its function's source file.  Debug info only — never read on the
+/// execution path, only when a trap is being reported.
+pub const Origin = struct {
+    line: u32,
+    column: u32,
+};
+
 pub const Function = struct {
     name: []const u8, // arena-owned by the program
     parameter_count: u32,
@@ -245,6 +253,12 @@ pub const Function = struct {
     instructions: []Instruction,
     result_types: []Type, // parallel to instructions; .none = no result
     blocks: []Block, // entry is block 0
+    /// Debug info, parallel to instructions; empty when the module was
+    /// built --release.  Traps then report codes without locations.
+    origins: []Origin = &.{},
+    /// The source file this function came from ("dice.luc",
+    /// "strings.luc"); "" when stripped.
+    source: []const u8 = "",
 };
 
 // ---------------------------------------------------------------------------
@@ -273,6 +287,17 @@ pub const Program = struct {
         self.* = undefined;
     }
 };
+
+/// Drop debug info — the release build.  Traps in a stripped program
+/// still name their functions, but carry no source lines, and the
+/// encoded module is smaller.  Semantics never change: every check
+/// and trap fires identically in both modes.
+pub fn strip(program: *Program) void {
+    for (program.functions) |*function| {
+        function.origins = &.{};
+        function.source = "";
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Verifier
@@ -356,6 +381,10 @@ fn verifyFunction(allocator: Allocator, program: *const Program, function: *cons
     if (function.blocks.len == 0) return error.EmptyFunction;
     if (function.parameter_count > function.locals.len) return error.BadLocal;
     if (function.instructions.len != function.result_types.len) return error.BadFunction;
+    // Debug info is all-or-nothing per function: one origin per
+    // instruction, or none (a --release build).
+    if (function.origins.len != 0 and function.origins.len != function.instructions.len)
+        return error.BadFunction;
     try verifyType(program, function.return_type);
     for (function.locals) |local| try verifyType(program, local.local_type);
     for (function.result_types) |result_type| try verifyType(program, result_type);

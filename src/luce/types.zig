@@ -65,6 +65,10 @@ pub const CompileOptions = struct {
     entry_mode: EntryMode = .evaluator,
     allow_host: bool = false,
     allow_fabric: bool = false,
+    /// Display name for the root module in debug info ("dice.luc") —
+    /// what a runtime trap location reports.  "" falls back to
+    /// "main.luc".  Imported modules always report "PREFIX.luc".
+    source_name: []const u8 = "",
 };
 
 // ---------------------------------------------------------------------------

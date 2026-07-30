@@ -24,6 +24,10 @@ const program_budget: luce.backend.Budget = .{
     .call_depth = 1 << 18,
 };
 
+/// A trap trace prints at most this many frames; a runaway recursion
+/// reports its innermost calls and a count of the rest.
+const max_printed_frames = 12;
+
 pub const compile_options: luce.types.CompileOptions = .{
     .entry_mode = .script,
     .allow_host = true,
@@ -89,7 +93,9 @@ pub fn runSource(
     loader: ?luce.compile.Loader,
     arguments: []const []const u8,
 ) !u8 {
-    var result = try luce.compile.compileProject(gpa, source, loader, .{}, compile_options);
+    var options = compile_options;
+    options.source_name = std.fs.path.basename(name);
+    var result = try luce.compile.compileProject(gpa, source, loader, .{}, options);
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {
@@ -150,7 +156,22 @@ pub fn run(
             return 0;
         },
         .trap => |trap| {
-            try err.print("loom: trap: {s}\n", .{trap.message});
+            try err.print("loom: trap: {s} [{s}]\n", .{ trap.message, @tagName(trap.code) });
+            // Innermost first, like Zig's own traces.  A --release
+            // module has no lines; the function names still print.
+            for (trap.trace, 0..) |frame, index| {
+                if (index == max_printed_frames) break;
+                if (frame.line != 0) {
+                    try err.print("    at {s} ({s}:{d}:{d})\n", .{
+                        frame.function, frame.source, frame.line, frame.column,
+                    });
+                } else {
+                    try err.print("    at {s}\n", .{frame.function});
+                }
+            }
+            const hidden = trap.dropped +
+                @as(u32, @intCast(trap.trace.len -| max_printed_frames));
+            if (hidden != 0) try err.print("    ... {d} more frames\n", .{hidden});
             return 1;
         },
         .unavailable => {

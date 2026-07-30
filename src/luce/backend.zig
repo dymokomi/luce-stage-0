@@ -59,10 +59,23 @@ pub const InputValue = union(enum) {
     value: RuntimeValue,
 };
 
+/// One call in a trap's stack trace.  `function` and `source` borrow
+/// from the program; a stripped (--release) module reports line 0.
+pub const TraceFrame = struct {
+    function: []const u8,
+    source: []const u8,
+    line: u32,
+    column: u32,
+};
+
 pub const Trap = struct {
     code: ir.TrapCode,
     /// Arena-owned or static; valid until the evaluation arena frees.
     message: []const u8,
+    /// The call stack at the trap, innermost first (arena-owned).
+    /// Deep recursion is capped; `dropped` counts what the cap cut.
+    trace: []const TraceFrame = &.{},
+    dropped: u32 = 0,
 };
 
 pub const Success = struct {

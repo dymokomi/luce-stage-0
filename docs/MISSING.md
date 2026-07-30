@@ -42,11 +42,11 @@ design philosophy.
    m:` and `for i, x in xs:` (enumerate) bind a position and a
    payload; `m.values()` and `m.get(k, default)` landed too.  The
    no-default `m.get(k)` still waits on optionals (Phase 3).
-3. **Runtime traps carry no source location.**  Compile diagnostics
-   have byte spans; a runtime trap says `index out of bounds` with
-   no file:line.  Python tracebacks and Zig panic traces both spoil
-   users here.  Needs an IR-instruction→span side table (the format
-   has room; bump `format_version`).
+3. ~~Runtime traps carry no source location~~ — shipped
+   (docs/MODES.md): debug builds (the default) carry per-instruction
+   origins, and a trap prints `file:line:column` plus the full call
+   trace, innermost first; `luce build --release` strips the tables
+   for smaller modules with identical behavior.
 4. **No `read_line()`** (or any line-mode stdin) — calc.luc cannot
    be a REPL.  One host builtin away.
 5. **No character literals.**  `byte_at(...) == 40  # "("` is the

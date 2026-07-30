@@ -20,7 +20,7 @@ const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 7;
+pub const format_version: u32 = 8;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -142,6 +142,15 @@ const Writer = struct {
 
         try self.int(u32, @intCast(of.blocks.len));
         for (of.blocks) |block| try self.registers(block.items);
+
+        // Debug info: the source file name and one line:column per
+        // instruction; a --release build writes "" and zero.
+        try self.blob(of.source);
+        try self.int(u32, @intCast(of.origins.len));
+        for (of.origins) |origin| {
+            try self.int(u32, origin.line);
+            try self.int(u32, origin.column);
+        }
     }
 
     fn instruction(self: *Writer, of: ir.Instruction) error{OutOfMemory}!void {
@@ -407,6 +416,18 @@ const Reader = struct {
         const blocks = try arena.alloc(ir.Block, block_count);
         for (blocks) |*block| block.items = try self.registers(arena);
         out.blocks = blocks;
+
+        // Debug info is all-or-nothing per function; reject a table
+        // that disagrees with the instruction count before allocating.
+        out.source = try arena.dupe(u8, try self.blob());
+        const origin_count = try self.count();
+        if (origin_count != 0 and origin_count != instruction_count) return error.InvalidModule;
+        const origins = try arena.alloc(ir.Origin, origin_count);
+        for (origins) |*origin| {
+            origin.line = try self.int(u32);
+            origin.column = try self.int(u32);
+        }
+        out.origins = origins;
     }
 
     fn instruction(self: *Reader, arena: Allocator) DecodeError!ir.Instruction {
@@ -571,6 +592,56 @@ test "a compiled program round-trips through the module format" {
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "debug origins round-trip; strip removes them and shrinks the module" {
+    var program = try compileScript(
+        \\func double(value: Int) -> Int:
+        \\    return value * 2
+        \\
+        \\func main():
+        \\    let sum = double(4) + double(5)
+        \\
+    );
+    defer program.deinit();
+
+    const debug_encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(debug_encoded);
+    var debug_loaded = try decode(testing.allocator, debug_encoded);
+    defer debug_loaded.deinit();
+    for (debug_loaded.functions, program.functions) |loaded, original| {
+        try testing.expectEqualStrings(original.source, loaded.source);
+        try testing.expectEqual(original.instructions.len, loaded.origins.len);
+        try testing.expectEqualSlices(ir.Origin, original.origins, loaded.origins);
+    }
+    // Bench compiles without a source_name; the root falls back.
+    try testing.expectEqualStrings("main.luc", debug_loaded.functions[0].source);
+
+    ir.strip(&program);
+    const release_encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(release_encoded);
+    try testing.expect(release_encoded.len < debug_encoded.len);
+    var release_loaded = try decode(testing.allocator, release_encoded);
+    defer release_loaded.deinit();
+    for (release_loaded.functions) |function| {
+        try testing.expectEqual(@as(usize, 0), function.origins.len);
+        try testing.expectEqualStrings("", function.source);
+    }
+}
+
+test "an origins table that disagrees with the instruction count is rejected" {
+    var program = try compileScript(
+        \\func main():
+        \\    print("hi")
+        \\
+    );
+    defer program.deinit();
+    // Damage in memory, then encode: one origin too few.
+    const function = &program.functions[0];
+    function.origins = function.origins[0 .. function.origins.len - 1];
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
 }
 
 test "a decoded module runs behind the backend boundary" {
@@ -739,6 +810,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     inline for (comptime std.meta.fieldNames(ir.TrapCode)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap codes: bump format_version and update BOTH numbers.
-    try testing.expectEqual(@as(u32, 7), format_version);
+    try testing.expectEqual(@as(u32, 8), format_version);
     try testing.expectEqual(@as(u64, 13456387974860105935), hasher.final());
 }

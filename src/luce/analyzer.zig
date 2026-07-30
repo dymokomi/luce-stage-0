@@ -66,10 +66,12 @@ pub const Analyzed = struct {
 };
 
 /// One file in a project: the root ("" prefix) or an imported module
-/// whose declarations are namespaced by its import name.
+/// whose declarations are namespaced by its import name.  The source
+/// text feeds debug info (span -> line:column origins).
 pub const ModuleTree = struct {
     prefix: []const u8,
     tree: *const ast.Program,
+    source: []const u8,
 };
 
 /// Check the project against the schema and lower it to IR.  Returns
@@ -202,6 +204,11 @@ const Analyzer = struct {
     constant_infos: std.ArrayList(ConstantInfo) = .empty,
     constant_names: std.StringHashMapUnmanaged(u32) = .empty,
     reads: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// Lazy per-module debug caches: line-start offsets (temporary,
+    /// for span -> line:column) and display names (arena — they end
+    /// up in ir.Function.source).
+    line_tables: std.ArrayList(?[]u32) = .empty,
+    source_names: std.ArrayList(?[]const u8) = .empty,
 
     fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
@@ -210,6 +217,44 @@ const Analyzer = struct {
         self.constant_infos.deinit(self.temporary);
         self.constant_names.deinit(self.temporary);
         self.reads.deinit(self.temporary);
+        for (self.line_tables.items) |starts| {
+            if (starts) |owned| self.temporary.free(owned);
+        }
+        self.line_tables.deinit(self.temporary);
+        self.source_names.deinit(self.temporary);
+    }
+
+    fn moduleLineStarts(self: *Analyzer, module: usize) Error![]const u32 {
+        if (self.line_tables.items.len == 0) {
+            try self.line_tables.appendNTimes(self.temporary, null, self.modules.len);
+        }
+        if (self.line_tables.items[module]) |starts| return starts;
+        const source = self.modules[module].source;
+        var starts: std.ArrayList(u32) = .empty;
+        errdefer starts.deinit(self.temporary);
+        try starts.append(self.temporary, 0);
+        for (source, 0..) |character, offset| {
+            if (character == '\n') try starts.append(self.temporary, @intCast(offset + 1));
+        }
+        const owned = try starts.toOwnedSlice(self.temporary);
+        self.line_tables.items[module] = owned;
+        return owned;
+    }
+
+    fn moduleSourceName(self: *Analyzer, module: usize) Error![]const u8 {
+        if (self.source_names.items.len == 0) {
+            try self.source_names.appendNTimes(self.temporary, null, self.modules.len);
+        }
+        if (self.source_names.items[module]) |name| return name;
+        const prefix = self.modules[module].prefix;
+        const name: []const u8 = if (prefix.len != 0)
+            try std.fmt.allocPrint(self.arena, "{s}.luc", .{prefix})
+        else if (self.options.source_name.len != 0)
+            try self.arena.dupe(u8, std.fs.path.basename(self.options.source_name))
+        else
+            "main.luc";
+        self.source_names.items[module] = name;
+        return name;
     }
 
     fn fail(self: *Analyzer, code: []const u8, span: Span, comptime format: []const u8, arguments: anytype) Error!void {
@@ -1014,6 +1059,7 @@ const Analyzer = struct {
             .has_frames = info.is_entry and self.options.entry_mode == .evaluator,
         };
         defer builder.deinitScratch();
+        builder.origin = @intCast(info.declaration.span.start);
 
         try builder.openBlock();
         try builder.pushScope();
@@ -1055,6 +1101,12 @@ const Analyzer = struct {
         }
         try builder.sealOpenBlocks();
 
+        const line_starts = try self.moduleLineStarts(info.module);
+        const origins = try self.arena.alloc(ir.Origin, builder.origin_offsets.items.len);
+        for (builder.origin_offsets.items, origins) |offset, *slot| {
+            slot.* = placeOf(line_starts, offset);
+        }
+
         return .{
             .name = info.name,
             .parameter_count = @intCast(info.parameter_types.len),
@@ -1063,9 +1115,23 @@ const Analyzer = struct {
             .instructions = try builder.instructions.toOwnedSlice(self.arena),
             .result_types = try builder.result_types.toOwnedSlice(self.arena),
             .blocks = try builder.finishBlocks(),
+            .origins = origins,
+            .source = try self.moduleSourceName(info.module),
         };
     }
 };
+
+/// Line and column of a byte offset against a module's precomputed
+/// line-start table (binary search for the last start <= offset).
+fn placeOf(line_starts: []const u32, offset: u32) ir.Origin {
+    var low: usize = 0;
+    var high: usize = line_starts.len;
+    while (low + 1 < high) {
+        const middle = (low + high) / 2;
+        if (line_starts[middle] <= offset) low = middle else high = middle;
+    }
+    return .{ .line = @intCast(low + 1), .column = offset - line_starts[low] + 1 };
+}
 
 fn compareOrder(op: ast.BinaryOp, a: anytype, b: @TypeOf(a)) bool {
     return switch (op) {
@@ -1130,6 +1196,10 @@ const FunctionBuilder = struct {
     /// ones nothing adopted.  Adoption is a runtime re-owning, so a
     /// stale release is a safe no-op.
     temps: std.ArrayList(TempSlot) = .empty,
+    /// Debug info: the source offset stamped on every emitted
+    /// instruction (statement granularity), parallel to instructions.
+    origin_offsets: std.ArrayList(u32) = .empty,
+    origin: u32 = 0,
 
     const TempSlot = struct { local: LocalId, register: Register };
 
@@ -1149,6 +1219,7 @@ const FunctionBuilder = struct {
         self.scopes.deinit(self.temporary());
         self.loops.deinit(self.temporary());
         self.temps.deinit(self.temporary());
+        self.origin_offsets.deinit(self.temporary());
     }
 
     fn fail(self: *FunctionBuilder, code: []const u8, span: Span, comptime format: []const u8, arguments: anytype) Error!void {
@@ -1175,6 +1246,7 @@ const FunctionBuilder = struct {
         const register: Register = @intCast(self.instructions.items.len);
         try self.instructions.append(self.arena(), instruction);
         try self.result_types.append(self.arena(), result);
+        try self.origin_offsets.append(self.temporary(), self.origin);
         const block = &self.blocks.items[self.current];
         if (!block.terminated) {
             try block.items.append(self.arena(), register);
@@ -1504,6 +1576,10 @@ const FunctionBuilder = struct {
     }
 
     fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
+        // Statement granularity is the trap-location contract: every
+        // instruction a statement lowers to reports the statement's
+        // own line, the way Python tracebacks do.
+        self.origin = @intCast(statement.span().start);
         switch (statement) {
             .let => |binding| try self.lowerBinding(binding.name, binding.annotation, binding.value, false, binding.span),
             .variable => |binding| {

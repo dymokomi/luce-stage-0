@@ -33,10 +33,16 @@ build/loom edit programs/hello.luc    # the editor, written in Luce
 The compiler:
 
 ```text
-luce build FILE.luc [-o FILE.lc]   compile and write a module
+luce build FILE.luc [-o FILE.lc] [--release]
+                                   compile and write a module
 luce check FILE.luc                compile, report, write nothing
 luce ir FILE.luc                   compile and dump readable IR
 ```
+
+Builds are debug by default: the module carries source locations,
+so a runtime trap prints `file:line:column` and a call trace.
+`--release` strips them for a smaller module — the program itself
+behaves identically (docs/MODES.md).
 
 The terminal:
 

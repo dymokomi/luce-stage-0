@@ -189,6 +189,12 @@ pub const Statement = union(enum) {
     break_statement: Marker,
     continue_statement: Marker,
     expression: ExpressionStatement,
+
+    pub fn span(self: *const Statement) Span {
+        return switch (self.*) {
+            inline else => |node| node.span,
+        };
+    }
 };
 
 pub const Block = struct {

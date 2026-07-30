@@ -46,9 +46,22 @@ pub fn run(
             .intents = machine.intents,
             .leaked_objects = machine.live_objects,
         } },
-        .trap => |trap| return .{ .trap = trap },
+        .trap => |trap| {
+            // The frame stack survives a trap intact, so the trace
+            // costs nothing until a trap actually happens — the
+            // debug tables are never read on the execution path.
+            var reported = trap;
+            machine.traceback(&reported) catch |mistake| switch (mistake) {
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            return .{ .trap = reported };
+        },
     }
 }
+
+/// Deep recursion reports the innermost frames and drops the rest;
+/// a call_depth_exceeded trace would otherwise be the whole budget.
+const max_trace_frames = 64;
 
 const CallOutcome = union(enum) {
     value: RuntimeValue,
@@ -121,6 +134,33 @@ const Machine = struct {
             error.OutOfMemory => error.OutOfMemory,
             error.Trap => .{ .trap = self.pending_trap.? },
         };
+    }
+
+    /// Fill a trap's stack trace from the live frame stack, innermost
+    /// first.  Each frame's current instruction resolves through the
+    /// function's origins table when the module carries one (debug);
+    /// a stripped module still names the function, with line 0.
+    fn traceback(self: *Machine, reported: *backend.Trap) error{OutOfMemory}!void {
+        const depth = self.stack.items.len;
+        const kept = @min(depth, max_trace_frames);
+        const frames = try self.arena.alloc(backend.TraceFrame, kept);
+        for (frames, 0..) |*slot, out_index| {
+            const frame = self.stack.items[depth - 1 - out_index];
+            const function = &self.program.functions[frame.function];
+            const items = function.blocks[frame.block].items;
+            // position already advanced past the current instruction;
+            // at position 0 the block's first instruction is the one
+            // about to run (a step-budget trap between instructions).
+            const at = items[if (frame.position == 0) 0 else frame.position - 1];
+            slot.* = .{
+                .function = function.name,
+                .source = function.source,
+                .line = if (at < function.origins.len) function.origins[at].line else 0,
+                .column = if (at < function.origins.len) function.origins[at].column else 0,
+            };
+        }
+        reported.trace = frames;
+        reported.dropped = @intCast(depth - kept);
     }
 
     /// Resolve a handle to its live object, or fail: null slots trap
@@ -2462,4 +2502,119 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
     , .{}, script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Trap locations and traces
+// ---------------------------------------------------------------------------
+//
+// Debug builds carry per-instruction origins; a trap walks the intact
+// frame stack once and reports file:line:column per call, innermost
+// first.  The tables are never read while the program runs — the
+// release difference is what a trap can say, never what happens.
+
+test "a trap reports its statement's line and the full call trace" {
+    var bench = try Bench.setup(
+        \\func divide(a: Int, b: Int) -> Int:
+        \\    return a / b
+        \\
+        \\func ratio(n: Int) -> Int:
+        \\    return divide(100, n)
+        \\
+        \\func main():
+        \\    let x = ratio(0)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{});
+    try testing.expect(result == .trap);
+    const trap = result.trap;
+    try testing.expectEqual(ir.TrapCode.divide_by_zero, trap.code);
+    try testing.expectEqual(@as(usize, 3), trap.trace.len);
+    try testing.expectEqual(@as(u32, 0), trap.dropped);
+
+    try testing.expectEqualStrings("divide", trap.trace[0].function);
+    try testing.expectEqualStrings("main.luc", trap.trace[0].source);
+    try testing.expectEqual(@as(u32, 2), trap.trace[0].line);
+    try testing.expectEqual(@as(u32, 5), trap.trace[0].column);
+
+    try testing.expectEqualStrings("ratio", trap.trace[1].function);
+    try testing.expectEqual(@as(u32, 5), trap.trace[1].line);
+
+    try testing.expectEqualStrings("main", trap.trace[2].function);
+    try testing.expectEqual(@as(u32, 8), trap.trace[2].line);
+}
+
+test "a stripped program still names its trap frames, without lines" {
+    var bench = try Bench.setup(
+        \\func boom() -> Int:
+        \\    return 1 / 0
+        \\
+        \\func main():
+        \\    let x = boom()
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    ir.strip(&bench.program);
+
+    const result = try bench.evaluate(&.{});
+    try testing.expect(result == .trap);
+    const trap = result.trap;
+    try testing.expectEqual(@as(usize, 2), trap.trace.len);
+    try testing.expectEqualStrings("boom", trap.trace[0].function);
+    try testing.expectEqualStrings("", trap.trace[0].source);
+    try testing.expectEqual(@as(u32, 0), trap.trace[0].line);
+    try testing.expectEqual(@as(u32, 0), trap.trace[0].column);
+}
+
+test "a trap inside std code points into the std module" {
+    var bench = try Bench.setup(
+        \\import strings
+        \\
+        \\func main():
+        \\    var decimals = -1
+        \\    let bad = strings.format_float(1.0, decimals)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{});
+    try testing.expect(result == .trap);
+    const trap = result.trap;
+    try testing.expectEqual(ir.TrapCode.explicit_trap, trap.code);
+    try testing.expect(trap.trace.len == 2);
+    try testing.expectEqualStrings("strings.format_float", trap.trace[0].function);
+    try testing.expectEqualStrings("strings.luc", trap.trace[0].source);
+    try testing.expect(trap.trace[0].line != 0);
+    try testing.expectEqualStrings("main", trap.trace[1].function);
+    try testing.expectEqualStrings("main.luc", trap.trace[1].source);
+    try testing.expectEqual(@as(u32, 5), trap.trace[1].line);
+}
+
+test "a runaway recursion reports a capped trace and counts the rest" {
+    var bench = try Bench.setup(
+        \\func spiral(n: Int) -> Int:
+        \\    return spiral(n + 1)
+        \\
+        \\func main():
+        \\    let x = spiral(0)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+
+    const result = try backend.evaluate(
+        bench.arena.allocator(),
+        &bench.program,
+        &.{},
+        bench.outputs,
+        .{ .steps = 200_000, .call_depth = 100 },
+    );
+    try testing.expect(result == .trap);
+    const trap = result.trap;
+    try testing.expectEqual(ir.TrapCode.call_depth_exceeded, trap.code);
+    try testing.expectEqual(@as(usize, max_trace_frames), trap.trace.len);
+    try testing.expectEqual(@as(u32, 100 - max_trace_frames), trap.dropped);
+    try testing.expectEqualStrings("spiral", trap.trace[0].function);
+    try testing.expectEqual(@as(u32, 2), trap.trace[0].line);
 }

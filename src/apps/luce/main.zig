@@ -41,16 +41,19 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
 
     if (std.mem.eql(u8, command, "build")) {
         var output_path: []const u8 = "";
+        var release = false;
         var index: usize = 3;
         while (index < arguments.len) : (index += 1) {
             if (std.mem.eql(u8, arguments[index], "-o") and index + 1 < arguments.len) {
                 index += 1;
                 output_path = arguments[index];
+            } else if (std.mem.eql(u8, arguments[index], "--release")) {
+                release = true;
             } else {
                 return usage(err);
             }
         }
-        return build(gpa, io, err, out, path, output_path);
+        return build(gpa, io, err, out, path, output_path, release);
     }
     if (std.mem.eql(u8, command, "check")) {
         if (arguments.len != 3) return usage(err);
@@ -76,9 +79,14 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
 fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
-            "  luce build FILE.luc [-o FILE.lc]\n" ++
+            "  luce build FILE.luc [-o FILE.lc] [--release]\n" ++
             "  luce check FILE.luc\n" ++
-            "  luce ir FILE.luc\n",
+            "  luce ir FILE.luc\n" ++
+            "\n" ++
+            "build is a debug build unless --release: the module\n" ++
+            "carries source locations, so traps report file:line\n" ++
+            "and a call trace.  --release strips them for smaller\n" ++
+            "modules; the program itself behaves identically.\n",
         .{},
     );
     return 1;
@@ -91,10 +99,14 @@ fn build(
     out: *std.Io.Writer,
     path: []const u8,
     output_path: []const u8,
+    release: bool,
 ) !u8 {
     var program = (try compilePath(gpa, io, err, path)) orelse return 1;
     defer program.deinit();
 
+    // Release strips debug info (trap locations); it never changes
+    // what the program does — every check traps identically.
+    if (release) luce.ir.strip(&program);
     const encoded = try luce.module.encode(gpa, &program);
     defer gpa.free(encoded);
 
@@ -139,6 +151,7 @@ fn compilePath(
     var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{}, .{
         .entry_mode = .script,
         .allow_host = true,
+        .source_name = std.fs.path.basename(path),
     });
     switch (result) {
         .success => |program| return program,

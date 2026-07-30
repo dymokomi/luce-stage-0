@@ -117,7 +117,7 @@ pub fn compileProject(
 
     var modules: std.ArrayList(analyzer_mod.ModuleTree) = .empty;
     defer modules.deinit(gpa);
-    try modules.append(gpa, .{ .prefix = "", .tree = root_tree });
+    try modules.append(gpa, .{ .prefix = "", .tree = root_tree, .source = source });
 
     // Breadth-first over the import graph; each module loads and
     // parses once, cycles are simply already-loaded names.
@@ -163,7 +163,7 @@ pub fn compileProject(
         tree.* = try parser_mod.parse(scaffold, gpa, module_source, &diagnostics);
         diagnostics.scope = "";
         const prefix = try scaffold.dupe(u8, wanted.name);
-        try modules.append(gpa, .{ .prefix = prefix, .tree = tree });
+        try modules.append(gpa, .{ .prefix = prefix, .tree = tree, .source = module_source });
         try pending.appendSlice(gpa, tree.imports);
     }
     if (diagnostics.hasErrors()) {
