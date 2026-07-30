@@ -13,10 +13,10 @@ Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS:
 ```sh
 ./build.sh         # zig build --prefix build: installs build/luce, build/loom, build/programs/*.lc
 zig build test     # Luce language suite + compiler CLI suite + loom terminal suite
-zig fmt luce/ apps/ build.zig
+zig fmt src/ build.zig
 ```
 
-Tests are `test` blocks beside the code they prove, leak-checked under `std.testing.allocator`; `zig build test` discovers them through the module roots (`luce/luce.zig` re-exports every language package and lists them in its test block; `apps/loom/main.zig` and `apps/luce/main.zig` do the same for their trees). A new language package must be added to `luce/luce.zig`'s re-exports and test block. Note: `zig build test` does not refresh installed binaries — run `./build.sh` for that (a bare `zig build` installs under `zig-out/`; both install trees are gitignored).
+Tests are `test` blocks beside the code they prove, leak-checked under `std.testing.allocator`; `zig build test` discovers them through the module roots (`src/luce/luce.zig` re-exports every language package and lists them in its test block; `src/apps/loom/main.zig` and `src/apps/luce/main.zig` do the same for their trees). A new language package must be added to `src/luce/luce.zig`'s re-exports and test block. Note: `zig build test` does not refresh installed binaries — run `./build.sh` for that (a bare `zig build` installs under `zig-out/`; both install trees are gitignored).
 
 ## What this project is
 
@@ -24,8 +24,8 @@ LuciaOS **v2** is language-first: **Luce**, the small statically typed language,
 
 Two binaries from one language module:
 
-- `luce` (apps/luce/) — the compiler: `luce build FILE.luc [-o FILE.lc]`, `luce check`, `luce ir`.
-- `loom` (apps/loom/) — the environment: an interactive colored shell (`run`, `luce`, `edit`, `clear`, `exit`, bare `.lc`/`.luc` paths), plus direct CLI forms (`loom run FILE.lc [args]`, `loom luce FILE.luc`, `loom edit FILE`).
+- `luce` (src/apps/luce/) — the compiler: `luce build FILE.luc [-o FILE.lc]`, `luce check`, `luce ir`.
+- `loom` (src/apps/loom/) — the environment: an interactive colored shell (`run`, `luce`, `edit`, `clear`, `exit`, bare `.lc`/`.luc` paths), plus direct CLI forms (`loom run FILE.lc [args]`, `loom luce FILE.luc`, `loom edit FILE`).
 
 ## Architecture
 
@@ -34,17 +34,17 @@ apps (luce CLI, loom terminal) → luce module (language)
 tests → the package under test
 ```
 
-**`luce/` — the language, one file per stage, re-exported by `luce/luce.zig`:** pipeline is `compile.zig`: indentation-aware lexer → recursive-descent/Pratt parser → arena AST → `analyzer.zig` (checking and IR lowering in one walk: no implicit conversions, immutable `let`, no shadowing, return paths, struct cycles, builtin typing) → typed Luce IR (`ir.zig`: instruction pool + basic blocks; registers never cross blocks, mutable locals carry loop state; verifier + deterministic printer) → the execution boundary (`backend.zig`: immutable Input frame, scratch Output frame, explicit step/depth budget, publish-nothing-on-failure) → the deterministic IR interpreter (`interpreter.zig`: checked integer arithmetic, IEEE floats, range-checked `Int(Float)`, checked UTF-8-boundary `slice` and byte-level `byte_at`, traps with stable codes). Diagnostics carry stable codes (`luce.lex.*`, `luce.parse.*`, `luce.sema.*`) and byte spans.
+**`src/luce/` — the language, one file per stage, re-exported by `src/luce/luce.zig`:** pipeline is `compile.zig`: indentation-aware lexer → recursive-descent/Pratt parser → arena AST → `analyzer.zig` (checking and IR lowering in one walk: no implicit conversions, immutable `let`, no shadowing, return paths, struct cycles, builtin typing) → typed Luce IR (`ir.zig`: instruction pool + basic blocks; registers never cross blocks, mutable locals carry loop state; verifier + deterministic printer) → the execution boundary (`backend.zig`: immutable Input frame, scratch Output frame, explicit step/depth budget, publish-nothing-on-failure) → the deterministic IR interpreter (`interpreter.zig`: checked integer arithmetic, IEEE floats, range-checked `Int(Float)`, checked UTF-8-boundary `slice` and byte-level `byte_at`, traps with stable codes). Diagnostics carry stable codes (`luce.lex.*`, `luce.parse.*`, `luce.sema.*`) and byte spans.
 
-**`luce/module.zig` — the `.lc` format:** a direct binary serialization of the verified IR (magic `LUCE` + version, constants, structs, functions, ports, entry). `decode` re-runs the IR verifier so damaged modules are rejected, but instruction *types* beyond the verifier are trusted — treat `.lc` like an executable. Any change to the instruction set, intrinsics, or trap codes must bump `format_version` (no migration; modules recompile from source).
+**`src/luce/module.zig` — the `.lc` format:** a direct binary serialization of the verified IR (magic `LUCE` + version, constants, structs, functions, ports, entry). `decode` re-runs the IR verifier so damaged modules are rejected, but instruction *types* beyond the verifier are trusted — treat `.lc` like an executable. Any change to the instruction set, intrinsics, or trap codes must bump `format_version` (no migration; modules recompile from source).
 
 **Entry modes and gates** (`types.CompileOptions`): scripts require exactly `func main():`; evaluator mode (`func evaluate(input: Input, output: Output):` against a Port schema) still exists for the Fabric's eventual return. `allow_host` gates the host builtins (`print`, `file_read`/`file_write`/`file_exists`, `arg`/`arg_count`, `term_*`, `key_read`/`key_text`) — ungated use is a `luce.sema.host` diagnostic. `allow_fabric` gates the dormant fabric-intent builtins (off everywhere in v2). The declaration keyword is strictly `func`; structs are value-only but may contain static namespaced functions (`Struct.name(...)`); no receivers, methods, classes, inheritance, or first-class functions.
 
 **The host boundary** (`backend.Host`): every effect is an optional host service; a missing service traps (`host_unavailable`) instead of touching anything, so the pure `evaluate()` API stays pure. `Host.terminal` is a vtable (`rows/cols/clear/move/style/write/flush/key`) — the host owns raw mode, the alternate screen, frame buffering, and every escape byte; `term_write` text is sanitized so programs can never emit control sequences. `key_read` presents the pending frame before blocking (a draw loop needs no explicit flush) and returns stable key names ("text", "enter", "up", "ctrl_s", …) with `key_text()` carrying the "text" payload.
 
-**`apps/loom/`** — `main.zig` (dispatch), `shell.zig` (line shell; embeds `programs/editor.luc` via build-system import so `loom edit` needs no paths; `LOOM_EDITOR` overrides), `runner.zig` (load `.lc` / compile `.luc`, run with effectively unlimited steps but bounded call depth, restore the screen before reporting traps), `host.zig` (the real host: lazy raw mode + alt screen, 256-color SGR styles, sanitized writes, cwd-relative files, key decoding), `key.zig` (escape-sequence decoding), `palette.zig` (semantic shell colors, empty when not a tty / NO_COLOR).
+**`src/apps/loom/`** — `main.zig` (dispatch), `shell.zig` (line shell; embeds `programs/editor.luc` via build-system import so `loom edit` needs no paths; `LOOM_EDITOR` overrides), `runner.zig` (load `.lc` / compile `.luc`, run with effectively unlimited steps but bounded call depth, restore the screen before reporting traps), `host.zig` (the real host: lazy raw mode + alt screen, 256-color SGR styles, sanitized writes, cwd-relative files, key decoding), `key.zig` (escape-sequence decoding), `palette.zig` (semantic shell colors, empty when not a tty / NO_COLOR).
 
-**`programs/`** — userland in Luce. `editor.luc` is the flagship: a full-screen editor with per-line Luce syntax highlighting (keywords, capitalized type names, builtins, strings, numbers, comments), line numbers, status bar, Ctrl-S save / Ctrl-Q quit (twice to discard). A test in `apps/loom/shell.zig` compiles the embedded editor so it can never rot; `build.zig` also compiles every bundled program with the freshly built `luce` on install.
+**`programs/`** — userland in Luce. `editor.luc` is the flagship: a full-screen editor with per-line Luce syntax highlighting (keywords, capitalized type names, builtins, strings, numbers, comments), line numbers, status bar, Ctrl-S save / Ctrl-Q quit (twice to discard). A test in `src/apps/loom/shell.zig` compiles the embedded editor so it can never rot; `build.zig` also compiles every bundled program with the freshly built `luce` on install.
 
 ## Coding conventions
 
@@ -56,5 +56,5 @@ tests → the package under test
 - Tagged unions over class hierarchies (`Value`, `Instruction`, `Result`); function-pointer tables only where substitution is real (`backend.Host`). No comptime cleverness a reader can't hold in their head, no premature abstraction, no framework-style managers.
 - Naming: TitleCase types, camelCase functions, snake_case fields; short verbs (`read`, `write`, `open`, `parse`, `encode`); collections use `count`/`has`/`get`/`put`/`remove`/`at`; drop redundant type nouns; plain-English names (`file_handle`, `page_index` — never `fd`, `buf`, `n`, `ptr`).
 - Comments: `//!` file purpose lines, dashed section headers, `///` docs that explain assumptions and ownership — not narration of obvious code.
-- Types that must not move after setup (something captured a pointer into them) use the documented in-place `setup(self: *T, ...)` pattern (`apps/loom/host.zig`'s `Host`).
+- Types that must not move after setup (something captured a pointer into them) use the documented in-place `setup(self: *T, ...)` pattern (`src/apps/loom/host.zig`'s `Host`).
 - Tests: `test` blocks beside the code, named after what they prove (`test "truncated, oversold, and damaged modules are rejected"`); direct `std.testing` checks, no framework; cover success, bounds failure, and round-trip/rejection where relevant.

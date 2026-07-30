@@ -72,12 +72,12 @@ rebuilding loom.  `Ctrl-S` saves, `Ctrl-Q` quits.
 ## Packages
 
 ```text
-luce/                     the Luce language: lexer, parser, analyzer,
+src/luce/                 the Luce language: lexer, parser, analyzer,
                           typed IR + verifier, the .lc module format,
                           and the interpreter behind the backend
                           boundary
-apps/luce/                the luce compiler CLI
-apps/loom/                the loom terminal: shell, program runner,
+src/apps/luce/            the luce compiler CLI
+src/apps/loom/            the loom terminal: shell, program runner,
                           and the trusted host behind the Luce host
                           builtins
 programs/                 userland, written in Luce (editor, hello)

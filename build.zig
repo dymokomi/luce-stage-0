@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
 
     // Luce: the language — lexer through IR, interpreter, .lc format.
     const luce = b.addModule("luce", .{
-        .root_source_file = b.path("luce/luce.zig"),
+        .root_source_file = b.path("src/luce/luce.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
 
     // The luce compiler executable.
     const compiler_module = b.createModule(.{
-        .root_source_file = b.path("apps/luce/main.zig"),
+        .root_source_file = b.path("src/apps/luce/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
 
     // The loom terminal, with the editor source embedded.
     const terminal_module = b.createModule(.{
-        .root_source_file = b.path("apps/loom/main.zig"),
+        .root_source_file = b.path("src/apps/loom/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
