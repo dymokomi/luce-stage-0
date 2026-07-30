@@ -207,6 +207,15 @@ s += "b"            # s == "ab"
 counts[key] += 1    # key evaluated once
 ```
 
+Assignment targets a **place**: a name, a field, or an index, nested
+freely — `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag =
+"x"`.  The place is read once (every subscript evaluated once), then
+rebuilt: value structs update functionally up to their root binding,
+and the innermost container element is written in place.  A nested
+place assigns a **value** (a number, String, or plain struct); to
+restock an *object* field use the single-level form
+(`bag.items = [1, 2]`).
+
 ## Scope
 
 One scope per **file** (top-level constants, structs, and functions),

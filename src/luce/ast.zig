@@ -119,11 +119,18 @@ pub const Expression = union(enum) {
 pub const NameTarget = struct { text: []const u8, span: Span };
 pub const FieldTarget = struct { base: []const u8, field: []const u8, span: Span };
 pub const IndexTarget = struct { base: *Expression, indices: []*Expression, span: Span };
+/// A nested place `root.a.b`, `cells[0].value` — a field access whose
+/// target is not a plain name, so it can't be the simple `name.field`
+/// form.  Carries the whole field expression; the analyzer reads the
+/// chain once and rebuilds it, writing the innermost object element or
+/// the root local.  (`base[i]` with a complex base is still IndexTarget.)
+pub const ChainTarget = struct { place: *Expression, span: Span };
 
 pub const Target = union(enum) {
     name: NameTarget,
     field: FieldTarget,
     index: IndexTarget,
+    chain: ChainTarget,
 
     pub fn span(self: *const Target) Span {
         return switch (self.*) {

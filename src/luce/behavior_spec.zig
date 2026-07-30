@@ -501,6 +501,73 @@ test "structs: namespaced functions and nested structs" {
 }
 
 // ---------------------------------------------------------------------------
+// Nested-place assignment
+// ---------------------------------------------------------------------------
+
+test "chained assignment through nested struct fields" {
+    try expectOk(
+        \\struct Inner:
+        \\    n: Int
+        \\
+        \\struct Outer:
+        \\    label: String
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    var o = Outer(label = "x", inner = Inner(n = 1))
+        \\    o.inner.n = 42
+        \\    assert(o.inner.n == 42)
+        \\    assert(o.label == "x")
+        \\    o.inner.n += 8
+        \\    assert(o.inner.n == 50)
+        \\    let snapshot = o
+        \\    o.inner.n = 0
+        \\    assert(snapshot.inner.n == 50)
+        \\
+    );
+}
+
+test "chained assignment into struct elements of lists and arrays" {
+    try expectOk(
+        \\struct Cell:
+        \\    value: Int
+        \\
+        \\func main():
+        \\    var cells = [Cell(value = 10), Cell(value = 20)]
+        \\    cells[1].value = 99
+        \\    assert(cells[1].value == 99)
+        \\    assert(cells[0].value == 10)
+        \\    cells[0].value += 5
+        \\    assert(cells[0].value == 15)
+        \\    var grid = new Array(Cell, 2, 2)
+        \\    grid[1, 1].value = 7
+        \\    assert(grid[1, 1].value == 7)
+        \\    assert(grid[0, 0].value == 0)
+        \\
+    );
+}
+
+test "a chained index place evaluates its subscript once" {
+    try expectOk(
+        \\struct Cell:
+        \\    value: Int
+        \\
+        \\func bump(counter: List(Int)) -> Int:
+        \\    counter[0] = counter[0] + 1
+        \\    return 1
+        \\
+        \\func main():
+        \\    var calls = [0]
+        \\    var cells = [Cell(value = 100), Cell(value = 200)]
+        \\    cells[bump(calls)].value += 5
+        \\    assert(calls[0] == 1)
+        \\    assert(cells[1].value == 205)
+        \\    assert(cells[0].value == 100)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Collections
 // ---------------------------------------------------------------------------
 

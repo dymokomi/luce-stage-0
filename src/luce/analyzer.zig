@@ -1669,7 +1669,193 @@ const FunctionBuilder = struct {
             .name => |name| try self.lowerAssignName(name.text, name.span, assign),
             .field => |field| try self.lowerAssignField(field, assign),
             .index => |index| try self.lowerAssignIndex(index, assign),
+            .chain => |chain| try self.lowerAssignChain(chain, assign),
         }
+    }
+
+    /// One step down a nested place: a struct field, or an index into
+    /// a container.  Recorded on the way down so the way up can
+    /// rebuild — struct fields functionally update and propagate to
+    /// the root; a container index writes in place and stops (objects
+    /// are references).
+    const Accessor = union(enum) {
+        field: struct { parent: Register, layout: u32, field_index: u32 },
+        index: struct { object: Register, index_registers: []Register },
+    };
+
+    /// place = value / place OP= value for a nested place
+    /// (`root.a.b`, `cells[0].value`).  The chain is read exactly once
+    /// (every subscript evaluated once), then rebuilt from the leaf:
+    /// structs functionally update up to the root local, and the first
+    /// container index writes in place and stops.  Restricted to
+    /// value leaves and value structs — nesting object ownership
+    /// through a chain stays the single-level form's job.
+    fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.Assign) Error!void {
+        // Collect the accessor chain outer-to-inner, then find the
+        // root name.
+        var steps: std.ArrayList(*const ast.Expression) = .empty;
+        defer steps.deinit(self.temporary());
+        var walk: *const ast.Expression = chain.place;
+        const root: ast.Name = while (true) {
+            switch (walk.*) {
+                .name => |name| break name,
+                .field => |field| {
+                    try steps.append(self.temporary(), walk);
+                    walk = field.target;
+                },
+                .index => |index| {
+                    try steps.append(self.temporary(), walk);
+                    walk = index.target;
+                },
+                else => {
+                    try self.fail("luce.parse.assign", chain.span, "assignment targets a name, a field, or an index of one", .{});
+                    return;
+                },
+            }
+        };
+        std.mem.reverse(*const ast.Expression, steps.items);
+
+        // The root must be a mutable, usable local.
+        if (std.mem.eql(u8, root.text, "input") or std.mem.eql(u8, root.text, "output")) {
+            try self.fail("luce.sema.name", root.span, "ports are not nested places", .{});
+            return;
+        }
+        const found = self.findLocal(root.text) orelse {
+            try self.fail("luce.sema.name", root.span, "unknown name {s}", .{root.text});
+            return;
+        };
+        const info = found.info;
+        if (!info.mutable) {
+            try self.fail("luce.sema.let", root.span, "{s} is let-bound; use var for reassignment", .{root.text});
+            return;
+        }
+        if (try self.checkPoisoned(info, root.text, root.span)) return;
+        const root_local = info.local;
+        const root_type = self.locals.items[root_local].local_type;
+
+        // Lower every subscript across the chain plus the right-hand
+        // side in one pass: lowerOperands keeps them all live together
+        // even across short-circuit block splits, so the descent and
+        // rebuild below emit only non-splitting struct/index
+        // instructions and every cached register stays valid.
+        var operand_list: std.ArrayList(*ast.Expression) = .empty;
+        defer operand_list.deinit(self.temporary());
+        for (steps.items) |node| {
+            if (node.* == .index) {
+                for (node.index.indices) |subscript| try operand_list.append(self.temporary(), subscript);
+            }
+        }
+        try operand_list.append(self.temporary(), assign.value);
+        const operands = (try self.lowerOperands(operand_list.items)) orelse return;
+        const value = operands[operands.len - 1];
+        var next_operand: usize = 0;
+
+        // Descend, reading the current value at each step and caching
+        // what the rebuild needs.
+        const accessors = try self.arena().alloc(Accessor, steps.items.len);
+        var current = try self.emit(.{ .local_get = root_local }, root_type);
+        var current_type = root_type;
+        for (steps.items, accessors) |node, *accessor| {
+            switch (node.*) {
+                .field => |field| {
+                    if (current_type != .strukt) {
+                        try self.fail("luce.sema.field", field.span, "{s} has no fields", .{
+                            try self.analyzer.typeName(current_type),
+                        });
+                        return;
+                    }
+                    const layout_index = current_type.strukt;
+                    const layout = self.analyzer.structs.items[layout_index];
+                    const field_index = layout.findField(field.name) orelse {
+                        try self.fail("luce.sema.field", field.span, "{s} has no field {s}", .{ layout.name, field.name });
+                        return;
+                    };
+                    accessor.* = .{ .field = .{ .parent = current, .layout = layout_index, .field_index = field_index } };
+                    current = try self.emit(.{ .struct_get = .{
+                        .target = current,
+                        .layout = layout_index,
+                        .field = field_index,
+                    } }, layout.fields[field_index].field_type);
+                    current_type = layout.fields[field_index].field_type;
+                },
+                .index => |index| {
+                    const lowered = operands[next_operand .. next_operand + index.indices.len];
+                    next_operand += index.indices.len;
+                    const object_value: Value = .{ .register = current, .value_type = current_type };
+                    const element_type = (try self.checkIndex(object_value, lowered, index.span)) orelse return;
+                    // Writing the element back frees the old one, so a
+                    // container of object-carrying structs can't be a
+                    // nested-place step (it would free objects the
+                    // rebuilt struct still shares).
+                    if (self.analyzer.carriesObjects(element_type)) {
+                        try self.fail("luce.sema.own", index.span, "cannot assign through an index into object-carrying elements; rebuild the element and store it whole [OWNERSHIP.md S22]", .{});
+                        return;
+                    }
+                    const index_registers = try self.arena().alloc(Register, lowered.len);
+                    for (lowered, index_registers) |value_operand, *slot| slot.* = value_operand.register;
+                    accessor.* = .{ .index = .{ .object = current, .index_registers = index_registers } };
+                    const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
+                    read_arguments[0] = current;
+                    @memcpy(read_arguments[1..], index_registers);
+                    current = try self.emit(
+                        .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
+                        element_type,
+                    );
+                    current_type = element_type;
+                },
+                else => unreachable, // only field/index steps are collected
+            }
+        }
+
+        // The leaf must be a value; nesting object ownership through a
+        // chain is not supported here.
+        if (self.analyzer.carriesObjects(current_type)) {
+            try self.fail("luce.sema.own", chain.span, "a nested place assigns a value; replace the whole object slot with the single-level form [OWNERSHIP.md S21, S25]", .{});
+            return;
+        }
+        if (!value.value_type.eql(current_type)) {
+            try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
+                try self.analyzer.typeName(current_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        var new_value = value.register;
+        if (assign.compound) |op| {
+            new_value = (try self.compoundCombine(op, current, current_type, value, assign.span)) orelse return;
+        }
+
+        // Rebuild from the leaf: struct fields functionally update and
+        // carry to the root; the first container index writes in place
+        // and stops (the object is shared by reference).
+        var index = accessors.len;
+        while (index > 0) {
+            index -= 1;
+            switch (accessors[index]) {
+                .field => |field| {
+                    // struct_set copies the parent struct with one
+                    // field replaced, so its result type is the
+                    // parent register's type.
+                    const parent_type = self.result_types.items[field.parent];
+                    new_value = try self.emit(.{ .struct_set = .{
+                        .target = field.parent,
+                        .layout = field.layout,
+                        .field = field.field_index,
+                        .value = new_value,
+                    } }, parent_type);
+                },
+                .index => |index_step| {
+                    const write_arguments = try self.arena().alloc(Register, index_step.index_registers.len + 2);
+                    write_arguments[0] = index_step.object;
+                    @memcpy(write_arguments[1 .. 1 + index_step.index_registers.len], index_step.index_registers);
+                    write_arguments[write_arguments.len - 1] = new_value;
+                    _ = try self.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = write_arguments } }, .none);
+                    return; // the object mutated in place — nothing above to update
+                },
+            }
+        }
+        // Reached the root through struct fields only: store it back.
+        _ = try self.emit(.{ .local_set = .{ .local = root_local, .value = new_value } }, .none);
     }
 
     /// Combine the current value of a compound-assignment place with

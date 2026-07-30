@@ -439,8 +439,56 @@ test "luce.parse.assign: cannot assign to a literal" {
     try expectError("func main():\n    1 = 2\n", "luce.parse.assign");
 }
 
-test "luce.parse.assign: assignment reaches only one field deep" {
-    try expectError("func main():\n    a.b.c = 1\n", "luce.parse.assign");
+test "luce.parse.assign: cannot assign through a call result" {
+    // Nested field/index places are allowed now; a call in the place
+    // chain is not a place.
+    try expectError("func main():\n    f().x = 1\n", "luce.parse.assign");
+}
+
+test "luce.sema.field: a nested place checks each field on the way down" {
+    try expectError(
+        \\struct Inner:
+        \\    n: Int
+        \\
+        \\struct Outer:
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    var o = Outer(inner = Inner(n = 1))
+        \\    o.inner.ghost = 2
+        \\
+    , "luce.sema.field");
+}
+
+test "luce.sema.own: a nested place cannot assign an object slot" {
+    // The single-level form (bag.items = [1, 2]) is the way to
+    // restock an object field; a chain leaf must be a value.
+    try expectError(
+        \\struct Bag:
+        \\    items: List(Int)
+        \\
+        \\struct Holder:
+        \\    bag: Bag
+        \\
+        \\func main():
+        \\    var h = Holder(bag = Bag(items = [1]))
+        \\    h.bag.items = [2, 3]
+        \\
+    , "luce.sema.own");
+}
+
+test "luce.sema.own: cannot index into object-carrying elements in a chain" {
+    try expectError(
+        \\struct Bag:
+        \\    label: String
+        \\    items: List(Int)
+        \\
+        \\func main():
+        \\    var bags = new List(Bag)
+        \\    bags.append(Bag(label = "a", items = [1]))
+        \\    bags[0].label = "b"
+        \\
+    , "luce.sema.own");
 }
 
 test "luce.parse.new: new builds only the four heap types" {

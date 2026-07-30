@@ -582,13 +582,10 @@ const Parser = struct {
                         .span = field.span,
                     } };
                 }
-                try self.diagnostics.add(
-                    "luce.parse.assign",
-                    field.span,
-                    "assign through one field (name.field = ...) or an index (place[i] = ...)",
-                    .{},
-                );
-                return null;
+                // A field access on something that isn't a plain name
+                // (p.inner.n, cells[0].value): a nested place the
+                // analyzer reads and rebuilds.
+                return .{ .chain = .{ .place = left, .span = field.span } };
             },
             .index => |index| return .{ .index = .{
                 .base = index.target,

@@ -61,14 +61,12 @@ design philosophy.
    min/max/clamp` exist; `pow`, `log`, `exp`, trig, and any random
    source do not.  Games (life.luc wants random seeding) and stats
    programs feel it immediately.
-9. **Assignment targets are a single field or index, not a chain.**
-   `p.inner.n = 1` and `cells[0].value = 1` are rejected
-   (`luce.parse.assign`); you replace the whole slot instead
-   (`p.inner = Inner(...)`, `cells[0] = Cell(...)`).  Reading such
-   chains is fine — only the assignment left-hand side is
-   constrained.  Nested mutation through a chain is the natural
-   thing to want; lifting this is parser + lowering work, worth
-   doing once struct/collection programs grow.
+9. ~~Assignment targets are a single field or index, not a chain~~ —
+   shipped: `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag
+   = "x"` all work now (value leaves; the place is read once and
+   rebuilt).  Restocking an *object* field still uses the
+   single-level form (`bag.items = [1, 2]`) — object ownership
+   through a chain stays deliberately out.
 
 ## Tier 2 — language shape decisions worth making deliberately
 
