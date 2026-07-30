@@ -527,6 +527,64 @@ chosen for now.
 
 ---
 
+## G3. Null (review round 2)
+
+**S41. "Uninitialized" is a state, not a value — and it cannot be
+said.**
+```luce
+var inner: Builder            # unfilled slot (S40)
+# There is NO null literal, no `inner == null`, no nullable returns.
+# A parameter or return typed Builder is ALWAYS a real Builder —
+# every signature stays trustworthy, nobody checks.
+inner.append("x")             # RUNTIME trap: null_object — a bug with
+                              # a line number, like index out of bounds
+```
+Decision: the unfilled state is non-denotable and trapping.  The
+"did I set it?" information always already exists as ordinary
+program state — the Bool you branched on — and that is where it
+belongs:
+```luce
+var report: Builder
+if verbose:
+    report = new Builder()
+if verbose:
+    print(str(report))        # guarded by the same condition; no null
+                              # concept needed anywhere
+```
+
+**S42. Verbs and borrows on unfilled slots.**
+```luce
+var inner: Builder
+free(inner)                   # RUNTIME trap: null_object (freed nothing)
+sink.append(give inner)       # RUNTIME trap: null_object (gave nothing)
+helper(inner)                 # passing does NOT trap; the callee traps
+                              # at first USE — same as null array
+                              # elements today
+```
+Decision: `give`/`copy`/`free` demand an object and trap on null;
+borrows trap at use, not at handoff.  (The alternative — eager trap
+at the call site — is stricter but inconsistent with array
+elements; flagged for review.)
+
+**S43. Null owns nothing: nullable memory management needs no rules.**
+- Scope exit or reassignment of an unfilled slot frees nothing.
+- Freeing a container skips null elements (already true for fresh
+  object-typed Arrays).
+- Future optionals inherit S1–S40 unchanged: a `Builder?` holding an
+  object owns it like any binding; holding null owns nothing.
+
+**Optionals (future, deliberately separate).**  When absence is part
+of a *contract* — `m.get(k)` that may find nothing — the answer is a
+distinct type, not implicit nullability: `Builder?` is not
+`Builder`; a `null` literal is legal only where a `T?` is expected;
+optionals are checked (`x == null`) or assert-unwrapped (`x!`,
+trapping) before use.  Plain types can never hold null, so the
+billion-dollar mistake stays impossible.  To be designed together
+with error handling (`?T` and `!T` belong in one conversation); not
+part of ownership v1.
+
+---
+
 ## H. Program edges
 
 **S33. Nothing can leak.**  Every object is owned by a binding, a
