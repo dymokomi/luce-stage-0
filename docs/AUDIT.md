@@ -1,5 +1,11 @@
 # Language audit — July 2026
 
+> **Round 2 addendum lives at the bottom** — after scope ownership
+> (OWNERSHIP.md) and file-scope constants landed, the memory model
+> was adversarially audited and the codebase organization was
+> compared against Zig and CPython practice.  The friction list
+> below is the round-1 record; items 1–5 of it are now shipped.
+
 The design target: **Zig's discipline with Python's ease and syntax.**
 This audit grades Luce against that target using evidence, not vibes:
 the eight programs in `programs/` were written in Luce as it exists,
@@ -19,9 +25,10 @@ levels; annotations appear where a human would want them anyway
 (signatures) and almost nowhere else.
 
 **Zig's soul, genuinely.**
-- Explicit memory: every allocation is a visible `new` or literal,
-  every release a visible `free`, and loom's leak report after every
-  run is the moral equivalent of `std.testing.allocator`.
+- Explicit memory: every allocation is a visible `new` or literal.
+  *(Round 1 said "every release a visible free"; round 2's answer is
+  better — scope ownership frees everything deterministically, and
+  the leak report became an interpreter self-check that never fires.)*
 - Checked everything: arithmetic overflows trap, conversions are
   spelled (`Int(x)`), indexes are bounds-checked, use-after-free
   traps with a stable code instead of corrupting.
@@ -111,14 +118,90 @@ The memory model is under deliberate design in docs/MEMORY.md.)*
 
 ## Recommended next moves, in order
 
-1. `defer` (pairs with `free`; also cleans up terminal/file patterns).
-2. Top-level `let` constants.
-3. String utilities + `sort` (as builtins now, or as the first
-   shipped std module — modules exist, `import std` is one design
-   decision away).
-4. Method-call sugar for builtins.
+1. ~~`defer`~~ — superseded: scope ownership (OWNERSHIP.md) removed
+   the need; `free` survives only as deliberate early release.
+2. ~~Top-level `let` constants~~ — shipped (Phase 2).
+3. ~~String utilities + `sort`~~ — shipped as methods.
+4. ~~Method-call sugar for builtins~~ — shipped.
 5. `for key, value in map:`.
 6. Character literals.
 7. `read_line()` host builtin.
 
 Everything above is additive; nothing written so far would break.
+
+---
+
+# Audit round 2 — 30 July 2026
+
+Two audits ran after ownership (Phase 1) and file-scope constants
+(Phase 2) landed: an **adversarial memory audit** (write programs
+that leak, dangle, or double-free; every suspicion run against the
+real toolchain) and an **organization review** against Zig-compiler
+and CPython practice.
+
+## Memory audit: found and fixed
+
+The core machinery — statement temporaries, scope releases,
+early-exit unwinding, frame serials under recursion, container
+adoption, return moves, deep copies — **held against everything
+thrown at it**.  Five real holes were found at the edges, all fixed
+the same day, each with a regression test built from the audit's own
+reproducing program (`src/luce/ownership_spec.zig`, "audit:" tests):
+
+1. `Array.fill` with object elements sat outside the ownership
+   machinery entirely — the one confirmed leak path, plus a dangling
+   reference from a verb-free program.  Fix: `fill` on
+   object-carrying elements is a compile error (one value cannot own
+   every slot; store per slot).
+2. List literals skipped the S21 keeping rule, so `[hits]` let a
+   *borrowing* callee adopt — and then free — the caller's object.
+   Fix: literal elements are a container door like any other.
+3. The S30 give/free loop guard missed `while` conditions.  Fix: the
+   loop frame is pushed before the condition lowers.
+4. `len(give xs)` and friends compiled — a give with no owner to
+   receive it silently became an early free.  Fix: give is refused in
+   pure borrow positions (builtin arguments, non-adopting method
+   arguments, operator operands).
+5. give/free verified only "not container-owned", so an alias could
+   move ownership and a stale `free(xs)` still fired.  Fix: verbs on
+   owned names carry their binding and the runtime verifies the name
+   still owns the object (`not_owned` trap).  Bonus: reassigning a
+   name while a `for` iterates it is now a compile error instead of a
+   deterministic use-after-free.
+
+Accepted behaviors, recorded deliberately: `x = f(give x)` is
+unwritable (S29's blunt poisoning — use a fresh name); the i64
+minimum cannot be written as a literal (parity with runtime
+literals); `give` through an alias may hand ownership to a new
+binding silently (memory-safe and coherent; the dangerous stale-free
+half now traps).
+
+## Organization review: verdict
+
+The stage layout (lexer → parser → analyzer → IR → interpreter →
+module format) matches the Zig compiler's decomposition at healthy
+sizes, the host boundary is stricter than CPython ever achieved, and
+the exhaustive intrinsic enum makes analyzer/interpreter drift a
+compile error.  Acted on: one shared file loader for both executables
+(`src/apps/files.zig`), named AST/IR payload structs replacing ~35
+`anytype` signatures, the pending-trap error flow in the interpreter
+(the ceval pattern; ~150 lines of resolve/host boilerplate gone),
+direct verifier tests in `ir.zig`, the ownership spec consolidated
+into one file, this guide refresh (`docs/CODING_GUIDE.md` replaces
+the v1 guide as authority).
+
+Deliberately deferred: making `sequenceMethod`/`objectMethod` fully
+table-driven like `stringMethod` (worth doing when the method set
+next grows), and splitting `analyzer.zig` at its
+Analyzer/FunctionBuilder seam (the file is ~3.8k lines; Zig's Sema is
+38k — split when it earns it).
+
+## Standing open questions (unchanged in substance)
+
+1. **Error handling + optionals** — Phase 3, deliberately awaiting a
+   design conversation (`T?` and the recoverable-error story are one
+   decision).
+2. **Map performance** — linear entries stay honest until a program
+   earns the hash index.
+3. `for key, value in map:`, character literals, `read_line()` —
+   still the next ergonomic wins, still additive.

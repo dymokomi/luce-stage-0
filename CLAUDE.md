@@ -50,7 +50,7 @@ tests → the package under test
 
 ## Coding conventions
 
-`docs/v1/CODING_GUIDE.md` is authoritative and intentionally opinionated — plain, old-school code over clever ceremony, expressed in Zig. The essentials:
+`docs/CODING_GUIDE.md` is authoritative and intentionally opinionated — plain, old-school code over clever ceremony, expressed in Zig (the v1 original it revises sits in `docs/v1/`). The essentials:
 
 - Zig 0.16; `zig fmt` before every commit; errors as values with small explicit error sets; no panics for ordinary failure; never hide durability (callers call `flush()`/`sync`).
 - Allocation is explicit: functions that allocate take an `Allocator`; every heap-holding type has `deinit`; doc comments say who owns what and what invalidates borrows. Tests run leak-checked under `std.testing.allocator`.
