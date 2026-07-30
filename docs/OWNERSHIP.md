@@ -2,11 +2,12 @@
 
 This is the specification of Luce's memory model — every situation
 that defines the rules, numbered, with the decision and example
-code.  **Ratified 2026-07-30: S1–S43 approved as written.**  This
-document is the implementation contract; compiler diagnostics quote
-it and the ownership test suite follows its numbering.  Optionals
-(`T?`) are Phase 3, designed together with error handling; global
-scope is Phase 2 (see docs/V2.md).
+code.  **Ratified 2026-07-30: S1–S43 approved as written.
+Implemented the same day** — the compiler and interpreter enforce
+every situation below, diagnostics quote the S-numbers, and
+`src/luce/ownership_spec.zig` is the executable form of this
+document.  Optionals (`T?`) are Phase 3, designed together with
+error handling; global scope is Phase 2 (see docs/V2.md).
 
 Vocabulary used throughout:
 - **object** — a heap value: `List`, `Map`, `Array`, `Builder`.

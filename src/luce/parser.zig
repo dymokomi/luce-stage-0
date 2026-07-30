@@ -280,9 +280,11 @@ const Parser = struct {
             const parameter_name = (try self.expect(.identifier, "a parameter name")) orelse
                 return null;
             if ((try self.expect(.colon, "':' after the parameter name")) == null) return null;
+            const mode: ast.ParameterMode = if (self.accept(.keyword_give) != null) .give else .borrow;
             const parameter_type = (try self.typeName()) orelse return null;
             try parameters.append(self.arena, .{
                 .name = self.text(parameter_name),
+                .mode = mode,
                 .type_name = parameter_type,
                 .span = .{ .start = parameter_name.span.start, .end = parameter_type.span.end },
             });
@@ -598,6 +600,20 @@ const Parser = struct {
     }
 
     fn unaryExpression(self: *Parser) Error!?*ast.Expression {
+        if (self.accept(.keyword_give)) |keyword| {
+            const operand = (try self.unaryExpression()) orelse return null;
+            return self.make(.{ .give = .{
+                .operand = operand,
+                .span = .{ .start = keyword.span.start, .end = operand.span().end },
+            } });
+        }
+        if (self.accept(.keyword_copy)) |keyword| {
+            const operand = (try self.unaryExpression()) orelse return null;
+            return self.make(.{ .copy = .{
+                .operand = operand,
+                .span = .{ .start = keyword.span.start, .end = operand.span().end },
+            } });
+        }
         if (self.accept(.keyword_not)) |operator| {
             const operand = (try self.unaryExpression()) orelse return null;
             const node = try self.arena.create(ast.Expression);

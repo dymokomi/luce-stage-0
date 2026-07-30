@@ -6,7 +6,7 @@ func mean(values: List(Float)) -> Float:
         total = total + value
     return total / Float(len(values))
 
-# A sorted copy; the caller frees it.
+# A sorted copy; whoever calls owns it.
 func sorted(values: List(Float)) -> List(Float):
     var copied = values[0:]
     copied.sort()
@@ -18,7 +18,6 @@ func median(values: List(Float)) -> Float:
     var middle = ordered[count / 2]
     if count % 2 == 0:
         middle = (ordered[count / 2 - 1] + ordered[count / 2]) / 2.0
-    free(ordered)
     return middle
 
 func deviation(values: List(Float)) -> Float:

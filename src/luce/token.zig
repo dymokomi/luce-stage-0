@@ -31,6 +31,8 @@ pub const Kind = enum {
     keyword_false,
     keyword_new,
     keyword_import,
+    keyword_give,
+    keyword_copy,
 
     // Literals
     int_literal,
@@ -86,4 +88,6 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "false", .kind = .keyword_false },
     .{ .word = "new", .kind = .keyword_new },
     .{ .word = "import", .kind = .keyword_import },
+    .{ .word = "give", .kind = .keyword_give },
+    .{ .word = "copy", .kind = .keyword_copy },
 };

@@ -36,7 +36,7 @@ struct World:
                         alive = alive + 1
         return alive
 
-    # One generation: builds the next grid; the caller frees the old.
+    # One generation: builds the next grid; the caller owns it.
     func step(grid: Array(Bool, _, _)) -> Array(Bool, _, _):
         let height = grid.dim(0)
         let width = grid.dim(1)
@@ -80,11 +80,8 @@ func main():
             if key == "text" and key_text() == " ":
                 steps = 10
             for tick in range(0, steps):
-                let old = grid
-                grid = World.step(grid)
-                free(old)
+                grid = World.step(grid)   # the old grid frees right here (S5)
                 generation = generation + 1
                 if steps > 1:
                     World.draw(grid, generation)
                     term_flush()
-    free(grid)

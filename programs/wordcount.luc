@@ -63,7 +63,5 @@ func main():
         line.append("  ")
         line.append(word)
         print(str(line))
-        free(line)
         counts.remove(word)
         shown = shown + 1
-    free(counts)

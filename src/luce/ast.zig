@@ -77,6 +77,10 @@ pub const Expression = union(enum) {
     /// namespaced call when the target chain names a struct/module
     /// (the analyzer decides; the parser cannot know).
     method: struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span },
+    /// give x — transfer ownership; x is poisoned afterwards (S10).
+    give: struct { operand: *Expression, span: Span },
+    /// copy x — a deep, independent duplicate (S31).
+    copy: struct { operand: *Expression, span: Span },
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {
@@ -161,8 +165,15 @@ pub const StructDecl = struct {
     span: Span,
 };
 
+/// How a parameter receives objects: borrowed (the default — the
+/// callee may read and mutate contents but not keep) or given (the
+/// callee takes ownership; the call site must say `give`/`copy` or
+/// pass something fresh).  See OWNERSHIP.md S11-S15.
+pub const ParameterMode = enum { borrow, give };
+
 pub const Parameter = struct {
     name: []const u8,
+    mode: ParameterMode = .borrow,
     type_name: TypeName,
     span: Span,
 };

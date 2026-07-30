@@ -163,9 +163,11 @@ pub fn run(
     services.restoreScreen();
     switch (result) {
         .success => |success| {
+            // Scope ownership frees everything (OWNERSHIP.md S33);
+            // a nonzero count is an interpreter bug, not a program's.
             if (success.leaked_objects != 0) {
                 try err.print(
-                    "loom: {d} object{s} leaked; free what you new\n",
+                    "loom: internal error: {d} object{s} escaped ownership — please report this\n",
                     .{ success.leaked_objects, if (success.leaked_objects == 1) "" else "s" },
                 );
             }

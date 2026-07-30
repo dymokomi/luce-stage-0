@@ -73,6 +73,12 @@ pub const Intrinsic = enum {
     key_at,
     dim_size,
     free_object,
+    /// give NAME — passes the object through after checking it is not
+    /// owned by a container (the one dynamic ownership check, S23).
+    give_object,
+    /// copy EXPR — a deep, independent duplicate of the object and
+    /// everything it owns (S31).
+    copy_object,
     // String methods.
     str_find,
     str_contains,
@@ -149,6 +155,7 @@ pub const TrapCode = enum {
     null_object,
     parse_failed,
     bad_codepoint,
+    not_owned,
 
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
@@ -175,6 +182,7 @@ pub const TrapCode = enum {
             .null_object => "null object reference",
             .parse_failed => "cannot parse number",
             .bad_codepoint => "invalid character code",
+            .not_owned => "object is owned by a container",
         };
     }
 };
@@ -201,6 +209,15 @@ pub const Instruction = union(enum) {
     /// Allocate one heap object of the program's heap type `heap`;
     /// `dims` carries an Array's runtime dimensions (empty otherwise).
     heap_new: struct { heap: u32, dims: []Register },
+    /// Ownership: the objects reachable through `value` (the object
+    /// itself, or a struct's object fields recursively) now belong to
+    /// this frame's `local`; its scope-exit release frees them.
+    object_bind: struct { local: LocalId, value: Register },
+    /// Ownership: free the objects in `value` still bound to this
+    /// frame's `local`.  Objects owned elsewhere by now — adopted by a
+    /// container, re-bound by a give — are left alone, so releases are
+    /// safe on every path.
+    object_unbind: struct { local: LocalId, value: Register },
     jump: BlockId,
     branch: struct { condition: Register, then_block: BlockId, else_block: BlockId },
     ret: ?Register,
@@ -443,6 +460,14 @@ fn verifyInstruction(
                 _ = try operandType(function, defined, argument);
             }
         },
+        .object_bind => |bind| {
+            if (bind.local >= function.locals.len) return error.BadLocal;
+            _ = try operandType(function, defined, bind.value);
+        },
+        .object_unbind => |unbind| {
+            if (unbind.local >= function.locals.len) return error.BadLocal;
+            _ = try operandType(function, defined, unbind.value);
+        },
         .heap_new => |new| {
             if (new.heap >= program.heap_types.len) return error.BadStruct;
             const expected_dims: usize = switch (program.heap_types[new.heap]) {
@@ -608,6 +633,8 @@ fn printInstruction(
             try appendPrint(text, allocator, "heap_new {s}", .{object_type_name});
             for (new.dims) |dimension| try appendPrint(text, allocator, ", r{d}", .{dimension});
         },
+        .object_bind => |bind| try appendPrint(text, allocator, "object_bind %{d}, r{d}", .{ bind.local, bind.value }),
+        .object_unbind => |unbind| try appendPrint(text, allocator, "object_unbind %{d}, r{d}", .{ unbind.local, unbind.value }),
         .jump => |target| try appendPrint(text, allocator, "jump b{d}", .{target}),
         .branch => |branch| try appendPrint(text, allocator, "branch r{d}, b{d}, b{d}", .{
             branch.condition,

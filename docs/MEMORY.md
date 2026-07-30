@@ -1,17 +1,19 @@
 # The memory model decision
 
-> The situation-by-situation specification distilled from this memo
-> lives in `docs/OWNERSHIP.md` — that is the document to review and
-> ratify before implementation.
+> **Decided and implemented.**  The situation-by-situation
+> specification distilled from this memo lives in `docs/OWNERSHIP.md`
+> (ratified S1–S43) and is live in the compiler and interpreter,
+> proven by `src/luce/ownership_spec.zig`.  This memo is kept as the
+> record of the options weighed and why scope ownership + `give` won.
 
-Luce currently has **manual explicit memory**: objects are created
-with `new`/literals, released with `free(x)`, use-after-free and
-double-free trap deterministically, and loom reports leaks after every
-run.  That is safe and honest — but `free` at every exit path is the
-single biggest source of friction in real programs (docs/AUDIT.md),
-so the question is what the *permanent* model should be.  This memo
-holds the options and trade-offs so the decision is made once, with
-eyes open.  Until then, manual free stays.
+Luce *had* **manual explicit memory**: objects created with
+`new`/literals, released with `free(x)`, use-after-free and
+double-free trapping deterministically, loom reporting leaks after
+every run.  That was safe and honest — but `free` at every exit path
+was the single biggest source of friction in real programs
+(docs/AUDIT.md), so the question was what the *permanent* model
+should be.  This memo held the options and trade-offs so the decision
+was made once, with eyes open.  Option 3 won.
 
 One fact makes every option cheaper than usual: the interpreter
 already tracks every object and traps on dead references.  Luce can

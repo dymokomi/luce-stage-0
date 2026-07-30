@@ -20,7 +20,7 @@ const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -204,6 +204,14 @@ const Writer = struct {
             .heap_new => |new| {
                 try self.int(u32, new.heap);
                 try self.registers(new.dims);
+            },
+            .object_bind => |bind| {
+                try self.int(u32, bind.local);
+                try self.int(u32, bind.value);
+            },
+            .object_unbind => |unbind| {
+                try self.int(u32, unbind.local);
+                try self.int(u32, unbind.value);
             },
             .jump => |target| try self.int(u32, target),
             .branch => |branch| {
@@ -456,6 +464,14 @@ const Reader = struct {
             .heap_new => .{ .heap_new = .{
                 .heap = try self.int(u32),
                 .dims = try self.registers(arena),
+            } },
+            .object_bind => .{ .object_bind = .{
+                .local = try self.int(u32),
+                .value = try self.int(u32),
+            } },
+            .object_unbind => .{ .object_unbind = .{
+                .local = try self.int(u32),
+                .value = try self.int(u32),
             } },
             .jump => .{ .jump = try self.int(u32) },
             .branch => .{ .branch = .{

@@ -99,6 +99,7 @@ const FunctionInfo = struct {
     name: []const u8,
     module: usize,
     parameter_types: []Type,
+    parameter_modes: []ast.ParameterMode,
     return_type: Type,
     is_entry: bool,
 };
@@ -110,16 +111,48 @@ const StructDeclInfo = struct {
     module: usize,
 };
 
+/// How a binding relates to the object it holds (OWNERSHIP.md):
+/// `owned` bindings received something fresh, a give, or a give
+/// parameter — their scope frees the object; `alias` bindings are just
+/// another name (S8); `borrow_param` marks a borrowed parameter, which
+/// may never keep, give, free, or return its object (S12, S17).
+/// Bindings of value types are all `.alias` — the class never matters.
+const OwnershipClass = enum { owned, alias, borrow_param };
+
+const Poison = enum { given, freed };
+
 const LocalInfo = struct {
     local: LocalId,
     mutable: bool,
+    class: OwnershipClass = .alias,
+    /// The local's type is an object or an object-carrying struct.
+    carries: bool = false,
+    /// Set by give/free in lowering (= source) order; any later use in
+    /// this scope is a compile error (S10, S29).
+    poisoned: ?Poison = null,
 };
 
-const Scope = std.StringHashMapUnmanaged(LocalInfo);
+const Scope = struct {
+    names: std.StringHashMapUnmanaged(LocalInfo) = .empty,
+    /// Owned object-carrying locals in declaration order; scope exit
+    /// releases them in reverse.
+    owned: std.ArrayList(LocalId) = .empty,
+};
+
+const FoundLocal = struct {
+    info: *LocalInfo,
+    /// Index of the scope that declared the name (S30 loop guard).
+    depth: usize,
+};
 
 const LoopFrame = struct {
     continue_block: BlockId,
     exit_block: BlockId,
+    /// self.scopes.items.len when the loop body began: break and
+    /// continue release every scope at or above this depth.
+    scope_depth: usize,
+    /// self.temps.items.len when the loop body began.
+    temps_depth: usize,
 };
 
 const Analyzer = struct {
@@ -293,6 +326,22 @@ const Analyzer = struct {
         return self.heap_types.items[of.heap];
     }
 
+    /// True for types the ownership rules apply to: heap objects and
+    /// structs transitively containing them (S27's "object-carrying").
+    /// Struct cycles are rejected before this is ever asked.
+    fn carriesObjects(self: *const Analyzer, of: Type) bool {
+        return switch (of) {
+            .heap => true,
+            .strukt => |layout_index| blk: {
+                for (self.structs.items[layout_index].fields) |field| {
+                    if (self.carriesObjects(field.field_type)) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+
     fn collectStructs(self: *Analyzer) Error!void {
         // Imports first: names must be usable and free of collisions.
         for (self.modules, 0..) |module, module_index| {
@@ -451,10 +500,22 @@ const Analyzer = struct {
         const is_entry = top_level and in_root and std.mem.eql(u8, declaration.name, entry_name);
         var parameter_types: std.ArrayList(Type) = .empty;
         defer parameter_types.deinit(self.arena);
+        var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
+        defer parameter_modes.deinit(self.arena);
         if (!is_entry) {
             for (declaration.parameters) |parameter| {
                 const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
+                if (parameter.mode == .give and !self.carriesObjects(resolved)) {
+                    try self.fail(
+                        "luce.sema.own",
+                        parameter.span,
+                        "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                        .{},
+                    );
+                    continue;
+                }
                 try parameter_types.append(self.arena, resolved);
+                try parameter_modes.append(self.arena, parameter.mode);
             }
         }
         var return_type: Type = .none;
@@ -469,6 +530,7 @@ const Analyzer = struct {
             .name = try self.arena.dupe(u8, name),
             .module = module,
             .parameter_types = try parameter_types.toOwnedSlice(self.arena),
+            .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
             .return_type = return_type,
             .is_entry = is_entry,
         });
@@ -537,16 +599,27 @@ const Analyzer = struct {
         if (!info.is_entry) {
             for (info.declaration.parameters, 0..) |parameter, index| {
                 if (index >= info.parameter_types.len) break;
-                _ = try builder.declareLocal(
+                const parameter_type = info.parameter_types[index];
+                const gives = info.parameter_modes[index] == .give;
+                const class: OwnershipClass = if (gives) .owned else .borrow_param;
+                const local = (try builder.declareLocal(
                     parameter.name,
-                    info.parameter_types[index],
+                    parameter_type,
                     false,
+                    class,
                     parameter.span,
-                );
+                )) orelse continue;
+                // A give parameter is an owned binding like any other
+                // (S15): take the object over from the caller on entry.
+                if (gives) {
+                    const value = try builder.emit(.{ .local_get = local }, parameter_type);
+                    _ = try builder.emit(.{ .object_bind = .{ .local = local, .value = value } }, .none);
+                }
             }
         }
 
         try builder.lowerBlock(info.declaration.body);
+        try builder.emitScopeEnd();
         builder.popScope();
 
         // A typed function must return on every path.
@@ -618,6 +691,13 @@ const FunctionBuilder = struct {
     current: BlockId = 0,
     scopes: std.ArrayList(Scope) = .empty,
     loops: std.ArrayList(LoopFrame) = .empty,
+    /// Statement temporaries (S3): every fresh, unowned object is
+    /// parked in a hidden local; the end of the statement releases the
+    /// ones nothing adopted.  Adoption is a runtime re-owning, so a
+    /// stale release is a safe no-op.
+    temps: std.ArrayList(TempSlot) = .empty,
+
+    const TempSlot = struct { local: LocalId, register: Register };
 
     fn arena(self: *FunctionBuilder) Allocator {
         return self.analyzer.arena;
@@ -628,9 +708,13 @@ const FunctionBuilder = struct {
     }
 
     fn deinitScratch(self: *FunctionBuilder) void {
-        for (self.scopes.items) |*scope| scope.deinit(self.temporary());
+        for (self.scopes.items) |*scope| {
+            scope.names.deinit(self.temporary());
+            scope.owned.deinit(self.temporary());
+        }
         self.scopes.deinit(self.temporary());
         self.loops.deinit(self.temporary());
+        self.temps.deinit(self.temporary());
     }
 
     fn fail(self: *FunctionBuilder, code: []const u8, span: Span, comptime format: []const u8, arguments: anytype) Error!void {
@@ -697,16 +781,78 @@ const FunctionBuilder = struct {
 
     fn popScope(self: *FunctionBuilder) void {
         var scope = self.scopes.pop().?;
-        scope.deinit(self.temporary());
+        scope.names.deinit(self.temporary());
+        scope.owned.deinit(self.temporary());
     }
 
-    fn findLocal(self: *const FunctionBuilder, name: []const u8) ?LocalInfo {
+    fn findLocal(self: *FunctionBuilder, name: []const u8) ?FoundLocal {
         var index = self.scopes.items.len;
         while (index > 0) {
             index -= 1;
-            if (self.scopes.items[index].get(name)) |found| return found;
+            if (self.scopes.items[index].names.getPtr(name)) |found| {
+                return .{ .info = found, .depth = index };
+            }
         }
         return null;
+    }
+
+    // Ownership releases -------------------------------------------------
+
+    /// Release one owned local: free whatever objects in its slot are
+    /// still bound to it.  Safe on any path — objects given away or
+    /// adopted elsewhere are skipped at run time.
+    fn emitRelease(self: *FunctionBuilder, local: LocalId) Error!void {
+        const value = try self.emit(.{ .local_get = local }, self.locals.items[local].local_type);
+        _ = try self.emit(.{ .object_unbind = .{ .local = local, .value = value } }, .none);
+    }
+
+    /// Emit releases for the owned locals of every scope at or above
+    /// `from`, innermost first, skipping `moved` (a returned binding —
+    /// its object moves to the caller, S16).
+    fn emitScopeReleases(self: *FunctionBuilder, from: usize, moved: ?LocalId) Error!void {
+        var scope_index = self.scopes.items.len;
+        while (scope_index > from) {
+            scope_index -= 1;
+            const owned = self.scopes.items[scope_index].owned.items;
+            var owned_index = owned.len;
+            while (owned_index > 0) {
+                owned_index -= 1;
+                if (moved != null and owned[owned_index] == moved.?) continue;
+                try self.emitRelease(owned[owned_index]);
+            }
+        }
+    }
+
+    /// Emit releases for the innermost scope, in reverse declaration
+    /// order, without popping it: the normal end of a block.
+    fn emitScopeEnd(self: *FunctionBuilder) Error!void {
+        try self.emitScopeReleases(self.scopes.items.len - 1, null);
+    }
+
+    /// Park a fresh, unowned object in a hidden local so the end of
+    /// the statement can release it if nothing adopted it (S3, S19).
+    fn registerTemp(self: *FunctionBuilder, value: Value) Error!void {
+        const local = try self.hiddenLocal(value.value_type);
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+        _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+        try self.temps.append(self.temporary(), .{ .local = local, .register = value.register });
+    }
+
+    /// Emit releases for the temporaries above `from` without
+    /// forgetting them (unwinding paths: return, break, continue).
+    fn emitTempReleases(self: *FunctionBuilder, from: usize) Error!void {
+        var index = self.temps.items.len;
+        while (index > from) {
+            index -= 1;
+            try self.emitRelease(self.temps.items[index].local);
+        }
+    }
+
+    /// Release and forget the temporaries above `from`: the end of the
+    /// statement (or of a condition) that created them.
+    fn flushTemps(self: *FunctionBuilder, from: usize) Error!void {
+        try self.emitTempReleases(from);
+        self.temps.shrinkRetainingCapacity(from);
     }
 
     /// Resolve a written declaration name from this module's point of
@@ -729,7 +875,14 @@ const FunctionBuilder = struct {
         return try self.analyzer.qualify(self.prefix, written);
     }
 
-    fn declareLocal(self: *FunctionBuilder, name: []const u8, local_type: Type, mutable: bool, span: Span) Error!?LocalId {
+    fn declareLocal(
+        self: *FunctionBuilder,
+        name: []const u8,
+        local_type: Type,
+        mutable: bool,
+        class: OwnershipClass,
+        span: Span,
+    ) Error!?LocalId {
         if (isReserved(name) or std.mem.eql(u8, name, "evaluate")) {
             try self.fail("luce.sema.reserved", span, "{s} is a reserved name", .{name});
             return null;
@@ -745,13 +898,22 @@ const FunctionBuilder = struct {
             try self.fail("luce.sema.duplicate", span, "{s} is already a declaration", .{name});
             return null;
         }
+        const carries = self.analyzer.carriesObjects(local_type);
         const local: LocalId = @intCast(self.locals.items.len);
         try self.locals.append(self.arena(), .{
             .name = try self.arena().dupe(u8, name),
             .local_type = local_type,
         });
         const scope = &self.scopes.items[self.scopes.items.len - 1];
-        try scope.put(self.temporary(), name, .{ .local = local, .mutable = mutable });
+        try scope.names.put(self.temporary(), name, .{
+            .local = local,
+            .mutable = mutable,
+            .class = if (carries) class else .alias,
+            .carries = carries,
+        });
+        if (carries and class == .owned) {
+            try scope.owned.append(self.temporary(), local);
+        }
         return local;
     }
 
@@ -791,8 +953,78 @@ const FunctionBuilder = struct {
             .method => |method| splitsBlocks(method.target) or for (method.arguments) |argument| {
                 if (splitsBlocks(argument.value)) break true;
             } else false,
+            .give => |give| splitsBlocks(give.operand),
+            .copy => |copied| splitsBlocks(copied.operand),
             else => false,
         };
+    }
+
+    // Ownership classification ---------------------------------------------
+
+    /// True when evaluating this expression yields an object the
+    /// receiver may own: something fresh (new, a literal, a slice, a
+    /// call result, pop/split/keys), a give, or a copy.  Names and
+    /// element/field reads are borrows (S8, S22).  Only consulted for
+    /// object-carrying types, so value-typed calls answering true is
+    /// harmless.
+    fn yieldsOwnership(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
+        return switch (expression.*) {
+            .new_object, .list_literal, .slice_range, .call, .give, .copy => true,
+            .method => |method| blk: {
+                if (try self.methodIsNamespaced(method)) break :blk true;
+                break :blk std.mem.eql(u8, method.name, "pop") or
+                    std.mem.eql(u8, method.name, "split") or
+                    std.mem.eql(u8, method.name, "keys");
+            },
+            else => false,
+        };
+    }
+
+    /// Side-effect-free twin of methodNamespace: does target.name(...)
+    /// resolve to a declaration (whose result the caller owns, S16)
+    /// rather than a builtin method on a value?
+    fn methodIsNamespaced(self: *FunctionBuilder, method: anytype) Error!bool {
+        var parts: [3][]const u8 = undefined;
+        var count: usize = 0;
+        var walk: *const ast.Expression = method.target;
+        while (true) {
+            switch (walk.*) {
+                .name => |name| {
+                    if (count == 3) return false;
+                    parts[count] = name.text;
+                    count += 1;
+                    break;
+                },
+                .field => |field| {
+                    if (count == 3) return false;
+                    parts[count] = field.name;
+                    count += 1;
+                    walk = field.target;
+                },
+                else => return false,
+            }
+        }
+        const head = parts[count - 1];
+        if (self.findLocal(head) != null) return false;
+        const head_qualified = try self.analyzer.qualify(self.prefix, head);
+        if (self.analyzer.struct_names.contains(head_qualified)) return true;
+        return self.analyzer.importsModule(self.module, head);
+    }
+
+    /// Report a use of a poisoned name (S10, S29); true when poisoned.
+    fn checkPoisoned(self: *FunctionBuilder, info: *const LocalInfo, name: []const u8, span: Span) Error!bool {
+        const why = info.poisoned orelse return false;
+        try self.fail(
+            "luce.sema.own",
+            span,
+            "{s} was {s} and cannot be touched again in this scope [OWNERSHIP.md {s}]",
+            .{
+                name,
+                if (why == .given) @as([]const u8, "given away") else "freed",
+                if (why == .given) @as([]const u8, "S10, S29") else "S6",
+            },
+        );
+        return true;
     }
 
     /// Lower a left-to-right operand sequence whose registers must all
@@ -838,8 +1070,13 @@ const FunctionBuilder = struct {
     fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
         try self.pushScope();
         for (block.statements) |statement| {
+            // Fresh objects nothing adopted die with their statement
+            // (S3); the release is a no-op for everything adopted.
+            const temps_floor = self.temps.items.len;
             try self.lowerStatement(statement);
+            try self.flushTemps(temps_floor);
         }
+        try self.emitScopeEnd();
         self.popScope();
     }
 
@@ -865,6 +1102,10 @@ const FunctionBuilder = struct {
                     return;
                 }
                 const frame = self.loops.items[self.loops.items.len - 1];
+                // Early exits unwind what the scopes they leave still
+                // own (S4).
+                try self.emitTempReleases(frame.temps_depth);
+                try self.emitScopeReleases(frame.scope_depth, null);
                 _ = try self.emit(.{ .jump = frame.exit_block }, .none);
             },
             .continue_statement => |continued| {
@@ -873,6 +1114,8 @@ const FunctionBuilder = struct {
                     return;
                 }
                 const frame = self.loops.items[self.loops.items.len - 1];
+                try self.emitTempReleases(frame.temps_depth);
+                try self.emitScopeReleases(frame.scope_depth, null);
                 _ = try self.emit(.{ .jump = frame.continue_block }, .none);
             },
             .expression => |expression| {
@@ -911,8 +1154,9 @@ const FunctionBuilder = struct {
                 return;
             }
             const list = try self.emit(.{ .heap_new = .{ .heap = expected.heap, .dims = &.{} } }, expected);
-            const local = (try self.declareLocal(name, expected, mutable, span)) orelse return;
+            const local = (try self.declareLocal(name, expected, mutable, .owned, span)) orelse return;
             _ = try self.emit(.{ .local_set = .{ .local = local, .value = list } }, .none);
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = list } }, .none);
             return;
         }
 
@@ -929,8 +1173,22 @@ const FunctionBuilder = struct {
                 return;
             }
         }
-        const local = (try self.declareLocal(name, value.value_type, mutable, span)) orelse return;
+        // A binding that received something fresh (or a give, or a
+        // copy) owns the object; receiving another name is an alias
+        // (S1, S8).
+        const owns = self.analyzer.carriesObjects(value.value_type) and
+            try self.yieldsOwnership(value_expression);
+        const local = (try self.declareLocal(
+            name,
+            value.value_type,
+            mutable,
+            if (owns) .owned else .alias,
+            span,
+        )) orelse return;
         _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+        if (owns) {
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+        }
     }
 
     /// var name: Type — a late declaration (OWNERSHIP.md S40): the
@@ -944,7 +1202,9 @@ const FunctionBuilder = struct {
     ) Error!void {
         const declared = (try self.analyzer.resolveType(self.module, written)) orelse return;
         const zero = try self.emitZero(declared);
-        const local = (try self.declareLocal(name, declared, true, span)) orelse return;
+        // The declaration establishes the binding and its scope; the
+        // scope owns whatever a later assignment fills in (S36, S40).
+        const local = (try self.declareLocal(name, declared, true, .owned, span)) orelse return;
         _ = try self.emit(.{ .local_set = .{ .local = local, .value = zero } }, .none);
     }
 
@@ -1002,11 +1262,36 @@ const FunctionBuilder = struct {
             try self.fail("luce.sema.name", span, "unknown name {s}", .{base});
             return;
         };
-        if (!found.mutable) {
+        const info = found.info;
+        if (!info.mutable) {
             try self.fail("luce.sema.let", span, "{s} is let-bound; use var for reassignment", .{base});
             return;
         }
-        const local_type = self.locals.items[found.local].local_type;
+        if (try self.checkPoisoned(info, base, span)) return;
+        const local = info.local;
+        const class = info.class;
+        const local_type = self.locals.items[local].local_type;
+        if (info.carries) {
+            const yields = try self.yieldsOwnership(assign.value);
+            if (class == .owned and !yields) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "{s} owns its object; assign something fresh, give NAME, or copy NAME [OWNERSHIP.md S5, S21]",
+                    .{base},
+                );
+                return;
+            }
+            if (class != .owned and yields) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "{s} aliases another binding's object and cannot own a fresh one; declare a new name [OWNERSHIP.md S8]",
+                    .{base},
+                );
+                return;
+            }
+        }
         const value = (try self.lowerExpression(assign.value, false)) orelse return;
         if (!value.value_type.eql(local_type)) {
             try self.fail("luce.sema.type", assign.span, "{s} is {s} but the value is {s}", .{
@@ -1016,7 +1301,15 @@ const FunctionBuilder = struct {
             });
             return;
         }
-        _ = try self.emit(.{ .local_set = .{ .local = found.local, .value = value.register } }, .none);
+        // Reassigning an owning var frees the old object immediately
+        // (S5); the very first assignment finds only the null object.
+        if (info.carries and class == .owned) {
+            try self.emitRelease(local);
+        }
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+        if (info.carries and class == .owned) {
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+        }
     }
 
     fn lowerAssignField(self: *FunctionBuilder, target: anytype, assign: anytype) Error!void {
@@ -1055,11 +1348,14 @@ const FunctionBuilder = struct {
             try self.fail("luce.sema.name", target.span, "unknown name {s}", .{target.base});
             return;
         };
-        if (!found.mutable) {
+        const info = found.info;
+        if (!info.mutable) {
             try self.fail("luce.sema.let", target.span, "{s} is let-bound; use var for reassignment", .{target.base});
             return;
         }
-        const local_type = self.locals.items[found.local].local_type;
+        if (try self.checkPoisoned(info, target.base, target.span)) return;
+        const local = info.local;
+        const local_type = self.locals.items[local].local_type;
         if (local_type != .strukt) {
             try self.fail("luce.sema.field", target.span, "{s} is {s}, not a struct", .{
                 target.base,
@@ -1074,6 +1370,29 @@ const FunctionBuilder = struct {
             return;
         };
         const expected = layout.fields[field_index].field_type;
+        // An object field follows the verb rule and its owner drops
+        // the old value (S25); only the owning binding can restock it.
+        const field_carries = self.analyzer.carriesObjects(expected);
+        if (field_carries) {
+            if (info.class != .owned) {
+                try self.fail(
+                    "luce.sema.own",
+                    target.span,
+                    "{s} does not own its objects; assign the field through the owning name [OWNERSHIP.md S25, S26]",
+                    .{target.base},
+                );
+                return;
+            }
+            if (!(try self.yieldsOwnership(assign.value))) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "this field keeps its object; assign something fresh, give NAME, or copy NAME [OWNERSHIP.md S21, S25]",
+                    .{},
+                );
+                return;
+            }
+        }
         const value = (try self.lowerExpression(assign.value, false)) orelse return;
         if (!value.value_type.eql(expected)) {
             try self.fail("luce.sema.type", assign.span, "{s}.{s} is {s} but the value is {s}", .{
@@ -1084,14 +1403,25 @@ const FunctionBuilder = struct {
             });
             return;
         }
-        const current = try self.emit(.{ .local_get = found.local }, local_type);
+        const current = try self.emit(.{ .local_get = local }, local_type);
+        if (field_carries) {
+            const old_field = try self.emit(.{ .struct_get = .{
+                .target = current,
+                .layout = layout_index,
+                .field = field_index,
+            } }, expected);
+            _ = try self.emit(.{ .object_unbind = .{ .local = local, .value = old_field } }, .none);
+        }
         const updated = try self.emit(.{ .struct_set = .{
             .target = current,
             .layout = layout_index,
             .field = field_index,
             .value = value.register,
         } }, local_type);
-        _ = try self.emit(.{ .local_set = .{ .local = found.local, .value = updated } }, .none);
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = updated } }, .none);
+        if (field_carries) {
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+        }
     }
 
     /// place[i] = v, grid[r, c] = v, m[key] = v.  The base may be any
@@ -1108,6 +1438,19 @@ const FunctionBuilder = struct {
         const indices = values[1 .. values.len - 1];
         const value = values[values.len - 1];
         const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
+        // Containers own their object elements: storing one takes a
+        // fresh value, a give, or a copy (S20, S21).
+        if (self.analyzer.carriesObjects(element_type) and
+            !(try self.yieldsOwnership(assign.value)))
+        {
+            try self.fail(
+                "luce.sema.own",
+                assign.span,
+                "a container keeps its object elements; store something fresh, give NAME, or copy NAME [OWNERSHIP.md S21]",
+                .{},
+            );
+            return;
+        }
         if (!value.value_type.eql(element_type)) {
             try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
                 try self.analyzer.typeName(element_type),
@@ -1196,7 +1539,11 @@ const FunctionBuilder = struct {
     }
 
     fn lowerConditional(self: *FunctionBuilder, conditional: anytype) Error!void {
+        const temps_floor = self.temps.items.len;
         const condition = (try self.lowerCondition(conditional.condition)) orelse return;
+        // Condition temporaries die before the branch: the condition
+        // value is a Bool, so nothing still needs them.
+        try self.flushTemps(temps_floor);
         const then_block = try self.reserveBlock();
         const merge_block = try self.reserveBlock();
         var else_target = merge_block;
@@ -1228,11 +1575,15 @@ const FunctionBuilder = struct {
         _ = try self.emit(.{ .jump = header }, .none);
 
         self.switchTo(header);
+        const temps_floor = self.temps.items.len;
         const condition = (try self.lowerCondition(loop.condition)) orelse {
             _ = try self.emit(.{ .jump = exit }, .none);
             self.switchTo(exit);
             return;
         };
+        // The header re-runs every iteration: its temporaries must die
+        // in it, not after the loop.
+        try self.flushTemps(temps_floor);
         _ = try self.emit(.{ .branch = .{
             .condition = condition.register,
             .then_block = body,
@@ -1240,7 +1591,12 @@ const FunctionBuilder = struct {
         } }, .none);
 
         self.switchTo(body);
-        try self.loops.append(self.temporary(), .{ .continue_block = header, .exit_block = exit });
+        try self.loops.append(self.temporary(), .{
+            .continue_block = header,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
         try self.lowerBlock(loop.body);
         _ = self.loops.pop();
         _ = try self.emit(.{ .jump = header }, .none);
@@ -1249,6 +1605,7 @@ const FunctionBuilder = struct {
     }
 
     fn lowerForRange(self: *FunctionBuilder, loop: anytype) Error!void {
+        const temps_floor = self.temps.items.len;
         const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
         const start = bounds[0];
         const end = bounds[1];
@@ -1256,10 +1613,12 @@ const FunctionBuilder = struct {
             try self.fail("luce.sema.type", loop.span, "range bounds must be Int", .{});
             return;
         }
+        // Bound temporaries die before the loop starts.
+        try self.flushTemps(temps_floor);
 
         try self.pushScope();
         defer self.popScope();
-        const index_local = (try self.declareLocal(loop.name, .int, false, loop.span)) orelse return;
+        const index_local = (try self.declareLocal(loop.name, .int, false, .alias, loop.span)) orelse return;
         const limit_local = try self.hiddenLocal(.int);
         _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = start.register } }, .none);
         _ = try self.emit(.{ .local_set = .{ .local = limit_local, .value = end.register } }, .none);
@@ -1286,7 +1645,12 @@ const FunctionBuilder = struct {
         } }, .none);
 
         self.switchTo(body);
-        try self.loops.append(self.temporary(), .{ .continue_block = step, .exit_block = exit });
+        try self.loops.append(self.temporary(), .{
+            .continue_block = step,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
         try self.lowerBlock(loop.body);
         _ = self.loops.pop();
         _ = try self.emit(.{ .jump = step }, .none);
@@ -1342,7 +1706,8 @@ const FunctionBuilder = struct {
         defer self.popScope();
         const object_local = try self.hiddenLocal(iterable.value_type);
         const index_local = try self.hiddenLocal(.int);
-        const name_local = (try self.declareLocal(loop.name, element_type, false, loop.span)) orelse return;
+        // The element binds each iteration as a borrow (S22).
+        const name_local = (try self.declareLocal(loop.name, element_type, false, .alias, loop.span)) orelse return;
         _ = try self.emit(.{ .local_set = .{ .local = object_local, .value = iterable.register } }, .none);
         const zero = try self.emit(.{ .const_int = 0 }, .int);
         _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = zero } }, .none);
@@ -1382,7 +1747,12 @@ const FunctionBuilder = struct {
             element_type,
         );
         _ = try self.emit(.{ .local_set = .{ .local = name_local, .value = element } }, .none);
-        try self.loops.append(self.temporary(), .{ .continue_block = step, .exit_block = exit });
+        try self.loops.append(self.temporary(), .{
+            .continue_block = step,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
         try self.lowerBlock(loop.body);
         _ = self.loops.pop();
         _ = try self.emit(.{ .jump = step }, .none);
@@ -1416,6 +1786,63 @@ const FunctionBuilder = struct {
                 });
                 return;
             }
+
+            // Whatever a function returns, the caller owns (S16, S17):
+            // an owned name moves out, fresh values flow out, borrows
+            // are compile errors.
+            var moved: ?LocalId = null;
+            if (self.analyzer.carriesObjects(value.value_type)) {
+                switch (expression.*) {
+                    .name => |name| {
+                        const found = self.findLocal(name.text).?;
+                        switch (found.info.class) {
+                            .owned => moved = found.info.local,
+                            .borrow_param => {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "{s} is a borrowed parameter; return copy {s}, or take the parameter as give [OWNERSHIP.md S17]",
+                                    .{ name.text, name.text },
+                                );
+                                return;
+                            },
+                            .alias => {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
+                                    .{ name.text, name.text },
+                                );
+                                return;
+                            },
+                        }
+                    },
+                    else => {
+                        if (!(try self.yieldsOwnership(expression))) {
+                            try self.fail(
+                                "luce.sema.own",
+                                returned.span,
+                                "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
+                                .{},
+                            );
+                            return;
+                        }
+                        // The fresh return value was parked as a
+                        // statement temporary; un-park it so the
+                        // unwinding below leaves it alone.
+                        var index = self.temps.items.len;
+                        while (index > 0) {
+                            index -= 1;
+                            if (self.temps.items[index].register == value.register) {
+                                _ = self.temps.orderedRemove(index);
+                                break;
+                            }
+                        }
+                    },
+                }
+            }
+            try self.emitTempReleases(0);
+            try self.emitScopeReleases(0, moved);
             _ = try self.emit(.{ .ret = value.register }, .none);
             return;
         }
@@ -1425,12 +1852,29 @@ const FunctionBuilder = struct {
             });
             return;
         }
+        try self.emitTempReleases(0);
+        try self.emitScopeReleases(0, null);
         _ = try self.emit(.{ .ret = null }, .none);
     }
 
     // Expressions ----------------------------------------------------------
 
     fn lowerExpression(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
+        const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
+        // Every ownership-yielding object is parked as a statement
+        // temporary (S3).  Whatever adopts it — a binding, a
+        // container, a give parameter, a return — re-owns it at run
+        // time, which turns the parked release into a no-op.
+        if (value.value_type != .none and
+            self.analyzer.carriesObjects(value.value_type) and
+            try self.yieldsOwnership(expression))
+        {
+            try self.registerTemp(value);
+        }
+        return value;
+    }
+
+    fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
         switch (expression.*) {
             .int_literal => |literal| {
                 const parsed = std.fmt.parseInt(i64, literal.text, 10) catch {
@@ -1469,8 +1913,10 @@ const FunctionBuilder = struct {
                     try self.fail("luce.sema.name", name.span, "unknown name {s}", .{name.text});
                     return null;
                 };
-                const local_type = self.locals.items[found.local].local_type;
-                return .{ .register = try self.emit(.{ .local_get = found.local }, local_type), .value_type = local_type };
+                if (try self.checkPoisoned(found.info, name.text, name.span)) return null;
+                const local = found.info.local;
+                const local_type = self.locals.items[local].local_type;
+                return .{ .register = try self.emit(.{ .local_get = local }, local_type), .value_type = local_type };
             },
             .field => |field| return self.lowerField(field),
             .call => |call| return self.lowerCall(call, as_statement),
@@ -1481,7 +1927,96 @@ const FunctionBuilder = struct {
             .list_literal => |literal| return self.lowerListLiteral(literal),
             .index => |index| return self.lowerIndex(index),
             .slice_range => |slice| return self.lowerSliceRange(slice),
+            .give => |give| return self.lowerGive(give),
+            .copy => |copied| return self.lowerCopy(copied),
         }
+    }
+
+    /// give NAME — the named object transfers to whatever receives it;
+    /// the name is poisoned to the end of its scope (S10, S13, S29).
+    fn lowerGive(self: *FunctionBuilder, give: anytype) Error!?Value {
+        if (give.operand.* != .name) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "give moves a named object; use copy for other expressions [OWNERSHIP.md S10, S31]",
+                .{},
+            );
+            return null;
+        }
+        const name = give.operand.name.text;
+        const found = self.findLocal(name) orelse {
+            try self.fail("luce.sema.name", give.operand.name.span, "unknown name {s}", .{name});
+            return null;
+        };
+        const info = found.info;
+        const local = info.local;
+        const local_type = self.locals.items[local].local_type;
+        if (!info.carries) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                .{},
+            );
+            return null;
+        }
+        if (try self.checkPoisoned(info, name, give.span)) return null;
+        if (info.class == .borrow_param) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "{s} is a borrowed parameter and cannot be given; take it as give in the signature, or copy it [OWNERSHIP.md S12]",
+                .{name},
+            );
+            return null;
+        }
+        if (self.loops.items.len > 0 and
+            found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
+        {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "{s} is declared outside this loop; the next iteration would use a given-away name — create it fresh inside the loop, or copy [OWNERSHIP.md S30]",
+                .{name},
+            );
+            return null;
+        }
+        info.poisoned = .given;
+        const value = try self.emit(.{ .local_get = local }, local_type);
+        const arguments = try self.arena().alloc(Register, 1);
+        arguments[0] = value;
+        return .{
+            .register = try self.emit(
+                .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
+                local_type,
+            ),
+            .value_type = local_type,
+        };
+    }
+
+    /// copy EXPR — a deep, independent duplicate; always legal on
+    /// readable objects (S31).
+    fn lowerCopy(self: *FunctionBuilder, copied: anytype) Error!?Value {
+        const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
+        if (!self.analyzer.carriesObjects(value.value_type)) {
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "copy applies to objects (List, Map, Array, Builder, object-carrying structs); values copy by themselves [OWNERSHIP.md S32]",
+                .{},
+            );
+            return null;
+        }
+        const arguments = try self.arena().alloc(Register, 1);
+        arguments[0] = value.register;
+        return .{
+            .register = try self.emit(
+                .{ .intrinsic = .{ .kind = .copy_object, .arguments = arguments } },
+                value.value_type,
+            ),
+            .value_type = value.value_type,
+        };
     }
 
     fn lowerNew(self: *FunctionBuilder, new: anytype) Error!?Value {
@@ -1877,6 +2412,31 @@ const FunctionBuilder = struct {
             }
             slot.* = argument.value;
         }
+        // Ownership handoffs are never invisible: a give parameter
+        // needs give NAME, copy NAME, or something fresh at the call
+        // site; a borrow parameter refuses a give (S13, S14).
+        for (expressions, 0..) |argument, index| {
+            if (index >= info.parameter_modes.len) break;
+            if (info.parameter_modes[index] == .give) {
+                if (!(try self.yieldsOwnership(argument))) {
+                    try self.fail(
+                        "luce.sema.own",
+                        call_arguments[index].span,
+                        "argument {d} of {s} takes ownership; write give NAME, copy NAME, or pass something fresh [OWNERSHIP.md S13, S14]",
+                        .{ index + 1, name },
+                    );
+                    return null;
+                }
+            } else if (argument.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    call_arguments[index].span,
+                    "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
+                    .{name},
+                );
+                return null;
+            }
+        }
         const values = (try self.lowerOperands(expressions)) orelse return null;
         const registers = try self.arena().alloc(Register, call_arguments.len);
         for (values, 0..) |value, index| {
@@ -2041,6 +2601,24 @@ const FunctionBuilder = struct {
         if (found.result == .none and !as_statement) {
             try self.fail("luce.sema.method", method.span, "{s} returns nothing", .{method.name});
             return null;
+        }
+        // Containers own their object elements: append/insert take a
+        // fresh value, a give, or a copy (S20, S21).
+        if (found.kind == .append_value or found.kind == .insert_value) {
+            if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
+                if (descriptor == .list and self.analyzer.carriesObjects(descriptor.list)) {
+                    const value_index: usize = if (found.kind == .append_value) 0 else 1;
+                    if (!(try self.yieldsOwnership(method.arguments[value_index].value))) {
+                        try self.fail(
+                            "luce.sema.own",
+                            method.arguments[value_index].span,
+                            "a container keeps its object elements; store something fresh, give NAME, or copy NAME [OWNERSHIP.md S21]",
+                            .{},
+                        );
+                        return null;
+                    }
+                }
+            }
         }
         const registers = try self.arena().alloc(Register, values.len);
         for (values, registers) |value, *slot| slot.* = value.register;
@@ -2278,6 +2856,19 @@ const FunctionBuilder = struct {
                 });
                 return null;
             }
+            // Object fields follow the verb rule at construction
+            // (S24): the binding that receives the struct owns them.
+            if (self.analyzer.carriesObjects(expected) and
+                !(try self.yieldsOwnership(argument.value)))
+            {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s}.{s} keeps its object; construct with something fresh, give NAME, or copy NAME [OWNERSHIP.md S21, S24]",
+                    .{ layout.name, name },
+                );
+                return null;
+            }
             seen[field_index] = true;
             registers[field_index] = value.register;
         }
@@ -2459,6 +3050,52 @@ const FunctionBuilder = struct {
             .free_object => {
                 if (arguments[0].value_type != .heap)
                     return self.intrinsicType(call, "free releases a List, Map, Array, or Builder");
+                // free is deliberate early release of an owned name,
+                // and poisons the name like give does (S6).
+                const operand = call.arguments[0].value;
+                if (operand.* != .name) {
+                    try self.fail(
+                        "luce.sema.own",
+                        call.span,
+                        "free releases an owned name; containers free their own elements [OWNERSHIP.md S6, S22]",
+                        .{},
+                    );
+                    return .failed;
+                }
+                const found = self.findLocal(operand.name.text).?;
+                switch (found.info.class) {
+                    .borrow_param => {
+                        try self.fail(
+                            "luce.sema.own",
+                            call.span,
+                            "{s} is a borrowed parameter and cannot be freed; only owners free [OWNERSHIP.md S12]",
+                            .{operand.name.text},
+                        );
+                        return .failed;
+                    },
+                    .alias => {
+                        try self.fail(
+                            "luce.sema.own",
+                            call.span,
+                            "{s} aliases an object it does not own; free the owning name [OWNERSHIP.md S6, S8]",
+                            .{operand.name.text},
+                        );
+                        return .failed;
+                    },
+                    .owned => {},
+                }
+                if (self.loops.items.len > 0 and
+                    found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
+                {
+                    try self.fail(
+                        "luce.sema.own",
+                        call.span,
+                        "{s} is declared outside this loop; the next iteration would use a freed name [OWNERSHIP.md S30]",
+                        .{operand.name.text},
+                    );
+                    return .failed;
+                }
+                found.info.poisoned = .freed;
                 result = .none;
             },
             .str_value => {
@@ -2488,6 +3125,8 @@ const FunctionBuilder = struct {
                 result = .int;
             },
             // Lowered from syntax or method calls, never from bare names.
+            .give_object,
+            .copy_object,
             .null_object,
             .index_get,
             .index_set,

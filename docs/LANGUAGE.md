@@ -15,18 +15,65 @@ Two kinds of data, with a deliberate line between them:
   `String` (immutable UTF-8), `Bytes`, and user `struct`s.  Values
   copy on assignment and call; nobody frees a value.
 - **Heap objects** — `List(T)`, `Map(K, V)`, `Array(T, ...)`, and
-  `Builder`.  Variables hold *references*.  Objects are created
-  explicitly (`new ...` or a literal) and released explicitly
-  (`free(x)`).  Using an object after `free` traps
-  (`use_after_free`), freeing twice traps, and loom reports anything
-  still alive when a program ends ("leaked N objects").  Copying a
-  struct that contains a list copies the *reference* — both structs
-  see the same list.
+  `Builder`.  Variables hold *references*.  Objects are created with
+  `new ...` or a literal and freed automatically by **scope
+  ownership** (next section).  Copying a struct that contains a list
+  copies the *reference* — both structs see the same list.
 
-  Explicit `free` is the *current* answer, not the final one: the
-  memory model (scope ownership, defer, reference counting, ...) is
-  under deliberate design — the options and trade-offs live in
-  `docs/MEMORY.md`.  Everything else in this document is settled.
+## Ownership
+
+The memory model, in one paragraph (the full ratified specification —
+43 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
+its numbers in diagnostics and `src/luce/ownership_spec.zig` executes
+it):
+
+- **The binding that received a fresh object owns it**, and the
+  owning scope frees it — at the block end, at early `return`/`break`/
+  `continue`, and immediately on reassignment of the owning `var`.
+  Casual code never writes a memory word:
+
+  ```luce
+  func main():
+      var xs = [1, 2, 3]        # xs owns the list
+      xs.append(4)
+      xs = [5, 6]               # old list freed right here
+      # scope ends: everything owned here is freed
+  ```
+
+- **`let y = x` is an alias** — two names, one object, no tracking.
+  An alias that outlives the object traps `use_after_free` at use
+  (safe builds; the Zig posture).
+- **Keeping a *named* object needs a verb.**  Storing into a
+  container or struct field, or passing to a `give` parameter, takes
+  something fresh, `give x` (transfer; `x` is poisoned — a compile
+  error — to the end of its scope), or `copy x` (deep copy).
+  Containers therefore *always* own their object elements: `pop()`
+  hands the element out; overwrite/`remove`/`clear` free the old one;
+  freeing a container frees everything it owns.
+- **Calls borrow by default.**  A borrowed parameter may read and
+  mutate contents but never keep, give, free, or return its object.
+  Taking ownership is declared in the signature *and* echoed at the
+  call site: `func stash(hits: give List(Int))` /
+  `stash(give mine)`.
+- **`return` moves.**  Whatever a function returns, the caller owns —
+  returning a borrow or alias is a compile error (`return copy x` is
+  the escape hatch).
+- **Values never take verbs.**  Ints, Floats, Bools, Strings, Bytes,
+  and plain-value structs copy freely.  A struct with object fields
+  ("object-carrying") follows the object rules when *kept*.
+- **`free(x)` survives as deliberate early release** on owned names,
+  and poisons the name like `give`.
+- **`var name: Type`** (no value) declares now, fills later: the slot
+  holds the type's zero value — the null object for object types —
+  and using it before assignment traps `null_object`.  There is no
+  null literal and no nullable type; optionals are a future, separate
+  decision.
+
+Two dynamic backstops cover what static rules cannot see: `give`
+through an alias of a container-owned object traps `not_owned`
+(S23), and every verb demands a filled slot (`null_object`
+otherwise).  Nothing can leak — loom's leak report is now an
+interpreter self-check, not a program diagnostic.
 
 ## Collections
 
@@ -51,10 +98,7 @@ let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
 let text = str(b)                  # builder -> String
-free(xs)
-free(m)
-free(grid)
-free(b)
+# scope ownership frees xs, m, grid, and b here — no free() needed
 ```
 
 Type-specific operations are **methods** (Python's split: `len`,
@@ -81,8 +125,9 @@ sugar for a plain function with the receiver first, not dispatch):
   `func total(grid: Array(Int, _, _)) -> Int`.
 - `==` / `!=` on objects compare *identity* (same object), never
   contents.
-- Slices copy: `xs[a:b]` allocates a new list (you free it);
-  `s[a:b]` on a String stays a value.
+- Slices copy: `xs[a:b]` allocates a new list the receiver owns —
+  deeply, when elements are objects (two containers can never own one
+  object); `s[a:b]` on a String stays a value.
 
 ## Iteration
 
@@ -150,7 +195,8 @@ dispatch.
 Errors are traps: deterministic, with stable codes, and they abort the
 program without publishing anything.  New codes in this round:
 `index_bounds`, `key_missing`, `empty_collection`, `use_after_free`,
-`null_object`, `parse_failed`, `bad_codepoint`.  Long-standing codes:
+`null_object`, `not_owned`, `parse_failed`, `bad_codepoint`.
+Long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
 string bounds/boundary, step budget, call depth.  The interpreter runs
 on an explicit frame stack, so call depth is a *policy* limit, not a
@@ -175,6 +221,8 @@ search paths, conditional imports, re-exports.
 
 First-class functions, closures, user-defined methods/receivers
 (`x.f()` is builtin sugar, not dispatch), exceptions (traps are
-final), implicit conversions, shadowing, globals, automatic memory
-(under design — docs/MEMORY.md), operator overloading, string
-interpolation, and enums/unions.
+final), implicit conversions, shadowing, globals (Phase 2 —
+docs/V2.md), optionals and nullable types (Phase 3, designed with
+error handling), garbage collection and reference counting (scope
+ownership is the model — docs/OWNERSHIP.md), operator overloading,
+string interpolation, and enums/unions.

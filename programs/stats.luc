@@ -20,5 +20,3 @@ func main():
     print("mean    " + str(mathx.mean(values)))
     print("median  " + str(mathx.median(values)))
     print("stddev  " + str(mathx.deviation(values)))
-    free(ordered)
-    free(values)

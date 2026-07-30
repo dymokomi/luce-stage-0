@@ -66,6 +66,9 @@ const Frame = struct {
     position: usize = 0,
     /// The caller register receiving this frame's return value.
     destination: Register = 0,
+    /// Unique per call: object ownership names (serial, local) pairs,
+    /// so recursion never confuses two frames' bindings.
+    serial: u32 = 0,
 };
 
 const Register = ir.Register;
@@ -89,6 +92,7 @@ const Machine = struct {
     /// detectably dead for the whole evaluation.
     heap: std.ArrayList(HeapObject) = .empty,
     live_objects: u32 = 0,
+    next_serial: u32 = 1,
 
     fn terminal(self: *Machine) ?backend.Terminal {
         const host = self.host orelse return null;
@@ -112,11 +116,14 @@ const Machine = struct {
         const locals = try self.arena.alloc(RuntimeValue, function.locals.len);
         @memset(locals, .none);
         @memcpy(locals[0..arguments.len], arguments);
+        const serial = self.next_serial;
+        self.next_serial += 1;
         try self.stack.append(self.arena, .{
             .function = function_index,
             .registers = registers,
             .locals = locals,
             .destination = destination,
+            .serial = serial,
         });
         return null;
     }
@@ -210,6 +217,8 @@ const Machine = struct {
                             .trap => |failed| return .{ .trap = failed },
                         }
                     },
+                    .object_bind => |bind| self.bindValue(registers[bind.value], frame.serial, bind.local),
+                    .object_unbind => |unbind| self.unbindValue(registers[unbind.value], frame.serial, unbind.local),
                     .call => |called| {
                         const arguments_storage = try self.arena.alloc(RuntimeValue, called.arguments.len);
                         for (called.arguments, arguments_storage) |argument, *slot| {
@@ -242,6 +251,10 @@ const Machine = struct {
                     .ret => |value| {
                         const returned: RuntimeValue = if (value) |register| registers[register] else .none;
                         const finished = self.stack.pop().?;
+                        // Whatever the finished frame still owned in
+                        // the returned value moves to the caller
+                        // (S16): loose until something there binds it.
+                        self.loosenFromFrame(returned, finished.serial);
                         if (self.stack.items.len == 0) return .{ .value = returned };
                         const parent = &self.stack.items[self.stack.items.len - 1];
                         const parent_function = &self.program.functions[parent.function];
@@ -261,8 +274,19 @@ const Machine = struct {
 
     const MapEntry = struct { key: RuntimeValue, value: RuntimeValue };
 
+    /// Who frees an object (OWNERSHIP.md): `loose` — a fresh value or
+    /// statement temporary; `container` — an element some container
+    /// adopted and frees with itself; `binding` — a named local of one
+    /// specific call frame, released when that scope exits.
+    const Owner = union(enum) {
+        loose,
+        container,
+        binding: struct { serial: u32, local: u32 },
+    };
+
     const HeapObject = struct {
         alive: bool = true,
+        owner: Owner = .loose,
         data: Data,
 
         const Data = union(enum) {
@@ -272,6 +296,226 @@ const Machine = struct {
             builder: std.ArrayList(u8),
         };
     };
+
+    // -- ownership walks ----------------------------------------------
+    //
+    // Bind/adopt/release walk a value's top objects: the object a
+    // handle names, or a struct's object fields recursively.  They
+    // never descend into an object's elements — those already belong
+    // to it.  Nesting depth is bounded by the (finite) type shape.
+
+    fn liveObject(self: *Machine, handle: backend.ObjectHandle) ?*HeapObject {
+        if (handle.isNull() or handle.index >= self.heap.items.len) return null;
+        const object = &self.heap.items[handle.index];
+        if (!object.alive) return null;
+        return object;
+    }
+
+    /// The objects in `value` now belong to `local` of frame `serial`.
+    fn bindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
+        switch (value) {
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                object.owner = .{ .binding = .{ .serial = serial, .local = local } };
+            },
+            .strukt => |fields| for (fields) |field| self.bindValue(field, serial, local),
+            else => {},
+        }
+    }
+
+    /// The objects in `value` were adopted by a container (S20).
+    fn adoptValue(self: *Machine, value: RuntimeValue) void {
+        switch (value) {
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                object.owner = .container;
+            },
+            .strukt => |fields| for (fields) |field| self.adoptValue(field),
+            else => {},
+        }
+    }
+
+    /// The objects in `value` belong to nobody yet: pop results and
+    /// returned values (the receiver adopts or binds them next).
+    fn loosenValue(self: *Machine, value: RuntimeValue) void {
+        switch (value) {
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                object.owner = .loose;
+            },
+            .strukt => |fields| for (fields) |field| self.loosenValue(field),
+            else => {},
+        }
+    }
+
+    /// On return, everything the finished frame still owned in the
+    /// returned value moves out loose; the caller owns it (S16).
+    fn loosenFromFrame(self: *Machine, value: RuntimeValue, serial: u32) void {
+        switch (value) {
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                if (object.owner == .binding and object.owner.binding.serial == serial) {
+                    object.owner = .loose;
+                }
+            },
+            .strukt => |fields| for (fields) |field| self.loosenFromFrame(field, serial),
+            else => {},
+        }
+    }
+
+    /// Free the objects in `value` still bound to (serial, local); the
+    /// scope-exit release.  Objects owned elsewhere by now are left
+    /// alone, which makes releases safe on every path.
+    fn unbindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
+        switch (value) {
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                if (object.owner == .binding and
+                    object.owner.binding.serial == serial and
+                    object.owner.binding.local == local)
+                {
+                    self.freeObject(handle.index);
+                }
+            },
+            .strukt => |fields| for (fields) |field| self.unbindValue(field, serial, local),
+            else => {},
+        }
+    }
+
+    /// Free one object and everything it owns, recursively (S20).
+    fn freeObject(self: *Machine, index: u32) void {
+        const object = &self.heap.items[index];
+        if (!object.alive) return;
+        object.alive = false;
+        self.live_objects -= 1;
+        switch (object.data) {
+            .list => |list| for (list.items) |item| self.freeValue(item),
+            .map => |map| for (map.items) |entry| self.freeValue(entry.value),
+            .array => |array| for (array.elements) |item| self.freeValue(item),
+            .builder => {},
+        }
+    }
+
+    /// Free the objects in a value unconditionally (owned elements
+    /// being dropped by their container: overwrite, remove, clear).
+    fn freeValue(self: *Machine, value: RuntimeValue) void {
+        switch (value) {
+            .object => |handle| {
+                if (self.liveObject(handle) != null) self.freeObject(handle.index);
+            },
+            .strukt => |fields| for (fields) |field| self.freeValue(field),
+            else => {},
+        }
+    }
+
+    const GiveCheck = union(enum) { fine, failed: ir.TrapCode };
+
+    /// Giving an object-carrying struct checks every filled field the
+    /// way give checks a single object (S23, S27); unfilled fields are
+    /// simply carried along.
+    fn givableFields(self: *Machine, value: RuntimeValue) GiveCheck {
+        switch (value) {
+            .object => |handle| {
+                if (handle.isNull()) return .fine;
+                if (handle.index >= self.heap.items.len) return .{ .failed = .use_after_free };
+                const object = &self.heap.items[handle.index];
+                if (!object.alive) return .{ .failed = .use_after_free };
+                if (object.owner == .container) return .{ .failed = .not_owned };
+                return .fine;
+            },
+            .strukt => |fields| {
+                for (fields) |field| {
+                    switch (self.givableFields(field)) {
+                        .fine => {},
+                        .failed => |code| return .{ .failed = code },
+                    }
+                }
+                return .fine;
+            },
+            else => return .fine,
+        }
+    }
+
+    const CopyResult = union(enum) { value: RuntimeValue, failed: ir.TrapCode };
+
+    /// Deep copy (S31): duplicate the object and everything it owns,
+    /// recursively.  Values pass through; unfilled slots stay unfilled
+    /// (only the copy verb itself demands a filled top-level object).
+    fn deepCopy(self: *Machine, value: RuntimeValue) error{OutOfMemory}!CopyResult {
+        switch (value) {
+            .object => |handle| {
+                if (handle.isNull()) return .{ .value = value };
+                if (handle.index >= self.heap.items.len) return .{ .failed = .use_after_free };
+                if (!self.heap.items[handle.index].alive) return .{ .failed = .use_after_free };
+                const data: HeapObject.Data = switch (self.heap.items[handle.index].data) {
+                    .list => |list| blk: {
+                        var copied: std.ArrayList(RuntimeValue) = .empty;
+                        try copied.ensureTotalCapacity(self.arena, list.items.len);
+                        for (list.items) |item| {
+                            switch (try self.deepCopy(item)) {
+                                .value => |duplicate| copied.appendAssumeCapacity(duplicate),
+                                .failed => |code| return .{ .failed = code },
+                            }
+                        }
+                        break :blk .{ .list = copied };
+                    },
+                    .map => |map| blk: {
+                        var copied: std.ArrayList(MapEntry) = .empty;
+                        try copied.ensureTotalCapacity(self.arena, map.items.len);
+                        for (map.items) |entry| {
+                            switch (try self.deepCopy(entry.value)) {
+                                .value => |duplicate| copied.appendAssumeCapacity(.{
+                                    .key = entry.key,
+                                    .value = duplicate,
+                                }),
+                                .failed => |code| return .{ .failed = code },
+                            }
+                        }
+                        break :blk .{ .map = copied };
+                    },
+                    .array => |array| blk: {
+                        const dims = try self.arena.dupe(i64, array.dims);
+                        const elements = try self.arena.alloc(RuntimeValue, array.elements.len);
+                        for (array.elements, elements) |item, *slot| {
+                            switch (try self.deepCopy(item)) {
+                                .value => |duplicate| slot.* = duplicate,
+                                .failed => |code| return .{ .failed = code },
+                            }
+                        }
+                        break :blk .{ .array = .{ .dims = dims, .elements = elements } };
+                    },
+                    .builder => |builder| blk: {
+                        var copied: std.ArrayList(u8) = .empty;
+                        try copied.appendSlice(self.arena, builder.items);
+                        break :blk .{ .builder = copied };
+                    },
+                };
+                const index: u32 = @intCast(self.heap.items.len);
+                try self.heap.append(self.arena, .{ .data = data });
+                self.live_objects += 1;
+                const duplicate: RuntimeValue = .{ .object = .{ .index = index } };
+                // The copy's own elements belong to it.
+                switch (self.heap.items[index].data) {
+                    .list => |list| for (list.items) |item| self.adoptValue(item),
+                    .map => |map| for (map.items) |entry| self.adoptValue(entry.value),
+                    .array => |array| for (array.elements) |item| self.adoptValue(item),
+                    .builder => {},
+                }
+                return .{ .value = duplicate };
+            },
+            .strukt => |fields| {
+                const copied = try self.arena.alloc(RuntimeValue, fields.len);
+                for (fields, copied) |field, *slot| {
+                    switch (try self.deepCopy(field)) {
+                        .value => |duplicate| slot.* = duplicate,
+                        .failed => |code| return .{ .failed = code },
+                    }
+                }
+                return .{ .value = .{ .strukt = copied } };
+            },
+            else => return .{ .value = value },
+        }
+    }
 
     /// A safety valve, not a design limit: one array allocation cannot
     /// exceed this many elements.
@@ -613,11 +857,15 @@ const Machine = struct {
                     .list => |*list| {
                         const index = registers[arguments[1]].int;
                         if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
+                        // An element overwrite frees the old owned
+                        // element (S22).
+                        self.freeValue(list.items[@intCast(index)]);
                         list.items[@intCast(index)] = value;
                     },
                     .map => |*map| {
                         const key = registers[arguments[1]];
                         if (findEntry(map.items, key)) |at| {
+                            self.freeValue(map.items[at].value);
                             map.items[at].value = value;
                         } else {
                             try map.append(self.arena, .{ .key = key, .value = value });
@@ -626,10 +874,12 @@ const Machine = struct {
                     .array => |array| {
                         const flat = flattenIndex(array.dims, registers, arguments[1 .. arguments.len - 1]) orelse
                             return self.trap(.index_bounds);
+                        self.freeValue(array.elements[flat]);
                         array.elements[flat] = value;
                     },
                     .builder => unreachable,
                 }
+                self.adoptValue(value);
                 return .{ .value = .none };
             },
             .list_slice => {
@@ -641,8 +891,19 @@ const Machine = struct {
                 const start = registers[arguments[1]].int;
                 const end = registers[arguments[2]].int;
                 if (start < 0 or end < start or end > list.items.len) return self.trap(.index_bounds);
+                // Slices copy — including deep copies of object
+                // elements, since two containers can never own one
+                // object (S23, S31).
                 var copied: std.ArrayList(RuntimeValue) = .empty;
-                try copied.appendSlice(self.arena, list.items[@intCast(start)..@intCast(end)]);
+                for (list.items[@intCast(start)..@intCast(end)]) |element| {
+                    switch (try self.deepCopy(element)) {
+                        .value => |duplicate| {
+                            try copied.append(self.arena, duplicate);
+                            self.adoptValue(duplicate);
+                        },
+                        .failed => |code| return self.trap(code),
+                    }
+                }
                 const index: u32 = @intCast(self.heap.items.len);
                 try self.heap.append(self.arena, .{ .data = .{ .list = copied } });
                 self.live_objects += 1;
@@ -654,7 +915,10 @@ const Machine = struct {
                     .failed => |code| return self.trap(code),
                 };
                 switch (object.data) {
-                    .list => |*list| try list.append(self.arena, registers[arguments[1]]),
+                    .list => |*list| {
+                        try list.append(self.arena, registers[arguments[1]]);
+                        self.adoptValue(registers[arguments[1]]);
+                    },
                     .builder => |*builder| try builder.appendSlice(self.arena, registers[arguments[1]].string),
                     else => unreachable,
                 }
@@ -666,7 +930,11 @@ const Machine = struct {
                     .failed => |code| return self.trap(code),
                 };
                 const list = &object.data.list;
-                return .{ .value = list.pop() orelse return self.trap(.empty_collection) };
+                const taken = list.pop() orelse return self.trap(.empty_collection);
+                // pop hands the element out of the container (S22);
+                // whatever receives it owns it next.
+                self.loosenValue(taken);
+                return .{ .value = taken };
             },
             .insert_value => {
                 const object = switch (self.resolveObject(registers[arguments[0]])) {
@@ -677,6 +945,7 @@ const Machine = struct {
                 const index = registers[arguments[1]].int;
                 if (index < 0 or index > list.items.len) return self.trap(.index_bounds);
                 try list.insert(self.arena, @intCast(index), registers[arguments[2]]);
+                self.adoptValue(registers[arguments[2]]);
                 return .{ .value = .none };
             },
             .remove_entry => {
@@ -688,11 +957,12 @@ const Machine = struct {
                     .list => |*list| {
                         const index = registers[arguments[1]].int;
                         if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
-                        _ = list.orderedRemove(@intCast(index));
+                        // Removing an owned element frees it (S22).
+                        self.freeValue(list.orderedRemove(@intCast(index)));
                     },
                     .map => |*map| {
                         if (findEntry(map.items, registers[arguments[1]])) |at| {
-                            _ = map.orderedRemove(at);
+                            self.freeValue(map.orderedRemove(at).value);
                         }
                     },
                     else => unreachable,
@@ -728,13 +998,52 @@ const Machine = struct {
                 return .{ .value = .{ .int = array.dims[@intCast(axis)] } };
             },
             .free_object => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                const value = registers[arguments[0]];
+                const object = switch (self.resolveObject(value)) {
                     .object => |found| found,
                     .failed => |code| return self.trap(code),
                 };
-                object.alive = false;
-                self.live_objects -= 1;
+                // Only owners free: an object living in a container is
+                // freed by the container, never by an alias (S22, S23).
+                if (object.owner == .container) return self.trap(.not_owned);
+                self.freeObject(value.object.index);
                 return .{ .value = .none };
+            },
+            .give_object => {
+                // The one dynamic ownership check (S23): giving what a
+                // container owns would create a second owner.  Verbs
+                // demand an object, so an unfilled slot traps (S42).
+                const value = registers[arguments[0]];
+                switch (value) {
+                    .object => {
+                        const object = switch (self.resolveObject(value)) {
+                            .object => |found| found,
+                            .failed => |code| return self.trap(code),
+                        };
+                        if (object.owner == .container) return self.trap(.not_owned);
+                    },
+                    .strukt => switch (self.givableFields(value)) {
+                        .fine => {},
+                        .failed => |code| return self.trap(code),
+                    },
+                    else => unreachable,
+                }
+                return .{ .value = value };
+            },
+            .copy_object => {
+                const value = registers[arguments[0]];
+                if (value == .object) {
+                    // Verbs demand an object (S42): copying an
+                    // unfilled or freed slot traps.
+                    switch (self.resolveObject(value)) {
+                        .object => {},
+                        .failed => |code| return self.trap(code),
+                    }
+                }
+                switch (try self.deepCopy(value)) {
+                    .value => |duplicate| return .{ .value = duplicate },
+                    .failed => |code| return self.trap(code),
+                }
             },
             .str_find => {
                 const haystack = registers[arguments[0]].string;
@@ -876,8 +1185,15 @@ const Machine = struct {
                     .failed => |code| return self.trap(code),
                 };
                 switch (object.data) {
-                    .list => |*list| list.clearRetainingCapacity(),
-                    .map => |*map| map.clearRetainingCapacity(),
+                    .list => |*list| {
+                        // clear frees all owned elements (S22).
+                        for (list.items) |item| self.freeValue(item);
+                        list.clearRetainingCapacity();
+                    },
+                    .map => |*map| {
+                        for (map.items) |entry| self.freeValue(entry.value);
+                        map.clearRetainingCapacity();
+                    },
                     .builder => |*builder| builder.clearRetainingCapacity(),
                     .array => unreachable,
                 }
@@ -2027,16 +2343,15 @@ test "structs and nested collections share objects by reference" {
         \\
         \\func main():
         \\    var inner = [1, 2]
-        \\    var bag = Bag(label = "first", items = inner)
-        \\    let copy = bag
-        \\    copy.items.append(3)
-        \\    assert(len(inner) == 3)
+        \\    var bag = Bag(label = "first", items = give inner)
+        \\    let same_bag = bag
+        \\    same_bag.items.append(3)
+        \\    assert(len(bag.items) == 3)
         \\    var nested = new List(List(Int))
-        \\    nested.append(inner)
+        \\    nested.append(copy bag.items)
         \\    nested[0].append(4)
-        \\    assert(len(inner) == 4)
-        \\    free(inner)
-        \\    free(nested)
+        \\    assert(len(nested[0]) == 4)
+        \\    assert(len(bag.items) == 3)
         \\
     , .{}, script_options);
     defer bench.deinit();
@@ -2065,16 +2380,18 @@ test "collection misuse traps with stable codes" {
         , .code = .key_missing },
         .{ .source =
         \\func main():
-        \\    let xs = [1]
+        \\    var xs = [1]
+        \\    let view = xs
         \\    free(xs)
-        \\    free(xs)
+        \\    view.append(2)
         \\
         , .code = .use_after_free },
         .{ .source =
         \\func main():
-        \\    let xs = [1]
+        \\    var xs = [1]
+        \\    let view = xs
         \\    free(xs)
-        \\    let bad = xs[0]
+        \\    let bad = view[0]
         \\
         , .code = .use_after_free },
         .{ .source =
@@ -2107,17 +2424,18 @@ test "collection misuse traps with stable codes" {
     }
 }
 
-test "unfreed objects are counted as leaks" {
+test "S33: nothing leaks — scope ownership frees what free() used to" {
     var bench = try Bench.setup(
         \\func main():
         \\    let kept = [1, 2, 3]
         \\    let copied = kept[0:2]
         \\    var released = new Builder()
         \\    free(released)
+        \\    assert(len(copied) == 2)
         \\
     , .{}, script_options);
     defer bench.deinit();
-    try expectLeaks(&bench, 2);
+    try expectLeaks(&bench, 0);
 }
 
 test "the explicit frame stack survives deep recursion" {

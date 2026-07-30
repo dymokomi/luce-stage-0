@@ -49,10 +49,7 @@ func interpret(code: String, cells: Int) -> String:
             if tape[pointer] != 0:
                 pc = matching_backward(code, pc)
         pc = pc + 1
-    let text = str(out)
-    free(out)
-    free(tape)
-    return text
+    return str(out)
 
 func main():
     let hello = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
