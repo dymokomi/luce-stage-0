@@ -34,9 +34,39 @@ pub const CompileResult = union(enum) {
     }
 };
 
+/// Loads the source of `import name` for project compiles.  Returns
+/// null when the module cannot be found; the compiler reports it.
+/// Loaded bytes may be allocated from `arena` and must stay valid for
+/// the compile.
+pub const Loader = struct {
+    context: *anyopaque,
+    loadFn: *const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        name: []const u8,
+    ) error{OutOfMemory}!?[]const u8,
+};
+
+/// One source file may import at most this many modules transitively;
+/// a backstop against runaway import graphs, not a design limit.
+const max_modules = 64;
+
 pub fn compile(
     gpa: Allocator,
     source: []const u8,
+    schema: PortSchema,
+    options: types.CompileOptions,
+) Error!CompileResult {
+    return compileProject(gpa, source, null, schema, options);
+}
+
+/// Compile a root source plus everything it imports (a file is a
+/// module; `import geo` loads geo.luc through the loader) into one
+/// program.  Without a loader, imports are compile errors.
+pub fn compileProject(
+    gpa: Allocator,
+    source: []const u8,
+    loader: ?Loader,
     schema: PortSchema,
     options: types.CompileOptions,
 ) Error!CompileResult {
@@ -51,14 +81,68 @@ pub fn compile(
     // soon as analysis is done with it.
     var ast_arena = std.heap.ArenaAllocator.init(gpa);
     defer ast_arena.deinit();
+    const scaffold = ast_arena.allocator();
 
-    const tree = try parser_mod.parse(ast_arena.allocator(), gpa, source, &diagnostics);
+    const root_tree = try scaffold.create(@import("ast.zig").Program);
+    root_tree.* = try parser_mod.parse(scaffold, gpa, source, &diagnostics);
     if (diagnostics.hasErrors()) {
         program.deinit();
         return .{ .failure = diagnostics };
     }
 
-    const analyzed = (try analyzer_mod.analyze(arena, gpa, &tree, schema, options, &diagnostics)) orelse {
+    var modules: std.ArrayList(analyzer_mod.ModuleTree) = .empty;
+    defer modules.deinit(gpa);
+    try modules.append(gpa, .{ .prefix = "", .tree = root_tree });
+
+    // Breadth-first over the import graph; each module loads and
+    // parses once, cycles are simply already-loaded names.
+    var pending: std.ArrayList(@import("ast.zig").Import) = .empty;
+    defer pending.deinit(gpa);
+    try pending.appendSlice(gpa, root_tree.imports);
+    var next: usize = 0;
+    while (next < pending.items.len) : (next += 1) {
+        const wanted = pending.items[next];
+        var already = false;
+        for (modules.items) |module| {
+            if (std.mem.eql(u8, module.prefix, wanted.name)) already = true;
+        }
+        if (already) continue;
+        if (modules.items.len >= max_modules) {
+            diagnostics.scope = "";
+            try diagnostics.add("luce.import.limit", wanted.span, "too many modules (limit {d})", .{max_modules});
+            break;
+        }
+
+        const loaded: ?[]const u8 = if (loader) |through|
+            try through.loadFn(through.context, scaffold, wanted.name)
+        else
+            null;
+        const module_source = loaded orelse {
+            diagnostics.scope = "";
+            try diagnostics.add(
+                "luce.import.missing",
+                wanted.span,
+                "cannot load module {s} (looked for {s}.luc)",
+                .{ wanted.name, wanted.name },
+            );
+            continue;
+        };
+        try diagnostics.registerSource(wanted.name, module_source);
+
+        diagnostics.scope = wanted.name;
+        const tree = try scaffold.create(@import("ast.zig").Program);
+        tree.* = try parser_mod.parse(scaffold, gpa, module_source, &diagnostics);
+        diagnostics.scope = "";
+        const prefix = try scaffold.dupe(u8, wanted.name);
+        try modules.append(gpa, .{ .prefix = prefix, .tree = tree });
+        try pending.appendSlice(gpa, tree.imports);
+    }
+    if (diagnostics.hasErrors()) {
+        program.deinit();
+        return .{ .failure = diagnostics };
+    }
+
+    const analyzed = (try analyzer_mod.analyze(arena, gpa, modules.items, schema, options, &diagnostics)) orelse {
         program.deinit();
         return .{ .failure = diagnostics };
     };
@@ -646,4 +730,185 @@ test "collections type-check and reject misuse at compile time" {
         \\    xs[0] = "text"
         \\
     , .{}, script, "luce.sema.type");
+}
+
+// ---------------------------------------------------------------------------
+// Modules
+// ---------------------------------------------------------------------------
+
+const TestModule = struct { name: []const u8, source: []const u8 };
+
+const TestLoader = struct {
+    modules: []const TestModule,
+
+    fn load(context: *anyopaque, arena: Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
+        const self: *TestLoader = @ptrCast(@alignCast(context));
+        for (self.modules) |module| {
+            if (std.mem.eql(u8, module.name, name)) {
+                return try arena.dupe(u8, module.source);
+            }
+        }
+        return null;
+    }
+
+    fn loader(self: *TestLoader) Loader {
+        return .{ .context = self, .loadFn = load };
+    }
+};
+
+const geo_module: TestModule = .{ .name = "geo", .source =
+    \\import util
+    \\
+    \\struct Point:
+    \\    x: Float
+    \\    y: Float
+    \\
+    \\struct Text:
+    \\    func double(value: Int) -> Int:
+    \\        return value * 2
+    \\
+    \\func make(x: Float, y: Float) -> Point:
+    \\    return Point(x = x, y = y)
+    \\
+    \\func length(point: Point) -> Float:
+    \\    return util.hypot(point.x, point.y)
+    \\
+};
+
+const util_module: TestModule = .{ .name = "util", .source =
+    \\func hypot(x: Float, y: Float) -> Float:
+    \\    return sqrt(x * x + y * y)
+    \\
+};
+
+test "a file is a module: imports, qualified names, and shared types" {
+    var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
+    var result = try compileProject(testing.allocator,
+        \\import geo
+        \\
+        \\func main():
+        \\    let made = geo.make(3.0, 4.0)
+        \\    assert(geo.length(made) == 5.0)
+        \\    let direct = geo.Point(x = 1.0, y = 2.0)
+        \\    let copied: geo.Point = direct
+        \\    assert(copied.y == 2.0)
+        \\    assert(geo.Text.double(21) == 42)
+        \\
+    , files.loader(), .{}, .{ .entry_mode = .script });
+    switch (result) {
+        .success => {},
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator, "");
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            result.deinit();
+            return error.TestUnexpectedResult;
+        },
+    }
+    var program = result.success;
+    defer program.deinit();
+
+    // The whole project runs as one program.
+    const backend = @import("backend.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const ran = try backend.evaluate(arena.allocator(), &program, &.{}, &.{}, .{});
+    try testing.expect(ran == .success);
+}
+
+test "imports are explicit, checked, and reported per file" {
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
+
+    // Reaching a namespace without importing it fails.
+    var unimported = try compileProject(testing.allocator,
+        \\func main():
+        \\    let bad = geo.make(1.0, 2.0)
+        \\
+    , files.loader(), .{}, script);
+    defer unimported.deinit();
+    try testing.expect(unimported == .failure);
+    try testing.expectEqualStrings("luce.sema.import", unimported.failure.at(0).?.code);
+
+    // A missing module file reports where the import was written.
+    var missing = try compileProject(testing.allocator,
+        \\import ghost
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), .{}, script);
+    defer missing.deinit();
+    try testing.expect(missing == .failure);
+    try testing.expectEqualStrings("luce.import.missing", missing.failure.at(0).?.code);
+
+    // Without a loader, imports cannot resolve at all.
+    var lonely = try compile(testing.allocator,
+        \\import geo
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, script);
+    defer lonely.deinit();
+    try testing.expect(lonely == .failure);
+    try testing.expectEqualStrings("luce.import.missing", lonely.failure.at(0).?.code);
+
+    // An error inside an imported module renders against that file.
+    const broken: TestModule = .{ .name = "broken", .source =
+        \\func helper() -> Int:
+        \\    return "not an int"
+        \\
+    };
+    var broken_files: TestLoader = .{ .modules = &.{broken} };
+    var imported_error = try compileProject(testing.allocator,
+        \\import broken
+        \\
+        \\func main():
+        \\    let bad = broken.helper()
+        \\
+    , broken_files.loader(), .{}, script);
+    defer imported_error.deinit();
+    try testing.expect(imported_error == .failure);
+    const rendered = try imported_error.failure.render(testing.allocator, "");
+    defer testing.allocator.free(rendered);
+    try testing.expect(std.mem.indexOf(u8, rendered, "broken.luc:2:") != null);
+}
+
+test "modules may import each other; mutual recursion crosses files" {
+    const even_module: TestModule = .{ .name = "even", .source =
+        \\import odd
+        \\
+        \\func check(value: Int) -> Bool:
+        \\    if value == 0:
+        \\        return true
+        \\    return odd.check(value - 1)
+        \\
+    };
+    const odd_module: TestModule = .{ .name = "odd", .source =
+        \\import even
+        \\
+        \\func check(value: Int) -> Bool:
+        \\    if value == 0:
+        \\        return false
+        \\    return even.check(value - 1)
+        \\
+    };
+    var files: TestLoader = .{ .modules = &.{ even_module, odd_module } };
+    var result = try compileProject(testing.allocator,
+        \\import even
+        \\
+        \\func main():
+        \\    assert(even.check(10))
+        \\    assert(not even.check(7))
+        \\
+    , files.loader(), .{}, .{ .entry_mode = .script });
+    defer result.deinit();
+    try testing.expect(result == .success);
+
+    const backend = @import("backend.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const ran = try backend.evaluate(arena.allocator(), &result.success, &.{}, &.{}, .{});
+    try testing.expect(ran == .success);
 }

@@ -117,6 +117,8 @@ const Parser = struct {
     // Declarations ---------------------------------------------------------
 
     fn program(self: *Parser) Error!ast.Program {
+        var imports: std.ArrayList(ast.Import) = .empty;
+        defer imports.deinit(self.arena);
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         defer structs.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
@@ -125,6 +127,18 @@ const Parser = struct {
         while (self.peekKind() != .end_of_file) {
             switch (self.peekKind()) {
                 .newline => _ = self.advance(),
+                .keyword_import => {
+                    const start = self.advance();
+                    const name = (try self.expect(.identifier, "a module name after import")) orelse {
+                        self.syncToLine();
+                        continue;
+                    };
+                    _ = try self.expect(.newline, "a newline after the import");
+                    try imports.append(self.arena, .{
+                        .name = self.text(name),
+                        .span = .{ .start = start.span.start, .end = name.span.end },
+                    });
+                },
                 .keyword_struct => {
                     if (try self.structDecl()) |declaration| {
                         try structs.append(self.arena, declaration);
@@ -151,6 +165,7 @@ const Parser = struct {
             }
         }
         return .{
+            .imports = try imports.toOwnedSlice(self.arena),
             .structs = try structs.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
         };
@@ -159,6 +174,16 @@ const Parser = struct {
     fn typeName(self: *Parser) Error!?ast.TypeName {
         const item = (try self.expect(.identifier, "a type name")) orelse return null;
         var written: ast.TypeName = .{ .name = self.text(item), .span = item.span };
+        // module.Struct — one dotted level reaches an imported type.
+        if (self.peekKind() == .dot and self.peekAhead(1) == .identifier) {
+            _ = self.advance();
+            const member = self.advance();
+            written.name = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+                written.name,
+                self.text(member),
+            });
+            written.span = .{ .start = item.span.start, .end = member.span.end };
+        }
         if (self.peekKind() != .left_paren) return written;
         _ = self.advance(); // (
 
@@ -689,13 +714,30 @@ const Parser = struct {
                 if (self.peekKind() == .left_paren) {
                     return self.callExpression(item);
                 }
-                if (self.peekKind() == .dot and
-                    self.peekAhead(1) == .identifier and
-                    self.peekAhead(2) == .left_paren)
-                {
-                    _ = self.advance();
-                    const member = self.advance();
-                    return self.qualifiedCallExpression(item, member);
+                // A dotted chain directly followed by '(' is one
+                // namespaced callee: Text.width(...), geo.helper(...),
+                // geo.Text.width(...).  Anything else stays a name for
+                // field/index postfix handling.
+                var ahead: usize = 0;
+                var parts: usize = 1;
+                while (self.peekAhead(ahead) == .dot and self.peekAhead(ahead + 1) == .identifier) {
+                    ahead += 2;
+                    parts += 1;
+                }
+                if (parts > 1 and self.peekAhead(ahead) == .left_paren) {
+                    var callee: std.ArrayList(u8) = .empty;
+                    defer callee.deinit(self.arena);
+                    try callee.appendSlice(self.arena, self.text(item));
+                    for (1..parts) |_| {
+                        _ = self.advance(); // .
+                        const member = self.advance();
+                        try callee.append(self.arena, '.');
+                        try callee.appendSlice(self.arena, self.text(member));
+                    }
+                    return self.namedCallExpression(
+                        try callee.toOwnedSlice(self.arena),
+                        item.span.start,
+                    );
                 }
                 return self.make(.{ .name = .{ .text = self.text(item), .span = item.span } });
             },
@@ -721,14 +763,6 @@ const Parser = struct {
 
     fn callExpression(self: *Parser, callee: Token) Error!?*ast.Expression {
         return self.namedCallExpression(self.text(callee), callee.span.start);
-    }
-
-    fn qualifiedCallExpression(self: *Parser, namespace: Token, member: Token) Error!?*ast.Expression {
-        const callee = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
-            self.text(namespace),
-            self.text(member),
-        });
-        return self.namedCallExpression(callee, namespace.span.start);
     }
 
     fn namedCallExpression(self: *Parser, callee: []const u8, start: usize) Error!?*ast.Expression {

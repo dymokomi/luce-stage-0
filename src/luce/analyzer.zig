@@ -65,12 +65,19 @@ pub const Analyzed = struct {
     entry_function: u32,
 };
 
-/// Check the tree against the schema and lower it to IR.  Returns null
-/// when errors were reported; the diagnostics tell the story.
+/// One file in a project: the root ("" prefix) or an imported module
+/// whose declarations are namespaced by its import name.
+pub const ModuleTree = struct {
+    prefix: []const u8,
+    tree: *const ast.Program,
+};
+
+/// Check the project against the schema and lower it to IR.  Returns
+/// null when errors were reported; the diagnostics tell the story.
 pub fn analyze(
     arena: Allocator,
     temporary: Allocator,
-    tree: *const ast.Program,
+    modules: []const ModuleTree,
     schema: PortSchema,
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
@@ -78,7 +85,7 @@ pub fn analyze(
     var analyzer: Analyzer = .{
         .arena = arena,
         .temporary = temporary,
-        .tree = tree,
+        .modules = modules,
         .schema = schema,
         .options = options,
         .diagnostics = diagnostics,
@@ -90,9 +97,17 @@ pub fn analyze(
 const FunctionInfo = struct {
     declaration: *const ast.FuncDecl,
     name: []const u8,
+    module: usize,
     parameter_types: []Type,
     return_type: Type,
     is_entry: bool,
+};
+
+/// A collected struct declaration with its module, for cycle spans
+/// and field resolution.
+const StructDeclInfo = struct {
+    declaration: *const ast.StructDecl,
+    module: usize,
 };
 
 const LocalInfo = struct {
@@ -110,12 +125,13 @@ const LoopFrame = struct {
 const Analyzer = struct {
     arena: Allocator,
     temporary: Allocator,
-    tree: *const ast.Program,
+    modules: []const ModuleTree,
     schema: PortSchema,
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
 
     structs: std.ArrayList(StructLayout) = .empty,
+    struct_decls: std.ArrayList(StructDeclInfo) = .empty,
     heap_types: std.ArrayList(types.HeapType) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(FunctionInfo) = .empty,
@@ -124,6 +140,7 @@ const Analyzer = struct {
     reads: std.AutoHashMapUnmanaged(u32, void) = .empty,
 
     fn deinitScratch(self: *Analyzer) void {
+        self.struct_decls.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
         self.reads.deinit(self.temporary);
@@ -166,7 +183,22 @@ const Analyzer = struct {
 
     // Declarations ---------------------------------------------------------
 
-    fn resolveType(self: *Analyzer, written: ast.TypeName) Error!?Type {
+    /// A module-qualified declaration name: "geo" + "Point" ->
+    /// "geo.Point"; the root module ("") qualifies to the name itself.
+    fn qualify(self: *Analyzer, prefix: []const u8, name: []const u8) Error![]const u8 {
+        if (prefix.len == 0) return name;
+        return std.fmt.allocPrint(self.arena, "{s}.{s}", .{ prefix, name });
+    }
+
+    /// True when `module` imports `name`.
+    fn importsModule(self: *const Analyzer, module: usize, name: []const u8) bool {
+        for (self.modules[module].tree.imports) |imported| {
+            if (std.mem.eql(u8, imported.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
         const table = [_]struct { name: []const u8, resolved: Type }{
             .{ .name = "Bool", .resolved = .boolean },
             .{ .name = "Int", .resolved = .int },
@@ -188,7 +220,7 @@ const Analyzer = struct {
                 try self.fail("luce.sema.type", written.span, "List takes one element type: List(Int)", .{});
                 return null;
             }
-            const element = (try self.resolveType(written.arguments[0])) orelse return null;
+            const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
             return try self.internHeapType(.{ .list = element });
         }
         if (std.mem.eql(u8, written.name, "Map")) {
@@ -196,12 +228,12 @@ const Analyzer = struct {
                 try self.fail("luce.sema.type", written.span, "Map takes key and value types: Map(String, Int)", .{});
                 return null;
             }
-            const key = (try self.resolveType(written.arguments[0])) orelse return null;
+            const key = (try self.resolveType(module, written.arguments[0])) orelse return null;
             if (key != .int and key != .string) {
                 try self.fail("luce.sema.type", written.arguments[0].span, "Map keys are Int or String", .{});
                 return null;
             }
-            const value = (try self.resolveType(written.arguments[1])) orelse return null;
+            const value = (try self.resolveType(module, written.arguments[1])) orelse return null;
             return try self.internHeapType(.{ .map = .{ .key = key, .value = value } });
         }
         if (std.mem.eql(u8, written.name, "Array")) {
@@ -214,7 +246,7 @@ const Analyzer = struct {
                 );
                 return null;
             }
-            const element = (try self.resolveType(written.arguments[0])) orelse return null;
+            const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
             return try self.internHeapType(.{ .array = .{ .element = element, .rank = written.wildcards } });
         }
         if (std.mem.eql(u8, written.name, "Builder")) {
@@ -228,7 +260,20 @@ const Analyzer = struct {
             try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
             return null;
         }
-        if (self.struct_names.get(written.name)) |index| return .{ .strukt = index };
+        // module.Struct reaches an imported type; a bare name is local
+        // to the module it appears in.
+        if (std.mem.indexOfScalar(u8, written.name, '.')) |dot| {
+            const head = written.name[0..dot];
+            if (!self.importsModule(module, head)) {
+                try self.fail("luce.sema.import", written.span, "unknown module {s}; import {s} to use its types", .{ head, head });
+                return null;
+            }
+            if (self.struct_names.get(written.name)) |index| return .{ .strukt = index };
+            try self.fail("luce.sema.type", written.span, "unknown type {s}", .{written.name});
+            return null;
+        }
+        const local = try self.qualify(self.modules[module].prefix, written.name);
+        if (self.struct_names.get(local)) |index| return .{ .strukt = index };
         try self.fail("luce.sema.type", written.span, "unknown type {s}", .{written.name});
         return null;
     }
@@ -249,26 +294,53 @@ const Analyzer = struct {
     }
 
     fn collectStructs(self: *Analyzer) Error!void {
-        // Names first so fields may reference structs in any order.
-        for (self.tree.structs) |declaration| {
-            if (isReserved(declaration.name)) {
-                try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
-                continue;
+        // Imports first: names must be usable and free of collisions.
+        for (self.modules, 0..) |module, module_index| {
+            self.diagnostics.scope = module.prefix;
+            for (module.tree.imports) |imported| {
+                if (isReserved(imported.name) or std.mem.eql(u8, imported.name, "evaluate")) {
+                    try self.fail("luce.sema.reserved", imported.span, "{s} is a reserved name", .{imported.name});
+                }
+                for (module.tree.structs) |declaration| {
+                    if (std.mem.eql(u8, declaration.name, imported.name)) {
+                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a struct of the same name", .{imported.name});
+                    }
+                }
             }
-            if (self.struct_names.contains(declaration.name)) {
-                try self.fail("luce.sema.duplicate", declaration.span, "duplicate struct {s}", .{declaration.name});
-                continue;
-            }
-            const index: u32 = @intCast(self.structs.items.len);
-            try self.struct_names.put(self.temporary, declaration.name, index);
-            try self.structs.append(self.arena, .{
-                .name = try self.arena.dupe(u8, declaration.name),
-                .fields = &.{},
-            });
+            _ = module_index;
         }
 
-        for (self.tree.structs) |declaration| {
-            const index = self.struct_names.get(declaration.name) orelse continue;
+        // Names first so fields may reference structs in any order.
+        for (self.modules, 0..) |module, module_index| {
+            self.diagnostics.scope = module.prefix;
+            for (module.tree.structs) |*declaration| {
+                if (isReserved(declaration.name)) {
+                    try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
+                    continue;
+                }
+                const qualified = try self.qualify(module.prefix, declaration.name);
+                if (self.struct_names.contains(qualified)) {
+                    try self.fail("luce.sema.duplicate", declaration.span, "duplicate struct {s}", .{declaration.name});
+                    continue;
+                }
+                const index: u32 = @intCast(self.structs.items.len);
+                try self.struct_names.put(self.temporary, qualified, index);
+                try self.struct_decls.append(self.temporary, .{
+                    .declaration = declaration,
+                    .module = module_index,
+                });
+                try self.structs.append(self.arena, .{
+                    .name = try self.arena.dupe(u8, qualified),
+                    .fields = &.{},
+                });
+            }
+        }
+
+        for (self.struct_decls.items) |info| {
+            const declaration = info.declaration;
+            self.diagnostics.scope = self.modules[info.module].prefix;
+            const qualified = try self.qualify(self.modules[info.module].prefix, declaration.name);
+            const index = self.struct_names.get(qualified) orelse continue;
             var fields: std.ArrayList(types.StructField) = .empty;
             defer fields.deinit(self.arena);
             for (declaration.fields) |field| {
@@ -280,7 +352,7 @@ const Analyzer = struct {
                     try self.fail("luce.sema.duplicate", field.span, "duplicate field {s}", .{field.name});
                     continue;
                 }
-                const field_type = (try self.resolveType(field.type_name)) orelse continue;
+                const field_type = (try self.resolveType(info.module, field.type_name)) orelse continue;
                 try fields.append(self.arena, .{
                     .name = try self.arena.dupe(u8, field.name),
                     .field_type = field_type,
@@ -308,14 +380,17 @@ const Analyzer = struct {
         // struct) would have no finite value.
         for (self.structs.items, 0..) |_, index| {
             if (self.structCycles(@intCast(index), @intCast(index), 0)) {
+                const info = self.struct_decls.items[index];
+                self.diagnostics.scope = self.modules[info.module].prefix;
                 try self.fail(
                     "luce.sema.struct",
-                    self.tree.structs[index].span,
+                    info.declaration.span,
                     "struct {s} contains itself",
                     .{self.structs.items[index].name},
                 );
             }
         }
+        self.diagnostics.scope = "";
     }
 
     fn structCycles(self: *const Analyzer, origin: u32, current: u32, depth: usize) bool {
@@ -330,18 +405,24 @@ const Analyzer = struct {
     }
 
     fn collectFunctions(self: *Analyzer) Error!void {
-        for (self.tree.functions) |*declaration| {
-            try self.collectFunction(declaration, declaration.name, true);
-        }
-        for (self.tree.structs) |*declaration| {
-            for (declaration.functions) |*function| {
-                const qualified = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
-                    declaration.name,
-                    function.name,
-                });
-                try self.collectFunction(function, qualified, false);
+        for (self.modules, 0..) |module, module_index| {
+            self.diagnostics.scope = module.prefix;
+            for (module.tree.functions) |*declaration| {
+                const qualified = try self.qualify(module.prefix, declaration.name);
+                try self.collectFunction(declaration, qualified, module_index, true);
+            }
+            for (module.tree.structs) |*declaration| {
+                for (declaration.functions) |*function| {
+                    const member = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+                        declaration.name,
+                        function.name,
+                    });
+                    const qualified = try self.qualify(module.prefix, member);
+                    try self.collectFunction(function, qualified, module_index, false);
+                }
             }
         }
+        self.diagnostics.scope = "";
         try self.checkEntry();
     }
 
@@ -349,8 +430,10 @@ const Analyzer = struct {
         self: *Analyzer,
         declaration: *const ast.FuncDecl,
         name: []const u8,
+        module: usize,
         top_level: bool,
     ) Error!void {
+        const in_root = self.modules[module].prefix.len == 0;
         if (isReserved(declaration.name) and
             !(top_level and std.mem.eql(u8, declaration.name, "evaluate")))
         {
@@ -360,23 +443,23 @@ const Analyzer = struct {
         if (self.function_names.contains(name) or
             (top_level and self.struct_names.contains(name)))
         {
-            try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{name});
+            try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{declaration.name});
             return;
         }
 
         const entry_name = if (self.options.entry_mode == .evaluator) "evaluate" else "main";
-        const is_entry = top_level and std.mem.eql(u8, declaration.name, entry_name);
+        const is_entry = top_level and in_root and std.mem.eql(u8, declaration.name, entry_name);
         var parameter_types: std.ArrayList(Type) = .empty;
         defer parameter_types.deinit(self.arena);
         if (!is_entry) {
             for (declaration.parameters) |parameter| {
-                const resolved = (try self.resolveType(parameter.type_name)) orelse continue;
+                const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
                 try parameter_types.append(self.arena, resolved);
             }
         }
         var return_type: Type = .none;
         if (declaration.return_type) |written| {
-            return_type = (try self.resolveType(written)) orelse .none;
+            return_type = (try self.resolveType(module, written)) orelse .none;
         }
 
         const index: u32 = @intCast(self.functions.items.len);
@@ -384,6 +467,7 @@ const Analyzer = struct {
         try self.functions.append(self.arena, .{
             .declaration = declaration,
             .name = try self.arena.dupe(u8, name),
+            .module = module,
             .parameter_types = try parameter_types.toOwnedSlice(self.arena),
             .return_type = return_type,
             .is_entry = is_entry,
@@ -436,8 +520,12 @@ const Analyzer = struct {
     // Function lowering ----------------------------------------------------
 
     fn lowerFunction(self: *Analyzer, info: FunctionInfo) Error!ir.Function {
+        self.diagnostics.scope = self.modules[info.module].prefix;
+        defer self.diagnostics.scope = "";
         var builder: FunctionBuilder = .{
             .analyzer = self,
+            .module = info.module,
+            .prefix = self.modules[info.module].prefix,
             .return_type = info.return_type,
             .has_frames = info.is_entry and self.options.entry_mode == .evaluator,
         };
@@ -519,6 +607,8 @@ const BlockBuilder = struct {
 
 const FunctionBuilder = struct {
     analyzer: *Analyzer,
+    module: usize,
+    prefix: []const u8,
     return_type: Type,
     has_frames: bool,
     locals: std.ArrayList(ir.Local) = .empty,
@@ -619,6 +709,26 @@ const FunctionBuilder = struct {
         return null;
     }
 
+    /// Resolve a written declaration name from this module's point of
+    /// view: bare names are module-local; a dotted name is either a
+    /// module-local struct namespace (Text.width) or an imported one
+    /// (geo.helper, geo.Text.width).
+    fn resolveDeclared(self: *FunctionBuilder, written: []const u8, span: Span) Error!?[]const u8 {
+        if (std.mem.indexOfScalar(u8, written, '.')) |dot| {
+            const head = written[0..dot];
+            const local_head = try self.analyzer.qualify(self.prefix, head);
+            if (self.analyzer.struct_names.contains(local_head)) {
+                return try self.analyzer.qualify(self.prefix, written);
+            }
+            if (self.analyzer.importsModule(self.module, head)) {
+                return written;
+            }
+            try self.fail("luce.sema.import", span, "unknown namespace {s}; import {s} to use it", .{ head, head });
+            return null;
+        }
+        return try self.analyzer.qualify(self.prefix, written);
+    }
+
     fn declareLocal(self: *FunctionBuilder, name: []const u8, local_type: Type, mutable: bool, span: Span) Error!?LocalId {
         if (isReserved(name) or std.mem.eql(u8, name, "evaluate")) {
             try self.fail("luce.sema.reserved", span, "{s} is a reserved name", .{name});
@@ -628,8 +738,9 @@ const FunctionBuilder = struct {
             try self.fail("luce.sema.duplicate", span, "{s} is already declared", .{name});
             return null;
         }
-        if (self.analyzer.function_names.contains(name) or
-            self.analyzer.struct_names.contains(name))
+        const qualified = try self.analyzer.qualify(self.prefix, name);
+        if (self.analyzer.function_names.contains(qualified) or
+            self.analyzer.struct_names.contains(qualified))
         {
             try self.fail("luce.sema.duplicate", span, "{s} is already a declaration", .{name});
             return null;
@@ -715,7 +826,7 @@ const FunctionBuilder = struct {
                 );
                 return;
             };
-            const expected = (try self.analyzer.resolveType(written)) orelse return;
+            const expected = (try self.analyzer.resolveType(self.module, written)) orelse return;
             const descriptor = self.analyzer.heapOf(expected);
             if (descriptor == null or descriptor.? != .list) {
                 try self.fail("luce.sema.type", span, "[] builds a List, but {s} is annotated {s}", .{
@@ -732,7 +843,7 @@ const FunctionBuilder = struct {
 
         const value = (try self.lowerExpression(value_expression, false)) orelse return;
         if (annotation) |written| {
-            const expected = (try self.analyzer.resolveType(written)) orelse return;
+            const expected = (try self.analyzer.resolveType(self.module, written)) orelse return;
             if (!value.value_type.eql(expected)) {
                 try self.fail(
                     "luce.sema.type",
@@ -1263,7 +1374,7 @@ const FunctionBuilder = struct {
                 try self.fail("luce.sema.new", new.span, "new Array takes 1 to 4 dimension sizes: new Array(Int, 5, 5)", .{});
                 return null;
             }
-            const element = (try self.analyzer.resolveType(new.type_name.arguments[0])) orelse return null;
+            const element = (try self.analyzer.resolveType(self.module, new.type_name.arguments[0])) orelse return null;
             object_type = try self.analyzer.internHeapType(.{
                 .array = .{ .element = element, .rank = @intCast(new.dims.len) },
             });
@@ -1277,7 +1388,7 @@ const FunctionBuilder = struct {
                 register.* = dimension.register;
             }
         } else {
-            object_type = (try self.analyzer.resolveType(new.type_name)) orelse return null;
+            object_type = (try self.analyzer.resolveType(self.module, new.type_name)) orelse return null;
             if (object_type != .heap) {
                 try self.fail("luce.sema.new", new.span, "new builds List, Map, Array, or Builder", .{});
                 return null;
@@ -1590,19 +1701,24 @@ const FunctionBuilder = struct {
     // Calls: struct construction, explicit conversion, intrinsics,
     // and user functions.
     fn lowerCall(self: *FunctionBuilder, call: anytype, as_statement: bool) Error!?Value {
-        if (self.analyzer.struct_names.get(call.callee)) |layout_index| {
-            return self.lowerConstruct(call, layout_index);
-        }
-        if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
-            return self.lowerConvert(call);
-        }
-        switch (try self.lowerIntrinsic(call, as_statement)) {
-            .not_builtin => {},
-            .failed => return null,
-            .value => |value| return value,
+        // Builtins and conversions are bare names and take priority;
+        // reserved names keep user declarations out of their way.
+        if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
+            if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+                return self.lowerConvert(call);
+            }
+            switch (try self.lowerIntrinsic(call, as_statement)) {
+                .not_builtin => {},
+                .failed => return null,
+                .value => |value| return value,
+            }
         }
 
-        const function_index = self.analyzer.function_names.get(call.callee) orelse {
+        const resolved = (try self.resolveDeclared(call.callee, call.span)) orelse return null;
+        if (self.analyzer.struct_names.get(resolved)) |layout_index| {
+            return self.lowerConstruct(call, layout_index);
+        }
+        const function_index = self.analyzer.function_names.get(resolved) orelse {
             try self.fail("luce.sema.call", call.span, "unknown function {s}", .{call.callee});
             return null;
         };

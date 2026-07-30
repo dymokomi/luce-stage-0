@@ -122,7 +122,7 @@ pub const Shell = struct {
         if (self.editor_override) |editor_path| {
             return runner.runScript(self.gpa, self.io, self.out, self.err, editor_path, &arguments);
         }
-        return runner.runSource(self.gpa, self.io, self.out, self.err, "editor", embedded_editor, &arguments);
+        return runner.runSource(self.gpa, self.io, self.out, self.err, "editor", embedded_editor, null, &arguments);
     }
 
     fn help(self: *Shell) !void {

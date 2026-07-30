@@ -169,7 +169,14 @@ pub const FuncDecl = struct {
     span: Span,
 };
 
+/// import name — binds the sibling file name.luc as a namespace.
+pub const Import = struct {
+    name: []const u8,
+    span: Span,
+};
+
 pub const Program = struct {
+    imports: []Import,
     structs: []StructDecl,
     functions: []FuncDecl,
 };

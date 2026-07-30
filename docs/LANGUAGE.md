@@ -118,17 +118,20 @@ string bounds/boundary, step budget, call depth.  The interpreter runs
 on an explicit frame stack, so call depth is a *policy* limit, not a
 native-stack accident.
 
-## Modules (design; lands next)
+## Modules
 
 A file is a module, like Zig.  `import name` binds the sibling file
-`name.luc` as a namespace; `name.func(...)` and `name.Struct(...)`
-reach its public top level.  Scope stays per file — nothing is visible
-without an import, and import cycles are a compile error.  The
-compiler loads imports through the host (the CLI and loom provide the
-file loader), compiles the whole graph as one program, and writes one
-.lc module; imported functions are namespaced the same way struct
-functions already are.  Deliberately absent: package managers, search
-paths, conditional imports.
+`name.luc` as a namespace: `name.func(...)`, `name.Struct(x = ...)`,
+`name.Struct.member(...)`, and `p: name.Struct` annotations reach its
+top level.  Scope stays per file — nothing is visible without an
+import, and using a namespace you didn't import is a compile error
+(`luce.sema.import`).  Modules may import each other; the graph loads
+each file once, so cross-file mutual recursion just works.  The
+compiler loads imports through the host (the CLI and loom resolve
+them beside the root file), compiles the whole graph as one program,
+and writes one .lc module; errors inside an imported file render as
+`name.luc:line:column`.  Deliberately absent: package managers,
+search paths, conditional imports, re-exports.
 
 ## Deliberately absent (for now)
 

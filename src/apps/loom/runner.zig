@@ -58,7 +58,8 @@ pub fn runModule(
     return run(gpa, io, out, err, &program, arguments);
 }
 
-/// Compile a .luc source file and run it immediately.
+/// Compile a .luc source file (plus the modules it imports, resolved
+/// beside it) and run it immediately.
 pub fn runScript(
     gpa: Allocator,
     io: std.Io,
@@ -72,8 +73,34 @@ pub fn runScript(
         return 1;
     };
     defer gpa.free(source);
-    return runSource(gpa, io, out, err, path, source, arguments);
+    var files: FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
+    return runSource(gpa, io, out, err, path, source, files.loader(), arguments);
 }
+
+/// Loads `import name` as NAME.luc next to the root script.
+pub const FileLoader = struct {
+    io: std.Io,
+    directory: []const u8,
+
+    fn load(context: *anyopaque, arena: Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
+        const self: *FileLoader = @ptrCast(@alignCast(context));
+        const path = if (self.directory.len == 0)
+            try std.fmt.allocPrint(arena, "{s}.luc", .{name})
+        else
+            try std.fmt.allocPrint(arena, "{s}/{s}.luc", .{ self.directory, name });
+        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
+        defer file.close(self.io);
+        const size: usize = @intCast(file.length(self.io) catch return null);
+        const content = try arena.alloc(u8, size);
+        const loaded = file.readPositionalAll(self.io, content, 0) catch return null;
+        if (loaded != content.len) return null;
+        return content;
+    }
+
+    pub fn loader(self: *FileLoader) luce.compile.Loader {
+        return .{ .context = self, .loadFn = load };
+    }
+};
 
 /// Compile source bytes (already in memory) and run them.
 pub fn runSource(
@@ -83,9 +110,10 @@ pub fn runSource(
     err: *std.Io.Writer,
     name: []const u8,
     source: []const u8,
+    loader: ?luce.compile.Loader,
     arguments: []const []const u8,
 ) !u8 {
-    var result = try luce.compile.compile(gpa, source, .{}, compile_options);
+    var result = try luce.compile.compileProject(gpa, source, loader, .{}, compile_options);
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {

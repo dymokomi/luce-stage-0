@@ -134,7 +134,8 @@ fn compilePath(
     };
     defer gpa.free(source);
 
-    var result = try luce.compile.compile(gpa, source, .{}, .{
+    var files: FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
+    var result = try luce.compile.compileProject(gpa, source, files.loader(), .{}, .{
         .entry_mode = .script,
         .allow_host = true,
     });
@@ -149,6 +150,31 @@ fn compilePath(
         },
     }
 }
+
+/// Loads `import name` as NAME.luc next to the root source file.
+const FileLoader = struct {
+    io: std.Io,
+    directory: []const u8,
+
+    fn load(context: *anyopaque, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
+        const self: *FileLoader = @ptrCast(@alignCast(context));
+        const path = if (self.directory.len == 0)
+            try std.fmt.allocPrint(arena, "{s}.luc", .{name})
+        else
+            try std.fmt.allocPrint(arena, "{s}/{s}.luc", .{ self.directory, name });
+        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
+        defer file.close(self.io);
+        const size: usize = @intCast(file.length(self.io) catch return null);
+        const content = try arena.alloc(u8, size);
+        const loaded = file.readPositionalAll(self.io, content, 0) catch return null;
+        if (loaded != content.len) return null;
+        return content;
+    }
+
+    fn loader(self: *FileLoader) luce.compile.Loader {
+        return .{ .context = self, .loadFn = load };
+    }
+};
 
 fn readWhole(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
     const file = try std.Io.Dir.cwd().openFile(io, path, .{});
