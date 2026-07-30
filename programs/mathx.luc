@@ -9,13 +9,7 @@ func mean(values: List(Float)) -> Float:
 # A sorted copy; the caller frees it.
 func sorted(values: List(Float)) -> List(Float):
     var copied = values[0:]
-    for done in range(1, len(copied)):
-        let value = copied[done]
-        var hole = done
-        while hole > 0 and copied[hole - 1] > value:
-            copied[hole] = copied[hole - 1]
-            hole = hole - 1
-        copied[hole] = value
+    copied.sort()
     return copied
 
 func median(values: List(Float)) -> Float:

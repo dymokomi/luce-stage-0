@@ -48,7 +48,7 @@ struct Fmt:
             left = 0 - left
         while left > 0:
             let digit = left % 10
-            digits = slice("0123456789", digit, digit + 1) + digits
+            digits = "0123456789"[digit:digit + 1] + digits
             left = left / 10
         if negative:
             digits = "-" + digits
@@ -68,7 +68,7 @@ struct Text:
         if cursor <= 0:
             return 0
         var at = cursor - 1
-        while at > 0 and Text.continuation(byte_at(value, at)):
+        while at > 0 and Text.continuation(value.byte_at(at)):
             at = at - 1
         return at
 
@@ -76,26 +76,26 @@ struct Text:
         if cursor >= len(value):
             return len(value)
         var at = cursor + 1
-        while at < len(value) and Text.continuation(byte_at(value, at)):
+        while at < len(value) and Text.continuation(value.byte_at(at)):
             at = at + 1
         return at
 
     func line_start(value: String, cursor: Int) -> Int:
         var at = cursor
-        while at > 0 and byte_at(value, at - 1) != 10:
+        while at > 0 and value.byte_at(at - 1) != 10:
             at = at - 1
         return at
 
     func line_end(value: String, cursor: Int) -> Int:
         var at = cursor
-        while at < len(value) and byte_at(value, at) != 10:
+        while at < len(value) and value.byte_at(at) != 10:
             at = at + 1
         return at
 
     func line_of(value: String, cursor: Int) -> Int:
         var line = 0
         for at in range(0, cursor):
-            if byte_at(value, at) == 10:
+            if value.byte_at(at) == 10:
                 line = line + 1
         return line
 
@@ -114,7 +114,7 @@ struct Text:
         var at = 0
         var line = 0
         while line < wanted and at < len(value):
-            if byte_at(value, at) == 10:
+            if value.byte_at(at) == 10:
                 line = line + 1
             at = at + 1
         return at
@@ -138,15 +138,15 @@ struct Text:
 
 struct Editing:
     func splice(value: String, cursor: Int, extra: String) -> String:
-        return slice(value, 0, cursor) + extra + slice(value, cursor, len(value))
+        return value[0:cursor] + extra + value[cursor:len(value)]
 
     func erase_before(value: String, cursor: Int) -> String:
         let before = Text.previous_boundary(value, cursor)
-        return slice(value, 0, before) + slice(value, cursor, len(value))
+        return value[0:before] + value[cursor:len(value)]
 
     func erase_at(value: String, cursor: Int) -> String:
         let after = Text.next_boundary(value, cursor)
-        return slice(value, 0, cursor) + slice(value, after, len(value))
+        return value[0:cursor] + value[after:len(value)]
 
 struct Words:
     func is_digit(byte: Int) -> Bool:
@@ -201,7 +201,7 @@ struct Words:
     func classify(word: String) -> Int:
         if Words.is_keyword(word):
             return 1
-        if len(word) > 0 and Words.is_upper(byte_at(word, 0)):
+        if len(word) > 0 and Words.is_upper(word.byte_at(0)):
             return 2
         if Words.is_builtin(word):
             return 3
@@ -225,7 +225,7 @@ struct Draw:
         var used = 0
         while at < to and used < remaining:
             let stop = Text.next_boundary(value, at)
-            term_write(slice(value, at, stop))
+            term_write(value[at:stop])
             at = stop
             used = used + 1
         return used
@@ -235,7 +235,7 @@ struct Draw:
         var at = start
         var used = 0
         while at < finish and used < width:
-            let byte = byte_at(content, at)
+            let byte = content.byte_at(at)
             if byte == 35:
                 term_style(Theme.comment(), -1, false)
                 used = used + Draw.emit(content, at, finish, width - used)
@@ -244,7 +244,7 @@ struct Draw:
                 var close = at + 1
                 var closed = false
                 while close < finish and not closed:
-                    let inner = byte_at(content, close)
+                    let inner = content.byte_at(close)
                     if inner == 92:
                         close = close + 2
                     elif inner == 34:
@@ -258,16 +258,16 @@ struct Draw:
                 at = close
             elif Words.is_digit(byte):
                 var stop = at + 1
-                while stop < finish and (Words.is_digit(byte_at(content, stop)) or byte_at(content, stop) == 46):
+                while stop < finish and (Words.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 46):
                     stop = stop + 1
                 term_style(Theme.number(), -1, false)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
             elif Words.is_word_start(byte):
                 var stop = at + 1
-                while stop < finish and Words.is_word(byte_at(content, stop)):
+                while stop < finish and Words.is_word(content.byte_at(stop)):
                     stop = stop + 1
-                let kind = Words.classify(slice(content, at, stop))
+                let kind = Words.classify(content[at:stop])
                 if kind == 1:
                     term_style(Theme.keyword(), -1, true)
                 elif kind == 2:

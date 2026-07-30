@@ -15,12 +15,12 @@ func is_word_byte(byte: Int) -> Bool:
 func count_words(content: String, counts: Map(String, Int)):
     var at = 0
     while at < len(content):
-        if is_word_byte(byte_at(content, at)):
+        if is_word_byte(content.byte_at(at)):
             var stop = at + 1
-            while stop < len(content) and is_word_byte(byte_at(content, stop)):
+            while stop < len(content) and is_word_byte(content.byte_at(stop)):
                 stop = stop + 1
-            let word = slice(content, at, stop)
-            if has(counts, word):
+            let word = content[at:stop]
+            if counts.has(word):
                 counts[word] = counts[word] + 1
             else:
                 counts[word] = 1
@@ -58,12 +58,12 @@ func main():
     while shown < top and len(counts) > 0:
         let word = heaviest(counts)
         var line = new Builder()
-        append(line, "  ")
-        append(line, str(counts[word]))
-        append(line, "  ")
-        append(line, word)
+        line.append("  ")
+        line.append(str(counts[word]))
+        line.append("  ")
+        line.append(word)
         print(str(line))
         free(line)
-        remove(counts, word)
+        counts.remove(word)
         shown = shown + 1
     free(counts)

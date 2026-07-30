@@ -1,22 +1,18 @@
-# Insertion sort over a real List(Int) — collections showcase.
+# Sorting, searching, and joining a real List(Int).
 #
 #   loom luce programs/sort.luc
 
 func main():
     var values = [42, 7, -3, 99, 0, 13, -40, 8, 77, 1]
-    for sorted in range(1, len(values)):
-        let value = values[sorted]
-        var hole = sorted
-        while hole > 0 and values[hole - 1] > value:
-            values[hole] = values[hole - 1]
-            hole = hole - 1
-        values[hole] = value
+    values.sort()
 
-    var joined = new Builder()
+    var pieces: List(String) = []
     for value in values:
-        append(joined, str(value) + " ")
-    print(str(joined))
+        pieces.append(str(value))
+    print(pieces.join(" "))
+    assert(values.find(13) == 6)
+    assert(values.contains(99))
+    free(pieces)
     assert(values[0] == -40)
     assert(values[9] == 99)
-    free(joined)
     free(values)

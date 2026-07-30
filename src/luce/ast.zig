@@ -73,6 +73,10 @@ pub const Expression = union(enum) {
     index: struct { target: *Expression, indices: []*Expression, span: Span },
     /// target[a:b]; either bound may be omitted.
     slice_range: struct { target: *Expression, start: ?*Expression, end: ?*Expression, span: Span },
+    /// target.name(arguments) — a builtin method on a value, or a
+    /// namespaced call when the target chain names a struct/module
+    /// (the analyzer decides; the parser cannot know).
+    method: struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span },
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {

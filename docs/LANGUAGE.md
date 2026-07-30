@@ -17,11 +17,16 @@ Two kinds of data, with a deliberate line between them:
 - **Heap objects** — `List(T)`, `Map(K, V)`, `Array(T, ...)`, and
   `Builder`.  Variables hold *references*.  Objects are created
   explicitly (`new ...` or a literal) and released explicitly
-  (`free(x)`).  **Memory is explicit**: using an object after `free`
-  traps (`use_after_free`), freeing twice traps, and loom reports
-  anything still alive when a program ends ("leaked N objects").
-  Copying a struct that contains a list copies the *reference* — both
-  structs see the same list.
+  (`free(x)`).  Using an object after `free` traps
+  (`use_after_free`), freeing twice traps, and loom reports anything
+  still alive when a program ends ("leaked N objects").  Copying a
+  struct that contains a list copies the *reference* — both structs
+  see the same list.
+
+  Explicit `free` is the *current* answer, not the final one: the
+  memory model (scope ownership, defer, reference counting, ...) is
+  under deliberate design — the options and trade-offs live in
+  `docs/MEMORY.md`.  Everything else in this document is settled.
 
 ## Collections
 
@@ -32,19 +37,19 @@ var m = new Map(String, Int)       # insertion-ordered dictionary
 var grid = new Array(Int, 5, 5)    # fixed 5x5, zero-initialized
 var b = new Builder()              # string builder
 
-append(xs, 4)                      # [1, 2, 3, 4]
+xs.append(4)                       # [1, 2, 3, 4]
 let first = xs[0]                  # index (bounds-checked)
 xs[1] = 20                         # index assignment
-let mid = xs[1:3]                  # slice -> NEW list (you free it)
+let mid = xs[1:3]                  # slice -> a NEW list, owned by mid
 let tail = xs[2:]                  # open ends default to 0 / len
 m["one"] = 1                       # insert or update
 let n = m["one"]                   # missing key traps; guard with has
-if has(m, "one"):
-    remove(m, "one")
+if m.has("one"):
+    m.remove("one")
 grid[2, 3] = 7                     # multi-dimensional index
-let rows = dim(grid, 0)            # dimension size; len(grid) == dim 0
-append(b, "hello, ")
-append(b, "world")
+let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
+b.append("hello, ")
+b.append("world")
 let text = str(b)                  # builder -> String
 free(xs)
 free(m)
@@ -52,23 +57,32 @@ free(grid)
 free(b)
 ```
 
-- `List(T)`: growable.  `append`, `insert(xs, i, v)`, `remove(xs, i)`,
-  `pop(xs)` (traps when empty), `len`, index, slice.
+Type-specific operations are **methods** (Python's split: `len`,
+`str`, `print` and friends stay free functions; everything that
+belongs to one type is called on it — and like Zig, `xs.append(v)` is
+sugar for a plain function with the receiver first, not dispatch):
+
+- `List(T)`: `append(v)`, `insert(i, v)`, `remove(i)`, `pop()` (traps
+  when empty), `sort()` (in place; Int/Float/String elements),
+  `reverse()`, `find(v) -> Int` (-1 when absent), `contains(v)`,
+  `clear()`, plus `len`, index, slice.
+- rank-1 `Array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
+  `contains(v)`, `fill(v)`; every Array has `dim(axis)`.
 - `Map(K, V)`: `K` is `Int` or `String`.  Index get (traps on a
-  missing key), index set (insert or update), `has`, `remove`, `len`.
+  missing key), index set (insert or update), `has(k)`, `remove(k)`
+  (no-op when absent), `keys() -> List(K)`, `clear()`, `len`.
   Iteration order is insertion order.
+- `Builder`: `append(text)`, `clear()`, `len`, `str(b)`.
 - `Array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
   values at `new`, elements zero-initialized (numbers 0, Bool false,
   String "", structs zeroed field by field, object elements start null
   — using a null element traps until you store something).  In type
   annotations the shape is spelled with `_`:
   `func total(grid: Array(Int, _, _)) -> Int`.
-- `Builder`: append-only text accumulator; `append(b, s)`, `len`,
-  `str(b)`.  Exists so building big strings isn't O(n²).
 - `==` / `!=` on objects compare *identity* (same object), never
   contents.
-- Slices copy: `xs[a:b]` allocates a new list; `s[a:b]` on a String is
-  the existing checked `slice` and stays a value.
+- Slices copy: `xs[a:b]` allocates a new list (you free it);
+  `s[a:b]` on a String stays a value.
 
 ## Iteration
 
@@ -81,7 +95,29 @@ for key in m:               # map keys, insertion order
 Don't grow, shrink, or free a collection while iterating it; bounds
 stay checked per step, but which elements you visit is your problem.
 
-## Conversions and text
+## Strings
+
+Strings are immutable values with methods (all pure, all allocate
+fresh values):
+
+```luce
+s.find(sub)          # byte offset of first occurrence, -1 if absent
+s.contains(sub)      # Bool
+s.starts_with(p)     # Bool
+s.ends_with(p)       # Bool
+s.trim()             # ASCII whitespace off both ends
+s.lower()            # ASCII case fold down
+s.upper()            # ASCII case fold up
+s.replace(old, fresh)  # every occurrence; empty old is a no-op
+s.repeat(n)          # n copies (n <= 0 is "")
+s.split(sep)         # List(String); empty sep splits on whitespace
+s.byte_at(i)         # the byte value at offset i
+words.join(", ")     # List(String) -> String
+```
+
+`s[a:b]` slices (UTF-8-boundary-checked); `len(s)` is bytes.
+
+## Conversions and generic builtins
 
 ```luce
 str(42)          # "42"        (Int, Float, Bool, Builder, String)
@@ -91,10 +127,12 @@ chr(955)         # "λ"         codepoint -> String; traps on invalid
 ord("λ")         # 955         first codepoint; traps on empty
 ```
 
-These are pure builtins (always available, no host gate), joining the
-existing set: `abs min max clamp sqrt floor ceil len slice byte_at
-assert trap` and the host-gated `print`, file, argument, terminal, and
-key builtins (see docs/V2.md).
+The free builtins are the generic, cross-type set — Python's own
+split of capability: `len str print range assert trap free abs
+min max clamp sqrt floor ceil chr ord parse_int parse_float`, the
+conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,
+terminal, and key builtins (see docs/V2.md).  Everything that belongs
+to one type is a method on it.
 
 ## Scope
 
@@ -135,7 +173,8 @@ search paths, conditional imports, re-exports.
 
 ## Deliberately absent (for now)
 
-First-class functions, closures, methods/receivers, exceptions
-(traps are final), implicit conversions, shadowing, globals, garbage
-collection (free is yours), operator overloading, string
-interpolation, and enums/unions (likely next after modules).
+First-class functions, closures, user-defined methods/receivers
+(`x.f()` is builtin sugar, not dispatch), exceptions (traps are
+final), implicit conversions, shadowing, globals, automatic memory
+(under design — docs/MEMORY.md), operator overloading, string
+interpolation, and enums/unions.

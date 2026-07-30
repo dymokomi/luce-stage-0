@@ -10,25 +10,25 @@ struct Step:
 struct Scan:
     func skip_spaces(text: String, at: Int) -> Int:
         var here = at
-        while here < len(text) and byte_at(text, here) == 32:
+        while here < len(text) and text.byte_at(here) == 32:
             here = here + 1
         return here
 
     func number(text: String, at: Int) -> Step:
         var stop = at
-        while stop < len(text) and byte_at(text, stop) >= 48 and byte_at(text, stop) <= 57:
+        while stop < len(text) and text.byte_at(stop) >= 48 and text.byte_at(stop) <= 57:
             stop = stop + 1
         if stop == at:
             trap("expected a number at position " + str(at))
-        return Step(value = parse_int(slice(text, at, stop)), at = stop)
+        return Step(value = parse_int(text[at:stop]), at = stop)
 
 struct Parse:
     # expression = term (("+" | "-") term)*
     func expression(text: String, at: Int) -> Step:
         var left = Parse.term(text, at)
         var here = Scan.skip_spaces(text, left.at)
-        while here < len(text) and (byte_at(text, here) == 43 or byte_at(text, here) == 45):
-            let operator = byte_at(text, here)
+        while here < len(text) and (text.byte_at(here) == 43 or text.byte_at(here) == 45):
+            let operator = text.byte_at(here)
             let right = Parse.term(text, here + 1)
             if operator == 43:
                 left = Step(value = left.value + right.value, at = right.at)
@@ -41,8 +41,8 @@ struct Parse:
     func term(text: String, at: Int) -> Step:
         var left = Parse.factor(text, at)
         var here = Scan.skip_spaces(text, left.at)
-        while here < len(text) and (byte_at(text, here) == 42 or byte_at(text, here) == 47 or byte_at(text, here) == 37):
-            let operator = byte_at(text, here)
+        while here < len(text) and (text.byte_at(here) == 42 or text.byte_at(here) == 47 or text.byte_at(here) == 37):
+            let operator = text.byte_at(here)
             let right = Parse.factor(text, here + 1)
             if operator == 42:
                 left = Step(value = left.value * right.value, at = right.at)
@@ -56,13 +56,13 @@ struct Parse:
     # factor = number | "(" expression ")" | "-" factor
     func factor(text: String, at: Int) -> Step:
         let here = Scan.skip_spaces(text, at)
-        if here < len(text) and byte_at(text, here) == 45:
+        if here < len(text) and text.byte_at(here) == 45:
             let inner = Parse.factor(text, here + 1)
             return Step(value = 0 - inner.value, at = inner.at)
-        if here < len(text) and byte_at(text, here) == 40:
+        if here < len(text) and text.byte_at(here) == 40:
             let inner = Parse.expression(text, here + 1)
             let close = Scan.skip_spaces(text, inner.at)
-            if close >= len(text) or byte_at(text, close) != 41:
+            if close >= len(text) or text.byte_at(close) != 41:
                 trap("expected ) at position " + str(close))
             return Step(value = inner.value, at = close + 1)
         return Scan.number(text, here)

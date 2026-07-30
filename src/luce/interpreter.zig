@@ -733,6 +733,175 @@ const Machine = struct {
                 self.live_objects -= 1;
                 return .{ .value = .none };
             },
+            .str_find => {
+                const haystack = registers[arguments[0]].string;
+                const needle = registers[arguments[1]].string;
+                const found = std.mem.indexOf(u8, haystack, needle);
+                return .{ .value = .{ .int = if (found) |at| @intCast(at) else -1 } };
+            },
+            .str_contains => {
+                const found = std.mem.indexOf(u8, registers[arguments[0]].string, registers[arguments[1]].string);
+                return .{ .value = .{ .boolean = found != null } };
+            },
+            .str_starts => {
+                const matches = std.mem.startsWith(u8, registers[arguments[0]].string, registers[arguments[1]].string);
+                return .{ .value = .{ .boolean = matches } };
+            },
+            .str_ends => {
+                const matches = std.mem.endsWith(u8, registers[arguments[0]].string, registers[arguments[1]].string);
+                return .{ .value = .{ .boolean = matches } };
+            },
+            .str_trim => {
+                const trimmed = std.mem.trim(u8, registers[arguments[0]].string, " \t\r\n");
+                return .{ .value = .{ .string = trimmed } };
+            },
+            .str_lower, .str_upper => {
+                const text = registers[arguments[0]].string;
+                const folded = try self.arena.dupe(u8, text);
+                for (folded) |*byte| {
+                    byte.* = if (operation.kind == .str_lower)
+                        std.ascii.toLower(byte.*)
+                    else
+                        std.ascii.toUpper(byte.*);
+                }
+                return .{ .value = .{ .string = folded } };
+            },
+            .str_replace => {
+                const text = registers[arguments[0]].string;
+                const old = registers[arguments[1]].string;
+                const fresh = registers[arguments[2]].string;
+                if (old.len == 0) return .{ .value = .{ .string = text } };
+                var replaced: std.ArrayList(u8) = .empty;
+                var at: usize = 0;
+                while (std.mem.indexOfPos(u8, text, at, old)) |found| {
+                    try replaced.appendSlice(self.arena, text[at..found]);
+                    try replaced.appendSlice(self.arena, fresh);
+                    at = found + old.len;
+                }
+                try replaced.appendSlice(self.arena, text[at..]);
+                return .{ .value = .{ .string = replaced.items } };
+            },
+            .str_repeat => {
+                const text = registers[arguments[0]].string;
+                const times = registers[arguments[1]].int;
+                if (times <= 0 or text.len == 0) return .{ .value = .{ .string = "" } };
+                const total = std.math.mul(usize, text.len, @intCast(times)) catch
+                    return self.trap(.string_bounds);
+                if (total > max_string_size) return self.trap(.string_bounds);
+                const repeated = try self.arena.alloc(u8, total);
+                var at: usize = 0;
+                while (at < total) : (at += text.len) {
+                    @memcpy(repeated[at .. at + text.len], text);
+                }
+                return .{ .value = .{ .string = repeated } };
+            },
+            .str_split => {
+                const text = registers[arguments[0]].string;
+                const separator = registers[arguments[1]].string;
+                var pieces: std.ArrayList(RuntimeValue) = .empty;
+                if (separator.len == 0) {
+                    // Whitespace runs, Python's split() with no argument.
+                    var scan = std.mem.tokenizeAny(u8, text, " \t\r\n");
+                    while (scan.next()) |piece| {
+                        try pieces.append(self.arena, .{ .string = piece });
+                    }
+                } else {
+                    var scan = std.mem.splitSequence(u8, text, separator);
+                    while (scan.next()) |piece| {
+                        try pieces.append(self.arena, .{ .string = piece });
+                    }
+                }
+                const index: u32 = @intCast(self.heap.items.len);
+                try self.heap.append(self.arena, .{ .data = .{ .list = pieces } });
+                self.live_objects += 1;
+                return .{ .value = .{ .object = .{ .index = index } } };
+            },
+            .list_sort, .list_reverse => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const elements: []RuntimeValue = switch (object.data) {
+                    .list => |*list| list.items,
+                    .array => |array| array.elements,
+                    else => unreachable,
+                };
+                if (operation.kind == .list_reverse) {
+                    std.mem.reverse(RuntimeValue, elements);
+                } else {
+                    std.sort.insertion(RuntimeValue, elements, {}, orderedBefore);
+                }
+                return .{ .value = .none };
+            },
+            .list_find, .list_contains => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const elements: []const RuntimeValue = switch (object.data) {
+                    .list => |list| list.items,
+                    .array => |array| array.elements,
+                    else => unreachable,
+                };
+                const wanted = registers[arguments[1]];
+                var found: i64 = -1;
+                for (elements, 0..) |element, at| {
+                    if (self.compare(.equal, element, wanted)) {
+                        found = @intCast(at);
+                        break;
+                    }
+                }
+                if (operation.kind == .list_find) return .{ .value = .{ .int = found } };
+                return .{ .value = .{ .boolean = found != -1 } };
+            },
+            .list_join => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const separator = registers[arguments[1]].string;
+                var joined: std.ArrayList(u8) = .empty;
+                for (object.data.list.items, 0..) |element, at| {
+                    if (at != 0) try joined.appendSlice(self.arena, separator);
+                    try joined.appendSlice(self.arena, element.string);
+                }
+                return .{ .value = .{ .string = joined.items } };
+            },
+            .clear_object => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                switch (object.data) {
+                    .list => |*list| list.clearRetainingCapacity(),
+                    .map => |*map| map.clearRetainingCapacity(),
+                    .builder => |*builder| builder.clearRetainingCapacity(),
+                    .array => unreachable,
+                }
+                return .{ .value = .none };
+            },
+            .map_keys => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                var listed: std.ArrayList(RuntimeValue) = .empty;
+                for (object.data.map.items) |entry| {
+                    try listed.append(self.arena, entry.key);
+                }
+                const index: u32 = @intCast(self.heap.items.len);
+                try self.heap.append(self.arena, .{ .data = .{ .list = listed } });
+                self.live_objects += 1;
+                return .{ .value = .{ .object = .{ .index = index } } };
+            },
+            .array_fill => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                @memset(object.data.array.elements, registers[arguments[1]]);
+                return .{ .value = .none };
+            },
             .str_value => {
                 switch (registers[arguments[0]]) {
                     .int => |value| {
@@ -990,6 +1159,21 @@ fn isStringBoundary(value: []const u8, index: usize) bool {
     return index == value.len or value[index] & 0xc0 != 0x80;
 }
 
+/// One string operation cannot produce more than this many bytes.
+const max_string_size = 64 * 1024 * 1024;
+
+/// Ordering for sort: elements are Int, Float, or String (the
+/// analyzer guarantees it).
+fn orderedBefore(context: void, left: RuntimeValue, right: RuntimeValue) bool {
+    _ = context;
+    return switch (left) {
+        .int => |value| value < right.int,
+        .float => |value| value < right.float,
+        .string => |value| std.mem.order(u8, value, right.string) == .lt,
+        else => unreachable,
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1164,9 +1348,9 @@ test "loops, recursion, strings, and builtins compute" {
 test "checked string intrinsics slice and inspect UTF-8 bytes" {
     var bench = try Bench.setup(
         \\func evaluate(input: Input, output: Output):
-        \\    output.prefix = slice(input.text, 0, 2)
-        \\    output.middle = slice(input.text, 2, 6)
-        \\    output.byte = byte_at(input.text, 2)
+        \\    output.prefix = input.text[0:2]
+        \\    output.middle = input.text[2:6]
+        \\    output.byte = input.text.byte_at(2)
         \\
     , .{
         .inputs = &.{.{ .name = "text", .declared = .string }},
@@ -1192,17 +1376,17 @@ test "string intrinsics implement multiline UTF-8-safe edits" {
         \\
         \\func previous(value: String, cursor: Int) -> Int:
         \\    var at = cursor - 1
-        \\    while at > 0 and continuation(byte_at(value, at)):
+        \\    while at > 0 and continuation(value.byte_at(at)):
         \\        at = at - 1
         \\    return at
         \\
         \\func evaluate(input: Input, output: Output):
         \\    if input.insert:
-        \\        output.text = slice(input.text, 0, input.cursor) + input.added + slice(input.text, input.cursor, len(input.text))
+        \\        output.text = input.text[0:input.cursor] + input.added + input.text[input.cursor:len(input.text)]
         \\        output.cursor = input.cursor + len(input.added)
         \\    else:
         \\        let before = previous(input.text, input.cursor)
-        \\        output.text = slice(input.text, 0, before) + slice(input.text, input.cursor, len(input.text))
+        \\        output.text = input.text[0:before] + input.text[input.cursor:len(input.text)]
         \\        output.cursor = before
         \\
     , .{
@@ -1245,13 +1429,13 @@ test "checked string intrinsics trap on bounds and UTF-8 splits" {
     var bench = try Bench.setup(
         \\func evaluate(input: Input, output: Output):
         \\    if input.mode == 1:
-        \\        output.text = slice(input.text, -1, 0)
+        \\        output.text = input.text[-1:0]
         \\    elif input.mode == 2:
-        \\        output.text = slice(input.text, 0, len(input.text) + 1)
+        \\        output.text = input.text[0:len(input.text) + 1]
         \\    elif input.mode == 3:
-        \\        output.text = slice(input.text, 0, 2)
+        \\        output.text = input.text[0:2]
         \\    else:
-        \\        output.byte = byte_at(input.text, len(input.text))
+        \\        output.byte = input.text.byte_at(len(input.text))
         \\
     , .{
         .inputs = &.{
@@ -1275,12 +1459,12 @@ test "checked string intrinsics trap on bounds and UTF-8 splits" {
 test "string intrinsics reject wrong argument types" {
     var result = try compile_mod.compile(testing.allocator,
         \\func evaluate(input: Input, output: Output):
-        \\    output.text = slice(1, 0, 1)
+        \\    output.text = 1[0:1]
         \\
     , .{ .outputs = &.{.{ .name = "text", .declared = .string }} }, .{});
     defer result.deinit();
     try testing.expect(result == .failure);
-    try testing.expectEqualStrings("luce.sema.type", result.failure.at(0).?.code);
+    try testing.expectEqualStrings("luce.sema.index", result.failure.at(0).?.code);
 }
 
 test "an unavailable read input gates evaluation" {
@@ -1639,7 +1823,7 @@ test "print, arguments, and files flow through the host" {
         \\    var left = value
         \\    while left > 0:
         \\        let digit = left % 10
-        \\        text = slice("0123456789", digit, digit + 1) + text
+        \\        text = "0123456789"[digit:digit + 1] + text
         \\        left = left / 10
         \\    return text
         \\
@@ -1732,15 +1916,15 @@ test "lists grow, index, slice, iterate, and free explicitly" {
         \\func main():
         \\    var xs = [3, 1, 2]
         \\    assert(len(xs) == 3)
-        \\    append(xs, 9)
+        \\    xs.append(9)
         \\    assert(xs[3] == 9)
         \\    xs[0] = 30
         \\    assert(xs[0] == 30)
-        \\    insert(xs, 1, 7)
+        \\    xs.insert(1, 7)
         \\    assert(xs[1] == 7)
-        \\    remove(xs, 0)
+        \\    xs.remove(0)
         \\    assert(xs[0] == 7)
-        \\    assert(pop(xs) == 9)
+        \\    assert(xs.pop() == 9)
         \\    var total = 0
         \\    for x in xs:
         \\        total = total + x
@@ -1767,14 +1951,14 @@ test "maps upsert, look up, and iterate keys in insertion order" {
         \\    ages["ada"] = 37
         \\    assert(len(ages) == 2)
         \\    assert(ages["ada"] == 37)
-        \\    assert(has(ages, "alan"))
+        \\    assert(ages.has("alan"))
         \\    var joined = new Builder()
         \\    for key in ages:
-        \\        append(joined, key)
+        \\        joined.append(key)
         \\    assert(str(joined) == "adaalan")
-        \\    remove(ages, "alan")
-        \\    assert(not has(ages, "alan"))
-        \\    remove(ages, "ghost")
+        \\    ages.remove("alan")
+        \\    assert(not ages.has("alan"))
+        \\    ages.remove("ghost")
         \\    assert(len(ages) == 1)
         \\    free(ages)
         \\    free(joined)
@@ -1787,12 +1971,12 @@ test "maps upsert, look up, and iterate keys in insertion order" {
 test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     var bench = try Bench.setup(
         \\func corner(grid: Array(Int, _, _)) -> Int:
-        \\    return grid[dim(grid, 0) - 1, dim(grid, 1) - 1]
+        \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
         \\
         \\func main():
         \\    var grid = new Array(Int, 3, 4)
-        \\    assert(dim(grid, 0) == 3)
-        \\    assert(dim(grid, 1) == 4)
+        \\    assert(grid.dim(0) == 3)
+        \\    assert(grid.dim(1) == 4)
         \\    assert(len(grid) == 3)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
@@ -1842,11 +2026,11 @@ test "structs and nested collections share objects by reference" {
         \\    var inner = [1, 2]
         \\    var bag = Bag(label = "first", items = inner)
         \\    let copy = bag
-        \\    append(copy.items, 3)
+        \\    copy.items.append(3)
         \\    assert(len(inner) == 3)
         \\    var nested = new List(List(Int))
-        \\    append(nested, inner)
-        \\    append(nested[0], 4)
+        \\    nested.append(inner)
+        \\    nested[0].append(4)
         \\    assert(len(inner) == 4)
         \\    free(inner)
         \\    free(nested)
@@ -1867,7 +2051,7 @@ test "collection misuse traps with stable codes" {
         .{ .source =
         \\func main():
         \\    var xs: List(Int) = []
-        \\    let bad = pop(xs)
+        \\    let bad = xs.pop()
         \\
         , .code = .empty_collection },
         .{ .source =
@@ -1893,7 +2077,7 @@ test "collection misuse traps with stable codes" {
         .{ .source =
         \\func main():
         \\    var cells = new Array(List(Int), 2)
-        \\    append(cells[0], 1)
+        \\    cells[0].append(1)
         \\
         , .code = .null_object },
         .{ .source =
@@ -1962,4 +2146,79 @@ test "the explicit frame stack survives deep recursion" {
         .call_depth = 1_000,
     });
     try testing.expectEqual(ir.TrapCode.call_depth_exceeded, shallow.trap.code);
+}
+
+test "string methods: search, case, trim, replace, repeat, split" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    let text = "  Hello, Luce World  "
+        \\    let cleaned = text.trim()
+        \\    assert(cleaned == "Hello, Luce World")
+        \\    assert(cleaned.find("Luce") == 7)
+        \\    assert(cleaned.find("zig") == -1)
+        \\    assert(cleaned.contains("World"))
+        \\    assert(cleaned.starts_with("Hello"))
+        \\    assert(cleaned.ends_with("World"))
+        \\    assert(cleaned.lower() == "hello, luce world")
+        \\    assert(cleaned.upper() == "HELLO, LUCE WORLD")
+        \\    assert(cleaned.replace("Luce", "brave") == "Hello, brave World")
+        \\    assert("ab".repeat(3) == "ababab")
+        \\    assert("x".repeat(0) == "")
+        \\    assert("na".byte_at(0) == 110)
+        \\    var words = cleaned.replace(",", "").split("")
+        \\    assert(len(words) == 3)
+        \\    assert(words[0] == "Hello")
+        \\    var csv = "a;b;;c".split(";")
+        \\    assert(len(csv) == 4)
+        \\    assert(csv[2] == "")
+        \\    assert(csv.join("|") == "a|b||c")
+        \\    free(words)
+        \\    free(csv)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+test "list and array methods: sort, reverse, find, contains, fill, clear" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var xs = [3, 1, 4, 1, 5]
+        \\    xs.sort()
+        \\    assert(xs[0] == 1)
+        \\    assert(xs[4] == 5)
+        \\    xs.reverse()
+        \\    assert(xs[0] == 5)
+        \\    assert(xs.find(4) == 1)
+        \\    assert(xs.find(9) == -1)
+        \\    assert(xs.contains(3))
+        \\    assert(not xs.contains(9))
+        \\    xs.clear()
+        \\    assert(len(xs) == 0)
+        \\    var names = ["cyan", "amber"]
+        \\    names.sort()
+        \\    assert(names[0] == "amber")
+        \\    var row = new Array(Int, 4)
+        \\    row.fill(7)
+        \\    assert(row[3] == 7)
+        \\    assert(row.contains(7))
+        \\    row[1] = 2
+        \\    row.sort()
+        \\    assert(row[0] == 2)
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    ages["alan"] = 41
+        \\    var listed = ages.keys()
+        \\    assert(listed.join(",") == "ada,alan")
+        \\    ages.clear()
+        \\    assert(len(ages) == 0)
+        \\    free(xs)
+        \\    free(names)
+        \\    free(row)
+        \\    free(ages)
+        \\    free(listed)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
 }

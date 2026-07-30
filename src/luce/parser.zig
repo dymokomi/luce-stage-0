@@ -616,6 +616,10 @@ const Parser = struct {
             if (self.accept(.dot) != null) {
                 const field = (try self.expect(.identifier, "a field name after '.'")) orelse
                     return null;
+                if (self.peekKind() == .left_paren) {
+                    value = (try self.methodCall(value, field)) orelse return null;
+                    continue;
+                }
                 const node = try self.arena.create(ast.Expression);
                 node.* = .{ .field = .{
                     .target = value,
@@ -714,31 +718,6 @@ const Parser = struct {
                 if (self.peekKind() == .left_paren) {
                     return self.callExpression(item);
                 }
-                // A dotted chain directly followed by '(' is one
-                // namespaced callee: Text.width(...), geo.helper(...),
-                // geo.Text.width(...).  Anything else stays a name for
-                // field/index postfix handling.
-                var ahead: usize = 0;
-                var parts: usize = 1;
-                while (self.peekAhead(ahead) == .dot and self.peekAhead(ahead + 1) == .identifier) {
-                    ahead += 2;
-                    parts += 1;
-                }
-                if (parts > 1 and self.peekAhead(ahead) == .left_paren) {
-                    var callee: std.ArrayList(u8) = .empty;
-                    defer callee.deinit(self.arena);
-                    try callee.appendSlice(self.arena, self.text(item));
-                    for (1..parts) |_| {
-                        _ = self.advance(); // .
-                        const member = self.advance();
-                        try callee.append(self.arena, '.');
-                        try callee.appendSlice(self.arena, self.text(member));
-                    }
-                    return self.namedCallExpression(
-                        try callee.toOwnedSlice(self.arena),
-                        item.span.start,
-                    );
-                }
                 return self.make(.{ .name = .{ .text = self.text(item), .span = item.span } });
             },
             .left_paren => {
@@ -763,6 +742,34 @@ const Parser = struct {
 
     fn callExpression(self: *Parser, callee: Token) Error!?*ast.Expression {
         return self.namedCallExpression(self.text(callee), callee.span.start);
+    }
+
+    fn methodCall(self: *Parser, target: *ast.Expression, name: Token) Error!?*ast.Expression {
+        _ = self.advance(); // (
+        var arguments: std.ArrayList(ast.Argument) = .empty;
+        defer arguments.deinit(self.arena);
+        while (self.peekKind() != .right_paren and self.peekKind() != .end_of_file) {
+            var argument_name: ?[]const u8 = null;
+            if (self.peekKind() == .identifier and self.peekAhead(1) == .assign) {
+                const named = self.advance();
+                _ = self.advance(); // =
+                argument_name = self.text(named);
+            }
+            const value = (try self.expression()) orelse return null;
+            try arguments.append(self.arena, .{
+                .name = argument_name,
+                .value = value,
+                .span = value.span(),
+            });
+            if (self.accept(.comma) == null) break;
+        }
+        const closing = (try self.expect(.right_paren, "')'")) orelse return null;
+        return self.make(.{ .method = .{
+            .target = target,
+            .name = self.text(name),
+            .arguments = try arguments.toOwnedSlice(self.arena),
+            .span = .{ .start = target.span().start, .end = closing.span.end },
+        } });
     }
 
     fn namedCallExpression(self: *Parser, callee: []const u8, start: usize) Error!?*ast.Expression {
@@ -1026,10 +1033,30 @@ test "struct bodies parse fields and namespaced functions" {
     try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].fields.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
-    try testing.expectEqualStrings(
-        "Helpers.double",
-        parsed.program.functions[0].body.statements[0].assign.value.call.callee,
+    // Dotted calls parse as method nodes; the analyzer decides whether
+    // the chain names a namespace or a value.
+    const dotted = parsed.program.functions[0].body.statements[0].assign.value.method;
+    try testing.expectEqualStrings("double", dotted.name);
+    try testing.expectEqualStrings("Helpers", dotted.target.name.text);
+}
+
+test "method calls parse on any postfix expression" {
+    var parsed = try parseText(
+        \\func main():
+        \\    var xs = [3, 1]
+        \\    xs.append(2)
+        \\    xs.sort()
+        \\    let n = xs[0:2].find(3)
+        \\    let word = "Hello".lower()
+        \\
     );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+    const body = parsed.program.functions[0].body;
+    const call = body.statements[1].expression.value.method;
+    try testing.expectEqualStrings("append", call.name);
+    try testing.expect(body.statements[3].let.value.method.target.* == .slice_range);
+    try testing.expect(body.statements[4].let.value.method.target.* == .string_literal);
 }
 
 test "control flow, precedence, and elif chains parse" {

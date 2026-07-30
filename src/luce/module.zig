@@ -20,7 +20,7 @@ const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -514,9 +514,9 @@ test "a compiled program round-trips through the module format" {
         \\        if index % 2 == 0:
         \\            total = total + index
         \\    print("length ready")
-        \\    let text = "π = " + slice("3.14159", 0, 4)
+        \\    let text = "π = " + "3.14159"[0:4]
         \\    var points = new List(Float)
-        \\    append(points, length(point))
+        \\    points.append(length(point))
         \\    var counts = new Map(String, Int)
         \\    counts[text] = len(points)
         \\    var grid = new Array(Int, 2, 3)

@@ -665,14 +665,14 @@ test "collections type-check and reject misuse at compile time" {
         \\
         \\func label(counts: Map(String, Int), grid: Array(Int, _, _)) -> String:
         \\    var b = new Builder()
-        \\    append(b, str(len(counts) + grid[0, 0]))
+        \\    b.append(str(len(counts) + grid[0, 0]))
         \\    let made = str(b)
         \\    free(b)
         \\    return made
         \\
         \\func main():
         \\    var values: List(Int) = []
-        \\    append(values, 4)
+        \\    values.append(4)
         \\    let total = sum(values[0:])
         \\    free(values)
         \\
@@ -709,9 +709,9 @@ test "collections type-check and reject misuse at compile time" {
     , .{}, script, "luce.sema.index");
     try expectFailsOptions(
         \\func main():
-        \\    let bad = append(5, 1)
+        \\    let bad = 5.append(1)
         \\
-    , .{}, script, "luce.sema.type");
+    , .{}, script, "luce.sema.method");
     try expectFailsOptions(
         \\func main():
         \\    for x in 7:
@@ -820,15 +820,26 @@ test "imports are explicit, checked, and reported per file" {
     const script: types.CompileOptions = .{ .entry_mode = .script };
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
 
-    // Reaching a namespace without importing it fails.
+    // Reaching a loaded-but-unimported namespace names the fix; a
+    // namespace nothing loaded is an ordinary unknown name.
     var unimported = try compileProject(testing.allocator,
+        \\import geo
+        \\
         \\func main():
-        \\    let bad = geo.make(1.0, 2.0)
+        \\    let bad = util.hypot(3.0, 4.0)
         \\
     , files.loader(), .{}, script);
     defer unimported.deinit();
     try testing.expect(unimported == .failure);
     try testing.expectEqualStrings("luce.sema.import", unimported.failure.at(0).?.code);
+    var unknown = try compileProject(testing.allocator,
+        \\func main():
+        \\    let bad = geo.make(1.0, 2.0)
+        \\
+    , files.loader(), .{}, script);
+    defer unknown.deinit();
+    try testing.expect(unknown == .failure);
+    try testing.expectEqualStrings("luce.sema.name", unknown.failure.at(0).?.code);
 
     // A missing module file reports where the import was written.
     var missing = try compileProject(testing.allocator,
@@ -934,7 +945,7 @@ test "short-circuit operands survive block splits everywhere" {
         \\    let chosen = pick(a and b, a or b)
         \\    let pair = Flags(left = a or b, right = a and b)
         \\    var flags = [a or b, pair.left, cells[0, 1] and chosen]
-        \\    append(flags, a or b)
+        \\    flags.append(a or b)
         \\    let compared = (a or b) == (a and b)
         \\    let sliced = flags[0:len(flags)]
         \\    for index in range(0, len(sliced)):

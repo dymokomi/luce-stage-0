@@ -8,9 +8,9 @@ func matching_forward(code: String, pc: Int) -> Int:
     var at = pc
     while depth > 0:
         at = at + 1
-        if byte_at(code, at) == 91:
+        if code.byte_at(at) == 91:
             depth = depth + 1
-        elif byte_at(code, at) == 93:
+        elif code.byte_at(at) == 93:
             depth = depth - 1
     return at
 
@@ -19,9 +19,9 @@ func matching_backward(code: String, pc: Int) -> Int:
     var at = pc
     while depth > 0:
         at = at - 1
-        if byte_at(code, at) == 93:
+        if code.byte_at(at) == 93:
             depth = depth + 1
-        elif byte_at(code, at) == 91:
+        elif code.byte_at(at) == 91:
             depth = depth - 1
     return at
 
@@ -31,7 +31,7 @@ func interpret(code: String, cells: Int) -> String:
     var pc = 0
     var out = new Builder()
     while pc < len(code):
-        let op = byte_at(code, pc)
+        let op = code.byte_at(pc)
         if op == 62:
             pointer = pointer + 1
         elif op == 60:
@@ -41,7 +41,7 @@ func interpret(code: String, cells: Int) -> String:
         elif op == 45:
             tape[pointer] = (tape[pointer] + 255) % 256
         elif op == 46:
-            append(out, chr(tape[pointer]))
+            out.append(chr(tape[pointer]))
         elif op == 91:
             if tape[pointer] == 0:
                 pc = matching_forward(code, pc)

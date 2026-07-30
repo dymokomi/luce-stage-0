@@ -33,7 +33,12 @@ levels; annotations appear where a human would want them anyway
 
 ## Friction found while writing the programs
 
-Ranked by how often it hurt, with the program that proves it:
+Ranked by how often it hurt, with the program that proves it.
+*(Update: items 3, 4, and 5 below landed — strings grew
+find/contains/starts_with/ends_with/trim/lower/upper/replace/repeat/
+split/join, lists and rank-1 arrays grew sort/reverse/find/contains/
+fill/clear, and `xs.append(v)` method calls are now the one idiom.
+The memory model is under deliberate design in docs/MEMORY.md.)*
 
 1. **No `defer`.**  With explicit `free`, every early `return` after
    an allocation is a leak, so functions contort into single-exit

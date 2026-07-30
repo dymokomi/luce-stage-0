@@ -11,7 +11,7 @@ func main():
         return
     var values: List(Float) = []
     for index in range(0, arg_count()):
-        append(values, parse_float(arg(index)))
+        values.append(parse_float(arg(index)))
 
     var ordered = mathx.sorted(values)
     print("count   " + str(len(values)))

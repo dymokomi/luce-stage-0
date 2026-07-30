@@ -18,14 +18,14 @@ struct World:
         grid[3, 2] = true
         grid[3, 3] = true
         # ...and a blinker.
-        let mid = dim(grid, 0) / 2
+        let mid = grid.dim(0) / 2
         grid[mid, 6] = true
         grid[mid, 7] = true
         grid[mid, 8] = true
 
     func neighbors(grid: Array(Bool, _, _), row: Int, col: Int) -> Int:
-        let height = dim(grid, 0)
-        let width = dim(grid, 1)
+        let height = grid.dim(0)
+        let width = grid.dim(1)
         var alive = 0
         for dr in range(0, 3):
             for dc in range(0, 3):
@@ -38,8 +38,8 @@ struct World:
 
     # One generation: builds the next grid; the caller frees the old.
     func step(grid: Array(Bool, _, _)) -> Array(Bool, _, _):
-        let height = dim(grid, 0)
-        let width = dim(grid, 1)
+        let height = grid.dim(0)
+        let width = grid.dim(1)
         var next = new Array(Bool, height, width)
         for row in range(0, height):
             for col in range(0, width):
@@ -52,16 +52,16 @@ struct World:
 
     func draw(grid: Array(Bool, _, _), generation: Int):
         term_clear()
-        for row in range(0, dim(grid, 0)):
+        for row in range(0, grid.dim(0)):
             term_move(row, 0)
-            for col in range(0, dim(grid, 1)):
+            for col in range(0, grid.dim(1)):
                 if grid[row, col]:
                     term_style(114, -1, false)
                     term_write("██")
                 else:
                     term_style(238, -1, false)
                     term_write(" ·")
-        term_move(dim(grid, 0), 0)
+        term_move(grid.dim(0), 0)
         term_style(252, 237, false)
         term_write(" generation " + str(generation) + "  |  any key: step   space: run 10   Ctrl-Q: quit ")
 
