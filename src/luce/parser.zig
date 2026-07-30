@@ -1158,6 +1158,66 @@ test "method calls parse on any postfix expression" {
     try testing.expect(body.statements[4].let.value.method.target.* == .string_literal);
 }
 
+test "ownership verbs parse: give/copy expressions and give parameters" {
+    var parsed = try parseText(
+        \\func stash(index: Map(String, List(Int)), hits: give List(Int)):
+        \\    index["latest"] = give hits
+        \\
+        \\func main():
+        \\    var mine = [1, 2]
+        \\    let moved = give mine
+        \\    let doubled = copy moved
+        \\    var index = new Map(String, List(Int))
+        \\    stash(index, give doubled)
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+
+    const stash = parsed.program.functions[0];
+    try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
+    try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
+    try testing.expect(stash.body.statements[0].assign.value.* == .give);
+
+    const body = parsed.program.functions[1].body;
+    const moved = body.statements[1].let.value;
+    try testing.expect(moved.* == .give);
+    try testing.expectEqualStrings("mine", moved.give.operand.name.text);
+    try testing.expect(body.statements[2].let.value.* == .copy);
+    const call_arguments = body.statements[4].expression.value.call.arguments;
+    try testing.expect(call_arguments[1].value.* == .give);
+}
+
+test "top-level let constants parse; top-level var is refused" {
+    var parsed = try parseText(
+        \\let width = 80
+        \\let banner: String = "loom " + version
+        \\let version = "2.0"
+        \\
+        \\func main():
+        \\    let unused = width
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+    try testing.expectEqual(@as(usize, 3), parsed.program.constants.len);
+    try testing.expectEqualStrings("width", parsed.program.constants[0].name);
+    try testing.expect(parsed.program.constants[0].annotation == null);
+    try testing.expectEqualStrings("String", parsed.program.constants[1].annotation.?.name);
+    try testing.expect(parsed.program.constants[1].value.* == .binary);
+
+    var refused = try parseText(
+        \\var counter = 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer refused.deinit();
+    try testing.expect(refused.diagnostics.count() > 0);
+    try testing.expectEqualStrings("luce.parse.top", refused.diagnostics.at(0).?.code);
+}
+
 test "control flow, precedence, and elif chains parse" {
     var parsed = try parseText(
         \\func evaluate(input: Input, output: Output):

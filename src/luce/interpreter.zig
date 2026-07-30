@@ -2548,6 +2548,33 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
 // Ownership specification: late declarations and null (S40-S43)
 // ---------------------------------------------------------------------------
 
+test "evaluator mode runs under scope ownership too" {
+    var bench = try Bench.setup(
+        \\func widths(text: String) -> List(Int):
+        \\    var found: List(Int) = []
+        \\    for word in text.split(" "):
+        \\        found.append(len(word))
+        \\    return found
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    var sizes = widths(input.text)
+        \\    var total = 0
+        \\    for size in sizes:
+        \\        total = total + size
+        \\    output.total = total
+        \\
+    , .{
+        .inputs = &.{.{ .name = "text", .declared = .string }},
+        .outputs = &.{.{ .name = "total", .declared = .int }},
+    }, .{});
+    defer bench.deinit();
+
+    const result = try bench.evaluate(&.{.{ .value = .{ .string = "a bb ccc" } }});
+    try testing.expect(result == .success);
+    try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
+    try testing.expectEqual(@as(i64, 6), bench.outputs[0].?.int);
+}
+
 test "S40: late declarations start at the type's zero value" {
     var bench = try Bench.setup(
         \\struct Point:
