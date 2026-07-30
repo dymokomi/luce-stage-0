@@ -149,6 +149,23 @@ test "luce.sema.evaluate: an evaluator needs exactly the two-port entry" {
 }
 
 // ---------------------------------------------------------------------------
+// Compound assignment (value-only arithmetic sugar)
+// ---------------------------------------------------------------------------
+
+test "luce.sema.type: compound assignment is numbers, or += on String" {
+    // Objects have no compound assignment.
+    try expectError("func main():\n    var xs = [1, 2]\n    xs *= 3\n", "luce.sema.type");
+    // Non-+ operators do not apply to String.
+    try expectError("func main():\n    var s = \"a\"\n    s -= \"b\"\n", "luce.sema.type");
+    // The two sides must share a type.
+    try expectError("func main():\n    var n = 1\n    n += 2.0\n", "luce.sema.type");
+}
+
+test "luce.sema.let: a let binding cannot be compound-assigned either" {
+    try expectError("func main():\n    let n = 1\n    n += 1\n", "luce.sema.let");
+}
+
+// ---------------------------------------------------------------------------
 // Names, declarations, reserved words
 // ---------------------------------------------------------------------------
 

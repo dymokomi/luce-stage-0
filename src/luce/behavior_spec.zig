@@ -174,6 +174,88 @@ test "floats and ints do not mix without explicit conversion" {
 }
 
 // ---------------------------------------------------------------------------
+// Compound assignment
+// ---------------------------------------------------------------------------
+
+test "compound assignment on names: every operator, Int and Float" {
+    try expectOk(
+        \\func main():
+        \\    var n = 10
+        \\    n += 5
+        \\    assert(n == 15)
+        \\    n -= 3
+        \\    assert(n == 12)
+        \\    n *= 2
+        \\    assert(n == 24)
+        \\    n /= 5
+        \\    assert(n == 4)
+        \\    n %= 3
+        \\    assert(n == 1)
+        \\    var f = 2.0
+        \\    f += 0.5
+        \\    f *= 4.0
+        \\    assert(f == 10.0)
+        \\
+    );
+}
+
+test "compound assignment concatenates strings with +=" {
+    try expectOk(
+        \\func main():
+        \\    var s = "a"
+        \\    s += "b"
+        \\    s += "c" + "d"
+        \\    assert(s == "abcd")
+        \\
+    );
+}
+
+test "compound assignment on struct fields and container elements" {
+    try expectOk(
+        \\struct Counter:
+        \\    value: Int
+        \\
+        \\func main():
+        \\    var c = Counter(value = 1)
+        \\    c.value += 9
+        \\    c.value *= 2
+        \\    assert(c.value == 20)
+        \\    var xs = [1, 2, 3]
+        \\    xs[1] += 10
+        \\    assert(xs[1] == 12)
+        \\    var grid = new Array(Int, 2, 2)
+        \\    grid[1, 1] += 7
+        \\    grid[1, 1] -= 2
+        \\    assert(grid[1, 1] == 5)
+        \\    var m = new Map(String, Int)
+        \\    m["k"] = 5
+        \\    m["k"] *= 4
+        \\    assert(m["k"] == 20)
+        \\
+    );
+}
+
+test "a compound index target evaluates its index expression once" {
+    // If `xs[next()]` were evaluated twice the counter would land on
+    // 2 and the wrong slot would change; once, it lands on 1.
+    try expectOk(
+        \\func main():
+        \\    var calls = [0]
+        \\    var xs = [100, 200, 300]
+        \\    xs[bump(calls)] += 5
+        \\    assert(calls[0] == 1)
+        \\    assert(xs[1] == 205)
+        \\    assert(xs[0] == 100)
+        \\    assert(xs[2] == 300)
+        \\
+        \\func bump(counter: List(Int)) -> Int:
+        \\    counter[0] = counter[0] + 1
+        \\    return 1
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Booleans and comparison
 // ---------------------------------------------------------------------------
 

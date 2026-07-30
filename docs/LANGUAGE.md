@@ -180,6 +180,28 @@ conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,
 terminal, and key builtins (see docs/V2.md).  Everything that belongs
 to one type is a method on it.
 
+## Arithmetic and assignment
+
+Binary operators are `+ - * / %` (Int truncates toward zero, `%`
+follows the dividend's sign; Float is IEEE), the comparisons
+`== != < <= > >=` (ordering on Int, Float, String), and `and or not`
+(short-circuit).  There is no implicit numeric conversion — mixing
+Int and Float is a compile error; convert with `Int(x)`/`Float(x)`.
+
+Compound assignment applies an operator in place: `n += 1`, `n -= 1`,
+`n *= 2`, `n /= 2`, `n %= 3`, and `s += "!"` (String concat).  It is
+value-only arithmetic — the place is a number (or a String for `+=`),
+never an object — and the place is evaluated once, so
+`grid[row, col] += 1` reads and writes the same slot:
+
+```luce
+var total = 0
+total += 5          # total == 5
+var s = "a"
+s += "b"            # s == "ab"
+counts[key] += 1    # key evaluated once
+```
+
 ## Scope
 
 One scope per **file** (top-level constants, structs, and functions),

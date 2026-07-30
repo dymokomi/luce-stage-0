@@ -134,7 +134,11 @@ pub const Target = union(enum) {
 
 pub const Binding = struct { name: []const u8, annotation: ?TypeName, value: *Expression, span: Span };
 pub const Variable = struct { name: []const u8, annotation: ?TypeName, value: ?*Expression, span: Span };
-pub const Assign = struct { target: Target, value: *Expression, span: Span };
+/// `place = value`, or a compound assignment `place OP= value` when
+/// `compound` is set (which reads the place, applies OP, stores back —
+/// the place is evaluated once).  Compound forms are value-only
+/// arithmetic; OP is add/subtract/multiply/divide/remainder.
+pub const Assign = struct { target: Target, compound: ?BinaryOp = null, value: *Expression, span: Span };
 pub const Conditional = struct {
     condition: *Expression,
     then_block: Block,

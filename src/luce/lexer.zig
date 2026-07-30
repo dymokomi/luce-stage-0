@@ -173,16 +173,16 @@ const Lexer = struct {
             ',' => try self.single(.comma),
             ':' => try self.single(.colon),
             '.' => try self.single(.dot),
-            '+' => try self.single(.plus),
-            '*' => try self.single(.star),
-            '/' => try self.single(.slash),
-            '%' => try self.single(.percent),
+            '+' => try self.maybeAssign(.plus, .plus_assign),
+            '*' => try self.maybeAssign(.star, .star_assign),
+            '/' => try self.maybeAssign(.slash, .slash_assign),
+            '%' => try self.maybeAssign(.percent, .percent_assign),
             '-' => {
                 if (self.peek(1) == '>') {
                     try self.emit(.arrow, .{ .start = self.offset, .end = self.offset + 2 });
                     self.offset += 2;
                 } else {
-                    try self.single(.minus);
+                    try self.maybeAssign(.minus, .minus_assign);
                 }
             },
             '=' => {
@@ -246,6 +246,17 @@ const Lexer = struct {
     fn single(self: *Lexer, kind: Kind) Error!void {
         try self.emit(kind, .{ .start = self.offset, .end = self.offset + 1 });
         self.offset += 1;
+    }
+
+    /// An operator that may be followed by '=' to form a compound
+    /// assignment (`+` / `+=`, `*` / `*=`, ...).
+    fn maybeAssign(self: *Lexer, bare: Kind, compound: Kind) Error!void {
+        if (self.peek(1) == '=') {
+            try self.emit(compound, .{ .start = self.offset, .end = self.offset + 2 });
+            self.offset += 2;
+        } else {
+            try self.single(bare);
+        }
     }
 
     fn emit(self: *Lexer, kind: Kind, span: Span) Error!void {

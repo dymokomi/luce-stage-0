@@ -55,8 +55,9 @@ design philosophy.
 6. **No string interpolation.**  `"x = " + str(x) + ", y = " +
    str(y)` everywhere.  Python f-strings are the gold standard;
    even a minimal `format("x = {}", x)` would relieve most of it.
-7. **No compound assignment** (`+=`, `-=`, ...).  Pure parser sugar
-   over the existing assignment path; Python and Zig both have it.
+7. ~~Compound assignment (`+=`, `-=`, ...)~~ — shipped: `+= -= *= /=
+   %=` on Int/Float and `+=` on String, value-only, place evaluated
+   once.
 8. **No `pow`, no `random`, thin math.**  `sqrt/floor/ceil/abs/
    min/max/clamp` exist; `pow`, `log`, `exp`, trig, and any random
    source do not.  Games (life.luc wants random seeding) and stats
@@ -186,8 +187,9 @@ work above is what they will stand on.
 1. Trap source locations (Tier 1.3) — pure quality, no design risk.
 2. `for key, value in m:` + `m.values()` (1.2, needs mini-design
    for multi-binding; pairs naturally with tuples decision 2.12).
-3. `read_line()`, compound assignment, character-literal folding,
-   `format(...)`, pow/random (1.4–1.8) — one small slice.
+3. `read_line()`, character-literal folding, `format(...)`,
+   pow/random (1.4–1.8) — one small slice. (Compound assignment,
+   formerly here, is done.)
 4. The three Tier-2 decisions worth a memo each: integer division,
    enums+match, receivers.
 5. `import std` mechanism + first std module (Tier 3 umbrella).

@@ -1672,6 +1672,50 @@ const FunctionBuilder = struct {
         }
     }
 
+    /// Combine the current value of a compound-assignment place with
+    /// the right-hand side under OP — `place OP= value` reads the
+    /// place once (the caller supplies `current`) and stores this.
+    /// Type rules are a binary expression's exactly: numeric
+    /// arithmetic, plus String concat for `+=`.  Returns the register
+    /// holding the combined value, or null after reporting.
+    fn compoundCombine(
+        self: *FunctionBuilder,
+        op: ast.BinaryOp,
+        current: Register,
+        place_type: Type,
+        value: Value,
+        span: Span,
+    ) Error!?Register {
+        if (!value.value_type.eql(place_type)) {
+            try self.fail("luce.sema.type", span, "compound assignment needs matching types: place is {s}, value is {s}", .{
+                try self.analyzer.typeName(place_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return null;
+        }
+        const string_concat = op == .add and place_type == .string;
+        if (!place_type.isNumeric() and !string_concat) {
+            try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String)", .{
+                try self.analyzer.typeName(place_type),
+            });
+            return null;
+        }
+        const operation: ir.BinaryOp = switch (op) {
+            .add => .add,
+            .subtract => .subtract,
+            .multiply => .multiply,
+            .divide => .divide,
+            .remainder => .remainder,
+            else => unreachable, // the parser only builds these five
+        };
+        return try self.emit(.{ .binary = .{
+            .op = operation,
+            .operand_type = place_type,
+            .left = current,
+            .right = value.register,
+        } }, place_type);
+    }
+
     fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
         if (std.mem.eql(u8, base, "output")) {
             try self.fail("luce.sema.output", span, "assign to output.NAME", .{});
@@ -1708,6 +1752,15 @@ const FunctionBuilder = struct {
         const local = info.local;
         const class = info.class;
         const local_type = self.locals.items[local].local_type;
+        // Compound assignment is value-only arithmetic, so an object
+        // place gets a clear message here instead of the ownership
+        // check firing on the (non-fresh) right-hand side.
+        if (assign.compound != null and info.carries) {
+            try self.fail("luce.sema.type", assign.span, "{s} has no compound assignment (numbers, or += on String)", .{
+                try self.analyzer.typeName(local_type),
+            });
+            return;
+        }
         if (info.carries) {
             const yields = try self.yieldsOwnership(assign.value);
             if (class == .owned and !yields) {
@@ -1738,14 +1791,20 @@ const FunctionBuilder = struct {
             });
             return;
         }
+        var store = value.register;
+        if (assign.compound) |op| {
+            const current = try self.emit(.{ .local_get = local }, local_type);
+            store = (try self.compoundCombine(op, current, local_type, value, assign.span)) orelse return;
+        }
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
+        // Compound assignment is value-only, so `carries` is false.
         if (info.carries and class == .owned) {
             try self.emitRelease(local);
         }
-        _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = store } }, .none);
         if (info.carries and class == .owned) {
-            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = store } }, .none);
         }
     }
 
@@ -1759,6 +1818,10 @@ const FunctionBuilder = struct {
                 try self.fail("luce.sema.port", target.span, "no output port named {s}", .{target.field});
                 return;
             };
+            if (assign.compound != null) {
+                try self.fail("luce.sema.output", target.span, "output ports are write-only; compound assignment must read the place", .{});
+                return;
+            }
             const expected = Type.fromPort(self.analyzer.schema.outputs[port].declared);
             const value = (try self.lowerExpression(assign.value, false)) orelse return;
             if (!value.value_type.eql(expected)) {
@@ -1841,6 +1904,17 @@ const FunctionBuilder = struct {
             return;
         }
         const current = try self.emit(.{ .local_get = local }, local_type);
+        var store = value.register;
+        if (assign.compound) |op| {
+            // Read the field once, combine, store back (fields that
+            // carry objects can't be compound-assigned — value-only).
+            const old_value = try self.emit(.{ .struct_get = .{
+                .target = current,
+                .layout = layout_index,
+                .field = field_index,
+            } }, expected);
+            store = (try self.compoundCombine(op, old_value, expected, value, assign.span)) orelse return;
+        }
         if (field_carries) {
             const old_field = try self.emit(.{ .struct_get = .{
                 .target = current,
@@ -1853,11 +1927,11 @@ const FunctionBuilder = struct {
             .target = current,
             .layout = layout_index,
             .field = field_index,
-            .value = value.register,
+            .value = store,
         } }, local_type);
         _ = try self.emit(.{ .local_set = .{ .local = local, .value = updated } }, .none);
         if (field_carries) {
-            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = store } }, .none);
         }
     }
 
@@ -1895,8 +1969,22 @@ const FunctionBuilder = struct {
             });
             return;
         }
+        var store = value.register;
+        if (assign.compound) |op| {
+            // Read the element once (the base and indices were lowered
+            // once, above), combine, and store back.
+            const read_arguments = try self.arena().alloc(Register, indices.len + 1);
+            read_arguments[0] = object.register;
+            for (indices, read_arguments[1..]) |index_value, *slot| slot.* = index_value.register;
+            const current = try self.emit(
+                .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
+                element_type,
+            );
+            store = (try self.compoundCombine(op, current, element_type, value, assign.span)) orelse return;
+        }
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |lowered, *slot| slot.* = lowered.register;
+        arguments[arguments.len - 1] = store;
         _ = try self.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
     }
 

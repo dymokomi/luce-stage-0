@@ -529,19 +529,35 @@ const Parser = struct {
     // one dotted field on a name, or an indexed expression.
     fn assignOrExpression(self: *Parser) Error!?ast.Statement {
         const left = (try self.expression()) orelse return null;
-        if (self.accept(.assign) == null) {
+        const compound = compoundOp(self.peekKind());
+        if (self.peekKind() != .assign and compound == null) {
             _ = try self.expect(.newline, "a newline after the expression");
             return .{ .expression = .{ .value = left, .span = left.span() } };
         }
+        _ = self.advance(); // '=' or 'OP='
 
         const target = (try self.targetFrom(left)) orelse return null;
         const value = (try self.expression()) orelse return null;
         _ = try self.expect(.newline, "a newline after the assignment");
         return .{ .assign = .{
             .target = target,
+            .compound = compound,
             .value = value,
             .span = .{ .start = target.span().start, .end = value.span().end },
         } };
+    }
+
+    /// The arithmetic operator behind a compound-assignment token, or
+    /// null for a plain `=` or a non-assignment token.
+    fn compoundOp(kind: Kind) ?ast.BinaryOp {
+        return switch (kind) {
+            .plus_assign => .add,
+            .minus_assign => .subtract,
+            .star_assign => .multiply,
+            .slash_assign => .divide,
+            .percent_assign => .remainder,
+            else => null,
+        };
     }
 
     fn targetFrom(self: *Parser, left: *ast.Expression) Error!?ast.Target {
