@@ -158,7 +158,7 @@ pub const Host = struct {
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw) catch return;
         self.screen.saved = saved;
         self.screen.active = true;
-        self.out.writeAll("\x1b[?1049h\x1b[2J\x1b[H") catch {};
+        self.out.writeAll("\x1b[?1049h\x1b[0m\x1b[2J\x1b[H") catch {};
         self.out.flush() catch {};
     }
 
@@ -175,7 +175,10 @@ pub const Host = struct {
     fn clear(context: *anyopaque) error{OutOfMemory}!void {
         const self: *Host = @ptrCast(@alignCast(context));
         try self.ensureScreen();
-        try self.screen.buffer.appendSlice(self.gpa, "\x1b[?25l\x1b[2J\x1b[H");
+        // Reset styles before erasing: terminals fill cleared cells
+        // with the *current* background, so clearing while the last
+        // frame's colors are active would tint every empty cell.
+        try self.screen.buffer.appendSlice(self.gpa, "\x1b[?25l\x1b[0m\x1b[2J\x1b[H");
     }
 
     fn move(context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void {
