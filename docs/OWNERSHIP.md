@@ -450,12 +450,8 @@ func main():
                                     # lives where it was DECLARED
 ```
 Decision: ownership hoists naturally through assignment to
-outer-declared variables.  **Open sub-question:** Luce requires
-definite initialization, so "declare now, create later" needs a
-story — lean: allow `var report: Builder` starting as the null
-object (use-before-set traps `null_object`, machinery that already
-exists for array elements); full optionals are a separate future
-decision.
+outer-declared variables.  The "declare now, create later" story is
+S40.
 
 **S37. Values into containers: no ownership, no verbs, ever.**
 ```luce
@@ -491,6 +487,29 @@ who frees, and who may extend the object's life (store/return/
 give/free).  Content mutation through borrows is the normal way
 functions do work.  (Immutability-through-`let` is a separate,
 undecided question — see below.)
+
+**S40. Late initialization: `var name: Type` with no value.**
+```luce
+func main():
+    var inner: Builder          # declares name, type, and SCOPE;
+                                # holds the null object until assigned
+    if condition:
+        inner = new Builder()   # the only new; inner (outer scope) owns it
+        inner.append("details")
+    # condition true:  builder freed at the end of THIS scope
+    # condition false: inner is still null — nothing freed, and
+    #                  inner.append(...) would trap null_object
+```
+Decision: the annotation is required (nothing to infer); the
+declaration establishes the binding and its scope, assignment fills
+it.  Before assignment the variable holds its type's **zero value**
+— null for objects (use traps `null_object`, the same state array
+elements already start in), 0 / 0.0 / false / "" / zeroed struct for
+values.  One rule everywhere: an unfilled slot holds its type's
+zero.  The first assignment has no old object to drop; `let` still
+requires an initializer (a never-reassignable empty name is a
+contradiction).  Full optionals remain a separate future decision —
+this is zero-initialization, not `nil` semantics.
 
 **S39. `let` vs `var` freezes the binding, not the object.**
 ```luce
