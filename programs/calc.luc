@@ -1,0 +1,79 @@
+# A recursive-descent expression calculator: structs as parser state,
+# recursion, checked integer arithmetic.
+#
+#   loom run calc.lc "2 + 3 * (10 - 4)"
+
+struct Step:
+    value: Int
+    at: Int
+
+struct Scan:
+    func skip_spaces(text: String, at: Int) -> Int:
+        var here = at
+        while here < len(text) and byte_at(text, here) == 32:
+            here = here + 1
+        return here
+
+    func number(text: String, at: Int) -> Step:
+        var stop = at
+        while stop < len(text) and byte_at(text, stop) >= 48 and byte_at(text, stop) <= 57:
+            stop = stop + 1
+        if stop == at:
+            trap("expected a number at position " + str(at))
+        return Step(value = parse_int(slice(text, at, stop)), at = stop)
+
+struct Parse:
+    # expression = term (("+" | "-") term)*
+    func expression(text: String, at: Int) -> Step:
+        var left = Parse.term(text, at)
+        var here = Scan.skip_spaces(text, left.at)
+        while here < len(text) and (byte_at(text, here) == 43 or byte_at(text, here) == 45):
+            let operator = byte_at(text, here)
+            let right = Parse.term(text, here + 1)
+            if operator == 43:
+                left = Step(value = left.value + right.value, at = right.at)
+            else:
+                left = Step(value = left.value - right.value, at = right.at)
+            here = Scan.skip_spaces(text, left.at)
+        return left
+
+    # term = factor (("*" | "/" | "%") factor)*
+    func term(text: String, at: Int) -> Step:
+        var left = Parse.factor(text, at)
+        var here = Scan.skip_spaces(text, left.at)
+        while here < len(text) and (byte_at(text, here) == 42 or byte_at(text, here) == 47 or byte_at(text, here) == 37):
+            let operator = byte_at(text, here)
+            let right = Parse.factor(text, here + 1)
+            if operator == 42:
+                left = Step(value = left.value * right.value, at = right.at)
+            elif operator == 47:
+                left = Step(value = left.value / right.value, at = right.at)
+            else:
+                left = Step(value = left.value % right.value, at = right.at)
+            here = Scan.skip_spaces(text, left.at)
+        return left
+
+    # factor = number | "(" expression ")" | "-" factor
+    func factor(text: String, at: Int) -> Step:
+        let here = Scan.skip_spaces(text, at)
+        if here < len(text) and byte_at(text, here) == 45:
+            let inner = Parse.factor(text, here + 1)
+            return Step(value = 0 - inner.value, at = inner.at)
+        if here < len(text) and byte_at(text, here) == 40:
+            let inner = Parse.expression(text, here + 1)
+            let close = Scan.skip_spaces(text, inner.at)
+            if close >= len(text) or byte_at(text, close) != 41:
+                trap("expected ) at position " + str(close))
+            return Step(value = inner.value, at = close + 1)
+        return Scan.number(text, here)
+
+func main():
+    if arg_count() == 0:
+        print("usage: calc \"EXPRESSION\"   (integers, + - * / % and parentheses)")
+        return
+    let text = arg(0)
+    let result = Parse.expression(text, 0)
+    let rest = Scan.skip_spaces(text, result.at)
+    if rest != len(text):
+        trap("unexpected character at position " + str(rest))
+    print(text + " = " + str(result.value))

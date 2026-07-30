@@ -84,8 +84,10 @@ src/apps/luce/            the luce compiler CLI
 src/apps/loom/            the loom terminal: shell, program runner,
                           and the trusted host behind the Luce host
                           builtins
-programs/                 userland, written in Luce (editor, hello,
-                          sort, a Brainfuck interpreter)
+programs/                 userland, written in Luce: the editor,
+                          hello, sort, wordcount, a calculator,
+                          Conway's Life, stats (a two-file module
+                          demo), and a Brainfuck interpreter
 tools/vscode-luce/        VS Code syntax highlighting for .luc
 docs/                     V2.md is the plan; v1/ preserves the Fabric
                           era (LOOM.md, LUCE.md, CODING_GUIDE.md)

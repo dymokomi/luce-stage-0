@@ -1,0 +1,90 @@
+# Conway's Game of Life: a multi-dimensional Array on the terminal.
+#
+#   loom run life.lc
+#   any key steps a generation, space runs ten, Ctrl-Q quits
+
+struct World:
+    func rows() -> Int:
+        return clamp(term_rows() - 2, 8, 40)
+
+    func cols() -> Int:
+        return clamp((term_cols() - 1) / 2, 8, 60)
+
+    func seed(grid: Array(Bool, _, _)):
+        # A glider...
+        grid[1, 2] = true
+        grid[2, 3] = true
+        grid[3, 1] = true
+        grid[3, 2] = true
+        grid[3, 3] = true
+        # ...and a blinker.
+        let mid = dim(grid, 0) / 2
+        grid[mid, 6] = true
+        grid[mid, 7] = true
+        grid[mid, 8] = true
+
+    func neighbors(grid: Array(Bool, _, _), row: Int, col: Int) -> Int:
+        let height = dim(grid, 0)
+        let width = dim(grid, 1)
+        var alive = 0
+        for dr in range(0, 3):
+            for dc in range(0, 3):
+                if dr != 1 or dc != 1:
+                    let r = (row + dr - 1 + height) % height
+                    let c = (col + dc - 1 + width) % width
+                    if grid[r, c]:
+                        alive = alive + 1
+        return alive
+
+    # One generation: builds the next grid; the caller frees the old.
+    func step(grid: Array(Bool, _, _)) -> Array(Bool, _, _):
+        let height = dim(grid, 0)
+        let width = dim(grid, 1)
+        var next = new Array(Bool, height, width)
+        for row in range(0, height):
+            for col in range(0, width):
+                let around = World.neighbors(grid, row, col)
+                if grid[row, col]:
+                    next[row, col] = around == 2 or around == 3
+                else:
+                    next[row, col] = around == 3
+        return next
+
+    func draw(grid: Array(Bool, _, _), generation: Int):
+        term_clear()
+        for row in range(0, dim(grid, 0)):
+            term_move(row, 0)
+            for col in range(0, dim(grid, 1)):
+                if grid[row, col]:
+                    term_style(114, -1, false)
+                    term_write("██")
+                else:
+                    term_style(238, -1, false)
+                    term_write(" ·")
+        term_move(dim(grid, 0), 0)
+        term_style(252, 237, false)
+        term_write(" generation " + str(generation) + "  |  any key: step   space: run 10   Ctrl-Q: quit ")
+
+func main():
+    var grid = new Array(Bool, World.rows(), World.cols())
+    World.seed(grid)
+    var generation = 0
+    var running = true
+    while running:
+        World.draw(grid, generation)
+        let key = key_read()
+        if key == "ctrl_q":
+            running = false
+        else:
+            var steps = 1
+            if key == "text" and key_text() == " ":
+                steps = 10
+            for tick in range(0, steps):
+                let old = grid
+                grid = World.step(grid)
+                free(old)
+                generation = generation + 1
+                if steps > 1:
+                    World.draw(grid, generation)
+                    term_flush()
+    free(grid)

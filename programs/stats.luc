@@ -1,0 +1,24 @@
+# Summary statistics over the arguments — a two-file program:
+# mathx.luc is imported as a module and compiles into the same .lc.
+#
+#   loom run stats.lc 3 1 4 1 5 9 2.6
+
+import mathx
+
+func main():
+    if arg_count() == 0:
+        print("usage: stats NUMBER [NUMBER ...]")
+        return
+    var values: List(Float) = []
+    for index in range(0, arg_count()):
+        append(values, parse_float(arg(index)))
+
+    var ordered = mathx.sorted(values)
+    print("count   " + str(len(values)))
+    print("lowest  " + str(ordered[0]))
+    print("highest " + str(ordered[len(ordered) - 1]))
+    print("mean    " + str(mathx.mean(values)))
+    print("median  " + str(mathx.median(values)))
+    print("stddev  " + str(mathx.deviation(values)))
+    free(ordered)
+    free(values)

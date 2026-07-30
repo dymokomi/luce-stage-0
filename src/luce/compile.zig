@@ -912,3 +912,53 @@ test "modules may import each other; mutual recursion crosses files" {
     const ran = try backend.evaluate(arena.allocator(), &result.success, &.{}, &.{}, .{});
     try testing.expect(ran == .success);
 }
+
+test "short-circuit operands survive block splits everywhere" {
+    // Every multi-operand construct with a splitting (and/or) operand
+    // once emitted registers across block boundaries; the verifier
+    // rejected the program as an internal compiler error.
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    var featured = try compile(testing.allocator,
+        \\struct Flags:
+        \\    left: Bool
+        \\    right: Bool
+        \\
+        \\func pick(first: Bool, second: Bool) -> Bool:
+        \\    return first or second
+        \\
+        \\func main():
+        \\    let a = true
+        \\    let b = false
+        \\    var cells = new Array(Bool, 2, 2)
+        \\    cells[0, 1] = a == b or a
+        \\    let chosen = pick(a and b, a or b)
+        \\    let pair = Flags(left = a or b, right = a and b)
+        \\    var flags = [a or b, pair.left, cells[0, 1] and chosen]
+        \\    append(flags, a or b)
+        \\    let compared = (a or b) == (a and b)
+        \\    let sliced = flags[0:len(flags)]
+        \\    for index in range(0, len(sliced)):
+        \\        let unused = sliced[index] or compared
+        \\    free(sliced)
+        \\    free(flags)
+        \\    free(cells)
+        \\
+    , .{}, script);
+    defer featured.deinit();
+    switch (featured) {
+        .success => {},
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator, "");
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            return error.TestUnexpectedResult;
+        },
+    }
+
+    const backend = @import("backend.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const ran = try backend.evaluate(arena.allocator(), &featured.success, &.{}, &.{}, .{});
+    try testing.expect(ran == .success);
+    try testing.expectEqual(@as(u32, 0), ran.success.leaked_objects);
+}

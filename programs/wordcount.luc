@@ -1,0 +1,69 @@
+# Word frequencies: Map, List, Builder, file reading, arguments.
+#
+#   loom run wordcount.lc FILE [TOP_N]
+
+func is_word_byte(byte: Int) -> Bool:
+    if byte >= 97 and byte <= 122:
+        return true
+    if byte >= 65 and byte <= 90:
+        return true
+    if byte >= 48 and byte <= 57:
+        return true
+    return byte == 95 or byte >= 128
+
+# Collect every word of `content` into the counts map.
+func count_words(content: String, counts: Map(String, Int)):
+    var at = 0
+    while at < len(content):
+        if is_word_byte(byte_at(content, at)):
+            var stop = at + 1
+            while stop < len(content) and is_word_byte(byte_at(content, stop)):
+                stop = stop + 1
+            let word = slice(content, at, stop)
+            if has(counts, word):
+                counts[word] = counts[word] + 1
+            else:
+                counts[word] = 1
+            at = stop
+        else:
+            at = at + 1
+
+# The most frequent remaining word (first seen wins ties).
+func heaviest(counts: Map(String, Int)) -> String:
+    var best = ""
+    var best_count = 0
+    for word in counts:
+        if counts[word] > best_count:
+            best = word
+            best_count = counts[word]
+    return best
+
+func main():
+    if arg_count() == 0:
+        print("usage: wordcount FILE [TOP_N]")
+        return
+    let path = arg(0)
+    if not file_exists(path):
+        print("wordcount: no such file: " + path)
+        return
+    var top = 5
+    if arg_count() > 1:
+        top = parse_int(arg(1))
+
+    var counts = new Map(String, Int)
+    count_words(file_read(path), counts)
+    print(str(len(counts)) + " distinct words in " + path)
+
+    var shown = 0
+    while shown < top and len(counts) > 0:
+        let word = heaviest(counts)
+        var line = new Builder()
+        append(line, "  ")
+        append(line, str(counts[word]))
+        append(line, "  ")
+        append(line, word)
+        print(str(line))
+        free(line)
+        remove(counts, word)
+        shown = shown + 1
+    free(counts)

@@ -1,0 +1,35 @@
+# A tiny math module: imported by stats.luc (`import mathx`).
+
+func mean(values: List(Float)) -> Float:
+    var total = 0.0
+    for value in values:
+        total = total + value
+    return total / Float(len(values))
+
+# A sorted copy; the caller frees it.
+func sorted(values: List(Float)) -> List(Float):
+    var copied = values[0:]
+    for done in range(1, len(copied)):
+        let value = copied[done]
+        var hole = done
+        while hole > 0 and copied[hole - 1] > value:
+            copied[hole] = copied[hole - 1]
+            hole = hole - 1
+        copied[hole] = value
+    return copied
+
+func median(values: List(Float)) -> Float:
+    var ordered = sorted(values)
+    let count = len(ordered)
+    var middle = ordered[count / 2]
+    if count % 2 == 0:
+        middle = (ordered[count / 2 - 1] + ordered[count / 2]) / 2.0
+    free(ordered)
+    return middle
+
+func deviation(values: List(Float)) -> Float:
+    let center = mean(values)
+    var spread = 0.0
+    for value in values:
+        spread = spread + (value - center) * (value - center)
+    return sqrt(spread / Float(len(values)))

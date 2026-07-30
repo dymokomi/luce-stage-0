@@ -764,6 +764,72 @@ const FunctionBuilder = struct {
         return local;
     }
 
+    /// True when lowering this expression may end in a different basic
+    /// block than it started: short-circuit `and`/`or` anywhere inside
+    /// it branches and merges.
+    fn splitsBlocks(expression: *const ast.Expression) bool {
+        return switch (expression.*) {
+            .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
+                splitsBlocks(binary.left) or splitsBlocks(binary.right),
+            .unary => |unary| splitsBlocks(unary.operand),
+            .field => |field| splitsBlocks(field.target),
+            .call => |call| for (call.arguments) |argument| {
+                if (splitsBlocks(argument.value)) break true;
+            } else false,
+            .new_object => |new| for (new.dims) |dimension| {
+                if (splitsBlocks(dimension)) break true;
+            } else false,
+            .list_literal => |literal| for (literal.elements) |element| {
+                if (splitsBlocks(element)) break true;
+            } else false,
+            .index => |index| splitsBlocks(index.target) or for (index.indices) |item| {
+                if (splitsBlocks(item)) break true;
+            } else false,
+            .slice_range => |slice| splitsBlocks(slice.target) or
+                (slice.start != null and splitsBlocks(slice.start.?)) or
+                (slice.end != null and splitsBlocks(slice.end.?)),
+            else => false,
+        };
+    }
+
+    /// Lower a left-to-right operand sequence whose registers must all
+    /// be usable together afterwards.  Registers are block-local, so
+    /// every operand followed by a block-splitting one is carried
+    /// across the split in a hidden local and re-loaded at the end.
+    /// The returned values live in the arena.
+    fn lowerOperands(self: *FunctionBuilder, expressions: []const *ast.Expression) Error!?[]Value {
+        const values = try self.arena().alloc(Value, expressions.len);
+        const spills = try self.temporary().alloc(?LocalId, expressions.len);
+        defer self.temporary().free(spills);
+
+        var later_splits = try self.temporary().alloc(bool, expressions.len);
+        defer self.temporary().free(later_splits);
+        var any_split = false;
+        var backwards = expressions.len;
+        while (backwards > 0) {
+            backwards -= 1;
+            later_splits[backwards] = any_split;
+            if (splitsBlocks(expressions[backwards])) any_split = true;
+        }
+
+        for (expressions, 0..) |expression, index| {
+            const value = (try self.lowerExpression(expression, false)) orelse return null;
+            values[index] = value;
+            spills[index] = null;
+            if (later_splits[index] and value.value_type != .none) {
+                const local = try self.hiddenLocal(value.value_type);
+                _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+                spills[index] = local;
+            }
+        }
+        for (spills, 0..) |spill, index| {
+            if (spill) |local| {
+                values[index].register = try self.emit(.{ .local_get = local }, values[index].value_type);
+            }
+        }
+        return values;
+    }
+
     // Statements -----------------------------------------------------------
 
     fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
@@ -975,37 +1041,37 @@ const FunctionBuilder = struct {
     /// expression: objects mutate through the reference, so no local
     /// write-back is needed.
     fn lowerAssignIndex(self: *FunctionBuilder, target: anytype, assign: anytype) Error!void {
-        const object = (try self.lowerExpression(target.base, false)) orelse return;
-        const element = (try self.checkIndex(object, target.indices, target.span)) orelse return;
-        const value = (try self.lowerExpression(assign.value, false)) orelse return;
-        if (!value.value_type.eql(element.element_type)) {
+        const expressions = try self.arena().alloc(*ast.Expression, target.indices.len + 2);
+        expressions[0] = target.base;
+        @memcpy(expressions[1 .. 1 + target.indices.len], target.indices);
+        expressions[expressions.len - 1] = assign.value;
+        const values = (try self.lowerOperands(expressions)) orelse return;
+
+        const object = values[0];
+        const indices = values[1 .. values.len - 1];
+        const value = values[values.len - 1];
+        const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
+        if (!value.value_type.eql(element_type)) {
             try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
-                try self.analyzer.typeName(element.element_type),
+                try self.analyzer.typeName(element_type),
                 try self.analyzer.typeName(value.value_type),
             });
             return;
         }
-        const arguments = try self.arena().alloc(Register, 2 + element.indices.len);
-        arguments[0] = object.register;
-        @memcpy(arguments[1 .. 1 + element.indices.len], element.indices);
-        arguments[arguments.len - 1] = value.register;
+        const arguments = try self.arena().alloc(Register, values.len);
+        for (values, arguments) |lowered, *slot| slot.* = lowered.register;
         _ = try self.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
     }
 
-    const IndexCheck = struct {
-        element_type: Type,
-        indices: []Register,
-    };
-
-    /// Type-check an index list against a heap object: lists take one
-    /// Int, arrays take rank Ints, maps take one key.  Returns the
-    /// element/value type and the lowered index registers.
+    /// Type-check lowered index values against a heap object: lists
+    /// take one Int, arrays take rank Ints, maps take one key.
+    /// Returns the element/value type.
     fn checkIndex(
         self: *FunctionBuilder,
         object: Value,
-        indices: []*ast.Expression,
+        indices: []const Value,
         span: Span,
-    ) Error!?IndexCheck {
+    ) Error!?Type {
         const descriptor = self.analyzer.heapOf(object.value_type) orelse {
             if (object.value_type == .string) {
                 try self.fail("luce.sema.index", span, "strings are sliced (s[a:b] or slice), not indexed; byte_at reads bytes", .{});
@@ -1016,25 +1082,18 @@ const FunctionBuilder = struct {
             }
             return null;
         };
-
-        const registers = try self.arena().alloc(Register, indices.len);
-        var lowered: [4]Value = undefined;
         if (indices.len > 4) {
             try self.fail("luce.sema.index", span, "at most 4 index dimensions", .{});
             return null;
         }
-        for (indices, 0..) |expression, at| {
-            lowered[at] = (try self.lowerExpression(expression, false)) orelse return null;
-            registers[at] = lowered[at].register;
-        }
 
         switch (descriptor) {
             .list => |element| {
-                if (indices.len != 1 or lowered[0].value_type != .int) {
+                if (indices.len != 1 or indices[0].value_type != .int) {
                     try self.fail("luce.sema.index", span, "lists index with one Int", .{});
                     return null;
                 }
-                return .{ .element_type = element, .indices = registers };
+                return element;
             },
             .array => |shape| {
                 if (indices.len != shape.rank) {
@@ -1044,22 +1103,22 @@ const FunctionBuilder = struct {
                     });
                     return null;
                 }
-                for (lowered[0..indices.len]) |index_value| {
+                for (indices) |index_value| {
                     if (index_value.value_type != .int) {
                         try self.fail("luce.sema.index", span, "array indices are Int", .{});
                         return null;
                     }
                 }
-                return .{ .element_type = shape.element, .indices = registers };
+                return shape.element;
             },
             .map => |pair| {
-                if (indices.len != 1 or !lowered[0].value_type.eql(pair.key)) {
+                if (indices.len != 1 or !indices[0].value_type.eql(pair.key)) {
                     try self.fail("luce.sema.index", span, "this map is keyed by {s}", .{
                         try self.analyzer.typeName(pair.key),
                     });
                     return null;
                 }
-                return .{ .element_type = pair.value, .indices = registers };
+                return pair.value;
             },
             .builder => {
                 try self.fail("luce.sema.index", span, "Builder has no index; str(b) reads it", .{});
@@ -1133,8 +1192,9 @@ const FunctionBuilder = struct {
     }
 
     fn lowerForRange(self: *FunctionBuilder, loop: anytype) Error!void {
-        const start = (try self.lowerExpression(loop.start, false)) orelse return;
-        const end = (try self.lowerExpression(loop.end, false)) orelse return;
+        const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
+        const start = bounds[0];
+        const end = bounds[1];
         if (start.value_type != .int or end.value_type != .int) {
             try self.fail("luce.sema.type", loop.span, "range bounds must be Int", .{});
             return;
@@ -1379,8 +1439,8 @@ const FunctionBuilder = struct {
                 .array = .{ .element = element, .rank = @intCast(new.dims.len) },
             });
             dims = try self.arena().alloc(Register, new.dims.len);
-            for (new.dims, dims) |expression, *register| {
-                const dimension = (try self.lowerExpression(expression, false)) orelse return null;
+            const dimensions = (try self.lowerOperands(new.dims)) orelse return null;
+            for (dimensions, new.dims, dims) |dimension, expression, *register| {
                 if (dimension.value_type != .int) {
                     try self.fail("luce.sema.new", expression.span(), "array dimensions are Int", .{});
                     return null;
@@ -1410,22 +1470,19 @@ const FunctionBuilder = struct {
             );
             return null;
         }
-        var elements: std.ArrayList(Value) = .empty;
-        defer elements.deinit(self.temporary());
-        for (literal.elements) |expression| {
-            const element = (try self.lowerExpression(expression, false)) orelse return null;
-            if (elements.items.len > 0 and !element.value_type.eql(elements.items[0].value_type)) {
+        const elements = (try self.lowerOperands(literal.elements)) orelse return null;
+        for (elements, literal.elements) |element, expression| {
+            if (!element.value_type.eql(elements[0].value_type)) {
                 try self.fail("luce.sema.type", expression.span(), "list elements are all {s}, got {s}", .{
-                    try self.analyzer.typeName(elements.items[0].value_type),
+                    try self.analyzer.typeName(elements[0].value_type),
                     try self.analyzer.typeName(element.value_type),
                 });
                 return null;
             }
-            try elements.append(self.temporary(), element);
         }
-        const object_type = try self.analyzer.internHeapType(.{ .list = elements.items[0].value_type });
+        const object_type = try self.analyzer.internHeapType(.{ .list = elements[0].value_type });
         const list = try self.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = &.{} } }, object_type);
-        for (elements.items) |element| {
+        for (elements) |element| {
             const arguments = try self.arena().alloc(Register, 2);
             arguments[0] = list;
             arguments[1] = element.register;
@@ -1435,22 +1492,30 @@ const FunctionBuilder = struct {
     }
 
     fn lowerIndex(self: *FunctionBuilder, index: anytype) Error!?Value {
-        const object = (try self.lowerExpression(index.target, false)) orelse return null;
-        const element = (try self.checkIndex(object, index.indices, index.span)) orelse return null;
-        const arguments = try self.arena().alloc(Register, 1 + element.indices.len);
-        arguments[0] = object.register;
-        @memcpy(arguments[1..], element.indices);
+        const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
+        expressions[0] = index.target;
+        @memcpy(expressions[1..], index.indices);
+        const values = (try self.lowerOperands(expressions)) orelse return null;
+        const element_type = (try self.checkIndex(values[0], values[1..], index.span)) orelse return null;
+        const arguments = try self.arena().alloc(Register, values.len);
+        for (values, arguments) |value, *slot| slot.* = value.register;
         return .{
             .register = try self.emit(
                 .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
-                element.element_type,
+                element_type,
             ),
-            .value_type = element.element_type,
+            .value_type = element_type,
         };
     }
 
     fn lowerSliceRange(self: *FunctionBuilder, slice: anytype) Error!?Value {
-        const target = (try self.lowerExpression(slice.target, false)) orelse return null;
+        var whole_sequence: std.ArrayList(*ast.Expression) = .empty;
+        defer whole_sequence.deinit(self.temporary());
+        try whole_sequence.append(self.temporary(), slice.target);
+        if (slice.start) |expression| try whole_sequence.append(self.temporary(), expression);
+        if (slice.end) |expression| try whole_sequence.append(self.temporary(), expression);
+        const sequence = (try self.lowerOperands(whole_sequence.items)) orelse return null;
+        const target = sequence[0];
         const is_string = target.value_type == .string;
         const descriptor = self.analyzer.heapOf(target.value_type);
         if (!is_string and (descriptor == null or descriptor.? != .list)) {
@@ -1460,25 +1525,24 @@ const FunctionBuilder = struct {
             return null;
         }
 
-        var start: Register = undefined;
-        if (slice.start) |expression| {
-            const value = (try self.lowerExpression(expression, false)) orelse return null;
+        const lowered_bounds = sequence[1..];
+        for (lowered_bounds) |value| {
             if (value.value_type != .int) {
-                try self.fail("luce.sema.type", expression.span(), "slice bounds are Int", .{});
+                try self.fail("luce.sema.type", slice.span, "slice bounds are Int", .{});
                 return null;
             }
-            start = value.register;
+        }
+        var next_bound: usize = 0;
+        var start: Register = undefined;
+        if (slice.start != null) {
+            start = lowered_bounds[next_bound].register;
+            next_bound += 1;
         } else {
             start = try self.emit(.{ .const_int = 0 }, .int);
         }
         var end: Register = undefined;
-        if (slice.end) |expression| {
-            const value = (try self.lowerExpression(expression, false)) orelse return null;
-            if (value.value_type != .int) {
-                try self.fail("luce.sema.type", expression.span(), "slice bounds are Int", .{});
-                return null;
-            }
-            end = value.register;
+        if (slice.end != null) {
+            end = lowered_bounds[next_bound].register;
         } else {
             const whole = try self.arena().alloc(Register, 1);
             whole[0] = target.register;
@@ -1551,8 +1615,9 @@ const FunctionBuilder = struct {
             .logic_and, .logic_or => return self.lowerShortCircuit(binary),
             else => {},
         }
-        const left = (try self.lowerExpression(binary.left, false)) orelse return null;
-        const right = (try self.lowerExpression(binary.right, false)) orelse return null;
+        const sides = (try self.lowerOperands(&.{ binary.left, binary.right })) orelse return null;
+        const left = sides[0];
+        const right = sides[1];
         if (!left.value_type.eql(right.value_type)) {
             try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit)", .{
                 try self.analyzer.typeName(left.value_type),
@@ -1735,15 +1800,19 @@ const FunctionBuilder = struct {
             });
             return null;
         }
-        const registers = try self.arena().alloc(Register, call.arguments.len);
-        for (call.arguments, 0..) |argument, index| {
+        const expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
+        for (call.arguments, expressions) |argument, *slot| {
             if (argument.name != null) {
                 try self.fail("luce.sema.call", argument.span, "function arguments are positional", .{});
                 return null;
             }
-            const value = (try self.lowerExpression(argument.value, false)) orelse return null;
+            slot.* = argument.value;
+        }
+        const values = (try self.lowerOperands(expressions)) orelse return null;
+        const registers = try self.arena().alloc(Register, call.arguments.len);
+        for (values, 0..) |value, index| {
             if (!value.value_type.eql(info.parameter_types[index])) {
-                try self.fail("luce.sema.type", argument.span, "argument {d} of {s} is {s}, got {s}", .{
+                try self.fail("luce.sema.type", call.arguments[index].span, "argument {d} of {s} is {s}, got {s}", .{
                     index + 1,
                     call.callee,
                     try self.analyzer.typeName(info.parameter_types[index]),
@@ -1779,7 +1848,10 @@ const FunctionBuilder = struct {
         defer self.temporary().free(seen);
         @memset(seen, false);
 
-        for (call.arguments) |argument| {
+        const expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
+        for (call.arguments, expressions) |argument, *slot| slot.* = argument.value;
+        const values = (try self.lowerOperands(expressions)) orelse return null;
+        for (call.arguments, values) |argument, value| {
             const name = argument.name orelse {
                 try self.fail("luce.sema.construct", argument.span, "{s} is built with named fields: {s}(field = ...)", .{ layout.name, layout.name });
                 return null;
@@ -1792,7 +1864,6 @@ const FunctionBuilder = struct {
                 try self.fail("luce.sema.construct", argument.span, "field {s} given twice", .{name});
                 return null;
             }
-            const value = (try self.lowerExpression(argument.value, false)) orelse return null;
             const expected = layout.fields[field_index].field_type;
             if (!value.value_type.eql(expected)) {
                 try self.fail("luce.sema.type", argument.span, "{s}.{s} is {s}, got {s}", .{
@@ -1945,16 +2016,16 @@ const FunctionBuilder = struct {
             try self.fail("luce.sema.call", call.span, "{s} takes {d} arguments", .{ matched.name, matched.arity });
             return .failed;
         }
-        var argument_values: [3]Value = undefined;
+        var argument_expressions: [3]*ast.Expression = undefined;
         for (call.arguments, 0..) |argument, index| {
             if (argument.name != null) {
                 try self.fail("luce.sema.call", argument.span, "builtin arguments are positional", .{});
                 return .failed;
             }
-            argument_values[index] = (try self.lowerExpression(argument.value, false)) orelse
-                return .failed;
+            argument_expressions[index] = argument.value;
         }
-        const arguments = argument_values[0..call.arguments.len];
+        const arguments = (try self.lowerOperands(argument_expressions[0..call.arguments.len])) orelse
+            return .failed;
 
         // Argument and result typing per builtin.
         var result: Type = .none;

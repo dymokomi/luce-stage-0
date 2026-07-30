@@ -62,16 +62,30 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
 
     // Compile the bundled Luce programs with the freshly built luce.
-    const bundled = [_][]const u8{ "hello", "editor", "sort", "bf" };
-    for (bundled) |name| {
+    // `deps` lists imported sibling modules so edits to them re-run
+    // the compile even though only the root file is an argument.
+    const bundled = [_]struct { name: []const u8, deps: []const []const u8 = &.{} }{
+        .{ .name = "hello" },
+        .{ .name = "editor" },
+        .{ .name = "sort" },
+        .{ .name = "bf" },
+        .{ .name = "wordcount" },
+        .{ .name = "life" },
+        .{ .name = "calc" },
+        .{ .name = "stats", .deps = &.{"mathx"} },
+    };
+    for (bundled) |program| {
         const compile_program = b.addRunArtifact(compiler);
         compile_program.addArg("build");
-        compile_program.addFileArg(b.path(b.fmt("programs/{s}.luc", .{name})));
+        compile_program.addFileArg(b.path(b.fmt("programs/{s}.luc", .{program.name})));
         compile_program.addArg("-o");
-        const module_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{name}));
+        const module_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{program.name}));
+        for (program.deps) |dependency| {
+            compile_program.addFileInput(b.path(b.fmt("programs/{s}.luc", .{dependency})));
+        }
         const install_module = b.addInstallFile(
             module_file,
-            b.fmt("programs/{s}.lc", .{name}),
+            b.fmt("programs/{s}.lc", .{program.name}),
         );
         b.getInstallStep().dependOn(&install_module.step);
     }
