@@ -1,11 +1,12 @@
 # Ownership: the canonical situations
 
-This is the reviewable specification of Luce's memory model — every
-situation that defines the rules, numbered, with the decision and
-example code.  Syntax shown (`give`, `copy`, `give` parameters) is
-the spec, not yet the implementation.  Situations marked **[NEW]**
-are decisions made while writing this list that have not been
-explicitly ratified yet — read those hardest.
+This is the specification of Luce's memory model — every situation
+that defines the rules, numbered, with the decision and example
+code.  **Ratified 2026-07-30: S1–S43 approved as written.**  This
+document is the implementation contract; compiler diagnostics quote
+it and the ownership test suite follows its numbering.  Optionals
+(`T?`) are Phase 3, designed together with error handling; global
+scope is Phase 2 (see docs/V2.md).
 
 Vocabulary used throughout:
 - **object** — a heap value: `List`, `Map`, `Array`, `Builder`.
@@ -54,7 +55,7 @@ func main():
     print(str(len("xy".split(""))))  # freed at the end of this line
 ```
 Decision: expression temporaries live exactly as long as the
-statement that created them.  **[NEW]** precise wording: "end of the
+statement that created them.  Precise wording: "end of the
 outermost statement containing the expression."
 
 **S4. Early exits unwind scopes.**
@@ -187,7 +188,7 @@ func main():
 Decision: `give` appears at **both ends** — the parameter type and
 the call site.  Ownership handoffs are never invisible.
 
-**S14. A fresh argument satisfies a `give` parameter with no verb. [NEW]**
+**S14. A fresh argument satisfies a `give` parameter with no verb.**
 ```luce
     stash(index, [7, 8])      # fresh: nobody owns it yet, no verb
     stash(index, copy mine)   # or: hand over a duplicate, keep mine
@@ -359,7 +360,7 @@ ownership stays where it was.  (Want independence? `copy` the fields
 you care about into a new construction.)
 
 **S27. A struct that carries objects is itself subject to the verb
-rule when *kept*. [NEW]**
+rule when *kept*.**
 ```luce
 func main():
     var bags = new List(Bag)
@@ -412,7 +413,7 @@ func main():
     # fix: create fresh inside the loop, or copy
 ```
 
-**S31. `copy` is a deep copy and is always legal on readable objects. [NEW]**
+**S31. `copy` is a deep copy and is always legal on readable objects.**
 ```luce
     var nested = new List(List(Int))
     nested.append([1, 2])
