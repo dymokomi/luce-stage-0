@@ -107,7 +107,9 @@ pub const Target = union(enum) {
 
 pub const Statement = union(enum) {
     let: struct { name: []const u8, annotation: ?TypeName, value: *Expression, span: Span },
-    variable: struct { name: []const u8, annotation: ?TypeName, value: *Expression, span: Span },
+    /// var name: Type with no value is a late declaration: the slot
+    /// holds the type's zero value until assigned (OWNERSHIP.md S40).
+    variable: struct { name: []const u8, annotation: ?TypeName, value: ?*Expression, span: Span },
     assign: struct { target: Target, value: *Expression, span: Span },
     conditional: struct {
         condition: *Expression,

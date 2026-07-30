@@ -358,6 +358,17 @@ const Parser = struct {
         if (self.accept(.colon) != null) {
             annotation = (try self.typeName()) orelse return null;
         }
+        // var name: Type — a late declaration; the slot starts at the
+        // type's zero value (OWNERSHIP.md S40).  let always initializes.
+        if (mutable and annotation != null and self.peekKind() == .newline) {
+            _ = self.advance();
+            return .{ .variable = .{
+                .name = self.text(name),
+                .annotation = annotation,
+                .value = null,
+                .span = .{ .start = start.span.start, .end = annotation.?.span.end },
+            } };
+        }
         if ((try self.expect(.assign, "'=' with an initial value")) == null) return null;
         const value = (try self.expression()) orelse return null;
         _ = try self.expect(.newline, "a newline after the binding");
@@ -984,13 +995,13 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
     const annotated = body.statements[0].variable;
     try testing.expectEqualStrings("List", annotated.annotation.?.name);
     try testing.expectEqualStrings("Int", annotated.annotation.?.arguments[0].name);
-    try testing.expectEqual(@as(usize, 3), annotated.value.list_literal.elements.len);
+    try testing.expectEqual(@as(usize, 3), annotated.value.?.list_literal.elements.len);
 
-    const map_new = body.statements[1].variable.value.new_object;
+    const map_new = body.statements[1].variable.value.?.new_object;
     try testing.expectEqualStrings("Map", map_new.type_name.name);
     try testing.expectEqualStrings("List", map_new.type_name.arguments[1].name);
 
-    const array_new = body.statements[2].variable.value.new_object;
+    const array_new = body.statements[2].variable.value.?.new_object;
     try testing.expectEqualStrings("Array", array_new.type_name.name);
     try testing.expectEqual(@as(usize, 2), array_new.dims.len);
 
@@ -1000,6 +1011,40 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
     try testing.expect(body.statements[8].let.value.slice_range.start == null);
     try testing.expect(body.statements[9].let.value.slice_range.end == null);
     try testing.expectEqualStrings("x", body.statements[10].for_each.name);
+}
+
+test "late declarations parse: var with annotation only" {
+    var parsed = try parseText(
+        \\func main():
+        \\    var report: Builder
+        \\    var grid: Array(Int, _, _)
+        \\    var count: Int
+        \\    report = new Builder()
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+    const body = parsed.program.functions[0].body;
+    try testing.expect(body.statements[0].variable.value == null);
+    try testing.expectEqualStrings("Builder", body.statements[0].variable.annotation.?.name);
+    try testing.expect(body.statements[1].variable.value == null);
+    try testing.expect(body.statements[2].variable.value == null);
+
+    // let never late-declares, and var needs a type or a value.
+    var bad_let = try parseText(
+        \\func main():
+        \\    let frozen: Int
+        \\
+    );
+    defer bad_let.deinit();
+    try testing.expect(bad_let.diagnostics.count() > 0);
+    var bad_var = try parseText(
+        \\func main():
+        \\    var untyped
+        \\
+    );
+    defer bad_var.deinit();
+    try testing.expect(bad_var.diagnostics.count() > 0);
 }
 
 test "array shape wildcards parse in annotations" {

@@ -846,7 +846,13 @@ const FunctionBuilder = struct {
     fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
         switch (statement) {
             .let => |binding| try self.lowerBinding(binding.name, binding.annotation, binding.value, false, binding.span),
-            .variable => |binding| try self.lowerBinding(binding.name, binding.annotation, binding.value, true, binding.span),
+            .variable => |binding| {
+                if (binding.value) |value| {
+                    try self.lowerBinding(binding.name, binding.annotation, value, true, binding.span);
+                } else {
+                    try self.lowerLateDeclaration(binding.name, binding.annotation.?, binding.span);
+                }
+            },
             .assign => |assign| try self.lowerAssign(assign),
             .conditional => |conditional| try self.lowerConditional(conditional),
             .while_loop => |loop| try self.lowerWhile(loop),
@@ -925,6 +931,54 @@ const FunctionBuilder = struct {
         }
         const local = (try self.declareLocal(name, value.value_type, mutable, span)) orelse return;
         _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+    }
+
+    /// var name: Type — a late declaration (OWNERSHIP.md S40): the
+    /// slot starts at the type's zero value; the zero of an object
+    /// type is the null object, which traps on use until assigned.
+    fn lowerLateDeclaration(
+        self: *FunctionBuilder,
+        name: []const u8,
+        written: ast.TypeName,
+        span: Span,
+    ) Error!void {
+        const declared = (try self.analyzer.resolveType(self.module, written)) orelse return;
+        const zero = try self.emitZero(declared);
+        const local = (try self.declareLocal(name, declared, true, span)) orelse return;
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = zero } }, .none);
+    }
+
+    /// The zero value of a type, as instructions: numbers zero, Bool
+    /// false, text empty, structs zeroed field by field, objects null.
+    fn emitZero(self: *FunctionBuilder, of: Type) Error!Register {
+        return switch (of) {
+            .none => unreachable, // no annotation resolves to None
+            .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
+            .int => try self.emit(.{ .const_int = 0 }, .int),
+            .float => try self.emit(.{ .const_float = 0.0 }, .float),
+            .string, .bytes => blk: {
+                const constant = try self.analyzer.internConstant("");
+                break :blk try self.emit(
+                    .{ .const_data = .{ .constant = constant, .data_type = of } },
+                    of,
+                );
+            },
+            .heap => try self.emit(
+                .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
+                of,
+            ),
+            .strukt => |layout_index| blk: {
+                const layout = self.analyzer.structs.items[layout_index];
+                const fields = try self.arena().alloc(Register, layout.fields.len);
+                for (layout.fields, fields) |field, *slot| {
+                    slot.* = try self.emitZero(field.field_type);
+                }
+                break :blk try self.emit(
+                    .{ .struct_make = .{ .layout = layout_index, .fields = fields } },
+                    of,
+                );
+            },
+        };
     }
 
     fn lowerAssign(self: *FunctionBuilder, assign: anytype) Error!void {
@@ -2434,6 +2488,7 @@ const FunctionBuilder = struct {
                 result = .int;
             },
             // Lowered from syntax or method calls, never from bare names.
+            .null_object,
             .index_get,
             .index_set,
             .list_slice,

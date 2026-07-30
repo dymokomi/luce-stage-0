@@ -61,6 +61,7 @@ pub const Intrinsic = enum {
     assert_true,
     trap_message,
     // Collections and heap objects (see types.HeapType).
+    null_object,
     index_get,
     index_set,
     list_slice,

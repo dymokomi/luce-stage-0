@@ -20,7 +20,7 @@ const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 pub const DecodeError = error{
     OutOfMemory,

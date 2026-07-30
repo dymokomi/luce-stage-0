@@ -576,6 +576,9 @@ const Machine = struct {
                 };
                 return .{ .value = .{ .int = @intCast(measured) } };
             },
+            .null_object => {
+                return .{ .value = .{ .object = backend.ObjectHandle.null_object } };
+            },
             .index_get => {
                 const object = switch (self.resolveObject(registers[arguments[0]])) {
                     .object => |found| found,
@@ -2217,6 +2220,140 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    free(row)
         \\    free(ages)
         \\    free(listed)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Ownership specification: late declarations and null (S40-S43)
+// ---------------------------------------------------------------------------
+
+test "S40: late declarations start at the type's zero value" {
+    var bench = try Bench.setup(
+        \\struct Point:
+        \\    x: Float
+        \\    tag: String
+        \\
+        \\struct Nested:
+        \\    label: String
+        \\    at: Point
+        \\    marks: List(Int)
+        \\
+        \\func main():
+        \\    var count: Int
+        \\    var ratio: Float
+        \\    var open = true
+        \\    var flag: Bool
+        \\    var name: String
+        \\    var spot: Nested
+        \\    assert(count == 0)
+        \\    assert(ratio == 0.0)
+        \\    assert(open)
+        \\    assert(not flag)
+        \\    assert(name == "")
+        \\    assert(spot.label == "")
+        \\    assert(spot.at.x == 0.0)
+        \\    assert(spot.at.tag == "")
+        \\    count = 7
+        \\    assert(count == 7)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    const result = try bench.evaluate(&.{});
+    try testing.expect(result == .success);
+}
+
+test "S40: the branch-set pattern works and the object outlives the if" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var report: Builder
+        \\    let verbose = true
+        \\    if verbose:
+        \\        report = new Builder()
+        \\        report.append("details")
+        \\    if verbose:
+        \\        assert(str(report) == "details")
+        \\    free(report)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+test "S41: using an unfilled object slot traps null_object" {
+    const cases = [_][]const u8{
+        \\func main():
+        \\    var report: Builder
+        \\    report.append("boom")
+        \\
+        ,
+        \\func main():
+        \\    var xs: List(Int)
+        \\    let bad = xs[0]
+        \\
+        ,
+        \\func main():
+        \\    var xs: List(Int)
+        \\    let bad = len(xs)
+        \\
+        ,
+        \\func main():
+        \\    var grid: Array(Int, _, _)
+        \\    grid[0, 0] = 1
+        \\
+        ,
+        \\func main():
+        \\    var m: Map(String, Int)
+        \\    for key in m:
+        \\        let unused = key
+        \\
+    };
+    for (cases) |source| {
+        var bench = try Bench.setup(source, .{}, script_options);
+        defer bench.deinit();
+        try expectTrap(&bench, &.{}, .null_object);
+    }
+}
+
+test "S42: verbs demand an object — free of an unfilled slot traps" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var report: Builder
+        \\    free(report)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectTrap(&bench, &.{}, .null_object);
+}
+
+test "S42: passing an unfilled slot traps at first use, not at the call" {
+    var bench = try Bench.setup(
+        \\func peek(xs: List(Int)) -> Int:
+        \\    return 41 + 1
+        \\
+        \\func measure(xs: List(Int)) -> Int:
+        \\    return len(xs)
+        \\
+        \\func main():
+        \\    var xs: List(Int)
+        \\    assert(peek(xs) == 42)
+        \\    let bad = measure(xs)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectTrap(&bench, &.{}, .null_object);
+}
+
+test "S43: an unfilled slot frees nothing; a filled one frees normally" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var never: Builder
+        \\    var eventually: Builder
+        \\    eventually = new Builder()
+        \\    eventually.append("x")
+        \\    free(eventually)
         \\
     , .{}, script_options);
     defer bench.deinit();
