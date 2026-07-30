@@ -1387,6 +1387,12 @@ const FunctionBuilder = struct {
 
     // Ownership classification ---------------------------------------------
 
+    /// Value methods whose result is a fresh object the caller owns
+    /// (S22).  The ownership classifier below and the method tables
+    /// (sequenceMethod/stringMethod/objectMethod result types) must
+    /// agree on this list.
+    const fresh_object_methods = [_][]const u8{ "pop", "split", "keys" };
+
     /// True when evaluating this expression yields an object the
     /// receiver may own: something fresh (new, a literal, a slice, a
     /// call result, pop/split/keys), a give, or a copy.  Names and
@@ -1398,9 +1404,10 @@ const FunctionBuilder = struct {
             .new_object, .list_literal, .slice_range, .call, .give, .copy => true,
             .method => |method| blk: {
                 if (try self.methodIsNamespaced(method)) break :blk true;
-                break :blk std.mem.eql(u8, method.name, "pop") or
-                    std.mem.eql(u8, method.name, "split") or
-                    std.mem.eql(u8, method.name, "keys");
+                for (fresh_object_methods) |name| {
+                    if (std.mem.eql(u8, method.name, name)) break :blk true;
+                }
+                break :blk false;
             },
             else => false,
         };
@@ -1410,27 +1417,8 @@ const FunctionBuilder = struct {
     /// resolve to a declaration (whose result the caller owns, S16)
     /// rather than a builtin method on a value?
     fn methodIsNamespaced(self: *FunctionBuilder, method: anytype) Error!bool {
-        var parts: [3][]const u8 = undefined;
-        var count: usize = 0;
-        var walk: *const ast.Expression = method.target;
-        while (true) {
-            switch (walk.*) {
-                .name => |name| {
-                    if (count == 3) return false;
-                    parts[count] = name.text;
-                    count += 1;
-                    break;
-                },
-                .field => |field| {
-                    if (count == 3) return false;
-                    parts[count] = field.name;
-                    count += 1;
-                    walk = field.target;
-                },
-                else => return false,
-            }
-        }
-        const head = parts[count - 1];
+        const chain = dottedChain(method.target) orelse return false;
+        const head = chain.head();
         if (self.findLocal(head) != null) return false;
         const head_qualified = try self.analyzer.qualify(self.prefix, head);
         if (self.analyzer.struct_names.contains(head_qualified)) return true;
@@ -2835,8 +2823,10 @@ const FunctionBuilder = struct {
         }
     }
 
-    // Calls: struct construction, explicit conversion, intrinsics,
-    // and user functions.
+    // Calls and methods ----------------------------------------------------
+    //
+    // Struct construction, explicit conversion, namespaced calls, and
+    // builtin methods on values.
     fn lowerCall(self: *FunctionBuilder, call: anytype, as_statement: bool) Error!?Value {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
@@ -2968,31 +2958,46 @@ const FunctionBuilder = struct {
         resolved: []const u8,
     };
 
-    /// Decide whether target.name(...) names a declaration.
-    fn methodNamespace(self: *FunctionBuilder, method: anytype) Error!NamespaceResolution {
-        // Collect the dotted chain of bare names in front of the call.
-        var parts: [3][]const u8 = undefined;
-        var count: usize = 0;
-        var walk: *const ast.Expression = method.target;
+    /// A dotted chain of bare names in front of a call, collected
+    /// inner-to-outer: for geo.Text.width(...) the parts are
+    /// [width-side first] and the head is "geo".
+    const Chain = struct {
+        parts: [3][]const u8,
+        count: usize,
+
+        fn head(self: *const Chain) []const u8 {
+            return self.parts[self.count - 1];
+        }
+    };
+
+    fn dottedChain(target: *const ast.Expression) ?Chain {
+        var chain: Chain = .{ .parts = undefined, .count = 0 };
+        var walk = target;
         while (true) {
             switch (walk.*) {
                 .name => |name| {
-                    if (count == 3) return .value;
-                    parts[count] = name.text;
-                    count += 1;
-                    break;
+                    if (chain.count == 3) return null;
+                    chain.parts[chain.count] = name.text;
+                    chain.count += 1;
+                    return chain;
                 },
                 .field => |field| {
-                    if (count == 3) return .value;
-                    parts[count] = field.name;
-                    count += 1;
+                    if (chain.count == 3) return null;
+                    chain.parts[chain.count] = field.name;
+                    chain.count += 1;
                     walk = field.target;
                 },
-                else => return .value,
+                else => return null,
             }
         }
-        // parts collected inner-to-outer; the head is the last one.
-        const head = parts[count - 1];
+    }
+
+    /// Decide whether target.name(...) names a declaration.
+    fn methodNamespace(self: *FunctionBuilder, method: anytype) Error!NamespaceResolution {
+        const chain = dottedChain(method.target) orelse return .value;
+        const parts = chain.parts;
+        const count = chain.count;
+        const head = chain.head();
         if (self.findLocal(head) != null) return .value;
 
         var written: std.ArrayList(u8) = .empty;
@@ -3406,6 +3411,8 @@ const FunctionBuilder = struct {
         };
     }
 
+    // Builtins ---------------------------------------------------------------
+
     const IntrinsicResult = union(enum) {
         not_builtin,
         failed,
@@ -3503,25 +3510,25 @@ const FunctionBuilder = struct {
         var result: Type = .none;
         switch (matched.kind) {
             .abs => {
-                if (!arguments[0].value_type.isNumeric()) return self.intrinsicType(call, "abs takes Int or Float");
+                if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes Int or Float");
                 result = arguments[0].value_type;
             },
             .min, .max => {
                 if (!arguments[0].value_type.isNumeric() or
                     !arguments[0].value_type.eql(arguments[1].value_type))
-                    return self.intrinsicType(call, "min/max take two Ints or two Floats");
+                    return self.failIntrinsic(call, "min/max take two Ints or two Floats");
                 result = arguments[0].value_type;
             },
             .clamp => {
                 if (!arguments[0].value_type.isNumeric() or
                     !arguments[0].value_type.eql(arguments[1].value_type) or
                     !arguments[0].value_type.eql(arguments[2].value_type))
-                    return self.intrinsicType(call, "clamp takes three Ints or three Floats");
+                    return self.failIntrinsic(call, "clamp takes three Ints or three Floats");
                 result = arguments[0].value_type;
             },
             .sqrt, .floor, .ceil => {
                 if (arguments[0].value_type != .float)
-                    return self.intrinsicType(call, "this builtin takes a Float");
+                    return self.failIntrinsic(call, "this builtin takes a Float");
                 result = .float;
             },
             .len => {
@@ -3529,12 +3536,12 @@ const FunctionBuilder = struct {
                     arguments[0].value_type == .bytes or
                     arguments[0].value_type == .heap;
                 if (!measurable)
-                    return self.intrinsicType(call, "len takes a String, Bytes, List, Map, Array, or Builder");
+                    return self.failIntrinsic(call, "len takes a String, Bytes, List, Map, Array, or Builder");
                 result = .int;
             },
             .free_object => {
                 if (arguments[0].value_type != .heap)
-                    return self.intrinsicType(call, "free releases a List, Map, Array, or Builder");
+                    return self.failIntrinsic(call, "free releases a List, Map, Array, or Builder");
                 // free is deliberate early release of an owned name,
                 // and poisons the name like give does (S6).
                 const operand = call.arguments[0].value;
@@ -3591,22 +3598,22 @@ const FunctionBuilder = struct {
                     else => false,
                 };
                 if (!stringable)
-                    return self.intrinsicType(call, "str takes Int, Float, Bool, String, or Builder");
+                    return self.failIntrinsic(call, "str takes Int, Float, Bool, String, or Builder");
                 result = .string;
             },
             .parse_int, .parse_float => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "this builtin parses a String");
+                    return self.failIntrinsic(call, "this builtin parses a String");
                 result = if (matched.kind == .parse_int) .int else .float;
             },
             .chr_code => {
                 if (arguments[0].value_type != .int)
-                    return self.intrinsicType(call, "chr takes an Int codepoint");
+                    return self.failIntrinsic(call, "chr takes an Int codepoint");
                 result = .string;
             },
             .ord_text => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "ord takes a String");
+                    return self.failIntrinsic(call, "ord takes a String");
                 result = .int;
             },
             // Lowered from syntax or method calls, never from bare names.
@@ -3647,32 +3654,32 @@ const FunctionBuilder = struct {
 
             .assert_true => {
                 if (arguments[0].value_type != .boolean)
-                    return self.intrinsicType(call, "assert takes a Bool");
+                    return self.failIntrinsic(call, "assert takes a Bool");
                 result = .none;
             },
             .trap_message => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "trap takes a String message");
+                    return self.failIntrinsic(call, "trap takes a String message");
                 result = .none;
             },
             .print, .term_write => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "this builtin takes a String");
+                    return self.failIntrinsic(call, "this builtin takes a String");
                 result = .none;
             },
             .file_read => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "file_read takes a String path");
+                    return self.failIntrinsic(call, "file_read takes a String path");
                 result = .string;
             },
             .file_write => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                    return self.intrinsicType(call, "file_write takes (path String, content String)");
+                    return self.failIntrinsic(call, "file_write takes (path String, content String)");
                 result = .boolean;
             },
             .file_exists => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "file_exists takes a String path");
+                    return self.failIntrinsic(call, "file_exists takes a String path");
                 result = .boolean;
             },
             .arg_count, .term_rows, .term_cols => {
@@ -3680,7 +3687,7 @@ const FunctionBuilder = struct {
             },
             .arg_get => {
                 if (arguments[0].value_type != .int)
-                    return self.intrinsicType(call, "arg takes an Int index");
+                    return self.failIntrinsic(call, "arg takes an Int index");
                 result = .string;
             },
             .term_clear, .term_flush => {
@@ -3688,14 +3695,14 @@ const FunctionBuilder = struct {
             },
             .term_move => {
                 if (arguments[0].value_type != .int or arguments[1].value_type != .int)
-                    return self.intrinsicType(call, "term_move takes (row Int, col Int)");
+                    return self.failIntrinsic(call, "term_move takes (row Int, col Int)");
                 result = .none;
             },
             .term_style => {
                 if (arguments[0].value_type != .int or
                     arguments[1].value_type != .int or
                     arguments[2].value_type != .boolean)
-                    return self.intrinsicType(call, "term_style takes (foreground Int, background Int, bold Bool)");
+                    return self.failIntrinsic(call, "term_style takes (foreground Int, background Int, bold Bool)");
                 result = .none;
             },
             .key_read, .key_text => {
@@ -3703,24 +3710,24 @@ const FunctionBuilder = struct {
             },
             .fabric_image => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .int)
-                    return self.intrinsicType(call, "create_image takes (path String, pages Int)");
+                    return self.failIntrinsic(call, "create_image takes (path String, pages Int)");
                 result = .none;
             },
             .fabric_create => {
                 if (arguments[0].value_type != .string)
-                    return self.intrinsicType(call, "create_texel takes a String name");
+                    return self.failIntrinsic(call, "create_texel takes a String name");
                 result = .int;
             },
             .fabric_input, .fabric_output => {
                 if (arguments[0].value_type != .int or
                     arguments[1].value_type != .string or
                     arguments[2].value_type != .string)
-                    return self.intrinsicType(call, "takes (handle Int, name String, type String)");
+                    return self.failIntrinsic(call, "takes (handle Int, name String, type String)");
                 result = .none;
             },
             .fabric_content, .fabric_evaluator => {
                 if (arguments[0].value_type != .int or arguments[1].value_type != .string)
-                    return self.intrinsicType(call, "takes (handle Int, text String)");
+                    return self.failIntrinsic(call, "takes (handle Int, text String)");
                 result = .none;
             },
             .fabric_set => {
@@ -3730,7 +3737,7 @@ const FunctionBuilder = struct {
                 };
                 if (arguments[0].value_type != .int or
                     arguments[1].value_type != .string or !settable)
-                    return self.intrinsicType(call, "takes (handle Int, output String, value Bool/Int/Float/String)");
+                    return self.failIntrinsic(call, "takes (handle Int, output String, value Bool/Int/Float/String)");
                 result = .none;
             },
         }
@@ -3747,7 +3754,7 @@ const FunctionBuilder = struct {
         } };
     }
 
-    fn intrinsicType(self: *FunctionBuilder, call: anytype, message: []const u8) Error!IntrinsicResult {
+    fn failIntrinsic(self: *FunctionBuilder, call: anytype, message: []const u8) Error!IntrinsicResult {
         try self.fail("luce.sema.type", call.span, "{s}", .{message});
         return .failed;
     }

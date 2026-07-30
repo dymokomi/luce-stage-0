@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const luce = @import("luce");
+const files = @import("files");
 const host_mod = @import("host.zig");
 
 const Allocator = std.mem.Allocator;
@@ -37,7 +38,7 @@ pub fn runModule(
     path: []const u8,
     arguments: []const []const u8,
 ) !u8 {
-    const encoded = readWhole(gpa, io, path) catch {
+    const encoded = files.readWhole(gpa, io, path) catch {
         try err.print("loom: cannot read {s}\n", .{path});
         return 1;
     };
@@ -68,39 +69,14 @@ pub fn runScript(
     path: []const u8,
     arguments: []const []const u8,
 ) !u8 {
-    const source = readWhole(gpa, io, path) catch {
+    const source = files.readWhole(gpa, io, path) catch {
         try err.print("loom: cannot read {s}\n", .{path});
         return 1;
     };
     defer gpa.free(source);
-    var files: FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
-    return runSource(gpa, io, out, err, path, source, files.loader(), arguments);
+    var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
+    return runSource(gpa, io, out, err, path, source, loader.loader(), arguments);
 }
-
-/// Loads `import name` as NAME.luc next to the root script.
-pub const FileLoader = struct {
-    io: std.Io,
-    directory: []const u8,
-
-    fn load(context: *anyopaque, arena: Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
-        const self: *FileLoader = @ptrCast(@alignCast(context));
-        const path = if (self.directory.len == 0)
-            try std.fmt.allocPrint(arena, "{s}.luc", .{name})
-        else
-            try std.fmt.allocPrint(arena, "{s}/{s}.luc", .{ self.directory, name });
-        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
-        defer file.close(self.io);
-        const size: usize = @intCast(file.length(self.io) catch return null);
-        const content = try arena.alloc(u8, size);
-        const loaded = file.readPositionalAll(self.io, content, 0) catch return null;
-        if (loaded != content.len) return null;
-        return content;
-    }
-
-    pub fn loader(self: *FileLoader) luce.compile.Loader {
-        return .{ .context = self, .loadFn = load };
-    }
-};
 
 /// Compile source bytes (already in memory) and run them.
 pub fn runSource(
@@ -182,15 +158,4 @@ pub fn run(
             return 1;
         },
     }
-}
-
-pub fn readWhole(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    const size: usize = @intCast(try file.length(io));
-    const content = try gpa.alloc(u8, size);
-    errdefer gpa.free(content);
-    const loaded = try file.readPositionalAll(io, content, 0);
-    if (loaded != content.len) return error.ReadFailed;
-    return content;
 }

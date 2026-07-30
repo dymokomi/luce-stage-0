@@ -652,3 +652,80 @@ fn printInstruction(
     }
     try text.append(allocator, '\n');
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "the verifier rejects structural damage a decoder could admit" {
+    // A minimal valid program: main() -> Int { return 1 }.
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const instructions = try arena.dupe(Instruction, &.{
+        .{ .const_int = 1 },
+        .{ .ret = 0 },
+    });
+    const result_types = try arena.dupe(types.Type, &.{ .int, .none });
+    const items = try arena.dupe(Register, &.{ 0, 1 });
+    const blocks = try arena.alloc(Block, 1);
+    blocks[0] = .{ .items = items };
+    const functions = try arena.alloc(Function, 1);
+    functions[0] = .{
+        .name = try arena.dupe(u8, "main"),
+        .parameter_count = 0,
+        .return_type = .int,
+        .locals = &.{},
+        .instructions = instructions,
+        .result_types = result_types,
+        .blocks = blocks,
+    };
+    program.functions = functions;
+    try verify(testing.allocator, &program);
+
+    // An operand register that was never defined.
+    functions[0].instructions[1] = .{ .ret = 5 };
+    try testing.expectError(error.UndefinedRegister, verify(testing.allocator, &program));
+    functions[0].instructions[1] = .{ .ret = 0 };
+
+    // A block that does not end in a terminator.
+    blocks[0].items = items[0..1];
+    try testing.expectError(error.UnterminatedBlock, verify(testing.allocator, &program));
+    blocks[0].items = items;
+
+    // A terminator before the end of its block.
+    const reordered = try arena.dupe(Register, &.{ 1, 0 });
+    blocks[0].items = reordered;
+    try testing.expectError(error.MisplacedTerminator, verify(testing.allocator, &program));
+    blocks[0].items = items;
+
+    // A producer whose recorded type disagrees with its consumer.
+    functions[0].result_types[0] = .boolean;
+    try testing.expectError(error.TypeMismatch, verify(testing.allocator, &program));
+    functions[0].result_types[0] = .int;
+
+    // An ownership instruction naming a local that does not exist.
+    const owned_instructions = try arena.dupe(Instruction, &.{
+        .{ .const_int = 1 },
+        .{ .object_bind = .{ .local = 7, .value = 0 } },
+        .{ .ret = 0 },
+    });
+    const owned_results = try arena.dupe(types.Type, &.{ .int, .none, .none });
+    const owned_items = try arena.dupe(Register, &.{ 0, 1, 2 });
+    functions[0].instructions = owned_instructions;
+    functions[0].result_types = owned_results;
+    blocks[0].items = owned_items;
+    try testing.expectError(error.BadLocal, verify(testing.allocator, &program));
+    functions[0].instructions = instructions;
+    functions[0].result_types = result_types;
+    blocks[0].items = items;
+
+    // An entry index outside the function table.
+    program.entry_function = 9;
+    try testing.expectError(error.BadFunction, verify(testing.allocator, &program));
+    program.entry_function = 0;
+    try verify(testing.allocator, &program);
+}

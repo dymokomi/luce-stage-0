@@ -24,6 +24,17 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the Luce and loom test suites");
     test_step.dependOn(&run_luce_tests.step);
 
+    // File access shared by both executables (import loader, whole-
+    // file read/write) — one copy, no drift.
+    const app_files = b.createModule(.{
+        .root_source_file = b.path("src/apps/files.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+
     // The luce compiler executable.
     const compiler_module = b.createModule(.{
         .root_source_file = b.path("src/apps/luce/main.zig"),
@@ -31,6 +42,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "luce", .module = luce },
+            .{ .name = "files", .module = app_files },
         },
     });
     const compiler = b.addExecutable(.{ .name = "luce", .root_module = compiler_module });
@@ -48,6 +60,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "luce", .module = luce },
+            .{ .name = "files", .module = app_files },
         },
     });
     terminal_module.addAnonymousImport("editor.luc", .{
