@@ -14,9 +14,14 @@ const Allocator = std.mem.Allocator;
 
 /// Interactive programs run until they return; the budget guards
 /// against runaway recursion, not against long-lived main loops.
+/// The interpreter recurses on the native stack (one Zig frame per
+/// Luce call), so call_depth must stay well below what an 8 MiB
+/// stack holds — Debug frames are the largest and overflow a little
+/// past 3072, so 2048 keeps a comfortable margin and still traps
+/// with a clean `call_depth_exceeded` instead of a segfault.
 const program_budget: luce.backend.Budget = .{
     .steps = std.math.maxInt(u64),
-    .call_depth = 4096,
+    .call_depth = 2048,
 };
 
 pub const compile_options: luce.types.CompileOptions = .{
