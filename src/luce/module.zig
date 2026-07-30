@@ -315,6 +315,11 @@ const Reader = struct {
     fn count(self: *Reader) DecodeError!usize {
         const value = try self.int(u32);
         if (value > max_count) return error.InvalidModule;
+        // Every list element costs at least one byte on the wire, so
+        // a count larger than the remaining input is a lie — and
+        // rejecting it here keeps decode's allocations proportional
+        // to the input instead of trusting a four-byte field.
+        if (value > self.data.len - self.offset) return error.InvalidModule;
         return value;
     }
 
@@ -642,4 +647,98 @@ test "a damaged register reference fails verification, not execution" {
     const encoded = try encode(testing.allocator, &program);
     defer testing.allocator.free(encoded);
     try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+}
+
+// A compact program touching every interesting wire shape: structs,
+// heap types, intrinsics, calls, branches, ownership instructions.
+const mutation_source =
+    \\struct Point:
+    \\    x: Float
+    \\    tag: String
+    \\
+    \\func total(values: List(Int)) -> Int:
+    \\    var sum = 0
+    \\    for value in values:
+    \\        sum = sum + value
+    \\    return sum
+    \\
+    \\func main():
+    \\    var xs = [3, 1, 2]
+    \\    xs.sort()
+    \\    var ages = new Map(String, Int)
+    \\    ages["ada"] = total(xs)
+    \\    let point = Point(x = sqrt(4.0), tag = "p"[0:1])
+    \\    if point.x > 1.0 and ages.has("ada"):
+    \\        xs.append(Int(point.x))
+    \\    assert(total(xs) == 8)
+    \\
+;
+
+test "single-byte damage is rejected or runs to a clean outcome — never a crash" {
+    var program = try compileScript(mutation_source);
+    defer program.deinit();
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+
+    // Every byte, six adversarial values: decode must reject or the
+    // program must terminate as success/trap within budget.  This is
+    // the corpus-mode stand-in for fuzzing the trust boundary; any
+    // panic here is a verifier hole (a real one was found this way).
+    for (0..encoded.len) |index| {
+        for ([_]u8{ 0x00, 0x01, 0x02, 0x7f, 0x80, 0xff }) |value| {
+            if (encoded[index] == value) continue;
+            const mutant = try testing.allocator.dupe(u8, encoded);
+            defer testing.allocator.free(mutant);
+            mutant[index] = value;
+            var decoded = decode(testing.allocator, mutant) catch continue;
+            defer decoded.deinit();
+            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer arena.deinit();
+            const outputs = try arena.allocator().alloc(?backend.RuntimeValue, decoded.outputs.len);
+            @memset(outputs, null);
+            _ = try backend.evaluate(arena.allocator(), &decoded, &.{}, outputs, .{
+                .steps = 50_000,
+                .call_depth = 64,
+            });
+        }
+    }
+}
+
+test "decode allocates in proportion to its input" {
+    var program = try compileScript(mutation_source);
+    defer program.deinit();
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+
+    // A one-byte flip must never turn a small module into a huge
+    // allocation request: counts are bounded by the remaining input.
+    const cap = 64 * encoded.len + 4096;
+    const scratch = try testing.allocator.alloc(u8, cap);
+    defer testing.allocator.free(scratch);
+    for (0..encoded.len) |index| {
+        for ([_]u8{ 0x00, 0x01, 0x7f, 0x80, 0xff }) |value| {
+            if (encoded[index] == value) continue;
+            const mutant = try testing.allocator.dupe(u8, encoded);
+            defer testing.allocator.free(mutant);
+            mutant[index] = value;
+            var fixed = std.heap.FixedBufferAllocator.init(scratch);
+            if (decode(fixed.allocator(), mutant)) |decoded| {
+                var owned = decoded;
+                owned.deinit();
+            } else |mistake| {
+                try testing.expect(mistake != error.OutOfMemory);
+            }
+        }
+    }
+}
+
+test "the wire surface is fingerprinted: change it, bump format_version" {
+    var hasher = std.hash.Wyhash.init(0);
+    inline for (comptime std.meta.fieldNames(ir.Instruction)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(ir.Intrinsic)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(ir.TrapCode)) |name| hasher.update(name);
+    // If this fails you changed the instruction set, the intrinsics,
+    // or the trap codes: bump format_version and update BOTH numbers.
+    try testing.expectEqual(@as(u32, 5), format_version);
+    try testing.expectEqual(@as(u64, 4759111392816851325), hasher.final());
 }

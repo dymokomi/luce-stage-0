@@ -301,22 +301,73 @@ pub const VerifyError = error{
     BadFunction,
     BadStruct,
     BadConstant,
+    BadIntrinsic,
 };
 
 /// Check every structural and type invariant of a program.  Verified
-/// programs cannot reference undefined registers, mismatch types, or
-/// fall through a block.
+/// programs cannot reference undefined registers, mismatch types,
+/// fall through a block, or hand an intrinsic the wrong argument
+/// shape — the interpreter's positional reads and union accesses all
+/// rest on this pass, so a decoded module is safe to run, not merely
+/// plausible.
 pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
+    // The type tables themselves first: every index reachable from a
+    // type must land inside the tables, map keys must be hashable
+    // (Int/String), array ranks must be 1-4, and no struct may
+    // contain itself (the interpreter zeroes structs recursively).
+    for (program.heap_types) |descriptor| switch (descriptor) {
+        .list => |element| try verifyType(program, element),
+        .map => |pair| {
+            if (pair.key != .int and pair.key != .string) return error.BadStruct;
+            try verifyType(program, pair.value);
+        },
+        .array => |shape| {
+            try verifyType(program, shape.element);
+            if (shape.rank < 1 or shape.rank > 4) return error.BadStruct;
+        },
+        .builder => {},
+    };
+    for (program.structs) |layout| {
+        for (layout.fields) |field| try verifyType(program, field.field_type);
+    }
+    for (0..program.structs.len) |index| {
+        if (structContainsItself(program, @intCast(index), @intCast(index), 0)) {
+            return error.BadStruct;
+        }
+    }
+
     for (program.functions) |*function| {
         try verifyFunction(allocator, program, function);
     }
     if (program.entry_function >= program.functions.len) return error.BadFunction;
 }
 
+fn verifyType(program: *const Program, of: Type) VerifyError!void {
+    switch (of) {
+        .strukt => |index| if (index >= program.structs.len) return error.BadStruct,
+        .heap => |index| if (index >= program.heap_types.len) return error.BadStruct,
+        else => {},
+    }
+}
+
+fn structContainsItself(program: *const Program, origin: u32, current: u32, depth: usize) bool {
+    if (depth > program.structs.len) return true;
+    for (program.structs[current].fields) |field| {
+        if (field.field_type == .strukt) {
+            if (field.field_type.strukt == origin) return true;
+            if (structContainsItself(program, origin, field.field_type.strukt, depth + 1)) return true;
+        }
+    }
+    return false;
+}
+
 fn verifyFunction(allocator: Allocator, program: *const Program, function: *const Function) VerifyError!void {
     if (function.blocks.len == 0) return error.EmptyFunction;
     if (function.parameter_count > function.locals.len) return error.BadLocal;
     if (function.instructions.len != function.result_types.len) return error.BadFunction;
+    try verifyType(program, function.return_type);
+    for (function.locals) |local| try verifyType(program, local.local_type);
+    for (function.result_types) |result_type| try verifyType(program, result_type);
 
     // Registers are block-local: track which instructions this block
     // has executed so far.
@@ -392,8 +443,18 @@ fn verifyInstruction(
             try expectType(left, binary.operand_type);
             try expectType(right, binary.operand_type);
             if (binary.op.isComparison()) {
+                // Ordering exists for Int, Float, and String only;
+                // equality for everything with a value.
+                switch (binary.op) {
+                    .equal, .not_equal => {},
+                    else => if (!binary.operand_type.isNumeric() and binary.operand_type != .string)
+                        return error.TypeMismatch,
+                }
                 try expectType(result, .boolean);
             } else {
+                // Arithmetic is numeric, plus + as String concat.
+                const concat = binary.op == .add and binary.operand_type == .string;
+                if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
                 try expectType(result, binary.operand_type);
             }
         },
@@ -461,11 +522,7 @@ fn verifyInstruction(
             }
             if (!result.eql(callee.return_type)) return error.TypeMismatch;
         },
-        .intrinsic => |intrinsic| {
-            for (intrinsic.arguments) |argument| {
-                _ = try operandType(function, defined, argument);
-            }
-        },
+        .intrinsic => |intrinsic| try verifyIntrinsic(program, function, defined, register, intrinsic),
         .object_bind => |bind| {
             if (bind.local >= function.locals.len) return error.BadLocal;
             _ = try operandType(function, defined, bind.value);
@@ -506,6 +563,426 @@ fn verifyInstruction(
         },
         .trap => {},
     }
+}
+
+// ---------------------------------------------------------------------------
+// Intrinsic signatures
+// ---------------------------------------------------------------------------
+//
+// The interpreter executes intrinsics with positional register reads
+// and direct union-field access ("the analyzer guarantees...").  For
+// decoded modules the analyzer guaranteed nothing, so this switch
+// re-establishes every one of those guarantees: exact arity, argument
+// types (resolved against the program's heap-type table for container
+// operations), and the result type.  It is exhaustive by construction
+// — adding an intrinsic without a signature is a compile error.
+
+fn verifyIntrinsic(
+    program: *const Program,
+    function: *const Function,
+    defined: *const std.AutoHashMapUnmanaged(Register, void),
+    register: Register,
+    call: Instruction.IntrinsicCall,
+) VerifyError!void {
+    const result = function.result_types[register];
+    // The widest intrinsic is index_set on a rank-4 array: object,
+    // four indices, value.
+    if (call.arguments.len > 6) return error.BadIntrinsic;
+    var buffer: [6]Type = undefined;
+    for (call.arguments, 0..) |argument, index| {
+        buffer[index] = try operandType(function, defined, argument);
+    }
+    const arguments = buffer[0..call.arguments.len];
+
+    switch (call.kind) {
+        .abs => {
+            try exactly(arguments, 1);
+            if (!arguments[0].isNumeric()) return error.BadIntrinsic;
+            try expectType(result, arguments[0]);
+        },
+        .min, .max => {
+            try exactly(arguments, 2);
+            if (!arguments[0].isNumeric()) return error.BadIntrinsic;
+            try expectType(arguments[1], arguments[0]);
+            try expectType(result, arguments[0]);
+        },
+        .clamp => {
+            try exactly(arguments, 3);
+            if (!arguments[0].isNumeric()) return error.BadIntrinsic;
+            try expectType(arguments[1], arguments[0]);
+            try expectType(arguments[2], arguments[0]);
+            try expectType(result, arguments[0]);
+        },
+        .sqrt, .floor, .ceil => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .float);
+            try expectType(result, .float);
+        },
+        .len => {
+            try exactly(arguments, 1);
+            const measurable = arguments[0] == .string or arguments[0] == .bytes or
+                arguments[0] == .heap;
+            if (!measurable) return error.BadIntrinsic;
+            try expectType(result, .int);
+        },
+        .string_slice => {
+            try exactly(arguments, 3);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .int);
+            try expectType(arguments[2], .int);
+            try expectType(result, .string);
+        },
+        .string_byte => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .int);
+            try expectType(result, .int);
+        },
+        .assert_true => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .boolean);
+            try expectType(result, .none);
+        },
+        .trap_message => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .none);
+        },
+        .null_object => {
+            try exactly(arguments, 0);
+            if (result != .heap) return error.BadIntrinsic;
+        },
+        .index_get, .index_set => {
+            const reads = call.kind == .index_get;
+            const value_slots: usize = if (reads) 0 else 1;
+            if (arguments.len < 1) return error.BadIntrinsic;
+            const element: Type = switch (try heapShape(program, arguments[0])) {
+                .list => |item| blk: {
+                    try exactly(arguments, 2 + value_slots);
+                    try expectType(arguments[1], .int);
+                    break :blk item;
+                },
+                .map => |pair| blk: {
+                    try exactly(arguments, 2 + value_slots);
+                    try expectType(arguments[1], pair.key);
+                    break :blk pair.value;
+                },
+                .array => |shape| blk: {
+                    try exactly(arguments, 1 + shape.rank + value_slots);
+                    for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .int);
+                    break :blk shape.element;
+                },
+                .builder => return error.BadIntrinsic,
+            };
+            if (reads) {
+                try expectType(result, element);
+            } else {
+                try expectType(arguments[arguments.len - 1], element);
+                try expectType(result, .none);
+            }
+        },
+        .list_slice => {
+            try exactly(arguments, 3);
+            if (try heapShape(program, arguments[0]) != .list) return error.BadIntrinsic;
+            try expectType(arguments[1], .int);
+            try expectType(arguments[2], .int);
+            try expectType(result, arguments[0]);
+        },
+        .append_value => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .list => |element| try expectType(arguments[1], element),
+                .builder => try expectType(arguments[1], .string),
+                else => return error.BadIntrinsic,
+            }
+            try expectType(result, .none);
+        },
+        .pop_value => {
+            try exactly(arguments, 1);
+            switch (try heapShape(program, arguments[0])) {
+                .list => |element| try expectType(result, element),
+                else => return error.BadIntrinsic,
+            }
+        },
+        .insert_value => {
+            try exactly(arguments, 3);
+            switch (try heapShape(program, arguments[0])) {
+                .list => |element| {
+                    try expectType(arguments[1], .int);
+                    try expectType(arguments[2], element);
+                },
+                else => return error.BadIntrinsic,
+            }
+            try expectType(result, .none);
+        },
+        .remove_entry => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .list => try expectType(arguments[1], .int),
+                .map => |pair| try expectType(arguments[1], pair.key),
+                else => return error.BadIntrinsic,
+            }
+            try expectType(result, .none);
+        },
+        .has_key => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| try expectType(arguments[1], pair.key),
+                else => return error.BadIntrinsic,
+            }
+            try expectType(result, .boolean);
+        },
+        .key_at => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| {
+                    try expectType(arguments[1], .int);
+                    try expectType(result, pair.key);
+                },
+                else => return error.BadIntrinsic,
+            }
+        },
+        .dim_size => {
+            try exactly(arguments, 2);
+            if (try heapShape(program, arguments[0]) != .array) return error.BadIntrinsic;
+            try expectType(arguments[1], .int);
+            try expectType(result, .int);
+        },
+        .free_object => {
+            // The optional second argument is the owning local, for
+            // the runtime binding check.
+            if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
+            if (arguments[0] != .heap) return error.BadIntrinsic;
+            if (arguments.len == 2) try expectType(arguments[1], .int);
+            try expectType(result, .none);
+        },
+        .give_object => {
+            if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
+            if (arguments[0] != .heap and arguments[0] != .strukt) return error.BadIntrinsic;
+            if (arguments.len == 2) try expectType(arguments[1], .int);
+            try expectType(result, arguments[0]);
+        },
+        .copy_object => {
+            try exactly(arguments, 1);
+            if (arguments[0] != .heap and arguments[0] != .strukt) return error.BadIntrinsic;
+            try expectType(result, arguments[0]);
+        },
+        .str_find => try stringPair(arguments, result, .int),
+        .str_contains, .str_starts, .str_ends => try stringPair(arguments, result, .boolean),
+        .str_trim, .str_lower, .str_upper => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .string);
+        },
+        .str_replace => {
+            try exactly(arguments, 3);
+            for (arguments) |argument| try expectType(argument, .string);
+            try expectType(result, .string);
+        },
+        .str_repeat => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .int);
+            try expectType(result, .string);
+        },
+        .str_split => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .string);
+            if (!(try heapShape(program, result)).eql(.{ .list = .string })) {
+                return error.BadIntrinsic;
+            }
+        },
+        .list_sort, .list_reverse => {
+            try exactly(arguments, 1);
+            const element: Type = switch (try heapShape(program, arguments[0])) {
+                .list => |item| item,
+                .array => |shape| if (shape.rank == 1) shape.element else return error.BadIntrinsic,
+                else => return error.BadIntrinsic,
+            };
+            // Sort's comparator orders Int, Float, and String only.
+            if (call.kind == .list_sort and
+                !element.isNumeric() and element != .string)
+            {
+                return error.BadIntrinsic;
+            }
+            try expectType(result, .none);
+        },
+        .list_find, .list_contains => {
+            try exactly(arguments, 2);
+            const element: Type = switch (try heapShape(program, arguments[0])) {
+                .list => |item| item,
+                .array => |shape| if (shape.rank == 1) shape.element else return error.BadIntrinsic,
+                else => return error.BadIntrinsic,
+            };
+            try expectType(arguments[1], element);
+            try expectType(result, if (call.kind == .list_find) .int else .boolean);
+        },
+        .list_join => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .list => |element| try expectType(element, .string),
+                else => return error.BadIntrinsic,
+            }
+            try expectType(arguments[1], .string);
+            try expectType(result, .string);
+        },
+        .clear_object => {
+            try exactly(arguments, 1);
+            switch (try heapShape(program, arguments[0])) {
+                .list, .map, .builder => {},
+                .array => return error.BadIntrinsic,
+            }
+            try expectType(result, .none);
+        },
+        .map_keys => {
+            try exactly(arguments, 1);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| if (!(try heapShape(program, result)).eql(.{ .list = pair.key })) {
+                    return error.BadIntrinsic;
+                },
+                else => return error.BadIntrinsic,
+            }
+        },
+        .array_fill => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .array => |shape| try expectType(arguments[1], shape.element),
+                else => return error.BadIntrinsic,
+            }
+            try expectType(result, .none);
+        },
+        .str_value => {
+            try exactly(arguments, 1);
+            const stringable = switch (arguments[0]) {
+                .int, .float, .boolean, .string => true,
+                .heap => (try heapShape(program, arguments[0])) == .builder,
+                else => false,
+            };
+            if (!stringable) return error.BadIntrinsic;
+            try expectType(result, .string);
+        },
+        .parse_int, .parse_float => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, if (call.kind == .parse_int) .int else .float);
+        },
+        .chr_code => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .int);
+            try expectType(result, .string);
+        },
+        .ord_text => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .int);
+        },
+        .print, .term_write => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .none);
+        },
+        .file_read => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .string);
+        },
+        .file_write => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .string);
+            try expectType(result, .boolean);
+        },
+        .file_exists => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .boolean);
+        },
+        .arg_count, .term_rows, .term_cols => {
+            try exactly(arguments, 0);
+            try expectType(result, .int);
+        },
+        .arg_get => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .int);
+            try expectType(result, .string);
+        },
+        .term_clear, .term_flush => {
+            try exactly(arguments, 0);
+            try expectType(result, .none);
+        },
+        .term_move => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .int);
+            try expectType(result, .none);
+        },
+        .term_style => {
+            try exactly(arguments, 3);
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .int);
+            try expectType(arguments[2], .boolean);
+            try expectType(result, .none);
+        },
+        .key_read, .key_text => {
+            try exactly(arguments, 0);
+            try expectType(result, .string);
+        },
+        .fabric_image => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .int);
+            try expectType(result, .none);
+        },
+        .fabric_create => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .int);
+        },
+        .fabric_input, .fabric_output => {
+            try exactly(arguments, 3);
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .string);
+            try expectType(arguments[2], .string);
+            try expectType(result, .none);
+        },
+        .fabric_content, .fabric_evaluator => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .string);
+            try expectType(result, .none);
+        },
+        .fabric_set => {
+            try exactly(arguments, 3);
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .string);
+            const settable = switch (arguments[2]) {
+                .boolean, .int, .float, .string => true,
+                else => false,
+            };
+            if (!settable) return error.BadIntrinsic;
+            try expectType(result, .none);
+        },
+    }
+}
+
+fn exactly(arguments: []const Type, count: usize) VerifyError!void {
+    if (arguments.len != count) return error.BadIntrinsic;
+}
+
+/// Resolve a heap-typed value to its shape; anything else is not a
+/// container and fails the intrinsic.
+fn heapShape(program: *const Program, of: Type) VerifyError!types.HeapType {
+    if (of != .heap) return error.BadIntrinsic;
+    if (of.heap >= program.heap_types.len) return error.BadStruct;
+    return program.heap_types[of.heap];
+}
+
+fn stringPair(arguments: []const Type, result: Type, produced: Type) VerifyError!void {
+    try exactly(arguments, 2);
+    try expectType(arguments[0], .string);
+    try expectType(arguments[1], .string);
+    try expectType(result, produced);
 }
 
 // ---------------------------------------------------------------------------

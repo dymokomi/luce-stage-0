@@ -153,7 +153,16 @@ const Machine = struct {
         const function = &self.program.functions[function_index];
         const registers = try self.arena.alloc(RuntimeValue, function.instructions.len);
         const locals = try self.arena.alloc(RuntimeValue, function.locals.len);
-        @memset(locals, .none);
+        // Every local starts at its type's zero value, not a bare
+        // .none: a well-formed function sets locals before reading
+        // them, but a hand-forged or bit-flipped module may read one
+        // early, and a typed zero (0/false/""/null object) keeps that
+        // a clean value or a null_object trap instead of a crash on
+        // an untagged .none.  This is the same rule as S40's late
+        // declarations, applied defensively at the trust boundary.
+        for (locals, function.locals) |*slot, local| {
+            slot.* = try self.zeroValue(local.local_type);
+        }
         @memcpy(locals[0..arguments.len], arguments);
         const serial = self.next_serial;
         self.next_serial += 1;
