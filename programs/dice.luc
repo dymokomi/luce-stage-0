@@ -9,6 +9,7 @@
 
 import math
 import files
+import strings
 
 func bar(count: Int) -> String:
     return "#".repeat(count)
@@ -32,7 +33,7 @@ func main():
         total += roll
 
     print(f"{count} rolls from seed {seed}: " + rolls.join(" "))
-    let mean = Float(total) / Float(count)
+    let mean = strings.format_float(Float(total) / Float(count), 2)
     print(f"total {total}, mean {mean}")
     for face in range(1, 7):
         print(f"{face}: " + bar(histogram[face]))

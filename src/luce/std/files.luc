@@ -10,6 +10,8 @@
 # guard with exists first.  write returns false on failure and never
 # hides durability.
 
+import strings
+
 func exists(path: String) -> Bool:
     return file_exists(path)
 

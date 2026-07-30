@@ -733,8 +733,48 @@ test "luce.sema.method: no method takes more than two arguments" {
     try expectError("func main():\n    var xs = [1]\n    xs.append(1, 2, 3)\n", "luce.sema.method");
 }
 
-test "luce.sema.method: String has no such method" {
-    try expectError("func main():\n    let s = \"x\"\n    let n = s.frobnicate()\n", "luce.sema.method");
+test "luce.sema.method: strings has no such function" {
+    try expectError(
+        \\import strings
+        \\
+        \\func main():
+        \\    let s = "x"
+        \\    let n = s.frobnicate()
+        \\
+    , "luce.sema.method");
+}
+
+test "luce.sema.import: String methods need import strings" {
+    try expectError("func main():\n    let s = \"x\"\n    let n = s.find(\"y\")\n", "luce.sema.import");
+}
+
+test "luce.sema.import: join on List(String) needs import strings" {
+    try expectError(
+        \\func main():
+        \\    let parts = ["a", "b"]
+        \\    let s = parts.join(",")
+        \\
+    , "luce.sema.import");
+}
+
+test "luce.sema.call: a routed strings call checks its arity" {
+    try expectError(
+        \\import strings
+        \\
+        \\func main():
+        \\    let n = "abc".find("b", 1, 2)
+        \\
+    , "luce.sema.call");
+}
+
+test "luce.sema.type: a routed strings call checks argument types" {
+    try expectError(
+        \\import strings
+        \\
+        \\func main():
+        \\    let n = "abc".find(7)
+        \\
+    , "luce.sema.type");
 }
 
 test "luce.sema.method: Map has no such method" {

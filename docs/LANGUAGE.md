@@ -148,25 +148,39 @@ per step, but which elements you visit is your problem.
 
 ## Strings
 
-Strings are immutable values with methods (all pure, all allocate
-fresh values):
+Strings are immutable UTF-8 values.  The *language* provides the
+primitives — literals and f-strings, `+` concatenation, comparison,
+UTF-8-boundary-checked slices `s[a:b]`, `len(s)` in bytes, and
+`s.byte_at(i)` for raw byte access.  Everything built on top of them
+lives in the standard library's `strings` module (docs/STD.md),
+written in ordinary Luce:
 
 ```luce
+import strings
+
 s.find(sub)          # byte offset of first occurrence, -1 if absent
+s.find_from(sub, i)  # first occurrence at or after offset i
 s.contains(sub)      # Bool
 s.starts_with(p)     # Bool
 s.ends_with(p)       # Bool
+s.count(sub)         # non-overlapping occurrences
 s.trim()             # ASCII whitespace off both ends
-s.lower()            # ASCII case fold down
+s.lower()            # ASCII case fold down; multibyte passes whole
 s.upper()            # ASCII case fold up
-s.replace(old, fresh)  # every occurrence; empty old is a no-op
+s.replace(old, replacement)  # every occurrence; empty old is a no-op
 s.repeat(n)          # n copies (n <= 0 is "")
 s.split(sep)         # List(String); empty sep splits on whitespace
-s.byte_at(i)         # the byte value at offset i
+s.pad_left(w)        # space-padded to w bytes
+s.pad_right(w)
 words.join(", ")     # List(String) -> String
+strings.format_float(x, 2)   # fixed-point Float display: "2.50"
 ```
 
-`s[a:b]` slices (UTF-8-boundary-checked); `len(s)` is bytes.
+The method spelling is the same sugar as everywhere else:
+`s.find(x)` is `strings.find(s, x)` — a plain borrowed call with the
+receiver first — whenever `import strings` is in scope, and a compile
+error pointing at the missing import otherwise.  Only `byte_at` is
+built in.
 
 **Interpolation.**  An `f"..."` string splices expressions in `{...}`,
 each converted with `str(...)`:

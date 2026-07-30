@@ -241,6 +241,154 @@ test "math: the generator is deterministic, in range, and covers its die" {
 }
 
 // ---------------------------------------------------------------------------
+// strings
+// ---------------------------------------------------------------------------
+
+test "strings: find, find_from, contains, starts_with, ends_with, count" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    let s = "hello world"
+        \\    assert(strings.find(s, "world") == 6)
+        \\    assert(strings.find(s, "xyz") == -1)
+        \\    assert(strings.find(s, "") == 0)
+        \\    assert(strings.find_from(s, "o", 5) == 7)
+        \\    assert(strings.find_from(s, "o", 8) == -1)
+        \\    assert(strings.find_from(s, "", 3) == 3)
+        \\    assert(strings.find_from(s, "o", -1) == -1)
+        \\    assert(strings.find_from(s, "o", 99) == -1)
+        \\    assert(strings.contains(s, "lo w"))
+        \\    assert(not strings.contains(s, "zzz"))
+        \\    assert(strings.starts_with(s, "hello"))
+        \\    assert(strings.starts_with(s, ""))
+        \\    assert(not strings.starts_with(s, "hello world!"))
+        \\    assert(strings.ends_with(s, "world"))
+        \\    assert(strings.ends_with(s, ""))
+        \\    assert(not strings.ends_with(s, "worlds"))
+        \\    assert(strings.count("aaaa", "aa") == 2)
+        \\    assert(strings.count("a.b.c", ".") == 2)
+        \\    assert(strings.count("abc", "") == 0)
+        \\
+    );
+}
+
+test "strings: the method sugar routes to the module" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    let s = "hello world"
+        \\    assert(s.find("world") == strings.find(s, "world"))
+        \\    assert(s.trim() == strings.trim(s))
+        \\    assert(s.count("l") == 3)
+        \\    let parts = s.split(" ")
+        \\    assert(parts.join(" ") == s)
+        \\
+    );
+}
+
+test "strings: trim, lower, upper keep multibyte characters whole" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    assert(strings.trim("  hi  ") == "hi")
+        \\    assert(strings.trim("\t\nhi" + chr(13) + "\n") == "hi")
+        \\    assert(strings.trim("") == "")
+        \\    assert(strings.trim("   ") == "")
+        \\    assert(strings.trim("hi") == "hi")
+        \\    assert(strings.lower("MiXeD") == "mixed")
+        \\    assert(strings.upper("MiXeD") == "MIXED")
+        \\    assert(strings.lower("ABC🙂DEF") == "abc🙂def")
+        \\    assert(strings.upper("λx.λy") == "λX.λY")
+        \\    assert(strings.lower("already") == "already")
+        \\
+    );
+}
+
+test "strings: replace and repeat" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    assert(strings.replace("a.b.c", ".", "-") == "a-b-c")
+        \\    assert(strings.replace("aaa", "a", "bb") == "bbbbbb")
+        \\    assert(strings.replace("hello", "z", "y") == "hello")
+        \\    assert(strings.replace("hello", "l", "") == "heo")
+        \\    assert(strings.replace("abc", "", "x") == "abc")
+        \\    assert(strings.repeat("ab", 3) == "ababab")
+        \\    assert(strings.repeat("x", 0) == "")
+        \\    assert(strings.repeat("x", -2) == "")
+        \\    assert(strings.repeat("", 5) == "")
+        \\
+    );
+}
+
+test "strings: split keeps empties, whitespace mode drops them, join round-trips" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    let csv = strings.split("a;b;;c", ";")
+        \\    assert(len(csv) == 4)
+        \\    assert(csv[2] == "")
+        \\    assert(strings.join(csv, ";") == "a;b;;c")
+        \\    let lone = strings.split("abc", ";")
+        \\    assert(len(lone) == 1 and lone[0] == "abc")
+        \\    let words = strings.split("  the   quick brown  ", "")
+        \\    assert(len(words) == 3)
+        \\    assert(words[0] == "the" and words[1] == "quick" and words[2] == "brown")
+        \\    let none = strings.split("   ", "")
+        \\    assert(len(none) == 0)
+        \\    let empty: List(String) = []
+        \\    assert(strings.join(empty, ", ") == "")
+        \\    assert(strings.join(["only"], ", ") == "only")
+        \\
+    );
+}
+
+test "strings: pad_left and pad_right" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    assert(strings.pad_left("7", 3) == "  7")
+        \\    assert(strings.pad_right("7", 3) == "7  ")
+        \\    assert(strings.pad_left("wide", 3) == "wide")
+        \\    assert(strings.pad_right("wide", 4) == "wide")
+        \\
+    );
+}
+
+test "strings: format_float rounds half away and carries" {
+    try expectOk(
+        \\import strings
+        \\
+        \\func main():
+        \\    assert(strings.format_float(2.5, 2) == "2.50")
+        \\    assert(strings.format_float(2.345, 2) == "2.35")
+        \\    assert(strings.format_float(-2.345, 2) == "-2.35")
+        \\    assert(strings.format_float(0.999, 2) == "1.00")
+        \\    assert(strings.format_float(-0.999, 2) == "-1.00")
+        \\    assert(strings.format_float(1.05, 1) == "1.1")
+        \\    assert(strings.format_float(3.14159, 0) == "3")
+        \\    assert(strings.format_float(2.5, 0) == "3")
+        \\    assert(strings.format_float(0.0, 3) == "0.000")
+        \\    assert(strings.format_float(0.0625, 4) == "0.0625")
+        \\
+    );
+    try expectTrap(
+        \\import strings
+        \\
+        \\func main():
+        \\    var decimals = -1
+        \\    let bad = strings.format_float(1.0, decimals)
+        \\
+    , .explicit_trap);
+}
+
+// ---------------------------------------------------------------------------
 // The mechanism
 // ---------------------------------------------------------------------------
 

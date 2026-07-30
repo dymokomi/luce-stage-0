@@ -3427,11 +3427,7 @@ const FunctionBuilder = struct {
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
     fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
-        if (method.arguments.len > 2) {
-            try self.fail("luce.sema.method", method.span, "no method takes more than 2 arguments", .{});
-            return null;
-        }
-        var expressions: [3]*ast.Expression = undefined;
+        const expressions = try self.arena().alloc(*ast.Expression, method.arguments.len + 1);
         expressions[0] = method.target;
         for (method.arguments, 0..) |argument, index| {
             if (argument.name != null) {
@@ -3440,17 +3436,39 @@ const FunctionBuilder = struct {
             }
             expressions[index + 1] = argument.value;
         }
-        const values = (try self.lowerOperands(expressions[0 .. method.arguments.len + 1])) orelse
+        const values = (try self.lowerOperands(expressions)) orelse
             return null;
         const receiver = values[0];
         const arguments = values[1..];
 
         const found: MethodFound = blk: {
             if (receiver.value_type == .string) {
-                if (try self.stringMethod(method, arguments)) |found| break :blk found;
-                return null;
+                // byte_at is the language's primitive byte access;
+                // every other String method is library code —
+                // s.find(x) is strings.find(s, x) (docs/STD.md).
+                if (std.mem.eql(u8, method.name, "byte_at")) {
+                    if (arguments.len != 1 or arguments[0].value_type != .int) {
+                        try self.fail("luce.sema.method", method.span, "byte_at takes an Int offset", .{});
+                        return null;
+                    }
+                    break :blk .{ .kind = .string_byte, .result = .int };
+                }
+                return self.stringsCall(method, values, as_statement);
             }
             if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
+                // join belongs to the strings module too: it makes a
+                // String, from List(String).
+                if (descriptor == .list and descriptor.list == .string and
+                    std.mem.eql(u8, method.name, "join"))
+                {
+                    return self.stringsCall(method, values, as_statement);
+                }
+                // Built-in methods take at most two arguments; only
+                // routed strings calls go wider.
+                if (method.arguments.len > 2) {
+                    try self.fail("luce.sema.method", method.span, "no method takes more than 2 arguments", .{});
+                    return null;
+                }
                 if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
                     break :blk found;
                 }
@@ -3515,51 +3533,88 @@ const FunctionBuilder = struct {
         return null;
     }
 
-    fn stringMethod(self: *FunctionBuilder, method: ast.Method, arguments: []const Value) Error!?MethodFound {
-        const name = method.name;
-        const Simple = struct { name: []const u8, kind: ir.Intrinsic, takes: usize, argument: Type, result: Type };
-        const table = [_]Simple{
-            .{ .name = "find", .kind = .str_find, .takes = 1, .argument = .string, .result = .int },
-            .{ .name = "contains", .kind = .str_contains, .takes = 1, .argument = .string, .result = .boolean },
-            .{ .name = "starts_with", .kind = .str_starts, .takes = 1, .argument = .string, .result = .boolean },
-            .{ .name = "ends_with", .kind = .str_ends, .takes = 1, .argument = .string, .result = .boolean },
-            .{ .name = "trim", .kind = .str_trim, .takes = 0, .argument = .none, .result = .string },
-            .{ .name = "lower", .kind = .str_lower, .takes = 0, .argument = .none, .result = .string },
-            .{ .name = "upper", .kind = .str_upper, .takes = 0, .argument = .none, .result = .string },
-            .{ .name = "repeat", .kind = .str_repeat, .takes = 1, .argument = .int, .result = .string },
-            .{ .name = "byte_at", .kind = .string_byte, .takes = 1, .argument = .int, .result = .int },
+    /// Route a value method to the std strings module: `s.find(x)` is
+    /// `strings.find(s, x)`, and `parts.join(sep)` is
+    /// `strings.join(parts, sep)`.  The language keeps the primitives
+    /// (literals, +, comparison, slices, len, byte_at); manipulation
+    /// is library code and needs the import.
+    fn stringsCall(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        values: []const Value,
+        as_statement: bool,
+    ) Error!?Value {
+        const local_module = std.mem.eql(u8, self.prefix, "strings");
+        if (!local_module and !self.analyzer.importsModule(self.module, "strings")) {
+            try self.fail(
+                "luce.sema.import",
+                method.span,
+                "String manipulation lives in the standard library: import strings to use {s} (docs/STD.md)",
+                .{method.name},
+            );
+            return null;
+        }
+        // strings takes borrows only; a give here has no owner (S11).
+        for (method.arguments) |argument| {
+            if (argument.value.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                    .{method.name},
+                );
+                return null;
+            }
+        }
+        const qualified = try std.fmt.allocPrint(self.arena(), "strings.{s}", .{method.name});
+        const function_index = self.analyzer.function_names.get(qualified) orelse {
+            try self.fail("luce.sema.method", method.span, "strings has no function {s}", .{method.name});
+            return null;
         };
-        for (table) |entry| {
-            if (!std.mem.eql(u8, name, entry.name)) continue;
-            if (arguments.len != entry.takes) {
-                try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}", .{
-                    entry.name,
-                    entry.takes,
-                    if (entry.takes == 1) "" else "s",
+        return self.callUser(function_index, qualified, values, method.span, as_statement);
+    }
+
+    /// The emitting half of a user call, for callers that already
+    /// lowered their operands (method routing): arity and type checks
+    /// against the signature, then the call instruction.
+    fn callUser(
+        self: *FunctionBuilder,
+        function_index: u32,
+        name: []const u8,
+        values: []const Value,
+        span: Span,
+        as_statement: bool,
+    ) Error!?Value {
+        const info = self.analyzer.functions.items[function_index];
+        if (values.len != info.parameter_types.len) {
+            try self.fail("luce.sema.call", span, "{s} takes {d} arguments, got {d}", .{
+                name,
+                info.parameter_types.len,
+                values.len,
+            });
+            return null;
+        }
+        const registers = try self.arena().alloc(Register, values.len);
+        for (values, 0..) |value, index| {
+            if (!value.value_type.eql(info.parameter_types[index])) {
+                try self.fail("luce.sema.type", span, "argument {d} of {s} is {s}, got {s}", .{
+                    index + 1,
+                    name,
+                    try self.analyzer.typeName(info.parameter_types[index]),
+                    try self.analyzer.typeName(value.value_type),
                 });
                 return null;
             }
-            if (entry.takes == 1 and !arguments[0].value_type.eql(entry.argument)) {
-                try self.fail("luce.sema.method", method.span, "{s} takes {s}", .{
-                    entry.name,
-                    try self.analyzer.typeName(entry.argument),
-                });
-                return null;
-            }
-            return .{ .kind = entry.kind, .result = entry.result };
+            registers[index] = value.register;
         }
-        if (std.mem.eql(u8, name, "replace")) {
-            if (arguments.len != 2 or arguments[0].value_type != .string or arguments[1].value_type != .string)
-                return self.methodFail(method, "replace takes (old String, new String)");
-            return .{ .kind = .str_replace, .result = .string };
+        if (info.return_type == .none and !as_statement) {
+            try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+            return null;
         }
-        if (std.mem.eql(u8, name, "split")) {
-            if (arguments.len != 1 or arguments[0].value_type != .string)
-                return self.methodFail(method, "split takes a String separator (empty splits on whitespace)");
-            return .{ .kind = .str_split, .result = try self.analyzer.internHeapType(.{ .list = .string }) };
-        }
-        try self.fail("luce.sema.method", method.span, "String has no method {s}", .{name});
-        return null;
+        return .{
+            .register = try self.emit(.{ .call = .{ .function = function_index, .arguments = registers } }, info.return_type),
+            .value_type = info.return_type,
+        };
     }
 
     fn objectMethod(
@@ -3684,12 +3739,6 @@ const FunctionBuilder = struct {
                 if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
                 return .{ .kind = .clear_object, .result = .none };
             }
-            if (std.mem.eql(u8, name, "join")) {
-                if (element != .string) return self.methodFail(method, "join works on List(String)");
-                if (arguments.len != 1 or arguments[0].value_type != .string)
-                    return self.methodFail(method, "join takes a String separator");
-                return .{ .kind = .list_join, .result = .string };
-            }
         }
         if (std.mem.eql(u8, name, "sort")) {
             if (arguments.len != 0) return self.methodFail(method, "sort takes no arguments");
@@ -3711,7 +3760,7 @@ const FunctionBuilder = struct {
                 return self.methodFail(method, "contains takes one element value");
             return .{ .kind = .list_contains, .result = .boolean };
         }
-        try self.fail("luce.sema.method", method.span, "no method {s} here (append insert remove pop sort reverse find contains clear join)", .{name});
+        try self.fail("luce.sema.method", method.span, "no method {s} here (append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
         return null;
     }
 
@@ -4065,21 +4114,10 @@ const FunctionBuilder = struct {
             .remove_entry,
             .has_key,
             .dim_size,
-            .str_find,
-            .str_contains,
-            .str_starts,
-            .str_ends,
-            .str_trim,
-            .str_lower,
-            .str_upper,
-            .str_replace,
-            .str_repeat,
-            .str_split,
             .list_sort,
             .list_reverse,
             .list_find,
             .list_contains,
-            .list_join,
             .clear_object,
             .map_keys,
             .map_values,

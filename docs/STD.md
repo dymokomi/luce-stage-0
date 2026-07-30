@@ -14,8 +14,8 @@ because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
 in `src/luce/compile.zig`; the suite proving them is
-`src/luce/std_spec.zig` (math) plus a hosted test beside `TestHost`
-in `interpreter.zig` (files).
+`src/luce/std_spec.zig` (math, strings) plus a hosted test beside
+`TestHost` in `interpreter.zig` (files).
 
 Naming follows the language's own style: modules are short lower-case
 nouns, functions are short verbs read *with* the module prefix —
@@ -59,6 +59,43 @@ let roll = math.random_int(rng, 1, 7)   # Int in [low, high)
 ```
 
 Period 2^31 − 2; games and shuffles, never secrets.
+
+## strings
+
+The language keeps the String **primitives**: literals and f-strings,
+`+`, comparison, boundary-checked slices `s[a:b]`, `len(s)`, and
+`s.byte_at(i)`.  Everything built on top of them is ordinary Luce in
+this module — and the familiar method spelling is sugar for it:
+with `import strings` in scope, `s.find(x)` *is* `strings.find(s, x)`
+(and `parts.join(sep)` is `strings.join(parts, sep)`).  Using a
+String method without the import is a compile error that says so.
+
+All offsets are byte offsets, like the primitives.  The module never
+splits a UTF-8 character: it slices at ASCII positions or at match
+positions of valid UTF-8 needles.
+
+```luce
+import strings
+
+strings.find(s, needle)          # first byte offset, or -1
+strings.find_from(s, needle, start)
+strings.contains(s, needle)      # Bool
+strings.starts_with(s, prefix)   strings.ends_with(s, suffix)
+strings.count(s, needle)         # non-overlapping occurrences
+strings.trim(s)                  # ASCII whitespace off both ends
+strings.lower(s)  strings.upper(s)   # ASCII folding; multibyte
+                                     # characters pass through whole
+strings.replace(s, old, replacement) # every occurrence; empty old
+                                     # changes nothing
+strings.repeat(s, times)         # zero or fewer -> ""
+strings.split(s, separator)      # List(String), keeps empty pieces;
+                                 # "" separator = whitespace runs,
+                                 # empties dropped (Python's split())
+strings.join(parts, separator)   # List(String) -> String
+strings.pad_left(s, width)  strings.pad_right(s, width)
+strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
+                                     # half away from zero
+```
 
 ## files
 

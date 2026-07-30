@@ -1,0 +1,193 @@
+# strings — the Luce standard string module.
+#
+# The language keeps the primitives: String the immutable UTF-8
+# value, literals and f-strings, `+`, comparison, boundary-checked
+# slices `s[a:b]`, `len`, and `s.byte_at(i)`.  Everything built on
+# top of them lives here, in ordinary Luce — and `s.find(x)` is sugar
+# for `strings.find(s, x)` whenever this module is imported.
+#
+# Byte offsets throughout, like the primitives.  Slices below always
+# cut at safe places: ASCII positions, or match positions of a valid
+# UTF-8 needle (a needle's first byte can never be a continuation
+# byte, so a match never starts or ends mid-character).
+
+# The byte offset of the first occurrence of needle at or after
+# `start`, or -1.  An empty needle matches at `start`.
+func find_from(s: String, needle: String, start: Int) -> Int:
+    if start < 0 or start > len(s):
+        return -1
+    if len(needle) == 0:
+        return start
+    var at = start
+    while at + len(needle) <= len(s):
+        var matched = true
+        var i = 0
+        while matched and i < len(needle):
+            if s.byte_at(at + i) != needle.byte_at(i):
+                matched = false
+            i += 1
+        if matched:
+            return at
+        at += 1
+    return -1
+
+func find(s: String, needle: String) -> Int:
+    return find_from(s, needle, 0)
+
+func contains(s: String, needle: String) -> Bool:
+    return find_from(s, needle, 0) >= 0
+
+func starts_with(s: String, prefix: String) -> Bool:
+    if len(prefix) > len(s):
+        return false
+    return s[0:len(prefix)] == prefix
+
+func ends_with(s: String, suffix: String) -> Bool:
+    if len(suffix) > len(s):
+        return false
+    return s[len(s) - len(suffix):] == suffix
+
+# How many non-overlapping occurrences; an empty needle counts zero.
+func count(s: String, needle: String) -> Int:
+    if len(needle) == 0:
+        return 0
+    var found = 0
+    var at = find_from(s, needle, 0)
+    while at >= 0:
+        found += 1
+        at = find_from(s, needle, at + len(needle))
+    return found
+
+func is_space_byte(byte: Int) -> Bool:
+    return byte == 32 or byte == 9 or byte == 13 or byte == 10
+
+# ASCII whitespace off both ends.
+func trim(s: String) -> String:
+    var first = 0
+    while first < len(s) and is_space_byte(s.byte_at(first)):
+        first += 1
+    var last = len(s)
+    while last > first and is_space_byte(s.byte_at(last - 1)):
+        last -= 1
+    return s[first:last]
+
+# ASCII case folding; every other byte passes through untouched.
+# Unchanged runs are sliced whole, so multi-byte characters survive.
+func lower(s: String) -> String:
+    return fold_case(s, 65, 90, 32)
+
+func upper(s: String) -> String:
+    return fold_case(s, 97, 122, -32)
+
+func fold_case(s: String, first: Int, last: Int, shift: Int) -> String:
+    var out = new Builder()
+    var run = 0
+    var at = 0
+    while at < len(s):
+        let byte = s.byte_at(at)
+        if byte >= first and byte <= last:
+            out.append(s[run:at])
+            out.append(chr(byte + shift))
+            run = at + 1
+        at += 1
+    if run == 0:
+        return s
+    out.append(s[run:])
+    return str(out)
+
+# Every occurrence of old replaced with replacement; an empty old
+# changes nothing.
+func replace(s: String, old: String, replacement: String) -> String:
+    if len(old) == 0:
+        return s
+    var out = new Builder()
+    var run = 0
+    var at = find_from(s, old, 0)
+    while at >= 0:
+        out.append(s[run:at])
+        out.append(replacement)
+        run = at + len(old)
+        at = find_from(s, old, run)
+    if run == 0:
+        return s
+    out.append(s[run:])
+    return str(out)
+
+# The text repeated `times` times; zero or fewer is "".
+func repeat(s: String, times: Int) -> String:
+    if times <= 0 or len(s) == 0:
+        return ""
+    var out = new Builder()
+    for i in range(0, times):
+        out.append(s)
+    return str(out)
+
+# Split on a separator, keeping empty pieces ("a;;b" has three); an
+# empty separator splits on whitespace runs instead, dropping empties
+# (Python's bare split).
+func split(s: String, separator: String) -> List(String):
+    var pieces: List(String) = []
+    if len(separator) == 0:
+        var at = 0
+        while at < len(s):
+            while at < len(s) and is_space_byte(s.byte_at(at)):
+                at += 1
+            var word_end = at
+            while word_end < len(s) and not is_space_byte(s.byte_at(word_end)):
+                word_end += 1
+            if word_end > at:
+                pieces.append(s[at:word_end])
+            at = word_end
+        return pieces
+    var run = 0
+    var at = find_from(s, separator, 0)
+    while at >= 0:
+        pieces.append(s[run:at])
+        run = at + len(separator)
+        at = find_from(s, separator, run)
+    pieces.append(s[run:])
+    return pieces
+
+# The pieces joined with a separator between each pair.
+func join(parts: List(String), separator: String) -> String:
+    var out = new Builder()
+    for i, piece in parts:
+        if i > 0:
+            out.append(separator)
+        out.append(piece)
+    return str(out)
+
+# Space-padded to `width` bytes; text already that wide is unchanged.
+func pad_left(s: String, width: Int) -> String:
+    return repeat(" ", width - len(s)) + s
+
+func pad_right(s: String, width: Int) -> String:
+    return s + repeat(" ", width - len(s))
+
+# A Float as fixed-point text: format_float(2.5, 2) is "2.50",
+# rounded half away from zero.  Meant for display of ordinary
+# magnitudes; |value| past ~1e15 falls back to str(value).
+func format_float(value: Float, decimals: Int) -> String:
+    if decimals < 0:
+        trap("format_float needs decimals >= 0")
+    var magnitude = value
+    var sign = ""
+    if value < 0.0:
+        magnitude = 0.0 - value
+        sign = "-"
+    if magnitude > 1.0e15:
+        return str(value)
+    var scale = 1.0
+    for i in range(0, decimals):
+        scale *= 10.0
+    var whole = Int(magnitude)
+    var fraction = Int(floor((magnitude - Float(whole)) * scale + 0.5))
+    if Float(fraction) >= scale:
+        whole += 1
+        fraction = 0
+    if decimals == 0:
+        return sign + str(whole)
+    var digits = str(fraction)
+    while len(digits) < decimals:
+        digits = "0" + digits
+    return sign + str(whole) + "." + digits

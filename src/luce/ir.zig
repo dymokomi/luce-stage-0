@@ -80,23 +80,11 @@ pub const Intrinsic = enum {
     /// copy EXPR — a deep, independent duplicate of the object and
     /// everything it owns (S31).
     copy_object,
-    // String methods.
-    str_find,
-    str_contains,
-    str_starts,
-    str_ends,
-    str_trim,
-    str_lower,
-    str_upper,
-    str_replace,
-    str_repeat,
-    str_split,
     // List / rank-1 Array / Map / Builder methods.
     list_sort,
     list_reverse,
     list_find,
     list_contains,
-    list_join,
     clear_object,
     map_keys,
     map_values,
@@ -780,32 +768,6 @@ fn verifyIntrinsic(
             if (arguments[0] != .heap and arguments[0] != .strukt) return error.BadIntrinsic;
             try expectType(result, arguments[0]);
         },
-        .str_find => try stringPair(arguments, result, .int),
-        .str_contains, .str_starts, .str_ends => try stringPair(arguments, result, .boolean),
-        .str_trim, .str_lower, .str_upper => {
-            try exactly(arguments, 1);
-            try expectType(arguments[0], .string);
-            try expectType(result, .string);
-        },
-        .str_replace => {
-            try exactly(arguments, 3);
-            for (arguments) |argument| try expectType(argument, .string);
-            try expectType(result, .string);
-        },
-        .str_repeat => {
-            try exactly(arguments, 2);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .int);
-            try expectType(result, .string);
-        },
-        .str_split => {
-            try exactly(arguments, 2);
-            try expectType(arguments[0], .string);
-            try expectType(arguments[1], .string);
-            if (!(try heapShape(program, result)).eql(.{ .list = .string })) {
-                return error.BadIntrinsic;
-            }
-        },
         .list_sort, .list_reverse => {
             try exactly(arguments, 1);
             const element: Type = switch (try heapShape(program, arguments[0])) {
@@ -830,15 +792,6 @@ fn verifyIntrinsic(
             };
             try expectType(arguments[1], element);
             try expectType(result, if (call.kind == .list_find) .int else .boolean);
-        },
-        .list_join => {
-            try exactly(arguments, 2);
-            switch (try heapShape(program, arguments[0])) {
-                .list => |element| try expectType(element, .string),
-                else => return error.BadIntrinsic,
-            }
-            try expectType(arguments[1], .string);
-            try expectType(result, .string);
         },
         .clear_object => {
             try exactly(arguments, 1);
@@ -1009,13 +962,6 @@ fn heapShape(program: *const Program, of: Type) VerifyError!types.HeapType {
     if (of != .heap) return error.BadIntrinsic;
     if (of.heap >= program.heap_types.len) return error.BadStruct;
     return program.heap_types[of.heap];
-}
-
-fn stringPair(arguments: []const Type, result: Type, produced: Type) VerifyError!void {
-    try exactly(arguments, 2);
-    try expectType(arguments[0], .string);
-    try expectType(arguments[1], .string);
-    try expectType(result, produced);
 }
 
 // ---------------------------------------------------------------------------

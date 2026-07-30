@@ -66,6 +66,7 @@ const max_modules = 64;
 const std_modules = [_]struct { name: []const u8, source: []const u8 }{
     .{ .name = "math", .source = @embedFile("std/math.luc") },
     .{ .name = "files", .source = @embedFile("std/files.luc") },
+    .{ .name = "strings", .source = @embedFile("std/strings.luc") },
 };
 
 fn stdModule(name: []const u8) ?[]const u8 {
@@ -1281,6 +1282,8 @@ fn failsWith(source: []const u8, code: []const u8) !void {
 
 test "file-scope constants fold every value kind" {
     try runsClean(
+        \\import strings
+        \\
         \\let width = 80
         \\let tau = 2.0 * pi
         \\let pi = 3.14159
@@ -1342,6 +1345,7 @@ test "constants reach across modules through imports" {
     }} };
     var result = try compileProject(testing.allocator,
         \\import config
+        \\import strings
         \\
         \\let banner = "loom " + config.version
         \\

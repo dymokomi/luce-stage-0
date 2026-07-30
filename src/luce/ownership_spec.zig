@@ -129,6 +129,8 @@ test "S2: an object given out of the block survives it" {
 
 test "S3: unbound temporaries die at the end of their statement" {
     try expectClean(
+        \\import strings
+        \\
         \\func main():
         \\    var seen = 0
         \\    for word in "a b c".split(""):
@@ -206,6 +208,8 @@ test "S5: assigning a bare name into an owning var is a compile error" {
 
 test "S6: free is early release and poisons the name" {
     try expectClean(
+        \\import strings
+        \\
         \\func main():
         \\    var big = "a b c d".split(" ")
         \\    let count = len(big)
@@ -242,6 +246,8 @@ test "S6: free applies to owned names only" {
 
 test "S7: a fresh object inside a loop dies every iteration" {
     try expectClean(
+        \\import strings
+        \\
         \\func main():
         \\    for i in range(0, 1000):
         \\        var row = new Array(Int, 64)
@@ -545,6 +551,8 @@ test "S19: an ignored returned object is a temporary and frees itself" {
 
 test "S20: containers adopt fresh values silently and free them recursively" {
     try expectClean(
+        \\import strings
+        \\
         \\func main():
         \\    var index = new Map(String, List(Int))
         \\    index["a.luc"] = [12, 40]
@@ -1035,6 +1043,8 @@ test "S36: ownership follows the binding, which lives where it was declared" {
 
 test "S37: values into containers need no ownership, ever" {
     try expectClean(
+        \\import strings
+        \\
         \\func main():
         \\    var x: List(Int) = []
         \\    for i in range(0, 10):
@@ -1092,6 +1102,8 @@ test "S33: a busy program ends with zero live objects" {
         \\struct Entry:
         \\    word: String
         \\    hits: List(Int)
+        \\
+        \\import strings
         \\
         \\func collect(text: String) -> List(Entry):
         \\    var entries = new List(Entry)
@@ -1162,6 +1174,8 @@ test "mechanics: deep recursion moves objects out without confusion" {
 
 test "mechanics: loop conditions that allocate flush every iteration" {
     try expectClean(
+        \\import strings
+        \\
         \\func main():
         \\    var i = 0
         \\    while len(str(i).split(".")) > 0 and i < 100:
@@ -1173,6 +1187,8 @@ test "mechanics: loop conditions that allocate flush every iteration" {
 
 test "mechanics: returning from inside a for over a fresh iterable frees it" {
     try expectClean(
+        \\import strings
+        \\
         \\func hunt(text: String) -> String:
         \\    for word in text.split(" "):
         \\        if word.starts_with("b"):

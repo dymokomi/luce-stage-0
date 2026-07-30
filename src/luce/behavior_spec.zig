@@ -493,6 +493,8 @@ test "f-strings: empty, no holes, escapes, literal braces, nested strings" {
 
 test "f-strings compose with methods and calls in holes" {
     try expectOk(
+        \\import strings
+        \\
         \\func twice(n: Int) -> Int:
         \\    return n * 2
         \\
@@ -1054,6 +1056,8 @@ test "the explicit frame stack survives a deep iterative-recursive sum" {
 
 test "strings: find, contains, starts_with, ends_with" {
     try expectOk(
+        \\import strings
+        \\
         \\func main():
         \\    let s = "hello world"
         \\    assert(s.find("world") == 6)
@@ -1071,6 +1075,8 @@ test "strings: find, contains, starts_with, ends_with" {
 
 test "strings: trim, lower, upper, repeat" {
     try expectOk(
+        \\import strings
+        \\
         \\func main():
         \\    assert("  hi  ".trim() == "hi")
         \\    assert("\t\nhi\n".trim() == "hi")
@@ -1086,6 +1092,8 @@ test "strings: trim, lower, upper, repeat" {
 
 test "strings: replace substitutes every occurrence" {
     try expectOk(
+        \\import strings
+        \\
         \\func main():
         \\    assert("a.b.c".replace(".", "-") == "a-b-c")
         \\    assert("aaa".replace("a", "bb") == "bbbbbb")
@@ -1097,6 +1105,8 @@ test "strings: replace substitutes every occurrence" {
 
 test "strings: split on a separator and split on whitespace" {
     try expectOk(
+        \\import strings
+        \\
         \\func main():
         \\    let a = "1,2,3".split(",")
         \\    assert(len(a) == 3)
@@ -1112,6 +1122,8 @@ test "strings: split on a separator and split on whitespace" {
 
 test "strings: join round-trips split" {
     try expectOk(
+        \\import strings
+        \\
         \\func main():
         \\    let parts = "a-b-c".split("-")
         \\    assert(parts.join("-") == "a-b-c")

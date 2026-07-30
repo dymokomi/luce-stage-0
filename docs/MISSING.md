@@ -12,7 +12,8 @@ design is deliberately parked for a joint conversation (Phase 3).
 
 What already stands: a statically typed language with inference,
 structs, modules and imports, collections (List/Map/Array/Builder)
-with methods, strings with a real method set, file-scope constants,
+with methods, a standard library written in Luce (math, strings,
+files) with method sugar for strings, file-scope constants,
 recursion to any depth, a ratified and adversarially audited
 ownership model with zero-leak guarantee, stable diagnostics with
 spans, a verified binary module format, a terminal host, and a
@@ -119,10 +120,14 @@ are Luce source embedded in the compiler, resolved before the file
 loader — `import math` and `import files` lead the way.  What remains
 is breadth, added module by module:
 
-- **Strings:** `pad`/`center`/`ljust`, `find` from-index /
-  `find_last`, `count`, split with limit, `is_digit`/`is_alpha`
-  class checks, real Unicode case folding (today's lower/upper is
-  ASCII), codepoint iteration (byte_at only).
+- **Strings:** ~~moved into std~~ — `import strings` now owns all
+  manipulation in pure Luce (the language keeps only literals,
+  f-strings, `+`, comparison, slices, len, byte_at), and shipped
+  `find_from`, `count`, `pad_left`/`pad_right`, and
+  `format_float(x, decimals)` on the way.  Still missing: `center`,
+  `find_last`, split with limit, `is_digit`/`is_alpha` class
+  checks, real Unicode case folding (lower/upper is ASCII),
+  codepoint iteration (byte_at only).
 - **Collections:** `set` type (or Map(K, Bool) blessed), `m.values()`,
   list `min/max/sum`, sort with key/comparator (needs functions as
   values — see Tier 4), `enumerate`-style indexed iteration.
@@ -130,8 +135,8 @@ is breadth, added module by module:
   binary I/O (needs Bytes), `env(name)`, `exit(code)`, current
   time/clock, `sleep(ms)` (life.luc busy-waits today).
 - **Math:** ~~pow/log/exp/trig, PRNG~~ (shipped in `import math`);
-  still missing: float formatting control (`str(2.5)` is
-  take-it-or-leave-it).
+  ~~float formatting control~~ (shipped:
+  `strings.format_float(x, decimals)`).
 
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 

@@ -1025,89 +1025,6 @@ const Machine = struct {
                 }
                 return try self.deepCopy(value);
             },
-            .str_find => {
-                const haystack = registers[arguments[0]].string;
-                const needle = registers[arguments[1]].string;
-                const found = std.mem.indexOf(u8, haystack, needle);
-                return .{ .int = if (found) |at| @intCast(at) else -1 };
-            },
-            .str_contains => {
-                const found = std.mem.indexOf(u8, registers[arguments[0]].string, registers[arguments[1]].string);
-                return .{ .boolean = found != null };
-            },
-            .str_starts => {
-                const matches = std.mem.startsWith(u8, registers[arguments[0]].string, registers[arguments[1]].string);
-                return .{ .boolean = matches };
-            },
-            .str_ends => {
-                const matches = std.mem.endsWith(u8, registers[arguments[0]].string, registers[arguments[1]].string);
-                return .{ .boolean = matches };
-            },
-            .str_trim => {
-                const trimmed = std.mem.trim(u8, registers[arguments[0]].string, " \t\r\n");
-                return .{ .string = trimmed };
-            },
-            .str_lower, .str_upper => {
-                const text = registers[arguments[0]].string;
-                const folded = try self.arena.dupe(u8, text);
-                for (folded) |*byte| {
-                    byte.* = if (operation.kind == .str_lower)
-                        std.ascii.toLower(byte.*)
-                    else
-                        std.ascii.toUpper(byte.*);
-                }
-                return .{ .string = folded };
-            },
-            .str_replace => {
-                const text = registers[arguments[0]].string;
-                const old = registers[arguments[1]].string;
-                const fresh = registers[arguments[2]].string;
-                if (old.len == 0) return .{ .string = text };
-                var replaced: std.ArrayList(u8) = .empty;
-                var at: usize = 0;
-                while (std.mem.indexOfPos(u8, text, at, old)) |found| {
-                    try replaced.appendSlice(self.arena, text[at..found]);
-                    try replaced.appendSlice(self.arena, fresh);
-                    at = found + old.len;
-                }
-                try replaced.appendSlice(self.arena, text[at..]);
-                return .{ .string = replaced.items };
-            },
-            .str_repeat => {
-                const text = registers[arguments[0]].string;
-                const times = registers[arguments[1]].int;
-                if (times <= 0 or text.len == 0) return .{ .string = "" };
-                const total = std.math.mul(usize, text.len, @intCast(times)) catch
-                    return self.failure(.string_bounds);
-                if (total > max_string_size) return self.failure(.string_bounds);
-                const repeated = try self.arena.alloc(u8, total);
-                var at: usize = 0;
-                while (at < total) : (at += text.len) {
-                    @memcpy(repeated[at .. at + text.len], text);
-                }
-                return .{ .string = repeated };
-            },
-            .str_split => {
-                const text = registers[arguments[0]].string;
-                const separator = registers[arguments[1]].string;
-                var pieces: std.ArrayList(RuntimeValue) = .empty;
-                if (separator.len == 0) {
-                    // Whitespace runs, Python's split() with no argument.
-                    var scan = std.mem.tokenizeAny(u8, text, " \t\r\n");
-                    while (scan.next()) |piece| {
-                        try pieces.append(self.arena, .{ .string = piece });
-                    }
-                } else {
-                    var scan = std.mem.splitSequence(u8, text, separator);
-                    while (scan.next()) |piece| {
-                        try pieces.append(self.arena, .{ .string = piece });
-                    }
-                }
-                const index: u32 = @intCast(self.heap.items.len);
-                try self.heap.append(self.arena, .{ .data = .{ .list = pieces } });
-                self.live_objects += 1;
-                return .{ .object = .{ .index = index } };
-            },
             .list_sort, .list_reverse => {
                 const object = try self.resolve(registers[arguments[0]]);
                 const elements: []RuntimeValue = switch (object.data) {
@@ -1139,16 +1056,6 @@ const Machine = struct {
                 }
                 if (operation.kind == .list_find) return .{ .int = found };
                 return .{ .boolean = found != -1 };
-            },
-            .list_join => {
-                const object = try self.resolve(registers[arguments[0]]);
-                const separator = registers[arguments[1]].string;
-                var joined: std.ArrayList(u8) = .empty;
-                for (object.data.list.items, 0..) |element, at| {
-                    if (at != 0) try joined.appendSlice(self.arena, separator);
-                    try joined.appendSlice(self.arena, element.string);
-                }
-                return .{ .string = joined.items };
             },
             .clear_object => {
                 const object = try self.resolve(registers[arguments[0]]);
@@ -1458,9 +1365,6 @@ const Machine = struct {
 fn isStringBoundary(value: []const u8, index: usize) bool {
     return index == value.len or value[index] & 0xc0 != 0x80;
 }
-
-/// One string operation cannot produce more than this many bytes.
-const max_string_size = 64 * 1024 * 1024;
 
 /// Ordering for sort: elements are Int, Float, or String (the
 /// analyzer guarantees it).
@@ -2483,6 +2387,8 @@ test "the explicit frame stack survives deep recursion" {
 
 test "string methods: search, case, trim, replace, repeat, split" {
     var bench = try Bench.setup(
+        \\import strings
+        \\
         \\func main():
         \\    let text = "  Hello, Luce World  "
         \\    let cleaned = text.trim()
@@ -2515,6 +2421,8 @@ test "string methods: search, case, trim, replace, repeat, split" {
 
 test "list and array methods: sort, reverse, find, contains, fill, clear" {
     var bench = try Bench.setup(
+        \\import strings
+        \\
         \\func main():
         \\    var xs = [3, 1, 4, 1, 5]
         \\    xs.sort()
