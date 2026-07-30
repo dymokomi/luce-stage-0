@@ -32,44 +32,96 @@ timings include process startup; best of three.
   interpreter runs it scalar, and the ratio is the honest measure of
   that gap.
 
+## The interpreter's own build mode matters most
+
+The single biggest factor in these numbers is not Luce at all — it
+is the optimize mode of the **interpreter binary**.  A Debug-mode
+`zig build` interpreter is 4–5× slower than an optimized one, which
+is why `./build.sh` now defaults to ReleaseSafe and passing
+`-Doptimize=Debug` binaries to this harness is the one way to get
+meaningless numbers.  Measured across modes (loops):
+
+| interpreter build      | loops   | vs C |
+|------------------------|---------|------|
+| Debug (never bench)    | ~3.9s   | ~240x |
+| ReleaseSafe (default)  | ~0.97s  | ~60x |
+| ReleaseFast            | ~0.87s  | ~53x |
+
+ReleaseSafe keeps Zig's own overflow/bounds checks inside the
+interpreter — defense in depth behind the `.lc` trust boundary — at
+~15% over ReleaseFast.  That is the ship default; ReleaseFast is
+one flag away when it matters.
+
 ## Snapshot — 2026-07-30
 
-x86_64 Linux container, zig cc (clang 21).  Luce times are stable
-run to run (±3%); the C times are so small that container noise
-moves them ±40%, which is most of the spread in the ratio:
+x86_64 Linux container, zig cc (clang 21), interpreter at
+ReleaseSafe.  Luce times are stable run to run (±5%); the C times
+are so small that container noise moves them ±40%, which is most of
+the spread in the ratio:
 
-| benchmark | C       | Luce    | Luce/C    | CPython 3.11 |
-|-----------|---------|---------|-----------|--------------|
-| loops     | 16–26ms | ~3.9s   | 150–240x  | 1228ms       |
-| math      | 18–22ms | ~5.2s   | 240–290x  | 1884ms       |
-| strings   | 5–6ms   | ~1.6s   | 280–310x  |              |
-| arrays    | 8–9ms   | ~1.5s   | 170–180x  |              |
+| benchmark | C       | Luce     | Luce/C  | CPython 3.11 |
+|-----------|---------|----------|---------|--------------|
+| loops     | 16–26ms | ~0.97s   | 40–60x  | 1228ms       |
+| math      | 18–22ms | ~1.1s    | 50–60x  | 1884ms       |
+| strings   | 5–6ms   | ~0.45s   | 80–95x  |              |
+| arrays    | 8–10ms  | ~0.38s   | 40–45x  |              |
 
 (The CPython column is the same algorithm in plain Python on the
 same machine, for orientation; its mandelbrot count matches Luce's
 exactly — both are strict IEEE.)
 
-**Where we're at:** the interpreter runs 150–300× slower than
-full-speed C, and roughly 3× slower than CPython 3.11 on the
-loop-bound workloads.  For a young, safety-checked, ownership-
-tracking IR interpreter that is a sane starting point, not a crisis:
-CPython's interpreter has decades of tuning (adaptive specialized
-opcodes since 3.11) and Luce spends real work per step on things the
-language promises — checked arithmetic, bounds and boundary checks,
-statement-temporary bookkeeping.
+**Where we're at:** 40–95× slower than full-speed C, and **faster
+than CPython 3.11** on the loop-bound workloads (~1.3× on loops,
+~1.7× on math).  That is respectable territory for a
+safety-checked, ownership-tracking IR interpreter with zero tuning
+so far.
 
-Known levers, in the order they would pay:
+## Why runtime checks are not the cost
 
-1. **Dispatch and step accounting** — the inner loop's fixed costs
-   (budget decrement, tagged-union switch) dominate `loops`.
+It is tempting to blame the runtime checks and want them moved to
+compile time.  Most already are: types, ownership classes, poisoning,
+return paths, arity — all static.  What remains at runtime is what
+*cannot* be static (bounds of a dynamic index, overflow of runtime
+values — exactly the set Zig's ReleaseSafe keeps) plus the ownership
+serial bookkeeping, and each of those is a predictable branch or a
+store.  The measured ceiling for all checking combined is the
+ReleaseSafe-vs-ReleaseFast gap: ~15%.
+
+The real cost is **interpretation itself**.  A Luce `+` costs a trip
+around the dispatch loop — instruction fetch, tagged-union switch,
+register-array reads and writes, step-budget decrement — some 15–30
+machine instructions where C spends one.  Deleting every check would
+take ~60× to ~50×, not to 1×.  The path to C is not fewer checks;
+it is not dispatching at all.
+
+## The path to C-class speed, honestly
+
+1. **Interpreter tuning** (the current engine, kept as the reference
+   implementation): threaded/computed-goto dispatch, batched
+   step-budget accounting, fusing common instruction pairs.
+   Realistic landing zone: 15–30× C.  Interpreters do not beat that
+   band without JIT machinery.
+2. **A compiled backend** — the real answer, and the language was
+   shaped for it: statically typed, monomorphic, no GC, no dynamic
+   dispatch, verified IR with explicit blocks.  Lowering Luce IR to
+   native code (directly, or through Zig/C and an existing
+   optimizer) puts checked code in Zig-ReleaseSafe territory —
+   **1–2× C** — and closes the SIMD gap on `arrays`, because the
+   optimizer vectorizes compiled loops.  Semantics never change:
+   same traps, same codes, same IEEE results; a backend is a swap
+   behind `backend.zig`, invisible to programs.
+
+Interpreter levers in the order they would pay, until then:
+
+1. **Dispatch and step accounting** — the fixed per-instruction
+   costs dominate `loops` and `math`.
 2. **Interpreted std strings** — `strings.upper` pays the full
-   dispatch loop per byte where C pays one instruction.  If string
-   throughput ever matters, the fix is faster dispatch first, and
-   only then reconsider native fast paths for the hottest std
-   internals — moving code back into the compiler reverses a
-   deliberate design bet and needs that much evidence.
+   dispatch loop per byte; `strings` carries the widest ratio.
+   Faster dispatch helps it first; native fast paths for hot std
+   internals only with evidence, since that reverses a deliberate
+   design bet.
 3. **SIMD** — out of scope for an interpreter; the `arrays` ratio
-   simply records what a future compiled backend could reclaim.
+   records what the compiled backend reclaims.
 
 ## The regression-guard workflow
 

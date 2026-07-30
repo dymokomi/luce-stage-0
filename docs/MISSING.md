@@ -138,6 +138,18 @@ is breadth, added module by module:
   ~~float formatting control~~ (shipped:
   `strings.format_float(x, decimals)`).
 
+## Performance — where the speed comes from later
+
+Measured honestly in docs/BENCHMARKS.md: the ReleaseSafe
+interpreter runs 40–95× slower than C and beats CPython 3.11 on
+loop-bound work.  Runtime checks are *not* the gap (~15% ceiling,
+measured); interpretation is.  The path, when programs demand it:
+interpreter tuning (threaded dispatch, batched step accounting →
+15–30× C), then a compiled backend lowering the verified IR to
+native code (→ 1–2× C, SIMD included).  The language was shaped for
+that backend — statically typed, monomorphic, no GC, semantics
+identical under any engine — so it waits on need, not on design.
+
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 
 Recorded so the absence reads as a choice, not an oversight:
