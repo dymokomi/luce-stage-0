@@ -197,7 +197,7 @@ pub const Instruction = union(enum) {
     local_set: struct { local: LocalId, value: Register },
     input_load: u32,
     output_store: struct { port: u32, value: Register },
-    binary: struct { op: BinaryOp, operand_type: Type, left: Register, right: Register },
+    binary: Binary,
     unary: struct { op: UnaryOp, operand: Register },
     convert: struct { kind: ConvertKind, operand: Register },
     struct_make: struct { layout: u32, fields: []Register },
@@ -205,10 +205,10 @@ pub const Instruction = union(enum) {
     /// Functional field update: a copy of target with one field replaced.
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
     call: struct { function: u32, arguments: []Register },
-    intrinsic: struct { kind: Intrinsic, arguments: []Register },
+    intrinsic: IntrinsicCall,
     /// Allocate one heap object of the program's heap type `heap`;
     /// `dims` carries an Array's runtime dimensions (empty otherwise).
-    heap_new: struct { heap: u32, dims: []Register },
+    heap_new: HeapNew,
     /// Ownership: the objects reachable through `value` (the object
     /// itself, or a struct's object fields recursively) now belong to
     /// this frame's `local`; its scope-exit release frees them.
@@ -222,6 +222,12 @@ pub const Instruction = union(enum) {
     branch: struct { condition: Register, then_block: BlockId, else_block: BlockId },
     ret: ?Register,
     trap: TrapCode,
+
+    /// Named payloads, so the interpreter's handlers can say what
+    /// they take instead of `anytype`.
+    pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
+    pub const IntrinsicCall = struct { kind: Intrinsic, arguments: []Register };
+    pub const HeapNew = struct { heap: u32, dims: []Register };
 
     pub fn isTerminator(self: Instruction) bool {
         return switch (self) {

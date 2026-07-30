@@ -53,34 +53,53 @@ pub const Argument = struct {
     span: Span,
 };
 
+/// Payload types are named so analysis code can take them as real
+/// parameters instead of `anytype` — a signature should say what it
+/// receives.
+pub const Literal = struct { text: []const u8, span: Span };
+pub const BoolLiteral = struct { value: bool, span: Span };
+pub const StringLiteral = struct { decoded: []const u8, span: Span }; // arena-owned, unescaped
+pub const Name = struct { text: []const u8, span: Span };
+pub const FieldAccess = struct { target: *Expression, name: []const u8, span: Span };
+pub const Call = struct { callee: []const u8, arguments: []Argument, span: Span };
+pub const Binary = struct { op: BinaryOp, left: *Expression, right: *Expression, span: Span };
+pub const Unary = struct { op: UnaryOp, operand: *Expression, span: Span };
+pub const NewObject = struct { type_name: TypeName, dims: []*Expression, span: Span };
+pub const ListLiteral = struct { elements: []*Expression, span: Span };
+pub const Index = struct { target: *Expression, indices: []*Expression, span: Span };
+pub const SliceRange = struct { target: *Expression, start: ?*Expression, end: ?*Expression, span: Span };
+pub const Method = struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span };
+pub const Give = struct { operand: *Expression, span: Span };
+pub const Copy = struct { operand: *Expression, span: Span };
+
 pub const Expression = union(enum) {
-    int_literal: struct { text: []const u8, span: Span },
-    float_literal: struct { text: []const u8, span: Span },
-    bool_literal: struct { value: bool, span: Span },
-    string_literal: struct { decoded: []const u8, span: Span }, // arena-owned, unescaped
-    name: struct { text: []const u8, span: Span },
-    field: struct { target: *Expression, name: []const u8, span: Span },
-    call: struct { callee: []const u8, arguments: []Argument, span: Span },
-    binary: struct { op: BinaryOp, left: *Expression, right: *Expression, span: Span },
-    unary: struct { op: UnaryOp, operand: *Expression, span: Span },
+    int_literal: Literal,
+    float_literal: Literal,
+    bool_literal: BoolLiteral,
+    string_literal: StringLiteral,
+    name: Name,
+    field: FieldAccess,
+    call: Call,
+    binary: Binary,
+    unary: Unary,
     /// new List(Int), new Map(String, Int), new Array(Int, 5, 5),
     /// new Builder().  Type arguments live in `type_name`; an Array's
     /// runtime dimension expressions live in `dims`.
-    new_object: struct { type_name: TypeName, dims: []*Expression, span: Span },
+    new_object: NewObject,
     /// [1, 2, 3] — a List literal typed by its elements.
-    list_literal: struct { elements: []*Expression, span: Span },
+    list_literal: ListLiteral,
     /// target[i] or target[r, c].
-    index: struct { target: *Expression, indices: []*Expression, span: Span },
+    index: Index,
     /// target[a:b]; either bound may be omitted.
-    slice_range: struct { target: *Expression, start: ?*Expression, end: ?*Expression, span: Span },
+    slice_range: SliceRange,
     /// target.name(arguments) — a builtin method on a value, or a
     /// namespaced call when the target chain names a struct/module
     /// (the analyzer decides; the parser cannot know).
-    method: struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span },
+    method: Method,
     /// give x — transfer ownership; x is poisoned afterwards (S10).
-    give: struct { operand: *Expression, span: Span },
+    give: Give,
     /// copy x — a deep, independent duplicate (S31).
-    copy: struct { operand: *Expression, span: Span },
+    copy: Copy,
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {
@@ -97,10 +116,14 @@ pub const Expression = union(enum) {
 /// point.x or output.position, or an indexed place such as xs[i] or
 /// grid[r, c] (whose base may be any expression — objects mutate by
 /// reference).
+pub const NameTarget = struct { text: []const u8, span: Span };
+pub const FieldTarget = struct { base: []const u8, field: []const u8, span: Span };
+pub const IndexTarget = struct { base: *Expression, indices: []*Expression, span: Span };
+
 pub const Target = union(enum) {
-    name: struct { text: []const u8, span: Span },
-    field: struct { base: []const u8, field: []const u8, span: Span },
-    index: struct { base: *Expression, indices: []*Expression, span: Span },
+    name: NameTarget,
+    field: FieldTarget,
+    index: IndexTarget,
 
     pub fn span(self: *const Target) Span {
         return switch (self.*) {
@@ -109,38 +132,49 @@ pub const Target = union(enum) {
     }
 };
 
+pub const Binding = struct { name: []const u8, annotation: ?TypeName, value: *Expression, span: Span };
+pub const Variable = struct { name: []const u8, annotation: ?TypeName, value: ?*Expression, span: Span };
+pub const Assign = struct { target: Target, value: *Expression, span: Span };
+pub const Conditional = struct {
+    condition: *Expression,
+    then_block: Block,
+    /// elif chains become nested conditionals in this block.
+    else_block: ?Block,
+    span: Span,
+};
+pub const While = struct { condition: *Expression, body: Block, span: Span };
+pub const ForRange = struct {
+    name: []const u8,
+    start: *Expression,
+    end: *Expression,
+    body: Block,
+    span: Span,
+};
+pub const ForEach = struct {
+    name: []const u8,
+    iterable: *Expression,
+    body: Block,
+    span: Span,
+};
+pub const Return = struct { value: ?*Expression, span: Span };
+pub const Marker = struct { span: Span };
+pub const ExpressionStatement = struct { value: *Expression, span: Span };
+
 pub const Statement = union(enum) {
-    let: struct { name: []const u8, annotation: ?TypeName, value: *Expression, span: Span },
+    let: Binding,
     /// var name: Type with no value is a late declaration: the slot
     /// holds the type's zero value until assigned (OWNERSHIP.md S40).
-    variable: struct { name: []const u8, annotation: ?TypeName, value: ?*Expression, span: Span },
-    assign: struct { target: Target, value: *Expression, span: Span },
-    conditional: struct {
-        condition: *Expression,
-        then_block: Block,
-        /// elif chains become nested conditionals in this block.
-        else_block: ?Block,
-        span: Span,
-    },
-    while_loop: struct { condition: *Expression, body: Block, span: Span },
-    for_range: struct {
-        name: []const u8,
-        start: *Expression,
-        end: *Expression,
-        body: Block,
-        span: Span,
-    },
+    variable: Variable,
+    assign: Assign,
+    conditional: Conditional,
+    while_loop: While,
+    for_range: ForRange,
     /// for x in xs: — list and rank-1 array elements, or map keys.
-    for_each: struct {
-        name: []const u8,
-        iterable: *Expression,
-        body: Block,
-        span: Span,
-    },
-    return_statement: struct { value: ?*Expression, span: Span },
-    break_statement: struct { span: Span },
-    continue_statement: struct { span: Span },
-    expression: struct { value: *Expression, span: Span },
+    for_each: ForEach,
+    return_statement: Return,
+    break_statement: Marker,
+    continue_statement: Marker,
+    expression: ExpressionStatement,
 };
 
 pub const Block = struct {

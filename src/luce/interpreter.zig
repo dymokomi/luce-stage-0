@@ -523,7 +523,7 @@ const Machine = struct {
 
     fn allocateObject(
         self: *Machine,
-        new: anytype,
+        new: ir.Instruction.HeapNew,
         registers: []const RuntimeValue,
     ) error{OutOfMemory}!CallOutcome {
         const data: HeapObject.Data = switch (self.program.heap_types[new.heap]) {
@@ -621,7 +621,7 @@ const Machine = struct {
 
     fn binary(
         self: *Machine,
-        operation: anytype,
+        operation: ir.Instruction.Binary,
         registers: []const RuntimeValue,
     ) error{OutOfMemory}!CallOutcome {
         const left = registers[operation.left];
@@ -755,7 +755,7 @@ const Machine = struct {
 
     fn intrinsic(
         self: *Machine,
-        operation: anytype,
+        operation: ir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
     ) error{OutOfMemory}!CallOutcome {
         const arguments = operation.arguments;

@@ -649,7 +649,7 @@ const Analyzer = struct {
                 }
                 const qualified = try self.qualify(self.modules[module].prefix, call.callee);
                 if (self.struct_names.get(qualified)) |layout_index| {
-                    return self.foldConstruct(module, call, layout_index);
+                    return self.foldConstruct(module, call.arguments, call.span, layout_index);
                 }
                 return self.constantError(call.span, "constants fold at compile time; calls are not constant", .{});
             },
@@ -660,7 +660,7 @@ const Analyzer = struct {
                     if (self.importsModule(module, head)) {
                         const joined = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ head, method.name });
                         if (self.struct_names.get(joined)) |layout_index| {
-                            return self.foldConstruct(module, method, layout_index);
+                            return self.foldConstruct(module, method.arguments, method.span, layout_index);
                         }
                     }
                 }
@@ -675,7 +675,7 @@ const Analyzer = struct {
         }
     }
 
-    fn foldConvert(self: *Analyzer, call: anytype, operand: TypedConstant) Error!?TypedConstant {
+    fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
         const to_int = std.mem.eql(u8, call.callee, "Int");
         if (to_int) {
             switch (operand.value) {
@@ -699,20 +699,26 @@ const Analyzer = struct {
         }
     }
 
-    fn foldConstruct(self: *Analyzer, module: usize, call: anytype, layout_index: u32) Error!?TypedConstant {
+    fn foldConstruct(
+        self: *Analyzer,
+        module: usize,
+        call_arguments: []const ast.Argument,
+        span: Span,
+        layout_index: u32,
+    ) Error!?TypedConstant {
         const layout = self.structs.items[layout_index];
         const result_type: Type = .{ .strukt = layout_index };
         if (self.carriesObjects(result_type)) {
-            return self.constantError(call.span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
+            return self.constantError(span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
         }
         if (layout.fields.len == 0) {
-            return self.constantError(call.span, "{s} is a function namespace and has no value fields", .{layout.name});
+            return self.constantError(span, "{s} is a function namespace and has no value fields", .{layout.name});
         }
         const fields = try self.arena.alloc(ConstantValue, layout.fields.len);
         const seen = try self.temporary.alloc(bool, layout.fields.len);
         defer self.temporary.free(seen);
         @memset(seen, false);
-        for (call.arguments) |argument| {
+        for (call_arguments) |argument| {
             const name = argument.name orelse {
                 return self.constantError(argument.span, "{s} is built with named fields: {s}(field = ...)", .{ layout.name, layout.name });
             };
@@ -736,7 +742,7 @@ const Analyzer = struct {
         }
         for (seen, 0..) |given, field_index| {
             if (!given) {
-                return self.constantError(call.span, "{s} is missing field {s}", .{ layout.name, layout.fields[field_index].name });
+                return self.constantError(span, "{s} is missing field {s}", .{ layout.name, layout.fields[field_index].name });
             }
         }
         return .{
@@ -745,7 +751,7 @@ const Analyzer = struct {
         };
     }
 
-    fn foldBinary(self: *Analyzer, module: usize, binary: anytype) Error!?TypedConstant {
+    fn foldBinary(self: *Analyzer, module: usize, binary: ast.Binary) Error!?TypedConstant {
         const left = (try self.foldConstant(module, binary.left)) orelse return null;
         // Short-circuit folds without evaluating the other side's
         // side effects — there are none, so plain evaluation is fine.
@@ -1416,7 +1422,7 @@ const FunctionBuilder = struct {
     /// Side-effect-free twin of methodNamespace: does target.name(...)
     /// resolve to a declaration (whose result the caller owns, S16)
     /// rather than a builtin method on a value?
-    fn methodIsNamespaced(self: *FunctionBuilder, method: anytype) Error!bool {
+    fn methodIsNamespaced(self: *FunctionBuilder, method: ast.Method) Error!bool {
         const chain = dottedChain(method.target) orelse return false;
         const head = chain.head();
         if (self.findLocal(head) != null) return false;
@@ -1655,7 +1661,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerAssign(self: *FunctionBuilder, assign: anytype) Error!void {
+    fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
         switch (assign.target) {
             .name => |name| try self.lowerAssignName(name.text, name.span, assign),
             .field => |field| try self.lowerAssignField(field, assign),
@@ -1663,7 +1669,7 @@ const FunctionBuilder = struct {
         }
     }
 
-    fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: anytype) Error!void {
+    fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
         if (std.mem.eql(u8, base, "output")) {
             try self.fail("luce.sema.output", span, "assign to output.NAME", .{});
             return;
@@ -1731,7 +1737,7 @@ const FunctionBuilder = struct {
         }
     }
 
-    fn lowerAssignField(self: *FunctionBuilder, target: anytype, assign: anytype) Error!void {
+    fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
         if (std.mem.eql(u8, target.base, "output")) {
             if (!self.has_frames) {
                 try self.fail("luce.sema.name", target.span, "output exists only in the evaluator entry", .{});
@@ -1846,7 +1852,7 @@ const FunctionBuilder = struct {
     /// place[i] = v, grid[r, c] = v, m[key] = v.  The base may be any
     /// expression: objects mutate through the reference, so no local
     /// write-back is needed.
-    fn lowerAssignIndex(self: *FunctionBuilder, target: anytype, assign: anytype) Error!void {
+    fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast.Assign) Error!void {
         const expressions = try self.arena().alloc(*ast.Expression, target.indices.len + 2);
         expressions[0] = target.base;
         @memcpy(expressions[1 .. 1 + target.indices.len], target.indices);
@@ -1957,7 +1963,7 @@ const FunctionBuilder = struct {
         return condition;
     }
 
-    fn lowerConditional(self: *FunctionBuilder, conditional: anytype) Error!void {
+    fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!void {
         const temps_floor = self.temps.items.len;
         const condition = (try self.lowerCondition(conditional.condition)) orelse return;
         // Condition temporaries die before the branch: the condition
@@ -1987,7 +1993,7 @@ const FunctionBuilder = struct {
         self.switchTo(merge_block);
     }
 
-    fn lowerWhile(self: *FunctionBuilder, loop: anytype) Error!void {
+    fn lowerWhile(self: *FunctionBuilder, loop: ast.While) Error!void {
         const header = try self.reserveBlock();
         const body = try self.reserveBlock();
         const exit = try self.reserveBlock();
@@ -2023,7 +2029,7 @@ const FunctionBuilder = struct {
         self.switchTo(exit);
     }
 
-    fn lowerForRange(self: *FunctionBuilder, loop: anytype) Error!void {
+    fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
         const temps_floor = self.temps.items.len;
         const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
         const start = bounds[0];
@@ -2093,7 +2099,7 @@ const FunctionBuilder = struct {
     /// drive the loop; the element (or map key) binds immutably each
     /// iteration.  Length is re-read every step, so mutation during
     /// iteration stays bounds-safe.
-    fn lowerForEach(self: *FunctionBuilder, loop: anytype) Error!void {
+    fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
         const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
         const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
             try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map's keys, not {s}", .{
@@ -2191,7 +2197,7 @@ const FunctionBuilder = struct {
         self.switchTo(exit);
     }
 
-    fn lowerReturn(self: *FunctionBuilder, returned: anytype) Error!void {
+    fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
         if (returned.value) |expression| {
             const value = (try self.lowerExpression(expression, false)) orelse return;
             if (self.return_type == .none) {
@@ -2358,7 +2364,7 @@ const FunctionBuilder = struct {
 
     /// give NAME — the named object transfers to whatever receives it;
     /// the name is poisoned to the end of its scope (S10, S13, S29).
-    fn lowerGive(self: *FunctionBuilder, give: anytype) Error!?Value {
+    fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Value {
         if (give.operand.* != .name) {
             try self.fail(
                 "luce.sema.own",
@@ -2457,7 +2463,7 @@ const FunctionBuilder = struct {
 
     /// copy EXPR — a deep, independent duplicate; always legal on
     /// readable objects (S31).
-    fn lowerCopy(self: *FunctionBuilder, copied: anytype) Error!?Value {
+    fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Value {
         const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
         if (!self.analyzer.carriesObjects(value.value_type)) {
             try self.fail(
@@ -2479,7 +2485,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerNew(self: *FunctionBuilder, new: anytype) Error!?Value {
+    fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Value {
         var object_type: Type = undefined;
         var dims: []Register = &.{};
         if (std.mem.eql(u8, new.type_name.name, "Array")) {
@@ -2513,7 +2519,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerListLiteral(self: *FunctionBuilder, literal: anytype) Error!?Value {
+    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral) Error!?Value {
         if (literal.elements.len == 0) {
             try self.fail(
                 "luce.sema.type",
@@ -2544,7 +2550,7 @@ const FunctionBuilder = struct {
         return .{ .register = list, .value_type = object_type };
     }
 
-    fn lowerIndex(self: *FunctionBuilder, index: anytype) Error!?Value {
+    fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Value {
         const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
         expressions[0] = index.target;
         @memcpy(expressions[1..], index.indices);
@@ -2561,7 +2567,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerSliceRange(self: *FunctionBuilder, slice: anytype) Error!?Value {
+    fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Value {
         var whole_sequence: std.ArrayList(*ast.Expression) = .empty;
         defer whole_sequence.deinit(self.temporary());
         try whole_sequence.append(self.temporary(), slice.target);
@@ -2613,7 +2619,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerField(self: *FunctionBuilder, field: anytype) Error!?Value {
+    fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Value {
         // input.NAME reads a port; anything else reads a struct field.
         if (field.target.* == .name) {
             const base = field.target.name.text;
@@ -2670,7 +2676,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerBinary(self: *FunctionBuilder, binary: anytype) Error!?Value {
+    fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
         switch (binary.op) {
             .logic_and, .logic_or => return self.lowerShortCircuit(binary),
             else => {},
@@ -2749,7 +2755,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerShortCircuit(self: *FunctionBuilder, binary: anytype) Error!?Value {
+    fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
         const left = (try self.lowerExpression(binary.left, false)) orelse return null;
         if (left.value_type != .boolean) {
             try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands", .{
@@ -2795,7 +2801,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerUnary(self: *FunctionBuilder, unary: anytype) Error!?Value {
+    fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary) Error!?Value {
         const operand = (try self.lowerExpression(unary.operand, false)) orelse return null;
         switch (unary.op) {
             .negate => {
@@ -2827,7 +2833,7 @@ const FunctionBuilder = struct {
     //
     // Struct construction, explicit conversion, namespaced calls, and
     // builtin methods on values.
-    fn lowerCall(self: *FunctionBuilder, call: anytype, as_statement: bool) Error!?Value {
+    fn lowerCall(self: *FunctionBuilder, call: ast.Call, as_statement: bool) Error!?Value {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
@@ -2843,7 +2849,7 @@ const FunctionBuilder = struct {
 
         const resolved = (try self.resolveDeclared(call.callee, call.span)) orelse return null;
         if (self.analyzer.struct_names.get(resolved)) |layout_index| {
-            return self.lowerConstruct(call, layout_index);
+            return self.lowerConstruct(call.arguments, call.span, layout_index);
         }
         const function_index = self.analyzer.function_names.get(resolved) orelse {
             try self.fail("luce.sema.call", call.span, "unknown function {s}", .{call.callee});
@@ -2935,11 +2941,11 @@ const FunctionBuilder = struct {
     /// module.Struct(...) construction), otherwise a builtin method on
     /// the target value.  Locals shadow nothing, so a chain whose head
     /// is a local is always a value method.
-    fn lowerMethod(self: *FunctionBuilder, method: anytype, as_statement: bool) Error!?Value {
+    fn lowerMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
         switch (try self.methodNamespace(method)) {
             .resolved => |resolved| {
                 if (self.analyzer.struct_names.get(resolved)) |layout_index| {
-                    return self.lowerConstruct(method, layout_index);
+                    return self.lowerConstruct(method.arguments, method.span, layout_index);
                 }
                 const function_index = self.analyzer.function_names.get(resolved).?;
                 return self.lowerUserCall(function_index, resolved, method.arguments, method.span, as_statement);
@@ -2993,7 +2999,7 @@ const FunctionBuilder = struct {
     }
 
     /// Decide whether target.name(...) names a declaration.
-    fn methodNamespace(self: *FunctionBuilder, method: anytype) Error!NamespaceResolution {
+    fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceResolution {
         const chain = dottedChain(method.target) orelse return .value;
         const parts = chain.parts;
         const count = chain.count;
@@ -3052,7 +3058,7 @@ const FunctionBuilder = struct {
     /// Builtin methods on values: strings, lists, arrays, maps, and
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
-    fn lowerValueMethod(self: *FunctionBuilder, method: anytype, as_statement: bool) Error!?Value {
+    fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
         if (method.arguments.len > 2) {
             try self.fail("luce.sema.method", method.span, "no method takes more than 2 arguments", .{});
             return null;
@@ -3120,12 +3126,12 @@ const FunctionBuilder = struct {
 
     const MethodFound = struct { kind: ir.Intrinsic, result: Type };
 
-    fn methodFail(self: *FunctionBuilder, method: anytype, comptime message: []const u8) Error!?MethodFound {
+    fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []const u8) Error!?MethodFound {
         try self.fail("luce.sema.method", method.span, message, .{});
         return null;
     }
 
-    fn stringMethod(self: *FunctionBuilder, method: anytype, arguments: []const Value) Error!?MethodFound {
+    fn stringMethod(self: *FunctionBuilder, method: ast.Method, arguments: []const Value) Error!?MethodFound {
         const name = method.name;
         const Simple = struct { name: []const u8, kind: ir.Intrinsic, takes: usize, argument: Type, result: Type };
         const table = [_]Simple{
@@ -3174,7 +3180,7 @@ const FunctionBuilder = struct {
 
     fn objectMethod(
         self: *FunctionBuilder,
-        method: anytype,
+        method: ast.Method,
         receiver_type: Type,
         descriptor: types.HeapType,
         arguments: []const Value,
@@ -3242,7 +3248,7 @@ const FunctionBuilder = struct {
     /// list-only.
     fn sequenceMethod(
         self: *FunctionBuilder,
-        method: anytype,
+        method: ast.Method,
         element: Type,
         growable: bool,
         arguments: []const Value,
@@ -3304,12 +3310,17 @@ const FunctionBuilder = struct {
         return null;
     }
 
-    fn lowerConstruct(self: *FunctionBuilder, call: anytype, layout_index: u32) Error!?Value {
+    fn lowerConstruct(
+        self: *FunctionBuilder,
+        call_arguments: []const ast.Argument,
+        span: Span,
+        layout_index: u32,
+    ) Error!?Value {
         const layout = self.analyzer.structs.items[layout_index];
         if (layout.fields.len == 0) {
             try self.fail(
                 "luce.sema.construct",
-                call.span,
+                span,
                 "{s} is a function namespace and has no value fields",
                 .{layout.name},
             );
@@ -3320,10 +3331,10 @@ const FunctionBuilder = struct {
         defer self.temporary().free(seen);
         @memset(seen, false);
 
-        const expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
-        for (call.arguments, expressions) |argument, *slot| slot.* = argument.value;
+        const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
+        for (call_arguments, expressions) |argument, *slot| slot.* = argument.value;
         const values = (try self.lowerOperands(expressions)) orelse return null;
-        for (call.arguments, values) |argument, value| {
+        for (call_arguments, values) |argument, value| {
             const name = argument.name orelse {
                 try self.fail("luce.sema.construct", argument.span, "{s} is built with named fields: {s}(field = ...)", .{ layout.name, layout.name });
                 return null;
@@ -3364,7 +3375,7 @@ const FunctionBuilder = struct {
         }
         for (seen, 0..) |given, index| {
             if (!given) {
-                try self.fail("luce.sema.construct", call.span, "{s} is missing field {s}", .{
+                try self.fail("luce.sema.construct", span, "{s} is missing field {s}", .{
                     layout.name,
                     layout.fields[index].name,
                 });
@@ -3378,7 +3389,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn lowerConvert(self: *FunctionBuilder, call: anytype) Error!?Value {
+    fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Value {
         if (call.arguments.len != 1 or call.arguments[0].name != null) {
             try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
             return null;
@@ -3421,7 +3432,7 @@ const FunctionBuilder = struct {
 
     /// Lower a builtin call; .not_builtin when the callee is no
     /// builtin, .failed after reporting bad arguments.
-    fn lowerIntrinsic(self: *FunctionBuilder, call: anytype, as_statement: bool) Error!IntrinsicResult {
+    fn lowerIntrinsic(self: *FunctionBuilder, call: ast.Call, as_statement: bool) Error!IntrinsicResult {
         const Builtin = struct {
             name: []const u8,
             kind: ir.Intrinsic,
@@ -3754,7 +3765,7 @@ const FunctionBuilder = struct {
         } };
     }
 
-    fn failIntrinsic(self: *FunctionBuilder, call: anytype, message: []const u8) Error!IntrinsicResult {
+    fn failIntrinsic(self: *FunctionBuilder, call: ast.Call, message: []const u8) Error!IntrinsicResult {
         try self.fail("luce.sema.type", call.span, "{s}", .{message});
         return .failed;
     }

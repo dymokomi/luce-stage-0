@@ -1,8 +1,7 @@
 //! The executable specification of docs/OWNERSHIP.md.
 //!
-//! One test (or a small cluster) per ratified situation S1-S39,
-//! numbered to match the document; S40-S43 (late declarations and
-//! null) live beside the interpreter.  Each situation is proven three
+//! One test (or a small cluster) per ratified situation S1-S43,
+//! numbered to match the document.  Each situation is proven three
 //! ways where it applies: the behavior works, misuse is a compile
 //! error with the stable code `luce.sema.own`, and the dynamic
 //! backstops trap with stable codes.  Every successful run must end
