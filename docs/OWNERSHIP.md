@@ -435,6 +435,79 @@ point.
 
 ---
 
+## G2. Clarifications from review (round 1)
+
+**S36. Assigning into an outer-declared variable: the object lives in
+the variable's declaration scope.**
+```luce
+func main():
+    var report = new Builder()      # declared (and initialized) here
+    if verbose:
+        report = new Builder()      # old freed (S5); new one owned by
+        report.append("details")    # report — which lives in MAIN's scope
+    print(str(report))              # object survives the if: ownership
+                                    # follows the BINDING, and the binding
+                                    # lives where it was DECLARED
+```
+Decision: ownership hoists naturally through assignment to
+outer-declared variables.  **Open sub-question:** Luce requires
+definite initialization, so "declare now, create later" needs a
+story — lean: allow `var report: Builder` starting as the null
+object (use-before-set traps `null_object`, machinery that already
+exists for array elements); full optionals are a separate future
+decision.
+
+**S37. Values into containers: no ownership, no verbs, ever.**
+```luce
+func main():
+    var x: List(Int) = []
+    for i in range(0, 10):
+        x.append(i)                 # appends a COPY of the Int value;
+                                    # i "dying" each iteration is
+                                    # irrelevant — values are copied,
+                                    # never owned
+    var names: List(String) = []
+    names.append("ada")             # String is a value: same story
+```
+Decision: `give`/`copy`/ownership apply to objects (List, Map,
+Array, Builder, carrying structs) only.  Values — Int, Float, Bool,
+String, Bytes, plain structs — copy into containers with zero
+ceremony.
+
+**S38. A borrowed parameter may mutate contents — borrows restrict
+keeping, not editing.**
+```luce
+func fill_list(xs: List(Int)):      # borrow
+    for i in range(0, 10):
+        xs.append(i)                # editing contents: always legal
+
+func main():
+    var x: List(Int) = []
+    fill_list(x)                    # no verb at either end
+    assert(len(x) == 10)            # main still owns x
+```
+Decision: the borrow/own distinction is purely about *lifetime* —
+who frees, and who may extend the object's life (store/return/
+give/free).  Content mutation through borrows is the normal way
+functions do work.  (Immutability-through-`let` is a separate,
+undecided question — see below.)
+
+**S39. `let` vs `var` freezes the binding, not the object.**
+```luce
+func main():
+    let xs = [1, 2]
+    xs.append(3)                    # legal today: let pins the NAME,
+                                    # not the object's contents
+    xs = [9]                        # COMPILE error: let cannot re-point
+```
+Decision (current, needs explicit ratification): `let`/`var` govern
+reassignment of the binding only — JavaScript's `const`, not Swift's
+`let`.  The alternative (let freezes contents) buys read-only
+guarantees at the cost of a const-ness type system; deliberately not
+chosen for now.
+
+---
+
 ## H. Program edges
 
 **S33. Nothing can leak.**  Every object is owned by a binding, a
