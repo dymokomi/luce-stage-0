@@ -242,12 +242,187 @@ fn expectFailsOptions(
     }
 }
 
+const source_mod = @import("source.zig");
+
+fn printDiagnostics(diagnostics: *const Diagnostics, source: []const u8) void {
+    const rendered = diagnostics.render(testing.allocator, source) catch return;
+    defer testing.allocator.free(rendered);
+    std.debug.print("actual diagnostics:\n{s}", .{rendered});
+}
+
+const Expected = struct { code: []const u8, line: usize, column: usize };
+
+/// Assert the full ordered set of diagnostics a bad program produces,
+/// each by stable code AND source location.  Zig's test/cases corpus
+/// pins line:column on every expected error; nothing in our suite did
+/// until here, so a diagnostic silently retargeting to the wrong
+/// token — invisible to a code-only check, and this is an
+/// editor-facing project where the span IS the product — now fails a
+/// test.  Wording stays unasserted per the coding guide.
+fn expectDiagnostics(source: []const u8, schema: PortSchema, options: types.CompileOptions, wanted: []const Expected) !void {
+    var result = try compile(testing.allocator, source, schema, options);
+    defer result.deinit();
+    if (result == .success) {
+        std.debug.print("expected diagnostics, but this compiled:\n{s}", .{source});
+        return error.TestUnexpectedResult;
+    }
+    const diagnostics = &result.failure;
+    errdefer printDiagnostics(diagnostics, source);
+    try testing.expectEqual(wanted.len, diagnostics.count());
+    for (wanted, 0..) |want, index| {
+        const item = diagnostics.at(index).?;
+        try testing.expectEqualStrings(want.code, item.code);
+        const at = source_mod.place(source, item.span.start);
+        try testing.expectEqual(want.line, at.line);
+        try testing.expectEqual(want.column, at.column);
+    }
+}
+
 test "func is strict and fn is an ordinary identifier" {
     try expectFails(
         \\fn evaluate(input: Input, output: Output):
         \\    return
         \\
     , .{}, "luce.parse.top");
+}
+
+test "lexer diagnostics carry the right code and location" {
+    // A tab indent, then a number with a doubled dot, then an
+    // unterminated string: three lexer codes at known places.
+    try expectDiagnostics(
+        "func main():\n\tlet a = 1\n",
+        .{},
+        .{ .entry_mode = .script },
+        &.{
+            .{ .code = "luce.lex.tab", .line = 2, .column = 1 },
+            .{ .code = "luce.parse.expected", .line = 2, .column = 2 },
+        },
+    );
+    try expectDiagnostics(
+        "func main():\n    let a = 12ab\n",
+        .{},
+        .{ .entry_mode = .script },
+        &.{
+            .{ .code = "luce.lex.number", .line = 2, .column = 13 },
+            .{ .code = "luce.parse.expression", .line = 2, .column = 17 },
+        },
+    );
+    try expectDiagnostics(
+        "func main():\n    let a = \"open\n",
+        .{},
+        .{ .entry_mode = .script },
+        &.{
+            .{ .code = "luce.lex.string", .line = 2, .column = 13 },
+            .{ .code = "luce.parse.expression", .line = 2, .column = 18 },
+        },
+    );
+}
+
+test "parser diagnostics carry the right code and location" {
+    try expectDiagnostics(
+        "let 3 = 4\n",
+        .{},
+        .{ .entry_mode = .script },
+        &.{.{ .code = "luce.parse.expected", .line = 1, .column = 5 }},
+    );
+}
+
+test "semantic diagnostics carry the right code and location" {
+    // An unknown type, pointed at the annotation.
+    try expectDiagnostics(
+        \\func main():
+        \\    var x: Widget = 1
+        \\
+    , .{}, .{ .entry_mode = .script }, &.{.{ .code = "luce.sema.type", .line = 2, .column = 12 }});
+    // A bad conversion argument, pointed at the call.
+    try expectDiagnostics(
+        \\func main():
+        \\    let x = Int("no")
+        \\
+    , .{}, .{ .entry_mode = .script }, &.{.{ .code = "luce.sema.convert", .line = 2, .column = 13 }});
+    // An unknown field, pointed at the access.
+    try expectDiagnostics(
+        \\struct Point:
+        \\    x: Float
+        \\
+        \\func main():
+        \\    var p = Point(x = 1.0)
+        \\    let y = p.y
+        \\
+    , .{}, .{ .entry_mode = .script }, &.{.{ .code = "luce.sema.field", .line = 6, .column = 13 }});
+}
+
+test "the previously-unasserted diagnostic codes fire" {
+    // A single-case-per-code sweep for codes no other test pinned,
+    // so each stays reachable and keeps its stable name.
+    const Case = struct { source: []const u8, code: []const u8 };
+    const cases = [_]Case{
+        .{ .source = "func main():\n    let a = 1\x00\n", .code = "luce.lex.character" },
+        .{ .source = "func main():\n    let a = \"\\q\"\n", .code = "luce.lex.escape" },
+        .{ .source = "func main():\n    let a = @\n", .code = "luce.parse.expression" },
+        .{ .source = "func main():\n    let a: List = []\n", .code = "luce.sema.type" },
+        .{ .source = "func main():\n    let a = new Array(Int)\n", .code = "luce.sema.new" },
+        .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
+    };
+    for (cases) |case| {
+        try expectFailsOptions(case.source, .{}, .{ .entry_mode = .script }, case.code);
+    }
+}
+
+test "the pipeline survives every allocation failure" {
+    // A ratchet, not a bug-finder (all four pass today): the moment
+    // someone adds a non-arena cache or an ArrayList that outlives an
+    // error path, this catches the leak or the swallowed OOM.  Also
+    // enforces error.NondeterministicMemoryUsage.
+    const representative =
+        \\struct Point:
+        \\    x: Float
+        \\    tag: String
+        \\
+        \\func total(values: List(Int)) -> Int:
+        \\    var sum = 0
+        \\    for value in values:
+        \\        sum = sum + value
+        \\    return sum
+        \\
+        \\func main():
+        \\    var xs = [3, 1, 2]
+        \\    xs.sort()
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = total(xs)
+        \\    print(str(ages["ada"]))
+        \\
+    ;
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var result = try compile(gpa, representative, .{}, .{ .entry_mode = .script, .allow_host = true });
+            result.deinit();
+        }
+    }.run, .{});
+}
+
+test "decode survives every allocation failure" {
+    var program = try expectCompiles(
+        \\func evaluate(input: Input, output: Output):
+        \\    output.doubled = input.value * 2
+        \\
+    , .{
+        .inputs = &.{.{ .name = "value", .declared = .int }},
+        .outputs = &.{.{ .name = "doubled", .declared = .int }},
+    });
+    defer program.deinit();
+    const module = @import("module.zig");
+    const encoded = try module.encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator, bytes: []const u8) !void {
+            var decoded = module.decode(gpa, bytes) catch |mistake| switch (mistake) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return,
+            };
+            decoded.deinit();
+        }
+    }.run, .{encoded});
 }
 
 test "entry mode enforces evaluator and script contracts" {

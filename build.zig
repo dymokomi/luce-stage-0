@@ -45,6 +45,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "files", .module = app_files },
         },
     });
+    const app_files_tests = b.addTest(.{ .root_module = app_files });
+    test_step.dependOn(&b.addRunArtifact(app_files_tests).step);
+
     const compiler = b.addExecutable(.{ .name = "luce", .root_module = compiler_module });
     const install_compiler = b.addInstallArtifact(compiler, .{
         .dest_dir = .{ .override = .prefix },
@@ -101,5 +104,9 @@ pub fn build(b: *std.Build) void {
             b.fmt("programs/{s}.lc", .{program.name}),
         );
         b.getInstallStep().dependOn(&install_module.step);
+        // `zig build test` compiles every bundled program too, so a
+        // broken userland program fails the suite — not only a full
+        // ./build.sh install.
+        test_step.dependOn(&compile_program.step);
     }
 }

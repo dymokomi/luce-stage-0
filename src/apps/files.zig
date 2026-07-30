@@ -53,3 +53,55 @@ pub fn writeWhole(io: std.Io, path: []const u8, content: []const u8) !void {
     try file.writePositionalAll(io, content, 0);
     try file.sync(io);
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "whole-file write then read round-trips; a missing file errors" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // tmpDir lives under .zig-cache/tmp/<sub>; files.zig resolves
+    // paths relative to cwd, so build the cwd-relative prefix.
+    const directory = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(directory);
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}/note.txt", .{directory});
+    defer testing.allocator.free(path);
+
+    try writeWhole(io, path, "hello loom");
+    const read = try readWhole(testing.allocator, io, path);
+    defer testing.allocator.free(read);
+    try testing.expectEqualStrings("hello loom", read);
+
+    const absent = try std.fmt.allocPrint(testing.allocator, "{s}/absent.txt", .{directory});
+    defer testing.allocator.free(absent);
+    try testing.expectError(error.FileNotFound, readWhole(testing.allocator, io, absent));
+}
+
+test "the import loader resolves NAME.luc beside the root and returns null otherwise" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(directory);
+    const geo_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo.luc", .{directory});
+    defer testing.allocator.free(geo_path);
+    try writeWhole(io, geo_path, "func area() -> Int:\n    return 4\n");
+
+    var loader: FileLoader = .{ .io = io, .directory = directory };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const resolver = loader.loader();
+
+    const found = try resolver.loadFn(resolver.context, arena.allocator(), "geo");
+    try testing.expect(found != null);
+    try testing.expect(std.mem.indexOf(u8, found.?, "return 4") != null);
+
+    // An unknown module resolves to null (the caller reports the
+    // missing import), not an error.
+    const missing = try resolver.loadFn(resolver.context, arena.allocator(), "nope");
+    try testing.expectEqual(@as(?[]const u8, null), missing);
+}

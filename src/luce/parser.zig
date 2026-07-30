@@ -48,6 +48,13 @@ const Parser = struct {
     tokens: []const Token,
     diagnostics: *Diagnostics,
     index: usize = 0,
+    /// Expression nesting depth, so a pathological `((((…))))` or a
+    /// long prefix-operator chain reports an error instead of
+    /// overflowing the native stack.  Generous: real code never
+    /// approaches it; only hostile or generated input does.
+    depth: u32 = 0,
+
+    const max_depth = 512;
 
     // Token helpers --------------------------------------------------------
 
@@ -615,6 +622,14 @@ const Parser = struct {
     }
 
     fn expression(self: *Parser) Error!?*ast.Expression {
+        // Every expression — grouping, prefix ops, call arguments —
+        // re-enters here, so one guard covers all recursion paths.
+        if (self.depth >= max_depth) {
+            try self.diagnostics.add("luce.parse.nesting", self.peek().span, "expression nested too deeply", .{});
+            return null;
+        }
+        self.depth += 1;
+        defer self.depth -= 1;
         return self.binaryExpression(@intFromEnum(Precedence.logic_or));
     }
 
@@ -1156,6 +1171,62 @@ test "method calls parse on any postfix expression" {
     try testing.expectEqualStrings("append", call.name);
     try testing.expect(body.statements[3].let.value.method.target.* == .slice_range);
     try testing.expect(body.statements[4].let.value.method.target.* == .string_literal);
+}
+
+test "deeply nested expressions report instead of overflowing the stack" {
+    const allocator = testing.allocator;
+    var opens: std.ArrayList(u8) = .empty;
+    defer opens.deinit(allocator);
+    try opens.appendSlice(allocator, "func main():\n    let x = ");
+    for (0..5000) |_| try opens.append(allocator, '(');
+    try opens.append(allocator, '1');
+    for (0..5000) |_| try opens.append(allocator, ')');
+    try opens.append(allocator, '\n');
+
+    var parsed = try parseText(opens.items);
+    defer parsed.deinit();
+    // The point is that this returns at all (no crash); it must also
+    // have reported the nesting limit.
+    var saw_nesting = false;
+    for (0..parsed.diagnostics.count()) |index| {
+        if (std.mem.eql(u8, parsed.diagnostics.at(index).?.code, "luce.parse.nesting")) saw_nesting = true;
+    }
+    try testing.expect(saw_nesting);
+}
+
+test "fuzz: parsing any bytes terminates with spans inside the source" {
+    try testing.fuzz({}, parseAnything, .{ .corpus = &.{
+        "func main():\n    let x = 1 + 2\n",
+        "func f(a: give List(Int)) -> Int:\n    return len(a)\n",
+        "struct P:\n    x: Float\n",
+        "let k = 3\n",
+    } });
+}
+
+fn parseAnything(_: void, smith: *testing.Smith) anyerror!void {
+    var buffer: [512]u8 = undefined;
+    const length = smith.sliceWeightedBytes(&buffer, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .rangeAtMost(u8, 0x20, 0x7e, 5),
+        .value(u8, ' ', 5),
+        .value(u8, '\n', 5),
+        .value(u8, '(', 3),
+        .value(u8, ')', 3),
+        .value(u8, ':', 2),
+    });
+    const source = buffer[0..length];
+
+    var parsed = try parseText(source);
+    defer parsed.deinit();
+
+    // Every produced diagnostic points inside the source (parsing
+    // itself terminating is the other half of the property — a hang
+    // or crash fails the test by never returning).
+    for (0..parsed.diagnostics.count()) |index| {
+        const item = parsed.diagnostics.at(index).?;
+        try testing.expect(item.span.start <= item.span.end);
+        try testing.expect(item.span.end <= source.len);
+    }
 }
 
 test "ownership verbs parse: give/copy expressions and give parameters" {
