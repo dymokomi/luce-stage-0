@@ -158,7 +158,41 @@ const Parser = struct {
 
     fn typeName(self: *Parser) Error!?ast.TypeName {
         const item = (try self.expect(.identifier, "a type name")) orelse return null;
-        return .{ .name = self.text(item), .span = item.span };
+        var written: ast.TypeName = .{ .name = self.text(item), .span = item.span };
+        if (self.peekKind() != .left_paren) return written;
+        _ = self.advance(); // (
+
+        var arguments: std.ArrayList(ast.TypeName) = .empty;
+        defer arguments.deinit(self.arena);
+        var wildcards: u8 = 0;
+        while (self.peekKind() != .right_paren and self.peekKind() != .end_of_file) {
+            if (self.peekKind() == .identifier and std.mem.eql(u8, self.text(self.peek()), "_")) {
+                const wildcard = self.advance();
+                if (wildcards == 255) {
+                    try self.diagnostics.add("luce.parse.type", wildcard.span, "too many array dimensions", .{});
+                    return null;
+                }
+                wildcards += 1;
+            } else {
+                if (wildcards != 0) {
+                    try self.diagnostics.add(
+                        "luce.parse.type",
+                        self.peek().span,
+                        "array shape wildcards come last: Array(Int, _, _)",
+                        .{},
+                    );
+                    return null;
+                }
+                const argument = (try self.typeName()) orelse return null;
+                try arguments.append(self.arena, argument);
+            }
+            if (self.accept(.comma) == null) break;
+        }
+        const closing = (try self.expect(.right_paren, "')' closing the type")) orelse return null;
+        written.arguments = try arguments.toOwnedSlice(self.arena);
+        written.wildcards = wildcards;
+        written.span = .{ .start = item.span.start, .end = closing.span.end };
+        return written;
     }
 
     fn structDecl(self: *Parser) Error!?ast.StructDecl {
@@ -276,7 +310,7 @@ const Parser = struct {
             .keyword_var => return self.binding(true),
             .keyword_if => return self.conditional(),
             .keyword_while => return self.whileLoop(),
-            .keyword_for => return self.forRange(),
+            .keyword_for => return self.forLoop(),
             .keyword_return => return self.returnStatement(),
             .keyword_break => {
                 const item = self.advance();
@@ -357,31 +391,38 @@ const Parser = struct {
         } };
     }
 
-    fn forRange(self: *Parser) Error!?ast.Statement {
+    fn forLoop(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         const name = (try self.expect(.identifier, "a loop variable")) orelse return null;
         if ((try self.expect(.keyword_in, "'in'")) == null) return null;
-        const callee = (try self.expect(.identifier, "range(start, end)")) orelse return null;
-        if (!std.mem.eql(u8, self.text(callee), "range")) {
-            try self.diagnostics.add(
-                "luce.parse.range",
-                callee.span,
-                "for iterates over range(start, end) in Luce 0.1",
-                .{},
-            );
-            return null;
+
+        // for i in range(a, b): keeps its dedicated integer lowering.
+        if (self.peekKind() == .identifier and
+            std.mem.eql(u8, self.text(self.peek()), "range") and
+            self.peekAhead(1) == .left_paren)
+        {
+            _ = self.advance(); // range
+            _ = self.advance(); // (
+            const first = (try self.expression()) orelse return null;
+            if ((try self.expect(.comma, "',' between range bounds")) == null) return null;
+            const second = (try self.expression()) orelse return null;
+            _ = self.accept(.comma);
+            if ((try self.expect(.right_paren, "')'")) == null) return null;
+            const body = (try self.block()) orelse return null;
+            return .{ .for_range = .{
+                .name = self.text(name),
+                .start = first,
+                .end = second,
+                .body = body,
+                .span = .{ .start = start.span.start, .end = name.span.end },
+            } };
         }
-        if ((try self.expect(.left_paren, "'('")) == null) return null;
-        const first = (try self.expression()) orelse return null;
-        if ((try self.expect(.comma, "',' between range bounds")) == null) return null;
-        const second = (try self.expression()) orelse return null;
-        _ = self.accept(.comma);
-        if ((try self.expect(.right_paren, "')'")) == null) return null;
+
+        const iterable = (try self.expression()) orelse return null;
         const body = (try self.block()) orelse return null;
-        return .{ .for_range = .{
+        return .{ .for_each = .{
             .name = self.text(name),
-            .start = first,
-            .end = second,
+            .iterable = iterable,
             .body = body,
             .span = .{ .start = start.span.start, .end = name.span.end },
         } };
@@ -400,44 +441,60 @@ const Parser = struct {
         } };
     }
 
-    // name (. name)? = expression, or a bare expression statement.
+    // PLACE = expression, or a bare expression statement.  The place
+    // is parsed as an ordinary expression and then classified: a name,
+    // one dotted field on a name, or an indexed expression.
     fn assignOrExpression(self: *Parser) Error!?ast.Statement {
-        if (self.peekKind() == .identifier) {
-            // Lookahead: IDENT = ..., or IDENT . IDENT = ...
-            if (self.peekAhead(1) == .assign) {
-                const base = self.advance();
-                _ = self.advance(); // =
-                const value = (try self.expression()) orelse return null;
-                _ = try self.expect(.newline, "a newline after the assignment");
-                return .{ .assign = .{
-                    .target = .{ .base = self.text(base), .field = null, .span = base.span },
-                    .value = value,
-                    .span = .{ .start = base.span.start, .end = value.span().end },
-                } };
-            }
-            if (self.peekAhead(1) == .dot and self.peekAhead(2) == .identifier and
-                self.peekAhead(3) == .assign)
-            {
-                const base = self.advance();
-                _ = self.advance(); // .
-                const field = self.advance();
-                _ = self.advance(); // =
-                const value = (try self.expression()) orelse return null;
-                _ = try self.expect(.newline, "a newline after the assignment");
-                return .{ .assign = .{
-                    .target = .{
-                        .base = self.text(base),
-                        .field = self.text(field),
-                        .span = .{ .start = base.span.start, .end = field.span.end },
-                    },
-                    .value = value,
-                    .span = .{ .start = base.span.start, .end = value.span().end },
-                } };
-            }
+        const left = (try self.expression()) orelse return null;
+        if (self.accept(.assign) == null) {
+            _ = try self.expect(.newline, "a newline after the expression");
+            return .{ .expression = .{ .value = left, .span = left.span() } };
         }
+
+        const target = (try self.targetFrom(left)) orelse return null;
         const value = (try self.expression()) orelse return null;
-        _ = try self.expect(.newline, "a newline after the expression");
-        return .{ .expression = .{ .value = value, .span = value.span() } };
+        _ = try self.expect(.newline, "a newline after the assignment");
+        return .{ .assign = .{
+            .target = target,
+            .value = value,
+            .span = .{ .start = target.span().start, .end = value.span().end },
+        } };
+    }
+
+    fn targetFrom(self: *Parser, left: *ast.Expression) Error!?ast.Target {
+        switch (left.*) {
+            .name => |name| return .{ .name = .{ .text = name.text, .span = name.span } },
+            .field => |field| {
+                if (field.target.* == .name) {
+                    return .{ .field = .{
+                        .base = field.target.name.text,
+                        .field = field.name,
+                        .span = field.span,
+                    } };
+                }
+                try self.diagnostics.add(
+                    "luce.parse.assign",
+                    field.span,
+                    "assign through one field (name.field = ...) or an index (place[i] = ...)",
+                    .{},
+                );
+                return null;
+            },
+            .index => |index| return .{ .index = .{
+                .base = index.target,
+                .indices = index.indices,
+                .span = index.span,
+            } },
+            else => {
+                try self.diagnostics.add(
+                    "luce.parse.assign",
+                    left.span(),
+                    "cannot assign to this expression",
+                    .{},
+                );
+                return null;
+            },
+        }
     }
 
     // Expressions ----------------------------------------------------------
@@ -530,19 +587,78 @@ const Parser = struct {
 
     fn postfixExpression(self: *Parser) Error!?*ast.Expression {
         var value = (try self.primaryExpression()) orelse return null;
-        while (self.accept(.dot)) |dot| {
-            const field = (try self.expect(.identifier, "a field name after '.'")) orelse
-                return null;
-            _ = dot;
-            const node = try self.arena.create(ast.Expression);
-            node.* = .{ .field = .{
-                .target = value,
-                .name = self.text(field),
-                .span = .{ .start = value.span().start, .end = field.span.end },
-            } };
-            value = node;
+        while (true) {
+            if (self.accept(.dot) != null) {
+                const field = (try self.expect(.identifier, "a field name after '.'")) orelse
+                    return null;
+                const node = try self.arena.create(ast.Expression);
+                node.* = .{ .field = .{
+                    .target = value,
+                    .name = self.text(field),
+                    .span = .{ .start = value.span().start, .end = field.span.end },
+                } };
+                value = node;
+                continue;
+            }
+            if (self.peekKind() == .left_bracket) {
+                value = (try self.indexOrSlice(value)) orelse return null;
+                continue;
+            }
+            return value;
         }
-        return value;
+    }
+
+    /// value[...]: an index (one or more comma-separated expressions)
+    /// or a slice (a colon with either bound optional).
+    fn indexOrSlice(self: *Parser, target: *ast.Expression) Error!?*ast.Expression {
+        _ = self.advance(); // [
+
+        // [:end] — a slice from the beginning.
+        if (self.accept(.colon) != null) {
+            var end: ?*ast.Expression = null;
+            if (self.peekKind() != .right_bracket) {
+                end = (try self.expression()) orelse return null;
+            }
+            const closing = (try self.expect(.right_bracket, "']'")) orelse return null;
+            return self.make(.{ .slice_range = .{
+                .target = target,
+                .start = null,
+                .end = end,
+                .span = .{ .start = target.span().start, .end = closing.span.end },
+            } });
+        }
+
+        const first = (try self.expression()) orelse return null;
+
+        // [start:] and [start:end] — a slice.
+        if (self.accept(.colon) != null) {
+            var end: ?*ast.Expression = null;
+            if (self.peekKind() != .right_bracket) {
+                end = (try self.expression()) orelse return null;
+            }
+            const closing = (try self.expect(.right_bracket, "']'")) orelse return null;
+            return self.make(.{ .slice_range = .{
+                .target = target,
+                .start = first,
+                .end = end,
+                .span = .{ .start = target.span().start, .end = closing.span.end },
+            } });
+        }
+
+        // [i] or [r, c, ...] — an index.
+        var indices: std.ArrayList(*ast.Expression) = .empty;
+        defer indices.deinit(self.arena);
+        try indices.append(self.arena, first);
+        while (self.accept(.comma) != null) {
+            const next = (try self.expression()) orelse return null;
+            try indices.append(self.arena, next);
+        }
+        const closing = (try self.expect(.right_bracket, "']'")) orelse return null;
+        return self.make(.{ .index = .{
+            .target = target,
+            .indices = try indices.toOwnedSlice(self.arena),
+            .span = .{ .start = target.span().start, .end = closing.span.end },
+        } });
     }
 
     fn primaryExpression(self: *Parser) Error!?*ast.Expression {
@@ -589,6 +705,8 @@ const Parser = struct {
                 if ((try self.expect(.right_paren, "')'")) == null) return null;
                 return inner;
             },
+            .left_bracket => return self.listLiteral(),
+            .keyword_new => return self.newObject(),
             else => {
                 try self.diagnostics.add(
                     "luce.parse.expression",
@@ -637,6 +755,75 @@ const Parser = struct {
             .callee = callee,
             .arguments = try arguments.toOwnedSlice(self.arena),
             .span = .{ .start = start, .end = closing.span.end },
+        } });
+    }
+
+    fn listLiteral(self: *Parser) Error!?*ast.Expression {
+        const opening = self.advance(); // [
+        var elements: std.ArrayList(*ast.Expression) = .empty;
+        defer elements.deinit(self.arena);
+        while (self.peekKind() != .right_bracket and self.peekKind() != .end_of_file) {
+            const element = (try self.expression()) orelse return null;
+            try elements.append(self.arena, element);
+            if (self.accept(.comma) == null) break;
+        }
+        const closing = (try self.expect(.right_bracket, "']' closing the list")) orelse return null;
+        return self.make(.{ .list_literal = .{
+            .elements = try elements.toOwnedSlice(self.arena),
+            .span = .{ .start = opening.span.start, .end = closing.span.end },
+        } });
+    }
+
+    /// new List(Int) | new Map(String, Int) | new Array(Int, DIM...) |
+    /// new Builder().  Type arguments come first; an Array's trailing
+    /// arguments are runtime dimension expressions.
+    fn newObject(self: *Parser) Error!?*ast.Expression {
+        const start = self.advance(); // new
+        const name = (try self.expect(.identifier, "List, Map, Array, or Builder after new")) orelse
+            return null;
+        const kind = self.text(name);
+        var written: ast.TypeName = .{ .name = kind, .span = name.span };
+        var dims: std.ArrayList(*ast.Expression) = .empty;
+        defer dims.deinit(self.arena);
+
+        var closing_end = name.span.end;
+        if (std.mem.eql(u8, kind, "Builder")) {
+            if (self.accept(.left_paren) != null) {
+                const closing = (try self.expect(.right_paren, "')' — Builder takes no arguments")) orelse
+                    return null;
+                closing_end = closing.span.end;
+            }
+        } else if (std.mem.eql(u8, kind, "List") or std.mem.eql(u8, kind, "Map")) {
+            self.index -= 1; // rewind so typeName reads name(args...) whole
+            written = (try self.typeName()) orelse return null;
+            closing_end = written.span.end;
+        } else if (std.mem.eql(u8, kind, "Array")) {
+            if ((try self.expect(.left_paren, "'(' after Array")) == null) return null;
+            const element = (try self.typeName()) orelse return null;
+            const arguments = try self.arena.alloc(ast.TypeName, 1);
+            arguments[0] = element;
+            written.arguments = arguments;
+            while (self.accept(.comma) != null) {
+                const dimension = (try self.expression()) orelse return null;
+                try dims.append(self.arena, dimension);
+            }
+            const closing = (try self.expect(.right_paren, "')' closing the Array dimensions")) orelse
+                return null;
+            closing_end = closing.span.end;
+        } else {
+            try self.diagnostics.add(
+                "luce.parse.new",
+                name.span,
+                "new builds List, Map, Array, or Builder (structs are values: {s}(...))",
+                .{kind},
+            );
+            return null;
+        }
+
+        return self.make(.{ .new_object = .{
+            .type_name = written,
+            .dims = try dims.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = closing_end },
         } });
     }
 
@@ -728,8 +915,66 @@ test "the plan's scale example parses" {
     const evaluate = parsed.program.functions[1];
     try testing.expectEqual(@as(usize, 3), evaluate.body.statements.len);
     const assign = evaluate.body.statements[2].assign;
-    try testing.expectEqualStrings("output", assign.target.base);
-    try testing.expectEqualStrings("position", assign.target.field.?);
+    try testing.expectEqualStrings("output", assign.target.field.base);
+    try testing.expectEqualStrings("position", assign.target.field.field);
+}
+
+test "collections parse: types, new, literals, indexing, slices, for-in" {
+    var parsed = try parseText(
+        \\func main():
+        \\    var xs: List(Int) = [1, 2, 3]
+        \\    var m = new Map(String, List(Int))
+        \\    var grid = new Array(Float, 4, 8)
+        \\    var b = new Builder()
+        \\    xs[0] = 10
+        \\    grid[1, 2] = 3.5
+        \\    m["ones"] = xs
+        \\    let mid = xs[1:2]
+        \\    let head = xs[:1]
+        \\    let tail = xs[1:]
+        \\    for x in xs:
+        \\        append(b, str(x))
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+    const body = parsed.program.functions[0].body;
+
+    const annotated = body.statements[0].variable;
+    try testing.expectEqualStrings("List", annotated.annotation.?.name);
+    try testing.expectEqualStrings("Int", annotated.annotation.?.arguments[0].name);
+    try testing.expectEqual(@as(usize, 3), annotated.value.list_literal.elements.len);
+
+    const map_new = body.statements[1].variable.value.new_object;
+    try testing.expectEqualStrings("Map", map_new.type_name.name);
+    try testing.expectEqualStrings("List", map_new.type_name.arguments[1].name);
+
+    const array_new = body.statements[2].variable.value.new_object;
+    try testing.expectEqualStrings("Array", array_new.type_name.name);
+    try testing.expectEqual(@as(usize, 2), array_new.dims.len);
+
+    try testing.expectEqual(@as(usize, 1), body.statements[4].assign.target.index.indices.len);
+    try testing.expectEqual(@as(usize, 2), body.statements[5].assign.target.index.indices.len);
+    try testing.expect(body.statements[7].let.value.* == .slice_range);
+    try testing.expect(body.statements[8].let.value.slice_range.start == null);
+    try testing.expect(body.statements[9].let.value.slice_range.end == null);
+    try testing.expectEqualStrings("x", body.statements[10].for_each.name);
+}
+
+test "array shape wildcards parse in annotations" {
+    var parsed = try parseText(
+        \\func total(grid: Array(Int, _, _)) -> Int:
+        \\    return dim(grid, 0)
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+    const parameter = parsed.program.functions[0].parameters[0];
+    try testing.expectEqualStrings("Array", parameter.type_name.name);
+    try testing.expectEqual(@as(u8, 2), parameter.type_name.wildcards);
 }
 
 test "struct bodies parse fields and namespaced functions" {

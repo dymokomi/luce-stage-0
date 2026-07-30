@@ -48,7 +48,11 @@ loom edit FILE              open the Luce editor
 loom PROGRAM.lc [ARGS]      shorthand for run
 ```
 
-A Luce program is a script with a `main` entry.  Effects — console,
+A Luce program is a script with a `main` entry.  The language is
+statically typed with inference, has structs, `List`/`Map`/`Array`/
+`Builder` heap objects with explicit `new`/`free` (loom reports what
+you leak), slices, and checked traps — `docs/LANGUAGE.md` is the
+reference.  Effects — console,
 files, arguments, the screen — only exist as host builtins that loom,
 the trusted boundary, implements; the language itself stays pure:
 
@@ -80,7 +84,8 @@ src/apps/luce/            the luce compiler CLI
 src/apps/loom/            the loom terminal: shell, program runner,
                           and the trusted host behind the Luce host
                           builtins
-programs/                 userland, written in Luce (editor, hello)
+programs/                 userland, written in Luce (editor, hello,
+                          sort, a Brainfuck interpreter)
 tools/vscode-luce/        VS Code syntax highlighting for .luc
 docs/                     V2.md is the plan; v1/ preserves the Fabric
                           era (LOOM.md, LUCE.md, CODING_GUIDE.md)

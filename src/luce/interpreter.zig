@@ -38,11 +38,14 @@ pub fn run(
         .inputs = inputs,
         .outputs = outputs,
         .steps = budget.steps,
-        .depth_left = budget.call_depth,
+        .max_depth = budget.call_depth,
         .host = host,
     };
-    switch (try machine.call(program.entry_function, &.{})) {
-        .value => return .{ .success = machine.intents },
+    switch (try machine.execute(program.entry_function)) {
+        .value => return .{ .success = .{
+            .intents = machine.intents,
+            .leaked_objects = machine.live_objects,
+        } },
         .trap => |trap| return .{ .trap = trap },
     }
 }
@@ -52,19 +55,40 @@ const CallOutcome = union(enum) {
     trap: backend.Trap,
 };
 
+/// One live call.  Frames live on an explicit heap-allocated stack, so
+/// call depth is bounded by the budget and available memory — never by
+/// the native stack.
+const Frame = struct {
+    function: u32,
+    registers: []RuntimeValue,
+    locals: []RuntimeValue,
+    block: ir.BlockId = 0,
+    position: usize = 0,
+    /// The caller register receiving this frame's return value.
+    destination: Register = 0,
+};
+
+const Register = ir.Register;
+
 const Machine = struct {
     arena: Allocator,
     program: *const ir.Program,
     inputs: []const InputValue,
     outputs: []?RuntimeValue,
     steps: u64,
-    depth_left: u32,
+    max_depth: u32,
     host: ?backend.Host,
     /// Intents recorded by the fabric builtins, in order.  Arena-owned;
     /// the caller copies what it applies.
     intents: fabric.Intents = .{},
     /// The text payload of the most recent key_read "text" event.
     last_key_text: []const u8 = "",
+    stack: std.ArrayList(Frame) = .empty,
+    /// Every allocated object, alive or freed; handles index this
+    /// table.  Slots are never reused, so a freed handle stays
+    /// detectably dead for the whole evaluation.
+    heap: std.ArrayList(HeapObject) = .empty,
+    live_objects: u32 = 0,
 
     fn terminal(self: *Machine) ?backend.Terminal {
         const host = self.host orelse return null;
@@ -76,23 +100,43 @@ const Machine = struct {
         return .{ .trap = .{ .code = code, .message = code.message() } };
     }
 
-    fn call(self: *Machine, function_index: u32, arguments: []const RuntimeValue) error{OutOfMemory}!CallOutcome {
-        if (self.depth_left == 0) return self.trap(.call_depth_exceeded);
-        self.depth_left -= 1;
-        defer self.depth_left += 1;
-
+    fn pushFrame(
+        self: *Machine,
+        function_index: u32,
+        arguments: []const RuntimeValue,
+        destination: Register,
+    ) error{OutOfMemory}!?CallOutcome {
+        if (self.stack.items.len >= self.max_depth) return self.trap(.call_depth_exceeded);
         const function = &self.program.functions[function_index];
         const registers = try self.arena.alloc(RuntimeValue, function.instructions.len);
         const locals = try self.arena.alloc(RuntimeValue, function.locals.len);
         @memset(locals, .none);
         @memcpy(locals[0..arguments.len], arguments);
+        try self.stack.append(self.arena, .{
+            .function = function_index,
+            .registers = registers,
+            .locals = locals,
+            .destination = destination,
+        });
+        return null;
+    }
 
-        var block: ir.BlockId = 0;
+    fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
+        if (try self.pushFrame(entry, &.{}, 0)) |failed| return failed;
+
         dispatch: while (true) {
-            for (self.program.functions[function_index].blocks[block].items) |item| {
+            const frame = &self.stack.items[self.stack.items.len - 1];
+            const function = &self.program.functions[frame.function];
+            const registers = frame.registers;
+            const locals = frame.locals;
+            const items = function.blocks[frame.block].items;
+
+            while (frame.position < items.len) {
                 if (self.steps == 0) return self.trap(.step_budget_exhausted);
                 self.steps -= 1;
 
+                const item = items[frame.position];
+                frame.position += 1;
                 const instruction = function.instructions[item];
                 switch (instruction) {
                     .const_boolean => |value| registers[item] = .{ .boolean = value },
@@ -160,15 +204,21 @@ const Machine = struct {
                         fields[set.field] = registers[set.value];
                         registers[item] = .{ .strukt = fields };
                     },
+                    .heap_new => |new| {
+                        switch (try self.allocateObject(new, registers)) {
+                            .value => |value| registers[item] = value,
+                            .trap => |failed| return .{ .trap = failed },
+                        }
+                    },
                     .call => |called| {
                         const arguments_storage = try self.arena.alloc(RuntimeValue, called.arguments.len);
                         for (called.arguments, arguments_storage) |argument, *slot| {
                             slot.* = registers[argument];
                         }
-                        switch (try self.call(called.function, arguments_storage)) {
-                            .value => |value| registers[item] = value,
-                            .trap => |failed| return .{ .trap = failed },
+                        if (try self.pushFrame(called.function, arguments_storage, item)) |failed| {
+                            return failed;
                         }
+                        continue :dispatch;
                     },
                     .intrinsic => |operation| {
                         switch (try self.intrinsic(operation, registers)) {
@@ -177,25 +227,152 @@ const Machine = struct {
                         }
                     },
                     .jump => |target| {
-                        block = target;
+                        frame.block = target;
+                        frame.position = 0;
                         continue :dispatch;
                     },
                     .branch => |branched| {
-                        block = if (registers[branched.condition].boolean)
+                        frame.block = if (registers[branched.condition].boolean)
                             branched.then_block
                         else
                             branched.else_block;
+                        frame.position = 0;
                         continue :dispatch;
                     },
                     .ret => |value| {
-                        if (value) |returned| return .{ .value = registers[returned] };
-                        return .{ .value = .none };
+                        const returned: RuntimeValue = if (value) |register| registers[register] else .none;
+                        const finished = self.stack.pop().?;
+                        if (self.stack.items.len == 0) return .{ .value = returned };
+                        const parent = &self.stack.items[self.stack.items.len - 1];
+                        const parent_function = &self.program.functions[parent.function];
+                        if (parent_function.result_types[finished.destination] != .none) {
+                            parent.registers[finished.destination] = returned;
+                        }
+                        continue :dispatch;
                     },
                     .trap => |code| return self.trap(code),
                 }
             }
             unreachable; // the verifier guarantees a terminator
         }
+    }
+
+    // -- the object heap ----------------------------------------------
+
+    const MapEntry = struct { key: RuntimeValue, value: RuntimeValue };
+
+    const HeapObject = struct {
+        alive: bool = true,
+        data: Data,
+
+        const Data = union(enum) {
+            list: std.ArrayList(RuntimeValue),
+            map: std.ArrayList(MapEntry),
+            array: struct { dims: []i64, elements: []RuntimeValue },
+            builder: std.ArrayList(u8),
+        };
+    };
+
+    /// A safety valve, not a design limit: one array allocation cannot
+    /// exceed this many elements.
+    const max_array_elements = 1 << 24;
+
+    fn allocateObject(
+        self: *Machine,
+        new: anytype,
+        registers: []const RuntimeValue,
+    ) error{OutOfMemory}!CallOutcome {
+        const data: HeapObject.Data = switch (self.program.heap_types[new.heap]) {
+            .list => .{ .list = .empty },
+            .map => .{ .map = .empty },
+            .builder => .{ .builder = .empty },
+            .array => |shape| blk: {
+                const dims = try self.arena.alloc(i64, new.dims.len);
+                var total: usize = 1;
+                for (new.dims, dims) |register, *dimension| {
+                    const size = registers[register].int;
+                    if (size < 0 or size > max_array_elements) return self.trap(.index_bounds);
+                    dimension.* = size;
+                    total = std.math.mul(usize, total, @intCast(size)) catch
+                        return self.trap(.index_bounds);
+                    if (total > max_array_elements) return self.trap(.index_bounds);
+                }
+                const elements = try self.arena.alloc(RuntimeValue, total);
+                const zero = try self.zeroValue(shape.element);
+                @memset(elements, zero);
+                break :blk .{ .array = .{ .dims = dims, .elements = elements } };
+            },
+        };
+        const index: u32 = @intCast(self.heap.items.len);
+        try self.heap.append(self.arena, .{ .data = data });
+        self.live_objects += 1;
+        return .{ .value = .{ .object = .{ .index = index } } };
+    }
+
+    const ResolvedObject = union(enum) {
+        object: *HeapObject,
+        failed: ir.TrapCode,
+    };
+
+    fn resolveObject(self: *Machine, value: RuntimeValue) ResolvedObject {
+        const handle = value.object;
+        if (handle.isNull()) return .{ .failed = .null_object };
+        if (handle.index >= self.heap.items.len) return .{ .failed = .use_after_free };
+        const object = &self.heap.items[handle.index];
+        if (!object.alive) return .{ .failed = .use_after_free };
+        return .{ .object = object };
+    }
+
+    /// The zero value a fresh array element carries, per element type.
+    fn zeroValue(self: *Machine, of: types.Type) error{OutOfMemory}!RuntimeValue {
+        return switch (of) {
+            .none => .none,
+            .boolean => .{ .boolean = false },
+            .int => .{ .int = 0 },
+            .float => .{ .float = 0.0 },
+            .string => .{ .string = "" },
+            .bytes => .{ .bytes = "" },
+            .heap => .{ .object = backend.ObjectHandle.null_object },
+            .strukt => |layout_index| blk: {
+                const layout = self.program.structs[layout_index];
+                const fields = try self.arena.alloc(RuntimeValue, layout.fields.len);
+                for (layout.fields, fields) |field, *slot| {
+                    slot.* = try self.zeroValue(field.field_type);
+                }
+                break :blk .{ .strukt = fields };
+            },
+        };
+    }
+
+    fn keyEquals(left: RuntimeValue, right: RuntimeValue) bool {
+        return switch (left) {
+            .int => |value| value == right.int,
+            .string => |value| std.mem.eql(u8, value, right.string),
+            else => unreachable, // the analyzer keys maps by Int or String
+        };
+    }
+
+    fn findEntry(entries: []MapEntry, key: RuntimeValue) ?usize {
+        for (entries, 0..) |entry, index| {
+            if (keyEquals(entry.key, key)) return index;
+        }
+        return null;
+    }
+
+    /// Flatten a multi-dimensional index against the array's dims;
+    /// null when any index is out of range.
+    fn flattenIndex(
+        dims: []const i64,
+        registers: []const RuntimeValue,
+        indices: []const Register,
+    ) ?usize {
+        var flat: usize = 0;
+        for (dims, indices) |size, register| {
+            const index = registers[register].int;
+            if (index < 0 or index >= size) return null;
+            flat = flat * @as(usize, @intCast(size)) + @as(usize, @intCast(index));
+        }
+        return flat;
     }
 
     fn binary(
@@ -322,6 +499,12 @@ const Machine = struct {
                 }
                 return if (operation == .equal) same else !same;
             },
+            .object => |value| {
+                // Object equality is identity: same object, not same
+                // contents.
+                const same = value.index == right.object.index;
+                return if (operation == .equal) same else !same;
+            },
             .none => unreachable,
         }
     }
@@ -374,12 +557,236 @@ const Machine = struct {
             .floor => return .{ .value = .{ .float = @floor(registers[arguments[0]].float) } },
             .ceil => return .{ .value = .{ .float = @ceil(registers[arguments[0]].float) } },
             .len => {
-                const measured = switch (registers[arguments[0]]) {
+                const measured: usize = switch (registers[arguments[0]]) {
                     .string => |value| value.len,
                     .bytes => |value| value.len,
+                    .object => blk: {
+                        const object = switch (self.resolveObject(registers[arguments[0]])) {
+                            .object => |found| found,
+                            .failed => |code| return self.trap(code),
+                        };
+                        break :blk switch (object.data) {
+                            .list => |list| list.items.len,
+                            .map => |map| map.items.len,
+                            .array => |array| if (array.dims.len == 0) 0 else @intCast(array.dims[0]),
+                            .builder => |builder| builder.items.len,
+                        };
+                    },
                     else => unreachable,
                 };
                 return .{ .value = .{ .int = @intCast(measured) } };
+            },
+            .index_get => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                switch (object.data) {
+                    .list => |list| {
+                        const index = registers[arguments[1]].int;
+                        if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
+                        return .{ .value = list.items[@intCast(index)] };
+                    },
+                    .map => |map| {
+                        const at = findEntry(map.items, registers[arguments[1]]) orelse
+                            return self.trap(.key_missing);
+                        return .{ .value = map.items[at].value };
+                    },
+                    .array => |array| {
+                        const flat = flattenIndex(array.dims, registers, arguments[1..]) orelse
+                            return self.trap(.index_bounds);
+                        return .{ .value = array.elements[flat] };
+                    },
+                    .builder => unreachable,
+                }
+            },
+            .index_set => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const value = registers[arguments[arguments.len - 1]];
+                switch (object.data) {
+                    .list => |*list| {
+                        const index = registers[arguments[1]].int;
+                        if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
+                        list.items[@intCast(index)] = value;
+                    },
+                    .map => |*map| {
+                        const key = registers[arguments[1]];
+                        if (findEntry(map.items, key)) |at| {
+                            map.items[at].value = value;
+                        } else {
+                            try map.append(self.arena, .{ .key = key, .value = value });
+                        }
+                    },
+                    .array => |array| {
+                        const flat = flattenIndex(array.dims, registers, arguments[1 .. arguments.len - 1]) orelse
+                            return self.trap(.index_bounds);
+                        array.elements[flat] = value;
+                    },
+                    .builder => unreachable,
+                }
+                return .{ .value = .none };
+            },
+            .list_slice => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const list = object.data.list;
+                const start = registers[arguments[1]].int;
+                const end = registers[arguments[2]].int;
+                if (start < 0 or end < start or end > list.items.len) return self.trap(.index_bounds);
+                var copied: std.ArrayList(RuntimeValue) = .empty;
+                try copied.appendSlice(self.arena, list.items[@intCast(start)..@intCast(end)]);
+                const index: u32 = @intCast(self.heap.items.len);
+                try self.heap.append(self.arena, .{ .data = .{ .list = copied } });
+                self.live_objects += 1;
+                return .{ .value = .{ .object = .{ .index = index } } };
+            },
+            .append_value => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                switch (object.data) {
+                    .list => |*list| try list.append(self.arena, registers[arguments[1]]),
+                    .builder => |*builder| try builder.appendSlice(self.arena, registers[arguments[1]].string),
+                    else => unreachable,
+                }
+                return .{ .value = .none };
+            },
+            .pop_value => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const list = &object.data.list;
+                return .{ .value = list.pop() orelse return self.trap(.empty_collection) };
+            },
+            .insert_value => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const list = &object.data.list;
+                const index = registers[arguments[1]].int;
+                if (index < 0 or index > list.items.len) return self.trap(.index_bounds);
+                try list.insert(self.arena, @intCast(index), registers[arguments[2]]);
+                return .{ .value = .none };
+            },
+            .remove_entry => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                switch (object.data) {
+                    .list => |*list| {
+                        const index = registers[arguments[1]].int;
+                        if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
+                        _ = list.orderedRemove(@intCast(index));
+                    },
+                    .map => |*map| {
+                        if (findEntry(map.items, registers[arguments[1]])) |at| {
+                            _ = map.orderedRemove(at);
+                        }
+                    },
+                    else => unreachable,
+                }
+                return .{ .value = .none };
+            },
+            .has_key => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const found = findEntry(object.data.map.items, registers[arguments[1]]) != null;
+                return .{ .value = .{ .boolean = found } };
+            },
+            .key_at => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const map = object.data.map;
+                const index = registers[arguments[1]].int;
+                if (index < 0 or index >= map.items.len) return self.trap(.index_bounds);
+                return .{ .value = map.items[@intCast(index)].key };
+            },
+            .dim_size => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                const array = object.data.array;
+                const axis = registers[arguments[1]].int;
+                if (axis < 0 or axis >= array.dims.len) return self.trap(.index_bounds);
+                return .{ .value = .{ .int = array.dims[@intCast(axis)] } };
+            },
+            .free_object => {
+                const object = switch (self.resolveObject(registers[arguments[0]])) {
+                    .object => |found| found,
+                    .failed => |code| return self.trap(code),
+                };
+                object.alive = false;
+                self.live_objects -= 1;
+                return .{ .value = .none };
+            },
+            .str_value => {
+                switch (registers[arguments[0]]) {
+                    .int => |value| {
+                        const text = try std.fmt.allocPrint(self.arena, "{d}", .{value});
+                        return .{ .value = .{ .string = text } };
+                    },
+                    .float => |value| {
+                        const text = try std.fmt.allocPrint(self.arena, "{d}", .{value});
+                        return .{ .value = .{ .string = text } };
+                    },
+                    .boolean => |value| {
+                        return .{ .value = .{ .string = if (value) "true" else "false" } };
+                    },
+                    .string => |value| return .{ .value = .{ .string = value } },
+                    .object => {
+                        const object = switch (self.resolveObject(registers[arguments[0]])) {
+                            .object => |found| found,
+                            .failed => |code| return self.trap(code),
+                        };
+                        const text = try self.arena.dupe(u8, object.data.builder.items);
+                        return .{ .value = .{ .string = text } };
+                    },
+                    else => unreachable,
+                }
+            },
+            .parse_int => {
+                const text = registers[arguments[0]].string;
+                const value = std.fmt.parseInt(i64, text, 10) catch return self.trap(.parse_failed);
+                return .{ .value = .{ .int = value } };
+            },
+            .parse_float => {
+                const text = registers[arguments[0]].string;
+                const value = std.fmt.parseFloat(f64, text) catch return self.trap(.parse_failed);
+                if (std.math.isNan(value) or std.math.isInf(value)) return self.trap(.parse_failed);
+                return .{ .value = .{ .float = value } };
+            },
+            .chr_code => {
+                const code = registers[arguments[0]].int;
+                if (code < 0 or code > 0x10FFFF) return self.trap(.bad_codepoint);
+                const codepoint: u21 = @intCast(code);
+                const encoded = try self.arena.alloc(u8, 4);
+                const length = std.unicode.utf8Encode(codepoint, encoded) catch
+                    return self.trap(.bad_codepoint);
+                return .{ .value = .{ .string = encoded[0..length] } };
+            },
+            .ord_text => {
+                const text = registers[arguments[0]].string;
+                if (text.len == 0) return self.trap(.bad_codepoint);
+                const length = std.unicode.utf8ByteSequenceLength(text[0]) catch
+                    return self.trap(.bad_codepoint);
+                if (text.len < length) return self.trap(.bad_codepoint);
+                const codepoint = std.unicode.utf8Decode(text[0..length]) catch
+                    return self.trap(.bad_codepoint);
+                return .{ .value = .{ .int = codepoint } };
             },
             .string_slice => {
                 const value = registers[arguments[0]].string;
@@ -1008,7 +1415,7 @@ test "fabric builtins record complete texel intents" {
 
     const result = try bench.evaluate(&.{.{ .value = .{ .string = "adder" } }});
     try testing.expect(result == .success);
-    const intents = result.success.texels.items;
+    const intents = result.success.intents.texels.items;
     try testing.expectEqual(@as(usize, 2), intents.len);
 
     try testing.expectEqualStrings("adder", intents[0].name);
@@ -1037,7 +1444,7 @@ test "create_image records an image intent and validates its shape" {
 
     const result = try bench.evaluate(&.{.{ .value = .{ .boolean = false } }});
     try testing.expect(result == .success);
-    const images = result.success.images.items;
+    const images = result.success.intents.images.items;
     try testing.expectEqual(@as(usize, 1), images.len);
     try testing.expectEqualStrings("fresh.img", images[0].path);
     try testing.expectEqual(@as(u64, 64), images[0].pages);
@@ -1306,4 +1713,253 @@ test "terminal builtins drive the host screen and key queue" {
         host.screen.items,
     );
     try testing.expectEqualStrings("ctrl_q\n24x80\n", host.printed.items);
+}
+
+// ---------------------------------------------------------------------------
+// Collections, explicit memory, and conversions
+// ---------------------------------------------------------------------------
+
+const script_options: types.CompileOptions = .{ .entry_mode = .script };
+
+fn expectLeaks(bench: *Bench, wanted: u32) !void {
+    const result = try bench.evaluate(&.{});
+    try testing.expect(result == .success);
+    try testing.expectEqual(wanted, result.success.leaked_objects);
+}
+
+test "lists grow, index, slice, iterate, and free explicitly" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var xs = [3, 1, 2]
+        \\    assert(len(xs) == 3)
+        \\    append(xs, 9)
+        \\    assert(xs[3] == 9)
+        \\    xs[0] = 30
+        \\    assert(xs[0] == 30)
+        \\    insert(xs, 1, 7)
+        \\    assert(xs[1] == 7)
+        \\    remove(xs, 0)
+        \\    assert(xs[0] == 7)
+        \\    assert(pop(xs) == 9)
+        \\    var total = 0
+        \\    for x in xs:
+        \\        total = total + x
+        \\    assert(total == 10)
+        \\    let mid = xs[1:]
+        \\    assert(len(mid) == 2)
+        \\    assert(mid[0] == 1)
+        \\    assert(mid != xs)
+        \\    assert(xs == xs)
+        \\    free(mid)
+        \\    free(xs)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+test "maps upsert, look up, and iterate keys in insertion order" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    ages["alan"] = 41
+        \\    ages["ada"] = 37
+        \\    assert(len(ages) == 2)
+        \\    assert(ages["ada"] == 37)
+        \\    assert(has(ages, "alan"))
+        \\    var joined = new Builder()
+        \\    for key in ages:
+        \\        append(joined, key)
+        \\    assert(str(joined) == "adaalan")
+        \\    remove(ages, "alan")
+        \\    assert(not has(ages, "alan"))
+        \\    remove(ages, "ghost")
+        \\    assert(len(ages) == 1)
+        \\    free(ages)
+        \\    free(joined)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+test "arrays are fixed, zeroed, multi-dimensional, and typed" {
+    var bench = try Bench.setup(
+        \\func corner(grid: Array(Int, _, _)) -> Int:
+        \\    return grid[dim(grid, 0) - 1, dim(grid, 1) - 1]
+        \\
+        \\func main():
+        \\    var grid = new Array(Int, 3, 4)
+        \\    assert(dim(grid, 0) == 3)
+        \\    assert(dim(grid, 1) == 4)
+        \\    assert(len(grid) == 3)
+        \\    assert(grid[2, 3] == 0)
+        \\    grid[2, 3] = 7
+        \\    assert(corner(grid) == 7)
+        \\    var row = new Array(Float, 4)
+        \\    row[0] = 2.5
+        \\    var total = 0.0
+        \\    for value in row:
+        \\        total = total + value
+        \\    assert(total == 2.5)
+        \\    free(grid)
+        \\    free(row)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+test "conversions: str, parse_int, parse_float, chr, ord" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    assert(str(42) == "42")
+        \\    assert(str(-7) == "-7")
+        \\    assert(str(true) == "true")
+        \\    assert(str(2.5) == "2.5")
+        \\    assert(parse_int("123") == 123)
+        \\    assert(parse_int("-9") == -9)
+        \\    assert(parse_float("2.5") == 2.5)
+        \\    assert(chr(65) == "A")
+        \\    assert(chr(955) == "λ")
+        \\    assert(ord("λ") == 955)
+        \\    assert(ord("A") == 65)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    const result = try bench.evaluate(&.{});
+    try testing.expect(result == .success);
+}
+
+test "structs and nested collections share objects by reference" {
+    var bench = try Bench.setup(
+        \\struct Bag:
+        \\    label: String
+        \\    items: List(Int)
+        \\
+        \\func main():
+        \\    var inner = [1, 2]
+        \\    var bag = Bag(label = "first", items = inner)
+        \\    let copy = bag
+        \\    append(copy.items, 3)
+        \\    assert(len(inner) == 3)
+        \\    var nested = new List(List(Int))
+        \\    append(nested, inner)
+        \\    append(nested[0], 4)
+        \\    assert(len(inner) == 4)
+        \\    free(inner)
+        \\    free(nested)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 0);
+}
+
+test "collection misuse traps with stable codes" {
+    const cases = [_]struct { source: []const u8, code: ir.TrapCode }{
+        .{ .source =
+        \\func main():
+        \\    let xs = [1]
+        \\    let bad = xs[5]
+        \\
+        , .code = .index_bounds },
+        .{ .source =
+        \\func main():
+        \\    var xs: List(Int) = []
+        \\    let bad = pop(xs)
+        \\
+        , .code = .empty_collection },
+        .{ .source =
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let bad = m["ghost"]
+        \\
+        , .code = .key_missing },
+        .{ .source =
+        \\func main():
+        \\    let xs = [1]
+        \\    free(xs)
+        \\    free(xs)
+        \\
+        , .code = .use_after_free },
+        .{ .source =
+        \\func main():
+        \\    let xs = [1]
+        \\    free(xs)
+        \\    let bad = xs[0]
+        \\
+        , .code = .use_after_free },
+        .{ .source =
+        \\func main():
+        \\    var cells = new Array(List(Int), 2)
+        \\    append(cells[0], 1)
+        \\
+        , .code = .null_object },
+        .{ .source =
+        \\func main():
+        \\    let bad = parse_int("not a number")
+        \\
+        , .code = .parse_failed },
+        .{ .source =
+        \\func main():
+        \\    let bad = chr(11141111)
+        \\
+        , .code = .bad_codepoint },
+        .{ .source =
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    grid[2, 0] = 1
+        \\
+        , .code = .index_bounds },
+    };
+    for (cases) |case| {
+        var bench = try Bench.setup(case.source, .{}, script_options);
+        defer bench.deinit();
+        try expectTrap(&bench, &.{}, case.code);
+    }
+}
+
+test "unfreed objects are counted as leaks" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    let kept = [1, 2, 3]
+        \\    let copied = kept[0:2]
+        \\    var released = new Builder()
+        \\    free(released)
+        \\
+    , .{}, script_options);
+    defer bench.deinit();
+    try expectLeaks(&bench, 2);
+}
+
+test "the explicit frame stack survives deep recursion" {
+    var result = try compile_mod.compile(testing.allocator,
+        \\func dive(left: Int) -> Int:
+        \\    if left == 0:
+        \\        return 0
+        \\    return dive(left - 1)
+        \\
+        \\func main():
+        \\    assert(dive(50000) == 0)
+        \\
+    , .{}, script_options);
+    defer result.deinit();
+    try testing.expect(result == .success);
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const deep = try backend.evaluate(arena.allocator(), &result.success, &.{}, &.{}, .{
+        .steps = 10_000_000,
+        .call_depth = 60_000,
+    });
+    try testing.expect(deep == .success);
+
+    // The same program under a tighter policy traps instead.
+    _ = arena.reset(.retain_capacity);
+    const shallow = try backend.evaluate(arena.allocator(), &result.success, &.{}, &.{}, .{
+        .steps = 10_000_000,
+        .call_depth = 1_000,
+    });
+    try testing.expectEqual(ir.TrapCode.call_depth_exceeded, shallow.trap.code);
 }

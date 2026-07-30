@@ -162,6 +162,14 @@ const Lexer = struct {
                 if (self.paren_depth > 0) self.paren_depth -= 1;
                 try self.single(.right_paren);
             },
+            '[' => {
+                self.paren_depth += 1;
+                try self.single(.left_bracket);
+            },
+            ']' => {
+                if (self.paren_depth > 0) self.paren_depth -= 1;
+                try self.single(.right_bracket);
+            },
             ',' => try self.single(.comma),
             ':' => try self.single(.colon),
             '.' => try self.single(.dot),

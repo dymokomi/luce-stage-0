@@ -33,13 +33,17 @@ pub const Error = error{OutOfMemory};
 
 /// Names the language reserves; nothing user-declared may take them.
 const reserved_names = [_][]const u8{
-    "input",        "output",           "Input",           "Output",       "range",
-    "Int",          "Float",            "Bool",            "String",       "Bytes",
-    "abs",          "min",              "max",             "clamp",        "sqrt",
-    "floor",        "ceil",             "len",             "slice",        "byte_at",
-    "assert",       "trap",             "evaluate",        "create_texel", "texel_input",
-    "texel_output", "texel_content",    "texel_evaluator", "texel_set",    "create_image",
-    "read_file",    "script_directory",
+    "input",        "output",        "Input",           "Output",       "range",
+    "Int",          "Float",         "Bool",            "String",       "Bytes",
+    "List",         "Map",           "Array",           "Builder",      "None",
+    "abs",          "min",           "max",             "clamp",        "sqrt",
+    "floor",        "ceil",          "len",             "slice",        "byte_at",
+    "assert",       "trap",          "evaluate",        "str",          "parse_int",
+    "parse_float",  "chr",           "ord",             "append",       "pop",
+    "insert",       "remove",        "has",             "dim",          "free",
+    "print",        "file_read",     "file_write",      "file_exists",  "arg",
+    "arg_count",    "key_read",      "key_text",        "create_texel", "texel_input",
+    "texel_output", "texel_content", "texel_evaluator", "texel_set",    "create_image",
 };
 
 fn isReserved(name: []const u8) bool {
@@ -54,6 +58,7 @@ fn isReserved(name: []const u8) bool {
 /// The analyzed program parts, all allocated from the program arena.
 pub const Analyzed = struct {
     structs: []StructLayout,
+    heap_types: []types.HeapType,
     functions: []ir.Function,
     constants: []const []const u8,
     reads: []u32,
@@ -111,6 +116,7 @@ const Analyzer = struct {
     diagnostics: *Diagnostics,
 
     structs: std.ArrayList(StructLayout) = .empty,
+    heap_types: std.ArrayList(types.HeapType) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(FunctionInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
@@ -150,6 +156,7 @@ const Analyzer = struct {
 
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
+            .heap_types = try self.heap_types.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.constants.toOwnedSlice(self.arena),
             .reads = try reads.toOwnedSlice(self.arena),
@@ -168,11 +175,77 @@ const Analyzer = struct {
             .{ .name = "Bytes", .resolved = .bytes },
         };
         for (table) |entry| {
-            if (std.mem.eql(u8, written.name, entry.name)) return entry.resolved;
+            if (std.mem.eql(u8, written.name, entry.name)) {
+                if (written.arguments.len != 0 or written.wildcards != 0) {
+                    try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
+                    return null;
+                }
+                return entry.resolved;
+            }
+        }
+        if (std.mem.eql(u8, written.name, "List")) {
+            if (written.arguments.len != 1 or written.wildcards != 0) {
+                try self.fail("luce.sema.type", written.span, "List takes one element type: List(Int)", .{});
+                return null;
+            }
+            const element = (try self.resolveType(written.arguments[0])) orelse return null;
+            return try self.internHeapType(.{ .list = element });
+        }
+        if (std.mem.eql(u8, written.name, "Map")) {
+            if (written.arguments.len != 2 or written.wildcards != 0) {
+                try self.fail("luce.sema.type", written.span, "Map takes key and value types: Map(String, Int)", .{});
+                return null;
+            }
+            const key = (try self.resolveType(written.arguments[0])) orelse return null;
+            if (key != .int and key != .string) {
+                try self.fail("luce.sema.type", written.arguments[0].span, "Map keys are Int or String", .{});
+                return null;
+            }
+            const value = (try self.resolveType(written.arguments[1])) orelse return null;
+            return try self.internHeapType(.{ .map = .{ .key = key, .value = value } });
+        }
+        if (std.mem.eql(u8, written.name, "Array")) {
+            if (written.arguments.len != 1 or written.wildcards == 0 or written.wildcards > 4) {
+                try self.fail(
+                    "luce.sema.type",
+                    written.span,
+                    "Array spells element and shape: Array(Int, _) up to Array(Int, _, _, _, _)",
+                    .{},
+                );
+                return null;
+            }
+            const element = (try self.resolveType(written.arguments[0])) orelse return null;
+            return try self.internHeapType(.{ .array = .{ .element = element, .rank = written.wildcards } });
+        }
+        if (std.mem.eql(u8, written.name, "Builder")) {
+            if (written.arguments.len != 0 or written.wildcards != 0) {
+                try self.fail("luce.sema.type", written.span, "Builder takes no type arguments", .{});
+                return null;
+            }
+            return try self.internHeapType(.builder);
+        }
+        if (written.arguments.len != 0 or written.wildcards != 0) {
+            try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
+            return null;
         }
         if (self.struct_names.get(written.name)) |index| return .{ .strukt = index };
         try self.fail("luce.sema.type", written.span, "unknown type {s}", .{written.name});
         return null;
+    }
+
+    /// Heap types are interned: one index per distinct shape, so type
+    /// equality stays an index comparison.
+    fn internHeapType(self: *Analyzer, descriptor: types.HeapType) Error!Type {
+        for (self.heap_types.items, 0..) |existing, index| {
+            if (existing.eql(descriptor)) return .{ .heap = @intCast(index) };
+        }
+        try self.heap_types.append(self.arena, descriptor);
+        return .{ .heap = @intCast(self.heap_types.items.len - 1) };
+    }
+
+    fn heapOf(self: *const Analyzer, of: Type) ?types.HeapType {
+        if (of != .heap) return null;
+        return self.heap_types.items[of.heap];
     }
 
     fn collectStructs(self: *Analyzer) Error!void {
@@ -347,8 +420,8 @@ const Analyzer = struct {
         }
     }
 
-    fn typeName(self: *const Analyzer, of: Type) []const u8 {
-        return types.typeName(self.structs.items, of);
+    fn typeName(self: *Analyzer, of: Type) Error![]const u8 {
+        return types.typeName(self.arena, self.structs.items, self.heap_types.items, of);
     }
 
     fn internConstant(self: *Analyzer, bytes: []const u8) Error!u32 {
@@ -598,6 +671,7 @@ const FunctionBuilder = struct {
             .conditional => |conditional| try self.lowerConditional(conditional),
             .while_loop => |loop| try self.lowerWhile(loop),
             .for_range => |loop| try self.lowerForRange(loop),
+            .for_each => |loop| try self.lowerForEach(loop),
             .return_statement => |returned| try self.lowerReturn(returned),
             .break_statement => |broke| {
                 if (self.loops.items.len == 0) {
@@ -629,6 +703,33 @@ const FunctionBuilder = struct {
         mutable: bool,
         span: Span,
     ) Error!void {
+        // An empty [] has no element type of its own; the annotation
+        // supplies it: var xs: List(Int) = []
+        if (value_expression.* == .list_literal and value_expression.list_literal.elements.len == 0) {
+            const written = annotation orelse {
+                try self.fail(
+                    "luce.sema.type",
+                    span,
+                    "an empty [] needs an annotation: var {s}: List(T) = []",
+                    .{name},
+                );
+                return;
+            };
+            const expected = (try self.analyzer.resolveType(written)) orelse return;
+            const descriptor = self.analyzer.heapOf(expected);
+            if (descriptor == null or descriptor.? != .list) {
+                try self.fail("luce.sema.type", span, "[] builds a List, but {s} is annotated {s}", .{
+                    name,
+                    try self.analyzer.typeName(expected),
+                });
+                return;
+            }
+            const list = try self.emit(.{ .heap_new = .{ .heap = expected.heap, .dims = &.{} } }, expected);
+            const local = (try self.declareLocal(name, expected, mutable, span)) orelse return;
+            _ = try self.emit(.{ .local_set = .{ .local = local, .value = list } }, .none);
+            return;
+        }
+
         const value = (try self.lowerExpression(value_expression, false)) orelse return;
         if (annotation) |written| {
             const expected = (try self.analyzer.resolveType(written)) orelse return;
@@ -637,7 +738,7 @@ const FunctionBuilder = struct {
                     "luce.sema.type",
                     span,
                     "{s} declared {s} but initialized with {s} (conversions are explicit: {s}(...))",
-                    .{ name, self.analyzer.typeName(expected), self.analyzer.typeName(value.value_type), self.analyzer.typeName(expected) },
+                    .{ name, try self.analyzer.typeName(expected), try self.analyzer.typeName(value.value_type), try self.analyzer.typeName(expected) },
                 );
                 return;
             }
@@ -647,27 +748,60 @@ const FunctionBuilder = struct {
     }
 
     fn lowerAssign(self: *FunctionBuilder, assign: anytype) Error!void {
-        const target = assign.target;
+        switch (assign.target) {
+            .name => |name| try self.lowerAssignName(name.text, name.span, assign),
+            .field => |field| try self.lowerAssignField(field, assign),
+            .index => |index| try self.lowerAssignIndex(index, assign),
+        }
+    }
+
+    fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: anytype) Error!void {
+        if (std.mem.eql(u8, base, "output")) {
+            try self.fail("luce.sema.output", span, "assign to output.NAME", .{});
+            return;
+        }
+        if (std.mem.eql(u8, base, "input")) {
+            try self.fail("luce.sema.input", span, "input ports are read-only", .{});
+            return;
+        }
+        const found = self.findLocal(base) orelse {
+            try self.fail("luce.sema.name", span, "unknown name {s}", .{base});
+            return;
+        };
+        if (!found.mutable) {
+            try self.fail("luce.sema.let", span, "{s} is let-bound; use var for reassignment", .{base});
+            return;
+        }
+        const local_type = self.locals.items[found.local].local_type;
+        const value = (try self.lowerExpression(assign.value, false)) orelse return;
+        if (!value.value_type.eql(local_type)) {
+            try self.fail("luce.sema.type", assign.span, "{s} is {s} but the value is {s}", .{
+                base,
+                try self.analyzer.typeName(local_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        _ = try self.emit(.{ .local_set = .{ .local = found.local, .value = value.register } }, .none);
+    }
+
+    fn lowerAssignField(self: *FunctionBuilder, target: anytype, assign: anytype) Error!void {
         if (std.mem.eql(u8, target.base, "output")) {
             if (!self.has_frames) {
                 try self.fail("luce.sema.name", target.span, "output exists only in the evaluator entry", .{});
                 return;
             }
-            const field = target.field orelse {
-                try self.fail("luce.sema.output", target.span, "assign to output.NAME", .{});
-                return;
-            };
-            const port = self.analyzer.schema.findOutput(field) orelse {
-                try self.fail("luce.sema.port", target.span, "no output port named {s}", .{field});
+            const port = self.analyzer.schema.findOutput(target.field) orelse {
+                try self.fail("luce.sema.port", target.span, "no output port named {s}", .{target.field});
                 return;
             };
             const expected = Type.fromPort(self.analyzer.schema.outputs[port].declared);
             const value = (try self.lowerExpression(assign.value, false)) orelse return;
             if (!value.value_type.eql(expected)) {
                 try self.fail("luce.sema.type", assign.span, "output.{s} is {s} but the value is {s}", .{
-                    field,
-                    self.analyzer.typeName(expected),
-                    self.analyzer.typeName(value.value_type),
+                    target.field,
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(value.value_type),
                 });
                 return;
             }
@@ -692,60 +826,142 @@ const FunctionBuilder = struct {
             return;
         }
         const local_type = self.locals.items[found.local].local_type;
-
-        if (target.field) |field| {
-            if (local_type != .strukt) {
-                try self.fail("luce.sema.field", target.span, "{s} is {s}, not a struct", .{
-                    target.base,
-                    self.analyzer.typeName(local_type),
-                });
-                return;
-            }
-            const layout_index = local_type.strukt;
-            const layout = self.analyzer.structs.items[layout_index];
-            const field_index = layout.findField(field) orelse {
-                try self.fail("luce.sema.field", target.span, "{s} has no field {s}", .{ layout.name, field });
-                return;
-            };
-            const expected = layout.fields[field_index].field_type;
-            const value = (try self.lowerExpression(assign.value, false)) orelse return;
-            if (!value.value_type.eql(expected)) {
-                try self.fail("luce.sema.type", assign.span, "{s}.{s} is {s} but the value is {s}", .{
-                    target.base,
-                    field,
-                    self.analyzer.typeName(expected),
-                    self.analyzer.typeName(value.value_type),
-                });
-                return;
-            }
-            const current = try self.emit(.{ .local_get = found.local }, local_type);
-            const updated = try self.emit(.{ .struct_set = .{
-                .target = current,
-                .layout = layout_index,
-                .field = field_index,
-                .value = value.register,
-            } }, local_type);
-            _ = try self.emit(.{ .local_set = .{ .local = found.local, .value = updated } }, .none);
-            return;
-        }
-
-        const value = (try self.lowerExpression(assign.value, false)) orelse return;
-        if (!value.value_type.eql(local_type)) {
-            try self.fail("luce.sema.type", assign.span, "{s} is {s} but the value is {s}", .{
+        if (local_type != .strukt) {
+            try self.fail("luce.sema.field", target.span, "{s} is {s}, not a struct", .{
                 target.base,
-                self.analyzer.typeName(local_type),
-                self.analyzer.typeName(value.value_type),
+                try self.analyzer.typeName(local_type),
             });
             return;
         }
-        _ = try self.emit(.{ .local_set = .{ .local = found.local, .value = value.register } }, .none);
+        const layout_index = local_type.strukt;
+        const layout = self.analyzer.structs.items[layout_index];
+        const field_index = layout.findField(target.field) orelse {
+            try self.fail("luce.sema.field", target.span, "{s} has no field {s}", .{ layout.name, target.field });
+            return;
+        };
+        const expected = layout.fields[field_index].field_type;
+        const value = (try self.lowerExpression(assign.value, false)) orelse return;
+        if (!value.value_type.eql(expected)) {
+            try self.fail("luce.sema.type", assign.span, "{s}.{s} is {s} but the value is {s}", .{
+                target.base,
+                target.field,
+                try self.analyzer.typeName(expected),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        const current = try self.emit(.{ .local_get = found.local }, local_type);
+        const updated = try self.emit(.{ .struct_set = .{
+            .target = current,
+            .layout = layout_index,
+            .field = field_index,
+            .value = value.register,
+        } }, local_type);
+        _ = try self.emit(.{ .local_set = .{ .local = found.local, .value = updated } }, .none);
+    }
+
+    /// place[i] = v, grid[r, c] = v, m[key] = v.  The base may be any
+    /// expression: objects mutate through the reference, so no local
+    /// write-back is needed.
+    fn lowerAssignIndex(self: *FunctionBuilder, target: anytype, assign: anytype) Error!void {
+        const object = (try self.lowerExpression(target.base, false)) orelse return;
+        const element = (try self.checkIndex(object, target.indices, target.span)) orelse return;
+        const value = (try self.lowerExpression(assign.value, false)) orelse return;
+        if (!value.value_type.eql(element.element_type)) {
+            try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
+                try self.analyzer.typeName(element.element_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        const arguments = try self.arena().alloc(Register, 2 + element.indices.len);
+        arguments[0] = object.register;
+        @memcpy(arguments[1 .. 1 + element.indices.len], element.indices);
+        arguments[arguments.len - 1] = value.register;
+        _ = try self.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
+    }
+
+    const IndexCheck = struct {
+        element_type: Type,
+        indices: []Register,
+    };
+
+    /// Type-check an index list against a heap object: lists take one
+    /// Int, arrays take rank Ints, maps take one key.  Returns the
+    /// element/value type and the lowered index registers.
+    fn checkIndex(
+        self: *FunctionBuilder,
+        object: Value,
+        indices: []*ast.Expression,
+        span: Span,
+    ) Error!?IndexCheck {
+        const descriptor = self.analyzer.heapOf(object.value_type) orelse {
+            if (object.value_type == .string) {
+                try self.fail("luce.sema.index", span, "strings are sliced (s[a:b] or slice), not indexed; byte_at reads bytes", .{});
+            } else {
+                try self.fail("luce.sema.index", span, "{s} cannot be indexed", .{
+                    try self.analyzer.typeName(object.value_type),
+                });
+            }
+            return null;
+        };
+
+        const registers = try self.arena().alloc(Register, indices.len);
+        var lowered: [4]Value = undefined;
+        if (indices.len > 4) {
+            try self.fail("luce.sema.index", span, "at most 4 index dimensions", .{});
+            return null;
+        }
+        for (indices, 0..) |expression, at| {
+            lowered[at] = (try self.lowerExpression(expression, false)) orelse return null;
+            registers[at] = lowered[at].register;
+        }
+
+        switch (descriptor) {
+            .list => |element| {
+                if (indices.len != 1 or lowered[0].value_type != .int) {
+                    try self.fail("luce.sema.index", span, "lists index with one Int", .{});
+                    return null;
+                }
+                return .{ .element_type = element, .indices = registers };
+            },
+            .array => |shape| {
+                if (indices.len != shape.rank) {
+                    try self.fail("luce.sema.index", span, "this array has {d} dimensions, got {d} indices", .{
+                        shape.rank,
+                        indices.len,
+                    });
+                    return null;
+                }
+                for (lowered[0..indices.len]) |index_value| {
+                    if (index_value.value_type != .int) {
+                        try self.fail("luce.sema.index", span, "array indices are Int", .{});
+                        return null;
+                    }
+                }
+                return .{ .element_type = shape.element, .indices = registers };
+            },
+            .map => |pair| {
+                if (indices.len != 1 or !lowered[0].value_type.eql(pair.key)) {
+                    try self.fail("luce.sema.index", span, "this map is keyed by {s}", .{
+                        try self.analyzer.typeName(pair.key),
+                    });
+                    return null;
+                }
+                return .{ .element_type = pair.value, .indices = registers };
+            },
+            .builder => {
+                try self.fail("luce.sema.index", span, "Builder has no index; str(b) reads it", .{});
+                return null;
+            },
+        }
     }
 
     fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Value {
         const condition = (try self.lowerExpression(expression, false)) orelse return null;
         if (condition.value_type != .boolean) {
             try self.fail("luce.sema.type", expression.span(), "condition must be Bool, not {s}", .{
-                self.analyzer.typeName(condition.value_type),
+                try self.analyzer.typeName(condition.value_type),
             });
             return null;
         }
@@ -862,6 +1078,102 @@ const FunctionBuilder = struct {
         self.switchTo(exit);
     }
 
+    /// for x in xs: — a hidden object local and a hidden Int index
+    /// drive the loop; the element (or map key) binds immutably each
+    /// iteration.  Length is re-read every step, so mutation during
+    /// iteration stays bounds-safe.
+    fn lowerForEach(self: *FunctionBuilder, loop: anytype) Error!void {
+        const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
+        const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
+            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map's keys, not {s}", .{
+                try self.analyzer.typeName(iterable.value_type),
+            });
+            return;
+        };
+        var element_kind: ir.Intrinsic = .index_get;
+        const element_type: Type = switch (descriptor) {
+            .list => |element| element,
+            .array => |shape| blk: {
+                if (shape.rank != 1) {
+                    try self.fail("luce.sema.loop", loop.span, "for iterates rank-1 arrays; index higher ranks explicitly", .{});
+                    return;
+                }
+                break :blk shape.element;
+            },
+            .map => |pair| blk: {
+                element_kind = .key_at;
+                break :blk pair.key;
+            },
+            .builder => {
+                try self.fail("luce.sema.loop", loop.span, "Builder is not iterable", .{});
+                return;
+            },
+        };
+
+        try self.pushScope();
+        defer self.popScope();
+        const object_local = try self.hiddenLocal(iterable.value_type);
+        const index_local = try self.hiddenLocal(.int);
+        const name_local = (try self.declareLocal(loop.name, element_type, false, loop.span)) orelse return;
+        _ = try self.emit(.{ .local_set = .{ .local = object_local, .value = iterable.register } }, .none);
+        const zero = try self.emit(.{ .const_int = 0 }, .int);
+        _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = zero } }, .none);
+
+        const header = try self.reserveBlock();
+        const body = try self.reserveBlock();
+        const step = try self.reserveBlock();
+        const exit = try self.reserveBlock();
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(header);
+        const object_value = try self.emit(.{ .local_get = object_local }, iterable.value_type);
+        const length_arguments = try self.arena().alloc(Register, 1);
+        length_arguments[0] = object_value;
+        const length = try self.emit(.{ .intrinsic = .{ .kind = .len, .arguments = length_arguments } }, .int);
+        const index_value = try self.emit(.{ .local_get = index_local }, .int);
+        const keep_going = try self.emit(.{ .binary = .{
+            .op = .less,
+            .operand_type = .int,
+            .left = index_value,
+            .right = length,
+        } }, .boolean);
+        _ = try self.emit(.{ .branch = .{
+            .condition = keep_going,
+            .then_block = body,
+            .else_block = exit,
+        } }, .none);
+
+        self.switchTo(body);
+        const body_object = try self.emit(.{ .local_get = object_local }, iterable.value_type);
+        const body_index = try self.emit(.{ .local_get = index_local }, .int);
+        const element_arguments = try self.arena().alloc(Register, 2);
+        element_arguments[0] = body_object;
+        element_arguments[1] = body_index;
+        const element = try self.emit(
+            .{ .intrinsic = .{ .kind = element_kind, .arguments = element_arguments } },
+            element_type,
+        );
+        _ = try self.emit(.{ .local_set = .{ .local = name_local, .value = element } }, .none);
+        try self.loops.append(self.temporary(), .{ .continue_block = step, .exit_block = exit });
+        try self.lowerBlock(loop.body);
+        _ = self.loops.pop();
+        _ = try self.emit(.{ .jump = step }, .none);
+
+        self.switchTo(step);
+        const stepped = try self.emit(.{ .local_get = index_local }, .int);
+        const one = try self.emit(.{ .const_int = 1 }, .int);
+        const incremented = try self.emit(.{ .binary = .{
+            .op = .add,
+            .operand_type = .int,
+            .left = stepped,
+            .right = one,
+        } }, .int);
+        _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = incremented } }, .none);
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(exit);
+    }
+
     fn lowerReturn(self: *FunctionBuilder, returned: anytype) Error!void {
         if (returned.value) |expression| {
             const value = (try self.lowerExpression(expression, false)) orelse return;
@@ -871,8 +1183,8 @@ const FunctionBuilder = struct {
             }
             if (!value.value_type.eql(self.return_type)) {
                 try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}", .{
-                    self.analyzer.typeName(value.value_type),
-                    self.analyzer.typeName(self.return_type),
+                    try self.analyzer.typeName(value.value_type),
+                    try self.analyzer.typeName(self.return_type),
                 });
                 return;
             }
@@ -881,7 +1193,7 @@ const FunctionBuilder = struct {
         }
         if (self.return_type != .none) {
             try self.fail("luce.sema.return", returned.span, "return needs a {s} value", .{
-                self.analyzer.typeName(self.return_type),
+                try self.analyzer.typeName(self.return_type),
             });
             return;
         }
@@ -936,7 +1248,141 @@ const FunctionBuilder = struct {
             .call => |call| return self.lowerCall(call, as_statement),
             .binary => |binary| return self.lowerBinary(binary),
             .unary => |unary| return self.lowerUnary(unary),
+            .new_object => |new| return self.lowerNew(new),
+            .list_literal => |literal| return self.lowerListLiteral(literal),
+            .index => |index| return self.lowerIndex(index),
+            .slice_range => |slice| return self.lowerSliceRange(slice),
         }
+    }
+
+    fn lowerNew(self: *FunctionBuilder, new: anytype) Error!?Value {
+        var object_type: Type = undefined;
+        var dims: []Register = &.{};
+        if (std.mem.eql(u8, new.type_name.name, "Array")) {
+            if (new.dims.len == 0 or new.dims.len > 4) {
+                try self.fail("luce.sema.new", new.span, "new Array takes 1 to 4 dimension sizes: new Array(Int, 5, 5)", .{});
+                return null;
+            }
+            const element = (try self.analyzer.resolveType(new.type_name.arguments[0])) orelse return null;
+            object_type = try self.analyzer.internHeapType(.{
+                .array = .{ .element = element, .rank = @intCast(new.dims.len) },
+            });
+            dims = try self.arena().alloc(Register, new.dims.len);
+            for (new.dims, dims) |expression, *register| {
+                const dimension = (try self.lowerExpression(expression, false)) orelse return null;
+                if (dimension.value_type != .int) {
+                    try self.fail("luce.sema.new", expression.span(), "array dimensions are Int", .{});
+                    return null;
+                }
+                register.* = dimension.register;
+            }
+        } else {
+            object_type = (try self.analyzer.resolveType(new.type_name)) orelse return null;
+            if (object_type != .heap) {
+                try self.fail("luce.sema.new", new.span, "new builds List, Map, Array, or Builder", .{});
+                return null;
+            }
+        }
+        return .{
+            .register = try self.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = dims } }, object_type),
+            .value_type = object_type,
+        };
+    }
+
+    fn lowerListLiteral(self: *FunctionBuilder, literal: anytype) Error!?Value {
+        if (literal.elements.len == 0) {
+            try self.fail(
+                "luce.sema.type",
+                literal.span,
+                "an empty [] needs an annotated binding (var xs: List(Int) = []) or new List(T)",
+                .{},
+            );
+            return null;
+        }
+        var elements: std.ArrayList(Value) = .empty;
+        defer elements.deinit(self.temporary());
+        for (literal.elements) |expression| {
+            const element = (try self.lowerExpression(expression, false)) orelse return null;
+            if (elements.items.len > 0 and !element.value_type.eql(elements.items[0].value_type)) {
+                try self.fail("luce.sema.type", expression.span(), "list elements are all {s}, got {s}", .{
+                    try self.analyzer.typeName(elements.items[0].value_type),
+                    try self.analyzer.typeName(element.value_type),
+                });
+                return null;
+            }
+            try elements.append(self.temporary(), element);
+        }
+        const object_type = try self.analyzer.internHeapType(.{ .list = elements.items[0].value_type });
+        const list = try self.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = &.{} } }, object_type);
+        for (elements.items) |element| {
+            const arguments = try self.arena().alloc(Register, 2);
+            arguments[0] = list;
+            arguments[1] = element.register;
+            _ = try self.emit(.{ .intrinsic = .{ .kind = .append_value, .arguments = arguments } }, .none);
+        }
+        return .{ .register = list, .value_type = object_type };
+    }
+
+    fn lowerIndex(self: *FunctionBuilder, index: anytype) Error!?Value {
+        const object = (try self.lowerExpression(index.target, false)) orelse return null;
+        const element = (try self.checkIndex(object, index.indices, index.span)) orelse return null;
+        const arguments = try self.arena().alloc(Register, 1 + element.indices.len);
+        arguments[0] = object.register;
+        @memcpy(arguments[1..], element.indices);
+        return .{
+            .register = try self.emit(
+                .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
+                element.element_type,
+            ),
+            .value_type = element.element_type,
+        };
+    }
+
+    fn lowerSliceRange(self: *FunctionBuilder, slice: anytype) Error!?Value {
+        const target = (try self.lowerExpression(slice.target, false)) orelse return null;
+        const is_string = target.value_type == .string;
+        const descriptor = self.analyzer.heapOf(target.value_type);
+        if (!is_string and (descriptor == null or descriptor.? != .list)) {
+            try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on List and String", .{
+                try self.analyzer.typeName(target.value_type),
+            });
+            return null;
+        }
+
+        var start: Register = undefined;
+        if (slice.start) |expression| {
+            const value = (try self.lowerExpression(expression, false)) orelse return null;
+            if (value.value_type != .int) {
+                try self.fail("luce.sema.type", expression.span(), "slice bounds are Int", .{});
+                return null;
+            }
+            start = value.register;
+        } else {
+            start = try self.emit(.{ .const_int = 0 }, .int);
+        }
+        var end: Register = undefined;
+        if (slice.end) |expression| {
+            const value = (try self.lowerExpression(expression, false)) orelse return null;
+            if (value.value_type != .int) {
+                try self.fail("luce.sema.type", expression.span(), "slice bounds are Int", .{});
+                return null;
+            }
+            end = value.register;
+        } else {
+            const whole = try self.arena().alloc(Register, 1);
+            whole[0] = target.register;
+            end = try self.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .int);
+        }
+
+        const arguments = try self.arena().alloc(Register, 3);
+        arguments[0] = target.register;
+        arguments[1] = start;
+        arguments[2] = end;
+        const kind: ir.Intrinsic = if (is_string) .string_slice else .list_slice;
+        return .{
+            .register = try self.emit(.{ .intrinsic = .{ .kind = kind, .arguments = arguments } }, target.value_type),
+            .value_type = target.value_type,
+        };
     }
 
     fn lowerField(self: *FunctionBuilder, field: anytype) Error!?Value {
@@ -968,7 +1414,7 @@ const FunctionBuilder = struct {
         const target = (try self.lowerExpression(field.target, false)) orelse return null;
         if (target.value_type != .strukt) {
             try self.fail("luce.sema.field", field.span, "{s} has no fields", .{
-                self.analyzer.typeName(target.value_type),
+                try self.analyzer.typeName(target.value_type),
             });
             return null;
         }
@@ -998,8 +1444,8 @@ const FunctionBuilder = struct {
         const right = (try self.lowerExpression(binary.right, false)) orelse return null;
         if (!left.value_type.eql(right.value_type)) {
             try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit)", .{
-                self.analyzer.typeName(left.value_type),
-                self.analyzer.typeName(right.value_type),
+                try self.analyzer.typeName(left.value_type),
+                try self.analyzer.typeName(right.value_type),
             });
             return null;
         }
@@ -1028,7 +1474,7 @@ const FunctionBuilder = struct {
             const string_concat = operation == .add and operand_type == .string;
             if (!operand_type.isNumeric() and !string_concat) {
                 try self.fail("luce.sema.type", binary.span, "{s} does not support this operator", .{
-                    self.analyzer.typeName(operand_type),
+                    try self.analyzer.typeName(operand_type),
                 });
                 return null;
             }
@@ -1048,7 +1494,7 @@ const FunctionBuilder = struct {
         const ordering = operation != .equal and operation != .not_equal;
         if (ordering and !(operand_type.isNumeric() or operand_type == .string)) {
             try self.fail("luce.sema.type", binary.span, "{s} has no ordering", .{
-                self.analyzer.typeName(operand_type),
+                try self.analyzer.typeName(operand_type),
             });
             return null;
         }
@@ -1119,7 +1565,7 @@ const FunctionBuilder = struct {
             .negate => {
                 if (!operand.value_type.isNumeric()) {
                     try self.fail("luce.sema.type", unary.span, "cannot negate {s}", .{
-                        self.analyzer.typeName(operand.value_type),
+                        try self.analyzer.typeName(operand.value_type),
                     });
                     return null;
                 }
@@ -1184,8 +1630,8 @@ const FunctionBuilder = struct {
                 try self.fail("luce.sema.type", argument.span, "argument {d} of {s} is {s}, got {s}", .{
                     index + 1,
                     call.callee,
-                    self.analyzer.typeName(info.parameter_types[index]),
-                    self.analyzer.typeName(value.value_type),
+                    try self.analyzer.typeName(info.parameter_types[index]),
+                    try self.analyzer.typeName(value.value_type),
                 });
                 return null;
             }
@@ -1236,8 +1682,8 @@ const FunctionBuilder = struct {
                 try self.fail("luce.sema.type", argument.span, "{s}.{s} is {s}, got {s}", .{
                     layout.name,
                     name,
-                    self.analyzer.typeName(expected),
-                    self.analyzer.typeName(value.value_type),
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(value.value_type),
                 });
                 return null;
             }
@@ -1271,7 +1717,7 @@ const FunctionBuilder = struct {
             if (value.value_type == .int) return value;
             if (value.value_type != .float) {
                 try self.fail("luce.sema.convert", call.span, "Int() converts Float, not {s}", .{
-                    self.analyzer.typeName(value.value_type),
+                    try self.analyzer.typeName(value.value_type),
                 });
                 return null;
             }
@@ -1283,7 +1729,7 @@ const FunctionBuilder = struct {
         if (value.value_type == .float) return value;
         if (value.value_type != .int) {
             try self.fail("luce.sema.convert", call.span, "Float() converts Int, not {s}", .{
-                self.analyzer.typeName(value.value_type),
+                try self.analyzer.typeName(value.value_type),
             });
             return null;
         }
@@ -1322,6 +1768,18 @@ const FunctionBuilder = struct {
             .{ .name = "byte_at", .kind = .string_byte, .arity = 2 },
             .{ .name = "assert", .kind = .assert_true, .arity = 1 },
             .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+            .{ .name = "append", .kind = .append_value, .arity = 2 },
+            .{ .name = "pop", .kind = .pop_value, .arity = 1 },
+            .{ .name = "insert", .kind = .insert_value, .arity = 3 },
+            .{ .name = "remove", .kind = .remove_entry, .arity = 2 },
+            .{ .name = "has", .kind = .has_key, .arity = 2 },
+            .{ .name = "dim", .kind = .dim_size, .arity = 2 },
+            .{ .name = "free", .kind = .free_object, .arity = 1 },
+            .{ .name = "str", .kind = .str_value, .arity = 1 },
+            .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
+            .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
+            .{ .name = "chr", .kind = .chr_code, .arity = 1 },
+            .{ .name = "ord", .kind = .ord_text, .arity = 1 },
             .{ .name = "print", .kind = .print, .arity = 1, .host = true },
             .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
             .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
@@ -1408,10 +1866,105 @@ const FunctionBuilder = struct {
                 result = .float;
             },
             .len => {
-                if (arguments[0].value_type != .string and arguments[0].value_type != .bytes)
-                    return self.intrinsicType(call, "len takes a String or Bytes");
+                const measurable = arguments[0].value_type == .string or
+                    arguments[0].value_type == .bytes or
+                    arguments[0].value_type == .heap;
+                if (!measurable)
+                    return self.intrinsicType(call, "len takes a String, Bytes, List, Map, Array, or Builder");
                 result = .int;
             },
+            .append_value => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse
+                    return self.intrinsicType(call, "append takes a List or Builder first");
+                switch (descriptor) {
+                    .list => |element| {
+                        if (!arguments[1].value_type.eql(element))
+                            return self.intrinsicType(call, "appended value must match the list's element type");
+                    },
+                    .builder => {
+                        if (arguments[1].value_type != .string)
+                            return self.intrinsicType(call, "a Builder appends String");
+                    },
+                    else => return self.intrinsicType(call, "append takes a List or Builder first"),
+                }
+                result = .none;
+            },
+            .pop_value => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse
+                    return self.intrinsicType(call, "pop takes a List");
+                if (descriptor != .list) return self.intrinsicType(call, "pop takes a List");
+                result = descriptor.list;
+            },
+            .insert_value => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse
+                    return self.intrinsicType(call, "insert takes (List, index Int, value)");
+                if (descriptor != .list or arguments[1].value_type != .int or
+                    !arguments[2].value_type.eql(descriptor.list))
+                    return self.intrinsicType(call, "insert takes (List, index Int, value)");
+                result = .none;
+            },
+            .remove_entry => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse
+                    return self.intrinsicType(call, "remove takes (List, index) or (Map, key)");
+                switch (descriptor) {
+                    .list => {
+                        if (arguments[1].value_type != .int)
+                            return self.intrinsicType(call, "list remove takes an Int index");
+                    },
+                    .map => |pair| {
+                        if (!arguments[1].value_type.eql(pair.key))
+                            return self.intrinsicType(call, "map remove takes the map's key type");
+                    },
+                    else => return self.intrinsicType(call, "remove takes (List, index) or (Map, key)"),
+                }
+                result = .none;
+            },
+            .has_key => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse
+                    return self.intrinsicType(call, "has takes (Map, key)");
+                if (descriptor != .map or !arguments[1].value_type.eql(descriptor.map.key))
+                    return self.intrinsicType(call, "has takes (Map, key)");
+                result = .boolean;
+            },
+            .dim_size => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse
+                    return self.intrinsicType(call, "dim takes (Array, axis Int)");
+                if (descriptor != .array or arguments[1].value_type != .int)
+                    return self.intrinsicType(call, "dim takes (Array, axis Int)");
+                result = .int;
+            },
+            .free_object => {
+                if (arguments[0].value_type != .heap)
+                    return self.intrinsicType(call, "free releases a List, Map, Array, or Builder");
+                result = .none;
+            },
+            .str_value => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type);
+                const stringable = switch (arguments[0].value_type) {
+                    .int, .float, .boolean, .string => true,
+                    .heap => descriptor.? == .builder,
+                    else => false,
+                };
+                if (!stringable)
+                    return self.intrinsicType(call, "str takes Int, Float, Bool, String, or Builder");
+                result = .string;
+            },
+            .parse_int, .parse_float => {
+                if (arguments[0].value_type != .string)
+                    return self.intrinsicType(call, "this builtin parses a String");
+                result = if (matched.kind == .parse_int) .int else .float;
+            },
+            .chr_code => {
+                if (arguments[0].value_type != .int)
+                    return self.intrinsicType(call, "chr takes an Int codepoint");
+                result = .string;
+            },
+            .ord_text => {
+                if (arguments[0].value_type != .string)
+                    return self.intrinsicType(call, "ord takes a String");
+                result = .int;
+            },
+            .index_get, .index_set, .list_slice, .key_at => unreachable, // lowered from syntax, never named
             .string_slice => {
                 if (arguments[0].value_type != .string or
                     arguments[1].value_type != .int or

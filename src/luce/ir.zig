@@ -60,6 +60,24 @@ pub const Intrinsic = enum {
     string_byte,
     assert_true,
     trap_message,
+    // Collections and heap objects (see types.HeapType).
+    index_get,
+    index_set,
+    list_slice,
+    append_value,
+    pop_value,
+    insert_value,
+    remove_entry,
+    has_key,
+    key_at,
+    dim_size,
+    free_object,
+    // Conversions and text.
+    str_value,
+    parse_int,
+    parse_float,
+    chr_code,
+    ord_text,
     // Host builtins (gated by compile options; see backend.Host).
     print,
     file_read,
@@ -103,6 +121,13 @@ pub const TrapCode = enum {
     host_unavailable,
     argument_bounds,
     file_read_failed,
+    index_bounds,
+    key_missing,
+    empty_collection,
+    use_after_free,
+    null_object,
+    parse_failed,
+    bad_codepoint,
 
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
@@ -122,6 +147,13 @@ pub const TrapCode = enum {
             .host_unavailable => "host service unavailable",
             .argument_bounds => "program argument out of range",
             .file_read_failed => "file read failed",
+            .index_bounds => "index out of bounds",
+            .key_missing => "key not found in map",
+            .empty_collection => "pop from an empty list",
+            .use_after_free => "object used after free",
+            .null_object => "null object reference",
+            .parse_failed => "cannot parse number",
+            .bad_codepoint => "invalid character code",
         };
     }
 };
@@ -145,6 +177,9 @@ pub const Instruction = union(enum) {
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
     call: struct { function: u32, arguments: []Register },
     intrinsic: struct { kind: Intrinsic, arguments: []Register },
+    /// Allocate one heap object of the program's heap type `heap`;
+    /// `dims` carries an Array's runtime dimensions (empty otherwise).
+    heap_new: struct { heap: u32, dims: []Register },
     jump: BlockId,
     branch: struct { condition: Register, then_block: BlockId, else_block: BlockId },
     ret: ?Register,
@@ -188,6 +223,7 @@ pub const Function = struct {
 pub const Program = struct {
     arena: std.heap.ArenaAllocator,
     structs: []StructLayout = &.{},
+    heap_types: []types.HeapType = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},
     inputs: []Port = &.{},
@@ -386,6 +422,19 @@ fn verifyInstruction(
                 _ = try operandType(function, defined, argument);
             }
         },
+        .heap_new => |new| {
+            if (new.heap >= program.heap_types.len) return error.BadStruct;
+            const expected_dims: usize = switch (program.heap_types[new.heap]) {
+                .array => |shape| shape.rank,
+                else => 0,
+            };
+            if (new.dims.len != expected_dims) return error.BadStruct;
+            for (new.dims) |dimension| {
+                const value = try operandType(function, defined, dimension);
+                try expectType(value, .int);
+            }
+            try expectType(result, .{ .heap = new.heap });
+        },
         .jump => |target| {
             if (target >= function.blocks.len) return error.BadBlock;
         },
@@ -420,10 +469,9 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
     for (program.structs) |layout| {
         try appendPrint(&text, allocator, "struct {s}:\n", .{layout.name});
         for (layout.fields) |field| {
-            try appendPrint(&text, allocator, "    {s}: {s}\n", .{
-                field.name,
-                types.typeName(program.structs, field.field_type),
-            });
+            const field_type_name = try typeName(allocator, program, field.field_type);
+            defer allocator.free(field_type_name);
+            try appendPrint(&text, allocator, "    {s}: {s}\n", .{ field.name, field_type_name });
         }
     }
 
@@ -431,19 +479,20 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         try appendPrint(&text, allocator, "func {s}(", .{function.name});
         for (function.locals[0..function.parameter_count], 0..) |local, index| {
             if (index != 0) try text.appendSlice(allocator, ", ");
-            try appendPrint(&text, allocator, "{s}: {s}", .{
-                local.name,
-                types.typeName(program.structs, local.local_type),
-            });
+            const parameter_type_name = try typeName(allocator, program, local.local_type);
+            defer allocator.free(parameter_type_name);
+            try appendPrint(&text, allocator, "{s}: {s}", .{ local.name, parameter_type_name });
         }
-        try appendPrint(&text, allocator, ") -> {s}\n", .{
-            types.typeName(program.structs, function.return_type),
-        });
+        const return_type_name = try typeName(allocator, program, function.return_type);
+        defer allocator.free(return_type_name);
+        try appendPrint(&text, allocator, ") -> {s}\n", .{return_type_name});
         for (function.locals[function.parameter_count..], function.parameter_count..) |local, index| {
+            const local_type_name = try typeName(allocator, program, local.local_type);
+            defer allocator.free(local_type_name);
             try appendPrint(&text, allocator, "    local %{d} {s}: {s}\n", .{
                 index,
                 local.name,
-                types.typeName(program.structs, local.local_type),
+                local_type_name,
             });
         }
         for (function.blocks, 0..) |block, block_index| {
@@ -454,6 +503,10 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         }
     }
     return text.toOwnedSlice(allocator);
+}
+
+fn typeName(allocator: Allocator, program: *const Program, of: Type) error{OutOfMemory}![]u8 {
+    return types.typeName(allocator, program.structs, program.heap_types, of);
 }
 
 fn appendPrint(
@@ -493,12 +546,16 @@ fn printInstruction(
             program.outputs[store.port].name,
             store.value,
         }),
-        .binary => |binary| try appendPrint(text, allocator, "{s}.{s} r{d}, r{d}", .{
-            @tagName(binary.op),
-            types.typeName(program.structs, binary.operand_type),
-            binary.left,
-            binary.right,
-        }),
+        .binary => |binary| {
+            const operand_type_name = try typeName(allocator, program, binary.operand_type);
+            defer allocator.free(operand_type_name);
+            try appendPrint(text, allocator, "{s}.{s} r{d}, r{d}", .{
+                @tagName(binary.op),
+                operand_type_name,
+                binary.left,
+                binary.right,
+            });
+        },
         .unary => |unary| try appendPrint(text, allocator, "{s} r{d}", .{ @tagName(unary.op), unary.operand }),
         .convert => |convert| try appendPrint(text, allocator, "{s} r{d}", .{ @tagName(convert.kind), convert.operand }),
         .struct_make => |make| {
@@ -523,6 +580,12 @@ fn printInstruction(
         .intrinsic => |intrinsic| {
             try appendPrint(text, allocator, "intrinsic {s}", .{@tagName(intrinsic.kind)});
             for (intrinsic.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
+        .heap_new => |new| {
+            const object_type_name = try typeName(allocator, program, .{ .heap = new.heap });
+            defer allocator.free(object_type_name);
+            try appendPrint(text, allocator, "heap_new {s}", .{object_type_name});
+            for (new.dims) |dimension| try appendPrint(text, allocator, ", r{d}", .{dimension});
         },
         .jump => |target| try appendPrint(text, allocator, "jump b{d}", .{target}),
         .branch => |branch| try appendPrint(text, allocator, "branch r{d}, b{d}, b{d}", .{

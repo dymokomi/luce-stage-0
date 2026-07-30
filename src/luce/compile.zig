@@ -64,6 +64,7 @@ pub fn compile(
     };
 
     program.structs = analyzed.structs;
+    program.heap_types = analyzed.heap_types;
     program.functions = analyzed.functions;
     program.constants = analyzed.constants;
     program.reads = analyzed.reads;
@@ -566,4 +567,83 @@ test "host builtins type-check and stay host-gated" {
         \\    term_style(1, 2, 3)
         \\
     , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.type");
+}
+
+test "collections type-check and reject misuse at compile time" {
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+
+    var featured = try compile(testing.allocator,
+        \\func sum(values: List(Int)) -> Int:
+        \\    var total = 0
+        \\    for value in values:
+        \\        total = total + value
+        \\    return total
+        \\
+        \\func label(counts: Map(String, Int), grid: Array(Int, _, _)) -> String:
+        \\    var b = new Builder()
+        \\    append(b, str(len(counts) + grid[0, 0]))
+        \\    let made = str(b)
+        \\    free(b)
+        \\    return made
+        \\
+        \\func main():
+        \\    var values: List(Int) = []
+        \\    append(values, 4)
+        \\    let total = sum(values[0:])
+        \\    free(values)
+        \\
+    , .{}, script);
+    defer featured.deinit();
+    try testing.expect(featured == .success);
+
+    try expectFailsOptions(
+        \\func main():
+        \\    let mixed = [1, "two"]
+        \\
+    , .{}, script, "luce.sema.type");
+    try expectFailsOptions(
+        \\func main():
+        \\    var untyped = []
+        \\
+    , .{}, script, "luce.sema.type");
+    try expectFailsOptions(
+        \\func main():
+        \\    var m = new Map(Float, Int)
+        \\
+    , .{}, script, "luce.sema.type");
+    try expectFailsOptions(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    let bad = grid[0]
+        \\
+    , .{}, script, "luce.sema.index");
+    try expectFailsOptions(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let bad = m[7]
+        \\
+    , .{}, script, "luce.sema.index");
+    try expectFailsOptions(
+        \\func main():
+        \\    let bad = append(5, 1)
+        \\
+    , .{}, script, "luce.sema.type");
+    try expectFailsOptions(
+        \\func main():
+        \\    for x in 7:
+        \\        let unused = x
+        \\
+    , .{}, script, "luce.sema.loop");
+    try expectFailsOptions(
+        \\func main():
+        \\    let xs = [1]
+        \\    let bad = xs < xs
+        \\
+    , .{}, script, "luce.sema.type");
+    try expectFailsOptions(
+        \\func main():
+        \\    var xs = [1]
+        \\    xs[0] = "text"
+        \\
+    , .{}, script, "luce.sema.type");
 }

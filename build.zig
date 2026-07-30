@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
 
     // Compile the bundled Luce programs with the freshly built luce.
-    const bundled = [_][]const u8{ "hello", "editor" };
+    const bundled = [_][]const u8{ "hello", "editor", "sort", "bf" };
     for (bundled) |name| {
         const compile_program = b.addRunArtifact(compiler);
         compile_program.addArg("build");

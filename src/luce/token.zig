@@ -29,6 +29,7 @@ pub const Kind = enum {
     keyword_not,
     keyword_true,
     keyword_false,
+    keyword_new,
 
     // Literals
     int_literal,
@@ -38,6 +39,8 @@ pub const Kind = enum {
     // Symbols
     left_paren,
     right_paren,
+    left_bracket,
+    right_bracket,
     comma,
     colon,
     dot,
@@ -80,4 +83,5 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "not", .kind = .keyword_not },
     .{ .word = "true", .kind = .keyword_true },
     .{ .word = "false", .kind = .keyword_false },
+    .{ .word = "new", .kind = .keyword_new },
 };

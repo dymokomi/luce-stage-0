@@ -1,0 +1,61 @@
+# A Brainfuck interpreter in Luce: the byte tape is a real Array,
+# output accumulates in a Builder, and chr() maps cell values to text.
+#
+#   loom luce programs/bf.luc
+
+func matching_forward(code: String, pc: Int) -> Int:
+    var depth = 1
+    var at = pc
+    while depth > 0:
+        at = at + 1
+        if byte_at(code, at) == 91:
+            depth = depth + 1
+        elif byte_at(code, at) == 93:
+            depth = depth - 1
+    return at
+
+func matching_backward(code: String, pc: Int) -> Int:
+    var depth = 1
+    var at = pc
+    while depth > 0:
+        at = at - 1
+        if byte_at(code, at) == 93:
+            depth = depth + 1
+        elif byte_at(code, at) == 91:
+            depth = depth - 1
+    return at
+
+func interpret(code: String, cells: Int) -> String:
+    var tape = new Array(Int, cells)
+    var pointer = 0
+    var pc = 0
+    var out = new Builder()
+    while pc < len(code):
+        let op = byte_at(code, pc)
+        if op == 62:
+            pointer = pointer + 1
+        elif op == 60:
+            pointer = pointer - 1
+        elif op == 43:
+            tape[pointer] = (tape[pointer] + 1) % 256
+        elif op == 45:
+            tape[pointer] = (tape[pointer] + 255) % 256
+        elif op == 46:
+            append(out, chr(tape[pointer]))
+        elif op == 91:
+            if tape[pointer] == 0:
+                pc = matching_forward(code, pc)
+        elif op == 93:
+            if tape[pointer] != 0:
+                pc = matching_backward(code, pc)
+        pc = pc + 1
+    let text = str(out)
+    free(out)
+    free(tape)
+    return text
+
+func main():
+    let hello = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+    let out = interpret(hello, 30)
+    print(out)
+    assert(out == "Hello World!\n")

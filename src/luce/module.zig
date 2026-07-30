@@ -20,7 +20,7 @@ const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -53,6 +53,9 @@ pub fn encode(gpa: Allocator, program: *const ir.Program) error{OutOfMemory}![]u
             try writer.valueType(field.field_type);
         }
     }
+
+    try writer.int(u32, @intCast(program.heap_types.len));
+    for (program.heap_types) |descriptor| try writer.heapType(descriptor);
 
     try writer.ports(program.inputs);
     try writer.ports(program.outputs);
@@ -88,6 +91,23 @@ const Writer = struct {
     fn valueType(self: *Writer, of: types.Type) error{OutOfMemory}!void {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         if (of == .strukt) try self.int(u32, of.strukt);
+        if (of == .heap) try self.int(u32, of.heap);
+    }
+
+    fn heapType(self: *Writer, descriptor: types.HeapType) error{OutOfMemory}!void {
+        try self.int(u8, @intFromEnum(std.meta.activeTag(descriptor)));
+        switch (descriptor) {
+            .list => |element| try self.valueType(element),
+            .map => |pair| {
+                try self.valueType(pair.key);
+                try self.valueType(pair.value);
+            },
+            .array => |shape| {
+                try self.valueType(shape.element);
+                try self.int(u8, shape.rank);
+            },
+            .builder => {},
+        }
     }
 
     fn ports(self: *Writer, declared: []const types.Port) error{OutOfMemory}!void {
@@ -181,6 +201,10 @@ const Writer = struct {
                 try self.int(u8, @intFromEnum(intrinsic.kind));
                 try self.registers(intrinsic.arguments);
             },
+            .heap_new => |new| {
+                try self.int(u32, new.heap);
+                try self.registers(new.dims);
+            },
             .jump => |target| try self.int(u32, target),
             .branch => |branch| {
                 try self.int(u32, branch.condition);
@@ -232,6 +256,11 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!ir.Program {
         layout.fields = fields;
     }
     program.structs = structs;
+
+    const heap_count = try reader.count();
+    const heap_types = try arena.alloc(types.HeapType, heap_count);
+    for (heap_types) |*descriptor| descriptor.* = try reader.heapType();
+    program.heap_types = heap_types;
 
     program.inputs = try reader.ports(arena);
     program.outputs = try reader.ports(arena);
@@ -301,6 +330,23 @@ const Reader = struct {
             .string => .string,
             .bytes => .bytes,
             .strukt => .{ .strukt = try self.int(u32) },
+            .heap => .{ .heap = try self.int(u32) },
+        };
+    }
+
+    fn heapType(self: *Reader) DecodeError!types.HeapType {
+        const tag = try self.enumTag(std.meta.Tag(types.HeapType));
+        return switch (tag) {
+            .list => .{ .list = try self.valueType() },
+            .map => .{ .map = .{
+                .key = try self.valueType(),
+                .value = try self.valueType(),
+            } },
+            .array => .{ .array = .{
+                .element = try self.valueType(),
+                .rank = try self.int(u8),
+            } },
+            .builder => .builder,
         };
     }
 
@@ -407,6 +453,10 @@ const Reader = struct {
                 .kind = try self.enumTag(ir.Intrinsic),
                 .arguments = try self.registers(arena),
             } },
+            .heap_new => .{ .heap_new = .{
+                .heap = try self.int(u32),
+                .dims = try self.registers(arena),
+            } },
             .jump => .{ .jump = try self.int(u32) },
             .branch => .{ .branch = .{
                 .condition = try self.int(u32),
@@ -465,6 +515,17 @@ test "a compiled program round-trips through the module format" {
         \\            total = total + index
         \\    print("length ready")
         \\    let text = "π = " + slice("3.14159", 0, 4)
+        \\    var points = new List(Float)
+        \\    append(points, length(point))
+        \\    var counts = new Map(String, Int)
+        \\    counts[text] = len(points)
+        \\    var grid = new Array(Int, 2, 3)
+        \\    grid[1, 2] = total
+        \\    for value in points:
+        \\        total = total + Int(value)
+        \\    free(points)
+        \\    free(counts)
+        \\    free(grid)
         \\
     ;
     var program = try compileScript(source);

@@ -137,7 +137,7 @@ struct Text:
         return columns
 
 struct Editing:
-    func insert(value: String, cursor: Int, extra: String) -> String:
+    func splice(value: String, cursor: Int, extra: String) -> String:
         return slice(value, 0, cursor) + extra + slice(value, cursor, len(value))
 
     func erase_before(value: String, cursor: Int) -> String:
@@ -383,15 +383,15 @@ struct Handle:
                 next.content = Editing.erase_at(next.content, next.cursor)
                 next.dirty = true
         elif name == "enter":
-            next.content = Editing.insert(next.content, next.cursor, "\n")
+            next.content = Editing.splice(next.content, next.cursor, "\n")
             next.cursor = next.cursor + 1
             next.dirty = true
         elif name == "tab":
-            next.content = Editing.insert(next.content, next.cursor, "    ")
+            next.content = Editing.splice(next.content, next.cursor, "    ")
             next.cursor = next.cursor + 4
             next.dirty = true
         elif name == "text":
-            next.content = Editing.insert(next.content, next.cursor, inserted)
+            next.content = Editing.splice(next.content, next.cursor, inserted)
             next.cursor = next.cursor + len(inserted)
             next.dirty = true
         elif name == "ctrl_s":

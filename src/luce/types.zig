@@ -72,7 +72,10 @@ pub const CompileOptions = struct {
 // ---------------------------------------------------------------------------
 
 /// A Luce type: a scalar, a structure (by index into the program's
-/// layout table), or none (the absence of a value).
+/// layout table), a heap object shape (by index into the program's
+/// heap type table), or none (the absence of a value).  Heap type
+/// indexes are interned by the analyzer, so equal shapes share one
+/// index and equality is an index comparison.
 pub const Type = union(enum) {
     none,
     boolean,
@@ -81,10 +84,12 @@ pub const Type = union(enum) {
     string,
     bytes,
     strukt: u32,
+    heap: u32,
 
     pub fn eql(self: Type, other: Type) bool {
         return switch (self) {
             .strukt => |index| other == .strukt and other.strukt == index,
+            .heap => |index| other == .heap and other.heap == index,
             else => std.meta.activeTag(self) == std.meta.activeTag(other),
         };
     }
@@ -101,6 +106,26 @@ pub const Type = union(enum) {
 
     pub fn isNumeric(self: Type) bool {
         return self == .int or self == .float;
+    }
+};
+
+/// The shape of one heap object type: what a List holds, a Map's key
+/// and value, an Array's element and rank, or a Builder.
+pub const HeapType = union(enum) {
+    list: Type,
+    map: struct { key: Type, value: Type },
+    array: struct { element: Type, rank: u8 },
+    builder,
+
+    pub fn eql(self: HeapType, other: HeapType) bool {
+        return switch (self) {
+            .list => |element| other == .list and element.eql(other.list),
+            .map => |pair| other == .map and
+                pair.key.eql(other.map.key) and pair.value.eql(other.map.value),
+            .array => |shape| other == .array and
+                shape.element.eql(other.array.element) and shape.rank == other.array.rank,
+            .builder => other == .builder,
+        };
     }
 };
 
@@ -122,17 +147,58 @@ pub const StructLayout = struct {
 };
 
 /// The written name of a type, for diagnostics.  Struct names resolve
-/// through the layout table.
-pub fn typeName(layouts: []const StructLayout, of: Type) []const u8 {
-    return switch (of) {
-        .none => "None",
-        .boolean => "Bool",
-        .int => "Int",
-        .float => "Float",
-        .string => "String",
-        .bytes => "Bytes",
-        .strukt => |index| layouts[index].name,
-    };
+/// through the layout table; heap type names render recursively
+/// (`List(Int)`, `Map(String, List(Int))`, `Array(Float, _, _)`), so
+/// the caller supplies an allocator and owns the result.
+pub fn typeName(
+    allocator: std.mem.Allocator,
+    layouts: []const StructLayout,
+    heap_types: []const HeapType,
+    of: Type,
+) error{OutOfMemory}![]u8 {
+    var written: std.ArrayList(u8) = .empty;
+    errdefer written.deinit(allocator);
+    try writeTypeName(&written, allocator, layouts, heap_types, of);
+    return written.toOwnedSlice(allocator);
+}
+
+fn writeTypeName(
+    written: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    layouts: []const StructLayout,
+    heap_types: []const HeapType,
+    of: Type,
+) error{OutOfMemory}!void {
+    switch (of) {
+        .none => try written.appendSlice(allocator, "None"),
+        .boolean => try written.appendSlice(allocator, "Bool"),
+        .int => try written.appendSlice(allocator, "Int"),
+        .float => try written.appendSlice(allocator, "Float"),
+        .string => try written.appendSlice(allocator, "String"),
+        .bytes => try written.appendSlice(allocator, "Bytes"),
+        .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
+        .heap => |index| switch (heap_types[index]) {
+            .list => |element| {
+                try written.appendSlice(allocator, "List(");
+                try writeTypeName(written, allocator, layouts, heap_types, element);
+                try written.appendSlice(allocator, ")");
+            },
+            .map => |pair| {
+                try written.appendSlice(allocator, "Map(");
+                try writeTypeName(written, allocator, layouts, heap_types, pair.key);
+                try written.appendSlice(allocator, ", ");
+                try writeTypeName(written, allocator, layouts, heap_types, pair.value);
+                try written.appendSlice(allocator, ")");
+            },
+            .array => |shape| {
+                try written.appendSlice(allocator, "Array(");
+                try writeTypeName(written, allocator, layouts, heap_types, shape.element);
+                for (0..shape.rank) |_| try written.appendSlice(allocator, ", _");
+                try written.appendSlice(allocator, ")");
+            },
+            .builder => try written.appendSlice(allocator, "Builder"),
+        },
+    }
 }
 
 test "type equality distinguishes struct indices" {

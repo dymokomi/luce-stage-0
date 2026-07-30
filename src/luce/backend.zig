@@ -25,7 +25,9 @@ const Allocator = std.mem.Allocator;
 /// A runtime value.  Strings, bytes, and struct storage are borrowed
 /// from the program, the caller's input frame, or the evaluation arena
 /// — nothing here owns memory, and nothing outlives the evaluation
-/// unless the caller copies it out.
+/// unless the caller copies it out.  Heap objects (lists, maps,
+/// arrays, builders) live in the interpreter's object table; a value
+/// only carries the handle.
 pub const RuntimeValue = union(enum) {
     none,
     boolean: bool,
@@ -34,6 +36,20 @@ pub const RuntimeValue = union(enum) {
     string: []const u8,
     bytes: []const u8,
     strukt: []RuntimeValue,
+    object: ObjectHandle,
+};
+
+/// A reference to one heap object for the duration of an evaluation.
+/// The zero value of an object-typed place is the null handle; using
+/// it traps instead of touching anything.
+pub const ObjectHandle = struct {
+    index: u32,
+
+    pub const null_object: ObjectHandle = .{ .index = std.math.maxInt(u32) };
+
+    pub fn isNull(self: ObjectHandle) bool {
+        return self.index == std.math.maxInt(u32);
+    }
 };
 
 /// One input port slot: a value borrowed for the duration of the
@@ -49,11 +65,18 @@ pub const Trap = struct {
     message: []const u8,
 };
 
+pub const Success = struct {
+    /// Intents the program computed (arena-owned, often empty); the
+    /// trusted host applies them after publication.
+    intents: fabric.Intents = .{},
+    /// Heap objects still alive when the program returned — memory is
+    /// explicit in Luce, so the host reports what was not freed.
+    leaked_objects: u32 = 0,
+};
+
 pub const Result = union(enum) {
-    /// The output frame holds every written output; the payload holds
-    /// the intents the program computed (arena-owned, often empty).
-    /// The trusted host applies them after publication.
-    success: fabric.Intents,
+    /// The output frame holds every written output.
+    success: Success,
     /// The evaluator failed; the output frame must not be published
     /// and any intents are discarded.
     trap: Trap,
