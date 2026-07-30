@@ -1,5 +1,9 @@
 # The memory model decision
 
+> The situation-by-situation specification distilled from this memo
+> lives in `docs/OWNERSHIP.md` — that is the document to review and
+> ratify before implementation.
+
 Luce currently has **manual explicit memory**: objects are created
 with `new`/literals, released with `free(x)`, use-after-free and
 double-free trap deterministically, and loom reports leaks after every
