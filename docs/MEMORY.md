@@ -108,3 +108,62 @@ Questions to settle before implementing option 3, whichever way:
    required everywhere?
 4. What do struct fields own, if anything?
 5. Is `free` kept for early release?
+
+## Design sketch: gradual ownership ("fresh-or-said")
+
+Where the thinking currently is, after weighing the constraints:
+LuciaOS's language must be systems-grade (no GC; ARC rejected as a
+default — refcount traffic taxes everything and hides frees), must
+not be Rust-convoluted, must be effortless for casual users, and
+should have a sensible default with explicit verbs underneath.
+
+**Default (casual users write zero memory words):**
+- A *fresh* object — `new`, a literal, a slice, a `split()` result —
+  is owned by the binding that receives it; it dies at that binding's
+  scope exit or reassignment.  Deterministic, readable from source.
+- `return xs` moves to the caller automatically.
+- Storing a *fresh* object into a container hands ownership to the
+  container; freeing the container frees what it owns.
+- Passing to a function, reading, iterating: borrows — free, no
+  ceremony.
+- Unbound statement temporaries die at the end of their statement's
+  scope.
+
+**The verbs (the intricate 10%):**
+- `give x` — transfer ownership (into a call or container); free.
+- `copy x` — deep clone; independence made visible and O(n).
+- `free x` — early release; rare.
+- later, maybe: `share x` — an opt-in refcounted island for genuine
+  shared ownership; cost confined to objects that ask for it.
+  Explicitly not in the first version.
+
+**The one rule replacing the borrow checker:** *keeping* a named
+object — storing a bare variable into a container or an outliving
+struct — requires `give` or `copy`.  Fresh expressions keep
+themselves.  The distinction (bare name vs fresh expression) is
+purely syntactic, so the rule is enforceable on the AST with a
+fix-it diagnostic: no lifetimes, no dataflow, nothing to fight.
+
+**Safety is a build mode, not a semantic:** the interpreter (and a
+future ReleaseSafe native build) checks every access through
+generation-tagged handles, so a borrow outliving its owner is a
+deterministic `use_after_free` trap at the faulting line.  A future
+ReleaseFast lowers handles to raw pointers and the checks cost zero —
+Zig's exact posture, applied to ownership.
+
+**Prior art to steal from:** Vale (generational references — the
+same trap mechanism Luce already has), Mojo (ownership + transfer
+sigils without lifetime annotations), Nim ARC (move-on-last-use as a
+pure optimization later), Lobster/Perceus (compile-time RC elision if
+`share` ever needs to get fast).
+
+**Open questions specific to this sketch:**
+1. Struct fields: does binding a construction (`var bag = Bag(items =
+   [1, 2])`) walk and own the fresh objects reachable through it?
+   (Lean: yes at construction; borrowed fields stay borrows.)
+2. After `give x`, is `x` readable as a borrow (lean: yes, dynamic
+   trap if the owner died) or poisoned at compile time?
+3. Exact definition of the statement/expression scope for unbound
+   temporaries.
+4. Whether `defer` still arrives independently for host cleanup
+   (terminal state, files) — it is no longer needed for memory.
