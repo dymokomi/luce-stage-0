@@ -58,10 +58,12 @@ pub const EntryMode = enum {
 };
 
 /// Host-controlled compile options. Entry mode selects the required
-/// source contract independently from authority to compute Fabric
-/// intents.
+/// source contract independently from authority: `allow_host` grants
+/// the host builtins (console, files, arguments, terminal) and
+/// `allow_fabric` grants Fabric intent computation.
 pub const CompileOptions = struct {
     entry_mode: EntryMode = .evaluator,
+    allow_host: bool = false,
     allow_fabric: bool = false,
 };
 

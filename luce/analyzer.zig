@@ -1306,6 +1306,7 @@ const FunctionBuilder = struct {
             name: []const u8,
             kind: ir.Intrinsic,
             arity: usize,
+            host: bool = false,
             fabric: bool = false,
         };
         const builtins = [_]Builtin{
@@ -1321,8 +1322,21 @@ const FunctionBuilder = struct {
             .{ .name = "byte_at", .kind = .string_byte, .arity = 2 },
             .{ .name = "assert", .kind = .assert_true, .arity = 1 },
             .{ .name = "trap", .kind = .trap_message, .arity = 1 },
-            .{ .name = "read_file", .kind = .read_file, .arity = 2 },
-            .{ .name = "script_directory", .kind = .script_directory, .arity = 0, .fabric = true },
+            .{ .name = "print", .kind = .print, .arity = 1, .host = true },
+            .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
+            .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
+            .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
+            .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
+            .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
+            .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
+            .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
+            .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
+            .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
+            .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
+            .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
+            .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
+            .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
+            .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
             .{ .name = "create_image", .kind = .fabric_image, .arity = 2, .fabric = true },
             .{ .name = "create_texel", .kind = .fabric_create, .arity = 1, .fabric = true },
             .{ .name = "texel_input", .kind = .fabric_input, .arity = 3, .fabric = true },
@@ -1335,6 +1349,15 @@ const FunctionBuilder = struct {
             if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
         } else return .not_builtin;
 
+        if (matched.host and !self.analyzer.options.allow_host) {
+            try self.fail(
+                "luce.sema.host",
+                call.span,
+                "{s} is a host builtin; this host does not allow console, file, or terminal access here",
+                .{matched.name},
+            );
+            return .failed;
+        }
         if (matched.fabric and !self.analyzer.options.allow_fabric) {
             try self.fail(
                 "luce.sema.fabric",
@@ -1411,13 +1434,51 @@ const FunctionBuilder = struct {
                     return self.intrinsicType(call, "trap takes a String message");
                 result = .none;
             },
-            .read_file => {
-                if (arguments[0].value_type != .bytes or arguments[1].value_type != .string)
-                    return self.intrinsicType(call, "read_file takes (capability Bytes, path String)");
+            .print, .term_write => {
+                if (arguments[0].value_type != .string)
+                    return self.intrinsicType(call, "this builtin takes a String");
+                result = .none;
+            },
+            .file_read => {
+                if (arguments[0].value_type != .string)
+                    return self.intrinsicType(call, "file_read takes a String path");
                 result = .string;
             },
-            .script_directory => {
-                result = .bytes;
+            .file_write => {
+                if (arguments[0].value_type != .string or arguments[1].value_type != .string)
+                    return self.intrinsicType(call, "file_write takes (path String, content String)");
+                result = .boolean;
+            },
+            .file_exists => {
+                if (arguments[0].value_type != .string)
+                    return self.intrinsicType(call, "file_exists takes a String path");
+                result = .boolean;
+            },
+            .arg_count, .term_rows, .term_cols => {
+                result = .int;
+            },
+            .arg_get => {
+                if (arguments[0].value_type != .int)
+                    return self.intrinsicType(call, "arg takes an Int index");
+                result = .string;
+            },
+            .term_clear, .term_flush => {
+                result = .none;
+            },
+            .term_move => {
+                if (arguments[0].value_type != .int or arguments[1].value_type != .int)
+                    return self.intrinsicType(call, "term_move takes (row Int, col Int)");
+                result = .none;
+            },
+            .term_style => {
+                if (arguments[0].value_type != .int or
+                    arguments[1].value_type != .int or
+                    arguments[2].value_type != .boolean)
+                    return self.intrinsicType(call, "term_style takes (foreground Int, background Int, bold Bool)");
+                result = .none;
+            },
+            .key_read, .key_text => {
+                result = .string;
             },
             .fabric_image => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .int)

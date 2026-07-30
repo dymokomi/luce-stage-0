@@ -1,6 +1,4 @@
 /build/
-*.img
-*.key
 .DS_Store
 /.zig-cache/
 /zig-out/

@@ -60,9 +60,23 @@ pub const Intrinsic = enum {
     string_byte,
     assert_true,
     trap_message,
-    read_file,
+    // Host builtins (gated by compile options; see backend.Host).
+    print,
+    file_read,
+    file_write,
+    file_exists,
+    arg_count,
+    arg_get,
+    term_rows,
+    term_cols,
+    term_clear,
+    term_move,
+    term_style,
+    term_write,
+    term_flush,
+    key_read,
+    key_text,
     // Fabric builtins (gated by compile options; see fabric.zig).
-    script_directory,
     fabric_image,
     fabric_create,
     fabric_input,
@@ -86,8 +100,8 @@ pub const TrapCode = enum {
     invalid_image,
     string_bounds,
     string_boundary,
-    file_host_unavailable,
-    file_capability_denied,
+    host_unavailable,
+    argument_bounds,
     file_read_failed,
 
     pub fn message(self: TrapCode) []const u8 {
@@ -105,8 +119,8 @@ pub const TrapCode = enum {
             .invalid_image => "create_image needs a path and a positive page count",
             .string_bounds => "string index out of bounds",
             .string_boundary => "string slice splits a UTF-8 sequence",
-            .file_host_unavailable => "file host unavailable",
-            .file_capability_denied => "file read capability denied",
+            .host_unavailable => "host service unavailable",
+            .argument_bounds => "program argument out of range",
             .file_read_failed => "file read failed",
         };
     }

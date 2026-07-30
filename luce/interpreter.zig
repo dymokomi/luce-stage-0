@@ -63,6 +63,13 @@ const Machine = struct {
     /// Intents recorded by the fabric builtins, in order.  Arena-owned;
     /// the caller copies what it applies.
     intents: fabric.Intents = .{},
+    /// The text payload of the most recent key_read "text" event.
+    last_key_text: []const u8 = "",
+
+    fn terminal(self: *Machine) ?backend.Terminal {
+        const host = self.host orelse return null;
+        return host.terminal;
+    }
 
     fn trap(self: *Machine, code: ir.TrapCode) CallOutcome {
         _ = self;
@@ -406,23 +413,101 @@ const Machine = struct {
                     .message = registers[arguments[0]].string,
                 } };
             },
-            .read_file => {
-                const host = self.host orelse return self.trap(.file_host_unavailable);
-                const capability = registers[arguments[0]].bytes;
-                const path = registers[arguments[1]].string;
-                return switch (try host.readFileFn(host.context, self.arena, capability, path)) {
+            .print => {
+                const host = self.host orelse return self.trap(.host_unavailable);
+                const callback = host.printFn orelse return self.trap(.host_unavailable);
+                try callback(host.context, registers[arguments[0]].string);
+                return .{ .value = .none };
+            },
+            .file_read => {
+                const host = self.host orelse return self.trap(.host_unavailable);
+                const callback = host.readFileFn orelse return self.trap(.host_unavailable);
+                const path = registers[arguments[0]].string;
+                return switch (try callback(host.context, self.arena, path)) {
                     .content => |content| .{ .value = .{ .string = content } },
-                    .denied => self.trap(.file_capability_denied),
                     .failed => self.trap(.file_read_failed),
                 };
             },
-            .script_directory => {
-                const host = self.host orelse return self.trap(.file_host_unavailable);
-                const callback = host.scriptDirectoryFn orelse
-                    return self.trap(.file_host_unavailable);
-                const capability = (try callback(host.context, self.arena)) orelse
-                    return self.trap(.file_host_unavailable);
-                return .{ .value = .{ .bytes = capability } };
+            .file_write => {
+                const host = self.host orelse return self.trap(.host_unavailable);
+                const callback = host.writeFileFn orelse return self.trap(.host_unavailable);
+                const written = callback(
+                    host.context,
+                    registers[arguments[0]].string,
+                    registers[arguments[1]].string,
+                );
+                return .{ .value = .{ .boolean = written } };
+            },
+            .file_exists => {
+                const host = self.host orelse return self.trap(.host_unavailable);
+                const callback = host.fileExistsFn orelse return self.trap(.host_unavailable);
+                const found = callback(host.context, registers[arguments[0]].string);
+                return .{ .value = .{ .boolean = found } };
+            },
+            .arg_count => {
+                const host = self.host orelse return self.trap(.host_unavailable);
+                const callback = host.argCountFn orelse return self.trap(.host_unavailable);
+                return .{ .value = .{ .int = callback(host.context) } };
+            },
+            .arg_get => {
+                const host = self.host orelse return self.trap(.host_unavailable);
+                const callback = host.argFn orelse return self.trap(.host_unavailable);
+                const index = registers[arguments[0]].int;
+                if (index < 0 or index > std.math.maxInt(u32)) return self.trap(.argument_bounds);
+                const value = (try callback(host.context, self.arena, @intCast(index))) orelse
+                    return self.trap(.argument_bounds);
+                return .{ .value = .{ .string = value } };
+            },
+            .term_rows => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                return .{ .value = .{ .int = screen.rowsFn(screen.context) } };
+            },
+            .term_cols => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                return .{ .value = .{ .int = screen.colsFn(screen.context) } };
+            },
+            .term_clear => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                try screen.clearFn(screen.context);
+                return .{ .value = .none };
+            },
+            .term_move => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                try screen.moveFn(
+                    screen.context,
+                    registers[arguments[0]].int,
+                    registers[arguments[1]].int,
+                );
+                return .{ .value = .none };
+            },
+            .term_style => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                try screen.styleFn(
+                    screen.context,
+                    registers[arguments[0]].int,
+                    registers[arguments[1]].int,
+                    registers[arguments[2]].boolean,
+                );
+                return .{ .value = .none };
+            },
+            .term_write => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                try screen.writeFn(screen.context, registers[arguments[0]].string);
+                return .{ .value = .none };
+            },
+            .term_flush => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                try screen.flushFn(screen.context);
+                return .{ .value = .none };
+            },
+            .key_read => {
+                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const event = try screen.keyFn(screen.context, self.arena);
+                self.last_key_text = event.text;
+                return .{ .value = .{ .string = event.name } };
+            },
+            .key_text => {
+                return .{ .value = .{ .string = self.last_key_text } };
             },
             .fabric_image => {
                 const path = registers[arguments[0]].string;
@@ -987,86 +1072,238 @@ test "fabric builtins trap on bad handles and types, and need the gate" {
     try testing.expectEqualStrings("luce.sema.fabric", gated.failure.at(0).?.code);
 }
 
-const TestFileHost = struct {
-    capability: []const u8,
-    content: []const u8,
-    fail_read: bool = false,
+/// A scripted host for the v2 builtins: collected prints, fixed
+/// arguments, one readable file, and a queue of key events driving a
+/// recorded terminal.
+const TestHost = struct {
+    printed: std.ArrayList(u8) = .empty,
+    screen: std.ArrayList(u8) = .empty,
+    arguments: []const []const u8 = &.{},
+    file_path: []const u8 = "",
+    file_content: []const u8 = "",
+    written_path: []const u8 = "",
+    written_content: []const u8 = "",
+    fail_write: bool = false,
+    keys: []const backend.KeyEvent = &.{},
+    next_key: usize = 0,
 
-    fn read(
-        context: *anyopaque,
-        arena: Allocator,
-        capability: []const u8,
-        path: []const u8,
-    ) error{OutOfMemory}!backend.FileRead {
-        const self: *TestFileHost = @ptrCast(@alignCast(context));
-        if (!std.mem.eql(u8, capability, self.capability)) return .denied;
-        if (self.fail_read) return .failed;
-        if (!std.mem.eql(u8, path, "sibling.luc")) return .failed;
-        return .{ .content = try arena.dupe(u8, self.content) };
+    fn deinit(self: *TestHost) void {
+        self.printed.deinit(testing.allocator);
+        self.screen.deinit(testing.allocator);
     }
 
-    fn directory(context: *anyopaque, arena: Allocator) error{OutOfMemory}!?[]const u8 {
-        const self: *TestFileHost = @ptrCast(@alignCast(context));
-        return try arena.dupe(u8, self.capability);
+    fn printLine(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.printed.appendSlice(testing.allocator, text);
+        try self.printed.append(testing.allocator, '\n');
     }
 
-    fn host(self: *TestFileHost) backend.Host {
+    fn argCount(context: *anyopaque) u32 {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        return @intCast(self.arguments.len);
+    }
+
+    fn argAt(context: *anyopaque, arena: Allocator, index: u32) error{OutOfMemory}!?[]const u8 {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (index >= self.arguments.len) return null;
+        return try arena.dupe(u8, self.arguments[index]);
+    }
+
+    fn readFile(context: *anyopaque, arena: Allocator, path: []const u8) error{OutOfMemory}!backend.FileRead {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (!std.mem.eql(u8, path, self.file_path)) return .failed;
+        return .{ .content = try arena.dupe(u8, self.file_content) };
+    }
+
+    fn writeFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (self.fail_write) return false;
+        self.written_path = path;
+        self.written_content = content;
+        return true;
+    }
+
+    fn fileExists(context: *anyopaque, path: []const u8) bool {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        return std.mem.eql(u8, path, self.file_path);
+    }
+
+    fn rows(context: *anyopaque) i64 {
+        _ = context;
+        return 24;
+    }
+
+    fn cols(context: *anyopaque) i64 {
+        _ = context;
+        return 80;
+    }
+
+    fn record(self: *TestHost, comptime format: []const u8, values: anytype) error{OutOfMemory}!void {
+        const line = try std.fmt.allocPrint(testing.allocator, format, values);
+        defer testing.allocator.free(line);
+        try self.screen.appendSlice(testing.allocator, line);
+    }
+
+    fn clear(context: *anyopaque) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.record("[clear]", .{});
+    }
+
+    fn move(context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.record("[move {d},{d}]", .{ row, col });
+    }
+
+    fn style(context: *anyopaque, foreground: i64, background: i64, bold: bool) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.record("[style {d},{d},{}]", .{ foreground, background, bold });
+    }
+
+    fn write(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.record("{s}", .{text});
+    }
+
+    fn flush(context: *anyopaque) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.record("[flush]", .{});
+    }
+
+    fn key(context: *anyopaque, arena: Allocator) error{OutOfMemory}!backend.KeyEvent {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (self.next_key >= self.keys.len) return .{ .name = "none" };
+        const event = self.keys[self.next_key];
+        self.next_key += 1;
+        return .{
+            .name = try arena.dupe(u8, event.name),
+            .text = try arena.dupe(u8, event.text),
+        };
+    }
+
+    fn host(self: *TestHost) backend.Host {
         return .{
             .context = self,
-            .readFileFn = read,
-            .scriptDirectoryFn = directory,
+            .printFn = printLine,
+            .argCountFn = argCount,
+            .argFn = argAt,
+            .readFileFn = readFile,
+            .writeFileFn = writeFile,
+            .fileExistsFn = fileExists,
+            .terminal = .{
+                .context = self,
+                .rowsFn = rows,
+                .colsFn = cols,
+                .clearFn = clear,
+                .moveFn = move,
+                .styleFn = style,
+                .writeFn = write,
+                .flushFn = flush,
+                .keyFn = key,
+            },
         };
     }
 };
 
-test "file read fails closed without a host and reports stable host traps" {
+const hosted_options: types.CompileOptions = .{ .entry_mode = .script, .allow_host = true };
+
+test "host builtins fail closed without a host" {
     var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.text = read_file(input.capability, "sibling.luc")
+        \\func main():
+        \\    print("hello")
         \\
-    , .{
-        .inputs = &.{.{ .name = "capability", .declared = .bytes }},
-        .outputs = &.{.{ .name = "text", .declared = .string }},
-    }, .{});
+    , .{}, hosted_options);
     defer bench.deinit();
-
-    try expectTrap(&bench, &.{.{ .value = .{ .bytes = "cap" } }}, .file_host_unavailable);
-
-    var host: TestFileHost = .{ .capability = "cap", .content = "loaded" };
-    const denied = try bench.evaluateHosted(
-        &.{.{ .value = .{ .bytes = "foreign" } }},
-        host.host(),
-    );
-    try testing.expectEqual(ir.TrapCode.file_capability_denied, denied.trap.code);
-
-    const loaded = try bench.evaluateHosted(
-        &.{.{ .value = .{ .bytes = "cap" } }},
-        host.host(),
-    );
-    try testing.expect(loaded == .success);
-    try testing.expectEqualStrings("loaded", bench.outputs[0].?.string);
-
-    host.fail_read = true;
-    const failed = try bench.evaluateHosted(
-        &.{.{ .value = .{ .bytes = "cap" } }},
-        host.host(),
-    );
-    try testing.expectEqual(ir.TrapCode.file_read_failed, failed.trap.code);
+    try expectTrap(&bench, &.{}, .host_unavailable);
 }
 
-test "script directory capability is supplied only by a hosted fabric run" {
+test "print, arguments, and files flow through the host" {
     var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.capability = script_directory()
+        \\func main():
+        \\    print("args: " + Int_to_text(arg_count()))
+        \\    let path = arg(0)
+        \\    if file_exists(path):
+        \\        print(file_read(path))
+        \\    assert(file_write("out.txt", "saved"))
         \\
-    , .{ .outputs = &.{.{ .name = "capability", .declared = .bytes }} }, .{
-        .allow_fabric = true,
-    });
+        \\func Int_to_text(value: Int) -> String:
+        \\    if value == 0:
+        \\        return "0"
+        \\    var text = ""
+        \\    var left = value
+        \\    while left > 0:
+        \\        let digit = left % 10
+        \\        text = slice("0123456789", digit, digit + 1) + text
+        \\        left = left / 10
+        \\    return text
+        \\
+    , .{}, hosted_options);
     defer bench.deinit();
 
-    try expectTrap(&bench, &.{}, .file_host_unavailable);
-    var host: TestFileHost = .{ .capability = "directory-cap", .content = "" };
+    var host: TestHost = .{
+        .arguments = &.{"notes.txt"},
+        .file_path = "notes.txt",
+        .file_content = "file body",
+    };
+    defer host.deinit();
     const result = try bench.evaluateHosted(&.{}, host.host());
     try testing.expect(result == .success);
-    try testing.expectEqualStrings("directory-cap", bench.outputs[0].?.bytes);
+    try testing.expectEqualStrings("args: 1\nfile body\n", host.printed.items);
+    try testing.expectEqualStrings("out.txt", host.written_path);
+    try testing.expectEqualStrings("saved", host.written_content);
+}
+
+test "argument reads out of range trap and failed writes report false" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    if file_write("out.txt", "ignored"):
+        \\        print("wrote")
+        \\    let missing = arg(5)
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{ .fail_write = true };
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expectEqual(ir.TrapCode.argument_bounds, result.trap.code);
+    try testing.expectEqualStrings("", host.printed.items);
+}
+
+test "terminal builtins drive the host screen and key queue" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    term_clear()
+        \\    term_move(1, 2)
+        \\    term_style(114, -1, true)
+        \\    term_write("hi ")
+        \\    term_write(key_read())
+        \\    term_write(key_text())
+        \\    let quit = key_read()
+        \\    term_flush()
+        \\    print(quit)
+        \\    print(Int_pair(term_rows(), term_cols()))
+        \\
+        \\func Int_pair(rows: Int, cols: Int) -> String:
+        \\    var text = ""
+        \\    if rows == 24 and cols == 80:
+        \\        text = "24x80"
+        \\    return text
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{
+        .keys = &.{
+            .{ .name = "text", .text = "λ" },
+            .{ .name = "ctrl_q" },
+        },
+    };
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expect(result == .success);
+    try testing.expectEqualStrings(
+        "[clear][move 1,2][style 114,-1,true]hi textλ[flush]",
+        host.screen.items,
+    );
+    try testing.expectEqualStrings("ctrl_q\n24x80\n", host.printed.items);
 }

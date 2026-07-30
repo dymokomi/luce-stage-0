@@ -1,0 +1,10 @@
+# The smallest loom program.
+#
+#   luce build programs/hello.luc
+#   loom run programs/hello.lc you
+
+func main():
+    var name = "loom"
+    if arg_count() > 0:
+        name = arg(0)
+    print("hello, " + name)

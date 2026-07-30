@@ -1,0 +1,445 @@
+# The loom editor — a modern terminal editor written in Luce, for Luce.
+#
+# Runs on the loom terminal builtins: the host owns raw mode and escape
+# sequences, this program owns every editing decision.  Per-line syntax
+# highlighting for Luce: keywords, capitalized type names, builtins,
+# strings, numbers, and comments.
+#
+#   loom edit FILE          (or: loom run editor.lc FILE)
+#   Ctrl-S save             Ctrl-Q quit (twice to discard changes)
+
+struct Theme:
+    func keyword() -> Int:
+        return 176
+    func kind() -> Int:
+        return 80
+    func builtin() -> Int:
+        return 74
+    func text() -> Int:
+        return 114
+    func number() -> Int:
+        return 215
+    func comment() -> Int:
+        return 244
+    func plain() -> Int:
+        return 252
+    func punct() -> Int:
+        return 249
+    func gutter() -> Int:
+        return 240
+    func gutter_current() -> Int:
+        return 250
+    func status_fg() -> Int:
+        return 252
+    func status_bg() -> Int:
+        return 237
+    func alert() -> Int:
+        return 215
+
+struct Fmt:
+    func int(value: Int) -> String:
+        if value == 0:
+            return "0"
+        var digits = ""
+        var left = value
+        var negative = false
+        if left < 0:
+            negative = true
+            left = 0 - left
+        while left > 0:
+            let digit = left % 10
+            digits = slice("0123456789", digit, digit + 1) + digits
+            left = left / 10
+        if negative:
+            digits = "-" + digits
+        return digits
+
+    func pad_left(value: String, width: Int) -> String:
+        var padded = value
+        while len(padded) < width:
+            padded = " " + padded
+        return padded
+
+struct Text:
+    func continuation(byte: Int) -> Bool:
+        return byte >= 128 and byte < 192
+
+    func previous_boundary(value: String, cursor: Int) -> Int:
+        if cursor <= 0:
+            return 0
+        var at = cursor - 1
+        while at > 0 and Text.continuation(byte_at(value, at)):
+            at = at - 1
+        return at
+
+    func next_boundary(value: String, cursor: Int) -> Int:
+        if cursor >= len(value):
+            return len(value)
+        var at = cursor + 1
+        while at < len(value) and Text.continuation(byte_at(value, at)):
+            at = at + 1
+        return at
+
+    func line_start(value: String, cursor: Int) -> Int:
+        var at = cursor
+        while at > 0 and byte_at(value, at - 1) != 10:
+            at = at - 1
+        return at
+
+    func line_end(value: String, cursor: Int) -> Int:
+        var at = cursor
+        while at < len(value) and byte_at(value, at) != 10:
+            at = at + 1
+        return at
+
+    func line_of(value: String, cursor: Int) -> Int:
+        var line = 0
+        for at in range(0, cursor):
+            if byte_at(value, at) == 10:
+                line = line + 1
+        return line
+
+    func count_lines(value: String) -> Int:
+        return Text.line_of(value, len(value)) + 1
+
+    func column_of(value: String, cursor: Int) -> Int:
+        var at = Text.line_start(value, cursor)
+        var column = 0
+        while at < cursor:
+            at = Text.next_boundary(value, at)
+            column = column + 1
+        return column
+
+    func line_at(value: String, wanted: Int) -> Int:
+        var at = 0
+        var line = 0
+        while line < wanted and at < len(value):
+            if byte_at(value, at) == 10:
+                line = line + 1
+            at = at + 1
+        return at
+
+    func at_column(value: String, start: Int, column: Int) -> Int:
+        var at = start
+        var current = 0
+        let finish = Text.line_end(value, start)
+        while at < finish and current < column:
+            at = Text.next_boundary(value, at)
+            current = current + 1
+        return at
+
+    func width(value: String) -> Int:
+        var at = 0
+        var columns = 0
+        while at < len(value):
+            at = Text.next_boundary(value, at)
+            columns = columns + 1
+        return columns
+
+struct Editing:
+    func insert(value: String, cursor: Int, extra: String) -> String:
+        return slice(value, 0, cursor) + extra + slice(value, cursor, len(value))
+
+    func erase_before(value: String, cursor: Int) -> String:
+        let before = Text.previous_boundary(value, cursor)
+        return slice(value, 0, before) + slice(value, cursor, len(value))
+
+    func erase_at(value: String, cursor: Int) -> String:
+        let after = Text.next_boundary(value, cursor)
+        return slice(value, 0, cursor) + slice(value, after, len(value))
+
+struct Words:
+    func is_digit(byte: Int) -> Bool:
+        return byte >= 48 and byte <= 57
+
+    func is_upper(byte: Int) -> Bool:
+        return byte >= 65 and byte <= 90
+
+    func is_alpha(byte: Int) -> Bool:
+        return Words.is_upper(byte) or (byte >= 97 and byte <= 122)
+
+    func is_word_start(byte: Int) -> Bool:
+        return Words.is_alpha(byte) or byte == 95 or byte >= 194
+
+    func is_word(byte: Int) -> Bool:
+        return Words.is_word_start(byte) or Words.is_digit(byte) or Words.continuation_byte(byte)
+
+    func continuation_byte(byte: Int) -> Bool:
+        return byte >= 128 and byte < 192
+
+    func is_keyword(word: String) -> Bool:
+        if word == "func" or word == "let" or word == "var" or word == "if":
+            return true
+        if word == "elif" or word == "else" or word == "while" or word == "for":
+            return true
+        if word == "in" or word == "return" or word == "break" or word == "continue":
+            return true
+        if word == "struct" or word == "and" or word == "or" or word == "not":
+            return true
+        return word == "true" or word == "false"
+
+    func is_builtin(word: String) -> Bool:
+        if word == "range" or word == "len" or word == "slice" or word == "byte_at":
+            return true
+        if word == "print" or word == "assert" or word == "trap":
+            return true
+        if word == "min" or word == "max" or word == "clamp" or word == "abs":
+            return true
+        if word == "sqrt" or word == "floor" or word == "ceil":
+            return true
+        if word == "file_read" or word == "file_write" or word == "file_exists":
+            return true
+        if word == "arg" or word == "arg_count" or word == "key_read" or word == "key_text":
+            return true
+        if word == "term_write" or word == "term_move" or word == "term_style":
+            return true
+        if word == "term_clear" or word == "term_flush" or word == "term_rows":
+            return true
+        return word == "term_cols"
+
+    # 1 keyword, 2 type name (capitalized), 3 builtin, 0 plain.
+    func classify(word: String) -> Int:
+        if Words.is_keyword(word):
+            return 1
+        if len(word) > 0 and Words.is_upper(byte_at(word, 0)):
+            return 2
+        if Words.is_builtin(word):
+            return 3
+        return 0
+
+struct State:
+    path: String
+    content: String
+    cursor: Int
+    scroll: Int
+    dirty: Bool
+    message: String
+    quit_pending: Bool
+    quit: Bool
+
+struct Draw:
+    # Write [from, to) clipped to `remaining` display columns; returns
+    # the columns actually used.
+    func emit(value: String, from: Int, to: Int, remaining: Int) -> Int:
+        var at = from
+        var used = 0
+        while at < to and used < remaining:
+            let stop = Text.next_boundary(value, at)
+            term_write(slice(value, at, stop))
+            at = stop
+            used = used + 1
+        return used
+
+    # One source line with Luce highlighting, clipped to `width`.
+    func line(content: String, start: Int, finish: Int, width: Int):
+        var at = start
+        var used = 0
+        while at < finish and used < width:
+            let byte = byte_at(content, at)
+            if byte == 35:
+                term_style(Theme.comment(), -1, false)
+                used = used + Draw.emit(content, at, finish, width - used)
+                at = finish
+            elif byte == 34:
+                var close = at + 1
+                var closed = false
+                while close < finish and not closed:
+                    let inner = byte_at(content, close)
+                    if inner == 92:
+                        close = close + 2
+                    elif inner == 34:
+                        closed = true
+                        close = close + 1
+                    else:
+                        close = close + 1
+                close = min(close, finish)
+                term_style(Theme.text(), -1, false)
+                used = used + Draw.emit(content, at, close, width - used)
+                at = close
+            elif Words.is_digit(byte):
+                var stop = at + 1
+                while stop < finish and (Words.is_digit(byte_at(content, stop)) or byte_at(content, stop) == 46):
+                    stop = stop + 1
+                term_style(Theme.number(), -1, false)
+                used = used + Draw.emit(content, at, stop, width - used)
+                at = stop
+            elif Words.is_word_start(byte):
+                var stop = at + 1
+                while stop < finish and Words.is_word(byte_at(content, stop)):
+                    stop = stop + 1
+                let kind = Words.classify(slice(content, at, stop))
+                if kind == 1:
+                    term_style(Theme.keyword(), -1, true)
+                elif kind == 2:
+                    term_style(Theme.kind(), -1, false)
+                elif kind == 3:
+                    term_style(Theme.builtin(), -1, false)
+                else:
+                    term_style(Theme.plain(), -1, false)
+                used = used + Draw.emit(content, at, stop, width - used)
+                at = stop
+            else:
+                var stop = Text.next_boundary(content, at)
+                stop = min(stop, finish)
+                term_style(Theme.punct(), -1, false)
+                used = used + Draw.emit(content, at, stop, width - used)
+                at = stop
+
+    func gutter(number: Int, current: Bool):
+        if current:
+            term_style(Theme.gutter_current(), -1, false)
+        else:
+            term_style(Theme.gutter(), -1, false)
+        term_write(Fmt.pad_left(Fmt.int(number), 4) + " ")
+
+    func status(state: State, rows: Int, cols: Int, line: Int, column: Int):
+        term_move(rows - 1, 0)
+        var flag = ""
+        if state.dirty:
+            flag = " +"
+        var left = " " + state.path + flag + "  " + Fmt.int(line + 1) + ":" + Fmt.int(column + 1)
+        if len(state.message) > 0:
+            left = left + "  — " + state.message
+        let hint = "Ctrl-S save  Ctrl-Q quit "
+        var pad = cols - Text.width(left) - Text.width(hint)
+        while pad > 0:
+            left = left + " "
+            pad = pad - 1
+        let bar = left + hint
+        term_style(Theme.status_fg(), Theme.status_bg(), false)
+        let ignored = Draw.emit(bar, 0, len(bar), cols)
+
+    func frame(state: State):
+        let rows = max(term_rows(), 2)
+        let cols = max(term_cols(), 10)
+        let visible = rows - 1
+        let side = 5
+        let text_width = max(cols - side, 1)
+        let cursor_line = Text.line_of(state.content, state.cursor)
+        let cursor_column = Text.column_of(state.content, state.cursor)
+        let total = Text.count_lines(state.content)
+
+        term_clear()
+        var at = Text.line_at(state.content, state.scroll)
+        for row in range(0, visible):
+            let line_index = state.scroll + row
+            term_move(row, 0)
+            if line_index < total:
+                Draw.gutter(line_index + 1, line_index == cursor_line)
+                let finish = Text.line_end(state.content, at)
+                Draw.line(state.content, at, finish, text_width)
+                at = finish + 1
+            else:
+                term_style(Theme.gutter(), -1, false)
+                term_write("   ~")
+        Draw.status(state, rows, cols, cursor_line, cursor_column)
+        term_move(
+            clamp(cursor_line - state.scroll, 0, visible - 1),
+            clamp(side + cursor_column, 0, cols - 1),
+        )
+        term_flush()
+
+struct Handle:
+    func vertical(state: State, target_line: Int) -> State:
+        var moved = state
+        let total = Text.count_lines(moved.content)
+        let wanted = Text.column_of(moved.content, moved.cursor)
+        let landing = clamp(target_line, 0, total - 1)
+        let start = Text.line_at(moved.content, landing)
+        moved.cursor = Text.at_column(moved.content, start, wanted)
+        return moved
+
+    func key(state: State, name: String, inserted: String, visible: Int) -> State:
+        var next = state
+        let line = Text.line_of(next.content, next.cursor)
+        if name != "ctrl_q":
+            next.quit_pending = false
+        if len(next.message) > 0 and name != "ctrl_q" and name != "ctrl_s":
+            next.message = ""
+
+        if name == "left":
+            next.cursor = Text.previous_boundary(next.content, next.cursor)
+        elif name == "right":
+            next.cursor = Text.next_boundary(next.content, next.cursor)
+        elif name == "up":
+            next = Handle.vertical(next, line - 1)
+        elif name == "down":
+            next = Handle.vertical(next, line + 1)
+        elif name == "page_up":
+            next = Handle.vertical(next, line - visible)
+        elif name == "page_down":
+            next = Handle.vertical(next, line + visible)
+        elif name == "home":
+            next.cursor = Text.line_start(next.content, next.cursor)
+        elif name == "end":
+            next.cursor = Text.line_end(next.content, next.cursor)
+        elif name == "backspace":
+            if next.cursor > 0:
+                next.content = Editing.erase_before(next.content, next.cursor)
+                next.cursor = Text.previous_boundary(state.content, next.cursor)
+                next.dirty = true
+        elif name == "delete":
+            if next.cursor < len(next.content):
+                next.content = Editing.erase_at(next.content, next.cursor)
+                next.dirty = true
+        elif name == "enter":
+            next.content = Editing.insert(next.content, next.cursor, "\n")
+            next.cursor = next.cursor + 1
+            next.dirty = true
+        elif name == "tab":
+            next.content = Editing.insert(next.content, next.cursor, "    ")
+            next.cursor = next.cursor + 4
+            next.dirty = true
+        elif name == "text":
+            next.content = Editing.insert(next.content, next.cursor, inserted)
+            next.cursor = next.cursor + len(inserted)
+            next.dirty = true
+        elif name == "ctrl_s":
+            if file_write(next.path, next.content):
+                next.dirty = false
+                next.message = "saved " + next.path
+            else:
+                next.message = "cannot write " + next.path
+        elif name == "ctrl_q":
+            if next.dirty and not next.quit_pending:
+                next.quit_pending = true
+                next.message = "unsaved changes; Ctrl-Q again to discard"
+            else:
+                next.quit = true
+        return next
+
+    func adjust(state: State, visible: Int) -> State:
+        var next = state
+        let cursor_line = Text.line_of(next.content, next.cursor)
+        if cursor_line < next.scroll:
+            next.scroll = cursor_line
+        elif cursor_line >= next.scroll + visible:
+            next.scroll = cursor_line - visible + 1
+        return next
+
+func main():
+    if arg_count() != 1:
+        print("usage: editor FILE")
+        return
+    let path = arg(0)
+    var opening = ""
+    var greeting = "new file"
+    if file_exists(path):
+        opening = file_read(path)
+        greeting = ""
+    var state = State(
+        path = path,
+        content = opening,
+        cursor = 0,
+        scroll = 0,
+        dirty = false,
+        message = greeting,
+        quit_pending = false,
+        quit = false,
+    )
+    while not state.quit:
+        let visible = max(term_rows() - 1, 1)
+        state = Handle.adjust(state, visible)
+        Draw.frame(state)
+        let name = key_read()
+        state = Handle.key(state, name, key_text(), visible)

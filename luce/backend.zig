@@ -71,25 +71,69 @@ pub const Budget = struct {
 
 /// Optional trusted services for intrinsically host-facing builtins.
 /// Returned slices must remain valid for the evaluation; callbacks may
-/// allocate them from `arena`.  A missing host fails closed.
+/// allocate them from `arena`.  Every service is optional and a missing
+/// service fails closed — the pure `evaluate` API supplies none, so a
+/// program that touches the host traps instead of touching anything.
 pub const Host = struct {
     context: *anyopaque,
-    readFileFn: *const fn (
+    /// Console line output for `print`.
+    printFn: ?*const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void = null,
+    /// Program arguments for `arg_count` / `arg`.  `argFn` returns null
+    /// when the index is out of range.
+    argCountFn: ?*const fn (context: *anyopaque) u32 = null,
+    argFn: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
-        capability: []const u8,
-        path: []const u8,
-    ) error{OutOfMemory}!FileRead,
-    scriptDirectoryFn: ?*const fn (
-        context: *anyopaque,
-        arena: Allocator,
+        index: u32,
     ) error{OutOfMemory}!?[]const u8 = null,
+    /// Plain files for `file_read` / `file_write` / `file_exists`.
+    readFileFn: ?*const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        path: []const u8,
+    ) error{OutOfMemory}!FileRead = null,
+    writeFileFn: ?*const fn (
+        context: *anyopaque,
+        path: []const u8,
+        content: []const u8,
+    ) bool = null,
+    fileExistsFn: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    /// The interactive screen for the `term_*` and `key_*` builtins.
+    terminal: ?Terminal = null,
 };
 
 pub const FileRead = union(enum) {
     content: []const u8,
-    denied,
     failed,
+};
+
+/// The trusted screen behind the terminal builtins.  The host owns raw
+/// mode, buffering, and escape sequences; programs only ever describe
+/// what to draw and receive decoded keys.
+pub const Terminal = struct {
+    context: *anyopaque,
+    rowsFn: *const fn (context: *anyopaque) i64,
+    colsFn: *const fn (context: *anyopaque) i64,
+    clearFn: *const fn (context: *anyopaque) error{OutOfMemory}!void,
+    moveFn: *const fn (context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void,
+    styleFn: *const fn (
+        context: *anyopaque,
+        foreground: i64,
+        background: i64,
+        bold: bool,
+    ) error{OutOfMemory}!void,
+    writeFn: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
+    flushFn: *const fn (context: *anyopaque) error{OutOfMemory}!void,
+    /// Blocks until one key arrives.  Slices must stay valid for the
+    /// evaluation; the host may allocate them from `arena`.
+    keyFn: *const fn (context: *anyopaque, arena: Allocator) error{OutOfMemory}!KeyEvent,
+};
+
+/// One decoded key: a stable name ("text", "enter", "up", "ctrl_s",
+/// ...) plus the inserted text when the name is "text".
+pub const KeyEvent = struct {
+    name: []const u8,
+    text: []const u8 = "",
 };
 
 // ---------------------------------------------------------------------------

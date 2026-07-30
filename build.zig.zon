@@ -1,14 +1,14 @@
 .{
     .name = .loom,
-    .version = "0.0.1",
+    .version = "0.2.0",
     .fingerprint = 0xc2597137c2080e4b, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "abi",
-        "loom",
-        "testdata",
+        "luce",
+        "apps",
+        "programs",
     },
 }

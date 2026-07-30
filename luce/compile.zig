@@ -527,38 +527,43 @@ test "string operations type-check" {
     defer program.deinit();
 }
 
-test "file builtins type-check and script capability stays fabric-gated" {
-    var ordinary = try expectCompiles(
-        \\func load(capability: Bytes, path: String) -> String:
-        \\    return read_file(capability, path)
-        \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.text = load(input.capability, "sibling.luc")
-        \\
-    , .{
-        .inputs = &.{.{ .name = "capability", .declared = .bytes }},
-        .outputs = &.{.{ .name = "text", .declared = .string }},
-    });
-    defer ordinary.deinit();
-
+test "host builtins type-check and stay host-gated" {
     try expectFails(
         \\func evaluate(input: Input, output: Output):
-        \\    let capability = script_directory()
+        \\    print("hello")
         \\
-    , .{}, "luce.sema.fabric");
-
-    var gated = try compile(testing.allocator,
-        \\func evaluate(input: Input, output: Output):
-        \\    let capability = script_directory()
-        \\    let text = read_file(capability, "sibling.luc")
-        \\
-    , .{}, .{ .allow_fabric = true });
-    defer gated.deinit();
-    try testing.expect(gated == .success);
-
+    , .{}, "luce.sema.host");
     try expectFails(
         \\func evaluate(input: Input, output: Output):
-        \\    let text = read_file("not bytes", "sibling.luc")
+        \\    let text = file_read("notes.txt")
         \\
-    , .{}, "luce.sema.type");
+    , .{}, "luce.sema.host");
+
+    var hosted = try compile(testing.allocator,
+        \\func main():
+        \\    print("hello " + arg(0))
+        \\    if file_exists("notes.txt"):
+        \\        let text = file_read("notes.txt")
+        \\        if file_write("copy.txt", text):
+        \\            print("copied")
+        \\    term_clear()
+        \\    term_move(0, 0)
+        \\    term_style(114, -1, false)
+        \\    term_write(key_read() + key_text())
+        \\    term_flush()
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true });
+    defer hosted.deinit();
+    try testing.expect(hosted == .success);
+
+    try expectFailsOptions(
+        \\func main():
+        \\    let bad = file_read(7)
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.type");
+    try expectFailsOptions(
+        \\func main():
+        \\    term_style(1, 2, 3)
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.type");
 }
