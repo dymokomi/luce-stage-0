@@ -9,32 +9,36 @@
 #   Ctrl-S save             Ctrl-Q quit (twice to discard changes)
 
 struct Theme:
-    func keyword() -> Int:
-        return 176
-    func kind() -> Int:
-        return 80
-    func builtin() -> Int:
-        return 74
-    func text() -> Int:
-        return 114
-    func number() -> Int:
-        return 215
-    func comment() -> Int:
-        return 244
-    func plain() -> Int:
-        return 252
-    func punct() -> Int:
-        return 249
-    func gutter() -> Int:
-        return 240
-    func gutter_current() -> Int:
-        return 250
-    func status_fg() -> Int:
-        return 252
-    func status_bg() -> Int:
-        return 237
-    func alert() -> Int:
-        return 215
+    keyword: Int
+    kind: Int
+    builtin: Int
+    text: Int
+    number: Int
+    comment: Int
+    plain: Int
+    punct: Int
+    gutter: Int
+    gutter_current: Int
+    status_fg: Int
+    status_bg: Int
+    alert: Int
+
+# One file-scope constant instead of a function per color.
+let theme = Theme(
+    keyword = 176,
+    kind = 80,
+    builtin = 74,
+    text = 114,
+    number = 215,
+    comment = 244,
+    plain = 252,
+    punct = 249,
+    gutter = 240,
+    gutter_current = 250,
+    status_fg = 252,
+    status_bg = 237,
+    alert = 215,
+)
 
 struct Fmt:
     func int(value: Int) -> String:
@@ -237,7 +241,7 @@ struct Draw:
         while at < finish and used < width:
             let byte = content.byte_at(at)
             if byte == 35:
-                term_style(Theme.comment(), -1, false)
+                term_style(theme.comment, -1, false)
                 used = used + Draw.emit(content, at, finish, width - used)
                 at = finish
             elif byte == 34:
@@ -253,14 +257,14 @@ struct Draw:
                     else:
                         close = close + 1
                 close = min(close, finish)
-                term_style(Theme.text(), -1, false)
+                term_style(theme.text, -1, false)
                 used = used + Draw.emit(content, at, close, width - used)
                 at = close
             elif Words.is_digit(byte):
                 var stop = at + 1
                 while stop < finish and (Words.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 46):
                     stop = stop + 1
-                term_style(Theme.number(), -1, false)
+                term_style(theme.number, -1, false)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
             elif Words.is_word_start(byte):
@@ -269,27 +273,27 @@ struct Draw:
                     stop = stop + 1
                 let kind = Words.classify(content[at:stop])
                 if kind == 1:
-                    term_style(Theme.keyword(), -1, true)
+                    term_style(theme.keyword, -1, true)
                 elif kind == 2:
-                    term_style(Theme.kind(), -1, false)
+                    term_style(theme.kind, -1, false)
                 elif kind == 3:
-                    term_style(Theme.builtin(), -1, false)
+                    term_style(theme.builtin, -1, false)
                 else:
-                    term_style(Theme.plain(), -1, false)
+                    term_style(theme.plain, -1, false)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
             else:
                 var stop = Text.next_boundary(content, at)
                 stop = min(stop, finish)
-                term_style(Theme.punct(), -1, false)
+                term_style(theme.punct, -1, false)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
 
     func gutter(number: Int, current: Bool):
         if current:
-            term_style(Theme.gutter_current(), -1, false)
+            term_style(theme.gutter_current, -1, false)
         else:
-            term_style(Theme.gutter(), -1, false)
+            term_style(theme.gutter, -1, false)
         term_write(Fmt.pad_left(Fmt.int(number), 4) + " ")
 
     func status(state: State, rows: Int, cols: Int, line: Int, column: Int):
@@ -306,7 +310,7 @@ struct Draw:
             left = left + " "
             pad = pad - 1
         let bar = left + hint
-        term_style(Theme.status_fg(), Theme.status_bg(), false)
+        term_style(theme.status_fg, theme.status_bg, false)
         let ignored = Draw.emit(bar, 0, len(bar), cols)
 
     func frame(state: State):
@@ -330,7 +334,7 @@ struct Draw:
                 Draw.line(state.content, at, finish, text_width)
                 at = finish + 1
             else:
-                term_style(Theme.gutter(), -1, false)
+                term_style(theme.gutter, -1, false)
                 term_write("   ~")
         Draw.status(state, rows, cols, cursor_line, cursor_column)
         term_move(

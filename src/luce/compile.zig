@@ -973,3 +973,251 @@ test "short-circuit operands survive block splits everywhere" {
     try testing.expect(ran == .success);
     try testing.expectEqual(@as(u32, 0), ran.success.leaked_objects);
 }
+
+// ---------------------------------------------------------------------------
+// File-scope constants (docs/V2.md Phase 2)
+// ---------------------------------------------------------------------------
+
+const script_options: types.CompileOptions = .{ .entry_mode = .script };
+
+fn runsClean(source: []const u8) !void {
+    var result = try compile(testing.allocator, source, .{}, script_options);
+    defer result.deinit();
+    switch (result) {
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator, source);
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            return error.TestUnexpectedResult;
+        },
+        .success => |*program| {
+            const backend = @import("backend.zig");
+            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer arena.deinit();
+            const ran = try backend.evaluate(arena.allocator(), program, &.{}, &.{}, .{});
+            if (ran != .success) {
+                std.debug.print("unexpected trap: {s}\n", .{ran.trap.message});
+                return error.TestUnexpectedResult;
+            }
+            try testing.expectEqual(@as(u32, 0), ran.success.leaked_objects);
+        },
+    }
+}
+
+fn failsWith(source: []const u8, code: []const u8) !void {
+    return expectFailsOptions(source, .{}, script_options, code);
+}
+
+test "file-scope constants fold every value kind" {
+    try runsClean(
+        \\let width = 80
+        \\let tau = 2.0 * pi
+        \\let pi = 3.14159
+        \\let debug = not (width > 100)
+        \\let greeting = "hello, " + "loom"
+        \\let shout = greeting
+        \\let half_width = width / 2 - 1
+        \\let truncated = Int(tau)
+        \\let widened = Float(width)
+        \\let roomy = width >= 80 and tau > 6.0
+        \\
+        \\func main():
+        \\    assert(width == 80)
+        \\    assert(half_width == 39)
+        \\    assert(tau > 6.28 and tau < 6.29)
+        \\    assert(debug)
+        \\    assert(greeting == "hello, loom")
+        \\    assert(shout.upper() == "HELLO, LOOM")
+        \\    assert(truncated == 6)
+        \\    assert(widened == 80.0)
+        \\    assert(roomy)
+        \\    var xs = [width, half_width]
+        \\    assert(xs[0] + xs[1] == 119)
+        \\
+    );
+}
+
+test "struct constants: the Theme case" {
+    try runsClean(
+        \\struct Theme:
+        \\    keyword: Int
+        \\    comment: Int
+        \\    bold: Bool
+        \\
+        \\let theme = Theme(keyword = 114, comment = 238, bold = true)
+        \\let accent = theme.keyword + 1
+        \\
+        \\func main():
+        \\    assert(theme.keyword == 114)
+        \\    assert(theme.comment == 238)
+        \\    assert(theme.bold)
+        \\    assert(accent == 115)
+        \\    let local_copy = theme
+        \\    assert(local_copy.keyword == 114)
+        \\
+    );
+}
+
+test "constants reach across modules through imports" {
+    var files: TestLoader = .{ .modules = &.{.{ .name = "config", .source =
+        \\struct Size:
+        \\    rows: Int
+        \\    cols: Int
+        \\
+        \\let version = "2.0"
+        \\let rows = 24
+        \\let screen = Size(rows = rows, cols = 80)
+        \\
+    }} };
+    var result = try compileProject(testing.allocator,
+        \\import config
+        \\
+        \\let banner = "loom " + config.version
+        \\
+        \\func main():
+        \\    assert(config.rows == 24)
+        \\    assert(config.screen.cols == 80)
+        \\    assert(banner == "loom 2.0")
+        \\    assert(banner.starts_with("loom"))
+        \\    assert(config.version.contains("."))
+        \\
+    , files.loader(), .{}, script_options);
+    switch (result) {
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator, "");
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            result.deinit();
+            return error.TestUnexpectedResult;
+        },
+        .success => {},
+    }
+    var program = result.success;
+    defer program.deinit();
+    const backend = @import("backend.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const ran = try backend.evaluate(arena.allocator(), &program, &.{}, &.{}, .{});
+    try testing.expect(ran == .success);
+}
+
+test "constants are compile-time: calls, objects, and verbs are refused" {
+    try failsWith(
+        \\func answer() -> Int:
+        \\    return 42
+        \\
+        \\let bad = answer()
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+    try failsWith(
+        \\let bad = [1, 2]
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+    try failsWith(
+        \\struct Bag:
+        \\    items: List(Int)
+        \\
+        \\let bad = Bag(items = [1])
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+    try failsWith(
+        \\let source = "x"
+        \\let bad = copy source
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+}
+
+test "constant cycles, unknowns, and arithmetic faults are compile errors" {
+    try failsWith(
+        \\let a = b + 1
+        \\let b = a + 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+    try failsWith(
+        \\let alone = missing + 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+    try failsWith(
+        \\let big = 9223372036854775807 + 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+    try failsWith(
+        \\let broken = 1 / 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+}
+
+test "constants share the one namespace and stay immutable" {
+    try failsWith(
+        \\let twice = 2
+        \\
+        \\func twice() -> Int:
+        \\    return 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.duplicate");
+    try failsWith(
+        \\let width = 80
+        \\
+        \\func main():
+        \\    let width = 3
+        \\
+    , "luce.sema.duplicate");
+    try failsWith(
+        \\let width = 80
+        \\
+        \\func main():
+        \\    width = 3
+        \\
+    , "luce.sema.let");
+    try failsWith(
+        \\let len = 3
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.reserved");
+    try failsWith(
+        \\let wrong: Float = 3
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.type");
+}
+
+test "top-level var is refused with directions" {
+    try failsWith(
+        \\var counter = 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.top");
+}

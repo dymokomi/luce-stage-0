@@ -192,8 +192,18 @@ pub const Import = struct {
     span: Span,
 };
 
+/// let name = expression at file scope: a compile-time constant of a
+/// value type, usable anywhere in the module and through imports.
+pub const ConstDecl = struct {
+    name: []const u8,
+    annotation: ?TypeName,
+    value: *Expression,
+    span: Span,
+};
+
 pub const Program = struct {
     imports: []Import,
+    constants: []ConstDecl,
     structs: []StructDecl,
     functions: []FuncDecl,
 };

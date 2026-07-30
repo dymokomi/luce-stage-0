@@ -111,6 +111,32 @@ const StructDeclInfo = struct {
     module: usize,
 };
 
+/// The folded value of a file-scope constant.  Constants are values
+/// only — scalars, String, and value structs — computed entirely at
+/// compile time and inlined at every use site.
+const ConstantValue = union(enum) {
+    int: i64,
+    float: f64,
+    boolean: bool,
+    string: []const u8, // arena-owned
+    strukt: struct { layout: u32, fields: []ConstantValue },
+};
+
+const TypedConstant = struct {
+    value: ConstantValue,
+    value_type: Type,
+};
+
+const ConstantInfo = struct {
+    declaration: *const ast.ConstDecl,
+    module: usize,
+    /// Lazy evaluation with cycle detection: constants may reference
+    /// each other across modules in any order, but never in a loop.
+    state: enum { pending, evaluating, ready, failed } = .pending,
+    value: ConstantValue = .{ .int = 0 },
+    value_type: Type = .int,
+};
+
 /// How a binding relates to the object it holds (OWNERSHIP.md):
 /// `owned` bindings received something fresh, a give, or a give
 /// parameter — their scope frees the object; `alias` bindings are just
@@ -170,12 +196,16 @@ const Analyzer = struct {
     functions: std.ArrayList(FunctionInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     constants: std.ArrayList([]const u8) = .empty,
+    constant_infos: std.ArrayList(ConstantInfo) = .empty,
+    constant_names: std.StringHashMapUnmanaged(u32) = .empty,
     reads: std.AutoHashMapUnmanaged(u32, void) = .empty,
 
     fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
+        self.constant_infos.deinit(self.temporary);
+        self.constant_names.deinit(self.temporary);
         self.reads.deinit(self.temporary);
     }
 
@@ -185,6 +215,7 @@ const Analyzer = struct {
 
     fn run(self: *Analyzer) Error!?Analyzed {
         try self.collectStructs();
+        try self.collectConstants();
         try self.collectFunctions();
         if (self.diagnostics.hasErrors()) return null;
 
@@ -442,6 +473,387 @@ const Analyzer = struct {
         self.diagnostics.scope = "";
     }
 
+    // File-scope constants --------------------------------------------------
+
+    /// Register every module's top-level `let` constants, then fold
+    /// each one so every error reports even when nothing uses it.
+    fn collectConstants(self: *Analyzer) Error!void {
+        for (self.modules, 0..) |module, module_index| {
+            self.diagnostics.scope = module.prefix;
+            for (module.tree.constants) |*declaration| {
+                if (isReserved(declaration.name)) {
+                    try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
+                    continue;
+                }
+                const qualified = try self.qualify(module.prefix, declaration.name);
+                if (self.constant_names.contains(qualified) or self.struct_names.contains(qualified)) {
+                    try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{declaration.name});
+                    continue;
+                }
+                const index: u32 = @intCast(self.constant_infos.items.len);
+                try self.constant_names.put(self.temporary, qualified, index);
+                try self.constant_infos.append(self.temporary, .{
+                    .declaration = declaration,
+                    .module = module_index,
+                });
+            }
+        }
+        for (0..self.constant_infos.items.len) |index| {
+            const module = self.constant_infos.items[index].module;
+            self.diagnostics.scope = self.modules[module].prefix;
+            _ = try self.evaluateConstant(@intCast(index));
+        }
+        self.diagnostics.scope = "";
+    }
+
+    /// Fold one constant, lazily and cycle-checked.  Null after a
+    /// reported error.
+    fn evaluateConstant(self: *Analyzer, index: u32) Error!?TypedConstant {
+        const info = &self.constant_infos.items[index];
+        switch (info.state) {
+            .ready => return .{ .value = info.value, .value_type = info.value_type },
+            .failed => return null,
+            .evaluating => {
+                try self.fail(
+                    "luce.sema.const",
+                    info.declaration.span,
+                    "constant {s} depends on itself",
+                    .{info.declaration.name},
+                );
+                info.state = .failed;
+                return null;
+            },
+            .pending => {},
+        }
+        info.state = .evaluating;
+        const declaration = info.declaration;
+        const module = info.module;
+        const folded = try self.foldConstant(module, declaration.value);
+        // The map may have grown while folding dependencies; re-find.
+        const settled = &self.constant_infos.items[index];
+        const result = folded orelse {
+            settled.state = .failed;
+            return null;
+        };
+        if (declaration.annotation) |written| {
+            const expected = (try self.resolveType(module, written)) orelse {
+                settled.state = .failed;
+                return null;
+            };
+            if (!result.value_type.eql(expected)) {
+                try self.fail("luce.sema.type", declaration.span, "{s} declared {s} but its value is {s}", .{
+                    declaration.name,
+                    try self.typeName(expected),
+                    try self.typeName(result.value_type),
+                });
+                settled.state = .failed;
+                return null;
+            }
+        }
+        settled.value = result.value;
+        settled.value_type = result.value_type;
+        settled.state = .ready;
+        return result;
+    }
+
+    fn constantError(self: *Analyzer, span: Span, comptime format: []const u8, arguments: anytype) Error!?TypedConstant {
+        try self.fail("luce.sema.const", span, format, arguments);
+        return null;
+    }
+
+    /// Fold a constant expression: literals, other constants
+    /// (`pi`, `geo.pi`, struct-constant fields), arithmetic and
+    /// comparisons, string concatenation, `Int`/`Float` conversions,
+    /// and value-struct construction.  Objects and calls are not
+    /// constants.
+    fn foldConstant(self: *Analyzer, module: usize, expression: *const ast.Expression) Error!?TypedConstant {
+        switch (expression.*) {
+            .int_literal => |literal| {
+                const parsed = std.fmt.parseInt(i64, literal.text, 10) catch {
+                    return self.constantError(literal.span, "integer literal out of range", .{});
+                };
+                return .{ .value = .{ .int = parsed }, .value_type = .int };
+            },
+            .float_literal => |literal| {
+                const parsed = std.fmt.parseFloat(f64, literal.text) catch {
+                    return self.constantError(literal.span, "malformed float literal", .{});
+                };
+                return .{ .value = .{ .float = parsed }, .value_type = .float };
+            },
+            .bool_literal => |literal| {
+                return .{ .value = .{ .boolean = literal.value }, .value_type = .boolean };
+            },
+            .string_literal => |literal| {
+                return .{ .value = .{ .string = literal.decoded }, .value_type = .string };
+            },
+            .name => |name| {
+                const qualified = try self.qualify(self.modules[module].prefix, name.text);
+                if (self.constant_names.get(qualified)) |index| {
+                    return self.evaluateConstant(index);
+                }
+                return self.constantError(name.span, "unknown name {s} in a constant (constants may use literals and other constants)", .{name.text});
+            },
+            .field => |field| {
+                // geo.pi — an imported module's constant...
+                if (field.target.* == .name) {
+                    const head = field.target.name.text;
+                    if (self.importsModule(module, head)) {
+                        const joined = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ head, field.name });
+                        if (self.constant_names.get(joined)) |index| {
+                            return self.evaluateConstant(index);
+                        }
+                        return self.constantError(field.span, "{s} has no constant {s}", .{ head, field.name });
+                    }
+                }
+                // ...or a field of a struct constant.
+                const target = (try self.foldConstant(module, field.target)) orelse return null;
+                if (target.value != .strukt) {
+                    return self.constantError(field.span, "{s} has no fields here", .{try self.typeName(target.value_type)});
+                }
+                const layout = self.structs.items[target.value.strukt.layout];
+                const field_index = layout.findField(field.name) orelse {
+                    return self.constantError(field.span, "{s} has no field {s}", .{ layout.name, field.name });
+                };
+                return .{
+                    .value = target.value.strukt.fields[field_index],
+                    .value_type = layout.fields[field_index].field_type,
+                };
+            },
+            .unary => |unary| {
+                const operand = (try self.foldConstant(module, unary.operand)) orelse return null;
+                switch (unary.op) {
+                    .negate => switch (operand.value) {
+                        .int => |value| {
+                            if (value == std.math.minInt(i64)) {
+                                return self.constantError(unary.span, "constant arithmetic overflows", .{});
+                            }
+                            return .{ .value = .{ .int = -value }, .value_type = .int };
+                        },
+                        .float => |value| return .{ .value = .{ .float = -value }, .value_type = .float },
+                        else => return self.constantError(unary.span, "cannot negate {s}", .{try self.typeName(operand.value_type)}),
+                    },
+                    .logic_not => switch (operand.value) {
+                        .boolean => |value| return .{ .value = .{ .boolean = !value }, .value_type = .boolean },
+                        else => return self.constantError(unary.span, "not needs a Bool", .{}),
+                    },
+                }
+            },
+            .binary => |binary| return self.foldBinary(module, binary),
+            .call => |call| {
+                if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+                    if (call.arguments.len != 1 or call.arguments[0].name != null) {
+                        return self.constantError(call.span, "{s}(value) takes one argument", .{call.callee});
+                    }
+                    const operand = (try self.foldConstant(module, call.arguments[0].value)) orelse return null;
+                    return self.foldConvert(call, operand);
+                }
+                const qualified = try self.qualify(self.modules[module].prefix, call.callee);
+                if (self.struct_names.get(qualified)) |layout_index| {
+                    return self.foldConstruct(module, call, layout_index);
+                }
+                return self.constantError(call.span, "constants fold at compile time; calls are not constant", .{});
+            },
+            .method => |method| {
+                // module.Struct(...) construction reaches imports.
+                if (method.target.* == .name) {
+                    const head = method.target.name.text;
+                    if (self.importsModule(module, head)) {
+                        const joined = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ head, method.name });
+                        if (self.struct_names.get(joined)) |layout_index| {
+                            return self.foldConstruct(module, method, layout_index);
+                        }
+                    }
+                }
+                return self.constantError(method.span, "constants fold at compile time; calls are not constant", .{});
+            },
+            .new_object, .list_literal, .slice_range, .index => {
+                return self.constantError(expression.span(), "constants are values; objects cannot be file-scope [OWNERSHIP.md S35]", .{});
+            },
+            .give, .copy => {
+                return self.constantError(expression.span(), "constants are values and never take verbs [OWNERSHIP.md S32]", .{});
+            },
+        }
+    }
+
+    fn foldConvert(self: *Analyzer, call: anytype, operand: TypedConstant) Error!?TypedConstant {
+        const to_int = std.mem.eql(u8, call.callee, "Int");
+        if (to_int) {
+            switch (operand.value) {
+                .int => return operand,
+                .float => |value| {
+                    if (std.math.isNan(value) or
+                        value < -9223372036854775808.0 or
+                        value >= 9223372036854775808.0)
+                    {
+                        return self.constantError(call.span, "constant conversion out of range", .{});
+                    }
+                    return .{ .value = .{ .int = @intFromFloat(@trunc(value)) }, .value_type = .int };
+                },
+                else => return self.constantError(call.span, "Int() converts Float", .{}),
+            }
+        }
+        switch (operand.value) {
+            .float => return operand,
+            .int => |value| return .{ .value = .{ .float = @floatFromInt(value) }, .value_type = .float },
+            else => return self.constantError(call.span, "Float() converts Int", .{}),
+        }
+    }
+
+    fn foldConstruct(self: *Analyzer, module: usize, call: anytype, layout_index: u32) Error!?TypedConstant {
+        const layout = self.structs.items[layout_index];
+        const result_type: Type = .{ .strukt = layout_index };
+        if (self.carriesObjects(result_type)) {
+            return self.constantError(call.span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
+        }
+        if (layout.fields.len == 0) {
+            return self.constantError(call.span, "{s} is a function namespace and has no value fields", .{layout.name});
+        }
+        const fields = try self.arena.alloc(ConstantValue, layout.fields.len);
+        const seen = try self.temporary.alloc(bool, layout.fields.len);
+        defer self.temporary.free(seen);
+        @memset(seen, false);
+        for (call.arguments) |argument| {
+            const name = argument.name orelse {
+                return self.constantError(argument.span, "{s} is built with named fields: {s}(field = ...)", .{ layout.name, layout.name });
+            };
+            const field_index = layout.findField(name) orelse {
+                return self.constantError(argument.span, "{s} has no field {s}", .{ layout.name, name });
+            };
+            if (seen[field_index]) {
+                return self.constantError(argument.span, "field {s} given twice", .{name});
+            }
+            const value = (try self.foldConstant(module, argument.value)) orelse return null;
+            if (!value.value_type.eql(layout.fields[field_index].field_type)) {
+                return self.constantError(argument.span, "{s}.{s} is {s}, got {s}", .{
+                    layout.name,
+                    name,
+                    try self.typeName(layout.fields[field_index].field_type),
+                    try self.typeName(value.value_type),
+                });
+            }
+            seen[field_index] = true;
+            fields[field_index] = value.value;
+        }
+        for (seen, 0..) |given, field_index| {
+            if (!given) {
+                return self.constantError(call.span, "{s} is missing field {s}", .{ layout.name, layout.fields[field_index].name });
+            }
+        }
+        return .{
+            .value = .{ .strukt = .{ .layout = layout_index, .fields = fields } },
+            .value_type = result_type,
+        };
+    }
+
+    fn foldBinary(self: *Analyzer, module: usize, binary: anytype) Error!?TypedConstant {
+        const left = (try self.foldConstant(module, binary.left)) orelse return null;
+        // Short-circuit folds without evaluating the other side's
+        // side effects — there are none, so plain evaluation is fine.
+        const right = (try self.foldConstant(module, binary.right)) orelse return null;
+        if (!left.value_type.eql(right.value_type)) {
+            return self.constantError(binary.span, "operands are {s} and {s} (conversions are explicit)", .{
+                try self.typeName(left.value_type),
+                try self.typeName(right.value_type),
+            });
+        }
+        switch (binary.op) {
+            .logic_and, .logic_or => {
+                if (left.value != .boolean) return self.constantError(binary.span, "and/or need Bool operands", .{});
+                const folded = if (binary.op == .logic_and)
+                    left.value.boolean and right.value.boolean
+                else
+                    left.value.boolean or right.value.boolean;
+                return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
+            },
+            .add, .subtract, .multiply, .divide, .remainder => switch (left.value) {
+                .int => |a| {
+                    const b = right.value.int;
+                    const folded: i64 = switch (binary.op) {
+                        .add => blk: {
+                            const result = @addWithOverflow(a, b);
+                            if (result[1] != 0) return self.constantError(binary.span, "constant arithmetic overflows", .{});
+                            break :blk result[0];
+                        },
+                        .subtract => blk: {
+                            const result = @subWithOverflow(a, b);
+                            if (result[1] != 0) return self.constantError(binary.span, "constant arithmetic overflows", .{});
+                            break :blk result[0];
+                        },
+                        .multiply => blk: {
+                            const result = @mulWithOverflow(a, b);
+                            if (result[1] != 0) return self.constantError(binary.span, "constant arithmetic overflows", .{});
+                            break :blk result[0];
+                        },
+                        .divide => blk: {
+                            if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
+                            if (a == std.math.minInt(i64) and b == -1) {
+                                return self.constantError(binary.span, "constant arithmetic overflows", .{});
+                            }
+                            break :blk @divTrunc(a, b);
+                        },
+                        .remainder => blk: {
+                            if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
+                            if (a == std.math.minInt(i64) and b == -1) {
+                                return self.constantError(binary.span, "constant arithmetic overflows", .{});
+                            }
+                            break :blk @rem(a, b);
+                        },
+                        else => unreachable,
+                    };
+                    return .{ .value = .{ .int = folded }, .value_type = .int };
+                },
+                .float => |a| {
+                    const b = right.value.float;
+                    const folded: f64 = switch (binary.op) {
+                        .add => a + b,
+                        .subtract => a - b,
+                        .multiply => a * b,
+                        .divide => a / b,
+                        .remainder => @rem(a, b),
+                        else => unreachable,
+                    };
+                    return .{ .value = .{ .float = folded }, .value_type = .float };
+                },
+                .string => |a| {
+                    if (binary.op != .add) {
+                        return self.constantError(binary.span, "String supports + only", .{});
+                    }
+                    const joined = try std.mem.concat(self.arena, u8, &.{ a, right.value.string });
+                    return .{ .value = .{ .string = joined }, .value_type = .string };
+                },
+                else => return self.constantError(binary.span, "{s} does not support this operator", .{
+                    try self.typeName(left.value_type),
+                }),
+            },
+            .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => {
+                const ordering = binary.op != .equal and binary.op != .not_equal;
+                const folded: bool = switch (left.value) {
+                    .int => |a| compareOrder(binary.op, a, right.value.int),
+                    .float => |a| compareOrder(binary.op, a, right.value.float),
+                    .string => |a| blk: {
+                        const order = std.mem.order(u8, a, right.value.string);
+                        break :blk switch (binary.op) {
+                            .equal => order == .eq,
+                            .not_equal => order != .eq,
+                            .less => order == .lt,
+                            .less_equal => order != .gt,
+                            .greater => order == .gt,
+                            .greater_equal => order != .lt,
+                            else => unreachable,
+                        };
+                    },
+                    .boolean => |a| blk: {
+                        if (ordering) return self.constantError(binary.span, "Bool has no ordering", .{});
+                        const same = a == right.value.boolean;
+                        break :blk if (binary.op == .equal) same else !same;
+                    },
+                    .strukt => return self.constantError(binary.span, "struct constants have no comparison", .{}),
+                };
+                return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
+            },
+        }
+    }
+
     fn structCycles(self: *const Analyzer, origin: u32, current: u32, depth: usize) bool {
         if (depth > self.structs.items.len) return true;
         for (self.structs.items[current].fields) |field| {
@@ -490,6 +902,7 @@ const Analyzer = struct {
             return;
         }
         if (self.function_names.contains(name) or
+            self.constant_names.contains(name) or
             (top_level and self.struct_names.contains(name)))
         {
             try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{declaration.name});
@@ -644,6 +1057,18 @@ const Analyzer = struct {
         };
     }
 };
+
+fn compareOrder(op: ast.BinaryOp, a: anytype, b: @TypeOf(a)) bool {
+    return switch (op) {
+        .equal => a == b,
+        .not_equal => a != b,
+        .less => a < b,
+        .less_equal => a <= b,
+        .greater => a > b,
+        .greater_equal => a >= b,
+        else => unreachable,
+    };
+}
 
 /// Conservative all-paths-return: a block returns when some statement
 /// certainly returns; an if returns only when both arms do.  Loops
@@ -893,7 +1318,8 @@ const FunctionBuilder = struct {
         }
         const qualified = try self.analyzer.qualify(self.prefix, name);
         if (self.analyzer.function_names.contains(qualified) or
-            self.analyzer.struct_names.contains(qualified))
+            self.analyzer.struct_names.contains(qualified) or
+            self.analyzer.constant_names.contains(qualified))
         {
             try self.fail("luce.sema.duplicate", span, "{s} is already a declaration", .{name});
             return null;
@@ -1259,7 +1685,12 @@ const FunctionBuilder = struct {
             return;
         }
         const found = self.findLocal(base) orelse {
-            try self.fail("luce.sema.name", span, "unknown name {s}", .{base});
+            const qualified = try self.analyzer.qualify(self.prefix, base);
+            if (self.analyzer.constant_names.contains(qualified)) {
+                try self.fail("luce.sema.let", span, "{s} is a file-scope constant and cannot be assigned", .{base});
+            } else {
+                try self.fail("luce.sema.name", span, "unknown name {s}", .{base});
+            }
             return;
         };
         const info = found.info;
@@ -1910,6 +2341,11 @@ const FunctionBuilder = struct {
                     return null;
                 }
                 const found = self.findLocal(name.text) orelse {
+                    // Not a local: perhaps a file-scope constant.
+                    const qualified = try self.analyzer.qualify(self.prefix, name.text);
+                    if (self.analyzer.constant_names.get(qualified)) |constant| {
+                        return self.emitConstant(constant);
+                    }
                     try self.fail("luce.sema.name", name.span, "unknown name {s}", .{name.text});
                     return null;
                 };
@@ -1992,6 +2428,42 @@ const FunctionBuilder = struct {
                 local_type,
             ),
             .value_type = local_type,
+        };
+    }
+
+    /// Inline a folded file-scope constant at this use site.
+    fn emitConstant(self: *FunctionBuilder, index: u32) Error!?Value {
+        const info = self.analyzer.constant_infos.items[index];
+        if (info.state != .ready) return null; // already diagnosed
+        return .{
+            .register = try self.emitConstantValue(info.value, info.value_type),
+            .value_type = info.value_type,
+        };
+    }
+
+    fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Register {
+        return switch (value) {
+            .int => |folded| try self.emit(.{ .const_int = folded }, .int),
+            .float => |folded| try self.emit(.{ .const_float = folded }, .float),
+            .boolean => |folded| try self.emit(.{ .const_boolean = folded }, .boolean),
+            .string => |folded| blk: {
+                const constant = try self.analyzer.internConstant(folded);
+                break :blk try self.emit(
+                    .{ .const_data = .{ .constant = constant, .data_type = .string } },
+                    .string,
+                );
+            },
+            .strukt => |folded| blk: {
+                const layout = self.analyzer.structs.items[folded.layout];
+                const fields = try self.arena().alloc(Register, folded.fields.len);
+                for (folded.fields, layout.fields, fields) |field, field_layout, *slot| {
+                    slot.* = try self.emitConstantValue(field, field_layout.field_type);
+                }
+                break :blk try self.emit(
+                    .{ .struct_make = .{ .layout = folded.layout, .fields = fields } },
+                    value_type,
+                );
+            },
         };
     }
 
@@ -2177,6 +2649,13 @@ const FunctionBuilder = struct {
                     try self.fail("luce.sema.name", field.span, "output exists only in the evaluator entry", .{});
                 }
                 return null;
+            }
+            // geo.pi — an imported module's file-scope constant.
+            if (self.findLocal(base) == null and self.analyzer.importsModule(self.module, base)) {
+                const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
+                if (self.analyzer.constant_names.get(joined)) |constant| {
+                    return self.emitConstant(constant);
+                }
             }
         }
         const target = (try self.lowerExpression(field.target, false)) orelse return null;
@@ -2544,6 +3023,12 @@ const FunctionBuilder = struct {
         if (self.analyzer.importsModule(self.module, head)) {
             if (self.analyzer.struct_names.contains(joined) or self.analyzer.function_names.contains(joined)) {
                 return .{ .resolved = try self.arena().dupe(u8, joined) };
+            }
+            // geo.pi.method() — a value method on an imported constant.
+            if (count >= 2) {
+                const member = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ head, parts[count - 2] });
+                defer self.temporary().free(member);
+                if (self.analyzer.constant_names.contains(member)) return .value;
             }
             try self.fail("luce.sema.call", method.span, "unknown function {s}", .{joined});
             return .reported;

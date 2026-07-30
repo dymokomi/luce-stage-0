@@ -181,14 +181,38 @@ to one type is a method on it.
 
 ## Scope
 
-One scope per **file** (top-level structs and functions), per
-**struct** (its namespaced functions: `Text.width(...)`), and per
+One scope per **file** (top-level constants, structs, and functions),
+per **struct** (its namespaced functions: `Text.width(...)`), and per
 **function** (parameters and every indented block; `if`/`while`/`for`
 bodies open nested scopes).  No shadowing anywhere; `let` is
 immutable; `var` is mutable; loop variables are immutable inside the
 body.  Structs contain plain functions — there are no methods, no
 receivers, no inheritance; `Struct.func(...)` is a name, not a
 dispatch.
+
+### File-scope constants
+
+`let` at the top level declares a **compile-time constant**:
+
+```luce
+let width = 80
+let tau = 2.0 * pi          # constants may reference each other,
+let pi = 3.14159            # in any order — never in a cycle
+let banner = "loom " + version
+let theme = Theme(keyword = 176, comment = 244)   # value structs too
+```
+
+Initializers fold at compile time: literals, other constants
+(including `module.constant` through imports), arithmetic,
+comparisons, `and`/`or`, string concatenation, `Int()`/`Float()`,
+and value-struct construction.  Calls, objects (`List`, `Map`,
+`Array`, `Builder`, object-carrying structs), and verbs are not
+constant — constants are values, so ownership never applies to them.
+Constants share the file's one namespace with structs and functions,
+are reachable as `module.name` through imports, and cannot be
+assigned or shadowed.  Every use site inlines the folded value.
+Top-level `var` does not exist (whether mutable file scope ever
+arrives is a separate decision — docs/V2.md).
 
 ## Traps
 
@@ -221,8 +245,9 @@ search paths, conditional imports, re-exports.
 
 First-class functions, closures, user-defined methods/receivers
 (`x.f()` is builtin sugar, not dispatch), exceptions (traps are
-final), implicit conversions, shadowing, globals (Phase 2 —
-docs/V2.md), optionals and nullable types (Phase 3, designed with
+final), implicit conversions, shadowing, mutable file-scope `var`
+(top-level `let` constants exist; mutable globals are a separate
+decision), optionals and nullable types (Phase 3, designed with
 error handling), garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
 string interpolation, and enums/unions.

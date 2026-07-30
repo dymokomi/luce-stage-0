@@ -119,6 +119,8 @@ const Parser = struct {
     fn program(self: *Parser) Error!ast.Program {
         var imports: std.ArrayList(ast.Import) = .empty;
         defer imports.deinit(self.arena);
+        var constants: std.ArrayList(ast.ConstDecl) = .empty;
+        defer constants.deinit(self.arena);
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         defer structs.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
@@ -153,11 +155,27 @@ const Parser = struct {
                         self.syncToLine();
                     }
                 },
+                .keyword_let => {
+                    if (try self.constDecl()) |declaration| {
+                        try constants.append(self.arena, declaration);
+                    } else {
+                        self.syncToLine();
+                    }
+                },
+                .keyword_var => {
+                    try self.diagnostics.add(
+                        "luce.parse.top",
+                        self.peek().span,
+                        "top-level declarations are let constants; var lives inside functions",
+                        .{},
+                    );
+                    self.syncToLine();
+                },
                 else => {
                     try self.diagnostics.add(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected func or struct at top level",
+                        "expected import, let, struct, or func at top level",
                         .{},
                     );
                     self.syncToLine();
@@ -166,8 +184,28 @@ const Parser = struct {
         }
         return .{
             .imports = try imports.toOwnedSlice(self.arena),
+            .constants = try constants.toOwnedSlice(self.arena),
             .structs = try structs.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
+        };
+    }
+
+    /// let name = value at file scope — a constant declaration.
+    fn constDecl(self: *Parser) Error!?ast.ConstDecl {
+        const start = self.advance(); // let
+        const name = (try self.expect(.identifier, "a constant name")) orelse return null;
+        var annotation: ?ast.TypeName = null;
+        if (self.accept(.colon) != null) {
+            annotation = (try self.typeName()) orelse return null;
+        }
+        if ((try self.expect(.assign, "'=' with the constant's value")) == null) return null;
+        const value = (try self.expression()) orelse return null;
+        _ = try self.expect(.newline, "a newline after the constant");
+        return .{
+            .name = self.text(name),
+            .annotation = annotation,
+            .value = value,
+            .span = .{ .start = start.span.start, .end = value.span().end },
         };
     }
 
