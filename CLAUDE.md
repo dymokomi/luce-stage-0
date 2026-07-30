@@ -48,6 +48,8 @@ tests → the package under test
 
 **`src/apps/loom/`** — `main.zig` (dispatch), `shell.zig` (line shell; embeds `programs/editor.luc` via build-system import so `loom edit` needs no paths; `LOOM_EDITOR` overrides), `runner.zig` (load `.lc` / compile `.luc`, run with effectively unlimited steps but bounded call depth, restore the screen before reporting traps), `host.zig` (the real host: lazy raw mode + alt screen, 256-color SGR styles, sanitized writes, cwd-relative files, key decoding), `key.zig` (escape-sequence decoding), `palette.zig` (semantic shell colors, empty when not a tty / NO_COLOR).
 
+**`bench/`** — paired C/Luce benchmarks with identical algorithms and outputs (`bench/run.sh` compiles, cross-checks, and times them; snapshot and workflow in `docs/BENCHMARKS.md`). Run it before and after interpreter/lowering/std changes — the Luce/C ratio is the regression guard.
+
 **`programs/`** — userland in Luce. `editor.luc` is the flagship: a full-screen editor with per-line Luce syntax highlighting (keywords, capitalized type names, builtins, strings, numbers, comments), line numbers, status bar, Ctrl-S save / Ctrl-Q quit (twice to discard). A test in `src/apps/loom/shell.zig` compiles the embedded editor so it can never rot; `build.zig` also compiles every bundled program with the freshly built `luce` on install.
 
 ## Coding conventions

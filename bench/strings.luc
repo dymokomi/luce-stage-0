@@ -1,0 +1,25 @@
+# String manipulation: build a big text with a Builder, then split,
+# count, case-fold, and replace over it — all through std strings,
+# which is pure Luce over byte_at and slices.  The C twin is
+# bench/strings.c; both print the same numbers.
+
+import strings
+
+func main():
+    var b = new Builder()
+    for i in range(0, 20000):
+        b.append("item-")
+        b.append(str(i))
+        b.append(";")
+    let text = str(b)
+
+    let pieces = text.split(";")
+    var total_len = 0
+    for piece in pieces:
+        total_len += len(piece)
+
+    let ones = text.count("1")
+    let upper_text = text.upper()
+    let replaced = text.replace("item-", "x")
+
+    print(f"{len(text)} {len(pieces)} {total_len} {ones} {len(upper_text)} {len(replaced)}")

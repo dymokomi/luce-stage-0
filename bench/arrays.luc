@@ -1,0 +1,22 @@
+# Array number-crunching: fill two Float arrays, then a repeated dot
+# product.  This is the workload a C compiler auto-vectorizes (SIMD);
+# the interpreter runs it scalar, so the ratio here is the honest
+# measure of that gap.  The C twin is bench/arrays.c.  Every product
+# is an exact multiple of 1/8, so the sum is exact and both sides
+# truncate to the same integer.
+
+func main():
+    let n = 200000
+    let reps = 10
+    var a = new Array(Float, n)
+    var b = new Array(Float, n)
+    for i in range(0, n):
+        a[i] = Float(i % 100) * 0.5
+        b[i] = Float((i * 7) % 100) * 0.25
+    var dot = 0.0
+    for r in range(0, reps):
+        var sum = 0.0
+        for i in range(0, n):
+            sum += a[i] * b[i]
+        dot += sum
+    print(str(Int(dot)))

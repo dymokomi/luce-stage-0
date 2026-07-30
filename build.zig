@@ -110,4 +110,16 @@ pub fn build(b: *std.Build) void {
         // ./build.sh install.
         test_step.dependOn(&compile_program.step);
     }
+
+    // The benchmark programs compile under test too, so bench/*.luc
+    // cannot rot; timing them stays manual (bench/run.sh).
+    const benches = [_][]const u8{ "loops", "math", "strings", "arrays" };
+    for (benches) |name| {
+        const compile_bench = b.addRunArtifact(compiler);
+        compile_bench.addArg("build");
+        compile_bench.addFileArg(b.path(b.fmt("bench/{s}.luc", .{name})));
+        compile_bench.addArg("-o");
+        _ = compile_bench.addOutputFileArg(b.fmt("{s}.lc", .{name}));
+        test_step.dependOn(&compile_bench.step);
+    }
 }

@@ -1,0 +1,10 @@
+# Tight integer loops: multiply, remainder, accumulate.  The C twin
+# is bench/loops.c; both print the same checksum.
+
+func main():
+    let n = 3000
+    var total = 0
+    for i in range(0, n):
+        for j in range(0, n):
+            total += (i * j) % 7
+    print(str(total))
