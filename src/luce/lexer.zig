@@ -134,6 +134,12 @@ const Lexer = struct {
 
     fn next(self: *Lexer) Error!void {
         const character = self.source[self.offset];
+        // f"..." is an interpolated string; the parser expands it.  A
+        // bare `f` followed by anything else is an ordinary word.
+        if (character == 'f' and self.peek(1) == '"') {
+            try self.fstring();
+            return;
+        }
         switch (character) {
             ' ' => self.offset += 1,
             '\t' => {
@@ -394,6 +400,82 @@ const Lexer = struct {
             .{},
         );
     }
+
+    /// Scan an f-string to its closing quote and emit one `fstring`
+    /// token.  Brace depth and nested string literals are tracked so a
+    /// `"` or `}` inside `{...}` does not end the f-string early; the
+    /// parser re-scans the interior to split chunks from holes.
+    fn fstring(self: *Lexer) Error!void {
+        const start = self.offset;
+        self.offset += 2; // f"
+        var depth: usize = 0;
+        while (self.offset < self.source.len) {
+            const character = self.source[self.offset];
+            if (character == '\n') break;
+            if (depth == 0) {
+                if (character == '"') {
+                    self.offset += 1;
+                    const span: Span = .{ .start = start, .end = self.offset };
+                    if (!std.unicode.utf8ValidateSlice(span.slice(self.source))) {
+                        try self.diagnostics.add("luce.lex.utf8", span, "string is not valid UTF-8", .{});
+                        return;
+                    }
+                    try self.emit(.fstring, span);
+                    return;
+                }
+                if (character == '\\') {
+                    self.offset += 2;
+                    continue;
+                }
+                if (character == '{') {
+                    if (self.peek(1) == '{') {
+                        self.offset += 2;
+                        continue;
+                    }
+                    depth = 1;
+                }
+                self.offset += 1;
+            } else {
+                // Inside a hole: skip nested strings whole, track brace
+                // nesting.
+                switch (character) {
+                    '"' => self.skipNestedString(),
+                    '{' => {
+                        depth += 1;
+                        self.offset += 1;
+                    },
+                    '}' => {
+                        depth -= 1;
+                        self.offset += 1;
+                    },
+                    else => self.offset += 1,
+                }
+            }
+        }
+        try self.diagnostics.add(
+            "luce.lex.string",
+            .{ .start = start, .end = self.offset },
+            "unterminated f-string",
+            .{},
+        );
+    }
+
+    /// Advance past a `"..."` nested inside an f-string hole, honoring
+    /// escapes, so its closing quote is not mistaken for the
+    /// f-string's.  Stops at the end of input or a newline.
+    fn skipNestedString(self: *Lexer) void {
+        self.offset += 1; // opening "
+        while (self.offset < self.source.len) {
+            const character = self.source[self.offset];
+            if (character == '\n') return;
+            if (character == '\\') {
+                self.offset += 2;
+                continue;
+            }
+            self.offset += 1;
+            if (character == '"') return;
+        }
+    }
 };
 
 fn isDigit(character: u8) bool {
@@ -503,6 +585,7 @@ test "fuzz: the lexer upholds its span invariants on any bytes" {
         "\tlet a = \"open\n",
         "let s = \"\xff\xfe\"\n",
         "0x 1.2e 99999999999999999999\n",
+        "let s = f\"a{x + 1}b{{c}}\"\n",
     } });
 }
 

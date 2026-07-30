@@ -51,9 +51,9 @@ design philosophy.
 5. **No character literals.**  `byte_at(...) == 40  # "("` is the
    editor's and calc's whole lexing story.  Options: `'('`, or
    compile-time-folded `ord("(")` now that constant folding exists.
-6. **No string interpolation.**  `"x = " + str(x) + ", y = " +
-   str(y)` everywhere.  Python f-strings are the gold standard;
-   even a minimal `format("x = {}", x)` would relieve most of it.
+6. ~~No string interpolation~~ — shipped: `f"x = {x}, y = {y}"`
+   f-strings, holes are any str-able expression, `{{`/`}}` for
+   literal braces; desugars to `str()`-wrapped concatenation.
 7. ~~Compound assignment (`+=`, `-=`, ...)~~ — shipped: `+= -= *= /=
    %=` on Int/Float and `+=` on String, value-only, place evaluated
    once.

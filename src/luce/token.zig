@@ -38,6 +38,10 @@ pub const Kind = enum {
     int_literal,
     float_literal,
     string_literal,
+    /// f"...{expr}..." — the parser expands it into str()-wrapped
+    /// concatenation; the token spans the whole f"..." including the
+    /// leading f and both quotes.
+    fstring,
 
     // Symbols
     left_paren,

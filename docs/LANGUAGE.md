@@ -168,6 +168,21 @@ words.join(", ")     # List(String) -> String
 
 `s[a:b]` slices (UTF-8-boundary-checked); `len(s)` is bytes.
 
+**Interpolation.**  An `f"..."` string splices expressions in `{...}`,
+each converted with `str(...)`:
+
+```luce
+f"x = {x}, y = {y}"       # "x = 7, y = 3"
+f"sum = {a + b}"          # any str-able expression: Int, Float, Bool,
+                          # String, Builder — a List is a type error
+f"name is {user.name}"    # methods, calls, fields all work
+f"{{literal braces}}"     # double a brace for a literal { or }
+```
+
+The hole is one expression; nested `"..."` strings inside a hole are
+fine.  `f"..."` desugars to plain `+` concatenation of `str(...)`
+pieces, so it is a String like any other.
+
 ## Conversions and generic builtins
 
 ```luce

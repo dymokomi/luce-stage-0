@@ -112,6 +112,33 @@ test "luce.lex.utf8: a string of invalid UTF-8 is rejected" {
 // Parser
 // ---------------------------------------------------------------------------
 
+test "luce.lex.string: an unterminated f-string is caught" {
+    try expectError("func main():\n    let a = f\"open {x}\n", "luce.lex.string");
+}
+
+test "luce.parse.fstring: a malformed or unmatched hole is rejected" {
+    // A hole that does not lex.
+    try expectError("func main():\n    let a = f\"{@}\"\n", "luce.parse.fstring");
+    // Two expressions where one is expected.
+    try expectError("func main():\n    let a = f\"{1 2}\"\n", "luce.parse.fstring");
+    // A bare close brace without doubling.
+    try expectError("func main():\n    let a = f\"lone }\"\n", "luce.parse.fstring");
+}
+
+test "luce.parse.expression: a broken f-string hole reports the sub-parse error" {
+    try expectError("func main():\n    let a = f\"{1 +}\"\n", "luce.parse.expression");
+}
+
+test "luce.sema.type: an f-string hole must be str-able" {
+    // A List has no str(); interpolation rejects it.
+    try expectError(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let a = f"{xs}"
+        \\
+    , "luce.sema.type");
+}
+
 test "luce.parse.top: only func/struct/let/import at file scope" {
     try expectError("fn main():\n    return\n", "luce.parse.top");
     try expectError("var counter = 0\n", "luce.parse.top");

@@ -455,6 +455,58 @@ test "conversions: str, parse, chr, ord" {
 }
 
 // ---------------------------------------------------------------------------
+// String interpolation (f-strings)
+// ---------------------------------------------------------------------------
+
+test "f-strings interpolate names, expressions, and every str-able type" {
+    try expectOk(
+        \\func main():
+        \\    let x = 7
+        \\    let y = 3
+        \\    assert(f"x = {x}, y = {y}" == "x = 7, y = 3")
+        \\    assert(f"sum = {x + y}" == "sum = 10")
+        \\    assert(f"{x}" == "7")
+        \\    assert(f"{x}{y}" == "73")
+        \\    let name = "loom"
+        \\    assert(f"hi {name}!" == "hi loom!")
+        \\    let flag = true
+        \\    assert(f"flag={flag}" == "flag=true")
+        \\    assert(f"ratio={2.5}" == "ratio=2.5")
+        \\
+    );
+}
+
+test "f-strings: empty, no holes, escapes, literal braces, nested strings" {
+    try expectOk(
+        \\func main():
+        \\    assert(f"" == "")
+        \\    assert(f"plain" == "plain")
+        \\    assert(f"tab\tend" == "tab\tend")
+        \\    assert(f"braces: {{ }}" == "braces: { }")
+        \\    let name = "x"
+        \\    assert(f"{name + "!"}" == "x!")
+        \\    let n = 5
+        \\    assert(f"{n * n} squared" == "25 squared")
+        \\
+    );
+}
+
+test "f-strings compose with methods and calls in holes" {
+    try expectOk(
+        \\func twice(n: Int) -> Int:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let s = "Loom"
+        \\    assert(f"{s.lower()} and {s.upper()}" == "loom and LOOM")
+        \\    assert(f"twice(21) = {twice(21)}" == "twice(21) = 42")
+        \\    var xs = [1, 2, 3]
+        \\    assert(f"len is {len(xs)}" == "len is 3")
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Structs
 // ---------------------------------------------------------------------------
 

@@ -817,6 +817,10 @@ const Parser = struct {
                 const decoded = try self.decodeString(item);
                 return self.make(.{ .string_literal = .{ .decoded = decoded, .span = item.span } });
             },
+            .fstring => {
+                const item = self.advance();
+                return self.expandFString(item);
+            },
             .identifier => {
                 const item = self.advance();
                 if (self.peekKind() == .left_paren) {
@@ -976,6 +980,162 @@ const Parser = struct {
         const node = try self.arena.create(ast.Expression);
         node.* = value;
         return node;
+    }
+
+    /// Expand f"...{expr}..." into a String-typed concatenation:
+    /// literal chunks (escapes and `{{`/`}}` decoded) joined with `+`,
+    /// each `{expr}` wrapped in `str(expr)`.  A hole is sub-parsed
+    /// against the real source with absolute spans, so diagnostics
+    /// inside interpolations point at the right bytes.
+    fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
+        const raw = self.text(item);
+        const inner = raw[2 .. raw.len - 1]; // between f" and the closing "
+        const inner_start = item.span.start + 2;
+
+        var result: ?*ast.Expression = null;
+        var literal: std.ArrayList(u8) = .empty;
+        defer literal.deinit(self.arena);
+
+        var index: usize = 0;
+        while (index < inner.len) {
+            const character = inner[index];
+            if (character == '{') {
+                if (index + 1 < inner.len and inner[index + 1] == '{') {
+                    try literal.append(self.arena, '{');
+                    index += 2;
+                    continue;
+                }
+                // Flush the literal chunk, then the interpolation.
+                result = try self.appendLiteralChunk(result, item.span, literal.items);
+                literal.clearRetainingCapacity();
+                const close = self.matchBrace(inner, index + 1) orelse {
+                    try self.diagnostics.add("luce.parse.fstring", item.span, "unmatched open brace in f-string", .{});
+                    return null;
+                };
+                const hole = inner[index + 1 .. close];
+                const hole_expr = (try self.subExpression(hole, inner_start + index + 1)) orelse return null;
+                const wrapped = try self.wrapStr(hole_expr, item.span);
+                result = try self.concat(result, wrapped);
+                index = close + 1;
+                continue;
+            }
+            if (character == '}') {
+                if (index + 1 < inner.len and inner[index + 1] == '}') {
+                    try literal.append(self.arena, '}');
+                    index += 2;
+                    continue;
+                }
+                try self.diagnostics.add("luce.parse.fstring", item.span, "unmatched close brace in f-string (double it for a literal)", .{});
+                return null;
+            }
+            if (character == '\\' and index + 1 < inner.len) {
+                index += 1;
+                try literal.append(self.arena, switch (inner[index]) {
+                    'n' => '\n',
+                    't' => '\t',
+                    '\\' => '\\',
+                    '"' => '"',
+                    else => inner[index],
+                });
+                index += 1;
+                continue;
+            }
+            try literal.append(self.arena, character);
+            index += 1;
+        }
+        result = try self.appendLiteralChunk(result, item.span, literal.items);
+        // An empty f-string, or one that is all interpolation, still
+        // yields a String.
+        return result orelse try self.make(.{ .string_literal = .{ .decoded = "", .span = item.span } });
+    }
+
+    /// Fold a non-empty literal chunk into the running concatenation.
+    fn appendLiteralChunk(self: *Parser, current: ?*ast.Expression, span: Span, chunk: []const u8) Error!?*ast.Expression {
+        if (chunk.len == 0) return current;
+        const owned = try self.arena.dupe(u8, chunk);
+        const node = try self.make(.{ .string_literal = .{ .decoded = owned, .span = span } });
+        return try self.concat(current, node);
+    }
+
+    /// left + right, or right alone when there is no left yet.
+    fn concat(self: *Parser, left: ?*ast.Expression, right: *ast.Expression) Error!*ast.Expression {
+        const base = left orelse return right;
+        return self.make(.{ .binary = .{
+            .op = .add,
+            .left = base,
+            .right = right,
+            .span = .{ .start = base.span().start, .end = right.span().end },
+        } });
+    }
+
+    /// str(expr) — the interpolation converts each hole to text.
+    fn wrapStr(self: *Parser, expr: *ast.Expression, span: Span) Error!*ast.Expression {
+        const arguments = try self.arena.alloc(ast.Argument, 1);
+        arguments[0] = .{ .name = null, .value = expr, .span = expr.span() };
+        return self.make(.{ .call = .{ .callee = "str", .arguments = arguments, .span = span } });
+    }
+
+    /// Find the `}` matching the `{` just before `from`, tracking
+    /// nested braces and skipping nested string literals whole.
+    fn matchBrace(self: *Parser, inner: []const u8, from: usize) ?usize {
+        _ = self;
+        var depth: usize = 1;
+        var index = from;
+        while (index < inner.len) {
+            switch (inner[index]) {
+                '"' => {
+                    index += 1;
+                    while (index < inner.len and inner[index] != '"') {
+                        if (inner[index] == '\\') index += 1;
+                        index += 1;
+                    }
+                    index += 1; // closing "
+                },
+                '{' => {
+                    depth += 1;
+                    index += 1;
+                },
+                '}' => {
+                    depth -= 1;
+                    if (depth == 0) return index;
+                    index += 1;
+                },
+                else => index += 1,
+            }
+        }
+        return null;
+    }
+
+    /// Parse one expression from an f-string hole.  The hole bytes are
+    /// lexed on their own, then their spans are shifted to absolute so
+    /// the sub-parser reads the real source and reports real
+    /// positions.
+    fn subExpression(self: *Parser, bytes: []const u8, offset: usize) Error!?*ast.Expression {
+        var scratch = Diagnostics.init(self.arena);
+        const raw_tokens = try lexer_mod.lex(self.arena, bytes, &scratch);
+        if (scratch.hasErrors()) {
+            try self.diagnostics.add("luce.parse.fstring", .{ .start = offset, .end = offset + bytes.len }, "malformed expression in f-string", .{});
+            return null;
+        }
+        const tokens = try self.arena.alloc(Token, raw_tokens.len);
+        for (raw_tokens, tokens) |source_token, *shifted| {
+            shifted.* = .{ .kind = source_token.kind, .span = .{
+                .start = source_token.span.start + offset,
+                .end = source_token.span.end + offset,
+            } };
+        }
+        var sub: Parser = .{
+            .arena = self.arena,
+            .source = self.source,
+            .tokens = tokens,
+            .diagnostics = self.diagnostics,
+        };
+        const expr = (try sub.expression()) orelse return null;
+        if (sub.peekKind() != .newline and sub.peekKind() != .end_of_file) {
+            try self.diagnostics.add("luce.parse.fstring", expr.span(), "an f-string hole is a single expression", .{});
+            return null;
+        }
+        return expr;
     }
 
     fn decodeString(self: *Parser, item: Token) Error![]const u8 {
