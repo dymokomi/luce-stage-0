@@ -1,0 +1,35 @@
+# files — the Luce standard file module.
+#
+# A thin, honest layer over the host's file builtins, so programs
+# read `files.read(path)` instead of remembering builtin names.  The
+# host gate still applies: importing files in a host-less context
+# (an evaluator) is a compile error, which is the truth.
+#
+# Paths resolve the way the host says — in loom, relative to the
+# current directory.  read traps file_read_failed on a missing file;
+# guard with exists first.  write returns false on failure and never
+# hides durability.
+
+func exists(path: String) -> Bool:
+    return file_exists(path)
+
+func read(path: String) -> String:
+    return file_read(path)
+
+func write(path: String, text: String) -> Bool:
+    return file_write(path, text)
+
+# The file's lines, without their newlines.  A trailing final newline
+# (the usual text-file ending) does not produce a phantom empty line.
+func read_lines(path: String) -> List(String):
+    var lines = file_read(path).split("\n")
+    if len(lines) > 0 and lines[len(lines) - 1] == "":
+        lines.remove(len(lines) - 1)
+    return lines
+
+# Write lines joined with newlines, ending with one (the text-file
+# convention); an empty list writes an empty file.
+func write_lines(path: String, lines: List(String)) -> Bool:
+    if len(lines) == 0:
+        return file_write(path, "")
+    return file_write(path, lines.join("\n") + "\n")

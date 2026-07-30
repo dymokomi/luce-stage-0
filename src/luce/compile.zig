@@ -51,6 +51,30 @@ pub const Loader = struct {
 /// a backstop against runaway import graphs, not a design limit.
 const max_modules = 64;
 
+// ---------------------------------------------------------------------------
+// The standard library
+// ---------------------------------------------------------------------------
+//
+// Std modules are Luce source embedded in the compiler — the way Zig
+// ships lib/std with its compiler, minus the install path: wherever
+// the compiler is (the luce CLI, loom, a test), `import math` works.
+// They resolve before any loader runs, so std names are reserved and
+// a sibling file of the same name is never consulted.  Being ordinary
+// modules, they obey every language rule, including the host gate:
+// `import files` inside a host-less evaluator is a compile error.
+
+const std_modules = [_]struct { name: []const u8, source: []const u8 }{
+    .{ .name = "math", .source = @embedFile("std/math.luc") },
+    .{ .name = "files", .source = @embedFile("std/files.luc") },
+};
+
+fn stdModule(name: []const u8) ?[]const u8 {
+    for (std_modules) |module| {
+        if (std.mem.eql(u8, module.name, name)) return module.source;
+    }
+    return null;
+}
+
 pub fn compile(
     gpa: Allocator,
     source: []const u8,
@@ -113,10 +137,14 @@ pub fn compileProject(
             break;
         }
 
-        const loaded: ?[]const u8 = if (loader) |through|
-            try through.loadFn(through.context, scaffold, wanted.name)
-        else
-            null;
+        // The standard library resolves first: std names are a
+        // reserved namespace, and a sibling file cannot shadow one.
+        var loaded: ?[]const u8 = stdModule(wanted.name);
+        if (loaded == null) {
+            if (loader) |through| {
+                loaded = try through.loadFn(through.context, scaffold, wanted.name);
+            }
+        }
         const module_source = loaded orelse {
             diagnostics.scope = "";
             try diagnostics.add(

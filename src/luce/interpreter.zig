@@ -2143,6 +2143,37 @@ test "print, arguments, and files flow through the host" {
     try testing.expectEqualStrings("saved", host.written_content);
 }
 
+test "std files wraps the host builtins faithfully" {
+    var bench = try Bench.setup(
+        \\import files
+        \\
+        \\func main():
+        \\    assert(files.exists("notes.txt"))
+        \\    assert(not files.exists("ghost.txt"))
+        \\    var lines = files.read_lines("notes.txt")
+        \\    assert(len(lines) == 2)
+        \\    assert(lines[0] == "alpha" and lines[1] == "beta")
+        \\    lines.append("gamma")
+        \\    assert(files.write_lines("out.txt", lines))
+        \\    assert(files.write("plain.txt", files.read("notes.txt")))
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{
+        .file_path = "notes.txt",
+        .file_content = "alpha\nbeta\n",
+    };
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expect(result == .success);
+    try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
+    // The last write wins in the single-slot TestHost; it proves the
+    // whole read -> lines -> write pipeline carried real content.
+    try testing.expectEqualStrings("plain.txt", host.written_path);
+    try testing.expectEqualStrings("alpha\nbeta\n", host.written_content);
+}
+
 test "argument reads out of range trap and failed writes report false" {
     var bench = try Bench.setup(
         \\func main():

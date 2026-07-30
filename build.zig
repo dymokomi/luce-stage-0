@@ -89,6 +89,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "life" },
         .{ .name = "calc" },
         .{ .name = "stats", .deps = &.{"mathx"} },
+        .{ .name = "dice" },
     };
     for (bundled) |program| {
         const compile_program = b.addRunArtifact(compiler);

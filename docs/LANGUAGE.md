@@ -293,6 +293,10 @@ and writes one .lc module; errors inside an imported file render as
 `name.luc:line:column`.  Deliberately absent: package managers,
 search paths, conditional imports, re-exports.
 
+**The standard library** resolves before the file loader: `import
+math`, `import files` reach modules embedded in the compiler itself,
+so std names are reserved and work everywhere — see docs/STD.md.
+
 ## Deliberately absent (for now)
 
 First-class functions, closures, user-defined methods/receivers

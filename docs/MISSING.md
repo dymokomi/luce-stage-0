@@ -57,10 +57,10 @@ design philosophy.
 7. ~~Compound assignment (`+=`, `-=`, ...)~~ — shipped: `+= -= *= /=
    %=` on Int/Float and `+=` on String, value-only, place evaluated
    once.
-8. **No `pow`, no `random`, thin math.**  `sqrt/floor/ceil/abs/
-   min/max/clamp` exist; `pow`, `log`, `exp`, trig, and any random
-   source do not.  Games (life.luc wants random seeding) and stats
-   programs feel it immediately.
+8. ~~No `pow`, no `random`, thin math~~ — shipped as `import math`
+   (docs/STD.md): pow/ipow, exp/ln/log2/log10, sin/cos/tan, round,
+   constants, and a deterministic seeded generator
+   (`math.seed`/`random`/`random_int`).
 9. ~~Assignment targets are a single field or index, not a chain~~ —
    shipped: `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag
    = "x"` all work now (value leaves; the place is read once and
@@ -114,9 +114,10 @@ purpose — same posture as the memory-model process.
 
 ## Tier 3 — standard library breadth
 
-Nothing here needs language changes; all of it wants a decision on
-**where std lives** (builtins vs a shipped `import std` module —
-modules exist, so the mechanism is one design choice away).
+**The mechanism is decided and shipped** (docs/STD.md): std modules
+are Luce source embedded in the compiler, resolved before the file
+loader — `import math` and `import files` lead the way.  What remains
+is breadth, added module by module:
 
 - **Strings:** `pad`/`center`/`ljust`, `find` from-index /
   `find_last`, `count`, split with limit, `is_digit`/`is_alpha`
@@ -128,8 +129,9 @@ modules exist, so the mechanism is one design choice away).
 - **Files & OS:** list directory, delete/rename, append mode,
   binary I/O (needs Bytes), `env(name)`, `exit(code)`, current
   time/clock, `sleep(ms)` (life.luc busy-waits today).
-- **Math:** pow/log/exp/trig, PRNG with seed, float formatting
-  control (`str(2.5)` is take-it-or-leave-it).
+- **Math:** ~~pow/log/exp/trig, PRNG~~ (shipped in `import math`);
+  still missing: float formatting control (`str(2.5)` is
+  take-it-or-leave-it).
 
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 
@@ -189,6 +191,7 @@ work above is what they will stand on.
    formerly here, is done.)
 4. The three Tier-2 decisions worth a memo each: integer division,
    enums+match, receivers.
-5. `import std` mechanism + first std module (Tier 3 umbrella).
+5. ~~Std mechanism + first modules~~ — shipped (`math`, `files`);
+   grow Tier 3 breadth module by module.
 6. **Phase 3 brainstorm: optionals + errors** — after which `get`,
    file APIs, and parse functions all get their real signatures.
