@@ -238,6 +238,43 @@ test "luce.sema.method: a method must exist on its receiver type" {
     try expectError("func main():\n    let a = 5.append(1)\n", "luce.sema.method");
 }
 
+test "luce.sema.method: map get takes (key, default) of the right types" {
+    try expectError(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let x = m.get("k")
+        \\
+    , "luce.sema.method");
+    try expectError(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let x = m.get("k", "wrong")
+        \\
+    , "luce.sema.method");
+}
+
+test "luce.sema.loop: two-name for needs a Map or a sequence" {
+    // A Builder is not iterable at all.
+    try expectError(
+        \\func main():
+        \\    var b = new Builder()
+        \\    for a, c in b:
+        \\        b.append("x")
+        \\
+    , "luce.sema.loop");
+}
+
+test "luce.sema.duplicate: the two for-loop names must differ" {
+    try expectError(
+        \\func main():
+        \\    var m = new Map(Int, Int)
+        \\    m[1] = 1
+        \\    for k, k in m:
+        \\        let unused = k
+        \\
+    , "luce.sema.duplicate");
+}
+
 test "luce.sema.index: only heap containers index, with the right key" {
     try expectError("func main():\n    let a = 1[0]\n", "luce.sema.index");
 }

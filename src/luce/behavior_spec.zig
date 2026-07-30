@@ -548,6 +548,71 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
     );
 }
 
+test "maps: for key, value iteration, values(), and get with default" {
+    try expectOk(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    m["a"] = 1
+        \\    m["b"] = 2
+        \\    m["c"] = 3
+        \\    var keys = new Builder()
+        \\    var total = 0
+        \\    for k, v in m:
+        \\        keys.append(k)
+        \\        total += v
+        \\    assert(str(keys) == "abc")
+        \\    assert(total == 6)
+        \\    assert(m.get("b", 0) == 2)
+        \\    assert(m.get("missing", 99) == 99)
+        \\    var vs = m.values()
+        \\    assert(len(vs) == 3)
+        \\    assert(vs[0] == 1 and vs[2] == 3)
+        \\    assert(vs.contains(2))
+        \\
+    );
+}
+
+test "sequences: for index, element enumerates lists and rank-1 arrays" {
+    try expectOk(
+        \\func main():
+        \\    var xs = [10, 20, 30]
+        \\    var sum_index = 0
+        \\    var sum_value = 0
+        \\    for i, x in xs:
+        \\        sum_index += i
+        \\        sum_value += x
+        \\    assert(sum_index == 0 + 1 + 2)
+        \\    assert(sum_value == 60)
+        \\    var row = new Array(Int, 4)
+        \\    row.fill(5)
+        \\    var seen = 0
+        \\    for i, v in row:
+        \\        seen += i
+        \\        assert(v == 5)
+        \\    assert(seen == 0 + 1 + 2 + 3)
+        \\
+    );
+}
+
+test "single-name for still binds keys for maps and elements for sequences" {
+    try expectOk(
+        \\func main():
+        \\    var m = new Map(Int, Int)
+        \\    m[7] = 70
+        \\    m[8] = 80
+        \\    var key_sum = 0
+        \\    for k in m:
+        \\        key_sum += k
+        \\    assert(key_sum == 15)
+        \\    var xs = [1, 2, 3]
+        \\    var element_sum = 0
+        \\    for x in xs:
+        \\        element_sum += x
+        \\    assert(element_sum == 6)
+        \\
+    );
+}
+
 test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
     try expectOk(
         \\func main():

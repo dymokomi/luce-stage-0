@@ -969,6 +969,13 @@ const Machine = struct {
                 if (index < 0 or index >= map.items.len) return self.failure(.index_bounds);
                 return map.items[@intCast(index)].key;
             },
+            .value_at => {
+                const object = try self.resolve(registers[arguments[0]]);
+                const map = object.data.map;
+                const index = registers[arguments[1]].int;
+                if (index < 0 or index >= map.items.len) return self.failure(.index_bounds);
+                return map.items[@intCast(index)].value;
+            },
             .dim_size => {
                 const object = try self.resolve(registers[arguments[0]]);
                 const array = object.data.array;
@@ -1170,6 +1177,31 @@ const Machine = struct {
                 try self.heap.append(self.arena, .{ .data = .{ .list = listed } });
                 self.live_objects += 1;
                 return .{ .object = .{ .index = index } };
+            },
+            .map_values => {
+                const object = try self.resolve(registers[arguments[0]]);
+                // The returned list independently owns its elements, so
+                // object values are deep-copied — two containers never
+                // own one object (S23, mirrors list_slice).
+                var listed: std.ArrayList(RuntimeValue) = .empty;
+                for (object.data.map.items) |entry| {
+                    const duplicate = try self.deepCopy(entry.value);
+                    try listed.append(self.arena, duplicate);
+                    self.adoptValue(duplicate);
+                }
+                const index: u32 = @intCast(self.heap.items.len);
+                try self.heap.append(self.arena, .{ .data = .{ .list = listed } });
+                self.live_objects += 1;
+                return .{ .object = .{ .index = index } };
+            },
+            .map_get => {
+                const object = try self.resolve(registers[arguments[0]]);
+                // A borrow of the stored value (like m[key]), or the
+                // caller's default when the key is absent.
+                if (findEntry(object.data.map.items, registers[arguments[1]])) |at| {
+                    return object.data.map.items[at].value;
+                }
+                return registers[arguments[2]];
             },
             .array_fill => {
                 const object = try self.resolve(registers[arguments[0]]);

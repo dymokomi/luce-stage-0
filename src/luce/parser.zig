@@ -477,10 +477,19 @@ const Parser = struct {
     fn forLoop(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         const name = (try self.expect(.identifier, "a loop variable")) orelse return null;
+        // for key, value in ...: — an optional second binding.  A
+        // two-name loop is never a range, so this precedes that check.
+        var value_name: ?[]const u8 = null;
+        var value_token: ?Token = null;
+        if (self.accept(.comma) != null) {
+            const second = (try self.expect(.identifier, "a second loop variable")) orelse return null;
+            value_name = self.text(second);
+            value_token = second;
+        }
         if ((try self.expect(.keyword_in, "'in'")) == null) return null;
 
         // for i in range(a, b): keeps its dedicated integer lowering.
-        if (self.peekKind() == .identifier and
+        if (value_name == null and self.peekKind() == .identifier and
             std.mem.eql(u8, self.text(self.peek()), "range") and
             self.peekAhead(1) == .left_paren)
         {
@@ -503,11 +512,13 @@ const Parser = struct {
 
         const iterable = (try self.expression()) orelse return null;
         const body = (try self.block()) orelse return null;
+        const end = if (value_token) |token| token.span.end else name.span.end;
         return .{ .for_each = .{
             .name = self.text(name),
+            .value_name = value_name,
             .iterable = iterable,
             .body = body,
-            .span = .{ .start = start.span.start, .end = name.span.end },
+            .span = .{ .start = start.span.start, .end = end },
         } };
     }
 

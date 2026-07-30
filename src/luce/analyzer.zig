@@ -1400,7 +1400,7 @@ const FunctionBuilder = struct {
     /// (S22).  The ownership classifier below and the method tables
     /// (sequenceMethod/stringMethod/objectMethod result types) must
     /// agree on this list.
-    const fresh_object_methods = [_][]const u8{ "pop", "split", "keys" };
+    const fresh_object_methods = [_][]const u8{ "pop", "split", "keys", "values" };
 
     /// True when evaluating this expression yields an object the
     /// receiver may own: something fresh (new, a literal, a slice, a
@@ -2206,13 +2206,20 @@ const FunctionBuilder = struct {
     fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
         const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
         const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
-            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map's keys, not {s}", .{
+            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map, not {s}", .{
                 try self.analyzer.typeName(iterable.value_type),
             });
             return;
         };
-        var element_kind: ir.Intrinsic = .index_get;
-        const element_type: Type = switch (descriptor) {
+        // Each collection has a "position" (a Map's key, or a
+        // List/Array's Int index) and a "payload" (a Map's value, or
+        // the element).  `for x in c:` binds the payload for
+        // sequences and the key for maps (Python's habit); `for a, b
+        // in c:` binds position then payload.
+        var payload_kind: ir.Intrinsic = .index_get;
+        var position_kind: ?ir.Intrinsic = null; // null = the raw Int index
+        var position_type: Type = .int;
+        const payload_type: Type = switch (descriptor) {
             .list => |element| element,
             .array => |shape| blk: {
                 if (shape.rank != 1) {
@@ -2222,8 +2229,10 @@ const FunctionBuilder = struct {
                 break :blk shape.element;
             },
             .map => |pair| blk: {
-                element_kind = .key_at;
-                break :blk pair.key;
+                position_kind = .key_at;
+                position_type = pair.key;
+                payload_kind = .value_at;
+                break :blk pair.value;
             },
             .builder => {
                 try self.fail("luce.sema.loop", loop.span, "Builder is not iterable", .{});
@@ -2235,8 +2244,19 @@ const FunctionBuilder = struct {
         defer self.popScope();
         const object_local = try self.hiddenLocal(iterable.value_type);
         const index_local = try self.hiddenLocal(.int);
-        // The element binds each iteration as a borrow (S22).
-        const name_local = (try self.declareLocal(loop.name, element_type, false, .alias, loop.span)) orelse return;
+
+        // Which intrinsic and type each declared name binds to.
+        const two_names = loop.value_name != null;
+        const map_like = descriptor == .map;
+        // Single name: payload for sequences, key for maps.  Two
+        // names: first = position, second = payload.
+        const first_kind: ?ir.Intrinsic = if (two_names or map_like) position_kind else payload_kind;
+        const first_type: Type = if (two_names or map_like) position_type else payload_type;
+        const name_local = (try self.declareLocal(loop.name, first_type, false, .alias, loop.span)) orelse return;
+        const value_local: ?LocalId = if (two_names)
+            (try self.declareLocal(loop.value_name.?, payload_type, false, .alias, loop.span)) orelse return
+        else
+            null;
         _ = try self.emit(.{ .local_set = .{ .local = object_local, .value = iterable.register } }, .none);
         const zero = try self.emit(.{ .const_int = 0 }, .int);
         _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = zero } }, .none);
@@ -2268,14 +2288,25 @@ const FunctionBuilder = struct {
         self.switchTo(body);
         const body_object = try self.emit(.{ .local_get = object_local }, iterable.value_type);
         const body_index = try self.emit(.{ .local_get = index_local }, .int);
-        const element_arguments = try self.arena().alloc(Register, 2);
-        element_arguments[0] = body_object;
-        element_arguments[1] = body_index;
-        const element = try self.emit(
-            .{ .intrinsic = .{ .kind = element_kind, .arguments = element_arguments } },
-            element_type,
-        );
-        _ = try self.emit(.{ .local_set = .{ .local = name_local, .value = element } }, .none);
+        // Bind the first name: a getter intrinsic (key_at / index_get)
+        // or the raw index when it is the List/Array position.
+        const first_value = if (first_kind) |kind| blk: {
+            const args = try self.arena().alloc(Register, 2);
+            args[0] = body_object;
+            args[1] = body_index;
+            break :blk try self.emit(.{ .intrinsic = .{ .kind = kind, .arguments = args } }, first_type);
+        } else body_index;
+        _ = try self.emit(.{ .local_set = .{ .local = name_local, .value = first_value } }, .none);
+        // Bind the payload as a second name when present.
+        if (value_local) |local| {
+            const payload_object = try self.emit(.{ .local_get = object_local }, iterable.value_type);
+            const payload_index = try self.emit(.{ .local_get = index_local }, .int);
+            const args = try self.arena().alloc(Register, 2);
+            args[0] = payload_object;
+            args[1] = payload_index;
+            const payload = try self.emit(.{ .intrinsic = .{ .kind = payload_kind, .arguments = args } }, payload_type);
+            _ = try self.emit(.{ .local_set = .{ .local = local, .value = payload } }, .none);
+        }
         try self.loops.append(self.temporary(), .{
             .continue_block = step,
             .exit_block = exit,
@@ -3399,6 +3430,16 @@ const FunctionBuilder = struct {
                     if (arguments.len != 0) return self.methodFail(method, "keys takes no arguments");
                     return .{ .kind = .map_keys, .result = try self.analyzer.internHeapType(.{ .list = pair.key }) };
                 }
+                if (std.mem.eql(u8, name, "values")) {
+                    if (arguments.len != 0) return self.methodFail(method, "values takes no arguments");
+                    return .{ .kind = .map_values, .result = try self.analyzer.internHeapType(.{ .list = pair.value }) };
+                }
+                if (std.mem.eql(u8, name, "get")) {
+                    if (arguments.len != 2 or !arguments[0].value_type.eql(pair.key) or
+                        !arguments[1].value_type.eql(pair.value))
+                        return self.methodFail(method, "get takes (key, default) of the map's key and value types");
+                    return .{ .kind = .map_get, .result = pair.value };
+                }
                 if (std.mem.eql(u8, name, "clear")) {
                     if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
                     return .{ .kind = .clear_object, .result = .none };
@@ -3829,6 +3870,7 @@ const FunctionBuilder = struct {
             .index_set,
             .list_slice,
             .key_at,
+            .value_at,
             .string_slice,
             .string_byte,
             .append_value,
@@ -3854,6 +3896,8 @@ const FunctionBuilder = struct {
             .list_join,
             .clear_object,
             .map_keys,
+            .map_values,
+            .map_get,
             .array_fill,
             => unreachable,
 

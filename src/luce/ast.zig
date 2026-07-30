@@ -156,6 +156,9 @@ pub const ForRange = struct {
 };
 pub const ForEach = struct {
     name: []const u8,
+    /// `for key, value in ...:` — the second binding: a Map's value or
+    /// a List/Array element's index.  Null for the single-name form.
+    value_name: ?[]const u8 = null,
     iterable: *Expression,
     body: Block,
     span: Span,

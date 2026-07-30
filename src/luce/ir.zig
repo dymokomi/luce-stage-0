@@ -71,6 +71,7 @@ pub const Intrinsic = enum {
     remove_entry,
     has_key,
     key_at,
+    value_at,
     dim_size,
     free_object,
     /// give NAME — passes the object through after checking it is not
@@ -98,6 +99,8 @@ pub const Intrinsic = enum {
     list_join,
     clear_object,
     map_keys,
+    map_values,
+    map_get,
     array_fill,
     // Conversions and text.
     str_value,
@@ -742,6 +745,16 @@ fn verifyIntrinsic(
                 else => return error.BadIntrinsic,
             }
         },
+        .value_at => {
+            try exactly(arguments, 2);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| {
+                    try expectType(arguments[1], .int);
+                    try expectType(result, pair.value);
+                },
+                else => return error.BadIntrinsic,
+            }
+        },
         .dim_size => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .array) return error.BadIntrinsic;
@@ -840,6 +853,26 @@ fn verifyIntrinsic(
             switch (try heapShape(program, arguments[0])) {
                 .map => |pair| if (!(try heapShape(program, result)).eql(.{ .list = pair.key })) {
                     return error.BadIntrinsic;
+                },
+                else => return error.BadIntrinsic,
+            }
+        },
+        .map_values => {
+            try exactly(arguments, 1);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| if (!(try heapShape(program, result)).eql(.{ .list = pair.value })) {
+                    return error.BadIntrinsic;
+                },
+                else => return error.BadIntrinsic,
+            }
+        },
+        .map_get => {
+            try exactly(arguments, 3);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| {
+                    try expectType(arguments[1], pair.key);
+                    try expectType(arguments[2], pair.value);
+                    try expectType(result, pair.value);
                 },
                 else => return error.BadIntrinsic,
             }

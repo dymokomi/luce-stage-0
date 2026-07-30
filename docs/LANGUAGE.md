@@ -114,9 +114,10 @@ sugar for a plain function with the receiver first, not dispatch):
   `contains(v)`, `fill(v)` (value elements only — an array of
   objects stores each slot separately); every Array has `dim(axis)`.
 - `Map(K, V)`: `K` is `Int` or `String`.  Index get (traps on a
-  missing key), index set (insert or update), `has(k)`, `remove(k)`
-  (no-op when absent), `keys() -> List(K)`, `clear()`, `len`.
-  Iteration order is insertion order.
+  missing key), index set (insert or update), `has(k)`, `get(k,
+  default) -> V` (the value or the default — no trap), `remove(k)`
+  (no-op when absent), `keys() -> List(K)`, `values() -> List(V)`,
+  `clear()`, `len`.  Iteration order is insertion order.
 - `Builder`: `append(text)`, `clear()`, `len`, `str(b)`.
 - `Array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
   values at `new`, elements zero-initialized (numbers 0, Bool false,
@@ -136,10 +137,14 @@ sugar for a plain function with the receiver first, not dispatch):
 for i in range(0, 10):      # ints, as before
 for x in xs:                # list / rank-1 array elements, in order
 for key in m:               # map keys, insertion order
+for i, x in xs:             # index and element together (enumerate)
+for key, value in m:        # both, no second lookup
 ```
 
-Don't grow, shrink, or free a collection while iterating it; bounds
-stay checked per step, but which elements you visit is your problem.
+The two-name form binds a *position* then a *payload*: a sequence's
+Int index and its element, or a map's key and its value.  Don't grow,
+shrink, or free a collection while iterating it; bounds stay checked
+per step, but which elements you visit is your problem.
 
 ## Strings
 

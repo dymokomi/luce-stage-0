@@ -37,11 +37,10 @@ design philosophy.
    `!T` and `try`; Python's is exceptions.  Luce needs its own
    answer, and `T?` and errors are one design conversation
    (**Phase 3 — parked for joint brainstorm, per plan**).
-2. **Map iteration yields keys only.**  `for key, value in m:` needs
-   multi-binding in `for` — the single most-felt ergonomic gap
-   (every map loop pays a second lookup, O(n) inside O(n) on
-   today's linear map).  Related missing: `m.values()`, `m.get(k,
-   default)` (blocked on optionals for the no-default form).
+2. ~~Map iteration yields keys only~~ — shipped: `for key, value in
+   m:` and `for i, x in xs:` (enumerate) bind a position and a
+   payload; `m.values()` and `m.get(k, default)` landed too.  The
+   no-default `m.get(k)` still waits on optionals (Phase 3).
 3. **Runtime traps carry no source location.**  Compile diagnostics
    have byte spans; a runtime trap says `index out of bounds` with
    no file:line.  Python tracebacks and Zig panic traces both spoil
