@@ -203,7 +203,11 @@ const point_schema: PortSchema = .{
 };
 
 fn expectCompiles(source: []const u8, schema: PortSchema) !ir.Program {
-    var result = try compile(testing.allocator, source, schema, .{});
+    return expectCompilesOptions(source, schema, .{});
+}
+
+fn expectCompilesOptions(source: []const u8, schema: PortSchema, options: types.CompileOptions) !ir.Program {
+    var result = try compile(testing.allocator, source, schema, options);
     switch (result) {
         .success => |program| return program,
         .failure => |*diagnostics| {
@@ -606,6 +610,70 @@ test "the IR dump is readable and deterministic" {
     try testing.expect(std.mem.indexOf(u8, first, "input_load value") != null);
     try testing.expect(std.mem.indexOf(u8, first, "output_store value") != null);
     try testing.expect(std.mem.indexOf(u8, first, "multiply.Int") != null);
+}
+
+test "the IR dump has a stable golden shape (short-circuit + ownership)" {
+    // A full-dump snapshot of the two trickiest lowerings at once:
+    // short-circuit `and` splitting a block, and scope ownership
+    // inserting object_bind/object_unbind around the list.  Behavior
+    // tests can't see block ordering or a lost temp release; this
+    // does, and it documents the IR for a reader.  Regenerate
+    // deliberately when lowering changes on purpose.
+    var program = try expectCompilesOptions(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    if len(xs) > 0 and xs[0] == 1:
+        \\        xs.append(3)
+        \\
+    , .{}, .{ .entry_mode = .script });
+    defer program.deinit();
+    const dump = try ir.print(testing.allocator, &program);
+    defer testing.allocator.free(dump);
+    try testing.expectEqualStrings(
+        \\func main() -> None
+        \\    local %0 (temporary): List(Int)
+        \\    local %1 xs: List(Int)
+        \\    local %2 (temporary): Bool
+        \\  b0:
+        \\    r0 = const 1
+        \\    r1 = const 2
+        \\    r2 = heap_new List(Int)
+        \\    intrinsic append_value, r2, r0
+        \\    intrinsic append_value, r2, r1
+        \\    local_set %0, r2
+        \\    object_bind %0, r2
+        \\    local_set %1, r2
+        \\    object_bind %1, r2
+        \\    r9 = local_get %0
+        \\    object_unbind %0, r9
+        \\    r11 = local_get %1
+        \\    r12 = intrinsic len, r11
+        \\    r13 = const 0
+        \\    r14 = greater.Int r12, r13
+        \\    local_set %2, r14
+        \\    branch r14, b1, b2
+        \\  b1:
+        \\    r17 = local_get %1
+        \\    r18 = const 0
+        \\    r19 = intrinsic index_get, r17, r18
+        \\    r20 = const 1
+        \\    r21 = equal.Int r19, r20
+        \\    local_set %2, r21
+        \\    jump b2
+        \\  b2:
+        \\    r24 = local_get %2
+        \\    branch r24, b3, b4
+        \\  b3:
+        \\    r26 = local_get %1
+        \\    r27 = const 3
+        \\    intrinsic append_value, r26, r27
+        \\    jump b4
+        \\  b4:
+        \\    r30 = local_get %1
+        \\    object_unbind %1, r30
+        \\    ret
+        \\
+    , dump);
 }
 
 test "unknown ports and port type mismatches diagnose" {
