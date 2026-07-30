@@ -41,23 +41,6 @@ let theme = Theme(
 )
 
 struct Fmt:
-    func int(value: Int) -> String:
-        if value == 0:
-            return "0"
-        var digits = ""
-        var left = value
-        var negative = false
-        if left < 0:
-            negative = true
-            left = 0 - left
-        while left > 0:
-            let digit = left % 10
-            digits = "0123456789"[digit:digit + 1] + digits
-            left = left / 10
-        if negative:
-            digits = "-" + digits
-        return digits
-
     func pad_left(value: String, width: Int) -> String:
         var padded = value
         while len(padded) < width:
@@ -294,14 +277,14 @@ struct Draw:
             term_style(theme.gutter_current, -1, false)
         else:
             term_style(theme.gutter, -1, false)
-        term_write(Fmt.pad_left(Fmt.int(number), 4) + " ")
+        term_write(Fmt.pad_left(str(number), 4) + " ")
 
     func status(state: State, rows: Int, cols: Int, line: Int, column: Int):
         term_move(rows - 1, 0)
         var flag = ""
         if state.dirty:
             flag = " +"
-        var left = " " + state.path + flag + "  " + Fmt.int(line + 1) + ":" + Fmt.int(column + 1)
+        var left = " " + state.path + flag + "  " + str(line + 1) + ":" + str(column + 1)
         if len(state.message) > 0:
             left = left + "  — " + state.message
         let hint = "Ctrl-S save  Ctrl-Q quit "
