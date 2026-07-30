@@ -111,7 +111,8 @@ sugar for a plain function with the receiver first, not dispatch):
   `reverse()`, `find(v) -> Int` (-1 when absent), `contains(v)`,
   `clear()`, plus `len`, index, slice.
 - rank-1 `Array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
-  `contains(v)`, `fill(v)`; every Array has `dim(axis)`.
+  `contains(v)`, `fill(v)` (value elements only — an array of
+  objects stores each slot separately); every Array has `dim(axis)`.
 - `Map(K, V)`: `K` is `Int` or `String`.  Index get (traps on a
   missing key), index set (insert or update), `has(k)`, `remove(k)`
   (no-op when absent), `keys() -> List(K)`, `clear()`, `len`.

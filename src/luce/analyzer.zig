@@ -156,6 +156,9 @@ const LocalInfo = struct {
     /// Set by give/free in lowering (= source) order; any later use in
     /// this scope is a compile error (S10, S29).
     poisoned: ?Poison = null,
+    /// True while a for-loop iterates this name: reassignment would
+    /// free the collection under the loop's feet (S5 meets S9).
+    iterating: bool = false,
 };
 
 const Scope = struct {
@@ -1693,6 +1696,15 @@ const FunctionBuilder = struct {
             return;
         }
         if (try self.checkPoisoned(info, base, span)) return;
+        if (info.iterating) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "{s} is being iterated; reassigning it would free the collection under the loop [OWNERSHIP.md S5, S9]",
+                .{base},
+            );
+            return;
+        }
         const local = info.local;
         const class = info.class;
         const local_type = self.locals.items[local].local_type;
@@ -2000,8 +2012,18 @@ const FunctionBuilder = struct {
         _ = try self.emit(.{ .jump = header }, .none);
 
         self.switchTo(header);
+        // The frame is pushed before the condition lowers: the header
+        // re-runs every iteration, so the S30 give/free guard must see
+        // the loop there too.
+        try self.loops.append(self.temporary(), .{
+            .continue_block = header,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
         const temps_floor = self.temps.items.len;
         const condition = (try self.lowerCondition(loop.condition)) orelse {
+            _ = self.loops.pop();
             _ = try self.emit(.{ .jump = exit }, .none);
             self.switchTo(exit);
             return;
@@ -2016,12 +2038,6 @@ const FunctionBuilder = struct {
         } }, .none);
 
         self.switchTo(body);
-        try self.loops.append(self.temporary(), .{
-            .continue_block = header,
-            .exit_block = exit,
-            .scope_depth = self.scopes.items.len,
-            .temps_depth = self.temps.items.len,
-        });
         try self.lowerBlock(loop.body);
         _ = self.loops.pop();
         _ = try self.emit(.{ .jump = header }, .none);
@@ -2178,7 +2194,23 @@ const FunctionBuilder = struct {
             .scope_depth = self.scopes.items.len,
             .temps_depth = self.temps.items.len,
         });
+        // A named iterable is locked against reassignment for the
+        // duration of the loop (restored below for outer loops).
+        var iterated: ?[]const u8 = null;
+        var was_iterating = false;
+        if (loop.iterable.* == .name) {
+            if (self.findLocal(loop.iterable.name.text)) |iterable_binding| {
+                iterated = loop.iterable.name.text;
+                was_iterating = iterable_binding.info.iterating;
+                iterable_binding.info.iterating = true;
+            }
+        }
         try self.lowerBlock(loop.body);
+        if (iterated) |name| {
+            if (self.findLocal(name)) |iterable_binding| {
+                iterable_binding.info.iterating = was_iterating;
+            }
+        }
         _ = self.loops.pop();
         _ = try self.emit(.{ .jump = step }, .none);
 
@@ -2413,9 +2445,16 @@ const FunctionBuilder = struct {
             return null;
         }
         info.poisoned = .given;
+        const owned = info.class == .owned;
         const value = try self.emit(.{ .local_get = local }, local_type);
-        const arguments = try self.arena().alloc(Register, 1);
+        // An owned name passes its binding along so the runtime can
+        // verify the name still owns the object; an alias keeps only
+        // the container backstop (S23).
+        const arguments = try self.arena().alloc(Register, if (owned) 2 else 1);
         arguments[0] = value;
+        if (owned) {
+            arguments[1] = try self.emit(.{ .const_int = local }, .int);
+        }
         return .{
             .register = try self.emit(
                 .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
@@ -2536,6 +2575,19 @@ const FunctionBuilder = struct {
                     try self.analyzer.typeName(elements[0].value_type),
                     try self.analyzer.typeName(element.value_type),
                 });
+                return null;
+            }
+            // A literal is a container door like any other (S20, S21):
+            // object elements must be fresh, given, or copied.
+            if (self.analyzer.carriesObjects(element.value_type) and
+                !(try self.yieldsOwnership(expression)))
+            {
+                try self.fail(
+                    "luce.sema.own",
+                    expression.span(),
+                    "a container keeps its object elements; store something fresh, give NAME, or copy NAME [OWNERSHIP.md S21]",
+                    .{},
+                );
                 return null;
             }
         }
@@ -2680,6 +2732,17 @@ const FunctionBuilder = struct {
         switch (binary.op) {
             .logic_and, .logic_or => return self.lowerShortCircuit(binary),
             else => {},
+        }
+        // Operators borrow their operands (S11); a give here would
+        // hand the object to nobody.
+        if (binary.left.* == .give or binary.right.* == .give) {
+            try self.fail(
+                "luce.sema.own",
+                binary.span,
+                "operators only borrow their operands; give needs an owning destination [OWNERSHIP.md S13]",
+                .{},
+            );
+            return null;
         }
         const sides = (try self.lowerOperands(&.{ binary.left, binary.right })) orelse return null;
         const left = sides[0];
@@ -3116,6 +3179,22 @@ const FunctionBuilder = struct {
                 }
             }
         }
+        // Every other method argument is a borrow (S11): a give there
+        // would hand the object to nobody.
+        for (method.arguments, 0..) |argument, position| {
+            if (argument.value.* != .give) continue;
+            const adopting = (found.kind == .append_value and position == 0) or
+                (found.kind == .insert_value and position == 1);
+            if (!adopting) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                    .{method.name},
+                );
+                return null;
+            }
+        }
         const registers = try self.arena().alloc(Register, values.len);
         for (values, registers) |value, *slot| slot.* = value.register;
         return .{
@@ -3198,6 +3277,17 @@ const FunctionBuilder = struct {
                 if (std.mem.eql(u8, name, "fill")) {
                     if (arguments.len != 1 or !arguments[0].value_type.eql(shape.element))
                         return self.methodFail(method, "fill takes one element value");
+                    // One value cannot own every slot (S21, S23):
+                    // arrays of objects store per slot instead.
+                    if (self.analyzer.carriesObjects(shape.element)) {
+                        try self.fail(
+                            "luce.sema.own",
+                            method.span,
+                            "fill copies one value into every slot; an array of objects stores each slot separately [OWNERSHIP.md S21, S23]",
+                            .{},
+                        );
+                        return null;
+                    }
                     return .{ .kind = .array_fill, .result = .none };
                 }
                 if (shape.rank != 1) {
@@ -3512,6 +3602,18 @@ const FunctionBuilder = struct {
                 try self.fail("luce.sema.call", argument.span, "builtin arguments are positional", .{});
                 return .failed;
             }
+            // Builtins borrow (S11); a give with no owner to receive
+            // it would silently become an early free (free's operand
+            // is a name and gets its own diagnosis).
+            if (argument.value.* == .give and matched.kind != .free_object) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                    .{matched.name},
+                );
+                return .failed;
+            }
             argument_expressions[index] = argument.value;
         }
         const arguments = (try self.lowerOperands(argument_expressions[0..call.arguments.len])) orelse
@@ -3519,6 +3621,7 @@ const FunctionBuilder = struct {
 
         // Argument and result typing per builtin.
         var result: Type = .none;
+        var extra_argument: ?Register = null;
         switch (matched.kind) {
             .abs => {
                 if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes Int or Float");
@@ -3599,6 +3702,9 @@ const FunctionBuilder = struct {
                     return .failed;
                 }
                 found.info.poisoned = .freed;
+                // Free names its binding so the runtime can verify
+                // this name still owns the object (S6, S23).
+                extra_argument = try self.emit(.{ .const_int = found.info.local }, .int);
                 result = .none;
             },
             .str_value => {
@@ -3757,8 +3863,10 @@ const FunctionBuilder = struct {
             return .failed;
         }
 
-        const registers = try self.arena().alloc(Register, arguments.len);
-        for (arguments, registers) |value, *register| register.* = value.register;
+        const register_count = arguments.len + @intFromBool(extra_argument != null);
+        const registers = try self.arena().alloc(Register, register_count);
+        for (arguments, registers[0..arguments.len]) |value, *register| register.* = value.register;
+        if (extra_argument) |extra| registers[register_count - 1] = extra;
         return .{ .value = .{
             .register = try self.emit(.{ .intrinsic = .{ .kind = matched.kind, .arguments = registers } }, result),
             .value_type = result,

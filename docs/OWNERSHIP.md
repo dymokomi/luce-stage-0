@@ -298,6 +298,15 @@ Decisions: `pop()` hands the element to the receiver (fresh-like);
 **[NEW]**: all three of those "container frees the old element"
 behaviors.
 
+Implementation addendum (audit 2026-07-30): every container door
+enforces S21 — element stores, `append`/`insert`, struct
+construction, field assignment, give-parameters, **and list
+literals** (`[xs]` is a store like any other).  `fill` on an array
+of objects is a compile error outright: one value cannot own every
+slot — store per slot instead.  Verbs are likewise refused in pure
+borrow positions (builtin arguments, non-adopting method arguments,
+operator operands): a give must always have an owner to receive it.
+
 **S23. One object cannot end up owned twice.**
 ```luce
 func main():

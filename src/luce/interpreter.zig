@@ -265,7 +265,7 @@ const Machine = struct {
                         continue :dispatch;
                     },
                     .intrinsic => |operation| {
-                        registers[item] = self.intrinsic(operation, registers) catch |mistake|
+                        registers[item] = self.intrinsic(operation, registers, frame.serial) catch |mistake|
                             return self.caught(mistake);
                     },
                     .jump => |target| {
@@ -311,10 +311,12 @@ const Machine = struct {
     /// statement temporary; `container` — an element some container
     /// adopted and frees with itself; `binding` — a named local of one
     /// specific call frame, released when that scope exits.
+    const OwnedBy = struct { serial: u32, local: u32 };
+
     const Owner = union(enum) {
         loose,
         container,
-        binding: struct { serial: u32, local: u32 },
+        binding: OwnedBy,
     };
 
     const HeapObject = struct {
@@ -441,10 +443,12 @@ const Machine = struct {
         }
     }
 
-    /// Giving an object-carrying struct checks every filled field the
-    /// way give checks a single object (S23, S27); unfilled fields are
+    /// give/free verification (S23): never an object a container
+    /// owns, and — when the verb names an owned binding — only an
+    /// object that binding still owns (an alias may have moved it).
+    /// Struct values check every filled field; unfilled fields are
     /// simply carried along.
-    fn checkGivable(self: *Machine, value: RuntimeValue) EvalError!void {
+    fn checkGivable(self: *Machine, value: RuntimeValue, expected: ?OwnedBy) EvalError!void {
         switch (value) {
             .object => |handle| {
                 if (handle.isNull()) return;
@@ -452,8 +456,16 @@ const Machine = struct {
                 const found = &self.heap.items[handle.index];
                 if (!found.alive) return self.failure(.use_after_free);
                 if (found.owner == .container) return self.failure(.not_owned);
+                if (expected) |owner| {
+                    if (!(found.owner == .binding and
+                        found.owner.binding.serial == owner.serial and
+                        found.owner.binding.local == owner.local))
+                    {
+                        return self.failure(.not_owned);
+                    }
+                }
             },
-            .strukt => |fields| for (fields) |field| try self.checkGivable(field),
+            .strukt => |fields| for (fields) |field| try self.checkGivable(field, expected),
             else => {},
         }
     }
@@ -751,6 +763,7 @@ const Machine = struct {
         self: *Machine,
         operation: ir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
+        serial: u32,
     ) EvalError!RuntimeValue {
         const arguments = operation.arguments;
         switch (operation.kind) {
@@ -955,25 +968,34 @@ const Machine = struct {
                 return .{ .int = array.dims[@intCast(axis)] };
             },
             .free_object => {
+                // Only the named owner frees (S6, S23): a second
+                // argument carries the binding to verify against.
                 const value = registers[arguments[0]];
-                const object = try self.resolve(value);
-                // Only owners free: an object living in a container is
-                // freed by the container, never by an alias (S22, S23).
-                if (object.owner == .container) return self.failure(.not_owned);
+                _ = try self.resolve(value);
+                const expected: ?OwnedBy = if (arguments.len == 2)
+                    .{ .serial = serial, .local = @intCast(registers[arguments[1]].int) }
+                else
+                    null;
+                try self.checkGivable(value, expected);
                 self.freeObject(value.object.index);
                 return .none;
             },
             .give_object => {
-                // The one dynamic ownership check (S23): giving what a
-                // container owns would create a second owner.  Verbs
-                // demand an object, so an unfilled slot traps (S42).
+                // The dynamic ownership check (S23): giving what a
+                // container owns — or what the named binding no longer
+                // owns — would forge a second owner.  Verbs demand an
+                // object, so an unfilled slot traps (S42).
                 const value = registers[arguments[0]];
+                const expected: ?OwnedBy = if (arguments.len == 2)
+                    .{ .serial = serial, .local = @intCast(registers[arguments[1]].int) }
+                else
+                    null;
                 switch (value) {
                     .object => {
-                        const object = try self.resolve(value);
-                        if (object.owner == .container) return self.failure(.not_owned);
+                        _ = try self.resolve(value);
+                        try self.checkGivable(value, expected);
                     },
-                    .strukt => try self.checkGivable(value),
+                    .strukt => try self.checkGivable(value, expected),
                     else => unreachable,
                 }
                 return value;

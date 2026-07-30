@@ -1345,3 +1345,156 @@ test "S43: an unfilled slot frees nothing; a filled one frees normally" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audit regressions: container doors the first release missed
+// ---------------------------------------------------------------------------
+
+test "audit: fill on arrays of objects is refused — one value cannot own every slot" {
+    try expectOwnError(
+        \\func main():
+        \\    var arr = new Array(List(Int), 2)
+        \\    arr.fill([9])
+        \\
+    );
+    try expectOwnError(
+        \\struct Bag:
+        \\    items: List(Int)
+        \\
+        \\func main():
+        \\    var arr = new Array(Bag, 2)
+        \\    arr.fill(Bag(items = [1]))
+        \\
+    );
+    // Value elements fill exactly as before.
+    try expectClean(
+        \\func main():
+        \\    var arr = new Array(Int, 4)
+        \\    arr.fill(7)
+        \\    assert(arr[3] == 7)
+        \\    var cells = new Array(List(Int), 2)
+        \\    cells[0] = [1]
+        \\    cells[1] = [2]
+        \\    assert(cells[1][0] == 2)
+        \\
+    );
+}
+
+test "audit: list literals are container doors too (S21)" {
+    // A bare name in a literal is refused...
+    try expectOwnError(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var a = [xs]
+        \\
+    );
+    // ...which keeps a borrowing callee from adopting the caller's
+    // object (S11, S12).
+    try expectOwnError(
+        \\func keepit(hits: List(Int)):
+        \\    var wrapped = [hits]
+        \\
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    keepit(xs)
+        \\    assert(len(xs) == 2)
+        \\
+    );
+    // Carrying structs need the verb here as well (S27).
+    try expectOwnError(
+        \\struct Bag:
+        \\    items: List(Int)
+        \\
+        \\func main():
+        \\    var bag = Bag(items = [1])
+        \\    var bags = [bag]
+        \\
+    );
+    // give, copy, and fresh values open the door.
+    try expectClean(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    var kept = [give xs]
+        \\    var seed = [3]
+        \\    var doubled = [copy seed, [4]]
+        \\    seed.append(5)
+        \\    assert(len(kept[0]) == 2)
+        \\    assert(len(doubled[0]) == 1)
+        \\    assert(len(seed) == 2)
+        \\
+    );
+}
+
+test "audit: the S30 guard sees while conditions" {
+    try expectOwnError(
+        \\func eat(xs: give List(Int)) -> Int:
+        \\    return len(xs)
+        \\
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    var n = 0
+        \\    while eat(give xs) > 0:
+        \\        n = n + 1
+        \\
+    );
+}
+
+test "audit: give in a borrow position has no owner to receive it" {
+    // Builtins borrow.
+    try expectOwnError(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let n = len(give xs)
+        \\
+    );
+    // Non-adopting method arguments borrow.
+    try expectOwnError(
+        \\func main():
+        \\    var xs = new List(List(Int))
+        \\    xs.append([1])
+        \\    var ys = [1]
+        \\    let same = xs.contains(give ys)
+        \\
+    );
+    // Operators borrow.
+    try expectOwnError(
+        \\func main():
+        \\    var xs = [1]
+        \\    var ys = [1]
+        \\    let same = give xs == ys
+        \\
+    );
+}
+
+test "audit: a stale owner cannot free what an alias gave away" {
+    try expectTrap(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let a = xs
+        \\    let s = give a
+        \\    free(xs)
+        \\
+    , .not_owned);
+}
+
+test "audit: reassigning the iterated name mid-loop is a compile error" {
+    try expectOwnError(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    for x in xs:
+        \\        xs = [9]
+        \\
+    );
+    // The lock lifts when the loop ends.
+    try expectClean(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var total = 0
+        \\    for x in xs:
+        \\        total = total + x
+        \\    xs = [9]
+        \\    assert(total == 6)
+        \\    assert(xs[0] == 9)
+        \\
+    );
+}
