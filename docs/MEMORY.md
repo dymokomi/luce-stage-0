@@ -157,13 +157,42 @@ sigils without lifetime annotations), Nim ARC (move-on-last-use as a
 pure optimization later), Lobster/Perceus (compile-time RC elision if
 `share` ever needs to get fast).
 
-**Open questions specific to this sketch:**
-1. Struct fields: does binding a construction (`var bag = Bag(items =
-   [1, 2])`) walk and own the fresh objects reachable through it?
-   (Lean: yes at construction; borrowed fields stay borrows.)
-2. After `give x`, is `x` readable as a borrow (lean: yes, dynamic
-   trap if the owner died) or poisoned at compile time?
-3. Exact definition of the statement/expression scope for unbound
-   temporaries.
-4. Whether `defer` still arrives independently for host cleanup
-   (terminal state, files) — it is no longer needed for memory.
+**Decided (July 2026):**
+- The default is the clean version: fresh objects belong to the
+  binding that receives them, die at scope exit or reassignment,
+  `return` moves, containers adopt fresh values.  Casual code has
+  zero memory words.
+- `let x = y` — two names for the same object; no move, no ceremony.
+- `give` is for people who know what they are doing, so it is
+  strict: after `give y` (including `let x = give y`), touching `y`
+  is a **compile error**.  Because storing a bare name is never
+  legal (only `give`, `copy`, or fresh), containers always own their
+  object elements — dangling container elements are unrepresentable.
+
+**Still open, most important first:**
+1. Function boundaries: parameters take ownership only when the
+   signature says so (`hits: give List(Int)`) and the call site must
+   match (`store(give my_hits)`); borrows are the default.
+   Recommended; Mojo-precedent.  A callee may only `give`/keep/
+   return what it owns.
+2. Returning borrows: forbidden — return what you own, or
+   `return copy xs`.  Recommended.
+3. Struct fields: own-at-construction (`var bag = Bag(items = [1,
+   2])` owns the list through the struct); field assignment follows
+   the verb rule (`bag.items = give xs`); struct copies alias.
+   Recommended over "structs never own", which cripples real data
+   structures.
+4. `give` under control flow: conservative source-order poisoning
+   (from the `give` line to end of scope, branch-insensitive), and
+   giving an outer-declared name from inside a loop body is a
+   compile error.  `copy` is always the out.
+5. The one dynamic backstop: aliases can dodge static poisoning
+   (`let y = xs`, give `xs` away, then `give y`), so `give` verifies
+   binding-ownership at run time — trap in safe builds, UB in a
+   future ReleaseFast, exactly Zig's posture.
+6. Confirmations pending: reassigning an owning `var` frees the old
+   object immediately; `free` survives as early release on owned
+   names and poisons like `give`; `share` stays out of v1; final
+   naming (`give`/`move`, `copy`/`clone`).
+7. Exact statement-scope definition for unbound temporaries, and
+   whether `defer` still arrives separately for host cleanup.
