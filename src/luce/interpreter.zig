@@ -93,15 +93,54 @@ const Machine = struct {
     heap: std.ArrayList(HeapObject) = .empty,
     live_objects: u32 = 0,
     next_serial: u32 = 1,
+    pending_trap: ?backend.Trap = null,
 
-    fn terminal(self: *Machine) ?backend.Terminal {
-        const host = self.host orelse return null;
-        return host.terminal;
-    }
+    /// Instruction handlers fail with error.Trap after recording the
+    /// trap here; the dispatch loop catches once (`caught`).  This is
+    /// the ceval-style pending-error pattern — no per-operation
+    /// outcome plumbing.
+    const EvalError = error{ OutOfMemory, Trap };
 
     fn trap(self: *Machine, code: ir.TrapCode) CallOutcome {
         _ = self;
         return .{ .trap = .{ .code = code, .message = code.message() } };
+    }
+
+    fn failure(self: *Machine, code: ir.TrapCode) EvalError {
+        self.pending_trap = .{ .code = code, .message = code.message() };
+        return error.Trap;
+    }
+
+    fn failureMessage(self: *Machine, code: ir.TrapCode, message: []const u8) EvalError {
+        self.pending_trap = .{ .code = code, .message = message };
+        return error.Trap;
+    }
+
+    fn caught(self: *Machine, mistake: EvalError) error{OutOfMemory}!CallOutcome {
+        return switch (mistake) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.Trap => .{ .trap = self.pending_trap.? },
+        };
+    }
+
+    /// Resolve a handle to its live object, or fail: null slots trap
+    /// null_object, freed ones use_after_free.
+    fn resolve(self: *Machine, value: RuntimeValue) EvalError!*HeapObject {
+        const handle = value.object;
+        if (handle.isNull()) return self.failure(.null_object);
+        if (handle.index >= self.heap.items.len) return self.failure(.use_after_free);
+        const found = &self.heap.items[handle.index];
+        if (!found.alive) return self.failure(.use_after_free);
+        return found;
+    }
+
+    fn service(self: *Machine) EvalError!backend.Host {
+        return self.host orelse return self.failure(.host_unavailable);
+    }
+
+    fn terminal(self: *Machine) EvalError!backend.Terminal {
+        const host = try self.service();
+        return host.terminal orelse return self.failure(.host_unavailable);
     }
 
     fn pushFrame(
@@ -161,10 +200,8 @@ const Machine = struct {
                     .input_load => |port| registers[item] = self.inputs[port].value,
                     .output_store => |store| self.outputs[store.port] = registers[store.value],
                     .binary => |operation| {
-                        switch (try self.binary(operation, registers)) {
-                            .value => |value| registers[item] = value,
-                            .trap => |failed| return .{ .trap = failed },
-                        }
+                        registers[item] = self.binary(operation, registers) catch |mistake|
+                            return self.caught(mistake);
                     },
                     .unary => |operation| {
                         switch (operation.op) {
@@ -212,10 +249,8 @@ const Machine = struct {
                         registers[item] = .{ .strukt = fields };
                     },
                     .heap_new => |new| {
-                        switch (try self.allocateObject(new, registers)) {
-                            .value => |value| registers[item] = value,
-                            .trap => |failed| return .{ .trap = failed },
-                        }
+                        registers[item] = self.allocateObject(new, registers) catch |mistake|
+                            return self.caught(mistake);
                     },
                     .object_bind => |bind| self.bindValue(registers[bind.value], frame.serial, bind.local),
                     .object_unbind => |unbind| self.unbindValue(registers[unbind.value], frame.serial, unbind.local),
@@ -230,10 +265,8 @@ const Machine = struct {
                         continue :dispatch;
                     },
                     .intrinsic => |operation| {
-                        switch (try self.intrinsic(operation, registers)) {
-                            .value => |value| registers[item] = value,
-                            .trap => |failed| return .{ .trap = failed },
-                        }
+                        registers[item] = self.intrinsic(operation, registers) catch |mistake|
+                            return self.caught(mistake);
                     },
                     .jump => |target| {
                         frame.block = target;
@@ -408,54 +441,38 @@ const Machine = struct {
         }
     }
 
-    const GiveCheck = union(enum) { fine, failed: ir.TrapCode };
-
     /// Giving an object-carrying struct checks every filled field the
     /// way give checks a single object (S23, S27); unfilled fields are
     /// simply carried along.
-    fn givableFields(self: *Machine, value: RuntimeValue) GiveCheck {
+    fn checkGivable(self: *Machine, value: RuntimeValue) EvalError!void {
         switch (value) {
             .object => |handle| {
-                if (handle.isNull()) return .fine;
-                if (handle.index >= self.heap.items.len) return .{ .failed = .use_after_free };
-                const object = &self.heap.items[handle.index];
-                if (!object.alive) return .{ .failed = .use_after_free };
-                if (object.owner == .container) return .{ .failed = .not_owned };
-                return .fine;
+                if (handle.isNull()) return;
+                if (handle.index >= self.heap.items.len) return self.failure(.use_after_free);
+                const found = &self.heap.items[handle.index];
+                if (!found.alive) return self.failure(.use_after_free);
+                if (found.owner == .container) return self.failure(.not_owned);
             },
-            .strukt => |fields| {
-                for (fields) |field| {
-                    switch (self.givableFields(field)) {
-                        .fine => {},
-                        .failed => |code| return .{ .failed = code },
-                    }
-                }
-                return .fine;
-            },
-            else => return .fine,
+            .strukt => |fields| for (fields) |field| try self.checkGivable(field),
+            else => {},
         }
     }
-
-    const CopyResult = union(enum) { value: RuntimeValue, failed: ir.TrapCode };
 
     /// Deep copy (S31): duplicate the object and everything it owns,
     /// recursively.  Values pass through; unfilled slots stay unfilled
     /// (only the copy verb itself demands a filled top-level object).
-    fn deepCopy(self: *Machine, value: RuntimeValue) error{OutOfMemory}!CopyResult {
+    fn deepCopy(self: *Machine, value: RuntimeValue) EvalError!RuntimeValue {
         switch (value) {
             .object => |handle| {
-                if (handle.isNull()) return .{ .value = value };
-                if (handle.index >= self.heap.items.len) return .{ .failed = .use_after_free };
-                if (!self.heap.items[handle.index].alive) return .{ .failed = .use_after_free };
+                if (handle.isNull()) return value;
+                if (handle.index >= self.heap.items.len) return self.failure(.use_after_free);
+                if (!self.heap.items[handle.index].alive) return self.failure(.use_after_free);
                 const data: HeapObject.Data = switch (self.heap.items[handle.index].data) {
                     .list => |list| blk: {
                         var copied: std.ArrayList(RuntimeValue) = .empty;
                         try copied.ensureTotalCapacity(self.arena, list.items.len);
                         for (list.items) |item| {
-                            switch (try self.deepCopy(item)) {
-                                .value => |duplicate| copied.appendAssumeCapacity(duplicate),
-                                .failed => |code| return .{ .failed = code },
-                            }
+                            copied.appendAssumeCapacity(try self.deepCopy(item));
                         }
                         break :blk .{ .list = copied };
                     },
@@ -463,13 +480,10 @@ const Machine = struct {
                         var copied: std.ArrayList(MapEntry) = .empty;
                         try copied.ensureTotalCapacity(self.arena, map.items.len);
                         for (map.items) |entry| {
-                            switch (try self.deepCopy(entry.value)) {
-                                .value => |duplicate| copied.appendAssumeCapacity(.{
-                                    .key = entry.key,
-                                    .value = duplicate,
-                                }),
-                                .failed => |code| return .{ .failed = code },
-                            }
+                            copied.appendAssumeCapacity(.{
+                                .key = entry.key,
+                                .value = try self.deepCopy(entry.value),
+                            });
                         }
                         break :blk .{ .map = copied };
                     },
@@ -477,10 +491,7 @@ const Machine = struct {
                         const dims = try self.arena.dupe(i64, array.dims);
                         const elements = try self.arena.alloc(RuntimeValue, array.elements.len);
                         for (array.elements, elements) |item, *slot| {
-                            switch (try self.deepCopy(item)) {
-                                .value => |duplicate| slot.* = duplicate,
-                                .failed => |code| return .{ .failed = code },
-                            }
+                            slot.* = try self.deepCopy(item);
                         }
                         break :blk .{ .array = .{ .dims = dims, .elements = elements } };
                     },
@@ -501,19 +512,16 @@ const Machine = struct {
                     .array => |array| for (array.elements) |item| self.adoptValue(item),
                     .builder => {},
                 }
-                return .{ .value = duplicate };
+                return duplicate;
             },
             .strukt => |fields| {
                 const copied = try self.arena.alloc(RuntimeValue, fields.len);
                 for (fields, copied) |field, *slot| {
-                    switch (try self.deepCopy(field)) {
-                        .value => |duplicate| slot.* = duplicate,
-                        .failed => |code| return .{ .failed = code },
-                    }
+                    slot.* = try self.deepCopy(field);
                 }
-                return .{ .value = .{ .strukt = copied } };
+                return .{ .strukt = copied };
             },
-            else => return .{ .value = value },
+            else => return value,
         }
     }
 
@@ -525,7 +533,7 @@ const Machine = struct {
         self: *Machine,
         new: ir.Instruction.HeapNew,
         registers: []const RuntimeValue,
-    ) error{OutOfMemory}!CallOutcome {
+    ) EvalError!RuntimeValue {
         const data: HeapObject.Data = switch (self.program.heap_types[new.heap]) {
             .list => .{ .list = .empty },
             .map => .{ .map = .empty },
@@ -535,11 +543,11 @@ const Machine = struct {
                 var total: usize = 1;
                 for (new.dims, dims) |register, *dimension| {
                     const size = registers[register].int;
-                    if (size < 0 or size > max_array_elements) return self.trap(.index_bounds);
+                    if (size < 0 or size > max_array_elements) return self.failure(.index_bounds);
                     dimension.* = size;
                     total = std.math.mul(usize, total, @intCast(size)) catch
-                        return self.trap(.index_bounds);
-                    if (total > max_array_elements) return self.trap(.index_bounds);
+                        return self.failure(.index_bounds);
+                    if (total > max_array_elements) return self.failure(.index_bounds);
                 }
                 const elements = try self.arena.alloc(RuntimeValue, total);
                 const zero = try self.zeroValue(shape.element);
@@ -550,21 +558,7 @@ const Machine = struct {
         const index: u32 = @intCast(self.heap.items.len);
         try self.heap.append(self.arena, .{ .data = data });
         self.live_objects += 1;
-        return .{ .value = .{ .object = .{ .index = index } } };
-    }
-
-    const ResolvedObject = union(enum) {
-        object: *HeapObject,
-        failed: ir.TrapCode,
-    };
-
-    fn resolveObject(self: *Machine, value: RuntimeValue) ResolvedObject {
-        const handle = value.object;
-        if (handle.isNull()) return .{ .failed = .null_object };
-        if (handle.index >= self.heap.items.len) return .{ .failed = .use_after_free };
-        const object = &self.heap.items[handle.index];
-        if (!object.alive) return .{ .failed = .use_after_free };
-        return .{ .object = object };
+        return .{ .object = .{ .index = index } };
     }
 
     /// The zero value a fresh array element carries, per element type.
@@ -623,12 +617,12 @@ const Machine = struct {
         self: *Machine,
         operation: ir.Instruction.Binary,
         registers: []const RuntimeValue,
-    ) error{OutOfMemory}!CallOutcome {
+    ) EvalError!RuntimeValue {
         const left = registers[operation.left];
         const right = registers[operation.right];
         switch (operation.op) {
             .add, .subtract, .multiply, .divide, .remainder => {},
-            else => return .{ .value = .{ .boolean = self.compare(operation.op, left, right) } },
+            else => return .{ .boolean = self.compare(operation.op, left, right) },
         }
 
         switch (left) {
@@ -637,32 +631,32 @@ const Machine = struct {
                 switch (operation.op) {
                     .add => {
                         const result = @addWithOverflow(left_int, right_int);
-                        if (result[1] != 0) return self.trap(.integer_overflow);
-                        return .{ .value = .{ .int = result[0] } };
+                        if (result[1] != 0) return self.failure(.integer_overflow);
+                        return .{ .int = result[0] };
                     },
                     .subtract => {
                         const result = @subWithOverflow(left_int, right_int);
-                        if (result[1] != 0) return self.trap(.integer_overflow);
-                        return .{ .value = .{ .int = result[0] } };
+                        if (result[1] != 0) return self.failure(.integer_overflow);
+                        return .{ .int = result[0] };
                     },
                     .multiply => {
                         const result = @mulWithOverflow(left_int, right_int);
-                        if (result[1] != 0) return self.trap(.integer_overflow);
-                        return .{ .value = .{ .int = result[0] } };
+                        if (result[1] != 0) return self.failure(.integer_overflow);
+                        return .{ .int = result[0] };
                     },
                     .divide => {
-                        if (right_int == 0) return self.trap(.divide_by_zero);
+                        if (right_int == 0) return self.failure(.divide_by_zero);
                         if (left_int == std.math.minInt(i64) and right_int == -1) {
-                            return self.trap(.integer_overflow);
+                            return self.failure(.integer_overflow);
                         }
-                        return .{ .value = .{ .int = @divTrunc(left_int, right_int) } };
+                        return .{ .int = @divTrunc(left_int, right_int) };
                     },
                     .remainder => {
-                        if (right_int == 0) return self.trap(.divide_by_zero);
+                        if (right_int == 0) return self.failure(.divide_by_zero);
                         if (left_int == std.math.minInt(i64) and right_int == -1) {
-                            return self.trap(.integer_overflow);
+                            return self.failure(.integer_overflow);
                         }
-                        return .{ .value = .{ .int = @rem(left_int, right_int) } };
+                        return .{ .int = @rem(left_int, right_int) };
                     },
                     else => unreachable,
                 }
@@ -679,12 +673,12 @@ const Machine = struct {
                     .remainder => @rem(left_float, right_float),
                     else => unreachable,
                 };
-                return .{ .value = .{ .float = computed } };
+                return .{ .float = computed };
             },
             .string => |left_string| {
                 // The analyzer only admits + for strings.
                 const joined = try std.mem.concat(self.arena, u8, &.{ left_string, right.string });
-                return .{ .value = .{ .string = joined } };
+                return .{ .string = joined };
             },
             else => unreachable,
         }
@@ -757,15 +751,15 @@ const Machine = struct {
         self: *Machine,
         operation: ir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
-    ) error{OutOfMemory}!CallOutcome {
+    ) EvalError!RuntimeValue {
         const arguments = operation.arguments;
         switch (operation.kind) {
             .abs => switch (registers[arguments[0]]) {
                 .int => |value| {
-                    if (value == std.math.minInt(i64)) return self.trap(.integer_overflow);
-                    return .{ .value = .{ .int = @intCast(@abs(value)) } };
+                    if (value == std.math.minInt(i64)) return self.failure(.integer_overflow);
+                    return .{ .int = @intCast(@abs(value)) };
                 },
-                .float => |value| return .{ .value = .{ .float = @abs(value) } },
+                .float => |value| return .{ .float = @abs(value) },
                 else => unreachable,
             },
             .min, .max => {
@@ -774,12 +768,12 @@ const Machine = struct {
                     .int => |left| {
                         const right = registers[arguments[1]].int;
                         const chosen = if (wants_minimum) @min(left, right) else @max(left, right);
-                        return .{ .value = .{ .int = chosen } };
+                        return .{ .int = chosen };
                     },
                     .float => |left| {
                         const right = registers[arguments[1]].float;
                         const chosen = if (wants_minimum) @min(left, right) else @max(left, right);
-                        return .{ .value = .{ .float = chosen } };
+                        return .{ .float = chosen };
                     },
                     else => unreachable,
                 }
@@ -788,27 +782,24 @@ const Machine = struct {
                 .int => |value| {
                     const low = registers[arguments[1]].int;
                     const high = registers[arguments[2]].int;
-                    return .{ .value = .{ .int = @min(@max(value, low), high) } };
+                    return .{ .int = @min(@max(value, low), high) };
                 },
                 .float => |value| {
                     const low = registers[arguments[1]].float;
                     const high = registers[arguments[2]].float;
-                    return .{ .value = .{ .float = @min(@max(value, low), high) } };
+                    return .{ .float = @min(@max(value, low), high) };
                 },
                 else => unreachable,
             },
-            .sqrt => return .{ .value = .{ .float = @sqrt(registers[arguments[0]].float) } },
-            .floor => return .{ .value = .{ .float = @floor(registers[arguments[0]].float) } },
-            .ceil => return .{ .value = .{ .float = @ceil(registers[arguments[0]].float) } },
+            .sqrt => return .{ .float = @sqrt(registers[arguments[0]].float) },
+            .floor => return .{ .float = @floor(registers[arguments[0]].float) },
+            .ceil => return .{ .float = @ceil(registers[arguments[0]].float) },
             .len => {
                 const measured: usize = switch (registers[arguments[0]]) {
                     .string => |value| value.len,
                     .bytes => |value| value.len,
                     .object => blk: {
-                        const object = switch (self.resolveObject(registers[arguments[0]])) {
-                            .object => |found| found,
-                            .failed => |code| return self.trap(code),
-                        };
+                        const object = try self.resolve(registers[arguments[0]]);
                         break :blk switch (object.data) {
                             .list => |list| list.items.len,
                             .map => |map| map.items.len,
@@ -818,45 +809,39 @@ const Machine = struct {
                     },
                     else => unreachable,
                 };
-                return .{ .value = .{ .int = @intCast(measured) } };
+                return .{ .int = @intCast(measured) };
             },
             .null_object => {
-                return .{ .value = .{ .object = backend.ObjectHandle.null_object } };
+                return .{ .object = backend.ObjectHandle.null_object };
             },
             .index_get => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 switch (object.data) {
                     .list => |list| {
                         const index = registers[arguments[1]].int;
-                        if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
-                        return .{ .value = list.items[@intCast(index)] };
+                        if (index < 0 or index >= list.items.len) return self.failure(.index_bounds);
+                        return list.items[@intCast(index)];
                     },
                     .map => |map| {
                         const at = findEntry(map.items, registers[arguments[1]]) orelse
-                            return self.trap(.key_missing);
-                        return .{ .value = map.items[at].value };
+                            return self.failure(.key_missing);
+                        return map.items[at].value;
                     },
                     .array => |array| {
                         const flat = flattenIndex(array.dims, registers, arguments[1..]) orelse
-                            return self.trap(.index_bounds);
-                        return .{ .value = array.elements[flat] };
+                            return self.failure(.index_bounds);
+                        return array.elements[flat];
                     },
                     .builder => unreachable,
                 }
             },
             .index_set => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const value = registers[arguments[arguments.len - 1]];
                 switch (object.data) {
                     .list => |*list| {
                         const index = registers[arguments[1]].int;
-                        if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
+                        if (index < 0 or index >= list.items.len) return self.failure(.index_bounds);
                         // An element overwrite frees the old owned
                         // element (S22).
                         self.freeValue(list.items[@intCast(index)]);
@@ -873,47 +858,37 @@ const Machine = struct {
                     },
                     .array => |array| {
                         const flat = flattenIndex(array.dims, registers, arguments[1 .. arguments.len - 1]) orelse
-                            return self.trap(.index_bounds);
+                            return self.failure(.index_bounds);
                         self.freeValue(array.elements[flat]);
                         array.elements[flat] = value;
                     },
                     .builder => unreachable,
                 }
                 self.adoptValue(value);
-                return .{ .value = .none };
+                return .none;
             },
             .list_slice => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const list = object.data.list;
                 const start = registers[arguments[1]].int;
                 const end = registers[arguments[2]].int;
-                if (start < 0 or end < start or end > list.items.len) return self.trap(.index_bounds);
+                if (start < 0 or end < start or end > list.items.len) return self.failure(.index_bounds);
                 // Slices copy — including deep copies of object
                 // elements, since two containers can never own one
                 // object (S23, S31).
                 var copied: std.ArrayList(RuntimeValue) = .empty;
                 for (list.items[@intCast(start)..@intCast(end)]) |element| {
-                    switch (try self.deepCopy(element)) {
-                        .value => |duplicate| {
-                            try copied.append(self.arena, duplicate);
-                            self.adoptValue(duplicate);
-                        },
-                        .failed => |code| return self.trap(code),
-                    }
+                    const duplicate = try self.deepCopy(element);
+                    try copied.append(self.arena, duplicate);
+                    self.adoptValue(duplicate);
                 }
                 const index: u32 = @intCast(self.heap.items.len);
                 try self.heap.append(self.arena, .{ .data = .{ .list = copied } });
                 self.live_objects += 1;
-                return .{ .value = .{ .object = .{ .index = index } } };
+                return .{ .object = .{ .index = index } };
             },
             .append_value => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 switch (object.data) {
                     .list => |*list| {
                         try list.append(self.arena, registers[arguments[1]]);
@@ -922,41 +897,32 @@ const Machine = struct {
                     .builder => |*builder| try builder.appendSlice(self.arena, registers[arguments[1]].string),
                     else => unreachable,
                 }
-                return .{ .value = .none };
+                return .none;
             },
             .pop_value => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const list = &object.data.list;
-                const taken = list.pop() orelse return self.trap(.empty_collection);
+                const taken = list.pop() orelse return self.failure(.empty_collection);
                 // pop hands the element out of the container (S22);
                 // whatever receives it owns it next.
                 self.loosenValue(taken);
-                return .{ .value = taken };
+                return taken;
             },
             .insert_value => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const list = &object.data.list;
                 const index = registers[arguments[1]].int;
-                if (index < 0 or index > list.items.len) return self.trap(.index_bounds);
+                if (index < 0 or index > list.items.len) return self.failure(.index_bounds);
                 try list.insert(self.arena, @intCast(index), registers[arguments[2]]);
                 self.adoptValue(registers[arguments[2]]);
-                return .{ .value = .none };
+                return .none;
             },
             .remove_entry => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 switch (object.data) {
                     .list => |*list| {
                         const index = registers[arguments[1]].int;
-                        if (index < 0 or index >= list.items.len) return self.trap(.index_bounds);
+                        if (index < 0 or index >= list.items.len) return self.failure(.index_bounds);
                         // Removing an owned element frees it (S22).
                         self.freeValue(list.orderedRemove(@intCast(index)));
                     },
@@ -967,47 +933,35 @@ const Machine = struct {
                     },
                     else => unreachable,
                 }
-                return .{ .value = .none };
+                return .none;
             },
             .has_key => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const found = findEntry(object.data.map.items, registers[arguments[1]]) != null;
-                return .{ .value = .{ .boolean = found } };
+                return .{ .boolean = found };
             },
             .key_at => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const map = object.data.map;
                 const index = registers[arguments[1]].int;
-                if (index < 0 or index >= map.items.len) return self.trap(.index_bounds);
-                return .{ .value = map.items[@intCast(index)].key };
+                if (index < 0 or index >= map.items.len) return self.failure(.index_bounds);
+                return map.items[@intCast(index)].key;
             },
             .dim_size => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const array = object.data.array;
                 const axis = registers[arguments[1]].int;
-                if (axis < 0 or axis >= array.dims.len) return self.trap(.index_bounds);
-                return .{ .value = .{ .int = array.dims[@intCast(axis)] } };
+                if (axis < 0 or axis >= array.dims.len) return self.failure(.index_bounds);
+                return .{ .int = array.dims[@intCast(axis)] };
             },
             .free_object => {
                 const value = registers[arguments[0]];
-                const object = switch (self.resolveObject(value)) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(value);
                 // Only owners free: an object living in a container is
                 // freed by the container, never by an alias (S22, S23).
-                if (object.owner == .container) return self.trap(.not_owned);
+                if (object.owner == .container) return self.failure(.not_owned);
                 self.freeObject(value.object.index);
-                return .{ .value = .none };
+                return .none;
             },
             .give_object => {
                 // The one dynamic ownership check (S23): giving what a
@@ -1016,56 +970,44 @@ const Machine = struct {
                 const value = registers[arguments[0]];
                 switch (value) {
                     .object => {
-                        const object = switch (self.resolveObject(value)) {
-                            .object => |found| found,
-                            .failed => |code| return self.trap(code),
-                        };
-                        if (object.owner == .container) return self.trap(.not_owned);
+                        const object = try self.resolve(value);
+                        if (object.owner == .container) return self.failure(.not_owned);
                     },
-                    .strukt => switch (self.givableFields(value)) {
-                        .fine => {},
-                        .failed => |code| return self.trap(code),
-                    },
+                    .strukt => try self.checkGivable(value),
                     else => unreachable,
                 }
-                return .{ .value = value };
+                return value;
             },
             .copy_object => {
                 const value = registers[arguments[0]];
                 if (value == .object) {
                     // Verbs demand an object (S42): copying an
                     // unfilled or freed slot traps.
-                    switch (self.resolveObject(value)) {
-                        .object => {},
-                        .failed => |code| return self.trap(code),
-                    }
+                    _ = try self.resolve(value);
                 }
-                switch (try self.deepCopy(value)) {
-                    .value => |duplicate| return .{ .value = duplicate },
-                    .failed => |code| return self.trap(code),
-                }
+                return try self.deepCopy(value);
             },
             .str_find => {
                 const haystack = registers[arguments[0]].string;
                 const needle = registers[arguments[1]].string;
                 const found = std.mem.indexOf(u8, haystack, needle);
-                return .{ .value = .{ .int = if (found) |at| @intCast(at) else -1 } };
+                return .{ .int = if (found) |at| @intCast(at) else -1 };
             },
             .str_contains => {
                 const found = std.mem.indexOf(u8, registers[arguments[0]].string, registers[arguments[1]].string);
-                return .{ .value = .{ .boolean = found != null } };
+                return .{ .boolean = found != null };
             },
             .str_starts => {
                 const matches = std.mem.startsWith(u8, registers[arguments[0]].string, registers[arguments[1]].string);
-                return .{ .value = .{ .boolean = matches } };
+                return .{ .boolean = matches };
             },
             .str_ends => {
                 const matches = std.mem.endsWith(u8, registers[arguments[0]].string, registers[arguments[1]].string);
-                return .{ .value = .{ .boolean = matches } };
+                return .{ .boolean = matches };
             },
             .str_trim => {
                 const trimmed = std.mem.trim(u8, registers[arguments[0]].string, " \t\r\n");
-                return .{ .value = .{ .string = trimmed } };
+                return .{ .string = trimmed };
             },
             .str_lower, .str_upper => {
                 const text = registers[arguments[0]].string;
@@ -1076,13 +1018,13 @@ const Machine = struct {
                     else
                         std.ascii.toUpper(byte.*);
                 }
-                return .{ .value = .{ .string = folded } };
+                return .{ .string = folded };
             },
             .str_replace => {
                 const text = registers[arguments[0]].string;
                 const old = registers[arguments[1]].string;
                 const fresh = registers[arguments[2]].string;
-                if (old.len == 0) return .{ .value = .{ .string = text } };
+                if (old.len == 0) return .{ .string = text };
                 var replaced: std.ArrayList(u8) = .empty;
                 var at: usize = 0;
                 while (std.mem.indexOfPos(u8, text, at, old)) |found| {
@@ -1091,21 +1033,21 @@ const Machine = struct {
                     at = found + old.len;
                 }
                 try replaced.appendSlice(self.arena, text[at..]);
-                return .{ .value = .{ .string = replaced.items } };
+                return .{ .string = replaced.items };
             },
             .str_repeat => {
                 const text = registers[arguments[0]].string;
                 const times = registers[arguments[1]].int;
-                if (times <= 0 or text.len == 0) return .{ .value = .{ .string = "" } };
+                if (times <= 0 or text.len == 0) return .{ .string = "" };
                 const total = std.math.mul(usize, text.len, @intCast(times)) catch
-                    return self.trap(.string_bounds);
-                if (total > max_string_size) return self.trap(.string_bounds);
+                    return self.failure(.string_bounds);
+                if (total > max_string_size) return self.failure(.string_bounds);
                 const repeated = try self.arena.alloc(u8, total);
                 var at: usize = 0;
                 while (at < total) : (at += text.len) {
                     @memcpy(repeated[at .. at + text.len], text);
                 }
-                return .{ .value = .{ .string = repeated } };
+                return .{ .string = repeated };
             },
             .str_split => {
                 const text = registers[arguments[0]].string;
@@ -1126,13 +1068,10 @@ const Machine = struct {
                 const index: u32 = @intCast(self.heap.items.len);
                 try self.heap.append(self.arena, .{ .data = .{ .list = pieces } });
                 self.live_objects += 1;
-                return .{ .value = .{ .object = .{ .index = index } } };
+                return .{ .object = .{ .index = index } };
             },
             .list_sort, .list_reverse => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const elements: []RuntimeValue = switch (object.data) {
                     .list => |*list| list.items,
                     .array => |array| array.elements,
@@ -1143,13 +1082,10 @@ const Machine = struct {
                 } else {
                     std.sort.insertion(RuntimeValue, elements, {}, orderedBefore);
                 }
-                return .{ .value = .none };
+                return .none;
             },
             .list_find, .list_contains => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const elements: []const RuntimeValue = switch (object.data) {
                     .list => |list| list.items,
                     .array => |array| array.elements,
@@ -1163,27 +1099,21 @@ const Machine = struct {
                         break;
                     }
                 }
-                if (operation.kind == .list_find) return .{ .value = .{ .int = found } };
-                return .{ .value = .{ .boolean = found != -1 } };
+                if (operation.kind == .list_find) return .{ .int = found };
+                return .{ .boolean = found != -1 };
             },
             .list_join => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 const separator = registers[arguments[1]].string;
                 var joined: std.ArrayList(u8) = .empty;
                 for (object.data.list.items, 0..) |element, at| {
                     if (at != 0) try joined.appendSlice(self.arena, separator);
                     try joined.appendSlice(self.arena, element.string);
                 }
-                return .{ .value = .{ .string = joined.items } };
+                return .{ .string = joined.items };
             },
             .clear_object => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 switch (object.data) {
                     .list => |*list| {
                         // clear frees all owned elements (S22).
@@ -1197,13 +1127,10 @@ const Machine = struct {
                     .builder => |*builder| builder.clearRetainingCapacity(),
                     .array => unreachable,
                 }
-                return .{ .value = .none };
+                return .none;
             },
             .map_keys => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 var listed: std.ArrayList(RuntimeValue) = .empty;
                 for (object.data.map.items) |entry| {
                     try listed.append(self.arena, entry.key);
@@ -1211,221 +1138,212 @@ const Machine = struct {
                 const index: u32 = @intCast(self.heap.items.len);
                 try self.heap.append(self.arena, .{ .data = .{ .list = listed } });
                 self.live_objects += 1;
-                return .{ .value = .{ .object = .{ .index = index } } };
+                return .{ .object = .{ .index = index } };
             },
             .array_fill => {
-                const object = switch (self.resolveObject(registers[arguments[0]])) {
-                    .object => |found| found,
-                    .failed => |code| return self.trap(code),
-                };
+                const object = try self.resolve(registers[arguments[0]]);
                 @memset(object.data.array.elements, registers[arguments[1]]);
-                return .{ .value = .none };
+                return .none;
             },
             .str_value => {
                 switch (registers[arguments[0]]) {
                     .int => |value| {
                         const text = try std.fmt.allocPrint(self.arena, "{d}", .{value});
-                        return .{ .value = .{ .string = text } };
+                        return .{ .string = text };
                     },
                     .float => |value| {
                         const text = try std.fmt.allocPrint(self.arena, "{d}", .{value});
-                        return .{ .value = .{ .string = text } };
+                        return .{ .string = text };
                     },
                     .boolean => |value| {
-                        return .{ .value = .{ .string = if (value) "true" else "false" } };
+                        return .{ .string = if (value) "true" else "false" };
                     },
-                    .string => |value| return .{ .value = .{ .string = value } },
+                    .string => |value| return .{ .string = value },
                     .object => {
-                        const object = switch (self.resolveObject(registers[arguments[0]])) {
-                            .object => |found| found,
-                            .failed => |code| return self.trap(code),
-                        };
+                        const object = try self.resolve(registers[arguments[0]]);
                         const text = try self.arena.dupe(u8, object.data.builder.items);
-                        return .{ .value = .{ .string = text } };
+                        return .{ .string = text };
                     },
                     else => unreachable,
                 }
             },
             .parse_int => {
                 const text = registers[arguments[0]].string;
-                const value = std.fmt.parseInt(i64, text, 10) catch return self.trap(.parse_failed);
-                return .{ .value = .{ .int = value } };
+                const value = std.fmt.parseInt(i64, text, 10) catch return self.failure(.parse_failed);
+                return .{ .int = value };
             },
             .parse_float => {
                 const text = registers[arguments[0]].string;
-                const value = std.fmt.parseFloat(f64, text) catch return self.trap(.parse_failed);
-                if (std.math.isNan(value) or std.math.isInf(value)) return self.trap(.parse_failed);
-                return .{ .value = .{ .float = value } };
+                const value = std.fmt.parseFloat(f64, text) catch return self.failure(.parse_failed);
+                if (std.math.isNan(value) or std.math.isInf(value)) return self.failure(.parse_failed);
+                return .{ .float = value };
             },
             .chr_code => {
                 const code = registers[arguments[0]].int;
-                if (code < 0 or code > 0x10FFFF) return self.trap(.bad_codepoint);
+                if (code < 0 or code > 0x10FFFF) return self.failure(.bad_codepoint);
                 const codepoint: u21 = @intCast(code);
                 const encoded = try self.arena.alloc(u8, 4);
                 const length = std.unicode.utf8Encode(codepoint, encoded) catch
-                    return self.trap(.bad_codepoint);
-                return .{ .value = .{ .string = encoded[0..length] } };
+                    return self.failure(.bad_codepoint);
+                return .{ .string = encoded[0..length] };
             },
             .ord_text => {
                 const text = registers[arguments[0]].string;
-                if (text.len == 0) return self.trap(.bad_codepoint);
+                if (text.len == 0) return self.failure(.bad_codepoint);
                 const length = std.unicode.utf8ByteSequenceLength(text[0]) catch
-                    return self.trap(.bad_codepoint);
-                if (text.len < length) return self.trap(.bad_codepoint);
+                    return self.failure(.bad_codepoint);
+                if (text.len < length) return self.failure(.bad_codepoint);
                 const codepoint = std.unicode.utf8Decode(text[0..length]) catch
-                    return self.trap(.bad_codepoint);
-                return .{ .value = .{ .int = codepoint } };
+                    return self.failure(.bad_codepoint);
+                return .{ .int = codepoint };
             },
             .string_slice => {
                 const value = registers[arguments[0]].string;
                 const start = registers[arguments[1]].int;
                 const end = registers[arguments[2]].int;
                 if (start < 0 or end < start or end > value.len) {
-                    return self.trap(.string_bounds);
+                    return self.failure(.string_bounds);
                 }
                 const start_index: usize = @intCast(start);
                 const end_index: usize = @intCast(end);
                 if (!isStringBoundary(value, start_index) or
                     !isStringBoundary(value, end_index))
                 {
-                    return self.trap(.string_boundary);
+                    return self.failure(.string_boundary);
                 }
-                return .{ .value = .{ .string = value[start_index..end_index] } };
+                return .{ .string = value[start_index..end_index] };
             },
             .string_byte => {
                 const value = registers[arguments[0]].string;
                 const index = registers[arguments[1]].int;
-                if (index < 0 or index >= value.len) return self.trap(.string_bounds);
-                return .{ .value = .{ .int = value[@intCast(index)] } };
+                if (index < 0 or index >= value.len) return self.failure(.string_bounds);
+                return .{ .int = value[@intCast(index)] };
             },
             .assert_true => {
-                if (!registers[arguments[0]].boolean) return self.trap(.assertion_failed);
-                return .{ .value = .none };
+                if (!registers[arguments[0]].boolean) return self.failure(.assertion_failed);
+                return .none;
             },
             .trap_message => {
-                return .{ .trap = .{
-                    .code = .explicit_trap,
-                    .message = registers[arguments[0]].string,
-                } };
+                return self.failureMessage(.explicit_trap, registers[arguments[0]].string);
             },
             .print => {
-                const host = self.host orelse return self.trap(.host_unavailable);
-                const callback = host.printFn orelse return self.trap(.host_unavailable);
+                const host = try self.service();
+                const callback = host.printFn orelse return self.failure(.host_unavailable);
                 try callback(host.context, registers[arguments[0]].string);
-                return .{ .value = .none };
+                return .none;
             },
             .file_read => {
-                const host = self.host orelse return self.trap(.host_unavailable);
-                const callback = host.readFileFn orelse return self.trap(.host_unavailable);
+                const host = try self.service();
+                const callback = host.readFileFn orelse return self.failure(.host_unavailable);
                 const path = registers[arguments[0]].string;
                 return switch (try callback(host.context, self.arena, path)) {
-                    .content => |content| .{ .value = .{ .string = content } },
-                    .failed => self.trap(.file_read_failed),
+                    .content => |content| .{ .string = content },
+                    .failed => self.failure(.file_read_failed),
                 };
             },
             .file_write => {
-                const host = self.host orelse return self.trap(.host_unavailable);
-                const callback = host.writeFileFn orelse return self.trap(.host_unavailable);
+                const host = try self.service();
+                const callback = host.writeFileFn orelse return self.failure(.host_unavailable);
                 const written = callback(
                     host.context,
                     registers[arguments[0]].string,
                     registers[arguments[1]].string,
                 );
-                return .{ .value = .{ .boolean = written } };
+                return .{ .boolean = written };
             },
             .file_exists => {
-                const host = self.host orelse return self.trap(.host_unavailable);
-                const callback = host.fileExistsFn orelse return self.trap(.host_unavailable);
+                const host = try self.service();
+                const callback = host.fileExistsFn orelse return self.failure(.host_unavailable);
                 const found = callback(host.context, registers[arguments[0]].string);
-                return .{ .value = .{ .boolean = found } };
+                return .{ .boolean = found };
             },
             .arg_count => {
-                const host = self.host orelse return self.trap(.host_unavailable);
-                const callback = host.argCountFn orelse return self.trap(.host_unavailable);
-                return .{ .value = .{ .int = callback(host.context) } };
+                const host = try self.service();
+                const callback = host.argCountFn orelse return self.failure(.host_unavailable);
+                return .{ .int = callback(host.context) };
             },
             .arg_get => {
-                const host = self.host orelse return self.trap(.host_unavailable);
-                const callback = host.argFn orelse return self.trap(.host_unavailable);
+                const host = try self.service();
+                const callback = host.argFn orelse return self.failure(.host_unavailable);
                 const index = registers[arguments[0]].int;
-                if (index < 0 or index > std.math.maxInt(u32)) return self.trap(.argument_bounds);
+                if (index < 0 or index > std.math.maxInt(u32)) return self.failure(.argument_bounds);
                 const value = (try callback(host.context, self.arena, @intCast(index))) orelse
-                    return self.trap(.argument_bounds);
-                return .{ .value = .{ .string = value } };
+                    return self.failure(.argument_bounds);
+                return .{ .string = value };
             },
             .term_rows => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
-                return .{ .value = .{ .int = screen.rowsFn(screen.context) } };
+                const screen = try self.terminal();
+                return .{ .int = screen.rowsFn(screen.context) };
             },
             .term_cols => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
-                return .{ .value = .{ .int = screen.colsFn(screen.context) } };
+                const screen = try self.terminal();
+                return .{ .int = screen.colsFn(screen.context) };
             },
             .term_clear => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const screen = try self.terminal();
                 try screen.clearFn(screen.context);
-                return .{ .value = .none };
+                return .none;
             },
             .term_move => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const screen = try self.terminal();
                 try screen.moveFn(
                     screen.context,
                     registers[arguments[0]].int,
                     registers[arguments[1]].int,
                 );
-                return .{ .value = .none };
+                return .none;
             },
             .term_style => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const screen = try self.terminal();
                 try screen.styleFn(
                     screen.context,
                     registers[arguments[0]].int,
                     registers[arguments[1]].int,
                     registers[arguments[2]].boolean,
                 );
-                return .{ .value = .none };
+                return .none;
             },
             .term_write => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const screen = try self.terminal();
                 try screen.writeFn(screen.context, registers[arguments[0]].string);
-                return .{ .value = .none };
+                return .none;
             },
             .term_flush => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const screen = try self.terminal();
                 try screen.flushFn(screen.context);
-                return .{ .value = .none };
+                return .none;
             },
             .key_read => {
-                const screen = self.terminal() orelse return self.trap(.host_unavailable);
+                const screen = try self.terminal();
                 const event = try screen.keyFn(screen.context, self.arena);
                 self.last_key_text = event.text;
-                return .{ .value = .{ .string = event.name } };
+                return .{ .string = event.name };
             },
             .key_text => {
-                return .{ .value = .{ .string = self.last_key_text } };
+                return .{ .string = self.last_key_text };
             },
             .fabric_image => {
                 const path = registers[arguments[0]].string;
                 const pages = registers[arguments[1]].int;
-                if (path.len == 0 or pages <= 0) return self.trap(.invalid_image);
+                if (path.len == 0 or pages <= 0) return self.failure(.invalid_image);
                 try self.intents.images.append(self.arena, .{
                     .path = path,
                     .pages = @intCast(pages),
                 });
-                return .{ .value = .none };
+                return .none;
             },
             .fabric_create => {
                 const handle: i64 = @intCast(self.intents.texels.items.len);
                 try self.intents.texels.append(self.arena, .{
                     .name = registers[arguments[0]].string,
                 });
-                return .{ .value = .{ .int = handle } };
+                return .{ .int = handle };
             },
             .fabric_input, .fabric_output => {
                 const intent = self.intentAt(registers[arguments[0]].int) orelse
-                    return self.trap(.invalid_handle);
+                    return self.failure(.invalid_handle);
                 const declared = fabric.portTypeNamed(registers[arguments[2]].string) orelse
-                    return self.trap(.invalid_port_type);
+                    return self.failure(.invalid_port_type);
                 const spec: fabric.PortSpec = .{
                     .name = registers[arguments[1]].string,
                     .declared = declared,
@@ -1435,23 +1353,23 @@ const Machine = struct {
                 } else {
                     try intent.outputs.append(self.arena, spec);
                 }
-                return .{ .value = .none };
+                return .none;
             },
             .fabric_content => {
                 const intent = self.intentAt(registers[arguments[0]].int) orelse
-                    return self.trap(.invalid_handle);
+                    return self.failure(.invalid_handle);
                 intent.content = registers[arguments[1]].string;
-                return .{ .value = .none };
+                return .none;
             },
             .fabric_evaluator => {
                 const intent = self.intentAt(registers[arguments[0]].int) orelse
-                    return self.trap(.invalid_handle);
+                    return self.failure(.invalid_handle);
                 intent.evaluator = registers[arguments[1]].string;
-                return .{ .value = .none };
+                return .none;
             },
             .fabric_set => {
                 const intent = self.intentAt(registers[arguments[0]].int) orelse
-                    return self.trap(.invalid_handle);
+                    return self.failure(.invalid_handle);
                 const value: fabric.SourceValue = switch (registers[arguments[2]]) {
                     .boolean => |flag| .{ .boolean = flag },
                     .int => |number| .{ .int = number },
@@ -1463,7 +1381,7 @@ const Machine = struct {
                     .output = registers[arguments[1]].string,
                     .value = value,
                 });
-                return .{ .value = .none };
+                return .none;
             },
         }
     }
