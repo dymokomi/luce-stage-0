@@ -72,8 +72,17 @@ done
 
 # The machine stamps every table: absolute numbers mean nothing off
 # this host — compare against another commit with bench/compare.sh,
-# never against a table from a different machine or day.
-awk -F: '/model name/{gsub(/^ +/, "", $2); print "host: " $2; exit}' /proc/cpuinfo 2>/dev/null || true
+# never against a table from a different machine or day.  Linux names
+# the CPU in /proc/cpuinfo, macOS in a sysctl; an unknown host still
+# gets stamped, so a table is never silently machine-less.
+host_stamp() {
+    if [ -r /proc/cpuinfo ]; then
+        awk -F: '/model name/{gsub(/^ +/, "", $2); print $2; exit}' /proc/cpuinfo
+    else
+        sysctl -n machdep.cpu.brand_string 2>/dev/null
+    fi
+}
+echo "host: $(host_stamp) ($(uname -sm))"
 
 # Interleaved rounds, best of five: slow host drift lands on every
 # column equally instead of biasing whichever ran last.

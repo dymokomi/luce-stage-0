@@ -43,7 +43,16 @@ for name in $names; do
     fi
 done
 
-awk -F: '/model name/{gsub(/^ +/, "", $2); print "host: " $2; exit}' /proc/cpuinfo 2>/dev/null || true
+# Linux names the CPU in /proc/cpuinfo, macOS in a sysctl.  The A/B is
+# same-host by construction, but the stamp keeps a pasted table honest.
+host_stamp() {
+    if [ -r /proc/cpuinfo ]; then
+        awk -F: '/model name/{gsub(/^ +/, "", $2); print $2; exit}' /proc/cpuinfo
+    else
+        sysctl -n machdep.cpu.brand_string 2>/dev/null
+    fi
+}
+echo "host: $(host_stamp) ($(uname -sm))"
 
 tmp="$(mktemp -d)"
 old_trap='git worktree remove --force "$base" >/dev/null 2>&1 || true'
