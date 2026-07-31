@@ -970,6 +970,16 @@ pub const Machine = struct {
                 }
                 return .none;
             },
+            .append_ascii => {
+                const object = try self.resolve(registers[arguments[0]]);
+                const code = registers[arguments[1]].int;
+                // ASCII only: the builder's bytes become a String, and
+                // String is valid UTF-8.  Anything wider goes through
+                // chr(), which encodes the codepoint.
+                if (code < 0 or code > 0x7F) return self.failure(.bad_codepoint);
+                try object.data.builder.append(self.arena, @intCast(code));
+                return .none;
+            },
             .pop_value => {
                 const object = try self.resolve(registers[arguments[0]]);
                 const list = &object.data.list;
@@ -1241,6 +1251,17 @@ pub const Machine = struct {
                 const index = registers[arguments[1]].int;
                 if (index < 0 or index >= value.len) return self.failure(.string_bounds);
                 return .{ .int = value[@intCast(index)] };
+            },
+            .string_find_byte => {
+                const value = registers[arguments[0]].string;
+                const byte = registers[arguments[1]].int;
+                const start = registers[arguments[2]].int;
+                if (byte < 0 or byte > 0xFF) return self.failure(.bad_codepoint);
+                if (start < 0 or start > value.len) return self.failure(.string_bounds);
+                const from: usize = @intCast(start);
+                const at = std.mem.indexOfScalarPos(u8, value, from, @intCast(byte)) orelse
+                    return .{ .int = -1 };
+                return .{ .int = @intCast(at) };
             },
             .assert_true => {
                 if (!registers[arguments[0]].boolean) return self.failure(.assertion_failed);

@@ -65,7 +65,8 @@ service that looks the instruction up and runs the interpreter's own
 implementation — full semantic reuse, ideal when the operation does
 real work (sort, split, allocation, host IO).  The hottest cheap
 primitives — sequence indexing over scalar elements, `byte_at`,
-string slices, `len`, Builder appends — get *fast* direct services
+`find_byte`, string slices, `len`, Builder appends, `chr`,
+`str(Int)`, string `+` — get *fast* direct services
 that skip the marshaling and mirror the interpreter's checks in a
 few lines each; the oracle holds both tiers to byte-identical
 behavior.
@@ -98,11 +99,31 @@ still traps inline — the view checks the object's real alive flag.
 Ownership, sort, fill, copy: all still the interpreter's one
 implementation.
 
-Current standing (docs/BENCHMARKS.md): **math ~1.3x C, arrays ~3x
-C, loops ~3-5x C, strings ~15-19x C** — the checked-scalar plateau
-a non-vectorizing backend can reach.  What is left in the strings
-ratio is allocation-per-operation (split's pieces, builder growth,
-formatting), not access cost.
+## Milestone 4: the producers, and one call Zig can vectorize
+
+Milestone 3 made *reading* a string free; milestone 4 went after
+*producing* one.  Measuring the tiers (docs/SPEED.md §10) found the
+cost was the generic boundary itself — `ord`, which allocates
+nothing, cost 20.7ns against a slice's 5.4ns — so `chr`, `str(Int)`
+and string `+` moved to fast direct services, each still ending in
+the OOM check that keeps a null descriptor from escaping.
+
+Two primitives joined the language with them.  `b.append_ascii(code)`
+appends one ASCII byte with no String to carry it (ASCII only —
+a Builder's bytes become a String, and String is valid UTF-8).
+`s.find_byte(byte, start)` is to scanning what `byte_at` is to
+access, and it is the interesting one: as a single call into Zig it
+picks up `std.mem`'s block-vector search, which is how SIMD reaches
+a backend that cannot vectorize.  std strings keeps the substring
+algorithm in Luce and merely stopped spelling its inner scan as a
+Luce loop.
+
+Current standing (docs/BENCHMARKS.md): **math ~1.2x C, loops ~1.2x
+C, arrays ~3x C, strings ~11x C** — the checked-scalar plateau a
+non-vectorizing backend can reach.  What is left in the strings
+ratio is no longer string-shaped: JIT compile time for std
+functions the program never calls, and `List.append` on the generic
+path behind `split`.
 
 ## Where a wall would send us
 

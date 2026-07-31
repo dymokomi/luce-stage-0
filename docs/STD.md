@@ -63,9 +63,10 @@ Period 2^31 − 2; games and shuffles, never secrets.
 ## strings
 
 The language keeps the String **primitives**: literals and f-strings,
-`+`, comparison, boundary-checked slices `s[a:b]`, `len(s)`, and
-`s.byte_at(i)`.  Everything built on top of them is ordinary Luce in
-this module — and the familiar method spelling is sugar for it:
+`+`, comparison, boundary-checked slices `s[a:b]`, `len(s)`,
+`s.byte_at(i)`, and `s.find_byte(byte, start)`.  Everything built on
+top of them is ordinary Luce in this module — and the familiar
+method spelling is sugar for it:
 with `import strings` in scope, `s.find(x)` *is* `strings.find(s, x)`
 (and `parts.join(sep)` is `strings.join(parts, sep)`).  Using a
 String method without the import is a compile error that says so.
@@ -73,6 +74,14 @@ String method without the import is a compile error that says so.
 All offsets are byte offsets, like the primitives.  The module never
 splits a UTF-8 character: it slices at ASCII positions or at match
 positions of valid UTF-8 needles.
+
+Two primitives carry the weight.  `find_from` locates a needle's
+first byte with `find_byte` and only then compares the rest, so the
+scan itself is one call the engine may vectorize rather than a Luce
+loop over `byte_at`; `fold_case` emits folded bytes with
+`append_ascii`, which needs no String per character.  Both are why
+the module is fast enough to stay written in Luce (docs/SPEED.md
+§10).
 
 ```luce
 import strings

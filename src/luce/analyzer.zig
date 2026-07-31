@@ -3529,6 +3529,18 @@ const FunctionBuilder = struct {
                     }
                     break :blk .{ .kind = .string_byte, .result = .int };
                 }
+                // find_byte is the scanning primitive that byte_at is
+                // the access primitive: std strings builds substring
+                // search on it (docs/STD.md).
+                if (std.mem.eql(u8, method.name, "find_byte")) {
+                    if (arguments.len != 2 or arguments[0].value_type != .int or
+                        arguments[1].value_type != .int)
+                    {
+                        try self.fail("luce.sema.method", method.span, "find_byte takes (byte Int, start Int)", .{});
+                        return null;
+                    }
+                    break :blk .{ .kind = .string_find_byte, .result = .int };
+                }
                 return self.stringsCall(method, values, as_statement);
             }
             if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
@@ -3769,6 +3781,11 @@ const FunctionBuilder = struct {
                     if (arguments.len != 1 or arguments[0].value_type != .string)
                         return self.methodFail(method, "a Builder appends String");
                     return .{ .kind = .append_value, .result = .none };
+                }
+                if (std.mem.eql(u8, name, "append_ascii")) {
+                    if (arguments.len != 1 or arguments[0].value_type != .int)
+                        return self.methodFail(method, "append_ascii takes an Int byte in 0..127");
+                    return .{ .kind = .append_ascii, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "clear")) {
                     if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
@@ -4184,7 +4201,9 @@ const FunctionBuilder = struct {
             .value_at,
             .string_slice,
             .string_byte,
+            .string_find_byte,
             .append_value,
+            .append_ascii,
             .pop_value,
             .insert_value,
             .remove_entry,

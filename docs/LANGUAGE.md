@@ -118,7 +118,11 @@ sugar for a plain function with the receiver first, not dispatch):
   default) -> V` (the value or the default — no trap), `remove(k)`
   (no-op when absent), `keys() -> List(K)`, `values() -> List(V)`,
   `clear()`, `len`.  Iteration order is insertion order.
-- `Builder`: `append(text)`, `clear()`, `len`, `str(b)`.
+- `Builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
+  `str(b)`.  `append_ascii` puts one ASCII byte in without the String
+  a `chr()` would allocate; it traps `bad_codepoint` outside 0..127,
+  because a Builder's bytes become a String and String is valid
+  UTF-8.  Wider characters go through `append(chr(code))`.
 - `Array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
   values at `new`, elements zero-initialized (numbers 0, Bool false,
   String "", structs zeroed field by field, object elements start null
@@ -150,8 +154,13 @@ per step, but which elements you visit is your problem.
 
 Strings are immutable UTF-8 values.  The *language* provides the
 primitives — literals and f-strings, `+` concatenation, comparison,
-UTF-8-boundary-checked slices `s[a:b]`, `len(s)` in bytes, and
-`s.byte_at(i)` for raw byte access.  Everything built on top of them
+UTF-8-boundary-checked slices `s[a:b]`, `len(s)` in bytes,
+`s.byte_at(i)` for raw byte access, and `s.find_byte(byte, start)`
+for raw byte *search* (the offset of the first `byte` at or after
+`start`, or -1; the byte must be 0..255 and `start` within the
+string, or it traps).  Search is a primitive for the same reason
+access is: the library builds substring matching on it, and an
+engine is free to vectorize it.  Everything built on top of them
 lives in the standard library's `strings` module (docs/STD.md),
 written in ordinary Luce:
 
@@ -179,8 +188,8 @@ strings.format_float(x, 2)   # fixed-point Float display: "2.50"
 The method spelling is the same sugar as everywhere else:
 `s.find(x)` is `strings.find(s, x)` — a plain borrowed call with the
 receiver first — whenever `import strings` is in scope, and a compile
-error pointing at the missing import otherwise.  Only `byte_at` is
-built in.
+error pointing at the missing import otherwise.  Only `byte_at` and
+`find_byte` are built in.
 
 **Interpolation.**  An `f"..."` string splices expressions in `{...}`,
 each converted with `str(...)`:

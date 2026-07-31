@@ -58,6 +58,11 @@ pub const Intrinsic = enum {
     len,
     string_slice,
     string_byte,
+    /// s.find_byte(byte, start) — the offset of the first `byte` at or
+    /// after `start`, or -1.  Scanning is a primitive like byte_at is
+    /// access: std strings builds substring search on top of it, and
+    /// an engine is free to vectorize it.
+    string_find_byte,
     assert_true,
     trap_message,
     // Collections and heap objects (see types.HeapType).
@@ -66,6 +71,10 @@ pub const Intrinsic = enum {
     index_set,
     list_slice,
     append_value,
+    /// b.append_ascii(code) — one ASCII byte onto a Builder, without
+    /// the String a chr()+append would allocate.  ASCII only: a
+    /// Builder's bytes become a String, and String is valid UTF-8.
+    append_ascii,
     pop_value,
     insert_value,
     remove_entry,
@@ -658,6 +667,13 @@ fn verifyIntrinsic(
             try expectType(arguments[1], .int);
             try expectType(result, .int);
         },
+        .string_find_byte => {
+            try exactly(arguments, 3);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .int);
+            try expectType(arguments[2], .int);
+            try expectType(result, .int);
+        },
         .assert_true => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .boolean);
@@ -715,6 +731,12 @@ fn verifyIntrinsic(
                 .builder => try expectType(arguments[1], .string),
                 else => return error.BadIntrinsic,
             }
+            try expectType(result, .none);
+        },
+        .append_ascii => {
+            try exactly(arguments, 2);
+            if (try heapShape(program, arguments[0]) != .builder) return error.BadIntrinsic;
+            try expectType(arguments[1], .int);
             try expectType(result, .none);
         },
         .pop_value => {

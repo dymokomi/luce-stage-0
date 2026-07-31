@@ -537,6 +537,73 @@ fn svcBuilderAppend(state: *State, function: i64, instruction: i64, handle: i64,
     };
 }
 
+fn svcBuilderAppendAscii(state: *State, function: i64, instruction: i64, handle: i64, code: i64) callconv(.c) void {
+    const object = fastResolve(state, function, instruction, handle) orelse return;
+    if (code < 0 or code > 0x7F) {
+        recordFastTrap(state, .bad_codepoint, function, instruction);
+        return;
+    }
+    object.data.builder.append(state.runtime.machine.arena, @intCast(code)) catch {
+        state.trap = State.oom_trap;
+    };
+}
+
+/// The scanning primitive.  std.mem does the block-vector search, so
+/// what the JIT cannot vectorize the Zig side still does.
+fn svcStrFindByte(state: *State, function: i64, instruction: i64, handle: i64, byte: i64, start: i64) callconv(.c) i64 {
+    const text = descText(@bitCast(handle));
+    if (byte < 0 or byte > 0xFF) {
+        recordFastTrap(state, .bad_codepoint, function, instruction);
+        return 0;
+    }
+    if (start < 0 or start > text.len) {
+        recordFastTrap(state, .string_bounds, function, instruction);
+        return 0;
+    }
+    const at = std.mem.indexOfScalarPos(u8, text, @intCast(start), @intCast(byte)) orelse return -1;
+    return @intCast(at);
+}
+
+/// Int to text without the generic path's instruction lookup and
+/// RuntimeValue staging — std.fmt writes two decimal digits per table
+/// lookup into a stack buffer, and only the result is arena-copied.
+fn svcStrInt(state: *State, value: i64) callconv(.c) i64 {
+    var scratch: [24]u8 = undefined;
+    const digits = std.fmt.bufPrint(&scratch, "{d}", .{value}) catch unreachable;
+    const text = state.runtime.machine.arena.dupe(u8, digits) catch {
+        state.trap = State.oom_trap;
+        return 0;
+    };
+    return newStringDesc(state, text);
+}
+
+fn svcChr(state: *State, function: i64, instruction: i64, code: i64) callconv(.c) i64 {
+    if (code < 0 or code > 0x10FFFF) {
+        recordFastTrap(state, .bad_codepoint, function, instruction);
+        return 0;
+    }
+    var scratch: [4]u8 = undefined;
+    const length = std.unicode.utf8Encode(@intCast(code), &scratch) catch {
+        recordFastTrap(state, .bad_codepoint, function, instruction);
+        return 0;
+    };
+    const text = state.runtime.machine.arena.dupe(u8, scratch[0..length]) catch {
+        state.trap = State.oom_trap;
+        return 0;
+    };
+    return newStringDesc(state, text);
+}
+
+fn svcStrConcat(state: *State, left: i64, right: i64) callconv(.c) i64 {
+    const first = descText(@bitCast(left));
+    const second = descText(@bitCast(right));
+    const joined = std.mem.concat(state.runtime.machine.arena, u8, &.{ first, second }) catch {
+        state.trap = State.oom_trap;
+        return 0;
+    };
+    return newStringDesc(state, joined);
+}
+
 const Service = struct { name: [:0]const u8, address: *anyopaque };
 
 const services = [_]Service{
@@ -553,6 +620,11 @@ const services = [_]Service{
     .{ .name = "svc_obj_len", .address = @ptrCast(@constCast(&svcObjLen)) },
     .{ .name = "svc_str_slice", .address = @ptrCast(@constCast(&svcStrSlice)) },
     .{ .name = "svc_builder_append", .address = @ptrCast(@constCast(&svcBuilderAppend)) },
+    .{ .name = "svc_builder_append_ascii", .address = @ptrCast(@constCast(&svcBuilderAppendAscii)) },
+    .{ .name = "svc_str_find_byte", .address = @ptrCast(@constCast(&svcStrFindByte)) },
+    .{ .name = "svc_str_int", .address = @ptrCast(@constCast(&svcStrInt)) },
+    .{ .name = "svc_chr", .address = @ptrCast(@constCast(&svcChr)) },
+    .{ .name = "svc_str_concat", .address = @ptrCast(@constCast(&svcStrConcat)) },
 };
 
 // ---------------------------------------------------------------------------
@@ -709,9 +781,15 @@ fn lowerProgram(arena: Allocator, program: *const ir.Program, layout: *const Mem
         \\p_svc_obj_len: proto i64, i64:s, i64:f, i64:i, i64:h
         \\p_svc_str_slice: proto i64, i64:s, i64:f, i64:i, i64:h, i64:a, i64:b
         \\p_svc_builder_append: proto i64:s, i64:f, i64:i, i64:h, i64:x
+        \\p_svc_builder_append_ascii: proto i64:s, i64:f, i64:i, i64:h, i64:c
+        \\p_svc_str_find_byte: proto i64, i64:s, i64:f, i64:i, i64:h, i64:b, i64:a
+        \\p_svc_str_int: proto i64, i64:s, i64:v
+        \\p_svc_chr: proto i64, i64:s, i64:f, i64:i, i64:c
+        \\p_svc_str_concat: proto i64, i64:s, i64:a, i64:b
         \\import svc_instr_i, svc_instr_d, svc_instr_v, svc_serial, svc_zero_strukt, svc_loosen
         \\import svc_seq_get_i, svc_seq_get_d, svc_seq_set_i, svc_seq_set_d, svc_obj_len
-        \\import svc_str_slice, svc_builder_append
+        \\import svc_str_slice, svc_builder_append, svc_builder_append_ascii
+        \\import svc_str_find_byte, svc_str_int, svc_chr, svc_str_concat
         \\
     , .{});
     for (program.functions, 0..) |*function, index| {
@@ -1088,11 +1166,40 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 try text.print("    bf S{d}_{d}, r{d}\n", .{ lowering.index, failed, call.arguments[0] });
             },
             .str_value => {
-                if (function.result_types[call.arguments[0]] == .string) {
+                const of = function.result_types[call.arguments[0]];
+                if (of == .string) {
                     try text.print("    mov r{d}, r{d}\n", .{ item, call.arguments[0] });
+                } else if (of == .int) {
+                    // str(i) is the hottest formatting path there is.
+                    // Formatting itself cannot fail, but the result is
+                    // allocated, so the OOM check still follows: a
+                    // failed allocation leaves a null descriptor, and
+                    // nothing may run on with one.
+                    try text.print("    call p_svc_str_int, svc_str_int, r{d}, s, r{d}\n", .{
+                        item, call.arguments[0],
+                    });
+                    try emitTrapCheck(lowering);
                 } else {
                     try emitGeneric(lowering, item);
                 }
+            },
+            .chr_code => {
+                try text.print("    call p_svc_chr, svc_chr, r{d}, s, {d}, {d}, r{d}\n", .{
+                    item, lowering.index, item, call.arguments[0],
+                });
+                try emitTrapCheck(lowering);
+            },
+            .string_find_byte => {
+                try text.print("    call p_svc_str_find_byte, svc_str_find_byte, r{d}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
+                    item, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
+                });
+                try emitTrapCheck(lowering);
+            },
+            .append_ascii => {
+                try text.print("    call p_svc_builder_append_ascii, svc_builder_append_ascii, s, {d}, {d}, r{d}, r{d}\n", .{
+                    lowering.index, item, call.arguments[0], call.arguments[1],
+                });
+                try emitTrapCheck(lowering);
             },
             .len => {
                 const operand = call.arguments[0];
@@ -1225,9 +1332,17 @@ fn lowerBinary(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory
     const text = lowering.text;
     const operation = lowering.function.instructions[item].binary;
     const of = operation.operand_type;
-    // String work (concat, ordering) lives in the reference
-    // implementation, one service call away.
-    if (of == .string) return emitGeneric(lowering, item);
+    // Concatenation gets a direct service; string ordering stays with
+    // the reference implementation.  Concat allocates, so the OOM
+    // check follows it.
+    if (of == .string) {
+        if (operation.op != .add) return emitGeneric(lowering, item);
+        try lowering.text.print("    call p_svc_str_concat, svc_str_concat, r{d}, s, r{d}, r{d}\n", .{
+            item, operation.left, operation.right,
+        });
+        try emitTrapCheck(lowering);
+        return;
+    }
     if (operation.op.isComparison()) {
         const name = switch (operation.op) {
             .equal => "eq",

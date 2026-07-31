@@ -203,3 +203,99 @@ from speed (§4), buy the proven 90% (§7–8), keep the seam that
 makes every future option cheap (§6, §8).**  Milestone 2 —
 collections, ownership, strings in the native core — continues in
 docs/NATIVE.md.
+
+---
+
+## 10. The strings gap, measured instead of assumed
+
+After milestone 3 the `strings` bench was the one embarrassing
+column, and the standing explanation — recorded in
+docs/BENCHMARKS.md — was "allocation-per-operation".  Measuring it
+on an Apple M4 Max (the first non-Linux host this project has run
+on) said otherwise.
+
+**The harness was flattering us first.**  `bench/run.sh` timed with
+`start=$(date +%s%N); cmd; end=$(date +%s%N)`, and the second
+`date` fork lands *inside* the interval: ~1ms of overhead on top of
+the ~1.3ms process floor, added to both columns.  When the Luce
+side was ~1s of interpreter that was noise; at 8–15ms of native
+code it compresses ratios badly — the table read `strings 3.8x`
+where direct-exec timing read ~14x, which is what docs/NATIVE.md
+had claimed all along.  **A constant added to both sides of a ratio
+is not neutral.**  The ratios in a run.sh table are a lower bound
+on the real gap; compare.sh deltas, being like-for-like, are not
+affected.
+
+**The cost model.**  Timing each primitive at 5M iterations
+separated the tiers cleanly:
+
+| operation | ns | tier |
+|---|---|---|
+| loop iteration, `len(s)` | 0.30 | inline |
+| `s.byte_at(i)` | 0.50 | inline (milestone 3) |
+| `s[a:b]` | 5.4 | fast service (allocates a descriptor) |
+| `ord("a")` — **allocates nothing** | 20.7 | generic service |
+| `chr(65)` | 27.0 | generic service + allocation |
+| `str(i)` | 41.0 | generic service + allocation |
+
+`ord` allocates nothing and still costs 20.7ns; `s[a:b]` allocates
+and costs 5.4ns.  So the string cost was **the generic dispatch
+boundary (~20ns) — instruction lookup, slot marshaling,
+RuntimeValue staging — not allocation (~6ns) and not the byte work
+(~0.5ns)**.  The old explanation had the wrong noun.  The model
+predicts the benchmark: fold_case at 80k folded bytes × (chr 27 +
+slice 5.4 + two appends 12.4) = 3.6ms predicted, 3.7ms measured.
+
+**Three changes followed, in the order the model ranked them.**
+
+1. *Free, in Luce.*  `find_from` hoists its lengths and gates the
+   inner compare on a first-byte test; `fold_case` stops appending
+   the empty run left between adjacent folded bytes.  No engine
+   change: count −71%, replace −35%, split −33%, upper −21%.
+2. *Fast services for the string producers* (§9's second tier,
+   extended): `chr`, `str(Int)`, and `+` stop marshaling through
+   the generic path.  Each still ends in an OOM check — a failed
+   allocation leaves a null descriptor, and nothing may run on with
+   one.
+3. *Two new primitives.*  `b.append_ascii(code)` puts one ASCII
+   byte in a Builder without the String a `chr()` would allocate
+   (ASCII only: a Builder's bytes become a String, and String is
+   valid UTF-8).  `s.find_byte(byte, start)` is the scanning
+   primitive that `byte_at` is the access primitive — and because
+   it is one call into Zig, it gets `std.mem`'s block-vector search
+   for free, which is the only way SIMD can ever enter a
+   non-vectorizing backend (§6's "whole-collection intrinsics",
+   arriving in a second domain).
+
+The primitives were chosen so std strings stays *written in Luce*:
+`find_from` still owns the substring algorithm, it just stopped
+spelling the inner scan as a Luce loop.  Rejected on that ground: a
+native `str_find`/`str_upper` intrinsic pair, which would have been
+faster still and would have moved the library into the engine.
+
+**Result** (M4 Max, direct-exec timing, process floor included):
+
+| phase (10x) | before | free Luce | + engine |
+|---|---|---|---|
+| upper | 37.1ms | 29.5ms | **6.1ms** |
+| build (`str(i)` × 200k) | 15.2ms | 15.2ms | **8.8ms** |
+| replace | 7.5ms | 4.9ms | **4.6ms** |
+| count | 5.4ms | 1.6ms | **1.1ms** |
+
+The bench itself: **14.03ms → 9.78ms (−30%)**, ~14x C down to
+~11x; the interpreter, which inherits the same std and the same
+`find_byte`, went 140ms → 58ms.  `bench/compare.sh HEAD` reads
+**strings −27.2%** with loops, math, and arrays flat.
+
+**What this leaves.**  The 9.78ms is now roughly 1.9ms process
+startup, **4.1ms JIT compile**, and 3.9ms of actual execution — so
+compiling the code outweighs running it, and §4's "compiling at
+every load costs well under a millisecond" is false once a std
+module is imported: `import strings` costs +4.1ms under the native
+engine and −0.1ms under the interpreter (measured both ways; it is
+JIT time, not decode), and the bench calls 7 of the module's 18
+functions.  The next lever is therefore not a string lever at all:
+**do not compile what is not reachable from `main`** — static
+pruning before lowering, or lazy per-function compilation.  After
+that, `split` is bounded by `List.append` on the generic path, not
+by anything string-shaped.

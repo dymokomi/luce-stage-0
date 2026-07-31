@@ -76,39 +76,60 @@ the harness enforces both:
 so slow host drift lands on every column equally — sequential
 timing on a bursty container biased whole columns by 2-3x.
 
-## Snapshot — 2026-07-31, milestone 3 (unboxed access)
+## The ratio column reads low — know by how much
 
-Illustrative, on the host stamped in the table's run ("Intel Xeon @
-2.80GHz" container).  `native` is loom's default engine
-(docs/NATIVE.md); `interp` forces the reference interpreter with
+`time_once` brackets each run with two `date` forks, and the second
+one lands *inside* the measured interval: every number here carries
+~1ms of that plus the ~1.3ms process floor, **on both columns**.  A
+constant added to both sides of a ratio is not neutral — it pulls
+the ratio toward 1.  On a fast host the effect is large: the
+milestone-4 table below reads `strings 2.8x` where direct-exec
+timing of the same binaries reads ~11x.
+
+So: **`native/C` here is a lower bound**, useful for watching one
+column move across a change, not for quoting the language's
+standing.  `bench/compare.sh` is unaffected — it compares like with
+like, and the constant cancels.  docs/SPEED.md §10 has the
+direct-exec method.
+
+## Snapshot — 2026-07-31, milestone 4 (string producers)
+
+Illustrative, on the host stamped in the table's run (Apple M4 Max,
+Darwin arm64).  `native` is loom's default engine (docs/NATIVE.md);
+`interp` forces the reference interpreter with
 LOOM_ENGINE=interpreter.  Both Luce columns include process
-startup, .lc decode, and (native) the ~millisecond JIT compile:
+startup, .lc decode, and (native) the JIT compile — which for a
+std-importing program is ~4ms, the largest single line item left in
+`strings`:
 
-| benchmark | C       | native   | interp  | native/C |
-|-----------|---------|----------|---------|----------|
-| loops     | ~16ms   | ~33ms    | ~1.0s   | **~2.2x** |
-| math      | ~18ms   | ~26ms    | ~1.2s   | **~1.4x** |
-| strings   | ~7ms    | ~74ms    | ~0.4s   | **~11x** |
-| arrays    | ~10ms   | ~27ms    | ~0.36s  | **~2.8x** |
+| benchmark | C      | native  | interp   | native/C (low) |
+|-----------|--------|---------|----------|----------------|
+| loops     | ~7.0ms | ~8.5ms  | ~418ms   | ~1.2x |
+| math      | ~9.9ms | ~11.8ms | ~497ms   | ~1.2x |
+| strings   | ~4.1ms | ~11.5ms | ~62ms    | ~2.8x |
+| arrays    | ~4.4ms | ~7.6ms  | ~131ms   | ~1.7x |
 
 Milestone 3 made string byte access and rank-1 scalar array
-indexing inline machine code (docs/NATIVE.md): no service call, a
-bounds check and a load against stable descriptors/views.  The
-remaining strings gap is allocation-per-operation (split's pieces,
-builder growth, formatting); the remaining arrays gap is what
-vectorization would buy.
+indexing inline machine code (docs/NATIVE.md).  Milestone 4 went
+after producing strings rather than reading them — fast services
+for `chr`, `str(Int)` and `+`, plus the `append_ascii` and
+`find_byte` primitives — for `strings` −27% and an interpreter that
+more than doubled on the same bench.  The remaining arrays gap is
+what vectorization would buy.
 
-For orientation: CPython 3.11 runs the loops algorithm in 1228ms
-and mandelbrot in 1884ms on this machine — native Luce is ~25-80x
-faster than CPython on these, and the interpreter alone already
-edges it.  (CPython's mandelbrot count matches Luce's exactly —
-both are strict IEEE.)
+For orientation, measured on the earlier Xeon container (not the
+host above): CPython 3.11 ran the loops algorithm in 1228ms and
+mandelbrot in 1884ms, where native Luce was ~25-80x faster and the
+interpreter alone already edged it.  (CPython's mandelbrot count
+matches Luce's exactly — both are strict IEEE.)
 
-**Where we're at:** compiled Luce runs at **1.5–3x full-speed C**
-on scalar workloads and **5–19x** on collection- and string-bound
-ones, checks and ownership included.  The interpreter (40–95x)
-remains the reference implementation, the oracle, and the fallback
-for platforms the JIT doesn't cover.
+**Where we're at**, by direct-exec timing with the process floor
+subtracted (docs/SPEED.md §10 — *not* the ratio column above):
+compiled Luce runs at **~1.2x full-speed C** on scalar workloads,
+~3x on the vectorizable array one, and **~11x** on the string-bound
+one, checks and ownership included.  The interpreter remains the
+reference implementation, the oracle, and the fallback for
+platforms the JIT doesn't cover.
 
 ## Why runtime checks are not the cost
 
@@ -134,18 +155,26 @@ The compiled backend predicted by the first edition of this file
 shipped as the native engine (docs/NATIVE.md) and landed where the
 MIR experiment said it would.  What remains, in value order:
 
-1. ~~Milestone 2 (full native core)~~ and ~~milestone 3 (unboxed
-   access: string descriptors, array views, inline indexing)~~ —
-   shipped.  Remaining service-tier levers, on demand: inline
-   Builder appends, fewer allocations in string-producing ops.
-2. **The self-written Zig backend** — grows unhurried behind the
+1. ~~Milestone 2 (full native core)~~, ~~milestone 3 (unboxed
+   access)~~, and ~~milestone 4 (string producers: fast services for
+   `chr`/`str(Int)`/`+`, the `append_ascii` and `find_byte`
+   primitives)~~ — shipped.
+2. **Don't compile what is never called** — `import strings` costs
+   ~4ms of JIT for 18 functions where a program calls 7, which is
+   now the single largest line item in `strings` (docs/SPEED.md
+   §10).  Static reachability pruning before lowering, or lazy
+   per-function compilation.
+3. **`List.append` on the generic path** — what `split` is actually
+   bounded by now; element adoption is ownership, so a fast service
+   has to carry that.
+4. **The self-written Zig backend** — grows unhurried behind the
    same seam, racing MIR under the same oracle and this table;
    sovereignty when it wins.
-3. **SIMD / the last 2x** — MIR does not vectorize; `arrays` will
+5. **SIMD / the last 2x** — MIR does not vectorize; `arrays` will
    plateau a few x above C until an LLVM-backed engine is ever
    judged worth its 200MB.  Whole-array std intrinsics (dot, fill)
    are the cheap VEX-style alternative when a real program wants
-   them.
+   them — `find_byte` is the first of that family to ship.
 
 ## The regression-guard workflow
 

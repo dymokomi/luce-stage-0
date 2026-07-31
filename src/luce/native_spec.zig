@@ -420,6 +420,51 @@ test "oracle: string concat, comparison, slices, and byte access" {
     , roomy);
 }
 
+test "oracle: find_byte scans and append_ascii builds identically" {
+    try oracle(
+        \\func main():
+        \\    let s = "hello world, hello"
+        \\    print(str(s.find_byte(111, 0)))
+        \\    print(str(s.find_byte(111, 5)))
+        \\    print(str(s.find_byte(122, 0)))
+        \\    print(str(s.find_byte(104, len(s))))
+        \\    print(str("".find_byte(97, 0)))
+        \\    let u = "aλb🙂c"
+        \\    print(str(u.find_byte(98, 0)))
+        \\    print(str(u.find_byte(99, 0)))
+        \\    var out = new Builder()
+        \\    for code in range(65, 91):
+        \\        out.append_ascii(code)
+        \\    print(str(out))
+        \\    print(str(str(out) == "ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+        \\
+    , roomy);
+    // Every rejection the two engines must share: a byte outside
+    // 0..255, a start past the end, and a non-ASCII append.
+    try oracle(
+        \\func main():
+        \\    print(str("abc".find_byte(256, 0)))
+        \\
+    , roomy);
+    try oracle(
+        \\func main():
+        \\    print(str("abc".find_byte(97, -1)))
+        \\
+    , roomy);
+    try oracle(
+        \\func main():
+        \\    print(str("abc".find_byte(97, 4)))
+        \\
+    , roomy);
+    try oracle(
+        \\func main():
+        \\    var out = new Builder()
+        \\    out.append_ascii(200)
+        \\    print(str(out))
+        \\
+    , roomy);
+}
+
 test "oracle: the std strings module runs natively" {
     try oracle(
         \\import strings
