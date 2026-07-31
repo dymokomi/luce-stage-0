@@ -86,7 +86,7 @@ const Frame = struct {
 
 const Register = ir.Register;
 
-const Machine = struct {
+pub const Machine = struct {
     arena: Allocator,
     program: *const ir.Program,
     inputs: []const InputValue,
@@ -112,7 +112,7 @@ const Machine = struct {
     /// trap here; the dispatch loop catches once (`caught`).  This is
     /// the ceval-style pending-error pattern — no per-operation
     /// outcome plumbing.
-    const EvalError = error{ OutOfMemory, Trap };
+    pub const EvalError = error{ OutOfMemory, Trap };
 
     fn trap(self: *Machine, code: ir.TrapCode) CallOutcome {
         _ = self;
@@ -368,7 +368,7 @@ const Machine = struct {
         binding: OwnedBy,
     };
 
-    const HeapObject = struct {
+    pub const HeapObject = struct {
         alive: bool = true,
         owner: Owner = .loose,
         data: Data,
@@ -396,7 +396,7 @@ const Machine = struct {
     }
 
     /// The objects in `value` now belong to `local` of frame `serial`.
-    fn bindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
+    pub fn bindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
         switch (value) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -434,7 +434,7 @@ const Machine = struct {
 
     /// On return, everything the finished frame still owned in the
     /// returned value moves out loose; the caller owns it (S16).
-    fn loosenFromFrame(self: *Machine, value: RuntimeValue, serial: u32) void {
+    pub fn loosenFromFrame(self: *Machine, value: RuntimeValue, serial: u32) void {
         switch (value) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -450,7 +450,7 @@ const Machine = struct {
     /// Free the objects in `value` still bound to (serial, local); the
     /// scope-exit release.  Objects owned elsewhere by now are left
     /// alone, which makes releases safe on every path.
-    fn unbindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
+    pub fn unbindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
         switch (value) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -590,7 +590,7 @@ const Machine = struct {
     /// exceed this many elements.
     const max_array_elements = 1 << 24;
 
-    fn allocateObject(
+    pub fn allocateObject(
         self: *Machine,
         new: ir.Instruction.HeapNew,
         registers: []const RuntimeValue,
@@ -623,7 +623,7 @@ const Machine = struct {
     }
 
     /// The zero value a fresh array element carries, per element type.
-    fn zeroValue(self: *Machine, of: types.Type) error{OutOfMemory}!RuntimeValue {
+    pub fn zeroValue(self: *Machine, of: types.Type) error{OutOfMemory}!RuntimeValue {
         return switch (of) {
             .none => .none,
             .boolean => .{ .boolean = false },
@@ -674,7 +674,7 @@ const Machine = struct {
         return flat;
     }
 
-    fn binary(
+    pub fn binary(
         self: *Machine,
         operation: ir.Instruction.Binary,
         registers: []const RuntimeValue,
@@ -808,7 +808,7 @@ const Machine = struct {
         }
     }
 
-    fn intrinsic(
+    pub fn intrinsic(
         self: *Machine,
         operation: ir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
@@ -1402,7 +1402,7 @@ const Machine = struct {
     }
 };
 
-fn isStringBoundary(value: []const u8, index: usize) bool {
+pub fn isStringBoundary(value: []const u8, index: usize) bool {
     return index == value.len or value[index] & 0xc0 != 0x80;
 }
 

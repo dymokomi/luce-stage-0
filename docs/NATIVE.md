@@ -49,29 +49,37 @@ Heap-shaped work crosses a small C-ABI services table into loom's
 Zig runtime (`svc_print`, `svc_str_*`, …) — the ownership model and
 host boundary stay implemented in exactly one place.
 
-## Milestone 1: the arithmetic core
+## Milestone 2: the whole language
 
-Supported today: Int/Float/Bool values and arithmetic, comparisons,
-blocks and calls and recursion, String as an opaque handle
-(constants, `str()`, `print`, `trap` messages), `assert`.  A program
-using anything else — collections, ownership verbs, string
-manipulation, host builtins beyond print — runs entirely on the
-interpreter: per-program fallback, never mixed engines.  The
-`bench/run.sh` table shows both engine columns; near-equal Luce
-columns mean the benchmark fell back.
+The native core now takes everything a script can be — collections,
+ownership verbs, structs, strings, the std modules, the host
+builtins.  What stays off it: evaluator-mode ports, the Bytes stub
+type, the dormant fabric intrinsics, and non-finite folded float
+constants — the interpreter is now the fallback for platforms and
+edge shapes, not for features.  Real programs (sort, dice, the
+editor's machinery) run native.
 
-Current standing (docs/BENCHMARKS.md): **loops ~2.9x C, math ~1.6x
-C** — against 55-60x interpreted — with process startup and the
-~millisecond MIR compile included in the timing.
+Two service tiers make that work.  Heap-shaped instructions marshal
+their operands into the State's scratch slots and call a *generic*
+service that looks the instruction up and runs the interpreter's own
+implementation — full semantic reuse, ideal when the operation does
+real work (sort, split, allocation, host IO).  The hottest cheap
+primitives — sequence indexing over scalar elements, `byte_at`,
+string slices, `len`, Builder appends — get *fast* direct services
+that skip the marshaling and mirror the interpreter's checks in a
+few lines each; the oracle holds both tiers to byte-identical
+behavior.
 
-Milestone 2 grows the core outward: collections and ownership
-through the services table, string operations, the remaining
-intrinsics, host builtins — until the interpreter is the fallback
-for platforms, not features.  Known limits recorded on purpose:
-`budget.steps` is not enforced natively (the call-depth budget is;
-loom runs scripts unlimited anyway), and a native trap reports its
-innermost frame only — the interpreter remains the engine with full
-call traces.
+Current standing (docs/BENCHMARKS.md): **loops ~2.9x C, math
+~1.5x C, arrays ~5.5x C, strings ~19x C** — every bench native,
+5-9x faster than the interpreter on the collection-bound ones.
+Known limits recorded on purpose: `budget.steps` is not enforced
+natively (the call-depth budget is; loom runs scripts unlimited
+anyway), and a native trap reports its innermost frame only — the
+interpreter remains the engine with full call traces.  The next
+speed lever, when a real program demands it: unboxed native storage
+for scalar arrays and strings, turning the per-element service call
+into an inline bounds-checked load.
 
 ## Where a wall would send us
 

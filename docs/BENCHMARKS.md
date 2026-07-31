@@ -63,15 +63,17 @@ columns include process startup, .lc decode, and (native) the
 
 | benchmark | C       | native   | interp  | native/C |
 |-----------|---------|----------|---------|----------|
-| loops     | ~13ms   | ~37ms    | ~860ms  | **~2.9x** |
-| math      | ~15ms   | ~23ms    | ~1.0s   | **~1.6x** |
-| strings   | ~4ms    | ~390ms   | ~415ms  | (fell back) |
-| arrays    | ~6ms    | ~330ms   | ~343ms  | (fell back) |
+| loops     | ~11ms   | ~33ms    | ~810ms  | **~2.9x** |
+| math      | ~12ms   | ~19ms    | ~920ms  | **~1.5x** |
+| strings   | ~3.5ms  | ~66ms    | ~330ms  | **~19x** |
+| arrays    | ~5ms    | ~31ms    | ~270ms  | **~5.5x** |
 
-strings and arrays use collections, so milestone 1 of the native
-core does not take them yet — both Luce columns are the interpreter
-there (the near-equal numbers are the tell).  Milestone 2 brings
-them over.
+Since milestone 2 every benchmark runs native: collections,
+ownership, and strings route through the service tiers
+(docs/NATIVE.md), which puts the collection-bound benches 5-9x
+ahead of the interpreter.  The remaining strings/arrays gap to C is
+the per-element service call; the recorded next lever is unboxed
+native storage for scalar arrays and strings.
 
 For orientation: CPython 3.11 runs the loops algorithm in 1228ms
 and mandelbrot in 1884ms on this machine — native Luce is ~25-80x
@@ -79,11 +81,11 @@ faster than CPython on these, and the interpreter alone already
 edges it.  (CPython's mandelbrot count matches Luce's exactly —
 both are strict IEEE.)
 
-**Where we're at:** compiled Luce runs at **1.6–3x full-speed C**
-on the workloads the native core covers, checks included, exactly
-in the band the MIR experiment predicted.  The interpreter (40–95x)
+**Where we're at:** compiled Luce runs at **1.5–3x full-speed C**
+on scalar workloads and **5–19x** on collection- and string-bound
+ones, checks and ownership included.  The interpreter (40–95x)
 remains the reference implementation, the oracle, and the fallback
-for everything the native core doesn't take yet.
+for platforms the JIT doesn't cover.
 
 ## Why runtime checks are not the cost
 
@@ -109,11 +111,10 @@ The compiled backend predicted by the first edition of this file
 shipped as the native engine (docs/NATIVE.md) and landed where the
 MIR experiment said it would.  What remains, in value order:
 
-1. **Milestone 2 of the native core** — collections, ownership, and
-   string operations through the runtime services table, so
-   `strings` and `arrays` (and real programs like the editor) leave
-   the interpreter.  Compiled std strings should collapse the
-   strings ratio: the per-byte cost becomes native loops.
+1. ~~Milestone 2 of the native core~~ — shipped: every benchmark
+   and real program runs native.  Next lever, on demand: unboxed
+   native storage for scalar arrays and strings (inline
+   bounds-checked access instead of a service call per element).
 2. **The self-written Zig backend** — grows unhurried behind the
    same seam, racing MIR under the same oracle and this table;
    sovereignty when it wins.

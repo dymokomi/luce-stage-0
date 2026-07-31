@@ -284,24 +284,309 @@ test "the native engine reports a source location on trap" {
     try testing.expectEqual(@as(u32, 2), trap.trace[0].line);
 }
 
-test "programs beyond the arithmetic core are refused, not broken" {
-    var result = try compile_mod.compile(testing.allocator,
+// ---------------------------------------------------------------------------
+// Milestone 2: collections, ownership, structs, strings — the
+// generic services route every heap-shaped instruction through the
+// interpreter's own machine, and the oracle proves it.
+// ---------------------------------------------------------------------------
+
+test "oracle: lists grow, index, slice, sort, and free" {
+    try oracle(
         \\func main():
-        \\    var xs = [1, 2, 3]
+        \\    var xs = [3, 1, 4, 1, 5, 9, 2, 6]
+        \\    xs.append(53)
+        \\    xs.insert(0, 58)
+        \\    xs.remove(1)
+        \\    xs.sort()
+        \\    var total = 0
+        \\    for x in xs:
+        \\        total += x
+        \\    print(str(total))
+        \\    print(str(xs.find(9)))
+        \\    print(str(xs.contains(58)))
+        \\    print(str(xs.pop()))
+        \\    let front = xs[0:3]
+        \\    print(str(len(front)))
+        \\    xs.reverse()
         \\    print(str(xs[0]))
+        \\    xs.clear()
+        \\    print(str(len(xs)))
         \\
-    , .{}, script);
-    defer result.deinit();
-    try testing.expect(!native.supported(&result.success));
+    , roomy);
 }
 
-test "string comparison stays on the interpreter for now" {
-    var result = try compile_mod.compile(testing.allocator,
-        \\func main():
-        \\    let a = "x"
-        \\    print(str(a == "x"))
+test "oracle: maps insert, look up, iterate, and report misses" {
+    try oracle(
+        \\import strings
         \\
-    , .{}, script);
+        \\func main():
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    ages["alan"] = 41
+        \\    ages["ada"] = 37
+        \\    print(str(len(ages)))
+        \\    print(str(ages["ada"]))
+        \\    print(str(ages.has("alan")))
+        \\    print(str(ages.get("grace", 0)))
+        \\    for name, age in ages:
+        \\        print(f"{name}: {age}")
+        \\    let keys = ages.keys()
+        \\    print(keys.join(","))
+        \\    ages.remove("alan")
+        \\    print(str(len(ages)))
+        \\
+    , roomy);
+    try oracle(
+        \\func main():
+        \\    var m = new Map(Int, Int)
+        \\    let missing = m[7]
+        \\
+    , roomy);
+}
+
+test "oracle: arrays fill, index in two dimensions, and bound-check" {
+    try oracle(
+        \\func main():
+        \\    var grid = new Array(Int, 3, 4)
+        \\    grid.fill(7)
+        \\    grid[2, 3] = 42
+        \\    var total = 0
+        \\    for r in range(0, 3):
+        \\        for c in range(0, 4):
+        \\            total += grid[r, c]
+        \\    print(str(total))
+        \\    print(str(grid.dim(0) * grid.dim(1)))
+        \\
+    , roomy);
+    try oracle(
+        \\func edge() -> Int:
+        \\    return 5
+        \\
+        \\func main():
+        \\    var row = new Array(Int, 5)
+        \\    print(str(row[edge()]))
+        \\
+    , roomy);
+}
+
+test "oracle: builders accumulate and str() them" {
+    try oracle(
+        \\func main():
+        \\    var b = new Builder()
+        \\    for i in range(0, 5):
+        \\        b.append(str(i * i))
+        \\        b.append(";")
+        \\    print(str(b))
+        \\    print(str(len(b)))
+        \\    b.clear()
+        \\    print(str(len(b)))
+        \\
+    , roomy);
+}
+
+test "oracle: string concat, comparison, slices, and byte access" {
+    try oracle(
+        \\func main():
+        \\    let a = "loom"
+        \\    let b = a + "!"
+        \\    print(b)
+        \\    print(str(a == "loom"))
+        \\    print(str(a != b))
+        \\    print(str("abc" < "abd"))
+        \\    print(b[0:2])
+        \\    print(str(len("a🙂b")))
+        \\    print(str("a🙂b"[1:5]))
+        \\    print(str("na".byte_at(0)))
+        \\    print(str(chr(955)))
+        \\    print(str(ord("λ")))
+        \\    print(str(parse_int("42") + 1))
+        \\    print(str(parse_float("2.5") * 2.0))
+        \\
+    , roomy);
+    // A slice that splits a codepoint traps identically.
+    try oracle(
+        \\func edge() -> Int:
+        \\    return 2
+        \\
+        \\func main():
+        \\    let s = "a🙂b"
+        \\    print(s[0:edge()])
+        \\
+    , roomy);
+    try oracle(
+        \\func main():
+        \\    let n = parse_int("not a number")
+        \\
+    , roomy);
+}
+
+test "oracle: the std strings module runs natively" {
+    try oracle(
+        \\import strings
+        \\
+        \\func main():
+        \\    let text = "  Hello, Luce World  "
+        \\    let cleaned = text.trim()
+        \\    print(cleaned)
+        \\    print(str(cleaned.find("Luce")))
+        \\    print(cleaned.upper())
+        \\    print(cleaned.replace("Luce", "native"))
+        \\    let pieces = "a;b;;c".split(";")
+        \\    print(str(len(pieces)))
+        \\    print(pieces.join("|"))
+        \\    print(strings.format_float(2.345, 2))
+        \\    print(strings.pad_left("7", 3))
+        \\
+    , roomy);
+}
+
+test "oracle: the std math module runs natively" {
+    try oracle(
+        \\import math
+        \\
+        \\func close(a: Float, b: Float) -> Bool:
+        \\    return abs(a - b) < 0.000000001
+        \\
+        \\func main():
+        \\    print(str(math.ipow(2, 10)))
+        \\    print(str(close(math.exp(math.ln(7.5)), 7.5)))
+        \\    print(str(close(math.pow(2.0, 10.0), 1024.0)))
+        \\    print(str(math.round(-2.5)))
+        \\    var rng = math.seed(42)
+        \\    print(str(math.random_int(rng, 1, 7)))
+        \\    print(str(sqrt(49.0) + floor(2.9) + ceil(0.1)))
+        \\    print(str(min(3, 7) + max(3, 7) + clamp(10, 0, 5)))
+        \\
+    , roomy);
+}
+
+test "oracle: structs make, read, rebuild, and nest" {
+    try oracle(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\struct Box:
+        \\    corner: Point
+        \\    label: String
+        \\    count: Int
+        \\
+        \\func shifted(p: Point, dx: Float) -> Point:
+        \\    return Point(x = p.x + dx, y = p.y)
+        \\
+        \\func main():
+        \\    var box = Box(corner = Point(x = 1.0, y = 2.0), label = "crate", count = 3)
+        \\    box.count += 4
+        \\    box.corner.x = 9.5
+        \\    print(str(box.count))
+        \\    print(str(box.corner.x))
+        \\    print(box.label)
+        \\    let moved = shifted(box.corner, 0.5)
+        \\    print(str(moved.x))
+        \\    var early: Point
+        \\    print(str(early.x))
+        \\
+    , roomy);
+}
+
+test "oracle: ownership — give, copy, free, and the traps" {
+    try oracle(
+        \\func take(xs: give List(Int)) -> Int:
+        \\    return len(xs)
+        \\
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    print(str(take(give xs)))
+        \\
+    , roomy);
+    try oracle(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var snapshot = copy xs
+        \\    xs.append(4)
+        \\    print(str(len(xs)))
+        \\    print(str(len(snapshot)))
+        \\    free(xs)
+        \\    print(str(len(snapshot)))
+        \\
+    , roomy);
+    // Use after free through an alias traps identically.
+    try oracle(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    let alias = xs
+        \\    free(xs)
+        \\    print(str(len(alias)))
+        \\
+    , roomy);
+    // S23: the alias dodge is caught dynamically, either engine.
+    try oracle(
+        \\func main():
+        \\    var a = new List(List(Int))
+        \\    var b = new List(List(Int))
+        \\    var item = [2]
+        \\    let alias = item
+        \\    a.append(give item)
+        \\    b.append(give alias)
+        \\
+    , roomy);
+}
+
+test "oracle: nested containers free recursively with zero leaks" {
+    try oracle(
+        \\func build() -> List(List(Int)):
+        \\    var rows: List(List(Int)) = []
+        \\    for i in range(0, 10):
+        \\        var row: List(Int) = []
+        \\        for j in range(0, 10):
+        \\            row.append(i * j)
+        \\        rows.append(give row)
+        \\    return rows
+        \\
+        \\func main():
+        \\    var rows = build()
+        \\    var total = 0
+        \\    for row in rows:
+        \\        total += row[9]
+        \\    print(str(total))
+        \\
+    , roomy);
+}
+
+test "oracle: hostless file access traps identically" {
+    try oracle(
+        \\func main():
+        \\    let text = file_read("nowhere.txt")
+        \\
+    , roomy);
+}
+
+test "oracle: the sort program shape agrees end to end" {
+    try oracle(
+        \\import strings
+        \\
+        \\func main():
+        \\    var values = [42, 7, -3, 99, 0, 13, -40, 8, 77, 1]
+        \\    values.sort()
+        \\    var pieces: List(String) = []
+        \\    for value in values:
+        \\        pieces.append(str(value))
+        \\    print(pieces.join(" "))
+        \\    assert(values.find(13) == 6)
+        \\    assert(values.contains(99))
+        \\
+    , roomy);
+}
+
+test "only ports and the Bytes stub stay off the native core" {
+    var result = try compile_mod.compile(testing.allocator,
+        \\func evaluate(input: Input, output: Output):
+        \\    output.value = input.value * 2
+        \\
+    , .{
+        .inputs = &.{.{ .name = "value", .declared = .int }},
+        .outputs = &.{.{ .name = "value", .declared = .int }},
+    }, .{});
     defer result.deinit();
     try testing.expect(!native.supported(&result.success));
 }

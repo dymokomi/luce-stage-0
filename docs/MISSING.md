@@ -141,15 +141,17 @@ is breadth, added module by module:
 ## Performance — the native engine is live
 
 The compiled backend shipped (docs/NATIVE.md): loom lowers the
-verified IR through the vendored MIR JIT to machine code at load,
-and the covered benchmarks run at **1.6–3× full-speed C**, checks
-included (docs/BENCHMARKS.md).  The interpreter stays as the
-reference implementation, the oracle, and the fallback.  What
-remains: milestone 2 (collections, ownership, and strings in the
-native core, so real programs leave the interpreter), the
-self-written Zig backend racing MIR behind the same seam, and — if
-ever judged worth its weight — an LLVM engine for the last 2× and
-SIMD.
+verified IR through the vendored MIR JIT to machine code at load.
+Since milestone 2 the native core takes the whole language —
+collections, ownership, structs, strings, host builtins — through
+two service tiers into the interpreter's own machinery, and every
+benchmark runs native: **1.5–3× C** scalar, **5–19× C**
+collection-bound (docs/BENCHMARKS.md).  The interpreter stays as
+the reference implementation, the oracle, and the platform
+fallback.  What remains: unboxed native arrays/strings when a
+program demands it, the self-written Zig backend racing MIR behind
+the same seam, and — if ever judged worth its weight — an LLVM
+engine for the last 2× and SIMD.
 
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 
