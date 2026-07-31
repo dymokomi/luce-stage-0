@@ -185,6 +185,11 @@ pub fn compileProject(
     program.inputs = try copyPorts(arena, schema.inputs);
     program.outputs = try copyPorts(arena, schema.outputs);
 
+    // Dead-code elimination before the artifact is written: a std
+    // import brings its whole module, and what a program never calls
+    // should not reach the .lc, the decoder, or an engine.
+    try ir.prune(arena, &program);
+
     // The verifier is a compiler invariant, not a user diagnostic: a
     // verification failure here is a compiler bug surfaced loudly.
     ir.verify(gpa, &program) catch |mistake| switch (mistake) {
@@ -611,6 +616,45 @@ test "control flow, loops, and builtins compile and verify" {
     , .{ .outputs = &.{.{ .name = "total", .declared = .int }} });
     defer program.deinit();
     try testing.expectEqual(@as(usize, 0), program.reads.len);
+}
+
+test "functions unreachable from the entry are pruned from the artifact" {
+    // A std import brings its whole module; what is never called must
+    // not reach the .lc, the decoder, or an engine (docs/SPEED.md §12).
+    var unused = try expectCompilesOptions(
+        \\import strings
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true });
+    defer unused.deinit();
+    try testing.expectEqual(@as(usize, 1), unused.functions.len);
+
+    // Calling one std function keeps it and what it calls — find is
+    // find_from — and still drops the rest of the module.
+    var used = try expectCompilesOptions(
+        \\import strings
+        \\
+        \\func main():
+        \\    print(str("abc".find("b")))
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true });
+    defer used.deinit();
+    try testing.expectEqual(@as(usize, 3), used.functions.len);
+
+    // Renumbering kept the program runnable: the entry is in range
+    // and every call target resolves (the verifier ran on the pruned
+    // program, and re-runs here through decode in module.zig).
+    try testing.expect(used.entry_function < used.functions.len);
+    for (used.functions) |function| {
+        for (function.instructions) |instruction| {
+            switch (instruction) {
+                .call => |call| try testing.expect(call.function < used.functions.len),
+                else => {},
+            }
+        }
+    }
 }
 
 test "the IR dump is readable and deterministic" {

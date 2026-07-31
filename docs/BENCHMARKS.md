@@ -167,12 +167,17 @@ MIR experiment said it would.  What remains, in value order:
    access)~~, and ~~milestone 4 (string producers: fast services for
    `chr`/`str(Int)`/`+`, the `append_ascii` and `find_byte`
    primitives)~~ — shipped.
-2. **Don't compile what is never called** — `import strings` costs
-   ~4ms of JIT for 18 functions where a program calls 7, which is
-   now the single largest line item in `strings` (docs/SPEED.md
-   §10).  Static reachability pruning before lowering, or lazy
-   per-function compilation.
-3. **`List.append` on the generic path** — what `split` is actually
+2. ~~**Don't compile what is never called**~~ — shipped as
+   `ir.prune`, dead-code elimination in the compiler: an unused
+   `import strings` went from 12308 to 178 bytes of `.lc` and from
+   +4.11ms of load-time compile to free (docs/SPEED.md §12).
+3. **AOT, if the goal is the model** — loom still generates code at
+   every load, which is the JVM/WASM pattern, not C's.  Making a
+   `.lc` runnable without a compiler means emitting code with no
+   host absolute addresses (ASLR moves the service addresses every
+   execution), then a host-specific image beside the portable `.lc`.
+   Scoped in docs/SPEED.md §12.
+4. **`List.append` on the generic path** — what `split` is actually
    bounded by now; element adoption is ownership, so a fast service
    has to carry that.
 4. **The self-written Zig backend** — grows unhurried behind the

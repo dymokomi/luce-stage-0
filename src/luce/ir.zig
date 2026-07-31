@@ -335,6 +335,65 @@ pub const VerifyError = error{
 /// shape — the interpreter's positional reads and union accesses all
 /// rest on this pass, so a decoded module is safe to run, not merely
 /// plausible.
+/// Drop every function unreachable from the entry.
+///
+/// Std modules arrive whole: `import strings` brings eighteen
+/// functions where a program may call three, and each one is
+/// otherwise encoded into the `.lc`, decoded at load, and compiled to
+/// machine code — the largest single cost in a short program's run
+/// (docs/SPEED.md §12).  This is the dead-code elimination a compiled
+/// language is expected to do, and it belongs here, in the compiler,
+/// so the artifact itself is smaller and everything downstream of it
+/// gets faster.
+///
+/// Call targets and the entry are the only function references in the
+/// IR, so remapping is a renumber; the verifier re-checks both.
+pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
+    const count = program.functions.len;
+    if (count == 0) return;
+
+    const reachable = try arena.alloc(bool, count);
+    @memset(reachable, false);
+    var pending: std.ArrayList(u32) = .empty;
+    reachable[program.entry_function] = true;
+    try pending.append(arena, program.entry_function);
+    while (pending.pop()) |index| {
+        for (program.functions[index].instructions) |instruction| {
+            const called = switch (instruction) {
+                .call => |call| call.function,
+                else => continue,
+            };
+            if (reachable[called]) continue;
+            reachable[called] = true;
+            try pending.append(arena, called);
+        }
+    }
+
+    var kept: u32 = 0;
+    const renumbered = try arena.alloc(u32, count);
+    for (reachable, renumbered) |live, *slot| {
+        if (!live) continue;
+        slot.* = kept;
+        kept += 1;
+    }
+    if (kept == count) return;
+
+    const functions = try arena.alloc(Function, kept);
+    for (reachable, 0..) |live, index| {
+        if (!live) continue;
+        const function = program.functions[index];
+        for (function.instructions) |*instruction| {
+            switch (instruction.*) {
+                .call => |*call| call.function = renumbered[call.function],
+                else => {},
+            }
+        }
+        functions[renumbered[index]] = function;
+    }
+    program.functions = functions;
+    program.entry_function = renumbered[program.entry_function];
+}
+
 pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // The type tables themselves first: every index reachable from a
     // type must land inside the tables, map keys must be hashable

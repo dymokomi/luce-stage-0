@@ -374,3 +374,105 @@ policy, and "the whole run" is the wrong lifetime for anything
 per-call.**  What remains arena-shaped is per-value (strings,
 descriptors, heap objects), which is bounded by the data a program
 touches rather than by how long it runs.
+
+---
+
+## 12. Are we a compiled language?  Not yet — and the benchmark is right to say so
+
+The question was put directly: Luce compiles `.luc` to `.lc` and then
+runs it, so — like C, C++, Zig — compile time should not be in the
+benchmark; and if it is, something is wrong.
+
+**Today it is not wrong, because we are not that kind of compiled.**
+§4 settled the architecture as *the JVM/ART/WASM pattern*: `.lc` is
+the portable, verified distribution format, and loom generates
+machine code at load, in-process.  That is `javac` → `.class` → a
+JIT, not `zig build-exe`.  Java is colloquially "compiled" too, and
+nobody excludes JIT time from a Java benchmark.  **While loom
+generates code at every load, that time is part of what every user
+experiences, and subtracting it would measure a program that does
+not exist.**  So the benchmark keeps it, and the `floor` row makes
+it visible (§11).
+
+**Where the load-time compile actually goes** (19 functions, 47KB of
+MIR text — measured with temporary instrumentation, since removed):
+
+| phase | time | share |
+|---|---|---|
+| our lowering to MIR text | 199us | 3% |
+| `MIR_scan_string` (parsing that text) | 1228us | 21% |
+| `MIR_link` with `MIR_set_gen_interface` | 4551us | **76%** |
+| `MIR_gen` per function | 8us | 0% |
+
+`MIR_gen` looks free because it is: linking with the gen interface
+already compiled everything, eagerly, including every function the
+program never calls.
+
+**The fix that was available regardless of the architecture** is the
+one a compiled language is expected to have: **dead-code
+elimination**.  `ir.prune` drops every function unreachable from the
+entry, in the compiler, before the artifact is written — call targets
+and the entry are the only function references in the IR, so it is a
+mark and a renumber, and the verifier re-checks the result.  A
+program that imports `strings` and calls none of it:
+
+| | before | after |
+|---|---|---|
+| `.lc` size | 12308 B | **178 B** |
+| load-time compile | +4.11ms | **free** |
+
+The benchmarks barely move (`strings` −1.4%) because they use most
+of what they import — which is the honest shape of this win: it is
+worth ~4ms to every *script*, and nearly nothing to a benchmark.
+`programs/editor.lc` is unchanged at 51KB; it calls everything it
+defines.
+
+**Rejected on the way.**  MIR offers `MIR_set_lazy_gen_interface` —
+compile each function on first call — which would have got most of
+the same win for one word.  Two reasons not to.  It makes loom *more*
+HotSpot-shaped, not less, which is the wrong direction for this
+question; and it is unsafe as the engine stands: `luce_mir_protected`
+establishes a `setjmp` and returns, so a MIR error raised during
+lazy generation — that is, during *execution* — would `longjmp` into
+a dead frame.  Making it safe means running the program itself
+inside the protected region and accepting a `longjmp` out of
+arbitrary native Luce frames with the Machine's heap mid-operation.
+Static pruning has neither problem.
+
+**What would actually make us C-shaped**, recorded now so the next
+edition does not re-derive it.  The blocker is not that we lack a
+cache; it is that the emitted code bakes in addresses valid for
+exactly one process:
+
+1. service addresses arrive via `MIR_load_external`, and **ASLR
+   moves them every execution** — they cannot be persisted at all;
+2. constant string-descriptor addresses are arena-allocated per run
+   and embedded as immediates;
+3. RuntimeValue payload offsets are measured at run time and
+   embedded (these at least are stable for one loom build).
+
+So AOT is not "write the code to disk"; it is **emit code with no
+host absolute addresses in it**.  The lever is already in place:
+every emitted function takes `state` as its first argument, so the
+externals can move behind it — `state->services[N]` as an indirect
+call, `state->constants[N]` as a descriptor table — leaving payload
+offsets as immediates guarded by a loom-build fingerprint.  The code
+then becomes position-independent with respect to the host and can
+be written once and mmap'd, at the cost of one indirection per
+service call and an audit of whatever references MIR emits to its
+own runtime helpers.
+
+The artifact should be a *second* one, not a replacement: `.lc` stays
+portable and verified (that is its whole job, and cross-machine
+distribution depends on it), with a host-specific image beside it
+keyed on the `.lc` hash, the loom build, and the target triple —
+ART's dex2oat, .NET's ReadyToRun.  `loom run` uses the image when it
+is valid and JITs when it is not, so nothing about §4 or §8 has to
+be given up to gain it.
+
+Standing recommendation: with pruning landed, a small program's
+load-time compile is ~0.3ms and a std-heavy one's is ~3-5ms.  Do AOT
+when the goal is *the model* — being able to say a `.lc` runs without
+a compiler in the loop — rather than when the goal is the
+milliseconds, which are now small and getting smaller from the other
+end.
