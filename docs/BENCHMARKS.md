@@ -52,23 +52,44 @@ interpreter — defense in depth behind the `.lc` trust boundary — at
 ~15% over ReleaseFast.  That is the ship default; ReleaseFast is
 one flag away when it matters.
 
+## Measurement discipline: the machine is not stable
+
+This project benchmarks inside shared containers whose hosts change
+between sessions — and once changed *under* a session mid-day,
+moving every number including the C column.  Two rules follow, and
+the harness enforces both:
+
+1. **Never compare absolute times across tables.**  Every table is
+   stamped with the host it ran on; a snapshot from another machine
+   or another day is an illustration, not a baseline.
+2. **The authoritative regression check is a same-host A/B**:
+   `bench/compare.sh GIT-REF` builds the base ref in a scratch
+   worktree and the working tree side by side, compiles each side's
+   benches with its own toolchain, and times both interleaved
+   round-robin on the current host.  Deltas within a few percent
+   are noise; the milestone-3 validation run read loops +0.6%,
+   math -0.2%, strings -19.1%, arrays -32.9% — signal and noise
+   cleanly separated on a host that had just invalidated every
+   absolute number we had.
+
+`bench/run.sh` itself times in interleaved rounds (best of five)
+so slow host drift lands on every column equally — sequential
+timing on a bursty container biased whole columns by 2-3x.
+
 ## Snapshot — 2026-07-31, milestone 3 (unboxed access)
 
-x86_64 Linux container, zig cc (clang 21), loom at ReleaseSafe.
-`native` is loom's default engine (docs/NATIVE.md); `interp` forces
-the reference interpreter with LOOM_ENGINE=interpreter.  Both Luce
-columns include process startup, .lc decode, and (native) the
-~millisecond JIT compile.  (The container was migrated to a slower
-host mid-day, so absolute times moved for *everything* including C
-— A/B on the same host measured milestone 3 at -20% strings, -33%
-arrays over milestone 2, with loops/math unchanged.)
+Illustrative, on the host stamped in the table's run ("Intel Xeon @
+2.80GHz" container).  `native` is loom's default engine
+(docs/NATIVE.md); `interp` forces the reference interpreter with
+LOOM_ENGINE=interpreter.  Both Luce columns include process
+startup, .lc decode, and (native) the ~millisecond JIT compile:
 
 | benchmark | C       | native   | interp  | native/C |
 |-----------|---------|----------|---------|----------|
-| loops     | ~20ms   | ~95ms    | ~1.4s   | **~4.6x** |
-| math      | ~20ms   | ~27ms    | ~1.6s   | **~1.3x** |
-| strings   | ~5ms    | ~92ms    | ~510ms  | **~17x** |
-| arrays    | ~11ms   | ~33ms    | ~460ms  | **~3x** |
+| loops     | ~16ms   | ~33ms    | ~1.0s   | **~2.2x** |
+| math      | ~18ms   | ~26ms    | ~1.2s   | **~1.4x** |
+| strings   | ~7ms    | ~74ms    | ~0.4s   | **~11x** |
+| arrays    | ~10ms   | ~27ms    | ~0.36s  | **~2.8x** |
 
 Milestone 3 made string byte access and rank-1 scalar array
 indexing inline machine code (docs/NATIVE.md): no service call, a
@@ -128,13 +149,21 @@ MIR experiment said it would.  What remains, in value order:
 
 ## The regression-guard workflow
 
-Run `bench/run.sh` before and after any change to the interpreter,
-analyzer lowering, or std internals.  **Ratios are the number to
-watch** — absolute times move with the machine and this container is
-noisy (±20% between runs is normal; best-of-three tames but does not
-eliminate it).  A step change in a ratio (say 1.5× on one benchmark)
-is a regression or a win to explain in the commit message.  Update
-the snapshot table when the numbers move for a *reason*.
+Before landing any change to an engine, the analyzer lowering, or
+std internals:
+
+```sh
+bench/compare.sh HEAD        # working tree vs last commit
+bench/compare.sh main~3      # or any base worth comparing against
+```
+
+A delta beyond a few percent on any benchmark is a regression or a
+win to explain in the commit message.  `bench/run.sh` remains the
+cross-language view (Luce vs C vs the interpreter, with the
+output-equality check); its ratios are meaningful within one table,
+its absolute times only on the host stamped above them.  Update the
+snapshot when the numbers move for a *reason*, and record the host
+with them.
 
 `zig build test` compiles every `bench/*.luc` (not timed), so the
 benchmarks themselves cannot rot.

@@ -39,17 +39,19 @@ interp_loom() {
     LOOM_ENGINE=interpreter build/loom "$@"
 }
 
-# Best-of-three wall time in nanoseconds.
-best_ns() {
-    best=""
-    for _ in 1 2 3; do
-        start=$(date +%s%N)
-        "$@" >/dev/null
-        end=$(date +%s%N)
-        took=$((end - start))
-        if [ -z "$best" ] || [ "$took" -lt "$best" ]; then best=$took; fi
-    done
-    echo "$best"
+time_once() {
+    start=$(date +%s%N)
+    "$@" >/dev/null
+    end=$(date +%s%N)
+    echo $((end - start))
+}
+
+keep_min() {
+    file="$1"
+    value="$2"
+    if [ ! -f "$file" ] || [ "$value" -lt "$(cat "$file")" ]; then
+        echo "$value" > "$file"
+    fi
 }
 
 # Three implementations of every benchmark: C at full optimization,
@@ -58,7 +60,6 @@ best_ns() {
 # interpreter).  All three outputs must agree before anything is
 # timed.  A benchmark beyond the native core runs the interpreter in
 # both Luce columns — the equal numbers are the tell.
-printf '%-10s %12s %12s %12s %10s\n' "benchmark" "C" "native" "interp" "native/C"
 for name in $names; do
     c_out=$(build/bench/"$name")
     native_out=$(build/loom run build/bench/"$name".lc)
@@ -67,10 +68,29 @@ for name in $names; do
         echo "bench: $name output mismatch — C:'$c_out' native:'$native_out' interp:'$interp_out'" >&2
         exit 1
     fi
-    c_ns=$(best_ns build/bench/"$name")
-    native_ns=$(best_ns build/loom run build/bench/"$name".lc)
-    interp_ns=$(best_ns interp_loom run build/bench/"$name".lc)
-    awk -v name="$name" -v c="$c_ns" -v native="$native_ns" -v interp="$interp_ns" 'BEGIN {
+done
+
+# The machine stamps every table: absolute numbers mean nothing off
+# this host — compare against another commit with bench/compare.sh,
+# never against a table from a different machine or day.
+awk -F: '/model name/{gsub(/^ +/, "", $2); print "host: " $2; exit}' /proc/cpuinfo 2>/dev/null || true
+
+# Interleaved rounds, best of five: slow host drift lands on every
+# column equally instead of biasing whichever ran last.
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+for round in 1 2 3 4 5; do
+    for name in $names; do
+        keep_min "$tmp/$name.c" "$(time_once build/bench/"$name")"
+        keep_min "$tmp/$name.native" "$(time_once build/loom run build/bench/"$name".lc)"
+        keep_min "$tmp/$name.interp" "$(time_once interp_loom run build/bench/"$name".lc)"
+    done
+done
+
+printf '%-10s %12s %12s %12s %10s\n' "benchmark" "C" "native" "interp" "native/C"
+for name in $names; do
+    awk -v name="$name" -v c="$(cat "$tmp/$name.c")" -v native="$(cat "$tmp/$name.native")" \
+        -v interp="$(cat "$tmp/$name.interp")" 'BEGIN {
         printf "%-10s %10.1fms %10.1fms %10.1fms %9.1fx\n",
             name, c / 1e6, native / 1e6, interp / 1e6, native / c
     }'
