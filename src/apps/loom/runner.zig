@@ -28,6 +28,13 @@ const program_budget: luce.backend.Budget = .{
 /// reports its innermost calls and a count of the rest.
 const max_printed_frames = 12;
 
+/// Process-wide engine policy, set once at startup from LOOM_ENGINE:
+/// `auto` picks native when the program fits, `interpreter` forces
+/// the reference engine (semantics are identical; this is for
+/// debugging and benchmarking the engines against each other).
+pub const Engine = enum { auto, interpreter };
+pub var engine: Engine = .auto;
+
 pub const compile_options: luce.types.CompileOptions = .{
     .entry_mode = .script,
     .allow_host = true,
@@ -132,14 +139,42 @@ pub fn run(
     const inputs = try arena.allocator().alloc(luce.backend.InputValue, program.inputs.len);
     @memset(inputs, .unavailable);
 
-    const result = try luce.backend.evaluateHosted(
-        arena.allocator(),
-        program,
-        inputs,
-        outputs,
-        program_budget,
-        services.host(),
-    );
+    // Engine choice: native (MIR-compiled at load) whenever the whole
+    // program fits its supported core, the interpreter otherwise —
+    // identical semantics either way.
+    const use_native = engine == .auto and
+        luce.native.available and
+        luce.native.supported(program);
+    const result = if (use_native)
+        luce.native.run(
+            arena.allocator(),
+            program,
+            inputs,
+            outputs,
+            program_budget,
+            services.host(),
+        ) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A native-compile failure is a loom bug; the program
+            // still runs, on the reference engine.
+            error.NativeFailed => try luce.backend.evaluateHosted(
+                arena.allocator(),
+                program,
+                inputs,
+                outputs,
+                program_budget,
+                services.host(),
+            ),
+        }
+    else
+        try luce.backend.evaluateHosted(
+            arena.allocator(),
+            program,
+            inputs,
+            outputs,
+            program_budget,
+            services.host(),
+        );
 
     // Land back on the ordinary screen before reporting anything.
     services.restoreScreen();

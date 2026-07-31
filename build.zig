@@ -13,12 +13,30 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Luce: the language — lexer through IR, interpreter, .lc format.
+    // MIR (vendor/mir, MIT): the JIT behind the native engine.  Two
+    // translation units, always optimized — the C library's build
+    // mode has nothing to do with debugging Luce — plus our glue.
+    const mir_module = b.createModule(.{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    mir_module.addIncludePath(b.path("vendor/mir"));
+    mir_module.addCSourceFiles(.{
+        .files = &.{ "vendor/mir/mir.c", "vendor/mir/mir-gen.c", "src/luce/mir_glue.c" },
+        .flags = &.{ "-std=gnu11", "-DNDEBUG", "-fsigned-char", "-fno-sanitize=undefined" },
+    });
+    const mir_lib = b.addLibrary(.{ .name = "mir", .root_module = mir_module });
+
+    // Luce: the language — lexer through IR, interpreter, native
+    // engine, .lc format.
     const luce = b.addModule("luce", .{
         .root_source_file = b.path("src/luce/luce.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
+    luce.linkLibrary(mir_lib);
     const luce_tests = b.addTest(.{ .root_module = luce });
     const run_luce_tests = b.addRunArtifact(luce_tests);
     const test_step = b.step("test", "Run the Luce and loom test suites");

@@ -52,29 +52,38 @@ interpreter — defense in depth behind the `.lc` trust boundary — at
 ~15% over ReleaseFast.  That is the ship default; ReleaseFast is
 one flag away when it matters.
 
-## Snapshot — 2026-07-30
+## Snapshot — 2026-07-31, with the native engine
 
-x86_64 Linux container, zig cc (clang 21), interpreter at
-ReleaseSafe.  Luce times are stable run to run (±5%); the C times
-are so small that container noise moves them ±40%, which is most of
-the spread in the ratio:
+x86_64 Linux container, zig cc (clang 21), loom at ReleaseSafe.
+`native` is loom's default engine (docs/NATIVE.md — the vendored
+MIR JIT compiling the verified IR at load); `interp` forces the
+reference interpreter with LOOM_ENGINE=interpreter.  Both Luce
+columns include process startup, .lc decode, and (native) the
+~millisecond JIT compile:
 
-| benchmark | C       | Luce     | Luce/C  | CPython 3.11 |
-|-----------|---------|----------|---------|--------------|
-| loops     | 16–26ms | ~0.97s   | 40–60x  | 1228ms       |
-| math      | 18–22ms | ~1.1s    | 50–60x  | 1884ms       |
-| strings   | 5–6ms   | ~0.45s   | 80–95x  |              |
-| arrays    | 8–10ms  | ~0.38s   | 40–45x  |              |
+| benchmark | C       | native   | interp  | native/C |
+|-----------|---------|----------|---------|----------|
+| loops     | ~13ms   | ~37ms    | ~860ms  | **~2.9x** |
+| math      | ~15ms   | ~23ms    | ~1.0s   | **~1.6x** |
+| strings   | ~4ms    | ~390ms   | ~415ms  | (fell back) |
+| arrays    | ~6ms    | ~330ms   | ~343ms  | (fell back) |
 
-(The CPython column is the same algorithm in plain Python on the
-same machine, for orientation; its mandelbrot count matches Luce's
-exactly — both are strict IEEE.)
+strings and arrays use collections, so milestone 1 of the native
+core does not take them yet — both Luce columns are the interpreter
+there (the near-equal numbers are the tell).  Milestone 2 brings
+them over.
 
-**Where we're at:** 40–95× slower than full-speed C, and **faster
-than CPython 3.11** on the loop-bound workloads (~1.3× on loops,
-~1.7× on math).  That is respectable territory for a
-safety-checked, ownership-tracking IR interpreter with zero tuning
-so far.
+For orientation: CPython 3.11 runs the loops algorithm in 1228ms
+and mandelbrot in 1884ms on this machine — native Luce is ~25-80x
+faster than CPython on these, and the interpreter alone already
+edges it.  (CPython's mandelbrot count matches Luce's exactly —
+both are strict IEEE.)
+
+**Where we're at:** compiled Luce runs at **1.6–3x full-speed C**
+on the workloads the native core covers, checks included, exactly
+in the band the MIR experiment predicted.  The interpreter (40–95x)
+remains the reference implementation, the oracle, and the fallback
+for everything the native core doesn't take yet.
 
 ## Why runtime checks are not the cost
 
@@ -94,34 +103,25 @@ machine instructions where C spends one.  Deleting every check would
 take ~60× to ~50×, not to 1×.  The path to C is not fewer checks;
 it is not dispatching at all.
 
-## The path to C-class speed, honestly
+## The path from here
 
-1. **Interpreter tuning** (the current engine, kept as the reference
-   implementation): threaded/computed-goto dispatch, batched
-   step-budget accounting, fusing common instruction pairs.
-   Realistic landing zone: 15–30× C.  Interpreters do not beat that
-   band without JIT machinery.
-2. **A compiled backend** — the real answer, and the language was
-   shaped for it: statically typed, monomorphic, no GC, no dynamic
-   dispatch, verified IR with explicit blocks.  Lowering Luce IR to
-   native code (directly, or through Zig/C and an existing
-   optimizer) puts checked code in Zig-ReleaseSafe territory —
-   **1–2× C** — and closes the SIMD gap on `arrays`, because the
-   optimizer vectorizes compiled loops.  Semantics never change:
-   same traps, same codes, same IEEE results; a backend is a swap
-   behind `backend.zig`, invisible to programs.
+The compiled backend predicted by the first edition of this file
+shipped as the native engine (docs/NATIVE.md) and landed where the
+MIR experiment said it would.  What remains, in value order:
 
-Interpreter levers in the order they would pay, until then:
-
-1. **Dispatch and step accounting** — the fixed per-instruction
-   costs dominate `loops` and `math`.
-2. **Interpreted std strings** — `strings.upper` pays the full
-   dispatch loop per byte; `strings` carries the widest ratio.
-   Faster dispatch helps it first; native fast paths for hot std
-   internals only with evidence, since that reverses a deliberate
-   design bet.
-3. **SIMD** — out of scope for an interpreter; the `arrays` ratio
-   records what the compiled backend reclaims.
+1. **Milestone 2 of the native core** — collections, ownership, and
+   string operations through the runtime services table, so
+   `strings` and `arrays` (and real programs like the editor) leave
+   the interpreter.  Compiled std strings should collapse the
+   strings ratio: the per-byte cost becomes native loops.
+2. **The self-written Zig backend** — grows unhurried behind the
+   same seam, racing MIR under the same oracle and this table;
+   sovereignty when it wins.
+3. **SIMD / the last 2x** — MIR does not vectorize; `arrays` will
+   plateau a few x above C until an LLVM-backed engine is ever
+   judged worth its 200MB.  Whole-array std intrinsics (dot, fill)
+   are the cheap VEX-style alternative when a real program wants
+   them.
 
 ## The regression-guard workflow
 

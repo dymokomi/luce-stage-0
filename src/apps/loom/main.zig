@@ -35,6 +35,9 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     defer environ_map.deinit();
     const no_color = environ_map.get("NO_COLOR") != null;
     const editor_override = environ_map.get("LOOM_EDITOR");
+    if (environ_map.get("LOOM_ENGINE")) |wanted| {
+        if (std.mem.eql(u8, wanted, "interpreter")) runner.engine = .interpreter;
+    }
 
     var err_writer = std.Io.File.stderr().writer(io, &.{});
     const err = &err_writer.interface;

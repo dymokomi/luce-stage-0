@@ -138,17 +138,18 @@ is breadth, added module by module:
   ~~float formatting control~~ (shipped:
   `strings.format_float(x, decimals)`).
 
-## Performance — where the speed comes from later
+## Performance — the native engine is live
 
-Measured honestly in docs/BENCHMARKS.md: the ReleaseSafe
-interpreter runs 40–95× slower than C and beats CPython 3.11 on
-loop-bound work.  Runtime checks are *not* the gap (~15% ceiling,
-measured); interpretation is.  The path, when programs demand it:
-interpreter tuning (threaded dispatch, batched step accounting →
-15–30× C), then a compiled backend lowering the verified IR to
-native code (→ 1–2× C, SIMD included).  The language was shaped for
-that backend — statically typed, monomorphic, no GC, semantics
-identical under any engine — so it waits on need, not on design.
+The compiled backend shipped (docs/NATIVE.md): loom lowers the
+verified IR through the vendored MIR JIT to machine code at load,
+and the covered benchmarks run at **1.6–3× full-speed C**, checks
+included (docs/BENCHMARKS.md).  The interpreter stays as the
+reference implementation, the oracle, and the fallback.  What
+remains: milestone 2 (collections, ownership, and strings in the
+native core, so real programs leave the interpreter), the
+self-written Zig backend racing MIR behind the same seam, and — if
+ever judged worth its weight — an LLVM engine for the last 2× and
+SIMD.
 
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 
