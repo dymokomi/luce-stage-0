@@ -32,6 +32,15 @@ a corpus through both engines and demands identical prints, trap
 codes, and messages — the same discipline Zig uses to keep its
 self-hosted backends honest against LLVM.
 
+The oracle is only as strong as its corpus.  A 2026-07-31 audit
+found struct `==` compiling to a comparison of field-array
+*addresses* — equal structs read as unequal natively — because the
+corpus had no struct-equality case; the lowering now routes strukt
+comparisons through the reference implementation and the corpus
+covers them.  The standing rule that fell out: every operator ×
+operand-type pair the analyzer admits belongs in the corpus, not
+just the pairs the benchmarks happen to exercise.
+
 ## How the lowering works
 
 The verified IR prints as one MIR module in MIR's textual form and
@@ -125,11 +134,59 @@ ratio is no longer string-shaped: JIT compile time for std
 functions the program never calls, and `List.append` on the generic
 path behind `split`.
 
+## Milestone 5 (planned): hermetic code, then the image
+
+Luce is a compiled language (docs/SPEED.md §13); what keeps its last
+compile stage at load rather than at build is only that the emitted
+code bakes in addresses valid for one process.  The complete
+inventory, from the milestone-4 audit:
+
+- **In the emitted text as immediates**: the empty-string
+  descriptor's address (the String zero value), every constant-pool
+  descriptor's address, `@sizeOf(RuntimeValue)` as the array stride,
+  and the run-time-measured payload offsets inside RuntimeValue.
+- **Resolved at MIR link**: the 18 `svc_*` service symbols
+  (`MIR_load_external`), plus inter-function call targets — which
+  MIR bakes into the code itself (movz/movk immediates on aarch64, a
+  constant-pool word on x86-64), so they are host-absolute too.
+- **Behind the code as run-time data** (need a stable ABI, not
+  relocation): runtime string descriptors, array views, struct field
+  arrays — all arena addresses flowing through registers.
+
+**M1 — hermetic codegen (days).**  Move every text-embedded and
+link-resolved absolute behind the State pointer: a services table, a
+constant-descriptor table, and a Luce function table for
+inter-function calls.  MIR needs no patch — its call instruction
+takes a register target natively (the scanner resolves a name as a
+register first; both backends emit `blr`/`call *r`).  Payload
+offsets stay immediates guarded by a loom-build fingerprint.
+Enforcement is mechanical: a hermeticity oracle compiles the same
+program in two contexts at different bases and demands
+byte-identical function code.  Cost to measure with
+`bench/compare.sh`: one load per call against today's absolute-
+address materialization, plus whatever MIR's link-time inlining was
+contributing.
+
+**M2 — the image (1-2 weeks).**  Each function's generated code is
+one contiguous buffer (constant pool appended); MIR retains its
+address but not its length — a small patch to the owned vendor
+snapshot records it.  The image sits **beside** the `.lc` — the
+`.lc` stays the portable verified artifact — keyed on the `.lc`
+hash, the loom build fingerprint (payload offsets included), and
+the target triple: header, concatenated bodies, offset table, entry
+index.  Loading maps it into executable pages (macOS arm64: the
+MAP_JIT + `pthread_jit_write_protect_np` + `sys_icache_invalidate`
+recipe already in `mir-code-alloc-default.c`), fills the State
+tables, and calls the entry — **zero code generation, no MIR
+context at load**.  Stale or foreign images fall back to the JIT,
+then the interpreter — per-program, never mixed.
+
 ## Where a wall would send us
 
 The engine seam is the contract: everything above it (`backend.zig`
 upward) is engine-blind.  If MIR's ~2-3x plateau ever stops being
 enough, the same lowering structure feeds a self-written Zig backend
-(sovereignty) or an LLVM-backed one (the last 2x and SIMD) — racing
-under the same oracle and the same bench table, exactly as this one
-was brought up.
+(sovereignty — and designed position-independent from day one, the
+milestone-5 image becomes its native output) or an LLVM-backed one
+(the last 2x and SIMD) — racing under the same oracle and the same
+bench table, exactly as this one was brought up.

@@ -309,32 +309,9 @@ pub fn strip(program: *Program) void {
 }
 
 // ---------------------------------------------------------------------------
-// Verifier
+// Dead-code elimination
 // ---------------------------------------------------------------------------
 
-pub const VerifyError = error{
-    OutOfMemory,
-    EmptyFunction,
-    UnterminatedBlock,
-    MisplacedTerminator,
-    UndefinedRegister,
-    ValuelessRegister,
-    TypeMismatch,
-    BadLocal,
-    BadPort,
-    BadBlock,
-    BadFunction,
-    BadStruct,
-    BadConstant,
-    BadIntrinsic,
-};
-
-/// Check every structural and type invariant of a program.  Verified
-/// programs cannot reference undefined registers, mismatch types,
-/// fall through a block, or hand an intrinsic the wrong argument
-/// shape — the interpreter's positional reads and union accesses all
-/// rest on this pass, so a decoded module is safe to run, not merely
-/// plausible.
 /// Drop every function unreachable from the entry.
 ///
 /// Std modules arrive whole: `import strings` brings eighteen
@@ -347,7 +324,14 @@ pub const VerifyError = error{
 /// gets faster.
 ///
 /// Call targets and the entry are the only function references in the
-/// IR, so remapping is a renumber; the verifier re-checks both.
+/// IR, so remapping is a renumber.  Call on verified programs only —
+/// the compiler verifies before pruning (an analyzer bug surfaces as
+/// a diagnostic, not an index panic here) and again after (proving
+/// the renumbering).  Functions are all that shrinks: constants,
+/// struct layouts, and heap-type rows they referenced stay, and the
+/// scratch plus the dead functions' memory stay in the program arena
+/// until deinit — the artifact is what gets smaller, not the
+/// resident compiler.
 pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     const count = program.functions.len;
     if (count == 0) return;
@@ -394,6 +378,88 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     program.entry_function = renumbered[program.entry_function];
 }
 
+test "unreachable functions are pruned and call targets renumbered" {
+    // Five functions with the entry in the middle: [dead, main, dead,
+    // mid, leaf], main -> mid -> leaf.  Pruning must keep the chain,
+    // shift the indices, and leave a program the verifier accepts.
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const functions = try arena.alloc(Function, 5);
+    for (functions, 0..) |*function, index| {
+        // Every function gets its own instruction pool (prune rewrites
+        // call targets in place, so sharing would double-renumber).
+        const instructions = try arena.dupe(Instruction, &.{
+            .{ .const_int = 1 },
+            .{ .ret = 0 },
+        });
+        const items = try arena.dupe(Register, &.{ 0, 1 });
+        const blocks = try arena.alloc(Block, 1);
+        blocks[0] = .{ .items = items };
+        function.* = .{
+            .name = try std.fmt.allocPrint(arena, "f{d}", .{index}),
+            .parameter_count = 0,
+            .return_type = .int,
+            .locals = &.{},
+            .instructions = instructions,
+            .result_types = try arena.dupe(types.Type, &.{ .int, .none }),
+            .blocks = blocks,
+        };
+    }
+    functions[1].name = try arena.dupe(u8, "main");
+    functions[1].instructions[0] = .{ .call = .{ .function = 3, .arguments = &.{} } };
+    functions[3].name = try arena.dupe(u8, "mid");
+    functions[3].instructions[0] = .{ .call = .{ .function = 4, .arguments = &.{} } };
+    functions[4].name = try arena.dupe(u8, "leaf");
+    program.functions = functions;
+    program.entry_function = 1;
+    try verify(testing.allocator, &program);
+
+    try prune(arena, &program);
+    try testing.expectEqual(@as(usize, 3), program.functions.len);
+    try testing.expectEqual(@as(u32, 0), program.entry_function);
+    try testing.expectEqualStrings("main", program.functions[0].name);
+    try testing.expectEqualStrings("mid", program.functions[1].name);
+    try testing.expectEqualStrings("leaf", program.functions[2].name);
+    try testing.expectEqual(@as(u32, 1), program.functions[0].instructions[0].call.function);
+    try testing.expectEqual(@as(u32, 2), program.functions[1].instructions[0].call.function);
+    try verify(testing.allocator, &program);
+
+    // Fully live programs pass through untouched (the no-op fast path
+    // keeps prune idempotent).
+    try prune(arena, &program);
+    try testing.expectEqual(@as(usize, 3), program.functions.len);
+    try testing.expectEqual(@as(u32, 0), program.entry_function);
+}
+
+// ---------------------------------------------------------------------------
+// Verifier
+// ---------------------------------------------------------------------------
+
+pub const VerifyError = error{
+    OutOfMemory,
+    EmptyFunction,
+    UnterminatedBlock,
+    MisplacedTerminator,
+    UndefinedRegister,
+    ValuelessRegister,
+    TypeMismatch,
+    BadLocal,
+    BadPort,
+    BadBlock,
+    BadFunction,
+    BadStruct,
+    BadConstant,
+    BadIntrinsic,
+};
+
+/// Check every structural and type invariant of a program.  Verified
+/// programs cannot reference undefined registers, mismatch types,
+/// fall through a block, or hand an intrinsic the wrong argument
+/// shape — the interpreter's positional reads and union accesses all
+/// rest on this pass, so a decoded module is safe to run, not merely
+/// plausible.
 pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // The type tables themselves first: every index reachable from a
     // type must land inside the tables, map keys must be hashable

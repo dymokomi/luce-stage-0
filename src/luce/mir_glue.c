@@ -9,19 +9,25 @@
  *
  * The longjmp only ever crosses MIR's own C frames and the thin Zig
  * callback passed to luce_mir_protected, which holds no resources.
- * After a reported error the context is abandoned (freed by
- * MIR_finish on the normal teardown path is skipped) — an error here
- * is a compiler bug surfaced to the caller, not a runtime condition.
+ * The jump buffer is only armed while luce_mir_protected is on the
+ * stack; an MIR error reported outside that window (teardown, a
+ * future misuse) prints and aborts instead of jumping into a dead
+ * frame.  After a reported error the context's state is unknown, so
+ * the caller abandons it — the normal MIR_finish teardown is
+ * skipped, leaking the context once; an error here is a compiler bug
+ * surfaced to the caller, not a runtime condition.
  */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "mir.h"
 #include "mir-gen.h"
 
 static _Thread_local jmp_buf luce_mir_recover;
+static _Thread_local int luce_mir_armed = 0;
 static _Thread_local char luce_mir_message[512];
 
 static void MIR_NO_RETURN error_handler (MIR_error_type_t type, const char *format, ...) {
@@ -30,6 +36,14 @@ static void MIR_NO_RETURN error_handler (MIR_error_type_t type, const char *form
   va_start (args, format);
   vsnprintf (luce_mir_message, sizeof (luce_mir_message), format, args);
   va_end (args);
+  if (!luce_mir_armed) {
+    /* No live jump target: longjmp here would enter a dead frame.
+     * This is a should-never-happen MIR error outside the protected
+     * compile window — fail as loudly as MIR's own default would. */
+    fprintf (stderr, "loom: MIR error outside compile: %s\n", luce_mir_message);
+    abort ();
+  }
+  luce_mir_armed = 0;
   longjmp (luce_mir_recover, 1);
 }
 
@@ -42,7 +56,9 @@ const char *luce_mir_error_text (void) { return luce_mir_message; }
 int luce_mir_protected (MIR_context_t ctx, void (*body) (void *payload), void *payload) {
   MIR_set_error_func (ctx, error_handler);
   if (setjmp (luce_mir_recover) != 0) return 1;
+  luce_mir_armed = 1;
   body (payload);
+  luce_mir_armed = 0;
   return 0;
 }
 

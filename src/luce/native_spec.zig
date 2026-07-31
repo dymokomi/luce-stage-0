@@ -505,6 +505,36 @@ test "oracle: the std math module runs natively" {
     , roomy);
 }
 
+test "oracle: struct equality is field-wise in both engines" {
+    // A struct travels natively as its field-array address, so a
+    // naive lowering compares pointers and calls equal structs
+    // unequal — the exact bug this corpus exists to catch.
+    try oracle(
+        \\struct Point:
+        \\    x: Int
+        \\    y: Int
+        \\
+        \\struct Tag:
+        \\    name: String
+        \\    at: Point
+        \\
+        \\func make(x: Int, y: Int) -> Point:
+        \\    return Point(x = x, y = y)
+        \\
+        \\func main():
+        \\    print(str(make(1, 2) == make(1, 2)))
+        \\    print(str(make(1, 2) == make(1, 3)))
+        \\    print(str(make(1, 2) != make(1, 2)))
+        \\    let a = Tag(name = "he" + "llo", at = make(4, 5))
+        \\    let b = Tag(name = "hello", at = make(4, 5))
+        \\    let c = Tag(name = "hello", at = make(4, 6))
+        \\    print(str(a == b))
+        \\    print(str(a == c))
+        \\    print(str(a != c))
+        \\
+    , roomy);
+}
+
 test "oracle: structs make, read, rebuild, and nest" {
     try oracle(
         \\struct Point:

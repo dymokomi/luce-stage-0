@@ -185,29 +185,48 @@ pub fn compileProject(
     program.inputs = try copyPorts(arena, schema.inputs);
     program.outputs = try copyPorts(arena, schema.outputs);
 
+    // The verifier is a compiler invariant, not a user diagnostic: a
+    // verification failure here is a compiler bug surfaced loudly.
+    // It runs before pruning (so an analyzer bug is a diagnostic, not
+    // an index panic inside prune) and again after (proving the
+    // renumbering).
+    if (try verifyStage(gpa, &program, &diagnostics, "generated")) |failed| return failed;
+
     // Dead-code elimination before the artifact is written: a std
     // import brings its whole module, and what a program never calls
     // should not reach the .lc, the decoder, or an engine.
-    try ir.prune(arena, &program);
+    // `luce ir --full` turns it off to show the unpruned lowering.
+    if (options.prune) {
+        try ir.prune(arena, &program);
+        if (try verifyStage(gpa, &program, &diagnostics, "pruned")) |failed| return failed;
+    }
 
-    // The verifier is a compiler invariant, not a user diagnostic: a
-    // verification failure here is a compiler bug surfaced loudly.
-    ir.verify(gpa, &program) catch |mistake| switch (mistake) {
+    diagnostics.deinit();
+    return .{ .success = program };
+}
+
+/// Run the verifier and convert any failure into the internal-compiler-
+/// error diagnostic; returns the failure result to bubble, null on pass.
+fn verifyStage(
+    gpa: Allocator,
+    program: *ir.Program,
+    diagnostics: *Diagnostics,
+    stage: []const u8,
+) Error!?CompileResult {
+    ir.verify(gpa, program) catch |mistake| switch (mistake) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
             try diagnostics.add(
                 "luce.compiler.verify",
                 .{ .start = 0, .end = 0 },
-                "internal compiler error: generated IR failed verification ({s})",
-                .{@errorName(mistake)},
+                "internal compiler error: {s} IR failed verification ({s})",
+                .{ stage, @errorName(mistake) },
             );
             program.deinit();
-            return .{ .failure = diagnostics };
+            return .{ .failure = diagnostics.* };
         },
     };
-
-    diagnostics.deinit();
-    return .{ .success = program };
+    return null;
 }
 
 fn copyPorts(arena: Allocator, ports: []const types.Port) Error![]types.Port {
@@ -631,8 +650,9 @@ test "functions unreachable from the entry are pruned from the artifact" {
     defer unused.deinit();
     try testing.expectEqual(@as(usize, 1), unused.functions.len);
 
-    // Calling one std function keeps it and what it calls — find is
-    // find_from — and still drops the rest of the module.
+    // Calling one std function keeps it (and its callees) by name and
+    // still drops the rest of the module — asserted by name, not by
+    // count, so an innocent std refactor cannot break this test.
     var used = try expectCompilesOptions(
         \\import strings
         \\
@@ -641,20 +661,39 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\
     , .{}, .{ .entry_mode = .script, .allow_host = true });
     defer used.deinit();
-    try testing.expectEqual(@as(usize, 3), used.functions.len);
-
-    // Renumbering kept the program runnable: the entry is in range
-    // and every call target resolves (the verifier ran on the pruned
-    // program, and re-runs here through decode in module.zig).
-    try testing.expect(used.entry_function < used.functions.len);
+    var kept_find = false;
+    var kept_dead = false;
     for (used.functions) |function| {
-        for (function.instructions) |instruction| {
-            switch (instruction) {
-                .call => |call| try testing.expect(call.function < used.functions.len),
-                else => {},
+        if (std.mem.endsWith(u8, function.name, "find")) kept_find = true;
+        if (std.mem.endsWith(u8, function.name, "split") or
+            std.mem.endsWith(u8, function.name, "upper")) kept_dead = true;
+    }
+    try testing.expect(kept_find);
+    try testing.expect(!kept_dead);
+
+    // Nothing dead survived: every kept function is reachable from
+    // the entry by re-walking the call graph.
+    const reached = try testing.allocator.alloc(bool, used.functions.len);
+    defer testing.allocator.free(reached);
+    @memset(reached, false);
+    reached[used.entry_function] = true;
+    var scan = true;
+    while (scan) {
+        scan = false;
+        for (used.functions, 0..) |function, index| {
+            if (!reached[index]) continue;
+            for (function.instructions) |instruction| {
+                switch (instruction) {
+                    .call => |call| if (!reached[call.function]) {
+                        reached[call.function] = true;
+                        scan = true;
+                    },
+                    else => {},
+                }
             }
         }
     }
+    for (reached) |live| try testing.expect(live);
 }
 
 test "the IR dump is readable and deterministic" {

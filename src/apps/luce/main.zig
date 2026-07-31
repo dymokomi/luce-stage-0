@@ -64,8 +64,16 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         return 0;
     }
     if (std.mem.eql(u8, command, "ir")) {
-        if (arguments.len != 3) return usage(err);
-        var program = (try compilePath(gpa, io, err, path)) orelse return 1;
+        // --full keeps functions the entry never reaches (a std module
+        // under inspection, a function not yet called) — the artifact
+        // commands always prune.
+        var keep_unreachable = false;
+        if (arguments.len == 4 and std.mem.eql(u8, arguments[3], "--full")) {
+            keep_unreachable = true;
+        } else if (arguments.len != 3) {
+            return usage(err);
+        }
+        var program = (try compilePathPruned(gpa, io, err, path, !keep_unreachable)) orelse return 1;
         defer program.deinit();
         const dump = try luce.ir.print(gpa, &program);
         defer gpa.free(dump);
@@ -81,7 +89,7 @@ fn usage(err: *std.Io.Writer) !u8 {
         "usage:\n" ++
             "  luce build FILE.luc [-o FILE.lc] [--release]\n" ++
             "  luce check FILE.luc\n" ++
-            "  luce ir FILE.luc\n" ++
+            "  luce ir FILE.luc [--full]\n" ++
             "\n" ++
             "build is a debug build unless --release: the module\n" ++
             "carries source locations, so traps report file:line\n" ++
@@ -141,6 +149,16 @@ fn compilePath(
     err: *std.Io.Writer,
     path: []const u8,
 ) !?luce.ir.Program {
+    return compilePathPruned(gpa, io, err, path, true);
+}
+
+fn compilePathPruned(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    err: *std.Io.Writer,
+    path: []const u8,
+    prune: bool,
+) !?luce.ir.Program {
     const source = files.readWhole(gpa, io, path) catch {
         try err.print("luce: cannot read {s}\n", .{path});
         return null;
@@ -152,6 +170,7 @@ fn compilePath(
         .entry_mode = .script,
         .allow_host = true,
         .source_name = std.fs.path.basename(path),
+        .prune = prune,
     });
     switch (result) {
         .success => |program| return program,

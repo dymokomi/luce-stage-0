@@ -76,8 +76,10 @@ const Frame = struct {
     /// Where this frame's slots start in `frame_storage`: registers
     /// first, then locals, one contiguous run released when the frame
     /// returns.  Offsets, not slices — the storage array reallocates
-    /// as the stack deepens, and offsets survive that.
-    slots_at: u32,
+    /// as the stack deepens, and offsets survive that.  usize because
+    /// total slots across a deep stack of large functions can pass
+    /// 2^32 before memory runs out on a big host.
+    slots_at: usize,
     register_count: u32,
     local_count: u32,
     block: ir.BlockId = 0,
@@ -85,8 +87,11 @@ const Frame = struct {
     /// The caller register receiving this frame's return value.
     destination: Register = 0,
     /// Unique per call: object ownership names (serial, local) pairs,
-    /// so recursion never confuses two frames' bindings.
-    serial: u32 = 0,
+    /// so recursion never confuses two frames' bindings.  u64 — loom
+    /// runs with an unlimited step budget, so 2^32 calls is an
+    /// afternoon, and a wrapped serial would let ownership confuse
+    /// two frames.
+    serial: u64 = 0,
 };
 
 const Register = ir.Register;
@@ -115,12 +120,16 @@ pub const Machine = struct {
     /// Scratch for one call's arguments, reused across calls; live
     /// only until pushFrame copies them into the callee's locals.
     argument_scratch: std.ArrayList(RuntimeValue) = .empty,
+    /// One zero template per struct layout, shared by every zero-
+    /// initialized local and element (see zeroValue for why sharing
+    /// is safe).  Allocated lazily, sized by program.structs.
+    struct_zeros: []?RuntimeValue = &.{},
     /// Every allocated object, alive or freed; handles index this
     /// table.  Slots are never reused, so a freed handle stays
     /// detectably dead for the whole evaluation.
     heap: std.ArrayList(*HeapObject) = .empty,
     live_objects: u32 = 0,
-    next_serial: u32 = 1,
+    next_serial: u64 = 1,
     pending_trap: ?backend.Trap = null,
 
     /// Instruction handlers fail with error.Trap after recording the
@@ -163,9 +172,13 @@ pub const Machine = struct {
             const frame = self.stack.items[depth - 1 - out_index];
             const function = &self.program.functions[frame.function];
             const items = function.blocks[frame.block].items;
-            // position already advanced past the current instruction;
-            // at position 0 the block's first instruction is the one
-            // about to run (a step-budget trap between instructions).
+            // position already advanced past the current instruction,
+            // so position - 1 is the instruction that trapped; at
+            // position 0 the block's first instruction is the one
+            // about to run.  A step-budget trap fires between
+            // instructions, so its innermost line points at the last
+            // completed statement, not the next one — "where the
+            // budget ran out", which is the honest answer.
             const at = items[if (frame.position == 0) 0 else frame.position - 1];
             slot.* = .{
                 .function = function.name,
@@ -213,22 +226,25 @@ pub const Machine = struct {
         // Safe to hold across zeroValue: it allocates struct fields
         // from the arena and never touches frame_storage.
         const locals = self.frame_storage.items[slots_at + register_count ..][0..local_count];
-        // Every local starts at its type's zero value, not a bare
-        // .none: a well-formed function sets locals before reading
-        // them, but a hand-forged or bit-flipped module may read one
-        // early, and a typed zero (0/false/""/null object) keeps that
-        // a clean value or a null_object trap instead of a crash on
-        // an untagged .none.  This is the same rule as S40's late
-        // declarations, applied defensively at the trust boundary.
-        for (locals, function.locals) |*slot, local| {
+        // Every non-parameter local starts at its type's zero value,
+        // not a bare .none: a well-formed function sets locals before
+        // reading them, but a hand-forged or bit-flipped module may
+        // read one early, and a typed zero (0/false/""/null object)
+        // keeps that a clean value or a null_object trap instead of a
+        // crash on an untagged .none.  This is the same rule as S40's
+        // late declarations, applied defensively at the trust
+        // boundary.  Parameter slots are copied over whole, so zeroing
+        // them first would only buy per-call allocations for struct
+        // parameters.
+        @memcpy(locals[0..arguments.len], arguments);
+        for (locals[arguments.len..], function.locals[arguments.len..]) |*slot, local| {
             slot.* = try self.zeroValue(local.local_type);
         }
-        @memcpy(locals[0..arguments.len], arguments);
         const serial = self.next_serial;
         self.next_serial += 1;
         try self.stack.append(self.arena, .{
             .function = function_index,
-            .slots_at = @intCast(slots_at),
+            .slots_at = slots_at,
             .register_count = @intCast(register_count),
             .local_count = @intCast(local_count),
             .destination = destination,
@@ -393,7 +409,7 @@ pub const Machine = struct {
     /// statement temporary; `container` — an element some container
     /// adopted and frees with itself; `binding` — a named local of one
     /// specific call frame, released when that scope exits.
-    const OwnedBy = struct { serial: u32, local: u32 };
+    const OwnedBy = struct { serial: u64, local: u32 };
 
     const Owner = union(enum) {
         loose,
@@ -432,7 +448,7 @@ pub const Machine = struct {
     }
 
     /// The objects in `value` now belong to `local` of frame `serial`.
-    pub fn bindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
+    pub fn bindValue(self: *Machine, value: RuntimeValue, serial: u64, local: u32) void {
         switch (value) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -470,7 +486,7 @@ pub const Machine = struct {
 
     /// On return, everything the finished frame still owned in the
     /// returned value moves out loose; the caller owns it (S16).
-    pub fn loosenFromFrame(self: *Machine, value: RuntimeValue, serial: u32) void {
+    pub fn loosenFromFrame(self: *Machine, value: RuntimeValue, serial: u64) void {
         switch (value) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -486,7 +502,7 @@ pub const Machine = struct {
     /// Free the objects in `value` still bound to (serial, local); the
     /// scope-exit release.  Objects owned elsewhere by now are left
     /// alone, which makes releases safe on every path.
-    pub fn unbindValue(self: *Machine, value: RuntimeValue, serial: u32, local: u32) void {
+    pub fn unbindValue(self: *Machine, value: RuntimeValue, serial: u64, local: u32) void {
         switch (value) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -673,12 +689,29 @@ pub const Machine = struct {
             .bytes => .{ .bytes = "" },
             .heap => .{ .object = backend.ObjectHandle.null_object },
             .strukt => |layout_index| blk: {
+                // One shared zero template per layout, built on first
+                // use.  Sharing the fields slice across every
+                // zero-initialized local and element is safe because
+                // struct field arrays are never mutated in place —
+                // struct_set always allocates a fresh array (value
+                // semantics).  If in-place struct mutation is ever
+                // added, this template must be copied out instead.
+                // Without the cache, a loop calling a function with a
+                // struct local allocated per call, growing evaluation
+                // memory with calls made rather than data held.
+                if (self.struct_zeros.len == 0) {
+                    self.struct_zeros = try self.arena.alloc(?RuntimeValue, self.program.structs.len);
+                    @memset(self.struct_zeros, null);
+                }
+                if (self.struct_zeros[layout_index]) |zero| break :blk zero;
                 const layout = self.program.structs[layout_index];
                 const fields = try self.arena.alloc(RuntimeValue, layout.fields.len);
                 for (layout.fields, fields) |field, *slot| {
                     slot.* = try self.zeroValue(field.field_type);
                 }
-                break :blk .{ .strukt = fields };
+                const zero: RuntimeValue = .{ .strukt = fields };
+                self.struct_zeros[layout_index] = zero;
+                break :blk zero;
             },
         };
     }
@@ -852,7 +885,7 @@ pub const Machine = struct {
         self: *Machine,
         operation: ir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
-        serial: u32,
+        serial: u64,
     ) EvalError!RuntimeValue {
         const arguments = operation.arguments;
         switch (operation.kind) {
@@ -2459,6 +2492,57 @@ test "S33: nothing leaks — scope ownership frees what free() used to" {
     , .{}, script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
+}
+
+test "interpreter memory is bounded by depth and data, not by calls made" {
+    // The regression this proves absent: frames (and struct-local
+    // zeroing) once allocated per call from the run arena, which
+    // never reclaims — so a call-heavy loop grew memory with the
+    // number of calls it MADE.  Frame slots now live in the reusable
+    // frame_storage stack and struct zeros are interned per layout,
+    // so 100k calls must end with an empty storage stack whose
+    // capacity reflects the deepest frame, not the call count.
+    var result = try compile_mod.compile(testing.allocator,
+        \\struct Point:
+        \\    x: Int
+        \\    y: Int
+        \\
+        \\func nudge(p: Point) -> Int:
+        \\    var scratch: Point
+        \\    scratch.x = p.x + 1
+        \\    return scratch.x + p.y
+        \\
+        \\func main():
+        \\    var total = 0
+        \\    for i in range(0, 100000):
+        \\        total += nudge(Point(x = i, y = 1))
+        \\    assert(total > 0)
+        \\
+    , .{}, script_options);
+    defer result.deinit();
+    try testing.expect(result == .success);
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var machine: Machine = .{
+        .arena = arena.allocator(),
+        .program = &result.success,
+        .inputs = &.{},
+        .outputs = &.{},
+        .steps = 50_000_000,
+        .max_depth = 256,
+        .host = null,
+    };
+    const outcome = try machine.execute(result.success.entry_function);
+    try testing.expect(outcome == .value);
+    // Every frame popped its slots on return.
+    try testing.expectEqual(@as(usize, 0), machine.frame_storage.items.len);
+    // Capacity is what the deepest live stack needed — two small
+    // frames here — not 100k frames' worth.  The generous bound only
+    // has to reject O(calls) growth.
+    try testing.expect(machine.frame_storage.capacity < 4096);
+    // The struct zero template was interned once, not built per call.
+    try testing.expect(machine.struct_zeros.len > 0);
 }
 
 test "the explicit frame stack survives deep recursion" {

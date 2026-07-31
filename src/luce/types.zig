@@ -69,6 +69,9 @@ pub const CompileOptions = struct {
     /// what a runtime trap location reports.  "" falls back to
     /// "main.luc".  Imported modules always report "PREFIX.luc".
     source_name: []const u8 = "",
+    /// Dead-code elimination (ir.prune): on for every artifact;
+    /// `luce ir --full` clears it to show unreached functions.
+    prune: bool = true,
 };
 
 // ---------------------------------------------------------------------------

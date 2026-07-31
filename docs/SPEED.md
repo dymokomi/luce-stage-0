@@ -379,6 +379,10 @@ touches rather than by how long it runs.
 
 ## 12. Are we a compiled language?  Not yet — and the benchmark is right to say so
 
+*(Correction in §13: the conclusion below — "not that kind of
+compiled", the Java framing — did not survive scrutiny.  The
+measurements and the pruning work stand.)*
+
 The question was put directly: Luce compiles `.luc` to `.lc` and then
 runs it, so — like C, C++, Zig — compile time should not be in the
 benchmark; and if it is, something is wrong.
@@ -476,3 +480,67 @@ when the goal is *the model* — being able to say a `.lc` runs without
 a compiler in the loop — rather than when the goal is the
 milliseconds, which are now small and getting smaller from the other
 end.
+
+---
+
+## 13. The correction: Luce is a compiled language
+
+§12 called the architecture "javac → .class → a JIT" and concluded
+"we are not that kind of compiled."  That framing was challenged and
+it does not hold.  It conflated **where code generation runs** — a
+toolchain property — with **what the language is**.
+
+What separates Python, JavaScript, and Java execution from C's is
+what happens *while the program runs*: an interpreter tier, hot-spot
+profiling, speculative optimization, deoptimization.  Their runtimes
+carry that machinery because their semantics resolve at run time —
+a JIT for a dynamic language must guess and be ready to un-guess.
+Luce has none of it, because it needs none of it: the language is
+statically typed, every call target and method resolves in the
+analyzer, the IR is verified, and loom lowers the **whole program
+directly to machine code before `main` runs** — no speculation, no
+tiers, no profile, no deopt, and the running program is machine
+code only.  The interpreter is a *reference implementation* behind
+an engine seam — an oracle and a fallback, exactly Zig's
+two-backend discipline — not an execution tier a program warms out
+of.
+
+The honest neighbor is not HotSpot but **WASM ahead-of-time**:
+wasmtime compiles a whole module at instantiation, everyone calls
+it a compiler, it ships `wasmtime compile` for cached native
+artifacts, and its benchmarks measure execution.  `.lc` plays the
+portable-verified-artifact role by design (§4); the only thing
+between "compiled at load" and "compiled, period" is engineering —
+the emitted code bakes in addresses valid for one process.  That is
+a finish line, not an identity.
+
+Benchmark policy follows the same logic and stays honest at every
+stage: the benchmark measures **what `loom run` does**.  Today that
+includes ~0.3-5ms of load-time codegen, kept visible in the `floor`
+row and held under ~10% by workload sizing (§11) — we never
+subtract it, because the fix is to *change what `loom run` does*,
+not the arithmetic.  When the native image lands, codegen leaves
+`loom run` and therefore leaves the numbers, the same way C's
+compile time is absent because `cc` already ran.
+
+The path is scoped from MIR's actual source (evidence and
+milestones in docs/NATIVE.md "Milestone 5"): **M1, hermetic
+codegen** — every host-absolute value moves behind the State
+pointer (services table, constant-descriptor table, and a Luce
+function table, which aarch64 requires because MIR bakes call
+targets as movz/movk immediates); MIR needs no patch for it, since
+call instructions take register targets natively.  Enforced by a
+new oracle: compile the same program in two contexts at different
+addresses and demand **byte-identical code**.  **M2, the image** —
+capture each function's contiguous code (a tiny owned-vendor patch
+to retain lengths), write it beside the `.lc` keyed on the `.lc`
+hash + loom build fingerprint + target triple, and load by mapping
+into executable pages and filling the State tables — zero codegen,
+no MIR context at load.  The planned self-written Zig backend (§8)
+is designed position-independent from day one, making the image its
+native output format.
+
+So the standing sentence, corrected: **Luce is a compiled language
+whose toolchain currently runs its last stage at load; M1/M2 move
+that stage to build time, and nothing about the language, the
+artifact, or the seam has to change to get there.**

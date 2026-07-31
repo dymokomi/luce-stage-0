@@ -121,6 +121,22 @@ const State = extern struct {
     pub const slot_count = 32;
 };
 
+comptime {
+    // The emitted text addresses these layouts with literal offsets;
+    // a field reorder must fail the build, not corrupt a run.
+    std.debug.assert(@offsetOf(State, "trap") == 0);
+    std.debug.assert(@offsetOf(State, "trap_function") == 8);
+    std.debug.assert(@offsetOf(State, "trap_instruction") == 16);
+    std.debug.assert(@offsetOf(State, "depth_left") == 24);
+    std.debug.assert(@offsetOf(State, "slots") == State.slots_offset);
+    std.debug.assert(@offsetOf(StringDesc, "bytes") == 0);
+    std.debug.assert(@offsetOf(StringDesc, "len") == 8);
+    std.debug.assert(@offsetOf(ArrayView, "elements") == 0);
+    std.debug.assert(@offsetOf(ArrayView, "len") == 8);
+    std.debug.assert(@offsetOf(ArrayView, "alive") == 16);
+    std.debug.assert(@offsetOf(ArrayView, "handle") == 24);
+}
+
 const Runtime = struct {
     /// The interpreter's own machine: the heap, the owner model, and
     /// every intrinsic implementation.  The native engine borrows the
@@ -139,7 +155,7 @@ fn trapWord(code: ir.TrapCode) i64 {
 /// Constants get theirs before lowering (addresses are embedded in
 /// the emitted text); runtime strings get one per value.
 const StringDesc = extern struct {
-    ptr: [*]const u8,
+    bytes: [*]const u8,
     len: u64,
 };
 
@@ -210,16 +226,24 @@ fn newStringDesc(state: *State, text: []const u8) i64 {
         state.trap = State.oom_trap;
         return 0;
     };
-    desc.* = .{ .ptr = text.ptr, .len = text.len };
+    desc.* = .{ .bytes = text.ptr, .len = text.len };
     return @bitCast(@intFromPtr(desc));
 }
 
+/// Reinterpret a register word as a descriptor.  Values arrive here
+/// only from code lowered from *verified* IR (module.decode re-runs
+/// the verifier; a .lc is trusted like an executable), and every
+/// OOM-nullable descriptor is trap-checked before use — so the word
+/// is always a live descriptor this engine created.
 fn descText(raw: u64) []const u8 {
     const desc: *const StringDesc = @ptrFromInt(raw);
-    return desc.ptr[0..desc.len];
+    return desc.bytes[0..desc.len];
 }
 
-/// A typed RuntimeValue from marshaling slot `slot`.
+/// A typed RuntimeValue from marshaling slot `slot`.  The pointer
+/// reinterpretations here stand on the same verified-IR trust as
+/// descText: only this engine's own descriptors, views, and field
+/// arrays ever reach the slots.
 fn fromSlot(state: *State, slot: usize, of: types.Type) RuntimeValue {
     const raw = state.slots[slot];
     return switch (of) {
@@ -298,6 +322,11 @@ fn genericResult(state: *State, function: i64, instruction: i64, serial: i64) ?R
     const target = &machine.program.functions[@intCast(function)];
     const instr = target.instructions[@intCast(instruction)];
     var staged: [State.slot_count]RuntimeValue = undefined;
+    // A mutable copy: IntrinsicCall/HeapNew carry non-const register
+    // slices, and handing them comptime-const memory through
+    // @constCast would be undefined behavior if any callee ever wrote
+    // through it.  128 bytes per generic call is noise there.
+    var staged_registers = identity_registers;
     const outcome: interpreter.Machine.EvalError!RuntimeValue = switch (instr) {
         .intrinsic => |call| blk: {
             for (call.arguments, 0..) |argument, index| {
@@ -305,7 +334,7 @@ fn genericResult(state: *State, function: i64, instruction: i64, serial: i64) ?R
             }
             const remapped: ir.Instruction.IntrinsicCall = .{
                 .kind = call.kind,
-                .arguments = @constCast(identity_registers[0..call.arguments.len]),
+                .arguments = staged_registers[0..call.arguments.len],
             };
             break :blk machine.intrinsic(remapped, &staged, @intCast(serial));
         },
@@ -324,7 +353,7 @@ fn genericResult(state: *State, function: i64, instruction: i64, serial: i64) ?R
             for (0..new.dims.len) |index| staged[index] = fromSlot(state, index, .int);
             const remapped: ir.Instruction.HeapNew = .{
                 .heap = new.heap,
-                .dims = @constCast(identity_registers[0..new.dims.len]),
+                .dims = staged_registers[0..new.dims.len],
             };
             break :blk machine.allocateObject(remapped, &staged);
         },
@@ -398,7 +427,9 @@ fn svcSerial(state: *State) callconv(.c) i64 {
     const machine = &state.runtime.machine;
     const serial = machine.next_serial;
     machine.next_serial += 1;
-    return serial;
+    // Serials are u64 machine-side; they cross the C ABI as i64 and
+    // 2^63 calls is out of reach.
+    return @intCast(serial);
 }
 
 /// The typed zero of a struct local (S40 late declarations).
@@ -1293,12 +1324,9 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
             // still owned in the value goes loose for the caller.
             if (value) |register| {
                 if (carriesObjects(lowering.program, function.return_type)) {
-                    const offset = State.slots_offset;
-                    if (function.return_type == .float) {
-                        try text.print("    dmov d:{d}(s), r{d}\n", .{ offset, register });
-                    } else {
-                        try text.print("    mov i64:{d}(s), r{d}\n", .{ offset, register });
-                    }
+                    // carriesObjects admits only heap and strukt
+                    // returns, both i64-shaped natively.
+                    try text.print("    mov i64:{d}(s), r{d}\n", .{ State.slots_offset, register });
                     try text.print("    call p_svc_loosen, svc_loosen, s, {d}, fs\n", .{lowering.index});
                 }
             }
@@ -1343,6 +1371,10 @@ fn lowerBinary(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory
         try emitTrapCheck(lowering);
         return;
     }
+    // Struct equality is field-wise (strings by content) in the
+    // reference implementation; a struct travels natively as its
+    // field-array address, so inline eq/ne would compare pointers.
+    if (of == .strukt) return emitGeneric(lowering, item);
     if (operation.op.isComparison()) {
         const name = switch (operation.op) {
             .equal => "eq",
@@ -1426,6 +1458,9 @@ const CompileJob = struct {
 
 fn compileBody(payload: ?*anyopaque) callconv(.c) void {
     const job: *CompileJob = @ptrCast(@alignCast(payload.?));
+    // gen_init is fallible MIR work too; it belongs inside the
+    // protected region with everything else.
+    c.MIR_gen_init(job.ctx);
     c.MIR_scan_string(job.ctx, job.text);
     for (services) |service| {
         c.MIR_load_external(job.ctx, service.name.ptr, service.address);
@@ -1434,7 +1469,9 @@ fn compileBody(payload: ?*anyopaque) callconv(.c) void {
     c.MIR_link(job.ctx, &c.MIR_set_gen_interface, null);
     for (0..job.function_count) |index| {
         const name = std.fmt.bufPrintZ(&job.name_buffer, "L{d}", .{index}) catch unreachable;
-        const item = c.luce_mir_find_func(job.ctx, name.ptr);
+        // Absent only on a lowering bug; a null here must fail the
+        // compile, not segfault inside MIR_gen.
+        const item = c.luce_mir_find_func(job.ctx, name.ptr) orelse return;
         const address = c.MIR_gen(job.ctx, item);
         if (index == job.entry) job.entry_address = address;
     }
@@ -1460,9 +1497,9 @@ pub fn run(
     // emitted text embeds their addresses and offsets as immediates.
     const constant_descs = try arena.alloc(StringDesc, program.constants.len + 1);
     for (program.constants, constant_descs[0..program.constants.len]) |constant, *desc| {
-        desc.* = .{ .ptr = constant.ptr, .len = constant.len };
+        desc.* = .{ .bytes = constant.ptr, .len = constant.len };
     }
-    constant_descs[program.constants.len] = .{ .ptr = "", .len = 0 };
+    constant_descs[program.constants.len] = .{ .bytes = "", .len = 0 };
     const layout: MemoryLayout = .{
         .constant_descs = constant_descs,
         .payloads = Payloads.measure(),
@@ -1480,7 +1517,6 @@ pub fn run(
         c.MIR_finish(ctx);
     };
 
-    c.MIR_gen_init(ctx);
     var job: CompileJob = .{
         .ctx = ctx,
         .text = text.ptr,
