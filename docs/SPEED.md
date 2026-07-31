@@ -544,3 +544,28 @@ So the standing sentence, corrected: **Luce is a compiled language
 whose toolchain currently runs its last stage at load; M1/M2 move
 that stage to build time, and nothing about the language, the
 artifact, or the seam has to change to get there.**
+
+---
+
+## 14. M1 landed: hermetic code, at zero cost
+
+Same day.  The lowering now computes State-relative table offsets
+and never sees an address — services, constant descriptors, and
+Luce function targets are all one load off the state register, the
+emitted module has no imports, and `run()`'s table fill is the
+single place host addresses exist.  MIR took a register call target
+natively, exactly as §13 predicted, plus a three-line owned-vendor
+patch to expose code lengths for the capture seam.
+
+The hermeticity oracle passes — the same program compiled in two
+MIR contexts yields **byte-identical machine code** — and was
+validated as an instrument by planting a direct symbolic call and
+watching it fail.  `bench/compare.sh HEAD` twice over: every bench
+within ±1%.  The feared losses (indirect-call overhead, MIR's
+link-time inlining) cost nothing measurable; a table load is no
+worse than materializing a 64-bit immediate.
+
+What §12 measured as "the JIT" is now a deterministic, hermetic,
+capturable code generator.  All that separates today from a `.lc`
+running with zero codegen at load is M2's file format and loader —
+docs/NATIVE.md milestone 5, second half.

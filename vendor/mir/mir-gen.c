@@ -9495,6 +9495,7 @@ static void *generate_func_code (MIR_context_t ctx, MIR_item_t func_item, int ma
   if (machine_code_p) {
     code = target_translate (gen_ctx, &code_len);
     machine_code = func_item->u.func->call_addr = _MIR_publish_code (ctx, code, code_len);
+    func_item->u.func->machine_code_len = code_len; /* LUCE PATCH */
     target_rebase (gen_ctx, func_item->u.func->call_addr);
 #if MIR_GEN_CALL_TRACE
     func_item->u.func->call_addr = _MIR_get_wrapper (ctx, func_item, print_and_execute_wrapper);

@@ -505,6 +505,63 @@ test "oracle: the std math module runs natively" {
     , roomy);
 }
 
+test "hermeticity: generated code is byte-identical across contexts" {
+    // The M1 contract (docs/NATIVE.md milestone 5): the emitted code
+    // contains no host address — services, constant descriptors, and
+    // Luce function targets are all read from the State address
+    // table at run time.  Two compilations in two fresh MIR contexts
+    // land their code and their would-be addresses at different
+    // places; if any address leaked into the code, the bytes differ.
+    // Covers every absolute-address class the audit inventoried:
+    // service calls (print, builder, generic), constant descriptors,
+    // the "" zero value, inter-function calls, float constants,
+    // array views, and string access.
+    if (!native.available) return;
+    const source =
+        \\import strings
+        \\
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\func total(p: Point, tail: String) -> Float:
+        \\    var zero: String
+        \\    assert(zero == "")
+        \\    return p.x + p.y + Float(len(tail))
+        \\
+        \\func main():
+        \\    var b = new Builder()
+        \\    var grid = new Array(Float, 3)
+        \\    for i in range(0, 3):
+        \\        grid[i] = Float(i) * 1.5
+        \\        b.append(str(i))
+        \\        b.append_ascii(59)
+        \\    let text = str(b)
+        \\    let pieces = text.split(";")
+        \\    let p = Point(x = grid[1], y = grid[2])
+        \\    print(str(total(p, text.upper())))
+        \\    print(str(len(pieces) + text.find_byte(59, 0)))
+        \\
+    ;
+    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    defer result.deinit();
+    try testing.expect(result == .success);
+    try testing.expect(native.supported(&result.success));
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const first = try native.generatedCode(arena.allocator(), &result.success);
+    const second = try native.generatedCode(arena.allocator(), &result.success);
+    try testing.expectEqual(first.len, second.len);
+    for (first, second, 0..) |one, two, index| {
+        try testing.expect(one.len > 0);
+        testing.expectEqualSlices(u8, one, two) catch |mistake| {
+            std.debug.print("function {d} code differs between contexts\n", .{index});
+            return mistake;
+        };
+    }
+}
+
 test "oracle: struct equality is field-wise in both engines" {
     // A struct travels natively as its field-array address, so a
     // naive lowering compares pointers and calls equal structs

@@ -134,43 +134,56 @@ ratio is no longer string-shaped: JIT compile time for std
 functions the program never calls, and `List.append` on the generic
 path behind `split`.
 
-## Milestone 5 (planned): hermetic code, then the image
+## Milestone 5, first half — hermetic code (shipped)
 
-Luce is a compiled language (docs/SPEED.md §13); what keeps its last
-compile stage at load rather than at build is only that the emitted
-code bakes in addresses valid for one process.  The complete
-inventory, from the milestone-4 audit:
+Luce is a compiled language (docs/SPEED.md §13); what kept its last
+compile stage at load rather than at build was only that the emitted
+code baked in addresses valid for one process.  The milestone-4
+audit's inventory — constant-descriptor addresses and the "" zero
+value as text immediates; the 18 `svc_*` symbols resolved by
+`MIR_load_external`; inter-function call targets baked in by MIR
+itself (movz/movk immediates on aarch64, a constant-pool word on
+x86-64) — is now empty.
 
-- **In the emitted text as immediates**: the empty-string
-  descriptor's address (the String zero value), every constant-pool
-  descriptor's address, `@sizeOf(RuntimeValue)` as the array stride,
-  and the run-time-measured payload offsets inside RuntimeValue.
-- **Resolved at MIR link**: the 18 `svc_*` service symbols
-  (`MIR_load_external`), plus inter-function call targets — which
-  MIR bakes into the code itself (movz/movk immediates on aarch64, a
-  constant-pool word on x86-64), so they are host-absolute too.
-- **Behind the code as run-time data** (need a stable ABI, not
-  relocation): runtime string descriptors, array views, struct field
-  arrays — all arena addresses flowing through registers.
+**The mechanism is an address table, and the lowering cannot leak
+what it never sees.**  State is allocated with a tail: services
+first (the order of `native.zig`'s `services` array), then one entry
+per constant descriptor plus the trailing "", then one entry per
+Luce function.  Every call target and every constant-string
+reference compiles to one load off the state register —
+`mov t, i64:OFF(s); call proto, t, ...` — which MIR's call
+instruction takes natively (a register target; both backends emit
+`blr`/`call *r`), so the vendored JIT needed no change for it.  The
+emitted module has **no imports and no forwards**; `lowerProgram`
+computes table offsets and never touches an address, and `run()`
+fills the table — the single place host addresses exist.  What
+remains as immediates is exactly the loom-build-stable set: the
+RuntimeValue payload offsets and stride, to be guarded by a build
+fingerprint when code persists.  (Runtime string descriptors, array
+views, and struct field arrays still flow through registers as
+data — they need ABI stability, not relocation, and always did.)
 
-**M1 — hermetic codegen (days).**  Move every text-embedded and
-link-resolved absolute behind the State pointer: a services table, a
-constant-descriptor table, and a Luce function table for
-inter-function calls.  MIR needs no patch — its call instruction
-takes a register target natively (the scanner resolves a name as a
-register first; both backends emit `blr`/`call *r`).  Payload
-offsets stay immediates guarded by a loom-build fingerprint.
-Enforcement is mechanical: a hermeticity oracle compiles the same
-program in two contexts at different bases and demands
-byte-identical function code.  Cost to measure with
-`bench/compare.sh`: one load per call against today's absolute-
-address materialization, plus whatever MIR's link-time inlining was
-contributing.
+**Enforcement is the hermeticity oracle** (`native_spec.zig`):
+compile the same program in two fresh MIR contexts — different code
+pages, different would-be addresses — and demand byte-identical
+machine code per function, through `native.generatedCode`, the
+capture seam the image will reuse.  The instrument is validated in
+both directions: planting one direct symbolic call back into the
+lowering makes it fail; the shipped lowering passes.  The code
+spans come from a three-line `LUCE PATCH` on the owned vendor
+snapshot (MIR kept each function's code address but dropped its
+length; see vendor/mir/LUCE-VENDOR.md).
 
-**M2 — the image (1-2 weeks).**  Each function's generated code is
-one contiguous buffer (constant pool appended); MIR retains its
-address but not its length — a small patch to the owned vendor
-snapshot records it.  The image sits **beside** the `.lc` — the
+Measured cost: none.  `bench/compare.sh` reads every bench within
+noise (±1%) — the feared loss of MIR's link-time inlining did not
+materialize, and one table load is no worse than materializing a
+64-bit absolute address inline.
+
+## Milestone 5, second half — the image (planned)
+
+**M2 (1-2 weeks).**  Each function's generated code is one
+contiguous buffer (constant pool appended), already captured whole
+by `native.generatedCode`.  The image sits **beside** the `.lc` — the
 `.lc` stays the portable verified artifact — keyed on the `.lc`
 hash, the loom build fingerprint (payload offsets included), and
 the target triple: header, concatenated bodies, offset table, entry

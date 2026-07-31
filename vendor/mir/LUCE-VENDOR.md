@@ -3,8 +3,17 @@
 - Upstream: https://github.com/vnmakarov/mir
 - Commit: a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c
 - License: MIT (see LICENSE in this directory)
-- Local changes: none — pristine copy of the runtime sources
-  (tests, c2mir, llvm2mir, and driver programs omitted).
+- Local changes: one three-line patch, each line marked
+  `LUCE PATCH`: `struct MIR_func` gains `machine_code_len`
+  (mir.h), zeroed at func creation (mir.c) and set beside
+  `machine_code` after `_MIR_publish_code` (mir-gen.c).  MIR
+  retains each generated function's address but not its length;
+  the length is what lets loom byte-compare generated code (the
+  hermeticity oracle in `src/luce/native_spec.zig`) and, later,
+  capture it into the native image (docs/NATIVE.md milestone 5).
+  Re-apply when updating the snapshot.
+  Otherwise a pristine copy of the runtime sources (tests, c2mir,
+  llvm2mir, and driver programs omitted).
 
 MIR is the optimizing JIT behind loom's native engine
 (`src/luce/native.zig`): the verified Luce IR lowers to MIR's

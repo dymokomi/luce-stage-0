@@ -83,7 +83,6 @@ const c = struct {
 
     extern fn MIR_finish(ctx: Context) void;
     extern fn MIR_scan_string(ctx: Context, str: [*:0]const u8) void;
-    extern fn MIR_load_external(ctx: Context, name: [*:0]const u8, addr: ?*anyopaque) void;
     extern fn MIR_link(
         ctx: Context,
         set_interface: *const fn (ctx: Context, item: Item) callconv(.c) void,
@@ -94,6 +93,7 @@ const c = struct {
     extern fn MIR_gen(ctx: Context, item: Item) ?*anyopaque;
     extern fn MIR_gen_finish(ctx: Context) void;
     extern fn luce_mir_find_func(ctx: Context, name: [*:0]const u8) Item;
+    extern fn luce_func_code(item: Item, length: *usize) ?*const anyopaque;
 };
 
 // ---------------------------------------------------------------------------
@@ -119,6 +119,16 @@ const State = extern struct {
     const oom_trap: i64 = -1;
     const slots_offset = 32;
     pub const slot_count = 32;
+
+    /// The address table starts right after the struct: services
+    /// first (the order of the `services` array), then one entry per
+    /// constant descriptor plus the trailing "" descriptor, then one
+    /// entry per Luce function.  The emitted code reads every call
+    /// target and constant address from here — one load — so the
+    /// code itself contains no host address (docs/NATIVE.md
+    /// milestone 5: hermetic codegen).  State is always allocated
+    /// with this tail; entry k lives at address_table_offset + 8k.
+    const address_table_offset = 296;
 };
 
 comptime {
@@ -129,6 +139,7 @@ comptime {
     std.debug.assert(@offsetOf(State, "trap_instruction") == 16);
     std.debug.assert(@offsetOf(State, "depth_left") == 24);
     std.debug.assert(@offsetOf(State, "slots") == State.slots_offset);
+    std.debug.assert(@sizeOf(State) == State.address_table_offset);
     std.debug.assert(@offsetOf(StringDesc, "bytes") == 0);
     std.debug.assert(@offsetOf(StringDesc, "len") == 8);
     std.debug.assert(@offsetOf(ArrayView, "elements") == 0);
@@ -192,21 +203,44 @@ const Payloads = struct {
     }
 };
 
-/// Everything the lowering embeds as immediates: constant string
-/// descriptors (the last one is "", the string zero value) and the
-/// element layout for inline array access.
-const MemoryLayout = struct {
-    constant_descs: []StringDesc,
-    payloads: Payloads,
+/// The element stride for inline array access — a layout fact of
+/// this loom build, embedded as an immediate like the payload
+/// offsets.
+const value_stride: u64 = @sizeOf(RuntimeValue);
 
-    const stride: u64 = @sizeOf(RuntimeValue);
+/// State-relative offsets into the address table (State.
+/// address_table_offset).  The lowering computes offsets and never
+/// addresses: hermeticity by construction — the emitted text cannot
+/// embed a host address it never sees.  run() fills the entries.
+const AddressTable = struct {
+    constant_count: usize,
 
-    fn constDescAddress(self: *const MemoryLayout, constant: usize) i64 {
-        return @bitCast(@intFromPtr(&self.constant_descs[constant]));
+    fn service(name: []const u8) u64 {
+        for (services, 0..) |entry, index| {
+            if (std.mem.eql(u8, entry.name, name)) {
+                return State.address_table_offset + 8 * @as(u64, @intCast(index));
+            }
+        }
+        unreachable; // every emitted service name is in the table
     }
 
-    fn emptyStringAddress(self: *const MemoryLayout) i64 {
-        return self.constDescAddress(self.constant_descs.len - 1);
+    /// Constant descriptor `index`; index constant_count is the
+    /// trailing "" descriptor, the String zero value.
+    fn constant(index: usize) u64 {
+        return State.address_table_offset + 8 * @as(u64, @intCast(services.len + index));
+    }
+
+    fn emptyString(self: AddressTable) u64 {
+        return constant(self.constant_count);
+    }
+
+    fn function(self: AddressTable, index: usize) u64 {
+        return State.address_table_offset +
+            8 * @as(u64, @intCast(services.len + self.constant_count + 1 + index));
+    }
+
+    fn entryCount(self: AddressTable, function_count: usize) usize {
+        return services.len + self.constant_count + 1 + function_count;
     }
 };
 
@@ -771,7 +805,8 @@ const TrapSite = struct { label: u32, code: ir.TrapCode, instruction: u32 };
 const FunctionLowering = struct {
     text: *Text,
     program: *const ir.Program,
-    layout: *const MemoryLayout,
+    payloads: Payloads,
+    table: AddressTable,
     function: *const ir.Function,
     index: u32,
     sites: std.ArrayList(TrapSite) = .empty,
@@ -791,13 +826,16 @@ const FunctionLowering = struct {
     }
 };
 
-fn lowerProgram(arena: Allocator, program: *const ir.Program, layout: *const MemoryLayout) error{OutOfMemory}![:0]const u8 {
+fn lowerProgram(arena: Allocator, program: *const ir.Program, payloads: Payloads) error{OutOfMemory}![:0]const u8 {
+    const table: AddressTable = .{ .constant_count = program.constants.len };
     var text: Text = .{ .arena = arena };
     try text.print("luce: module\n", .{});
 
-    for (program.functions, 0..) |_, index| {
-        try text.print("forward L{d}\n", .{index});
-    }
+    // No imports and no forwards: every call target — service or Luce
+    // function — is read from the State address table at the call
+    // site, so the module references no symbol the host must resolve
+    // and the generated code embeds no address (docs/NATIVE.md
+    // milestone 5).  The protos below carry signatures only.
     try text.print(
         \\p_svc_instr_i: proto i64, i64:s, i64:f, i64:i, i64:sr
         \\p_svc_instr_d: proto d, i64:s, i64:f, i64:i, i64:sr
@@ -817,10 +855,6 @@ fn lowerProgram(arena: Allocator, program: *const ir.Program, layout: *const Mem
         \\p_svc_str_int: proto i64, i64:s, i64:v
         \\p_svc_chr: proto i64, i64:s, i64:f, i64:i, i64:c
         \\p_svc_str_concat: proto i64, i64:s, i64:a, i64:b
-        \\import svc_instr_i, svc_instr_d, svc_instr_v, svc_serial, svc_zero_strukt, svc_loosen
-        \\import svc_seq_get_i, svc_seq_get_d, svc_seq_set_i, svc_seq_set_d, svc_obj_len
-        \\import svc_str_slice, svc_builder_append, svc_builder_append_ascii
-        \\import svc_str_find_byte, svc_str_int, svc_chr, svc_str_concat
         \\
     , .{});
     for (program.functions, 0..) |*function, index| {
@@ -832,11 +866,8 @@ fn lowerProgram(arena: Allocator, program: *const ir.Program, layout: *const Mem
         }
         try text.print("\n", .{});
     }
-    for (program.functions, 0..) |_, index| {
-        try text.print("export L{d}\n", .{index});
-    }
     for (program.functions, 0..) |*function, index| {
-        try lowerFunction(&text, program, layout, function, @intCast(index));
+        try lowerFunction(&text, program, payloads, table, function, @intCast(index));
     }
     try text.print("endmodule\n", .{});
     try text.out.append(arena, 0);
@@ -867,14 +898,16 @@ fn needsSerial(program: *const ir.Program, function: *const ir.Function) bool {
 fn lowerFunction(
     text: *Text,
     program: *const ir.Program,
-    layout: *const MemoryLayout,
+    payloads: Payloads,
+    table: AddressTable,
     function: *const ir.Function,
     index: u32,
 ) error{OutOfMemory}!void {
     var lowering: FunctionLowering = .{
         .text = text,
         .program = program,
-        .layout = layout,
+        .payloads = payloads,
+        .table = table,
         .function = function,
         .index = index,
     };
@@ -911,14 +944,15 @@ fn lowerFunction(
         \\
     , .{index});
     if (needsSerial(program, function)) {
-        try text.print("    call p_svc_serial, svc_serial, fs, s\n", .{});
+        try emitTarget(text, "svc_serial");
+        try text.print("    call p_svc_serial, t, fs, s\n", .{});
     } else {
         try text.print("    mov fs, 0\n", .{});
     }
     for (function.locals[function.parameter_count..], function.parameter_count..) |local, number| {
         switch (local.local_type) {
             .float => try text.print("    dmov l{d}, 0.0\n", .{number}),
-            .string => try text.print("    mov l{d}, {d}\n", .{ number, layout.emptyStringAddress() }),
+            .string => try text.print("    mov l{d}, i64:{d}(s)\n", .{ number, table.emptyString() }),
             .heap => |heap_index| try text.print("    mov l{d}, {d}\n", .{
                 number,
                 // Null: a zero view for viewable arrays, the null
@@ -926,7 +960,8 @@ fn lowerFunction(
                 if (viewable(program, heap_index)) @as(i64, 0) else @as(i64, 4294967295),
             }),
             .strukt => |struct_layout| {
-                try text.print("    call p_svc_zero_strukt, svc_zero_strukt, l{d}, s, {d}\n", .{
+                try emitTarget(text, "svc_zero_strukt");
+                try text.print("    call p_svc_zero_strukt, t, l{d}, s, {d}\n", .{
                     number, struct_layout,
                 });
                 try emitTrapCheck(&lowering);
@@ -972,6 +1007,12 @@ fn emitDefaultReturn(text: *Text, return_type: types.Type) error{OutOfMemory}!vo
 }
 
 /// The post-call trap check: callee (or service) may have stopped us.
+/// Load a call target from the State address table into `t` — one
+/// load, and the code never contains a host address.
+fn emitTarget(text: *Text, service: []const u8) error{OutOfMemory}!void {
+    try text.print("    mov t, i64:{d}(s)\n", .{AddressTable.service(service)});
+}
+
 fn emitTrapCheck(lowering: *FunctionLowering) error{OutOfMemory}!void {
     try lowering.text.print("    mov t, i64:0(s)\n    bne PROP{d}, t, 0\n", .{lowering.index});
 }
@@ -1029,15 +1070,24 @@ fn emitGeneric(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory
         }
     }
     switch (function.result_types[item]) {
-        .none => try text.print("    call p_svc_instr_v, svc_instr_v, s, {d}, {d}, fs\n", .{
-            lowering.index, item,
-        }),
-        .float => try text.print("    call p_svc_instr_d, svc_instr_d, r{d}, s, {d}, {d}, fs\n", .{
-            item, lowering.index, item,
-        }),
-        else => try text.print("    call p_svc_instr_i, svc_instr_i, r{d}, s, {d}, {d}, fs\n", .{
-            item, lowering.index, item,
-        }),
+        .none => {
+            try emitTarget(text, "svc_instr_v");
+            try text.print("    call p_svc_instr_v, t, s, {d}, {d}, fs\n", .{
+                lowering.index, item,
+            });
+        },
+        .float => {
+            try emitTarget(text, "svc_instr_d");
+            try text.print("    call p_svc_instr_d, t, r{d}, s, {d}, {d}, fs\n", .{
+                item, lowering.index, item,
+            });
+        },
+        else => {
+            try emitTarget(text, "svc_instr_i");
+            try text.print("    call p_svc_instr_i, t, r{d}, s, {d}, {d}, fs\n", .{
+                item, lowering.index, item,
+            });
+        },
     }
     try emitTrapCheck(lowering);
 }
@@ -1108,8 +1158,8 @@ fn emitArrayAccess(lowering: *FunctionLowering, item: ir.Register, call: ir.Inst
         \\    mul t2, r{0d}, {4d}
         \\    add t, t, t2
         \\
-    , .{ index_register, view, lowering.index, bounds, MemoryLayout.stride });
-    const payloads = lowering.layout.payloads;
+    , .{ index_register, view, lowering.index, bounds, value_stride });
+    const payloads = lowering.payloads;
     if (call.kind == .index_get) {
         switch (element) {
             .float => try text.print("    dmov r{d}, d:{d}(t)\n", .{ item, payloads.float }),
@@ -1136,8 +1186,10 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
         .const_boolean => |value| try text.print("    mov r{d}, {d}\n", .{ item, @intFromBool(value) }),
         .const_int => |value| try text.print("    mov r{d}, {d}\n", .{ item, value }),
         .const_float => |value| try emitFloatMove(text, item, value),
-        .const_data => |data| try text.print("    mov r{d}, {d}\n", .{
-            item, lowering.layout.constDescAddress(data.constant),
+        // A constant string is its descriptor's address, read from
+        // the table — never embedded.
+        .const_data => |data| try text.print("    mov r{d}, i64:{d}(s)\n", .{
+            item, AddressTable.constant(data.constant),
         }),
         .local_get => |local| {
             const kind = function.locals[local].local_type;
@@ -1183,7 +1235,8 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
         },
         .call => |call| {
             const callee = &lowering.program.functions[call.function];
-            try text.print("    call p_L{d}, L{d}", .{ call.function, call.function });
+            try text.print("    mov t, i64:{d}(s)\n", .{lowering.table.function(call.function)});
+            try text.print("    call p_L{d}, t", .{call.function});
             if (callee.return_type != .none) try text.print(", r{d}", .{item});
             try text.print(", s", .{});
             for (call.arguments) |argument| try text.print(", r{d}", .{argument});
@@ -1206,7 +1259,8 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                     // allocated, so the OOM check still follows: a
                     // failed allocation leaves a null descriptor, and
                     // nothing may run on with one.
-                    try text.print("    call p_svc_str_int, svc_str_int, r{d}, s, r{d}\n", .{
+                    try emitTarget(text, "svc_str_int");
+                    try text.print("    call p_svc_str_int, t, r{d}, s, r{d}\n", .{
                         item, call.arguments[0],
                     });
                     try emitTrapCheck(lowering);
@@ -1215,19 +1269,22 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 }
             },
             .chr_code => {
-                try text.print("    call p_svc_chr, svc_chr, r{d}, s, {d}, {d}, r{d}\n", .{
+                try emitTarget(text, "svc_chr");
+                try text.print("    call p_svc_chr, t, r{d}, s, {d}, {d}, r{d}\n", .{
                     item, lowering.index, item, call.arguments[0],
                 });
                 try emitTrapCheck(lowering);
             },
             .string_find_byte => {
-                try text.print("    call p_svc_str_find_byte, svc_str_find_byte, r{d}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
+                try emitTarget(text, "svc_str_find_byte");
+                try text.print("    call p_svc_str_find_byte, t, r{d}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
                     item, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
                 });
                 try emitTrapCheck(lowering);
             },
             .append_ascii => {
-                try text.print("    call p_svc_builder_append_ascii, svc_builder_append_ascii, s, {d}, {d}, r{d}, r{d}\n", .{
+                try emitTarget(text, "svc_builder_append_ascii");
+                try text.print("    call p_svc_builder_append_ascii, t, s, {d}, {d}, r{d}, r{d}\n", .{
                     lowering.index, item, call.arguments[0], call.arguments[1],
                 });
                 try emitTrapCheck(lowering);
@@ -1242,7 +1299,8 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                     try emitViewPrelude(lowering, item, operand);
                     try text.print("    mov r{d}, i64:8(r{d})\n", .{ item, operand });
                 } else {
-                    try text.print("    call p_svc_obj_len, svc_obj_len, r{d}, s, {d}, {d}, r{d}\n", .{
+                    try emitTarget(text, "svc_obj_len");
+                    try text.print("    call p_svc_obj_len, t, r{d}, s, {d}, {d}, r{d}\n", .{
                         item, lowering.index, item, operand,
                     });
                     try emitTrapCheck(lowering);
@@ -1261,7 +1319,8 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 , .{ item, call.arguments[0], call.arguments[1], lowering.index, bounds });
             },
             .string_slice => {
-                try text.print("    call p_svc_str_slice, svc_str_slice, r{d}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
+                try emitTarget(text, "svc_str_slice");
+                try text.print("    call p_svc_str_slice, t, r{d}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
                     item, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
                 });
                 try emitTrapCheck(lowering);
@@ -1271,7 +1330,8 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 // keep the generic path (element adoption is ownership).
                 const receiver = function.result_types[call.arguments[0]];
                 if (receiver == .heap and lowering.program.heap_types[receiver.heap] == .builder) {
-                    try text.print("    call p_svc_builder_append, svc_builder_append, s, {d}, {d}, r{d}, r{d}\n", .{
+                    try emitTarget(text, "svc_builder_append");
+                    try text.print("    call p_svc_builder_append, t, s, {d}, {d}, r{d}, r{d}\n", .{
                         lowering.index, item, call.arguments[0], call.arguments[1],
                     });
                     try emitTrapCheck(lowering);
@@ -1284,8 +1344,9 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                     try emitArrayAccess(lowering, item, call, element);
                 } else if (fastSeqElement(lowering, call)) |element| {
                     const suffix: []const u8 = if (element == .float) "d" else "i";
-                    try text.print("    call p_svc_seq_get_{s}, svc_seq_get_{s}, r{d}, s, {d}, {d}, r{d}, r{d}\n", .{
-                        suffix, suffix, item, lowering.index, item, call.arguments[0], call.arguments[1],
+                    try emitTarget(text, if (element == .float) "svc_seq_get_d" else "svc_seq_get_i");
+                    try text.print("    call p_svc_seq_get_{s}, t, r{d}, s, {d}, {d}, r{d}, r{d}\n", .{
+                        suffix, item, lowering.index, item, call.arguments[0], call.arguments[1],
                     });
                     try emitTrapCheck(lowering);
                 } else {
@@ -1297,8 +1358,9 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                     try emitArrayAccess(lowering, item, call, element);
                 } else if (fastSeqElement(lowering, call)) |element| {
                     const suffix: []const u8 = if (element == .float) "d" else "i";
-                    try text.print("    call p_svc_seq_set_{s}, svc_seq_set_{s}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
-                        suffix, suffix, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
+                    try emitTarget(text, if (element == .float) "svc_seq_set_d" else "svc_seq_set_i");
+                    try text.print("    call p_svc_seq_set_{s}, t, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
+                        suffix, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
                     });
                     try emitTrapCheck(lowering);
                 } else {
@@ -1327,7 +1389,8 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                     // carriesObjects admits only heap and strukt
                     // returns, both i64-shaped natively.
                     try text.print("    mov i64:{d}(s), r{d}\n", .{ State.slots_offset, register });
-                    try text.print("    call p_svc_loosen, svc_loosen, s, {d}, fs\n", .{lowering.index});
+                    try emitTarget(text, "svc_loosen");
+                    try text.print("    call p_svc_loosen, t, s, {d}, fs\n", .{lowering.index});
                 }
             }
             // Restore the depth budget on the successful path only;
@@ -1365,7 +1428,8 @@ fn lowerBinary(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory
     // check follows it.
     if (of == .string) {
         if (operation.op != .add) return emitGeneric(lowering, item);
-        try lowering.text.print("    call p_svc_str_concat, svc_str_concat, r{d}, s, r{d}, r{d}\n", .{
+        try emitTarget(lowering.text, "svc_str_concat");
+        try lowering.text.print("    call p_svc_str_concat, t, r{d}, s, r{d}, r{d}\n", .{
             item, operation.left, operation.right,
         });
         try emitTrapCheck(lowering);
@@ -1450,31 +1514,88 @@ fn lowerBinary(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory
 const CompileJob = struct {
     ctx: c.Context,
     text: [*:0]const u8,
-    function_count: usize,
     name_buffer: [32]u8 = undefined,
-    entry: u32,
-    entry_address: ?*anyopaque = null,
+    /// One generated-code span per function, filled by compileBody; a
+    /// null address means generation failed (a lowering bug).
+    addresses: []?*const anyopaque,
+    lengths: []usize,
 };
 
 fn compileBody(payload: ?*anyopaque) callconv(.c) void {
     const job: *CompileJob = @ptrCast(@alignCast(payload.?));
     // gen_init is fallible MIR work too; it belongs inside the
-    // protected region with everything else.
+    // protected region with everything else.  The module has no
+    // imports — every call target reads from the State address table
+    // — so nothing external is loaded and link only finalizes and
+    // generates.
     c.MIR_gen_init(job.ctx);
     c.MIR_scan_string(job.ctx, job.text);
-    for (services) |service| {
-        c.MIR_load_external(job.ctx, service.name.ptr, service.address);
-    }
     c.luce_mir_load_all(job.ctx);
     c.MIR_link(job.ctx, &c.MIR_set_gen_interface, null);
-    for (0..job.function_count) |index| {
+    for (job.addresses, job.lengths, 0..) |*address, *length, index| {
         const name = std.fmt.bufPrintZ(&job.name_buffer, "L{d}", .{index}) catch unreachable;
         // Absent only on a lowering bug; a null here must fail the
         // compile, not segfault inside MIR_gen.
         const item = c.luce_mir_find_func(job.ctx, name.ptr) orelse return;
-        const address = c.MIR_gen(job.ctx, item);
-        if (index == job.entry) job.entry_address = address;
+        _ = c.MIR_gen(job.ctx, item);
+        address.* = c.luce_func_code(item, length);
     }
+}
+
+/// A compiled program: the MIR context that owns the executable
+/// pages, and each function's code span.  Deinit tears the context
+/// (and the code) down — nothing may run it afterwards.
+const Compiled = struct {
+    ctx: c.Context,
+    addresses: []?*const anyopaque,
+    lengths: []usize,
+
+    fn deinit(self: Compiled) void {
+        c.MIR_gen_finish(self.ctx);
+        c.MIR_finish(self.ctx);
+    }
+};
+
+/// Lower and compile the whole program in a fresh MIR context.  On
+/// failure after an MIR error the context is abandoned (its state
+/// after the longjmp is unknown — a small, one-time leak on what is
+/// by definition a lowering bug).
+fn compileNative(arena: Allocator, program: *const ir.Program) RunError!Compiled {
+    const text = try lowerProgram(arena, program, Payloads.measure());
+    const ctx = c.luce_mir_init() orelse return error.NativeFailed;
+    var job: CompileJob = .{
+        .ctx = ctx,
+        .text = text.ptr,
+        .addresses = try arena.alloc(?*const anyopaque, program.functions.len),
+        .lengths = try arena.alloc(usize, program.functions.len),
+    };
+    @memset(job.addresses, null);
+    @memset(job.lengths, 0);
+    if (c.luce_mir_protected(ctx, &compileBody, &job) != 0) return error.NativeFailed;
+    for (job.addresses) |address| {
+        if (address != null) continue;
+        // The context is healthy (no longjmp) — tear it down normally.
+        c.MIR_gen_finish(ctx);
+        c.MIR_finish(ctx);
+        return error.NativeFailed;
+    }
+    return .{ .ctx = ctx, .addresses = job.addresses, .lengths = job.lengths };
+}
+
+/// Every function's generated machine code, copied out of the
+/// context: the capture seam for the hermeticity oracle
+/// (native_spec.zig) and the planned native image (docs/NATIVE.md
+/// milestone 5).
+pub fn generatedCode(arena: Allocator, program: *const ir.Program) RunError![][]const u8 {
+    if (!available) return error.NativeFailed;
+    const compiled = try compileNative(arena, program);
+    defer compiled.deinit();
+    const copies = try arena.alloc([]const u8, compiled.addresses.len);
+    for (compiled.addresses, compiled.lengths, copies) |address, length, *copy| {
+        const code: [*]const u8 = @ptrCast(address.?);
+        copy.* = try arena.dupe(u8, code[0..length]);
+    }
+    return copies;
 }
 
 pub const RunError = error{ OutOfMemory, NativeFailed };
@@ -1493,41 +1614,8 @@ pub fn run(
 ) RunError!Result {
     if (!available) return error.NativeFailed;
 
-    // Constant descriptors and the value layout come first: the
-    // emitted text embeds their addresses and offsets as immediates.
-    const constant_descs = try arena.alloc(StringDesc, program.constants.len + 1);
-    for (program.constants, constant_descs[0..program.constants.len]) |constant, *desc| {
-        desc.* = .{ .bytes = constant.ptr, .len = constant.len };
-    }
-    constant_descs[program.constants.len] = .{ .bytes = "", .len = 0 };
-    const layout: MemoryLayout = .{
-        .constant_descs = constant_descs,
-        .payloads = Payloads.measure(),
-    };
-
-    const text = try lowerProgram(arena, program, &layout);
-
-    const ctx = c.luce_mir_init() orelse return error.NativeFailed;
-    // After a longjmp'd MIR error the context's state is unknown, so
-    // the error path abandons it (a small, one-time leak on what is
-    // by definition a lowering bug) rather than risk finish crashing.
-    var healthy = true;
-    defer if (healthy) {
-        c.MIR_gen_finish(ctx);
-        c.MIR_finish(ctx);
-    };
-
-    var job: CompileJob = .{
-        .ctx = ctx,
-        .text = text.ptr,
-        .function_count = program.functions.len,
-        .entry = program.entry_function,
-    };
-    if (c.luce_mir_protected(ctx, &compileBody, &job) != 0) {
-        healthy = false;
-        return error.NativeFailed;
-    }
-    const entry = job.entry_address orelse return error.NativeFailed;
+    const compiled = try compileNative(arena, program);
+    defer compiled.deinit();
 
     var runtime: Runtime = .{ .machine = .{
         .arena = arena,
@@ -1538,13 +1626,37 @@ pub fn run(
         .max_depth = 0,
         .host = host,
     } };
-    var state: State = .{
+
+    // The State and its address table, one allocation: the code reads
+    // every call target and constant descriptor from the table, so
+    // this fill is the single place host addresses exist.
+    const constant_descs = try arena.alloc(StringDesc, program.constants.len + 1);
+    for (program.constants, constant_descs[0..program.constants.len]) |constant, *desc| {
+        desc.* = .{ .bytes = constant.ptr, .len = constant.len };
+    }
+    constant_descs[program.constants.len] = .{ .bytes = "", .len = 0 };
+    const table: AddressTable = .{ .constant_count = program.constants.len };
+    const words = try arena.alloc(u64, State.address_table_offset / 8 +
+        table.entryCount(program.functions.len));
+    const state: *State = @ptrCast(@alignCast(words.ptr));
+    state.* = .{
         .depth_left = @intCast(budget.call_depth),
         .runtime = &runtime,
     };
+    const entries = words[State.address_table_offset / 8 ..];
+    for (services, entries[0..services.len]) |service, *entry| {
+        entry.* = @intFromPtr(service.address);
+    }
+    for (constant_descs, entries[services.len..][0..constant_descs.len]) |*desc, *entry| {
+        entry.* = @intFromPtr(desc);
+    }
+    for (compiled.addresses, entries[services.len + constant_descs.len ..]) |address, *entry| {
+        entry.* = @intFromPtr(address.?);
+    }
 
-    const main: *const fn (*State) callconv(.c) void = @ptrCast(@alignCast(entry));
-    main(&state);
+    const entry_code = compiled.addresses[program.entry_function].?;
+    const main: *const fn (*State) callconv(.c) void = @ptrCast(@alignCast(entry_code));
+    main(state);
 
     if (state.trap == 0) {
         return .{ .success = .{ .leaked_objects = runtime.machine.live_objects } };
@@ -1556,7 +1668,7 @@ pub fn run(
     return .{ .trap = .{
         .code = code,
         .message = message,
-        .trace = try nativeTrace(arena, program, state),
+        .trace = try nativeTrace(arena, program, state.*),
     } };
 }
 

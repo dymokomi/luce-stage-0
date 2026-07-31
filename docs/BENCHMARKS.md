@@ -171,14 +171,13 @@ MIR experiment said it would.  What remains, in value order:
    `ir.prune`, dead-code elimination in the compiler: an unused
    `import strings` went from 12308 to 178 bytes of `.lc` and from
    +4.11ms of load-time compile to free (docs/SPEED.md §12).
-3. **Hermetic codegen, then the native image** — Luce is a compiled
-   language whose last stage currently runs at load (docs/SPEED.md
-   §13); M1 moves every host-absolute address behind the State
-   pointer (byte-identical-code oracle enforces it), M2 caches the
-   generated code beside the `.lc` so `loom run` does zero codegen.
-   Mechanics and the address inventory in docs/NATIVE.md
-   "Milestone 5".  When M2 lands, compile time leaves these numbers
-   the same way C's did — because it stopped happening at run time.
+3. ~~**Hermetic codegen (M1)**~~ — shipped at zero measured cost:
+   every host-absolute address now lives behind the State pointer
+   and the byte-identical-code oracle enforces it (docs/NATIVE.md
+   milestone 5; docs/SPEED.md §14).  **The native image (M2)**
+   remains: cache the captured code beside the `.lc` so `loom run`
+   does zero codegen — compile time then leaves these numbers the
+   same way C's did, by not happening at run time.
 4. **`List.append` on the generic path** — what `split` is actually
    bounded by now; element adoption is ownership, so a fast service
    has to carry that.

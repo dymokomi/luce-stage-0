@@ -68,6 +68,14 @@ void luce_mir_load_all (MIR_context_t ctx) {
     MIR_load_module (ctx, module);
 }
 
+/* The span of a generated function's machine code (the LUCE PATCH in
+ * vendor/mir records the length beside the address).  NULL with
+ * length 0 before generation. */
+const void *luce_func_code (MIR_item_t item, size_t *length) {
+  *length = item->u.func->machine_code_len;
+  return item->u.func->machine_code;
+}
+
 /* mir.h declares MIR_get_global_item but this snapshot never defines
  * it; finding a function by name is a plain walk of the module items. */
 MIR_item_t luce_mir_find_func (MIR_context_t ctx, const char *name) {
