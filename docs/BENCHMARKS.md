@@ -76,46 +76,52 @@ the harness enforces both:
 so slow host drift lands on every column equally — sequential
 timing on a bursty container biased whole columns by 2-3x.
 
-## The ratio column reads low — know by how much
+## The floor row, and why the benchmarks are big
 
-`time_once` brackets each run with two `date` forks, and the second
-one lands *inside* the measured interval: every number here carries
-~1ms of that plus the ~1.3ms process floor, **on both columns**.  A
-constant added to both sides of a ratio is not neutral — it pulls
-the ratio toward 1.  On a fast host the effect is large: the
-milestone-4 table below reads `strings 2.8x` where direct-exec
-timing of the same binaries reads ~11x.
+Every timing here carries a fixed cost neither language is being
+measured for: process startup on both sides, and on loom's side the
+JIT compile of the program and of every std function it imports.
+`time_once` adds ~1ms of its own on top, because it brackets each
+run with two `date` forks and the second lands *inside* the
+interval.  **A constant added to both columns is not neutral — it
+pulls a ratio toward 1.**
 
-So: **`native/C` here is a lower bound**, useful for watching one
-column move across a change, not for quoting the language's
-standing.  `bench/compare.sh` is unaffected — it compares like with
-like, and the constant cancels.  docs/SPEED.md §10 has the
-direct-exec method.
+Both fixes are applied.  The `floor` row times a do-nothing program
+through the same harness, so the reader can see what is not
+computation; and the benchmarks are sized so that floor is a small
+fraction of every row.  They were once sized for a ~1s *interpreter*
+run, which the native engine then made 10ms — small enough that
+fixed cost dominated and `strings` read ~2.8x where the honest
+figure was ~11x.  Sizing rule now: **native should run ~100ms, so
+the floor is under ~10%**.  A std-importing program pays a few ms
+more floor than the row shows (that compile is per-program).
+
+Because the sizes changed, `bench/compare.sh` cannot cross this
+commit — each side compiles its own `bench/*.luc`, so an older base
+runs the older, smaller workload.  It is exact for any two refs on
+the same side of the resize.
 
 ## Snapshot — 2026-07-31, milestone 4 (string producers)
 
-Illustrative, on the host stamped in the table's run (Apple M4 Max,
-Darwin arm64).  `native` is loom's default engine (docs/NATIVE.md);
+On the host stamped in the table's run (Apple M4 Max, Darwin
+arm64).  `native` is loom's default engine (docs/NATIVE.md);
 `interp` forces the reference interpreter with
-LOOM_ENGINE=interpreter.  Both Luce columns include process
-startup, .lc decode, and (native) the JIT compile — which for a
-std-importing program is ~4ms, the largest single line item left in
-`strings`:
+LOOM_ENGINE=interpreter:
 
-| benchmark | C      | native  | interp   | native/C (low) |
-|-----------|--------|---------|----------|----------------|
-| loops     | ~7.0ms | ~8.5ms  | ~418ms   | ~1.2x |
-| math      | ~9.9ms | ~11.8ms | ~497ms   | ~1.2x |
-| strings   | ~4.1ms | ~11.5ms | ~62ms    | ~2.8x |
-| arrays    | ~4.4ms | ~7.6ms  | ~131ms   | ~1.7x |
+| benchmark | C        | native   | interp    | native/C |
+|-----------|----------|----------|-----------|----------|
+| loops     | ~81ms    | ~90ms    | ~8.5s     | **~1.1x** |
+| math      | ~140ms   | ~158ms   | ~10.1s    | **~1.1x** |
+| strings   | ~20ms    | ~74ms    | ~1.1s     | **~3.6x** |
+| arrays    | ~44ms    | ~81ms    | ~4.7s     | **~1.8x** |
+| floor     | ~3.9ms   | ~4.3ms   | —         | — |
 
 Milestone 3 made string byte access and rank-1 scalar array
 indexing inline machine code (docs/NATIVE.md).  Milestone 4 went
 after producing strings rather than reading them — fast services
 for `chr`, `str(Int)` and `+`, plus the `append_ascii` and
-`find_byte` primitives — for `strings` −27% and an interpreter that
-more than doubled on the same bench.  The remaining arrays gap is
-what vectorization would buy.
+`find_byte` primitives.  The remaining arrays gap is what
+vectorization would buy.
 
 For orientation, measured on the earlier Xeon container (not the
 host above): CPython 3.11 ran the loops algorithm in 1228ms and
@@ -123,13 +129,15 @@ mandelbrot in 1884ms, where native Luce was ~25-80x faster and the
 interpreter alone already edged it.  (CPython's mandelbrot count
 matches Luce's exactly — both are strict IEEE.)
 
-**Where we're at**, by direct-exec timing with the process floor
-subtracted (docs/SPEED.md §10 — *not* the ratio column above):
-compiled Luce runs at **~1.2x full-speed C** on scalar workloads,
-~3x on the vectorizable array one, and **~11x** on the string-bound
-one, checks and ownership included.  The interpreter remains the
-reference implementation, the oracle, and the fallback for
-platforms the JIT doesn't cover.
+**Where we're at:** compiled Luce runs at **~1.1x full-speed C** on
+scalar workloads, ~1.8x on the vectorizable array one, and **~3.6x**
+on the string-bound one, checks and ownership included.  The
+interpreter remains the reference implementation, the oracle, and
+the fallback for platforms the JIT doesn't cover.
+
+(An earlier edition of this line said ~11x for strings.  That was
+measured on a workload too small to amortize startup and JIT — the
+honest computational figure is the one above; docs/SPEED.md §11.)
 
 ## Why runtime checks are not the cost
 
@@ -204,5 +212,9 @@ benchmarks themselves cannot rot.
    between the languages; cast through `Int(...)`/`(long)`).
 2. Add NAME to `names` in `bench/run.sh` and to `benches` in
    `build.zig`.
-3. Size the Luce side to run 1–5 seconds: long enough to swamp
-   startup, short enough to keep the suite pleasant.
+3. Size it so the **native** side runs ~100ms — long enough that the
+   `floor` row (startup plus JIT) stays under ~10% of it, short
+   enough to keep the suite pleasant.  Sizing to the interpreter
+   instead is how these got too small to measure honestly.  Prefer a
+   knob that scales work without scaling retained data (`arrays`
+   scales its repeat count, not its arrays).

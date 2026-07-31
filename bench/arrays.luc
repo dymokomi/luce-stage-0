@@ -7,7 +7,7 @@
 
 func main():
     let n = 200000
-    let reps = 10
+    let reps = 400
     var a = new Array(Float, n)
     var b = new Array(Float, n)
     for i in range(0, n):

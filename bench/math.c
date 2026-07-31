@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 int main(void) {
-    const long size = 500;
+    const long size = 2236;
     const long max_iter = 60;
     long inside = 0;
     for (long py = 0; py < size; py++) {

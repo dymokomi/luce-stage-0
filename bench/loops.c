@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 int main(void) {
-    const long n = 3000;
+    const long n = 13416;
     long total = 0;
     for (long i = 0; i < n; i++) {
         for (long j = 0; j < n; j++) {

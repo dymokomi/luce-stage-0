@@ -73,8 +73,13 @@ const CallOutcome = union(enum) {
 /// the native stack.
 const Frame = struct {
     function: u32,
-    registers: []RuntimeValue,
-    locals: []RuntimeValue,
+    /// Where this frame's slots start in `frame_storage`: registers
+    /// first, then locals, one contiguous run released when the frame
+    /// returns.  Offsets, not slices — the storage array reallocates
+    /// as the stack deepens, and offsets survive that.
+    slots_at: u32,
+    register_count: u32,
+    local_count: u32,
     block: ir.BlockId = 0,
     position: usize = 0,
     /// The caller register receiving this frame's return value.
@@ -100,6 +105,16 @@ pub const Machine = struct {
     /// The text payload of the most recent key_read "text" event.
     last_key_text: []const u8 = "",
     stack: std.ArrayList(Frame) = .empty,
+    /// Every live frame's registers and locals, as one stack that
+    /// pops on return.  Frames used to take a fresh arena slice each
+    /// call, which the arena never reclaimed: memory then grew with
+    /// the number of calls a program *made* rather than with what it
+    /// held, and a long-running loop over a function grew without
+    /// bound.  Reused storage makes it O(depth) instead.
+    frame_storage: std.ArrayList(RuntimeValue) = .empty,
+    /// Scratch for one call's arguments, reused across calls; live
+    /// only until pushFrame copies them into the callee's locals.
+    argument_scratch: std.ArrayList(RuntimeValue) = .empty,
     /// Every allocated object, alive or freed; handles index this
     /// table.  Slots are never reused, so a freed handle stays
     /// detectably dead for the whole evaluation.
@@ -191,8 +206,13 @@ pub const Machine = struct {
     ) error{OutOfMemory}!?CallOutcome {
         if (self.stack.items.len >= self.max_depth) return self.trap(.call_depth_exceeded);
         const function = &self.program.functions[function_index];
-        const registers = try self.arena.alloc(RuntimeValue, function.instructions.len);
-        const locals = try self.arena.alloc(RuntimeValue, function.locals.len);
+        const slots_at = self.frame_storage.items.len;
+        const register_count = function.instructions.len;
+        const local_count = function.locals.len;
+        try self.frame_storage.appendNTimes(self.arena, .none, register_count + local_count);
+        // Safe to hold across zeroValue: it allocates struct fields
+        // from the arena and never touches frame_storage.
+        const locals = self.frame_storage.items[slots_at + register_count ..][0..local_count];
         // Every local starts at its type's zero value, not a bare
         // .none: a well-formed function sets locals before reading
         // them, but a hand-forged or bit-flipped module may read one
@@ -208,8 +228,9 @@ pub const Machine = struct {
         self.next_serial += 1;
         try self.stack.append(self.arena, .{
             .function = function_index,
-            .registers = registers,
-            .locals = locals,
+            .slots_at = @intCast(slots_at),
+            .register_count = @intCast(register_count),
+            .local_count = @intCast(local_count),
             .destination = destination,
             .serial = serial,
         });
@@ -222,8 +243,12 @@ pub const Machine = struct {
         dispatch: while (true) {
             const frame = &self.stack.items[self.stack.items.len - 1];
             const function = &self.program.functions[frame.function];
-            const registers = frame.registers;
-            const locals = frame.locals;
+            // Re-derived every time round the dispatch loop: pushing a
+            // frame may reallocate the storage, and every path that
+            // pushes one continues here rather than reusing these.
+            const slots = self.frame_storage.items[frame.slots_at..];
+            const registers = slots[0..frame.register_count];
+            const locals = slots[frame.register_count..][0..frame.local_count];
             const items = function.blocks[frame.block].items;
 
             while (frame.position < items.len) {
@@ -304,11 +329,15 @@ pub const Machine = struct {
                     .object_bind => |bind| self.bindValue(registers[bind.value], frame.serial, bind.local),
                     .object_unbind => |unbind| self.unbindValue(registers[unbind.value], frame.serial, unbind.local),
                     .call => |called| {
-                        const arguments_storage = try self.arena.alloc(RuntimeValue, called.arguments.len);
-                        for (called.arguments, arguments_storage) |argument, *slot| {
-                            slot.* = registers[argument];
+                        // Reused scratch, not a fresh arena slice per
+                        // call: pushFrame copies it into the callee's
+                        // locals and nothing outlives that.
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(self.arena, called.arguments.len);
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
                         }
-                        if (try self.pushFrame(called.function, arguments_storage, item)) |failed| {
+                        if (try self.pushFrame(called.function, self.argument_scratch.items, item)) |failed| {
                             return failed;
                         }
                         continue :dispatch;
@@ -337,11 +366,15 @@ pub const Machine = struct {
                         // the returned value moves to the caller
                         // (S16): loose until something there binds it.
                         self.loosenFromFrame(returned, finished.serial);
+                        // `returned` is a copy — its string bytes and
+                        // struct fields live in the arena, not here —
+                        // so the frame's slots go back now.
+                        self.frame_storage.shrinkRetainingCapacity(finished.slots_at);
                         if (self.stack.items.len == 0) return .{ .value = returned };
                         const parent = &self.stack.items[self.stack.items.len - 1];
                         const parent_function = &self.program.functions[parent.function];
                         if (parent_function.result_types[finished.destination] != .none) {
-                            parent.registers[finished.destination] = returned;
+                            self.frame_storage.items[parent.slots_at + finished.destination] = returned;
                         }
                         continue :dispatch;
                     },

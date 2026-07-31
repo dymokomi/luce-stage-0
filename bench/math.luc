@@ -3,7 +3,7 @@
 # raw float work.  The C twin is bench/math.c.
 
 func main():
-    let size = 500
+    let size = 2236
     let max_iter = 60
     var inside = 0
     for py in range(0, size):

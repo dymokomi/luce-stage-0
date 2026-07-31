@@ -8,10 +8,10 @@
 
 int main(void) {
     /* Build "item-0;item-1;...". */
-    size_t capacity = 1 << 19;
+    size_t capacity = 1 << 24;
     char *text = malloc(capacity);
     size_t length = 0;
-    for (int i = 0; i < 20000; i++) {
+    for (int i = 0; i < 400000; i++) {
         length += (size_t)sprintf(text + length, "item-%d;", i);
     }
 

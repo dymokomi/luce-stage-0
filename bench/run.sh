@@ -85,15 +85,35 @@ host_stamp() {
 echo "host: $(host_stamp) ($(uname -sm))"
 
 # Interleaved rounds, best of five: slow host drift lands on every
-# column equally instead of biasing whichever ran last.
+# column equally instead of biasing whichever ran last.  The
+# interpreter is ~50x slower and correspondingly stable, so it takes
+# a single pass — five would dominate the suite's wall clock and buy
+# no precision.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 for round in 1 2 3 4 5; do
     for name in $names; do
         keep_min "$tmp/$name.c" "$(time_once build/bench/"$name")"
         keep_min "$tmp/$name.native" "$(time_once build/loom run build/bench/"$name".lc)"
-        keep_min "$tmp/$name.interp" "$(time_once interp_loom run build/bench/"$name".lc)"
     done
+done
+for name in $names; do
+    keep_min "$tmp/$name.interp" "$(time_once interp_loom run build/bench/"$name".lc)"
+done
+
+# The floor: what a do-nothing program costs on each side — process
+# startup for C, and for loom startup plus the JIT compile of the
+# program and every std function it imports.  Printed rather than
+# subtracted, so the reader can see how much of a row is not
+# computation.  Keep the benchmarks large enough that this stays
+# small; see docs/BENCHMARKS.md.
+printf 'func main():\n    print("")\n' > "$tmp/floor.luc"
+printf 'int main(void){return 0;}\n' > "$tmp/floor.c"
+build/luce build "$tmp/floor.luc" -o "$tmp/floor.lc" --release >/dev/null
+zig cc -O3 -o "$tmp/floor" "$tmp/floor.c"
+for round in 1 2 3; do
+    keep_min "$tmp/floor.c.ns" "$(time_once "$tmp/floor")"
+    keep_min "$tmp/floor.native.ns" "$(time_once build/loom run "$tmp/floor.lc")"
 done
 
 printf '%-10s %12s %12s %12s %10s\n' "benchmark" "C" "native" "interp" "native/C"
@@ -104,3 +124,7 @@ for name in $names; do
             name, c / 1e6, native / 1e6, interp / 1e6, native / c
     }'
 done
+awk -v c="$(cat "$tmp/floor.c.ns")" -v native="$(cat "$tmp/floor.native.ns")" 'BEGIN {
+    printf "%-10s %10.1fms %10.1fms %12s %10s   (do-nothing program)\n",
+        "floor", c / 1e6, native / 1e6, "-", "-"
+}'

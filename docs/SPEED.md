@@ -299,3 +299,78 @@ functions.  The next lever is therefore not a string lever at all:
 pruning before lowering, or lazy per-function compilation.  After
 that, `split` is bounded by `List.append` on the generic path, not
 by anything string-shaped.
+
+---
+
+## 11. Measuring computation, not overhead
+
+§10 ended with a JIT compile that outweighed the work it compiled.
+Three ways out were put to the question — cache the compile, exclude
+it from the numbers, or make the workload big enough that it stops
+mattering.  The third is right, and the other two are worth
+recording as rejected.
+
+**Cache the compiled code?  Not yet, and not first.**  The emitted
+code is not relocatable: service addresses arrive through
+`MIR_load_external`, and constant string-descriptor addresses and
+the measured RuntimeValue payload offsets are embedded in the text
+as immediates.  Caching therefore means emitting a relocation table
+and inventing the artifact §4 sketched (code + relocations +
+origins, mmap'd), plus a cache keyed on both the `.lc` and the loom
+build.  All of that to avoid compiling ~18 functions.  **Pruning
+what is never called is strictly smaller and strictly better** —
+no on-disk format, no invalidation, and it helps the first run too.
+Caching stays available if a program ever imports enough std that
+even the reachable set is slow to compile.
+
+**Exclude the compile from the numbers?  That would trade one bias
+for another.**  C pays its own process startup in every row; taking
+loom's fixed cost out while leaving C's in flatters Luce exactly as
+much as the old harness flattered it in the other direction.  What
+the reader needs is not a number with the overhead hidden but a
+number where overhead is small *and visible* — so `bench/run.sh`
+now prints a `floor` row (a do-nothing program through the same
+harness), and the benchmarks are sized against it.
+
+**Size the work so the fixed cost is noise.**  The benchmarks were
+sized for a ~1s *interpreter* run; the native engine then made them
+10ms, and nobody re-sized them.  At that size the fixed ~6ms was
+most of the measurement.  They are now ~20x (loops/math scale the
+side, `arrays` its repeat count, `strings` its item count), which
+puts native near 100ms and the floor under 10%.  The corrected
+picture is much better than §10's:
+
+| benchmark | C | native | native/C | (§10 said) |
+|---|---|---|---|---|
+| loops | ~81ms | ~90ms | **~1.1x** | ~1.4x |
+| math | ~140ms | ~158ms | **~1.1x** | ~1.2x |
+| arrays | ~44ms | ~81ms | **~1.8x** | ~3.1x |
+| strings | ~20ms | ~74ms | **~3.6x** | ~11x |
+
+**strings is ~3.6x C, not ~11x.**  The 11x was real for a 10ms
+program — it is what a short script actually experiences — but it
+was mostly startup and JIT, not string work.  Both numbers are
+true of different questions, and the benchmark should answer the
+one about computation.
+
+**What the resize exposed.**  Scaling the interpreter column 20x
+took `strings` to **3.1 GB** of resident memory.  The cause was not
+strings at all: `pushFrame` took each frame's registers and locals
+as a fresh slice of the run arena, and the arena never reclaims —
+so interpreter memory grew with the number of calls a program
+*made*, not with what it held.  A 3M-call loop cost 414 MB, and any
+long-running interpreted program would eventually die of it.
+Frames now take one contiguous run of a reusable `frame_storage`
+stack, popped on return, with frames holding offsets rather than
+slices (the storage reallocates as the stack deepens, and offsets
+survive that); call arguments use one reused scratch buffer instead
+of a per-call arena slice.  Memory became O(depth) instead of
+O(calls) — 3M calls **414 MB → 2 MB**, strings-20x **3156 MB → 55
+MB** — and it is *faster*, because the allocation per call is gone:
+**−23.7%** on the call-heavy program, **−15.8%** on strings.
+
+The lesson generalizes past this file: **an arena is a lifetime
+policy, and "the whole run" is the wrong lifetime for anything
+per-call.**  What remains arena-shaped is per-value (strings,
+descriptors, heap objects), which is bounded by the data a program
+touches rather than by how long it runs.

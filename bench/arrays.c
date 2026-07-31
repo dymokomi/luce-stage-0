@@ -6,7 +6,7 @@
 
 int main(void) {
     const long n = 200000;
-    const long reps = 10;
+    const long reps = 400;
     double *a = malloc((size_t)n * sizeof(double));
     double *b = malloc((size_t)n * sizeof(double));
     for (long i = 0; i < n; i++) {
