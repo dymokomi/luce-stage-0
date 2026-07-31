@@ -146,12 +146,13 @@ Since milestone 2 the native core takes the whole language —
 collections, ownership, structs, strings, host builtins — through
 two service tiers into the interpreter's own machinery, and every
 benchmark runs native: **1.5–3× C** scalar, **5–19× C**
-collection-bound (docs/BENCHMARKS.md).  The interpreter stays as
-the reference implementation, the oracle, and the platform
-fallback.  What remains: unboxed native arrays/strings when a
-program demands it, the self-written Zig backend racing MIR behind
-the same seam, and — if ever judged worth its weight — an LLVM
-engine for the last 2× and SIMD.
+collection-bound (docs/BENCHMARKS.md), with milestone 3's unboxed
+access (string descriptors, array views, inline rank-1 indexing)
+shipped on top.  The interpreter stays as the reference
+implementation, the oracle, and the platform fallback.  What
+remains: the self-written Zig backend racing MIR behind the same
+seam, and — if ever judged worth its weight — an LLVM engine for
+the last 2× and SIMD.
 
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 

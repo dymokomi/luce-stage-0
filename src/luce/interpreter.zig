@@ -103,7 +103,7 @@ pub const Machine = struct {
     /// Every allocated object, alive or freed; handles index this
     /// table.  Slots are never reused, so a freed handle stays
     /// detectably dead for the whole evaluation.
-    heap: std.ArrayList(HeapObject) = .empty,
+    heap: std.ArrayList(*HeapObject) = .empty,
     live_objects: u32 = 0,
     next_serial: u32 = 1,
     pending_trap: ?backend.Trap = null,
@@ -169,7 +169,7 @@ pub const Machine = struct {
         const handle = value.object;
         if (handle.isNull()) return self.failure(.null_object);
         if (handle.index >= self.heap.items.len) return self.failure(.use_after_free);
-        const found = &self.heap.items[handle.index];
+        const found = self.heap.items[handle.index];
         if (!found.alive) return self.failure(.use_after_free);
         return found;
     }
@@ -369,6 +369,9 @@ pub const Machine = struct {
     };
 
     pub const HeapObject = struct {
+        /// The native engine's cached unboxed view of this object
+        /// (docs/NATIVE.md); the interpreter never reads it.
+        native_view: ?*anyopaque = null,
         alive: bool = true,
         owner: Owner = .loose,
         data: Data,
@@ -390,7 +393,7 @@ pub const Machine = struct {
 
     fn liveObject(self: *Machine, handle: backend.ObjectHandle) ?*HeapObject {
         if (handle.isNull() or handle.index >= self.heap.items.len) return null;
-        const object = &self.heap.items[handle.index];
+        const object = self.heap.items[handle.index];
         if (!object.alive) return null;
         return object;
     }
@@ -468,7 +471,7 @@ pub const Machine = struct {
 
     /// Free one object and everything it owns, recursively (S20).
     fn freeObject(self: *Machine, index: u32) void {
-        const object = &self.heap.items[index];
+        const object = self.heap.items[index];
         if (!object.alive) return;
         object.alive = false;
         self.live_objects -= 1;
@@ -502,7 +505,7 @@ pub const Machine = struct {
             .object => |handle| {
                 if (handle.isNull()) return;
                 if (handle.index >= self.heap.items.len) return self.failure(.use_after_free);
-                const found = &self.heap.items[handle.index];
+                const found = self.heap.items[handle.index];
                 if (!found.alive) return self.failure(.use_after_free);
                 if (found.owner == .container) return self.failure(.not_owned);
                 if (expected) |owner| {
@@ -563,7 +566,9 @@ pub const Machine = struct {
                     },
                 };
                 const index: u32 = @intCast(self.heap.items.len);
-                try self.heap.append(self.arena, .{ .data = data });
+                const created = try self.arena.create(HeapObject);
+                created.* = .{ .data = data };
+                try self.heap.append(self.arena, created);
                 self.live_objects += 1;
                 const duplicate: RuntimeValue = .{ .object = .{ .index = index } };
                 // The copy's own elements belong to it.
@@ -617,7 +622,9 @@ pub const Machine = struct {
             },
         };
         const index: u32 = @intCast(self.heap.items.len);
-        try self.heap.append(self.arena, .{ .data = data });
+        const created = try self.arena.create(HeapObject);
+        created.* = .{ .data = data };
+        try self.heap.append(self.arena, created);
         self.live_objects += 1;
         return .{ .object = .{ .index = index } };
     }
@@ -945,7 +952,9 @@ pub const Machine = struct {
                     self.adoptValue(duplicate);
                 }
                 const index: u32 = @intCast(self.heap.items.len);
-                try self.heap.append(self.arena, .{ .data = .{ .list = copied } });
+                const created = try self.arena.create(HeapObject);
+                created.* = .{ .data = .{ .list = copied } };
+                try self.heap.append(self.arena, created);
                 self.live_objects += 1;
                 return .{ .object = .{ .index = index } };
             },
@@ -1121,7 +1130,9 @@ pub const Machine = struct {
                     try listed.append(self.arena, entry.key);
                 }
                 const index: u32 = @intCast(self.heap.items.len);
-                try self.heap.append(self.arena, .{ .data = .{ .list = listed } });
+                const created = try self.arena.create(HeapObject);
+                created.* = .{ .data = .{ .list = listed } };
+                try self.heap.append(self.arena, created);
                 self.live_objects += 1;
                 return .{ .object = .{ .index = index } };
             },
@@ -1137,7 +1148,9 @@ pub const Machine = struct {
                     self.adoptValue(duplicate);
                 }
                 const index: u32 = @intCast(self.heap.items.len);
-                try self.heap.append(self.arena, .{ .data = .{ .list = listed } });
+                const created = try self.arena.create(HeapObject);
+                created.* = .{ .data = .{ .list = listed } };
+                try self.heap.append(self.arena, created);
                 self.live_objects += 1;
                 return .{ .object = .{ .index = index } };
             },

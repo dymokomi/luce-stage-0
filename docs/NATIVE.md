@@ -70,16 +70,39 @@ that skip the marshaling and mirror the interpreter's checks in a
 few lines each; the oracle holds both tiers to byte-identical
 behavior.
 
-Current standing (docs/BENCHMARKS.md): **loops ~2.9x C, math
-~1.5x C, arrays ~5.5x C, strings ~19x C** — every bench native,
-5-9x faster than the interpreter on the collection-bound ones.
 Known limits recorded on purpose: `budget.steps` is not enforced
 natively (the call-depth budget is; loom runs scripts unlimited
 anyway), and a native trap reports its innermost frame only — the
-interpreter remains the engine with full call traces.  The next
-speed lever, when a real program demands it: unboxed native storage
-for scalar arrays and strings, turning the per-element service call
-into an inline bounds-checked load.
+interpreter remains the engine with full call traces.
+
+## Milestone 3: unboxed access
+
+The hottest primitives no longer call anything.  A String travels
+natively as the address of a stable `{ptr, len}` descriptor —
+`byte_at` compiles to a bounds check and a byte load, `len` to one
+load.  A scalar Array (any rank) travels as the address of a *view*
+— its element storage, `dims[0]`, the address of the object's alive
+flag, and its handle — so rank-1 indexing compiles to inline
+null/alive/bounds checks and a typed load or store at
+`elements + index * stride + payload_offset`.  The payload offsets
+inside RuntimeValue are measured at run time (the union's layout is
+the compiler's business) and embedded in the emitted text as
+immediates, together with the constant-pool descriptor addresses.
+
+The data itself never moved: views point into the interpreter's own
+heap objects (heap cells are arena-allocated and pointer-stable
+precisely for this), the element tags are never touched by payload
+writes, and every other operation converts view/descriptor back to
+handle/slice at the service boundary.  `free` through any alias
+still traps inline — the view checks the object's real alive flag.
+Ownership, sort, fill, copy: all still the interpreter's one
+implementation.
+
+Current standing (docs/BENCHMARKS.md): **math ~1.3x C, arrays ~3x
+C, loops ~3-5x C, strings ~15-19x C** — the checked-scalar plateau
+a non-vectorizing backend can reach.  What is left in the strings
+ratio is allocation-per-operation (split's pieces, builder growth,
+formatting), not access cost.
 
 ## Where a wall would send us
 

@@ -128,23 +128,95 @@ const Runtime = struct {
     /// ownership semantics exist in exactly one place.  Its frame
     /// stack stays empty — native code owns control flow.
     machine: interpreter.Machine,
-    /// String handles: the program's constant pool first, then ""
-    /// (the string zero value), then whatever runs make.
-    strings: std.ArrayList([]const u8) = .empty,
 };
 
 fn trapWord(code: ir.TrapCode) i64 {
     return @as(i64, @intFromEnum(code)) + 1;
 }
 
-fn internString(state: *State, text: []const u8) i64 {
-    const runtime = state.runtime;
-    const handle: i64 = @intCast(runtime.strings.items.len);
-    runtime.strings.append(runtime.machine.arena, text) catch {
+/// A String natively: the address of one of these, arena-allocated
+/// and immutable, so byte_at and len compile to plain loads.
+/// Constants get theirs before lowering (addresses are embedded in
+/// the emitted text); runtime strings get one per value.
+const StringDesc = extern struct {
+    ptr: [*]const u8,
+    len: u64,
+};
+
+/// A scalar Array natively: the address of a view into the object —
+/// its element storage, dims[0], the address of the stable alive
+/// flag (heap cells never move), and the handle for everything
+/// ownership-shaped.  Rank-1 indexing compiles to a null/alive/
+/// bounds-checked inline load; every other operation converts back
+/// to the handle at the service boundary.
+const ArrayView = extern struct {
+    elements: u64,
+    len: u64,
+    alive: u64,
+    handle: u64,
+};
+
+/// Where a RuntimeValue keeps each scalar payload — measured at run
+/// time (the union's layout is the compiler's business), embedded as
+/// constants in the emitted text.
+const Payloads = struct {
+    int: u64,
+    float: u64,
+    boolean: u64,
+
+    fn measure() Payloads {
+        var probe: RuntimeValue = .{ .int = 0 };
+        const base = @intFromPtr(&probe);
+        const int_offset = @intFromPtr(&probe.int) - base;
+        probe = .{ .float = 0 };
+        const float_offset = @intFromPtr(&probe.float) - base;
+        probe = .{ .boolean = false };
+        const bool_offset = @intFromPtr(&probe.boolean) - base;
+        return .{ .int = int_offset, .float = float_offset, .boolean = bool_offset };
+    }
+};
+
+/// Everything the lowering embeds as immediates: constant string
+/// descriptors (the last one is "", the string zero value) and the
+/// element layout for inline array access.
+const MemoryLayout = struct {
+    constant_descs: []StringDesc,
+    payloads: Payloads,
+
+    const stride: u64 = @sizeOf(RuntimeValue);
+
+    fn constDescAddress(self: *const MemoryLayout, constant: usize) i64 {
+        return @bitCast(@intFromPtr(&self.constant_descs[constant]));
+    }
+
+    fn emptyStringAddress(self: *const MemoryLayout) i64 {
+        return self.constDescAddress(self.constant_descs.len - 1);
+    }
+};
+
+/// Scalar arrays of any rank use the view representation.
+fn viewable(program: *const ir.Program, heap_index: u32) bool {
+    return switch (program.heap_types[heap_index]) {
+        .array => |shape| switch (shape.element) {
+            .int, .boolean, .float => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn newStringDesc(state: *State, text: []const u8) i64 {
+    const desc = state.runtime.machine.arena.create(StringDesc) catch {
         state.trap = State.oom_trap;
         return 0;
     };
-    return handle;
+    desc.* = .{ .ptr = text.ptr, .len = text.len };
+    return @bitCast(@intFromPtr(desc));
+}
+
+fn descText(raw: u64) []const u8 {
+    const desc: *const StringDesc = @ptrFromInt(raw);
+    return desc.ptr[0..desc.len];
 }
 
 /// A typed RuntimeValue from marshaling slot `slot`.
@@ -155,8 +227,15 @@ fn fromSlot(state: *State, slot: usize, of: types.Type) RuntimeValue {
         .boolean => .{ .boolean = raw != 0 },
         .int => .{ .int = @bitCast(raw) },
         .float => .{ .float = @bitCast(raw) },
-        .string => .{ .string = state.runtime.strings.items[@intCast(@as(i64, @bitCast(raw)))] },
-        .heap => .{ .object = .{ .index = @intCast(raw & 0xffff_ffff) } },
+        .string => .{ .string = descText(raw) },
+        .heap => |heap_index| blk: {
+            if (viewable(state.runtime.machine.program, heap_index)) {
+                if (raw == 0) break :blk .{ .object = backend.ObjectHandle.null_object };
+                const view: *const ArrayView = @ptrFromInt(raw);
+                break :blk .{ .object = .{ .index = @intCast(view.handle) } };
+            }
+            break :blk .{ .object = .{ .index = @intCast(raw & 0xffff_ffff) } };
+        },
         .strukt => |layout| blk: {
             const fields: [*]RuntimeValue = @ptrFromInt(raw);
             const count = state.runtime.machine.program.structs[layout].fields.len;
@@ -167,17 +246,42 @@ fn fromSlot(state: *State, slot: usize, of: types.Type) RuntimeValue {
 }
 
 /// The native i64 for a non-float RuntimeValue (floats travel on the
-/// d-returning service path).
-fn toNative(state: *State, value: RuntimeValue) i64 {
+/// d-returning service path).  The static type decides the object
+/// representation: viewable arrays travel as views, everything else
+/// as handles.
+fn toNative(state: *State, value: RuntimeValue, of: types.Type) i64 {
     return switch (value) {
         .none => 0,
         .boolean => |flag| @intFromBool(flag),
         .int => |number| number,
-        .string => |text| internString(state, text),
-        .object => |handle| @intCast(handle.index),
+        .string => |text| newStringDesc(state, text),
+        .object => |handle| objectNative(state, handle, of),
         .strukt => |fields| @bitCast(@intFromPtr(fields.ptr)),
         .float, .bytes => unreachable,
     };
+}
+
+fn objectNative(state: *State, handle: backend.ObjectHandle, of: types.Type) i64 {
+    const machine = &state.runtime.machine;
+    if (of == .heap and viewable(machine.program, of.heap)) {
+        if (handle.isNull()) return 0;
+        const object = machine.heap.items[handle.index];
+        if (object.native_view) |existing| return @bitCast(@intFromPtr(existing));
+        const view = machine.arena.create(ArrayView) catch {
+            state.trap = State.oom_trap;
+            return 0;
+        };
+        const array = object.data.array;
+        view.* = .{
+            .elements = @intFromPtr(array.elements.ptr),
+            .len = if (array.dims.len == 0) 0 else @intCast(array.dims[0]),
+            .alive = @intFromPtr(&object.alive),
+            .handle = handle.index,
+        };
+        object.native_view = view;
+        return @bitCast(@intFromPtr(view));
+    }
+    return @intCast(handle.index);
 }
 
 const identity_registers = blk: {
@@ -275,7 +379,8 @@ fn genericResult(state: *State, function: i64, instruction: i64, serial: i64) ?R
 
 fn svcInstrI(state: *State, function: i64, instruction: i64, serial: i64) callconv(.c) i64 {
     const value = genericResult(state, function, instruction, serial) orelse return 0;
-    return toNative(state, value);
+    const target = &state.runtime.machine.program.functions[@intCast(function)];
+    return toNative(state, value, target.result_types[@intCast(instruction)]);
 }
 
 fn svcInstrD(state: *State, function: i64, instruction: i64, serial: i64) callconv(.c) f64 {
@@ -299,11 +404,12 @@ fn svcSerial(state: *State) callconv(.c) i64 {
 /// The typed zero of a struct local (S40 late declarations).
 fn svcZeroStrukt(state: *State, layout: i64) callconv(.c) i64 {
     const machine = &state.runtime.machine;
-    const zero = machine.zeroValue(.{ .strukt = @intCast(layout) }) catch {
+    const of: types.Type = .{ .strukt = @intCast(layout) };
+    const zero = machine.zeroValue(of) catch {
         state.trap = State.oom_trap;
         return 0;
     };
-    return toNative(state, zero);
+    return toNative(state, zero, of);
 }
 
 /// Return-value ownership (S16): whatever the finishing frame still
@@ -343,7 +449,7 @@ fn fastResolve(state: *State, function: i64, instruction: i64, raw: i64) ?*inter
         recordFastTrap(state, .use_after_free, function, instruction);
         return null;
     }
-    const object = &machine.heap.items[index];
+    const object = machine.heap.items[index];
     if (!object.alive) {
         recordFastTrap(state, .use_after_free, function, instruction);
         return null;
@@ -397,19 +503,6 @@ fn svcSeqSetD(state: *State, function: i64, instruction: i64, handle: i64, index
     element.* = .{ .float = value };
 }
 
-fn svcStrByte(state: *State, function: i64, instruction: i64, handle: i64, index: i64) callconv(.c) i64 {
-    const text = state.runtime.strings.items[@intCast(handle)];
-    if (index < 0 or index >= text.len) {
-        recordFastTrap(state, .string_bounds, function, instruction);
-        return 0;
-    }
-    return text[@intCast(index)];
-}
-
-fn svcStrLen(state: *State, handle: i64) callconv(.c) i64 {
-    return @intCast(state.runtime.strings.items[@intCast(handle)].len);
-}
-
 fn svcObjLen(state: *State, function: i64, instruction: i64, handle: i64) callconv(.c) i64 {
     const object = fastResolve(state, function, instruction, handle) orelse return 0;
     const measured: usize = switch (object.data) {
@@ -422,7 +515,7 @@ fn svcObjLen(state: *State, function: i64, instruction: i64, handle: i64) callco
 }
 
 fn svcStrSlice(state: *State, function: i64, instruction: i64, handle: i64, from: i64, to: i64) callconv(.c) i64 {
-    const text = state.runtime.strings.items[@intCast(handle)];
+    const text = descText(@bitCast(handle));
     if (from < 0 or to < from or to > text.len) {
         recordFastTrap(state, .string_bounds, function, instruction);
         return 0;
@@ -433,12 +526,12 @@ fn svcStrSlice(state: *State, function: i64, instruction: i64, handle: i64, from
         recordFastTrap(state, .string_boundary, function, instruction);
         return 0;
     }
-    return internString(state, text[start..end]);
+    return newStringDesc(state, text[start..end]);
 }
 
 fn svcBuilderAppend(state: *State, function: i64, instruction: i64, handle: i64, text_handle: i64) callconv(.c) void {
     const object = fastResolve(state, function, instruction, handle) orelse return;
-    const text = state.runtime.strings.items[@intCast(text_handle)];
+    const text = descText(@bitCast(text_handle));
     object.data.builder.appendSlice(state.runtime.machine.arena, text) catch {
         state.trap = State.oom_trap;
     };
@@ -457,8 +550,6 @@ const services = [_]Service{
     .{ .name = "svc_seq_get_d", .address = @ptrCast(@constCast(&svcSeqGetD)) },
     .{ .name = "svc_seq_set_i", .address = @ptrCast(@constCast(&svcSeqSetI)) },
     .{ .name = "svc_seq_set_d", .address = @ptrCast(@constCast(&svcSeqSetD)) },
-    .{ .name = "svc_str_byte", .address = @ptrCast(@constCast(&svcStrByte)) },
-    .{ .name = "svc_str_len", .address = @ptrCast(@constCast(&svcStrLen)) },
     .{ .name = "svc_obj_len", .address = @ptrCast(@constCast(&svcObjLen)) },
     .{ .name = "svc_str_slice", .address = @ptrCast(@constCast(&svcStrSlice)) },
     .{ .name = "svc_builder_append", .address = @ptrCast(@constCast(&svcBuilderAppend)) },
@@ -577,6 +668,7 @@ const TrapSite = struct { label: u32, code: ir.TrapCode, instruction: u32 };
 const FunctionLowering = struct {
     text: *Text,
     program: *const ir.Program,
+    layout: *const MemoryLayout,
     function: *const ir.Function,
     index: u32,
     sites: std.ArrayList(TrapSite) = .empty,
@@ -596,7 +688,7 @@ const FunctionLowering = struct {
     }
 };
 
-fn lowerProgram(arena: Allocator, program: *const ir.Program) error{OutOfMemory}![:0]const u8 {
+fn lowerProgram(arena: Allocator, program: *const ir.Program, layout: *const MemoryLayout) error{OutOfMemory}![:0]const u8 {
     var text: Text = .{ .arena = arena };
     try text.print("luce: module\n", .{});
 
@@ -614,13 +706,11 @@ fn lowerProgram(arena: Allocator, program: *const ir.Program) error{OutOfMemory}
         \\p_svc_seq_get_d: proto d, i64:s, i64:f, i64:i, i64:h, i64:x
         \\p_svc_seq_set_i: proto i64:s, i64:f, i64:i, i64:h, i64:x, i64:v
         \\p_svc_seq_set_d: proto i64:s, i64:f, i64:i, i64:h, i64:x, d:v
-        \\p_svc_str_byte: proto i64, i64:s, i64:f, i64:i, i64:h, i64:x
-        \\p_svc_str_len: proto i64, i64:s, i64:h
         \\p_svc_obj_len: proto i64, i64:s, i64:f, i64:i, i64:h
         \\p_svc_str_slice: proto i64, i64:s, i64:f, i64:i, i64:h, i64:a, i64:b
         \\p_svc_builder_append: proto i64:s, i64:f, i64:i, i64:h, i64:x
         \\import svc_instr_i, svc_instr_d, svc_instr_v, svc_serial, svc_zero_strukt, svc_loosen
-        \\import svc_seq_get_i, svc_seq_get_d, svc_seq_set_i, svc_seq_set_d, svc_str_byte, svc_str_len, svc_obj_len
+        \\import svc_seq_get_i, svc_seq_get_d, svc_seq_set_i, svc_seq_set_d, svc_obj_len
         \\import svc_str_slice, svc_builder_append
         \\
     , .{});
@@ -637,7 +727,7 @@ fn lowerProgram(arena: Allocator, program: *const ir.Program) error{OutOfMemory}
         try text.print("export L{d}\n", .{index});
     }
     for (program.functions, 0..) |*function, index| {
-        try lowerFunction(&text, program, function, @intCast(index));
+        try lowerFunction(&text, program, layout, function, @intCast(index));
     }
     try text.print("endmodule\n", .{});
     try text.out.append(arena, 0);
@@ -651,20 +741,13 @@ fn needsSerial(program: *const ir.Program, function: *const ir.Function) bool {
     if (carriesObjects(program, function.return_type)) return true;
     for (function.instructions) |instruction| {
         switch (instruction) {
-            .object_bind,
-            .object_unbind,
-            .heap_new,
-            .struct_make,
-            .struct_get,
-            .struct_set,
-            => return true,
-            .binary => |operation| {
-                if (operation.operand_type == .string) return true;
-                if (operation.operand_type == .float and operation.op == .remainder) return true;
-            },
-            .intrinsic => |call| switch (call.kind) {
-                .assert_true => {},
-                else => return true,
+            // The serial only ever feeds bindings: bind/unbind, the
+            // give check (S23), and return loosening (S16).  Every
+            // other service ignores it, so hot leaf functions skip
+            // the acquisition call.
+            .object_bind, .object_unbind => return true,
+            .intrinsic => |call| {
+                if (call.kind == .give_object) return true;
             },
             else => {},
         }
@@ -675,12 +758,14 @@ fn needsSerial(program: *const ir.Program, function: *const ir.Function) bool {
 fn lowerFunction(
     text: *Text,
     program: *const ir.Program,
+    layout: *const MemoryLayout,
     function: *const ir.Function,
     index: u32,
 ) error{OutOfMemory}!void {
     var lowering: FunctionLowering = .{
         .text = text,
         .program = program,
+        .layout = layout,
         .function = function,
         .index = index,
     };
@@ -697,7 +782,7 @@ fn lowerFunction(
 
     // Declarations: scratch, the frame serial, non-parameter locals,
     // value registers.
-    try text.print("    local i64:t, i64:tc, i64:to, d:dt, i64:fs\n", .{});
+    try text.print("    local i64:t, i64:t2, i64:tc, i64:to, d:dt, i64:fs\n", .{});
     for (function.locals[function.parameter_count..], function.parameter_count..) |local, number| {
         try text.print("    local {s}:l{d}\n", .{ regType(local.local_type), number });
     }
@@ -724,11 +809,16 @@ fn lowerFunction(
     for (function.locals[function.parameter_count..], function.parameter_count..) |local, number| {
         switch (local.local_type) {
             .float => try text.print("    dmov l{d}, 0.0\n", .{number}),
-            .string => try text.print("    mov l{d}, {d}\n", .{ number, program.constants.len }),
-            .heap => try text.print("    mov l{d}, 4294967295\n", .{number}),
-            .strukt => |layout| {
+            .string => try text.print("    mov l{d}, {d}\n", .{ number, layout.emptyStringAddress() }),
+            .heap => |heap_index| try text.print("    mov l{d}, {d}\n", .{
+                number,
+                // Null: a zero view for viewable arrays, the null
+                // handle for everything else.
+                if (viewable(program, heap_index)) @as(i64, 0) else @as(i64, 4294967295),
+            }),
+            .strukt => |struct_layout| {
                 try text.print("    call p_svc_zero_strukt, svc_zero_strukt, l{d}, s, {d}\n", .{
-                    number, layout,
+                    number, struct_layout,
                 });
                 try emitTrapCheck(&lowering);
             },
@@ -843,9 +933,9 @@ fn emitGeneric(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory
     try emitTrapCheck(lowering);
 }
 
-/// The scalar element type of a fast-path sequence access: a List or
-/// rank-1 Array of Int/Bool/Float indexed with one index (and, for
-/// set, a scalar value).  Anything else takes the generic path.
+/// The scalar element type of a fast-service list access: a List of
+/// Int/Bool/Float with one index (scalar arrays go inline instead;
+/// everything else is generic).
 fn fastSeqElement(lowering: *FunctionLowering, call: ir.Instruction.IntrinsicCall) ?types.Type {
     const of = lowering.function.result_types[call.arguments[0]];
     if (of != .heap) return null;
@@ -853,13 +943,80 @@ fn fastSeqElement(lowering: *FunctionLowering, call: ir.Instruction.IntrinsicCal
     if (call.arguments.len != wanted) return null;
     const element = switch (lowering.program.heap_types[of.heap]) {
         .list => |element| element,
-        .array => |shape| if (shape.rank == 1) shape.element else return null,
         else => return null,
     };
     return switch (element) {
         .int, .boolean, .float => element,
         else => null,
     };
+}
+
+/// The scalar element type of an inline array access: rank-1 with
+/// one index — the shape whose view makes indexing three checks and
+/// a load.
+fn arrayInlineElement(lowering: *FunctionLowering, call: ir.Instruction.IntrinsicCall) ?types.Type {
+    const of = lowering.function.result_types[call.arguments[0]];
+    if (of != .heap) return null;
+    const wanted: usize = if (call.kind == .index_get) 2 else 3;
+    if (call.arguments.len != wanted) return null;
+    return switch (lowering.program.heap_types[of.heap]) {
+        .array => |shape| if (shape.rank == 1) switch (shape.element) {
+            .int, .boolean, .float => shape.element,
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
+/// Null and liveness checks on a view register: the same traps the
+/// interpreter's resolve raises, as three inline instructions.
+fn emitViewPrelude(lowering: *FunctionLowering, item: ir.Register, view: ir.Register) error{OutOfMemory}!void {
+    const null_stub = try lowering.site(.null_object, item);
+    const dead_stub = try lowering.site(.use_after_free, item);
+    try lowering.text.print(
+        \\    beq S{0d}_{1d}, r{3d}, 0
+        \\    mov t, i64:16(r{3d})
+        \\    mov t, u8:0(t)
+        \\    beq S{0d}_{2d}, t, 0
+        \\
+    , .{ lowering.index, null_stub, dead_stub, view });
+}
+
+/// Inline rank-1 array indexing: bounds check against the view, then
+/// a typed load or store at elements + index * stride + payload
+/// offset.  The element tag never changes, so a store that writes
+/// only the payload leaves the value well-formed.
+fn emitArrayAccess(lowering: *FunctionLowering, item: ir.Register, call: ir.Instruction.IntrinsicCall, element: types.Type) error{OutOfMemory}!void {
+    const text = lowering.text;
+    const view = call.arguments[0];
+    const index_register = call.arguments[1];
+    try emitViewPrelude(lowering, item, view);
+    const bounds = try lowering.site(.index_bounds, item);
+    try text.print(
+        \\    mov t, i64:8(r{1d})
+        \\    ubge S{2d}_{3d}, r{0d}, t
+        \\    mov t, i64:0(r{1d})
+        \\    mul t2, r{0d}, {4d}
+        \\    add t, t, t2
+        \\
+    , .{ index_register, view, lowering.index, bounds, MemoryLayout.stride });
+    const payloads = lowering.layout.payloads;
+    if (call.kind == .index_get) {
+        switch (element) {
+            .float => try text.print("    dmov r{d}, d:{d}(t)\n", .{ item, payloads.float }),
+            .int => try text.print("    mov r{d}, i64:{d}(t)\n", .{ item, payloads.int }),
+            .boolean => try text.print("    mov r{d}, u8:{d}(t)\n", .{ item, payloads.boolean }),
+            else => unreachable,
+        }
+    } else {
+        const value = call.arguments[2];
+        switch (element) {
+            .float => try text.print("    dmov d:{d}(t), r{d}\n", .{ payloads.float, value }),
+            .int => try text.print("    mov i64:{d}(t), r{d}\n", .{ payloads.int, value }),
+            .boolean => try text.print("    mov u8:{d}(t), r{d}\n", .{ payloads.boolean, value }),
+            else => unreachable,
+        }
+    }
 }
 
 fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory}!void {
@@ -870,7 +1027,9 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
         .const_boolean => |value| try text.print("    mov r{d}, {d}\n", .{ item, @intFromBool(value) }),
         .const_int => |value| try text.print("    mov r{d}, {d}\n", .{ item, value }),
         .const_float => |value| try emitFloatMove(text, item, value),
-        .const_data => |data| try text.print("    mov r{d}, {d}\n", .{ item, data.constant }),
+        .const_data => |data| try text.print("    mov r{d}, {d}\n", .{
+            item, lowering.layout.constDescAddress(data.constant),
+        }),
         .local_get => |local| {
             const kind = function.locals[local].local_type;
             try text.print("    {s} r{d}, l{d}\n", .{ movFor(kind), item, local });
@@ -937,10 +1096,13 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
             },
             .len => {
                 const operand = call.arguments[0];
-                if (function.result_types[operand] == .string) {
-                    try text.print("    call p_svc_str_len, svc_str_len, r{d}, s, r{d}\n", .{
-                        item, operand,
-                    });
+                const of = function.result_types[operand];
+                if (of == .string) {
+                    // A string is a {ptr, len} descriptor: one load.
+                    try text.print("    mov r{d}, i64:8(r{d})\n", .{ item, operand });
+                } else if (of == .heap and viewable(lowering.program, of.heap)) {
+                    try emitViewPrelude(lowering, item, operand);
+                    try text.print("    mov r{d}, i64:8(r{d})\n", .{ item, operand });
                 } else {
                     try text.print("    call p_svc_obj_len, svc_obj_len, r{d}, s, {d}, {d}, r{d}\n", .{
                         item, lowering.index, item, operand,
@@ -949,10 +1111,16 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 }
             },
             .string_byte => {
-                try text.print("    call p_svc_str_byte, svc_str_byte, r{d}, s, {d}, {d}, r{d}, r{d}\n", .{
-                    item, lowering.index, item, call.arguments[0], call.arguments[1],
-                });
-                try emitTrapCheck(lowering);
+                // Inline: bounds against the descriptor, one byte
+                // load (ubge treats a negative index as huge).
+                const bounds = try lowering.site(.string_bounds, item);
+                try text.print(
+                    \\    mov t, i64:8(r{1d})
+                    \\    ubge S{3d}_{4d}, r{2d}, t
+                    \\    mov t, i64:0(r{1d})
+                    \\    mov r{0d}, u8:(t, r{2d})
+                    \\
+                , .{ item, call.arguments[0], call.arguments[1], lowering.index, bounds });
             },
             .string_slice => {
                 try text.print("    call p_svc_str_slice, svc_str_slice, r{d}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
@@ -974,22 +1142,30 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 }
             },
             .index_get => {
-                const element = fastSeqElement(lowering, call) orelse
-                    return emitGeneric(lowering, item);
-                const suffix: []const u8 = if (element == .float) "d" else "i";
-                try text.print("    call p_svc_seq_get_{s}, svc_seq_get_{s}, r{d}, s, {d}, {d}, r{d}, r{d}\n", .{
-                    suffix, suffix, item, lowering.index, item, call.arguments[0], call.arguments[1],
-                });
-                try emitTrapCheck(lowering);
+                if (arrayInlineElement(lowering, call)) |element| {
+                    try emitArrayAccess(lowering, item, call, element);
+                } else if (fastSeqElement(lowering, call)) |element| {
+                    const suffix: []const u8 = if (element == .float) "d" else "i";
+                    try text.print("    call p_svc_seq_get_{s}, svc_seq_get_{s}, r{d}, s, {d}, {d}, r{d}, r{d}\n", .{
+                        suffix, suffix, item, lowering.index, item, call.arguments[0], call.arguments[1],
+                    });
+                    try emitTrapCheck(lowering);
+                } else {
+                    try emitGeneric(lowering, item);
+                }
             },
             .index_set => {
-                const element = fastSeqElement(lowering, call) orelse
-                    return emitGeneric(lowering, item);
-                const suffix: []const u8 = if (element == .float) "d" else "i";
-                try text.print("    call p_svc_seq_set_{s}, svc_seq_set_{s}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
-                    suffix, suffix, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
-                });
-                try emitTrapCheck(lowering);
+                if (arrayInlineElement(lowering, call)) |element| {
+                    try emitArrayAccess(lowering, item, call, element);
+                } else if (fastSeqElement(lowering, call)) |element| {
+                    const suffix: []const u8 = if (element == .float) "d" else "i";
+                    try text.print("    call p_svc_seq_set_{s}, svc_seq_set_{s}, s, {d}, {d}, r{d}, r{d}, r{d}\n", .{
+                        suffix, suffix, lowering.index, item, call.arguments[0], call.arguments[1], call.arguments[2],
+                    });
+                    try emitTrapCheck(lowering);
+                } else {
+                    try emitGeneric(lowering, item);
+                }
             },
             else => try emitGeneric(lowering, item),
         },
@@ -1165,7 +1341,19 @@ pub fn run(
 ) RunError!Result {
     if (!available) return error.NativeFailed;
 
-    const text = try lowerProgram(arena, program);
+    // Constant descriptors and the value layout come first: the
+    // emitted text embeds their addresses and offsets as immediates.
+    const constant_descs = try arena.alloc(StringDesc, program.constants.len + 1);
+    for (program.constants, constant_descs[0..program.constants.len]) |constant, *desc| {
+        desc.* = .{ .ptr = constant.ptr, .len = constant.len };
+    }
+    constant_descs[program.constants.len] = .{ .ptr = "", .len = 0 };
+    const layout: MemoryLayout = .{
+        .constant_descs = constant_descs,
+        .payloads = Payloads.measure(),
+    };
+
+    const text = try lowerProgram(arena, program, &layout);
 
     const ctx = c.luce_mir_init() orelse return error.NativeFailed;
     // After a longjmp'd MIR error the context's state is unknown, so
@@ -1199,13 +1387,6 @@ pub fn run(
         .max_depth = 0,
         .host = host,
     } };
-    try runtime.strings.ensureTotalCapacity(arena, program.constants.len + 16);
-    for (program.constants) |constant| {
-        runtime.strings.appendAssumeCapacity(constant);
-    }
-    // The string zero value, at the handle every lowering emits.
-    runtime.strings.appendAssumeCapacity("");
-
     var state: State = .{
         .depth_left = @intCast(budget.call_depth),
         .runtime = &runtime,

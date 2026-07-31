@@ -52,28 +52,30 @@ interpreter — defense in depth behind the `.lc` trust boundary — at
 ~15% over ReleaseFast.  That is the ship default; ReleaseFast is
 one flag away when it matters.
 
-## Snapshot — 2026-07-31, with the native engine
+## Snapshot — 2026-07-31, milestone 3 (unboxed access)
 
 x86_64 Linux container, zig cc (clang 21), loom at ReleaseSafe.
-`native` is loom's default engine (docs/NATIVE.md — the vendored
-MIR JIT compiling the verified IR at load); `interp` forces the
-reference interpreter with LOOM_ENGINE=interpreter.  Both Luce
+`native` is loom's default engine (docs/NATIVE.md); `interp` forces
+the reference interpreter with LOOM_ENGINE=interpreter.  Both Luce
 columns include process startup, .lc decode, and (native) the
-~millisecond JIT compile:
+~millisecond JIT compile.  (The container was migrated to a slower
+host mid-day, so absolute times moved for *everything* including C
+— A/B on the same host measured milestone 3 at -20% strings, -33%
+arrays over milestone 2, with loops/math unchanged.)
 
 | benchmark | C       | native   | interp  | native/C |
 |-----------|---------|----------|---------|----------|
-| loops     | ~11ms   | ~33ms    | ~810ms  | **~2.9x** |
-| math      | ~12ms   | ~19ms    | ~920ms  | **~1.5x** |
-| strings   | ~3.5ms  | ~66ms    | ~330ms  | **~19x** |
-| arrays    | ~5ms    | ~31ms    | ~270ms  | **~5.5x** |
+| loops     | ~20ms   | ~95ms    | ~1.4s   | **~4.6x** |
+| math      | ~20ms   | ~27ms    | ~1.6s   | **~1.3x** |
+| strings   | ~5ms    | ~92ms    | ~510ms  | **~17x** |
+| arrays    | ~11ms   | ~33ms    | ~460ms  | **~3x** |
 
-Since milestone 2 every benchmark runs native: collections,
-ownership, and strings route through the service tiers
-(docs/NATIVE.md), which puts the collection-bound benches 5-9x
-ahead of the interpreter.  The remaining strings/arrays gap to C is
-the per-element service call; the recorded next lever is unboxed
-native storage for scalar arrays and strings.
+Milestone 3 made string byte access and rank-1 scalar array
+indexing inline machine code (docs/NATIVE.md): no service call, a
+bounds check and a load against stable descriptors/views.  The
+remaining strings gap is allocation-per-operation (split's pieces,
+builder growth, formatting); the remaining arrays gap is what
+vectorization would buy.
 
 For orientation: CPython 3.11 runs the loops algorithm in 1228ms
 and mandelbrot in 1884ms on this machine — native Luce is ~25-80x
@@ -111,10 +113,10 @@ The compiled backend predicted by the first edition of this file
 shipped as the native engine (docs/NATIVE.md) and landed where the
 MIR experiment said it would.  What remains, in value order:
 
-1. ~~Milestone 2 of the native core~~ — shipped: every benchmark
-   and real program runs native.  Next lever, on demand: unboxed
-   native storage for scalar arrays and strings (inline
-   bounds-checked access instead of a service call per element).
+1. ~~Milestone 2 (full native core)~~ and ~~milestone 3 (unboxed
+   access: string descriptors, array views, inline indexing)~~ —
+   shipped.  Remaining service-tier levers, on demand: inline
+   Builder appends, fewer allocations in string-producing ops.
 2. **The self-written Zig backend** — grows unhurried behind the
    same seam, racing MIR under the same oracle and this table;
    sovereignty when it wins.
