@@ -106,6 +106,11 @@ const Location = union(enum) {
 const scratch_pool = [_]u4{ 10, 11 };
 const float_pool = [_]u4{ 0, 1, 2, 3 }; // xmm0-xmm3
 const pinned_pool = [_]u4{ 3, 12 };
+// No XMM is callee-saved on SysV, so a float local can only pin when
+// it is provably never live across a call (nothing to save).  xmm8-15
+// are disjoint from the argument (xmm0-7), scratch (xmm0-3), and
+// fhelper (xmm5) registers, so a pinned float never collides.
+const float_pinned_pool = [_]u4{ 8, 9, 10, 11, 12, 13, 14, 15 };
 
 const state: u4 = 15;
 const serial: u4 = 14;
@@ -148,6 +153,7 @@ const Emitter = struct {
     scratch_owner: [scratch_pool.len]?ir.Register = @splat(null),
     float_owner: [float_pool.len]?ir.Register = @splat(null),
     pinned: []?u4 = &.{},
+    float_pinned: []?u4 = &.{},
     local_version: []u32 = &.{},
     position: u32 = 0,
     pending_compare: ?struct { register: ir.Register, condition: u4 } = null,
@@ -533,6 +539,158 @@ const Emitter = struct {
         }
     }
 
+    /// Whether emitting `instruction` produces a call to a service or
+    /// user function — a point where every caller-saved XMM register
+    /// dies.  Conservative: any instruction whose lowering might reach
+    /// a `callReg` answers true, so a float pinned to an xmm is only
+    /// chosen when it is provably not live across one.
+    fn emitsCall(self: *const Emitter, instruction: ir.Instruction) bool {
+        return switch (instruction) {
+            .call => true,
+            .struct_make, .struct_get, .struct_set, .heap_new, .object_bind, .object_unbind => true,
+            .binary => |operation| operation.operand_type == .string or operation.operand_type == .strukt,
+            .ret => |value| value != null and abi.objectCarrying(self.program, self.function.return_type),
+            .intrinsic => |call| self.intrinsicEmitsCall(call),
+            else => false, // const/local/jump/branch/trap/unary/convert, and int/float/bool binary
+        };
+    }
+
+    fn intrinsicEmitsCall(self: *const Emitter, call: ir.Instruction.IntrinsicCall) bool {
+        return switch (call.kind) {
+            .assert_true, .string_byte => false,
+            // str on a String is a move; every other str is a service.
+            .str_value => self.typeOf(call.arguments[0]) != .string,
+            .len => blk: {
+                const of = self.typeOf(call.arguments[0]);
+                break :blk !(of == .string or (of == .heap and abi.viewableHeap(self.program, of.heap)));
+            },
+            .index_get, .index_set => self.arrayInlineElement(call) == null,
+            else => true, // chr, find_byte, append_*, slice, seq access, generic
+        };
+    }
+
+    /// Choose the float locals that may pin to an xmm register: those
+    /// whose reference span crosses no call.  The span starts at entry
+    /// when the first reference is a read (the value may be the S40
+    /// zero-init, live from the prologue), otherwise at the defining
+    /// write.  A pinned float is thus dead at every call, so no XMM
+    /// save/restore is needed — the one thing SysV would otherwise
+    /// force, having no callee-saved XMM.
+    fn assignFloatPins(self: *Emitter) error{OutOfMemory}!void {
+        const function = self.function;
+        self.float_pinned = try self.arena.alloc(?u4, function.locals.len);
+        @memset(self.float_pinned, null);
+        var has_float = false;
+        for (function.locals) |local| {
+            if (local.local_type == .float) has_float = true;
+        }
+        if (!has_float) return;
+
+        // Backward live-variable dataflow over the block CFG (block
+        // order need not match execution order, so a position-window
+        // proxy is unsound around loops).  A float local is barred from
+        // pinning when it is live across any call.
+        const count = function.locals.len;
+        const block_count = function.blocks.len;
+        const uses = try self.arena.alloc([]bool, block_count); // upward-exposed reads
+        const defs = try self.arena.alloc([]bool, block_count);
+        const live_out = try self.arena.alloc([]bool, block_count);
+        for (function.blocks, 0..) |block, b| {
+            uses[b] = try self.arena.alloc(bool, count);
+            defs[b] = try self.arena.alloc(bool, count);
+            live_out[b] = try self.arena.alloc(bool, count);
+            @memset(uses[b], false);
+            @memset(defs[b], false);
+            @memset(live_out[b], false);
+            for (block.items) |item| switch (function.instructions[item]) {
+                .local_get => |local| {
+                    if (!defs[b][local]) uses[b][local] = true;
+                },
+                .local_set => |set| defs[b][set.local] = true,
+                else => {},
+            };
+        }
+
+        // live_in[b] = uses[b] ∪ (live_out[b] − defs[b]); iterate to a
+        // fixpoint.  Recompute live_out from successors each round.
+        const live_in = try self.arena.alloc([]bool, block_count);
+        for (live_in) |*row| {
+            row.* = try self.arena.alloc(bool, count);
+            @memset(row.*, false);
+        }
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var b = block_count;
+            while (b > 0) {
+                b -= 1;
+                @memset(live_out[b], false);
+                var succ_buffer: [2]u32 = undefined;
+                for (self.successorsOf(@intCast(b), &succ_buffer)) |succ| {
+                    for (live_out[b], live_in[succ]) |*out, in| out.* = out.* or in;
+                }
+                for (0..count) |local| {
+                    const new_in = uses[b][local] or (live_out[b][local] and !defs[b][local]);
+                    if (new_in != live_in[b][local]) {
+                        live_in[b][local] = new_in;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // A float local crosses a call if it is live across any barrier
+        // instruction — walk each block backward from live_out.
+        const crosses = try self.arena.alloc(bool, count);
+        @memset(crosses, false);
+        const live = try self.arena.alloc(bool, count);
+        for (function.blocks, 0..) |block, b| {
+            @memcpy(live, live_out[b]);
+            var index = block.items.len;
+            while (index > 0) {
+                index -= 1;
+                const item = block.items[index];
+                if (self.emitsCall(function.instructions[item])) {
+                    for (0..count) |local| {
+                        if (live[local]) crosses[local] = true;
+                    }
+                }
+                switch (function.instructions[item]) {
+                    .local_get => |local| live[local] = true,
+                    .local_set => |set| live[set.local] = false,
+                    else => {},
+                }
+            }
+        }
+
+        var next: usize = 0;
+        for (function.locals, 0..) |local, index| {
+            if (local.local_type != .float) continue;
+            if (next >= float_pinned_pool.len) break;
+            if (crosses[index]) continue;
+            self.float_pinned[index] = float_pinned_pool[next];
+            next += 1;
+        }
+    }
+
+    /// The block indices a block can branch to, from its terminator.
+    fn successorsOf(self: *const Emitter, block: u32, buffer: *[2]u32) []const u32 {
+        const items = self.function.blocks[block].items;
+        if (items.len == 0) return buffer[0..0];
+        return switch (self.function.instructions[items[items.len - 1]]) {
+            .jump => |target| blk: {
+                buffer[0] = target;
+                break :blk buffer[0..1];
+            },
+            .branch => |branching| blk: {
+                buffer[0] = branching.then_block;
+                buffer[1] = branching.else_block;
+                break :blk buffer[0..2];
+            },
+            else => buffer[0..0], // ret / trap: no successor
+        };
+    }
+
     // -- the allocator -----------------------------------------------------
 
     fn slotOf(self: *const Emitter, register: ir.Register) usize {
@@ -683,6 +841,9 @@ const Emitter = struct {
                 return physical;
             },
             .alias => |lazy| {
+                if (self.local_version[lazy.local] == lazy.version) {
+                    if (self.float_pinned[lazy.local]) |physical| return physical;
+                }
                 const physical = try self.allocFloat(register, locked);
                 if (self.local_version[lazy.local] == lazy.version) {
                     try self.floadSlot(physical, lazy.local);
@@ -727,7 +888,11 @@ const Emitter = struct {
             .table => |offset| try self.floadTable(target, offset),
             .alias => |lazy| {
                 if (self.local_version[lazy.local] == lazy.version) {
-                    try self.floadSlot(target, lazy.local);
+                    if (self.float_pinned[lazy.local]) |physical| {
+                        try self.fmovRegs(target, physical);
+                    } else {
+                        try self.floadSlot(target, lazy.local);
+                    }
                 } else {
                     try self.floadSlot(target, self.slotOf(register));
                 }
@@ -742,7 +907,9 @@ const Emitter = struct {
             if (current != .alias) continue;
             if (current.alias.local != local or current.alias.version != version) continue;
             if (self.last_use[register] <= self.position) continue;
-            if (self.pinned[local]) |physical| {
+            if (floaty and self.float_pinned[local] != null) {
+                try self.fstoreSlot(self.float_pinned[local].?, self.slotOf(@intCast(register)));
+            } else if (self.pinned[local]) |physical| {
                 if (floaty) {
                     try self.fstoreSlot(physical, self.slotOf(@intCast(register)));
                 } else {
@@ -836,8 +1003,7 @@ const Emitter = struct {
         @memset(self.local_version, 0);
         var next_pinned: usize = 0;
         for (self.pinned, function.locals) |*slot, local| {
-            // Only integer/bool/string/heap locals pin (no XMM is
-            // callee-saved on this ABI, so floats never do).
+            // Integer/bool/string/heap locals pin to callee-saved GPRs.
             if (local.local_type != .float and next_pinned < pinned_pool.len) {
                 slot.* = pinned_pool[next_pinned];
                 next_pinned += 1;
@@ -845,6 +1011,8 @@ const Emitter = struct {
                 slot.* = null;
             }
         }
+        // Float locals pin to xmm when they never live across a call.
+        try self.assignFloatPins();
 
         // Prologue: push rbp; mov rbp,rsp; sub rsp,frame; save the
         // callee-saved registers to fixed frame slots; State into r15.
@@ -910,8 +1078,13 @@ const Emitter = struct {
             const home = self.pinned[index];
             switch (local.local_type) {
                 .float => {
-                    try self.fzero(fhelper);
-                    try self.fstoreSlot(fhelper, index);
+                    // A pinned float is initialised into its xmm after
+                    // the struct-zero calls below (which would clobber
+                    // it); an unpinned one zeroes its slot here.
+                    if (self.float_pinned[index] == null) {
+                        try self.fzero(fhelper);
+                        try self.fstoreSlot(fhelper, index);
+                    }
                 },
                 .string => {
                     const offset = AddressTable.constant(self.program.constants.len);
@@ -956,6 +1129,20 @@ const Emitter = struct {
                         try self.storeSlot(helper, index);
                     }
                 },
+            }
+        }
+
+        // Pinned floats settle into their xmm homes last, after every
+        // struct-zero call above that would clobber a caller-saved XMM:
+        // a parameter loads from the slot it was stored to, a late
+        // local starts at zero.  No call follows, so they survive into
+        // the body (where, by construction, none crosses a call).
+        for (0..function.locals.len) |index| {
+            const physical = self.float_pinned[index] orelse continue;
+            if (index < function.parameter_count) {
+                try self.floadSlot(physical, index);
+            } else {
+                try self.fzero(physical);
             }
         }
 
@@ -1074,7 +1261,9 @@ const Emitter = struct {
             .local_set => |set| {
                 try self.materializeAliases(set.local);
                 const floaty = function.locals[set.local].local_type == .float;
-                if (self.pinned[set.local]) |physical| {
+                if (floaty and self.float_pinned[set.local] != null) {
+                    try self.ffetchInto(self.float_pinned[set.local].?, set.value);
+                } else if (self.pinned[set.local]) |physical| {
                     try self.fetchInto(physical, set.value);
                 } else if (floaty) {
                     try self.ffetchInto(fhelper, set.value);

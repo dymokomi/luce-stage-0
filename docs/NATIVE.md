@@ -247,7 +247,7 @@ inline view checks, which MIR's GVN gets and this backend does not
 yet attempt (recorded, not disguised; it is also where vectorization
 work lands later).
 
-### x86-64 (milestone 2 + Phase B — the whole language, fast, opt-in)
+### x86-64 (milestone 2 + Phase B — the whole language, fast, the default on Linux)
 
 `codegen_x86.zig` is the twin emitter, reached the same way
 (LOOM_ENGINE=zig) against the same `native.abi` contract, hermetic
@@ -296,22 +296,33 @@ scratch pool (xmm0-3) overlaps the float argument registers, so a
 service call spills the pool *before* loading arguments (aarch64's
 float pool is callee-saved and disjoint, and can fetch first).
 
-The oracle proves it: on x86 the strong "covers everything" assert
+**Float pinning** closes the last structural gap Phase B left.  aarch64
+keeps hot float locals in the callee-saved d8-d12; SysV has no
+callee-saved XMM, so a float in an xmm dies at every call.  Rather than
+save and restore around calls, the backend pins a float local to an
+xmm (xmm8-15, disjoint from args/scratch/fhelper) *only when it is
+never live across a call* — proven by a backward live-variable
+dataflow over the block CFG (block order is not execution order, so a
+position-window proxy is unsound around loops) against the set of
+call-emitting instructions.  A pinned float is then provably dead at
+every call, so nothing needs saving: the mandelbrot and dot-product
+inner loops, both call-free, run their arithmetic entirely in
+registers instead of reloading each operand from a slot.
+
+The oracle proves it all: on x86 the strong "covers everything" assert
 holds (the gate is the whole core), so every program in the corpus —
 collections, maps, builders, arrays, structs, ownership traps, the
 std modules — runs on the zig backend byte-for-byte identical to the
 interpreter, same leak counts and trap codes, and the inline
 immediates keep the two-context hermeticity oracle and the `.lci`
-image green.  Standing (Intel Xeon container): scalar loops and
-strings at **~1.05x MIR** (parity), math/matmul/arrays **~1.6-1.9x**
-— the checked-scalar gap a no-GVN backend leaves against MIR's
-redundant-bounds-check elimination, the same shape aarch64 shows at a
-smaller margin.  Before Phase B the heap benches ran the generic
-service per instruction (matmul ~100x slower); they are now within
-~2x.  `mature_default` still stays aarch64-only — flipping x86's
-`auto` default from MIR to the self-written backend is the remaining
-sovereignty step (docs/SPEED.md §16-17), a policy call once the
-array/float margin closes; today LOOM_ENGINE=zig opts in.
+image green.  Standing (Intel Xeon container): loops/stats/matmul/
+strings at **~1.0-1.26x MIR** (parity to near-parity); math and arrays
+at **~1.7x** — what is left is not float traffic (pinning made the
+arithmetic register-resident) but the boolean-materialising compares
+that MIR fuses and the loop-invariant array bounds/liveness checks its
+GVN hoists.  Closing those needs compare-fusion and LICM passes, the
+next optimisation step.  Before Phase B the heap benches ran the
+generic service per instruction (matmul ~100x slower).
 
 Targets: aarch64 macOS/Linux and x86-64 Linux now, Windows when
 image.zig grows VirtualAlloc.

@@ -54,13 +54,19 @@ const on_x86 = builtin.cpu.arch == .x86_64;
 
 /// Whether the self-written backend is complete and proven enough on
 /// this target to be loom's *default* engine (LOOM_ENGINE=auto),
-/// rather than the opt-in racer.  aarch64 carries the whole language
-/// (milestone 2); x86-64 is still the scalar-core milestone 1, so it
-/// stays opt-in and auto keeps MIR there.  The runner asks this
-/// instead of hardcoding targets — backend maturity is the backend's
-/// own concern, not the ladder's.
-pub const mature_default = available and
-    builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
+/// rather than the opt-in racer.  Both ISAs now carry the whole
+/// language and pass the two-engine oracle byte-for-byte; the gate is
+/// where that has been exercised end to end — aarch64 on macOS, x86-64
+/// on Linux (this container's target, where the oracle and benchmarks
+/// run).  The runner asks this instead of hardcoding targets — backend
+/// maturity is the backend's own concern, not the ladder's.  MIR stays
+/// the fallback for unsupported programs and one env var away
+/// (LOOM_ENGINE=mir) for the float/array workloads still behind it.
+pub const mature_default = available and switch (builtin.cpu.arch) {
+    .aarch64 => builtin.os.tag == .macos,
+    .x86_64 => builtin.os.tag == .linux,
+    else => false,
+};
 
 /// Arguments travel in registers only: x1-x7 for values, d0-d7 for
 /// floats.  Wider signatures fall back to MIR (which speaks the full
