@@ -155,6 +155,28 @@ test "oracle: integer arithmetic, comparisons, and loops agree" {
     , roomy);
 }
 
+test "oracle: a pinned parameter drives a loop and accumulates" {
+    // The x86 backend pins the first integer/heap locals to callee-saved
+    // registers.  A binary op whose left operand is such a pinned value
+    // (an alias, never a scratch register) once let the destination reuse
+    // the *right* operand's register, which `mov dest, left` then
+    // clobbered — turning `i + 1` into `i + i` and `s + n` into `s + s`.
+    // The bound is read from the pinned register and the sum feeds back
+    // into another, so a corrupt right operand diverges immediately.
+    try oracle(
+        \\func total(n: Int) -> Int:
+        \\    var s = 0
+        \\    var i = 0
+        \\    while i < n:
+        \\        s = s + i * 2 - 1
+        \\        i = i + 1
+        \\    return s
+        \\func main():
+        \\    print(str(total(9)))
+        \\
+    , roomy);
+}
+
 test "oracle: float arithmetic, conversion, and formatting agree" {
     try oracle(
         \\func main():
@@ -941,6 +963,24 @@ test "oracle: ownership — give, copy, free, and the traps" {
         \\    let alias = item
         \\    a.append(give item)
         \\    b.append(give alias)
+        \\
+    , roomy);
+    // Two distinct heap objects live at once, each bound to its own
+    // name, the first freed and the second released at scope exit.  The
+    // second object's handle is non-zero, so a generic instruction that
+    // failed to marshal its object operand (leaving a stale slot) would
+    // bind or free the wrong object — an ownership divergence the
+    // single-object cases above cannot see.
+    try oracle(
+        \\func main():
+        \\    var xs = [3, 1, 4]
+        \\    xs.sort()
+        \\    var m = new Map(String, Int)
+        \\    m["ada"] = 36
+        \\    print(str(xs[0]))
+        \\    print(str(m["ada"]))
+        \\    free(xs)
+        \\    free(m)
         \\
     , roomy);
 }

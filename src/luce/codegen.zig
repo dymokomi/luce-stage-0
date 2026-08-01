@@ -1989,8 +1989,14 @@ fn emittedWord(bytes: []const u8, index: usize) u32 {
 }
 
 test "cached images are source-derived and backend-separated" {
+    // Mirror the generator_identity fold: on x86-64 the emitter source
+    // is codegen.zig ++ codegen_x86.zig, so the identity must too.
+    const backend_source = if (on_x86)
+        @embedFile("codegen.zig") ++ @embedFile("codegen_x86.zig")
+    else
+        @embedFile("codegen.zig");
     const source_identity = generatorIdentityFor(
-        @embedFile("codegen.zig"),
+        backend_source,
         builtin.zig_version_string,
     );
     try testing.expectEqual(generator_identity, source_identity);
@@ -2092,6 +2098,10 @@ test "branch fixups reject displacement truncation" {
 }
 
 test "the prologue guards depth before SP and links x29" {
+    // Golden aarch64 prologue encoding; on x86-64 compile() dispatches
+    // to codegen_x86, whose generated code is proven by the two-engine
+    // oracle (native_spec.zig) rather than golden bytes.
+    if (on_x86) return error.SkipZigTest;
     const source =
         \\func main():
         \\    let answer = 42

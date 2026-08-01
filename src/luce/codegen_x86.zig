@@ -40,30 +40,20 @@ const AddressTable = native.AddressTable;
 
 pub const available = builtin.cpu.arch == .x86_64 and image.supported;
 
-/// Slot displacements fit i32; a huge function still bounds them well
-/// under that, but the gate keeps the frame sane.
-const max_slots = 30000;
-/// The scalar core's calls take value args in rsi,rdx,rcx,r8,r9 and
-/// float args in xmm0-xmm7; wider signatures fall to MIR.
+/// Calls take value args in rsi,rdx,rcx,r8,r9 and float args in
+/// xmm0-xmm7; wider signatures fall to MIR through the ladder.
 const max_value_arguments = 5;
 const max_float_arguments = 8;
 
-/// The scalar arithmetic core: scalar types only, and only the
-/// arithmetic-core intrinsics.  Anything heap-shaped — collections,
-/// ownership, string manipulation, structs — is refused here and the
-/// runner's ladder runs it on MIR instead.
+/// Whether the whole program fits this backend: since milestone 2,
+/// everything MIR's core takes (native.supported), narrowed only by
+/// this ABI's register-passed argument counts and the shared frame
+/// bound.  Anything wider drops to MIR through the runner's ladder.
 pub fn supported(program: *const ir.Program) bool {
     if (!available) return false;
     if (!native.supported(program)) return false;
     for (program.functions) |*function| {
-        if (function.locals.len + function.instructions.len > max_slots) return false;
-        if (!scalarType(function.return_type)) return false;
-        for (function.locals) |local| {
-            if (!scalarType(local.local_type)) return false;
-        }
-        for (function.result_types) |result| {
-            if (!scalarType(result)) return false;
-        }
+        if (function.locals.len + function.instructions.len > native.max_function_slots) return false;
         var value_arguments: usize = 0;
         var float_arguments: usize = 0;
         for (function.locals[0..function.parameter_count]) |local| {
@@ -71,40 +61,8 @@ pub fn supported(program: *const ir.Program) bool {
         }
         if (value_arguments > max_value_arguments) return false;
         if (float_arguments > max_float_arguments) return false;
-        for (function.instructions) |instruction| {
-            if (!supportedInstruction(instruction)) return false;
-        }
     }
     return true;
-}
-
-fn scalarType(of: types.Type) bool {
-    return switch (of) {
-        .none, .boolean, .int, .float, .string => true,
-        else => false,
-    };
-}
-
-fn supportedInstruction(instruction: ir.Instruction) bool {
-    return switch (instruction) {
-        .const_boolean, .const_int, .const_float, .local_get, .local_set => true,
-        .const_data => |data| data.data_type == .string,
-        .unary, .convert, .jump, .branch, .ret, .trap => true,
-        .call => true,
-        .binary => |operation| switch (operation.operand_type) {
-            .int, .float => true,
-            // Bool compares are fine (word compares); String/struct
-            // comparison would need services — out of the M1 core.
-            .boolean => operation.op.isComparison(),
-            else => false,
-        },
-        .intrinsic => |call| switch (call.kind) {
-            .str_value => true,
-            .print, .assert_true, .trap_message => true,
-            else => false,
-        },
-        else => false,
-    };
 }
 
 /// Compile the program to one hermetic span per function.
@@ -479,6 +437,30 @@ const Emitter = struct {
             },
             .call => |call| return call.arguments,
             .intrinsic => |call| return call.arguments,
+            // Generic-service instructions marshal their operands in
+            // the canonical order genericResult reads them back (kept in
+            // lockstep with native.zig's genericOperands); analyze()
+            // reads the same list for liveness, so an omission here both
+            // starves the slots and mistracks the operand's last use.
+            .heap_new => |new| return new.dims,
+            .struct_make => |make| return make.fields,
+            .struct_get => |getter| {
+                buffer[0] = getter.target;
+                return buffer[0..1];
+            },
+            .struct_set => |setter| {
+                buffer[0] = setter.target;
+                buffer[1] = setter.value;
+                return buffer[0..2];
+            },
+            .object_bind => |binding| {
+                buffer[0] = binding.value;
+                return buffer[0..1];
+            },
+            .object_unbind => |unbinding| {
+                buffer[0] = unbinding.value;
+                return buffer[0..1];
+            },
             else => return buffer[0..0],
         }
     }
@@ -733,29 +715,25 @@ const Emitter = struct {
         }
     }
 
-    /// Before any call, every live pool value spills to its slot so
-    /// nothing rides in a caller-saved register across the call.
-    /// Values used *at* this position (the call's own operands) are
-    /// already fetched into ABI registers before this runs.
+    /// Before any call, every occupied pool value spills to its slot
+    /// so nothing rides in a caller-saved register across the call.
+    /// Every occupant is spilled — including a value whose last use is
+    /// the call itself (a call argument): the argument is then fetched
+    /// from its slot into an ABI register, so it must not be dropped to
+    /// `.nowhere` first (that was the milestone-1 hazard, latent until
+    /// calls carried operands that lived in the pool).  A truly dead
+    /// occupant costs one wasted store; the fast path will prune it.
     fn spillForCall(self: *Emitter) error{OutOfMemory}!void {
         for (scratch_pool, 0..) |physical, index| {
             const resident = self.scratch_owner[index] orelse continue;
-            if (self.last_use[resident] > self.position) {
-                try self.storeSlot(physical, self.slotOf(resident));
-                self.location[resident] = .slot;
-            } else {
-                self.location[resident] = .nowhere;
-            }
+            try self.storeSlot(physical, self.slotOf(resident));
+            self.location[resident] = .slot;
             self.scratch_owner[index] = null;
         }
         for (float_pool, 0..) |physical, index| {
             const resident = self.float_owner[index] orelse continue;
-            if (self.last_use[resident] > self.position) {
-                try self.fstoreSlot(physical, self.slotOf(resident));
-                self.location[resident] = .slot;
-            } else {
-                self.location[resident] = .nowhere;
-            }
+            try self.fstoreSlot(physical, self.slotOf(resident));
+            self.location[resident] = .slot;
             self.float_owner[index] = null;
         }
     }
@@ -871,9 +849,17 @@ const Emitter = struct {
             }
         }
 
-        // The scalar core has no bindings, so the serial is always
-        // zero (functions with bindings do not reach this backend).
-        try self.materialize(serial, 0);
+        // The frame serial (r14): functions with bindings want a real
+        // one from svc_serial; every other passes zero, exactly as MIR
+        // emits.  Nothing is live in a caller-saved register yet.
+        if (abi.wantsSerial(self.program, function)) {
+            try self.movReg(7, state); // rdi = State
+            try self.loadTable(call_target, abi.serviceOffset("svc_serial"));
+            try self.callReg(call_target);
+            try self.movReg(serial, 0); // r14 = rax
+        } else {
+            try self.materialize(serial, 0);
+        }
 
         // Typed zeros for non-parameter locals (S40 late declarations).
         for (function.locals[function.parameter_count..], function.parameter_count..) |local, index| {
@@ -891,6 +877,32 @@ const Emitter = struct {
                         try self.loadTable(helper, offset);
                         try self.storeSlot(helper, index);
                     }
+                },
+                .heap => |heap_index| {
+                    // Null: a zero view for viewable arrays, the null
+                    // handle (0xFFFF_FFFF) for everything else.
+                    const null_value: u64 = if (abi.viewableHeap(self.program, heap_index)) 0 else 0xFFFF_FFFF;
+                    if (home) |physical| {
+                        try self.materialize(physical, null_value);
+                    } else {
+                        try self.materialize(helper, null_value);
+                        try self.storeSlot(helper, index);
+                    }
+                },
+                .strukt => |layout| {
+                    // A struct zero is built by the runtime (recursive,
+                    // object fields start null); svc_zero_strukt returns
+                    // the field-array pointer this engine uses.
+                    try self.movReg(7, state);
+                    try self.materialize(6, layout); // rsi = layout
+                    try self.loadTable(call_target, abi.serviceOffset("svc_zero_strukt"));
+                    try self.callReg(call_target);
+                    if (home) |physical| {
+                        try self.movReg(physical, 0);
+                    } else {
+                        try self.storeSlot(0, index);
+                    }
+                    try self.trapCheck();
                 },
                 else => {
                     if (home) |physical| {
@@ -1062,16 +1074,30 @@ const Emitter = struct {
                 }
             },
             .ret => |value| {
-                // The scalar core carries no objects, so return is
-                // always the plain path: restore the depth budget,
-                // move the value into the ABI return register.
-                try self.loadWord(helper, state, abi.depth_offset);
-                // add rax, 1
-                try self.rex(true, 0, 0, helper);
-                try self.byte(0x83);
-                try self.byte(0xC0 | @as(u8, helper & 7));
-                try self.byte(0x01);
-                try self.storeWord(helper, state, abi.depth_offset);
+                // Return-value ownership first (S16): whatever the
+                // frame still owned in the value goes loose for the
+                // caller, marshaled through slot 0 the service reads.
+                if (value) |register| {
+                    if (abi.objectCarrying(self.program, function.return_type)) {
+                        // Object-carrying returns are heap/struct, never
+                        // float — the value word is a handle or a field
+                        // pointer.
+                        try self.fetchInto(helper2, register);
+                        try self.storeWord(helper2, state, abi.slots_offset);
+                        try self.spillForCall();
+                        try self.movReg(7, state);
+                        try self.materialize(6, self.function_index);
+                        try self.movReg(2, serial);
+                        try self.loadTable(call_target, abi.serviceOffset("svc_loosen"));
+                        try self.callReg(call_target);
+                        try self.restoreDepth();
+                        // The (possibly loosened) return value back into rax.
+                        try self.loadWord(0, state, abi.slots_offset);
+                        try self.branchTo(self.epilogue);
+                        return;
+                    }
+                }
+                try self.restoreDepth();
                 if (value) |register| {
                     if (self.isFloat(register)) {
                         try self.ffetchInto(0, register);
@@ -1088,12 +1114,24 @@ const Emitter = struct {
             .convert => |operation| try self.emitConvert(item, operation, following),
             .binary => |operation| try self.emitBinary(item, operation, following),
             .intrinsic => |call| try self.emitIntrinsic(item, call),
+            .struct_make, .struct_get, .struct_set, .heap_new, .object_bind, .object_unbind => try self.emitGeneric(item),
             else => unreachable,
         }
     }
 
     fn invertCondition(condition: u4) u4 {
         return condition ^ 1;
+    }
+
+    /// A successful return restores the call-depth budget (a trap
+    /// abandons it): add 1 to [State + depth].
+    fn restoreDepth(self: *Emitter) error{OutOfMemory}!void {
+        try self.loadWord(helper, state, abi.depth_offset);
+        try self.rex(true, 0, 0, helper);
+        try self.byte(0x83);
+        try self.byte(0xC0 | @as(u8, helper & 7)); // add rax, imm8
+        try self.byte(0x01);
+        try self.storeWord(helper, state, abi.depth_offset);
     }
 
     fn emitUnary(self: *Emitter, item: ir.Register, operation: anytype, following: ?ir.Register) error{OutOfMemory}!void {
@@ -1201,6 +1239,15 @@ const Emitter = struct {
 
     fn emitBinary(self: *Emitter, item: ir.Register, operation: anytype, following: ?ir.Register) error{OutOfMemory}!void {
         if (operation.operand_type == .float) return self.emitFloatBinary(item, operation, following);
+        // String concatenation and comparison, and struct equality,
+        // live in the reference implementation — the generic service
+        // (String + has a dedicated fast service added in the next
+        // pass; correctness lives here first).  Heap/bool/int compare
+        // as words below.
+        switch (operation.operand_type) {
+            .string, .strukt => return self.emitGeneric(item),
+            else => {},
+        }
         if (operation.op.isComparison()) {
             var condition = conditionOf(operation.op);
             if (self.immediateOperand(operation.right)) |value| {
@@ -1231,7 +1278,12 @@ const Emitter = struct {
                 const overflow = try self.trapSite(.integer_overflow, item);
                 const left = try self.operandRegister(operation.left, &.{});
                 const right = try self.operandRegister(operation.right, &.{left});
-                const dest = try self.destRegister(item, &.{ operation.left, operation.right }, &.{ left, right });
+                // The two-operand sequence is `mov dest, left; op dest,
+                // right`, so dest may reuse `left` (the mov is then a
+                // no-op) but never `right` — moving left in would clobber
+                // right before the op reads it.  Only `left` is offered
+                // for reuse; a fresh dest still avoids both source regs.
+                const dest = try self.destRegister(item, &.{operation.left}, &.{ left, right });
                 try self.movReg(dest, left);
                 try self.alu(if (operation.op == .add) 0x01 else 0x29, dest, right);
                 try self.branchCond(cc_o, overflow);
@@ -1241,7 +1293,8 @@ const Emitter = struct {
                 const overflow = try self.trapSite(.integer_overflow, item);
                 const left = try self.operandRegister(operation.left, &.{});
                 const right = try self.operandRegister(operation.right, &.{left});
-                const dest = try self.destRegister(item, &.{ operation.left, operation.right }, &.{ left, right });
+                // dest may reuse only `left`, as for add/subtract above.
+                const dest = try self.destRegister(item, &.{operation.left}, &.{ left, right });
                 try self.movReg(dest, left);
                 // imul dest, right (0F AF /r); sets OF on signed overflow.
                 try self.rex(true, dest, 0, right);
@@ -1398,10 +1451,10 @@ const Emitter = struct {
 
     fn emitCall(self: *Emitter, item: ir.Register, call: anytype) error{OutOfMemory}!void {
         const callee = &self.program.functions[call.function];
-        // Spill live pool values first, then load args from their
-        // (now stable) locations into the ABI registers — the pool
-        // and the arg registers overlap on this ABI, so fetch cannot
-        // precede spill the way it does on aarch64.
+        // Spill the pool to slots first, then load args from their now
+        // stable locations (slot / immediate / table / pinned) into
+        // the ABI registers.  Fetch reads never touch the pool or the
+        // arg registers' sources, so this order is safe.
         try self.spillForCall();
         const value_arg_regs = [_]u4{ 6, 2, 1, 8, 9 };
         var value_argument: usize = 0;
@@ -1496,8 +1549,14 @@ const Emitter = struct {
                     try self.emitGeneric(item);
                 }
             },
-            .print, .trap_message => try self.emitGeneric(item),
-            else => unreachable,
+            // Everything else — collections, string manipulation,
+            // conversions, host builtins — runs through the generic
+            // marshaling service, which reconstructs the instruction
+            // and runs the interpreter's own implementation.  The
+            // fast-service and inline-access optimizations layer on
+            // top of this in the next pass; the generic path is the
+            // correctness floor.
+            else => try self.emitGeneric(item),
         }
     }
 };

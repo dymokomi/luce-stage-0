@@ -356,6 +356,12 @@ pub const abi = struct {
     pub fn payloadOffsets() Payloads {
         return Payloads.measure();
     }
+
+    /// Whether a heap type is a scalar array — the shape a backend
+    /// represents as an unboxed view rather than a bare handle.
+    pub fn viewableHeap(program: *const ir.Program, heap_index: u32) bool {
+        return viewable(program, heap_index);
+    }
 };
 
 /// Scalar arrays of any rank use the view representation.

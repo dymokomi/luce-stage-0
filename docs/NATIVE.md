@@ -247,34 +247,51 @@ inline view checks, which MIR's GVN gets and this backend does not
 yet attempt (recorded, not disguised; it is also where vectorization
 work lands later).
 
-### x86-64 (milestone 1, opt-in)
+### x86-64 (milestone 2 — the whole language, opt-in)
 
 `codegen_x86.zig` is the twin emitter, reached the same way
 (LOOM_ENGINE=zig) against the same `native.abi` contract, hermetic
 spans, and image.map + native.runCode path — `codegen.zig`
 dispatches to it by arch, so the runner, oracle, and image cache are
-untouched.  Milestone 1 is the **scalar arithmetic core**:
-Int/Float/Bool values and arithmetic with every check (overflow via
-`jo`, `idiv`'s zero and MIN/-1 guards, `Int(Float)`'s NaN and range
-guards through `ucomisd`), integer `cmp`+`jcc` fusion, C-ABI calls
-and recursion, and the arithmetic-core intrinsics (str/print/assert/
-trap) through the generic marshaling service.  Locals pin in
-callee-saved rbx/r12, State in r15; floats are never pinned (no XMM
-is callee-saved on SysV) so they spill across calls; branches are
-`rel32` (no truncation possible, unlike the aarch64 ±1MB fixups).
-Anything heap-shaped — collections, ownership, string manipulation,
-structs — is refused by its narrower `supported()` and the ladder
-drops it to MIR, exactly the boundary aarch64 drew at *its*
-milestone 1.
+untouched.  Locals pin in callee-saved rbx/r12, State in r15; floats
+are never pinned (no XMM is callee-saved on SysV) so they spill
+across calls; branches are `rel32` (no truncation possible, unlike
+the aarch64 ±1MB fixups).
 
-The oracle proves it: every scalar-core program in the corpus runs
-on it byte-for-byte identical to the interpreter (on x86 the strong
-"covers everything" assert relaxes to "run where supported", since
-the M1 gate is the scalar core; MIR proves the rest).  Standing
-(Intel Xeon container): loops and math at **1.00x MIR**, ~14x faster
-than the interpreter, loops ~6x C / math ~1.1x C on that host.
-Milestone 2 (collections, ownership, strings, inline access) is the
-next step, transferring the aarch64 M2 arm by arm.
+**Milestone 1** was the scalar arithmetic core: Int/Float/Bool values
+and arithmetic with every check (overflow via `jo`, `idiv`'s zero and
+MIN/-1 guards, `Int(Float)`'s NaN and range guards through `ucomisd`),
+integer `cmp`+`jcc` fusion, C-ABI calls and recursion.
+
+**Milestone 2** widens `supported()` to the whole MIR core — the same
+gate as aarch64, everything but ports/Bytes.  It reaches that reach
+the way aarch64's M2 first did: the emitter marshals every
+heap-shaped instruction (collections, ownership binds, structs,
+string manipulation, the host builtins) into the State's scratch
+slots and calls the *generic* services (`svc_instr_{i,d,v}`,
+`svc_serial`, `svc_loosen`, `svc_zero_strukt`), which reconstruct the
+IR instruction and run the interpreter's own Machine — one
+implementation of collection and ownership semantics, shared by both
+native backends.  Object handles, the per-frame ownership serial (r14
+for functions with bindings), and return-value loosening all travel
+the same seams the MIR engine defined; the viewable-array
+representation matches too, so `supported()` is the only arch-specific
+line.  The fast direct services and unboxed inline access (aarch64's
+M3/M4) are **not** ported yet: heap, array, and string work runs
+through the generic boundary, correct but not fast.
+
+The oracle proves it: on x86 the strong "covers everything" assert
+holds again (the M2 gate is the whole core), so every program in the
+corpus — collections, maps, builders, arrays, structs, ownership
+traps, the std modules — runs on the zig backend byte-for-byte
+identical to the interpreter, with the same leak counts and trap
+codes.  Standing (Intel Xeon container): scalar loops/math at
+**~1.0-1.05x MIR**; array/string/allocation-heavy code is much slower
+than MIR (the generic per-instruction service call, e.g. matmul's
+n³ indexed reads), pending the Phase B fast-service/inline-access
+port.  Because that speed gap remains, `mature_default` stays aarch64-
+only: on x86 the `auto` ladder still defaults to MIR, and
+LOOM_ENGINE=zig opts in.
 
 Targets: aarch64 macOS/Linux and x86-64 Linux now, Windows when
 image.zig grows VirtualAlloc.
@@ -290,7 +307,9 @@ else names an OS tag or an instruction encoding:
   twin by arch; neither file's emitter body references the other's
   ISA.  Each declares its own `available`, `supported`, and
   `mature_default` (whether it is complete enough to be loom's
-  default engine here — aarch64 yes, x86-64 not until milestone 2).
+  default engine here — aarch64 yes; x86-64 is feature-complete at
+  milestone 2 but stays opt-in until its heap path reaches MIR's
+  speed, so `auto` still picks MIR there).
 - **OS (executable memory: mmap flags, the W^X write gate,
   instruction-cache sync)** lives only in `image.zig`, behind a
   comptime-selected `CodeMemory` namespace (`MacosCodeMemory` /
