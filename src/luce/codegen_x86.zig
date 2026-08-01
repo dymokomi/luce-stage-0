@@ -32,6 +32,7 @@ const builtin = @import("builtin");
 const ir = @import("ir.zig");
 const types = @import("types.zig");
 const native = @import("native.zig");
+const loop_analysis = @import("loops.zig");
 const image = @import("image.zig");
 
 const Allocator = std.mem.Allocator;
@@ -154,6 +155,8 @@ const Emitter = struct {
     frame_size: u64 = 0,
 
     positions: []u32 = &.{},
+    /// A register reading a provably-valid array local (no check needed).
+    valid_view: []bool = &.{},
     last_use: []u32 = &.{},
     use_count: []u32 = &.{},
 
@@ -533,6 +536,20 @@ const Emitter = struct {
         @memset(self.last_use, 0);
         @memset(self.use_count, 0);
         @memset(self.location, .nowhere);
+
+        self.valid_view = try self.arena.alloc(bool, count);
+        @memset(self.valid_view, false);
+        const hoistable = try loop_analysis.hoistableArrays(self.arena, self.program, function);
+        for (function.instructions, 0..) |instruction, ii| {
+            if (instruction == .local_get) {
+                for (hoistable) |local| {
+                    if (instruction.local_get == local) {
+                        self.valid_view[ii] = true;
+                        break;
+                    }
+                }
+            }
+        }
         var position: u32 = 0;
         for (function.blocks) |block| {
             for (block.items) |item| {
@@ -1966,7 +1983,7 @@ const Emitter = struct {
         const payloads = abi.payloadOffsets();
         const view = try self.operandRegister(call.arguments[0], &.{});
         const index = try self.operandRegister(call.arguments[1], &.{view});
-        try self.emitViewPrelude(item, view);
+        if (!self.valid_view[call.arguments[0]]) try self.emitViewPrelude(item, view);
         const bounds = try self.trapSite(.index_bounds, item);
         try self.loadWord(helper, view, 8); // len
         try self.compareRegisters(index, helper); // index - len
@@ -2114,7 +2131,7 @@ const Emitter = struct {
                     self.freeDead(&.{operand});
                 } else if (of == .heap and abi.viewableHeap(self.program, of.heap)) {
                     const view = try self.operandRegister(operand, &.{});
-                    try self.emitViewPrelude(item, view);
+                    if (!self.valid_view[operand]) try self.emitViewPrelude(item, view);
                     const dest = try self.destRegister(item, &.{operand}, &.{view});
                     try self.loadWord(dest, view, 8);
                     self.freeDead(&.{operand});

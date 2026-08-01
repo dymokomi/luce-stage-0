@@ -41,6 +41,7 @@ const types = @import("types.zig");
 const native = @import("native.zig");
 const image = @import("image.zig");
 const codegen_x86 = @import("codegen_x86.zig");
+const loop_analysis = @import("loops.zig");
 
 const Allocator = std.mem.Allocator;
 const abi = native.abi;
@@ -245,6 +246,9 @@ const Emitter = struct {
     // Analysis (emission order = block order, one position per item).
     positions: []u32 = &.{},
     last_use: []u32 = &.{},
+    /// A register that reads a provably-valid array local: its
+    /// null/alive check is redundant (loops.hoistableArrays).
+    valid_view: []bool = &.{},
     use_count: []u32 = &.{},
 
     // Allocation state.
@@ -537,6 +541,23 @@ const Emitter = struct {
         @memset(self.last_use, 0);
         @memset(self.use_count, 0);
         @memset(self.location, .nowhere);
+
+        // Array locals whose fresh, unfreed value dominates every use
+        // need no per-access null/alive check.  Mark each register
+        // that reads one.
+        self.valid_view = try self.arena.alloc(bool, count);
+        @memset(self.valid_view, false);
+        const hoistable = try loop_analysis.hoistableArrays(self.arena, self.program, function);
+        for (function.instructions, 0..) |instruction, ii| {
+            if (instruction == .local_get) {
+                for (hoistable) |local| {
+                    if (instruction.local_get == local) {
+                        self.valid_view[ii] = true;
+                        break;
+                    }
+                }
+            }
+        }
         var position: u32 = 0;
         for (function.blocks) |block| {
             for (block.items) |item| {
@@ -1587,7 +1608,7 @@ const Emitter = struct {
         const payloads = abi.payloadOffsets();
         const view = try self.operandRegister(call.arguments[0], &.{});
         const index = try self.operandRegister(call.arguments[1], &.{view});
-        try self.emitViewPrelude(item, view);
+        if (!self.valid_view[call.arguments[0]]) try self.emitViewPrelude(item, view);
         const bounds = try self.trapSite(.index_bounds, item);
         try self.loadWord(helper, view, 8);
         // Unsigned compare: a negative index reads as huge.
@@ -1939,7 +1960,7 @@ const Emitter = struct {
                     self.freeDead(&.{operand});
                 } else if (of == .heap and viewable(self.program, of.heap)) {
                     const view = try self.operandRegister(operand, &.{});
-                    try self.emitViewPrelude(item, view);
+                    if (!self.valid_view[operand]) try self.emitViewPrelude(item, view);
                     const dest = try self.resultRegister(item, following, &.{operand}, &.{view});
                     try self.loadWord(dest, view, 8);
                     self.freeDead(&.{operand});
