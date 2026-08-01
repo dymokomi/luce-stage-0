@@ -114,18 +114,24 @@ fn oracle(source: []const u8, budget: backend.Budget) !void {
             candidate.result.success.leaked_objects,
         );
     }
-    // The zig backend covers everything the MIR core covers on
-    // aarch64 (its gate is native.supported narrowed by ABI limits),
-    // so every oracle program must run on it identically too.
+    // The zig backend runs every program it claims support for,
+    // identically to the reference.  On aarch64 its gate is the whole
+    // MIR core, so it must cover every oracle program (the strong
+    // assert stays); the x86-64 backend's milestone-1 gate is the
+    // scalar arithmetic core, so there it runs on the programs it
+    // takes and MIR proves it right on the rest.
     if (codegen.available) {
-        try testing.expect(codegen.supported(program));
-        const third = try runZigBackend(arena.allocator(), program, budget);
-        try expectSameOutcome(reference, third);
-        if (reference.result == .success) {
-            try testing.expectEqual(
-                reference.result.success.leaked_objects,
-                third.result.success.leaked_objects,
-            );
+        const covers = codegen.supported(program);
+        if (@import("builtin").cpu.arch == .aarch64) try testing.expect(covers);
+        if (covers) {
+            const third = try runZigBackend(arena.allocator(), program, budget);
+            try expectSameOutcome(reference, third);
+            if (reference.result == .success) {
+                try testing.expectEqual(
+                    reference.result.success.leaked_objects,
+                    third.result.success.leaked_objects,
+                );
+            }
         }
     }
 }

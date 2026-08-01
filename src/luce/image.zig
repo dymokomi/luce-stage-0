@@ -189,9 +189,27 @@ pub const Loaded = struct {
     }
 };
 
-extern "c" fn pthread_jit_write_protect_np(enabled: c_int) void;
-extern "c" fn pthread_jit_write_protect_supported_np() c_int;
-extern "c" fn sys_icache_invalidate(start: *anyopaque, length: usize) void;
+// The write-gate and instruction-cache primitives are platform
+// specific: real externs where they exist, no-op stand-ins
+// elsewhere, chosen at comptime so a Linux/x86 build never emits a
+// reference to a macOS-only symbol (the extern is only *referenced*
+// on the platform that defines it).
+const jit = if (builtin.os.tag == .macos) struct {
+    extern "c" fn pthread_jit_write_protect_np(enabled: c_int) void;
+    extern "c" fn pthread_jit_write_protect_supported_np() c_int;
+    extern "c" fn sys_icache_invalidate(start: *anyopaque, length: usize) void;
+} else struct {
+    fn pthread_jit_write_protect_np(enabled: c_int) void {
+        _ = enabled;
+    }
+    fn pthread_jit_write_protect_supported_np() c_int {
+        return 0;
+    }
+    fn sys_icache_invalidate(start: *anyopaque, length: usize) void {
+        _ = start;
+        _ = length;
+    }
+};
 extern fn __clear_cache(start: *anyopaque, end: *anyopaque) void;
 
 pub const MapError = error{Unsupported} || Allocator.Error || std.posix.MMapError;
@@ -216,13 +234,13 @@ pub fn map(gpa: Allocator, spans: []const []const u8) MapError!Loaded {
     const addresses = try gpa.alloc(*const anyopaque, spans.len);
 
     const jit_write_gate = builtin.os.tag == .macos and
-        pthread_jit_write_protect_supported_np() != 0;
+        jit.pthread_jit_write_protect_supported_np() != 0;
     var write_gate_open = false;
     if (jit_write_gate) {
-        pthread_jit_write_protect_np(0);
+        jit.pthread_jit_write_protect_np(0);
         write_gate_open = true;
     }
-    defer if (write_gate_open) pthread_jit_write_protect_np(1);
+    defer if (write_gate_open) jit.pthread_jit_write_protect_np(1);
     var at: usize = 0;
     for (spans, addresses) |span, *address| {
         @memcpy(pages[at..][0..span.len], span);
@@ -231,10 +249,10 @@ pub fn map(gpa: Allocator, spans: []const []const u8) MapError!Loaded {
     }
     if (builtin.os.tag == .macos) {
         if (write_gate_open) {
-            pthread_jit_write_protect_np(1);
+            jit.pthread_jit_write_protect_np(1);
             write_gate_open = false;
         }
-        sys_icache_invalidate(pages.ptr, pages.len);
+        jit.sys_icache_invalidate(pages.ptr, pages.len);
     } else if (builtin.cpu.arch == .aarch64) {
         __clear_cache(pages.ptr, pages.ptr + pages.len);
     }
