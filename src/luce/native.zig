@@ -65,6 +65,26 @@ pub const available = switch (builtin.cpu.arch) {
     else => false,
 };
 
+/// Native recursion consumes the host stack, so this ceiling applies
+/// at the engine boundary even when callers bypass loom's runner.
+pub const max_call_depth: u32 = 128;
+
+/// MIR allocates one eight-byte ARM frame slot for each virtual value
+/// which register allocation must spill, before Luce's body-level
+/// depth check runs.  This matches the direct emitter's addressing
+/// ceiling and prevents an oversized function from falling through to
+/// MIR with an effectively unbounded recursive frame.
+pub const max_function_slots: usize = 4000;
+
+fn boundedCallDepth(requested: u32) i64 {
+    return @intCast(@min(requested, max_call_depth));
+}
+
+fn boundedFunctionFrame(local_count: usize, instruction_count: usize) bool {
+    return local_count <= max_function_slots and
+        instruction_count <= max_function_slots - local_count;
+}
+
 // ---------------------------------------------------------------------------
 // C bindings (mir_glue.c + the few plain functions of mir.h)
 // ---------------------------------------------------------------------------
@@ -825,6 +845,7 @@ const services = [_]Service{
 /// and the interpreter runs all of it.
 pub fn supported(program: *const ir.Program) bool {
     if (!available) return false;
+    if (!nativeEntrySupported(program)) return false;
     if (program.inputs.len != 0 or program.outputs.len != 0 or program.reads.len != 0) return false;
     for (program.structs) |layout| {
         for (layout.fields) |field| {
@@ -835,6 +856,7 @@ pub fn supported(program: *const ir.Program) bool {
         if (heapHasBytes(descriptor)) return false;
     }
     for (program.functions) |*function| {
+        if (!boundedFunctionFrame(function.locals.len, function.instructions.len)) return false;
         if (function.return_type == .bytes) return false;
         for (function.locals) |local| {
             if (local.local_type == .bytes) return false;
@@ -847,6 +869,16 @@ pub fn supported(program: *const ir.Program) bool {
         }
     }
     return true;
+}
+
+/// Generated entry points are called with State as their only ABI
+/// argument.  Language parameters would otherwise be read from
+/// uninitialized argument registers.  Scalar return values are safe:
+/// the caller deliberately ignores the return register.
+fn nativeEntrySupported(program: *const ir.Program) bool {
+    const entry: usize = @intCast(program.entry_function);
+    return entry < program.functions.len and
+        program.functions[entry].parameter_count == 0;
 }
 
 fn heapHasBytes(descriptor: types.HeapType) bool {
@@ -1739,17 +1771,23 @@ pub const Compiled = struct {
 pub fn compile(arena: Allocator, program: *const ir.Program) RunError!Compiled {
     if (!available) return error.NativeFailed;
     const text = try lowerProgram(arena, program, Payloads.measure());
+    // Make every Zig allocation before creating the MIR context.  Once
+    // generation starts an MIR-reported error deliberately abandons the
+    // context (longjmp leaves its state unknown), but an ordinary arena
+    // OOM must not leak an otherwise healthy context.
+    const nullable_addresses = try arena.alloc(?*const anyopaque, program.functions.len);
+    const lengths = try arena.alloc(usize, program.functions.len);
+    const solid = try arena.alloc(*const anyopaque, program.functions.len);
     const ctx = c.luce_mir_init() orelse return error.NativeFailed;
     var job: CompileJob = .{
         .ctx = ctx,
         .text = text.ptr,
-        .addresses = try arena.alloc(?*const anyopaque, program.functions.len),
-        .lengths = try arena.alloc(usize, program.functions.len),
+        .addresses = nullable_addresses,
+        .lengths = lengths,
     };
     @memset(job.addresses, null);
     @memset(job.lengths, 0);
     if (c.luce_mir_protected(ctx, &compileBody, &job) != 0) return error.NativeFailed;
-    const solid = try arena.alloc(*const anyopaque, job.addresses.len);
     for (job.addresses, solid) |address, *slot| {
         slot.* = address orelse {
             // The context is healthy (no longjmp) — tear it down
@@ -1762,12 +1800,42 @@ pub fn compile(arena: Allocator, program: *const ir.Program) RunError!Compiled {
     return .{ .ctx = ctx, .addresses = solid, .lengths = job.lengths };
 }
 
-/// The ABI half of an image's validity key (docs/NATIVE.md milestone
-/// 5b): target, the layouts the emitted text hardcodes, and the
-/// service roster whose order is the address table's.  The codegen
-/// half is textHash — together they invalidate a cached image on any
-/// change that could make its bytes wrong.
+/// Keep this exact vendor identity in step with vendor/mir/LUCE-VENDOR.md.
+/// Zig modules may not embed files outside their package root, so the
+/// upstream commit and our one local patch are named explicitly; the
+/// in-package glue, compiler version, and build flags are hashed below.
+const mir_vendor_revision =
+    "a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c;machine-code-length-patch-v1";
+
+const mir_generator_identity: u64 = blk: {
+    @setEvalBranchQuota(100_000);
+    var hasher = std.hash.Wyhash.init(0);
+    for ([_][]const u8{
+        mir_vendor_revision,
+        @embedFile("mir_glue.c"),
+    }) |source| {
+        var encoded_length: [8]u8 = undefined;
+        std.mem.writeInt(u64, &encoded_length, @intCast(source.len), .little);
+        hasher.update(&encoded_length);
+        hasher.update(source);
+    }
+    // Keep the build recipe beside the sources it compiles.  Zig's
+    // bundled C compiler follows its version, so that participates as
+    // well as the flags that can alter emitted machine code.
+    hasher.update("ReleaseFast;-std=gnu11;-DNDEBUG;-fsigned-char;-fno-sanitize=undefined");
+    hasher.update(builtin.zig_version_string);
+    break :blk hasher.final();
+};
+
+/// The ABI and generator half of an image's validity key
+/// (docs/NATIVE.md milestone 5b): target, layouts, service roster,
+/// and the exact MIR build which emitted the bytes.  textHash covers
+/// Luce lowering; together they reject every known stale-code case.
 pub fn fingerprint() u64 {
+    return fingerprintForGenerator(mir_generator_identity);
+}
+
+fn fingerprintForGenerator(generator_identity: u64) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(@tagName(builtin.cpu.arch));
     hasher.update(@tagName(builtin.os.tag));
@@ -1776,7 +1844,7 @@ pub fn fingerprint() u64 {
         module.format_version, State.address_table_offset,
         State.slot_count,      value_stride,
         payloads.int,          payloads.float,
-        payloads.boolean,
+        payloads.boolean,      generator_identity,
     }) |word| hasher.update(std.mem.asBytes(&word));
     for (services) |service| hasher.update(service.name);
     return hasher.final();
@@ -1826,6 +1894,8 @@ pub fn runCode(
     host: ?backend.Host,
 ) RunError!Result {
     if (!available) return error.NativeFailed;
+    if (!nativeEntrySupported(program)) return error.NativeFailed;
+    if (addresses.len != program.functions.len) return error.NativeFailed;
 
     var runtime: Runtime = .{ .machine = .{
         .arena = arena,
@@ -1850,7 +1920,7 @@ pub fn runCode(
         table.entryCount());
     const state: *State = @ptrCast(@alignCast(words.ptr));
     state.* = .{
-        .depth_left = @intCast(budget.call_depth),
+        .depth_left = boundedCallDepth(budget.call_depth),
         .runtime = &runtime,
     };
     const entries = words[State.address_table_offset / 8 ..];
@@ -1907,4 +1977,66 @@ fn nativeTrace(
         .column = if (instruction < function.origins.len) function.origins[instruction].column else 0,
     };
     return frame;
+}
+
+// ---------------------------------------------------------------------------
+// Focused validity tests
+// ---------------------------------------------------------------------------
+
+test "native fingerprint is stable and generator-sensitive" {
+    const expected = fingerprintForGenerator(mir_generator_identity);
+    try std.testing.expectEqual(expected, fingerprint());
+    try std.testing.expectEqual(expected, fingerprint());
+    try std.testing.expect(expected !=
+        fingerprintForGenerator(mir_generator_identity ^ 1));
+}
+
+test "native call depth is capped at the engine boundary" {
+    try std.testing.expectEqual(@as(i64, 0), boundedCallDepth(0));
+    try std.testing.expectEqual(@as(i64, max_call_depth - 1), boundedCallDepth(max_call_depth - 1));
+    try std.testing.expectEqual(@as(i64, max_call_depth), boundedCallDepth(max_call_depth));
+    try std.testing.expectEqual(@as(i64, max_call_depth), boundedCallDepth(std.math.maxInt(u32)));
+}
+
+test "native function frame complexity has an overflow-safe boundary" {
+    try std.testing.expect(boundedFunctionFrame(0, max_function_slots));
+    try std.testing.expect(boundedFunctionFrame(max_function_slots - 1, 1));
+    try std.testing.expect(!boundedFunctionFrame(max_function_slots, 1));
+    try std.testing.expect(!boundedFunctionFrame(max_function_slots + 1, 0));
+    try std.testing.expect(!boundedFunctionFrame(std.math.maxInt(usize), 1));
+}
+
+test "native entry takes no language parameters but may return a scalar" {
+    var functions = [_]ir.Function{.{
+        .name = "entry",
+        .parameter_count = 1,
+        .return_type = .int,
+        .locals = &.{},
+        .instructions = &.{},
+        .result_types = &.{},
+        .blocks = &.{},
+    }};
+    var program: ir.Program = .{
+        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+        .functions = &functions,
+    };
+    defer program.deinit();
+
+    try std.testing.expect(!nativeEntrySupported(&program));
+    try std.testing.expect(!supported(&program));
+    const fake_code: *const anyopaque = @ptrFromInt(1);
+    try std.testing.expectError(
+        error.NativeFailed,
+        runCode(std.testing.allocator, &program, &.{fake_code}, &.{}, &.{}, .{}, null),
+    );
+    functions[0].parameter_count = 0;
+    try std.testing.expect(nativeEntrySupported(&program));
+    if (available) try std.testing.expect(supported(&program));
+    try std.testing.expectError(
+        error.NativeFailed,
+        runCode(std.testing.allocator, &program, &.{}, &.{}, &.{}, .{}, null),
+    );
+    program.entry_function = 1;
+    try std.testing.expect(!nativeEntrySupported(&program));
+    try std.testing.expect(!supported(&program));
 }

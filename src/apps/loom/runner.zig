@@ -7,21 +7,21 @@
 //! and the screen is restored before any trap is reported.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const luce = @import("luce");
 const files = @import("files");
 const host_mod = @import("host.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Interactive programs run until they return; the budget guards
-/// against runaway recursion, not against long-lived main loops.
-/// The interpreter runs on an explicit heap-allocated frame stack,
-/// so this is a pure policy limit (frames cost memory, not native
-/// stack) and a runaway recursion traps with a clean
-/// `call_depth_exceeded` at any setting.
+/// Interactive programs run until they return; the step budget is
+/// intentionally open-ended.  Call depth is conservative because the
+/// native engines use the OS stack (the self-written backend permits
+/// frames up to about 32 KiB); 128 frames remain below the normal
+/// macOS/Linux main-thread stack while still giving useful recursion.
 const program_budget: luce.backend.Budget = .{
     .steps = std.math.maxInt(u64),
-    .call_depth = 1 << 18,
+    .call_depth = luce.native.max_call_depth,
 };
 
 /// A trap trace prints at most this many frames; a runaway recursion
@@ -29,19 +29,60 @@ const program_budget: luce.backend.Budget = .{
 const max_printed_frames = 12;
 
 /// Process-wide engine policy, set once at startup from LOOM_ENGINE:
-/// `auto` picks native when the program fits, `interpreter` forces
-/// the reference engine (semantics are identical; this is for
-/// debugging and benchmarking the engines against each other).
-pub const Engine = enum { auto, interpreter, zig };
+/// `auto` prefers the self-written backend on ARM macOS and MIR on
+/// other native hosts.  Explicit modes are strict, which keeps tests
+/// and benchmarks from silently measuring a fallback engine.
+pub const Engine = enum {
+    auto,
+    interpreter,
+    zig,
+    mir,
+
+    pub fn parse(name: []const u8) ?Engine {
+        inline for (std.meta.fields(Engine)) |field| {
+            if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
+        }
+        return null;
+    }
+};
 pub var engine: Engine = .auto;
+
+const SelectedEngine = enum { zig, mir, interpreter, unavailable };
+
+fn selectEngine(policy: Engine, zig_ok: bool, mir_ok: bool) SelectedEngine {
+    return switch (policy) {
+        .interpreter => .interpreter,
+        .zig => if (zig_ok) .zig else .unavailable,
+        .mir => if (mir_ok) .mir else .unavailable,
+        .auto => if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos and zig_ok)
+            .zig
+        else if (mir_ok)
+            .mir
+        else
+            .interpreter,
+    };
+}
 
 /// Process-wide image policy, set once at startup from LOOM_IMAGE:
 /// `auto` reads and writes the .lci cache beside a .lc (the native
 /// image, docs/NATIVE.md milestone 5b), `off` neither reads nor
 /// writes it.  Scripts (.luc) compile in memory and never touch
 /// images.
-pub const Image = enum { auto, off };
+pub const Image = enum {
+    auto,
+    off,
+
+    pub fn parse(name: []const u8) ?Image {
+        if (std.mem.eql(u8, name, "auto")) return .auto;
+        if (std.mem.eql(u8, name, "off")) return .off;
+        return null;
+    }
+};
 pub var image: Image = .auto;
+
+fn imageCacheEnabled(policy: Image, platform_supported: bool, has_artifact: bool) bool {
+    return policy == .auto and platform_supported and has_artifact;
+}
 
 pub const compile_options: luce.types.CompileOptions = .{
     .entry_mode = .script,
@@ -84,6 +125,14 @@ pub const Artifact = struct {
     path: []const u8,
     encoded: []const u8,
 };
+
+fn zigImageKeys(artifact: Artifact) luce.image.Keys {
+    return .{
+        .fingerprint = luce.codegen.fingerprint(),
+        .module_hash = luce.image.hashModule(artifact.encoded),
+        .text_hash = luce.codegen.imageTextHash(artifact.encoded),
+    };
+}
 
 /// Compile a .luc source file (plus the modules it imports, resolved
 /// beside it) and run it immediately.
@@ -149,7 +198,7 @@ fn runNative(
     outputs: []?luce.backend.RuntimeValue,
     host: ?luce.backend.Host,
 ) !luce.backend.Result {
-    const cache = image == .auto and luce.image.supported and artifact != null;
+    const cache = imageCacheEnabled(image, luce.image.supported, artifact != null);
     const keys: ?luce.image.Keys = if (cache) .{
         .fingerprint = luce.native.fingerprint(),
         .module_hash = luce.image.hashModule(artifact.?.encoded),
@@ -185,18 +234,47 @@ fn runNative(
     return compiled.run(arena, program, inputs, outputs, program_budget, host);
 }
 
-/// The self-written backend's path: emit, map, run — the exact
-/// pipeline a cached image takes, so it shares every downstream
-/// piece with the other engines.
+/// The self-written backend's persistent image path.  A module cache
+/// hit maps and runs with no code emission; a miss emits hermetic
+/// spans, writes the same .lci format MIR uses, then maps and runs.
+/// Backend-specific keys make the shared path safe when engine policy
+/// changes.  Scripts and LOOM_IMAGE=off never enter the cache path.
 fn runZig(
     gpa: Allocator,
+    io: std.Io,
     arena: Allocator,
     program: *const luce.ir.Program,
+    artifact: ?Artifact,
     inputs: []const luce.backend.InputValue,
     outputs: []?luce.backend.RuntimeValue,
     host: ?luce.backend.Host,
 ) !luce.backend.Result {
+    const cache = imageCacheEnabled(image, luce.image.supported, artifact != null);
+    const keys: ?luce.image.Keys = if (cache) zigImageKeys(artifact.?) else null;
+
+    if (keys) |wanted| from_image: {
+        const image_path = try imagePath(arena, artifact.?.path);
+        const bytes = files.readWhole(arena, io, image_path) catch break :from_image;
+        const spans = luce.image.decode(arena, bytes, wanted, program.functions.len) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => break :from_image,
+        };
+        var loaded = luce.image.map(gpa, spans) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => break :from_image,
+        };
+        defer loaded.deinit(gpa);
+        return luce.native.runCode(arena, program, loaded.addresses, inputs, outputs, program_budget, host);
+    }
+
     const spans = try luce.codegen.compile(arena, program);
+
+    if (keys) |fresh| write_image: {
+        const bytes = try luce.image.encode(arena, spans, fresh);
+        const image_path = try imagePath(arena, artifact.?.path);
+        files.writeWhole(io, image_path, bytes) catch break :write_image;
+    }
+
     var loaded = luce.image.map(gpa, spans) catch |mistake| switch (mistake) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.NativeFailed,
@@ -235,23 +313,49 @@ pub fn run(
     const inputs = try arena.allocator().alloc(luce.backend.InputValue, program.inputs.len);
     @memset(inputs, .unavailable);
 
-    // Engine choice: native (MIR-compiled at load) whenever the whole
-    // program fits its supported core, the interpreter otherwise —
-    // identical semantics either way.
-    // LOOM_ENGINE=zig opts into the self-written backend where its
-    // core covers the program (codegen.zig) — the racing seam, not
-    // yet the default.  Beyond its gate the ladder continues down:
-    // MIR, then the interpreter.
-    const use_zig = engine == .zig and
-        luce.codegen.available and
-        luce.codegen.supported(program);
-    const use_native = (engine == .auto or (engine == .zig and !use_zig)) and
-        luce.native.available and
-        luce.native.supported(program);
-    const result = if (use_zig)
-        runZig(gpa, arena.allocator(), program, inputs, outputs, services.host()) catch |mistake| switch (mistake) {
+    const zig_ok = luce.codegen.available and luce.codegen.supported(program);
+    const mir_ok = luce.native.available and luce.native.supported(program);
+    const selected = selectEngine(engine, zig_ok, mir_ok);
+    if (selected == .unavailable) {
+        try err.print("loom: requested {s} engine does not support this program on this host\n", .{@tagName(engine)});
+        return 1;
+    }
+
+    const result = switch (selected) {
+        .zig => runZig(
+            gpa,
+            io,
+            arena.allocator(),
+            program,
+            artifact,
+            inputs,
+            outputs,
+            services.host(),
+        ) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.NativeFailed => try luce.backend.evaluateHosted(
+            error.NativeFailed => if (engine == .zig) {
+                try err.print("loom: zig engine failed to compile or map this program\n", .{});
+                return 1;
+            } else if (mir_ok) runNative(
+                gpa,
+                io,
+                arena.allocator(),
+                program,
+                artifact,
+                inputs,
+                outputs,
+                services.host(),
+            ) catch |native_mistake| switch (native_mistake) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NativeFailed => try luce.backend.evaluateHosted(
+                    arena.allocator(),
+                    program,
+                    inputs,
+                    outputs,
+                    program_budget,
+                    services.host(),
+                ),
+            } else try luce.backend.evaluateHosted(
                 arena.allocator(),
                 program,
                 inputs,
@@ -259,13 +363,22 @@ pub fn run(
                 program_budget,
                 services.host(),
             ),
-        }
-    else if (use_native)
-        runNative(gpa, io, arena.allocator(), program, artifact, inputs, outputs, services.host()) catch |mistake| switch (mistake) {
+        },
+        .mir => runNative(
+            gpa,
+            io,
+            arena.allocator(),
+            program,
+            artifact,
+            inputs,
+            outputs,
+            services.host(),
+        ) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
-            // A native-compile failure is a loom bug; the program
-            // still runs, on the reference engine.
-            error.NativeFailed => try luce.backend.evaluateHosted(
+            error.NativeFailed => if (engine == .mir) {
+                try err.print("loom: MIR engine failed to compile this program\n", .{});
+                return 1;
+            } else try luce.backend.evaluateHosted(
                 arena.allocator(),
                 program,
                 inputs,
@@ -273,16 +386,17 @@ pub fn run(
                 program_budget,
                 services.host(),
             ),
-        }
-    else
-        try luce.backend.evaluateHosted(
+        },
+        .interpreter => try luce.backend.evaluateHosted(
             arena.allocator(),
             program,
             inputs,
             outputs,
             program_budget,
             services.host(),
-        );
+        ),
+        .unavailable => unreachable,
+    };
 
     // Land back on the ordinary screen before reporting anything.
     services.restoreScreen();
@@ -322,4 +436,40 @@ pub fn run(
             return 1;
         },
     }
+}
+
+test "engine policy is strict when forced and auto follows the platform ladder" {
+    try std.testing.expectEqual(Engine.zig, Engine.parse("zig").?);
+    try std.testing.expectEqual(Engine.mir, Engine.parse("mir").?);
+    try std.testing.expect(Engine.parse("mri") == null);
+    try std.testing.expectEqual(Image.off, Image.parse("off").?);
+    try std.testing.expect(Image.parse("sometimes") == null);
+
+    try std.testing.expectEqual(SelectedEngine.interpreter, selectEngine(.interpreter, true, true));
+    try std.testing.expectEqual(SelectedEngine.zig, selectEngine(.zig, true, true));
+    try std.testing.expectEqual(SelectedEngine.unavailable, selectEngine(.zig, false, true));
+    try std.testing.expectEqual(SelectedEngine.mir, selectEngine(.mir, true, true));
+    try std.testing.expectEqual(SelectedEngine.unavailable, selectEngine(.mir, true, false));
+
+    const auto_with_both: SelectedEngine = if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos)
+        .zig
+    else
+        .mir;
+    try std.testing.expectEqual(auto_with_both, selectEngine(.auto, true, true));
+    try std.testing.expectEqual(SelectedEngine.mir, selectEngine(.auto, false, true));
+    try std.testing.expectEqual(SelectedEngine.interpreter, selectEngine(.auto, false, false));
+}
+
+test "zig image caching requires auto policy, platform support, and a module artifact" {
+    try std.testing.expect(imageCacheEnabled(.auto, true, true));
+    try std.testing.expect(!imageCacheEnabled(.off, true, true));
+    try std.testing.expect(!imageCacheEnabled(.auto, false, true));
+    try std.testing.expect(!imageCacheEnabled(.auto, true, false)); // source scripts
+
+    const artifact: Artifact = .{ .path = "program.lc", .encoded = "portable module" };
+    const keys = zigImageKeys(artifact);
+    try std.testing.expectEqual(luce.codegen.fingerprint(), keys.fingerprint);
+    try std.testing.expectEqual(luce.image.hashModule(artifact.encoded), keys.module_hash);
+    try std.testing.expectEqual(luce.codegen.imageTextHash(artifact.encoded), keys.text_hash);
+    try std.testing.expect(keys.fingerprint != luce.native.fingerprint());
 }

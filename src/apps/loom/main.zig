@@ -35,12 +35,21 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     defer environ_map.deinit();
     const no_color = environ_map.get("NO_COLOR") != null;
     const editor_override = environ_map.get("LOOM_EDITOR");
+    var invalid_engine: ?[]const u8 = null;
+    var invalid_image: ?[]const u8 = null;
     if (environ_map.get("LOOM_ENGINE")) |wanted| {
-        if (std.mem.eql(u8, wanted, "interpreter")) runner.engine = .interpreter;
-        if (std.mem.eql(u8, wanted, "zig")) runner.engine = .zig;
+        if (runner.Engine.parse(wanted)) |parsed| {
+            runner.engine = parsed;
+        } else {
+            invalid_engine = wanted;
+        }
     }
     if (environ_map.get("LOOM_IMAGE")) |wanted| {
-        if (std.mem.eql(u8, wanted, "off")) runner.image = .off;
+        if (runner.Image.parse(wanted)) |parsed| {
+            runner.image = parsed;
+        } else {
+            invalid_image = wanted;
+        }
     }
 
     var err_writer = std.Io.File.stderr().writer(io, &.{});
@@ -48,6 +57,18 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     var out_buffer: [8192]u8 = undefined;
     var out_writer = std.Io.File.stdout().writer(io, &out_buffer);
     const out = &out_writer.interface;
+
+    if (invalid_engine) |wanted| {
+        try err.print(
+            "loom: unknown LOOM_ENGINE={s}; expected auto, zig, mir, or interpreter\n",
+            .{wanted},
+        );
+        return 2;
+    }
+    if (invalid_image) |wanted| {
+        try err.print("loom: unknown LOOM_IMAGE={s}; expected auto or off\n", .{wanted});
+        return 2;
+    }
 
     const colored = !no_color and (std.Io.File.stdout().isTty(io) catch false);
     var shell: shell_mod.Shell = .{

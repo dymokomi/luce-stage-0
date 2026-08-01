@@ -23,8 +23,8 @@
 //! OS work); x86-64 next; Windows once image.zig grows VirtualAlloc.
 //!
 //! Code shape: locals pinned in callee-saved registers (x20-x26 for
-//! values, d8-d11 for floats; frame slots beyond), block-local
-//! temporaries in small spilling pools (x9-x12, d12-d15) — sound
+//! values, d8-d12 for floats; frame slots beyond), block-local
+//! temporaries in small spilling pools (x9-x12, d13-d15) — sound
 //! because the IR guarantees registers never cross blocks.  Values
 //! stay lazy until a use forces them, which is what immediate
 //! forms, constant-divisor guard elision, and direct pinned reads
@@ -47,13 +47,61 @@ const AddressTable = native.AddressTable;
 
 pub const available = builtin.cpu.arch == .aarch64 and image.supported;
 
-/// Frame slots are addressed with a scaled 12-bit immediate.
-const max_slots = 4000;
 /// Arguments travel in registers only: x1-x7 for values, d0-d7 for
 /// floats.  Wider signatures fall back to MIR (which speaks the full
 /// C ABI) through the runner's engine ladder.
 const max_value_arguments = 7;
 const max_float_arguments = 8;
+
+/// The exact self-written generator which produced a cached image.
+/// Embedding this file is intentional: changing an encoder, lowering,
+/// register policy, or even a relevant constant changes the identity
+/// without relying on a manually maintained version number.
+const generator_identity: u64 = blk: {
+    @setEvalBranchQuota(2_000_000);
+    break :blk generatorIdentityFor(@embedFile("codegen.zig"), builtin.zig_version_string);
+};
+
+fn hashIdentityPart(hasher: *std.hash.Wyhash, part: []const u8) void {
+    var length: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length, @intCast(part.len), .little);
+    hasher.update(&length);
+    hasher.update(part);
+}
+
+fn generatorIdentityFor(source: []const u8, zig_version: []const u8) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashIdentityPart(&hasher, "luce-self-aarch64-generator-v1");
+    hashIdentityPart(&hasher, source);
+    hashIdentityPart(&hasher, zig_version);
+    return hasher.final();
+}
+
+fn fingerprintFor(generator: u64, runtime_abi: u64) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashIdentityPart(&hasher, "luce-self-aarch64-image-v1");
+    hashIdentityPart(&hasher, @tagName(builtin.cpu.arch));
+    hashIdentityPart(&hasher, @tagName(builtin.os.tag));
+    hasher.update(std.mem.asBytes(&generator));
+    hasher.update(std.mem.asBytes(&runtime_abi));
+    return hasher.final();
+}
+
+/// Backend-specific image identity.  The runtime half covers State,
+/// payload, address-table, service, target, and module ABI changes;
+/// the generator half covers this source and the Zig compiler.  The
+/// domain tag prevents MIR and self-written images from interchanging.
+pub fn fingerprint() u64 {
+    return fingerprintFor(generator_identity, native.fingerprint());
+}
+
+/// Cheap program/code key for a warm image lookup.  The portable
+/// module already determines the IR exactly, so domain-separating its
+/// bytes with the generator identity avoids re-emitting code merely to
+/// validate the cache.
+pub fn imageTextHash(encoded_module: []const u8) u64 {
+    return std.hash.Wyhash.hash(generator_identity, encoded_module);
+}
 
 /// Whether the whole program fits this backend: everything MIR's
 /// core takes, minus the shapes this emitter's ABI does not carry
@@ -62,7 +110,9 @@ pub fn supported(program: *const ir.Program) bool {
     if (!available) return false;
     if (!native.supported(program)) return false;
     for (program.functions) |*function| {
-        if (function.locals.len + function.instructions.len > max_slots) return false;
+        // Frame slots use a scaled 12-bit immediate; share MIR's
+        // audited bound so both native engines cap stack allocation.
+        if (function.locals.len + function.instructions.len > native.max_function_slots) return false;
         var value_arguments: usize = 0;
         var float_arguments: usize = 0;
         for (function.locals[0..function.parameter_count]) |local| {
@@ -82,7 +132,7 @@ pub fn supported(program: *const ir.Program) bool {
 /// map the spans executable (image.map) and run them with
 /// native.runCode — the same path a cached image takes.  Assumes
 /// supported() said yes.
-pub fn compile(arena: Allocator, program: *const ir.Program) error{OutOfMemory}![]const []const u8 {
+pub fn compile(arena: Allocator, program: *const ir.Program) native.RunError![]const []const u8 {
     const table = try AddressTable.collect(arena, program);
     const spans = try arena.alloc([]const u8, program.functions.len);
     for (program.functions, spans, 0..) |*function, *span, index| {
@@ -104,10 +154,12 @@ pub fn compile(arena: Allocator, program: *const ir.Program) error{OutOfMemory}!
 // ---------------------------------------------------------------------------
 
 /// A pending branch to a mark not yet bound.
+const FixupKind = enum { jump26, cond19 };
+
 const Fixup = struct {
     at: usize,
     mark: u32,
-    kind: enum { jump26, cond19 },
+    kind: FixupKind,
 };
 
 /// One trap exit: sets the trap triple in the State, returns default.
@@ -299,13 +351,17 @@ const Emitter = struct {
     }
 
     fn branchCond(self: *Emitter, condition: u4, mark: u32) !void {
-        try self.fixups.append(self.arena, .{ .at = self.here(), .mark = mark, .kind = .cond19 });
-        try self.word(0x54000000 | @as(u32, condition));
+        // Keep the conditional displacement local and let an imm26
+        // jump carry the real target.  Inverting the condition makes
+        // the ordinary fallthrough skip the veneer.
+        try self.word(0x54000040 | @as(u32, condition ^ 1)); // b.!cond +8
+        try self.branchTo(mark);
     }
 
     fn branchZero(self: *Emitter, rt: u5, mark: u32, when_zero: bool) !void {
-        try self.fixups.append(self.arena, .{ .at = self.here(), .mark = mark, .kind = .cond19 });
-        try self.word((if (when_zero) @as(u32, 0xB4000000) else 0xB5000000) | rt);
+        const inverse: u32 = if (when_zero) 0xB5000040 else 0xB4000040;
+        try self.word(inverse | rt); // cbnz/cbz +8
+        try self.branchTo(mark);
     }
 
     fn compareRegisters(self: *Emitter, rn: u5, rm: u5) !void {
@@ -807,7 +863,7 @@ const Emitter = struct {
 
     // -- the function ------------------------------------------------------
 
-    fn emitFunction(self: *Emitter) error{OutOfMemory}!void {
+    fn emitFunction(self: *Emitter) native.RunError!void {
         const function = self.function;
         try self.analyze();
         const slots = function.locals.len + function.instructions.len;
@@ -836,10 +892,36 @@ const Emitter = struct {
             }
         }
 
+        // Check the depth budget before touching SP.  A failed call
+        // must be able to report call_depth_exceeded even when the
+        // native stack has no room for this function's full frame.
+        // x0 is still the State pointer and x13 is caller-saved, so
+        // this path changes no register the caller expects preserved.
+        const depth_ok = try self.newMark();
+        try self.loadWord(helper, 0, abi.depth_offset);
+        try self.word(0xF10005AD); // subs x13, x13, #1
+        try self.storeWord(helper, 0, abi.depth_offset);
+        try self.branchCond(ge, depth_ok);
+        try self.materialize(helper, @bitCast(abi.trap(.call_depth_exceeded)));
+        try self.storeWord(helper, 0, abi.trap_offset);
+        try self.materialize(helper, self.function_index);
+        try self.storeWord(helper, 0, abi.trap_function_offset);
+        try self.materialize(helper, 0);
+        try self.storeWord(helper, 0, abi.trap_instruction_offset);
+        switch (function.return_type) {
+            .none => {},
+            .float => try self.fmovFromValue(0, zr),
+            else => try self.movReg(0, zr),
+        }
+        try self.word(0xD65F03C0); // ret
+        self.bind(depth_ok);
+
         // Prologue: saves (x19-x28 always; d8-d15 when floats are in
-        // play), frame, the State register, the depth budget, the
-        // frame serial, parameters into their homes, typed zeros.
+        // play), links the Darwin-compatible frame record, allocates
+        // the frame, then homes State, the serial, parameters, and
+        // typed zeros.
         try self.word(0xA9BF7BFD); // stp x29, x30, [sp, #-16]!
+        try self.word(0x910003FD); // mov x29, sp
         try self.word(0xA9BF53F3); // stp x19, x20, [sp, #-16]!
         try self.word(0xA9BF5BF5); // stp x21, x22, [sp, #-16]!
         try self.word(0xA9BF63F7); // stp x23, x24, [sp, #-16]!
@@ -858,12 +940,6 @@ const Emitter = struct {
             try self.word(0xCB2D63FF); // sub sp, sp, x13 (extended)
         }
         try self.movReg(state, 0);
-
-        const depth = try self.trapSite(.call_depth_exceeded, 0);
-        try self.loadWord(helper, state, abi.depth_offset);
-        try self.word(0xF10005AD); // subs x13, x13, #1
-        try self.storeWord(helper, state, abi.depth_offset);
-        try self.branchCond(lt, depth);
 
         // Parameters arrive per the C ABI — x1.. for values, d0.. for
         // floats — and move into their pinned homes or slots before
@@ -1008,14 +1084,15 @@ const Emitter = struct {
         try self.word(0xA8C17BFD); // ldp x29, x30, [sp], #16
         try self.word(0xD65F03C0); // ret
 
-        self.patch();
+        try self.patch();
     }
 
-    fn patch(self: *Emitter) void {
+    fn patch(self: *Emitter) error{NativeFailed}!void {
         for (self.fixups.items) |fixup| {
-            const target = self.marks.items[fixup.mark].?;
+            const target = self.marks.items[fixup.mark] orelse return error.NativeFailed;
             const displacement: i64 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(fixup.at)));
             const instructions: i64 = @divExact(displacement, 4);
+            if (!fixupFits(fixup.kind, instructions)) return error.NativeFailed;
             const bytes = self.code.items[fixup.at..][0..4];
             var encoded = std.mem.readInt(u32, bytes, .little);
             switch (fixup.kind) {
@@ -1024,6 +1101,14 @@ const Emitter = struct {
             }
             std.mem.writeInt(u32, bytes, encoded, .little);
         }
+    }
+
+    fn fixupFits(kind: FixupKind, instructions: i64) bool {
+        const limit: i64 = switch (kind) {
+            .jump26 => 1 << 25,
+            .cond19 => 1 << 18,
+        };
+        return instructions >= -limit and instructions < limit;
     }
 
     fn emitInstruction(self: *Emitter, item: ir.Register, following: ?ir.Register) error{OutOfMemory}!void {
@@ -1874,6 +1959,158 @@ const Emitter = struct {
 
 const compile_mod = @import("compile.zig");
 const testing = std.testing;
+
+fn emittedWord(bytes: []const u8, index: usize) u32 {
+    return std.mem.readInt(u32, bytes[index * 4 ..][0..4], .little);
+}
+
+test "cached images are source-derived and backend-separated" {
+    const source_identity = generatorIdentityFor(
+        @embedFile("codegen.zig"),
+        builtin.zig_version_string,
+    );
+    try testing.expectEqual(generator_identity, source_identity);
+    try testing.expectEqual(fingerprint(), fingerprint());
+    try testing.expectEqual(imageTextHash("module"), imageTextHash("module"));
+    try testing.expect(generator_identity != generatorIdentityFor("changed", builtin.zig_version_string));
+    try testing.expect(generator_identity != generatorIdentityFor(@embedFile("codegen.zig"), "different-zig"));
+    try testing.expect(fingerprint() != fingerprintFor(generator_identity ^ 1, native.fingerprint()));
+    try testing.expect(fingerprint() != fingerprintFor(generator_identity, native.fingerprint() ^ 1));
+    try testing.expect(imageTextHash("module-a") != imageTextHash("module-b"));
+
+    // The shared .lci format is deliberately unable to confuse a MIR
+    // payload with a self-written payload, even for the same module.
+    const module_bytes = "same portable module";
+    const zig_keys: image.Keys = .{
+        .fingerprint = fingerprint(),
+        .module_hash = image.hashModule(module_bytes),
+        .text_hash = imageTextHash(module_bytes),
+    };
+    const mir_keys: image.Keys = .{
+        .fingerprint = native.fingerprint(),
+        .module_hash = image.hashModule(module_bytes),
+        .text_hash = imageTextHash(module_bytes),
+    };
+    try testing.expect(zig_keys.fingerprint != mir_keys.fingerprint);
+
+    const spans = [_][]const u8{"code"};
+    const zig_bytes = try image.encode(testing.allocator, &spans, zig_keys);
+    defer testing.allocator.free(zig_bytes);
+    const mir_bytes = try image.encode(testing.allocator, &spans, mir_keys);
+    defer testing.allocator.free(mir_bytes);
+    try testing.expectError(error.WrongFingerprint, image.decode(testing.allocator, zig_bytes, mir_keys, 1));
+    try testing.expectError(error.WrongFingerprint, image.decode(testing.allocator, mir_bytes, zig_keys, 1));
+}
+
+fn expectRejectedFixup(kind: FixupKind, target: usize) !void {
+    var emitter: Emitter = .{
+        .arena = testing.allocator,
+        .program = undefined,
+        .table = undefined,
+        .function = undefined,
+        .function_index = 0,
+    };
+    defer emitter.code.deinit(testing.allocator);
+    defer emitter.marks.deinit(testing.allocator);
+    defer emitter.fixups.deinit(testing.allocator);
+
+    try emitter.word(switch (kind) {
+        .jump26 => 0x14000000,
+        .cond19 => 0x54000000,
+    });
+    const mark = try emitter.newMark();
+    emitter.marks.items[mark] = target;
+    try emitter.fixups.append(testing.allocator, .{ .at = 0, .mark = mark, .kind = kind });
+    try testing.expectError(error.NativeFailed, emitter.patch());
+}
+
+test "branch fixups reject displacement truncation" {
+    const cond_limit: i64 = 1 << 18;
+    const jump_limit: i64 = 1 << 25;
+    try testing.expect(Emitter.fixupFits(.cond19, -cond_limit));
+    try testing.expect(Emitter.fixupFits(.cond19, cond_limit - 1));
+    try testing.expect(!Emitter.fixupFits(.cond19, -cond_limit - 1));
+    try testing.expect(!Emitter.fixupFits(.cond19, cond_limit));
+    try testing.expect(Emitter.fixupFits(.jump26, -jump_limit));
+    try testing.expect(Emitter.fixupFits(.jump26, jump_limit - 1));
+    try testing.expect(!Emitter.fixupFits(.jump26, -jump_limit - 1));
+    try testing.expect(!Emitter.fixupFits(.jump26, jump_limit));
+
+    try expectRejectedFixup(.cond19, @intCast(cond_limit * 4));
+    try expectRejectedFixup(.jump26, @intCast(jump_limit * 4));
+
+    // Conditional targets outside imm19 range travel through imm26
+    // veneers.  The local inverse branches always skip exactly one
+    // instruction and therefore need no fixup of their own.
+    var emitter: Emitter = .{
+        .arena = testing.allocator,
+        .program = undefined,
+        .table = undefined,
+        .function = undefined,
+        .function_index = 0,
+    };
+    defer emitter.code.deinit(testing.allocator);
+    defer emitter.marks.deinit(testing.allocator);
+    defer emitter.fixups.deinit(testing.allocator);
+
+    const condition_mark = try emitter.newMark();
+    try emitter.branchCond(Emitter.eq, condition_mark);
+    const zero_mark = try emitter.newMark();
+    try emitter.branchZero(7, zero_mark, true);
+    emitter.marks.items[condition_mark] = @intCast(cond_limit * 4);
+    emitter.marks.items[zero_mark] = @intCast(cond_limit * 4);
+    try emitter.patch();
+    try testing.expectEqual(@as(u32, 0x54000041), emittedWord(emitter.code.items, 0)); // b.ne +8
+    try testing.expectEqual(@as(u32, 0xB5000047), emittedWord(emitter.code.items, 2)); // cbnz x7, +8
+    try testing.expectEqual(@as(usize, 2), emitter.fixups.items.len);
+    try testing.expect(emitter.fixups.items[0].kind == .jump26);
+    try testing.expect(emitter.fixups.items[1].kind == .jump26);
+}
+
+test "the prologue guards depth before SP and links x29" {
+    const source =
+        \\func main():
+        \\    let answer = 42
+        \\
+    ;
+    var result = try compile_mod.compile(testing.allocator, source, .{}, .{
+        .entry_mode = .script,
+        .allow_host = true,
+    });
+    defer result.deinit();
+    try testing.expect(result == .success);
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const spans = try compile(arena.allocator(), &result.success);
+    const code = spans[result.success.entry_function];
+    try testing.expect(code.len >= 6 * @sizeOf(u32));
+
+    try testing.expectEqual(@as(u32, 0xF9400C0D), emittedWord(code, 0)); // ldr x13, [x0, #24]
+    try testing.expectEqual(@as(u32, 0xF10005AD), emittedWord(code, 1)); // subs x13, x13, #1
+    try testing.expectEqual(@as(u32, 0xF9000C0D), emittedWord(code, 2)); // str x13, [x0, #24]
+    try testing.expectEqual(@as(u32, 0x5400004B), emittedWord(code, 3)); // b.lt +8
+    const guarded = emittedWord(code, 4);
+    try testing.expectEqual(@as(u32, 0x14000000), guarded & 0xFC000000); // b depth_ok
+
+    var record_at: ?usize = null;
+    for (0..code.len / 4) |index| {
+        if (emittedWord(code, index) == 0xA9BF7BFD) {
+            record_at = index;
+            break;
+        }
+    }
+    const frame = record_at orelse return error.TestUnexpectedResult;
+    try testing.expect(frame > 4);
+    try testing.expectEqual(@as(u32, 0x910003FD), emittedWord(code, frame + 1)); // mov x29, sp
+
+    const raw_displacement = guarded & 0x3FFFFFF;
+    const displacement: i64 = if (raw_displacement & (1 << 25) != 0)
+        @as(i64, raw_displacement) - (1 << 26)
+    else
+        raw_displacement;
+    try testing.expectEqual(@as(i64, @intCast(frame)), 4 + displacement);
+}
 
 test "the gate is MIR's core narrowed by the ABI limits" {
     const whole_language =

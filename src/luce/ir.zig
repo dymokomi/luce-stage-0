@@ -490,6 +490,13 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         try verifyFunction(allocator, program, function);
     }
     if (program.entry_function >= program.functions.len) return error.BadFunction;
+    const entry = &program.functions[program.entry_function];
+    // Every backend invokes the entry with no Luce arguments. Keep that
+    // ABI true for decoded modules, not only for analyzer-produced IR.
+    // Scalar return values are ABI-safe and may simply be ignored.
+    if (entry.parameter_count != 0) {
+        return error.BadFunction;
+    }
 }
 
 fn verifyType(program: *const Program, of: Type) VerifyError!void {
@@ -527,12 +534,20 @@ fn verifyFunction(allocator: Allocator, program: *const Program, function: *cons
     // has executed so far.
     var defined = std.AutoHashMapUnmanaged(Register, void){};
     defer defined.deinit(allocator);
+    const seen = try allocator.alloc(bool, function.instructions.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
 
     for (function.blocks) |block| {
         if (block.items.len == 0) return error.UnterminatedBlock;
         defined.clearRetainingCapacity();
         for (block.items, 0..) |item, position| {
             if (item >= function.instructions.len) return error.UndefinedRegister;
+            // An instruction is one SSA definition and executes at one
+            // position.  Repeating it (even in another block) breaks
+            // liveness/code-size analysis in native backends.
+            if (seen[item]) return error.BadFunction;
+            seen[item] = true;
             const instruction = function.instructions[item];
             const last = position == block.items.len - 1;
             if (instruction.isTerminator() != last) {
@@ -1298,14 +1313,14 @@ fn printInstruction(
 const testing = std.testing;
 
 test "the verifier rejects structural damage a decoder could admit" {
-    // A minimal valid program: main() -> Int { return 1 }.
+    // A minimal valid script entry: main() { let _ = 1; return }.
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();
     const arena = program.arena.allocator();
 
     const instructions = try arena.dupe(Instruction, &.{
         .{ .const_int = 1 },
-        .{ .ret = 0 },
+        .{ .ret = null },
     });
     const result_types = try arena.dupe(types.Type, &.{ .int, .none });
     const items = try arena.dupe(Register, &.{ 0, 1 });
@@ -1315,7 +1330,7 @@ test "the verifier rejects structural damage a decoder could admit" {
     functions[0] = .{
         .name = try arena.dupe(u8, "main"),
         .parameter_count = 0,
-        .return_type = .int,
+        .return_type = .none,
         .locals = &.{},
         .instructions = instructions,
         .result_types = result_types,
@@ -1327,7 +1342,7 @@ test "the verifier rejects structural damage a decoder could admit" {
     // An operand register that was never defined.
     functions[0].instructions[1] = .{ .ret = 5 };
     try testing.expectError(error.UndefinedRegister, verify(testing.allocator, &program));
-    functions[0].instructions[1] = .{ .ret = 0 };
+    functions[0].instructions[1] = .{ .ret = null };
 
     // A block that does not end in a terminator.
     blocks[0].items = items[0..1];
@@ -1365,5 +1380,20 @@ test "the verifier rejects structural damage a decoder could admit" {
     program.entry_function = 9;
     try testing.expectError(error.BadFunction, verify(testing.allocator, &program));
     program.entry_function = 0;
+    try verify(testing.allocator, &program);
+
+    // Entry functions are called without Luce arguments; a decoded
+    // module cannot redefine that ABI.
+    functions[0].parameter_count = 1;
+    functions[0].locals = try arena.dupe(Local, &.{.{ .name = "arg", .local_type = .int }});
+    try testing.expectError(error.BadFunction, verify(testing.allocator, &program));
+    functions[0].parameter_count = 0;
+    functions[0].locals = &.{};
+
+    // A register definition appears exactly once in the block graph.
+    const duplicate = try arena.dupe(Register, &.{ 0, 0, 1 });
+    blocks[0].items = duplicate;
+    try testing.expectError(error.BadFunction, verify(testing.allocator, &program));
+    blocks[0].items = items;
     try verify(testing.allocator, &program);
 }
