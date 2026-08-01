@@ -574,6 +574,40 @@ test "the zig backend agrees with the interpreter on its integer core" {
         \\    print(str(n))
         \\
         ,
+        // Register pressure: a balanced expression five levels deep
+        // holds more temporaries than the four-register scratch pool,
+        // so eviction and reload must both work.
+        \\func main():
+        \\    var a = 3
+        \\    var b = 5
+        \\    var c = 7
+        \\    var d = 11
+        \\    print(str(((((a + b) * (c + d)) + ((a + c) * (b + d))) * (((a + d) * (b + c)) + ((a * b) + (c * d)))) + ((((b + c) * (a + d)) + ((b * d) + (a * c))) * (((c + d) * (a + b)) + ((d * a) + (c * b))))))
+        \\
+        ,
+        // Immediate-form edges: 4095 is the widest add/cmp immediate,
+        // 4096 falls back to a register; negative immediates flip the
+        // op with the same flags.
+        \\func main():
+        \\    var x = 100
+        \\    print(str(x + 4095))
+        \\    print(str(x + 4096))
+        \\    print(str(x - 4095))
+        \\    print(str(4095 - x))
+        \\    print(str(x + 0 - 4096))
+        \\    print(str(x > 4095))
+        \\    print(str(4095 > x))
+        \\
+        ,
+        // A constant -1 divisor keeps the MIN guard (and must trap);
+        // constant benign divisors elide every guard.
+        \\func main():
+        \\    var lowest = -9223372036854775807 - 1
+        \\    print(str(lowest / 7))
+        \\    print(str(lowest % 7))
+        \\    print(str(lowest / -1))
+        \\
+        ,
         \\func main():
         \\    var answer = 41
         \\    assert(answer == 42)

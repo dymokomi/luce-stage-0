@@ -186,12 +186,13 @@ MIR experiment said it would.  What remains, in value order:
    elements (scalars, String) adopt nothing, so they take a direct
    service like the Builder's; strings read −12.2% on the A/B.
    Object-element lists keep the generic path (ownership).
-5. **The self-written Zig backend** — M0 shipped (`codegen.zig`,
-   LOOM_ENGINE=zig): aarch64, single-function integer core, every
-   trap identical, ~8x C with every value in a stack slot and no
-   register allocation yet.  Next: register allocation, the rest of
-   the language, x86-64 Linux, then Windows; it becomes the default
-   per-program when it wins this table (docs/SPEED.md §16).
+5. **The self-written Zig backend** — M0 and M1 shipped
+   (`codegen.zig`, LOOM_ENGINE=zig): aarch64, single-function
+   integer core, every trap identical, and with M1's allocator it
+   runs loops **at parity with MIR** (zig/MIR ≈ 1.00).  Next: the
+   rest of the language, x86-64 Linux, then Windows; it becomes the
+   default per-program when it wins this table (docs/SPEED.md
+   §16-17).
 6. **SIMD / the last 2x** — MIR does not vectorize; `arrays` will
    plateau a few x above C until an LLVM-backed engine is ever
    judged worth its 200MB.  Whole-array std intrinsics (dot, fill)

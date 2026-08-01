@@ -224,17 +224,19 @@ fill the table.
 
 ## The Zig backend (M0, opt-in)
 
-The self-written backend of docs/SPEED.md §16 lives in
+The self-written backend of docs/SPEED.md §16-17 lives in
 `codegen.zig` and is reached with LOOM_ENGINE=zig: Luce IR emitted
 straight to aarch64 machine code — no MIR, no C — against the same
 `native.abi` contract (State offsets, address table), producing the
 same hermetic spans, mapped and run by the same image.map +
-native.runCode path, held to the same oracle.  M0 covers
-single-function integer programs with the full trap semantics;
-every value lives in a stack slot (register allocation is the next
-milestone), which lands it at ~8x C — 13x the interpreter — on the
-loops bench.  A program outside its core simply is not
-`supported()` and takes the usual engines.  Targets: aarch64
+native.runCode path, held to the same oracle.  It covers
+single-function integer programs with the full trap semantics, and
+with milestone 1's allocator — locals pinned in callee-saved
+registers, block-local temporaries in a small spilling pool, lazy
+constants feeding immediate forms and guard elision, comparison/
+branch fusion — it runs the loops bench **at parity with MIR**
+(zig/MIR ≈ 1.00, ~1.15x C).  A program outside its core simply is
+not `supported()` and takes the usual engines.  Targets: aarch64
 macOS/Linux now, x86-64 Linux next, Windows when image.zig grows
 VirtualAlloc.
 

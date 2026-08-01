@@ -667,9 +667,54 @@ every trap and formatting path in its core.
 First numbers, every value in a stack slot and no register
 allocation at all: the loops bench at **8.2x C — 13x faster than
 the interpreter** — inside the 5-10x band §8 predicted for exactly
-this stage.  Target roster from here: register allocation and the
-rest of the language on aarch64, then x86-64 for Linux, then
-Windows once image.zig grows VirtualAlloc.  MIR stays the default
-and the ratchet: the Zig backend becomes the default per-program
-when it wins `bench/compare.sh`, and sovereignty — deleting
-vendor/mir and the libc link — comes when it wins everywhere.
+this stage.  MIR stays the default and the ratchet: the Zig backend
+becomes the default per-program when it wins `bench/compare.sh`,
+and sovereignty — deleting vendor/mir and the libc link — comes
+when it wins everywhere.
+
+---
+
+## 17. Backend milestone 1: parity with MIR, same day
+
+§8 guessed the self-written backend would catch MIR "only with
+register allocation," in months.  It took one more milestone, and
+the reason is the shape of Luce IR: registers never cross blocks —
+temporary lifetimes are single-block and single-assignment — so
+"register allocation" decomposes into problems small enough to
+solve exactly:
+
+- **locals pinned to callee-saved registers** (x20-x26; they
+  survive service calls by ABI), the rest in frame slots;
+- **block-local temporaries in a four-register scratch pool** with
+  spill-on-eviction — four on purpose, so the eviction path is
+  small enough to exercise from the oracle corpus rather than
+  trusted on inspection;
+- **lazy values**: constants and local reads hold no register until
+  a use forces them, which is what lets immediate forms
+  (`adds/subs/cmp #imm`), constant-divisor guard elision (a `% 7`
+  provably cannot divide by zero or overflow — the guards vanish,
+  semantics identical), and direct pinned-register reads fall out
+  as bookkeeping rather than passes;
+- **two peepholes**: a comparison feeding the adjacent branch fuses
+  to `cmp` + `b.cond` (no boolean ever materializes), and a
+  producer whose only use is the adjacent `local_set` of a pinned
+  local writes the pinned register directly (no temporary, no
+  `mov`); plus branch fallthrough to the physically next block.
+
+Measured on the shared bench, three interleaved rounds:
+**zig/MIR = 1.012, 0.998, 1.017** — statistical parity; both
+engines read ~1.15x C on loops.  629ms → 89ms across the two
+backend milestones, all of it under the three-way oracle (extended
+with register-pressure, immediate-boundary, and constant-divisor
+programs as the optimizations landed — each new trick brought the
+corpus that can break it).
+
+The honest caveats, so this number is not oversold: parity is on
+the one bench both engines fully cover, for a single-function
+integer core, and MIR still runs the whole language.  What parity
+proves is the thesis of §16 — that a backend shaped by Luce's own
+constraints reaches a generic JIT's quality at a few percent of
+its mass (codegen.zig is ~1.1k lines against the ~24k of MIR loom
+exercises).  Next: the rest of the language behind the same gate,
+x86-64 for Linux, Windows via image.zig's VirtualAlloc — each
+extension racing MIR per-program before it takes over.
