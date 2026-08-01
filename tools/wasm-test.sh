@@ -247,6 +247,62 @@ run_case depth_exceeded "func rec(n: Int) -> Int:
 func main():
     print(str(rec(0)))" trap 7
 
+# -- strings ----------------------------------------------------------------
+
+run_case str_build "func tag(n: Int) -> String:
+    return \"[\" + str(n) + \"]\"
+
+func main():
+    var s = \"\"
+    for i in range(0, 6):
+        s = s + tag(i * i)
+    print(s)
+    print(str(len(s)))
+    print(str(s < \"zzz\"))
+    print(str(\"abc\" == \"abc\"))" output
+
+run_case str_slice_bytes "func main():
+    var s = \"hello, world\"
+    print(s[0:5])
+    print(s[7:12])
+    print(str(s.byte_at(0)))
+    print(str(s.find_byte(111, 0)))
+    print(str(len(s[0:0])))" output
+
+run_case str_unicode "func main():
+    var s = chr(72) + chr(128512) + chr(233)
+    print(s)
+    print(str(len(s)))
+    print(str(ord(s)))
+    print(str(ord(chr(233))))" output
+
+run_case str_parse "func main():
+    print(str(parse_int(\"42\") + parse_int(\"-8\")))
+    print(str(parse_int(\"0\")))
+    print(str(parse_int(\"9223372036854775807\")))" output
+
+run_case slice_bounds "func main():
+    var s = \"abc\"
+    print(s[0:9])" trap 11
+
+run_case slice_boundary "func main():
+    var s = chr(233)
+    print(s[0:1])" trap 12
+
+run_case byte_oob "func main():
+    var s = \"ab\"
+    print(str(s.byte_at(5)))" trap 11
+
+run_case ord_empty "func main():
+    var s = \"\"
+    print(str(ord(s)))" trap 22
+
+run_case parse_bad "func main():
+    print(str(parse_int(\"12x\")))" trap 21
+
+run_case parse_overflow "func main():
+    print(str(parse_int(\"9223372036854775808\")))" trap 21
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else

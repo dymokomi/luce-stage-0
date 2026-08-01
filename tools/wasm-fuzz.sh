@@ -24,7 +24,7 @@ traps=0
 seed=1
 while [ "$seed" -le "$count" ]; do
     luc="$work/p$seed.luc"
-    deno run tools/wasm-fuzz.js "$seed" > "$luc"
+    deno run "${GEN:-tools/wasm-fuzz.js}" "$seed" > "$luc"
 
     if ! build/luce build "$luc" -o "$work/p.lc" >/dev/null 2>"$work/c.err"; then
         compile_fail=$((compile_fail + 1))

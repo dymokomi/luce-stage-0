@@ -164,7 +164,7 @@ fn buildWasm(
     var program = (try compilePath(gpa, io, err, path)) orelse return 1;
     defer program.deinit();
     if (!luce.codegen_wasm.supported(&program)) {
-        try err.print("{s}: outside the wasm backend's scalar core (Int/Bool/Float, functions, no strings/heap yet)\n", .{path});
+        try err.print("{s}: outside the wasm backend's core (scalars, strings, and functions; the heap, structs, host effects, and str(Float) are not lowered yet)\n", .{path});
         return 1;
     }
     var arena_state = std.heap.ArenaAllocator.init(gpa);
