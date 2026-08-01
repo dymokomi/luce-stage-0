@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Guiding principle
+
+**Always decide for long-term success. No short-term stopgaps.** When a fix is available in two forms — a quick patch that makes the symptom go away, or the correct change that costs more now — take the correct change. Skipping a test, gating a capability off, hard-coding around a case, or "we'll clean it up later" are debts this codebase does not take on; they hide problems and rot the architecture. If the right fix is genuinely large, say so and scope it rather than papering over it. Cleanliness and organization are load-bearing here: the project is a language and its runtime, and every engine, stage, and tool must stay legible and honest. When in doubt, choose the option a careful maintainer would still be glad of a year from now.
+
 ## Workflow
 
 Single-developer project: commit directly to `main` (no PRs, no feature branches) with git author `Dy Mokomi <dy@dymokomi.com>`.

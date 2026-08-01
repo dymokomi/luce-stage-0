@@ -85,20 +85,6 @@ fn expectSameOutcome(reference: Outcome, candidate: Outcome) !void {
 }
 
 /// Compile, run under every engine, and demand identical outcomes —
-/// Under CPU emulation (an x86-64 image on an arm64 Mac, Docker +
-/// Rosetta — tools/x86-test.sh), the vendored MIR JIT cannot be
-/// hosted: the emulator mistranslates its generated code once many
-/// contexts churn in one process (every program runs correctly
-/// standalone; only the many-contexts test binary trips it — a
-/// Rosetta limitation, not our code).  The harness sets
-/// LOOM_TEST_NO_MIR so the oracle still validates the interpreter
-/// against the self-written backend — the code actually under test on
-/// that platform — and leaves the vendored JIT to real hardware and
-/// CI, where `zig build test` runs all three engines.
-fn skipMir() bool {
-    return std.c.getenv("LOOM_TEST_NO_MIR") != null;
-}
-
 /// the interpreter is the reference, the MIR engine and the zig
 /// backend the candidates.
 fn oracle(source: []const u8, budget: backend.Budget) !void {
@@ -119,15 +105,13 @@ fn oracle(source: []const u8, budget: backend.Budget) !void {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const reference = try runEngine(arena.allocator(), program, budget, .interpreter);
-    if (!skipMir()) {
-        const candidate = try runEngine(arena.allocator(), program, budget, .native);
-        try expectSameOutcome(reference, candidate);
-        if (reference.result == .success) {
-            try testing.expectEqual(
-                reference.result.success.leaked_objects,
-                candidate.result.success.leaked_objects,
-            );
-        }
+    const candidate = try runEngine(arena.allocator(), program, budget, .native);
+    try expectSameOutcome(reference, candidate);
+    if (reference.result == .success) {
+        try testing.expectEqual(
+            reference.result.success.leaked_objects,
+            candidate.result.success.leaked_objects,
+        );
     }
     // The zig backend runs every program it claims support for,
     // identically to the reference.  On aarch64 its gate is the whole
@@ -341,7 +325,6 @@ test "oracle: the call-depth budget traps identically" {
 }
 
 test "the native engine reports a source location on trap" {
-    if (skipMir()) return;
     var result = try compile_mod.compile(testing.allocator,
         \\func boom(n: Int) -> Int:
         \\    return 1 / n
@@ -736,7 +719,6 @@ test "the zig backend agrees with the interpreter on its integer core" {
 }
 
 test "the image is a third engine with identical semantics" {
-    if (skipMir()) return; // maps MIR-generated code
     // The full milestone-5b pipeline — compile, capture, encode,
     // decode, map into fresh executable pages, run with no MIR
     // context — held to the oracle's contract: prints and traps
@@ -815,7 +797,6 @@ test "the image is a third engine with identical semantics" {
 }
 
 test "hermeticity: generated code is byte-identical across contexts" {
-    if (skipMir()) return; // compiles through MIR twice
     // The M1 contract (docs/NATIVE.md milestone 5): the emitted code
     // contains no host address — services, constant descriptors, and
     // Luce function targets are all read from the State address
