@@ -189,28 +189,89 @@ pub const Loaded = struct {
     }
 };
 
-// The write-gate and instruction-cache primitives are platform
-// specific: real externs where they exist, no-op stand-ins
-// elsewhere, chosen at comptime so a Linux/x86 build never emits a
-// reference to a macOS-only symbol (the extern is only *referenced*
-// on the platform that defines it).
-const jit = if (builtin.os.tag == .macos) struct {
+// ---------------------------------------------------------------------------
+// Platform: executable memory
+// ---------------------------------------------------------------------------
+//
+// Everything the OS needs to turn writable bytes into runnable code
+// lives in one comptime-selected namespace, so `map` below is pure
+// orchestration with no platform branch of its own — the same split
+// the code generators use (aarch64 in codegen.zig, x86-64 in
+// codegen_x86.zig).  Each namespace declares its own mmap flags, a
+// write-gate (macOS arms per-thread W^X around the copy; nowhere
+// else), and instruction-cache synchronization (needed on aarch64,
+// a no-op on x86-64's coherent icache).  A platform's externs are
+// declared *inside* its namespace, so a build for another platform
+// never references — nor demands from the linker — a symbol it does
+// not have.  Adding Windows (VirtualAlloc + FlushInstructionCache)
+// is one more prong here and nothing else.
+
+const CodeMemory = switch (builtin.os.tag) {
+    .macos => MacosCodeMemory,
+    .linux => LinuxCodeMemory,
+    else => UnsupportedCodeMemory,
+};
+
+const MacosCodeMemory = struct {
     extern "c" fn pthread_jit_write_protect_np(enabled: c_int) void;
     extern "c" fn pthread_jit_write_protect_supported_np() c_int;
     extern "c" fn sys_icache_invalidate(start: *anyopaque, length: usize) void;
-} else struct {
-    fn pthread_jit_write_protect_np(enabled: c_int) void {
-        _ = enabled;
+
+    const map_flags: std.posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .JIT = true };
+
+    /// Open the per-thread write gate so the JIT pages accept the
+    /// copy; the returned token says whether it was actually opened
+    /// (older kernels lack the gate).
+    fn openWrite() bool {
+        if (pthread_jit_write_protect_supported_np() == 0) return false;
+        pthread_jit_write_protect_np(0);
+        return true;
     }
-    fn pthread_jit_write_protect_supported_np() c_int {
-        return 0;
+
+    fn closeWrite(opened: bool) void {
+        if (opened) pthread_jit_write_protect_np(1);
     }
-    fn sys_icache_invalidate(start: *anyopaque, length: usize) void {
-        _ = start;
-        _ = length;
+
+    fn syncInstructionCache(pages: []u8) void {
+        sys_icache_invalidate(pages.ptr, pages.len);
     }
 };
-extern fn __clear_cache(start: *anyopaque, end: *anyopaque) void;
+
+const LinuxCodeMemory = struct {
+    // aarch64 needs an explicit cache flush after writing code; x86-64
+    // has a coherent instruction cache, so the extern is referenced
+    // only in the branch that needs it.
+    extern fn __clear_cache(start: *anyopaque, end: *anyopaque) void;
+
+    const map_flags: std.posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true };
+
+    fn openWrite() bool {
+        return false;
+    }
+
+    fn closeWrite(opened: bool) void {
+        _ = opened;
+    }
+
+    fn syncInstructionCache(pages: []u8) void {
+        if (builtin.cpu.arch == .aarch64) {
+            __clear_cache(pages.ptr, pages.ptr + pages.len);
+        }
+    }
+};
+
+const UnsupportedCodeMemory = struct {
+    const map_flags: std.posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true };
+    fn openWrite() bool {
+        return false;
+    }
+    fn closeWrite(opened: bool) void {
+        _ = opened;
+    }
+    fn syncInstructionCache(pages: []u8) void {
+        _ = pages;
+    }
+};
 
 pub const MapError = error{Unsupported} || Allocator.Error || std.posix.MMapError;
 
@@ -226,43 +287,31 @@ pub fn map(gpa: Allocator, spans: []const []const u8) MapError!Loaded {
         null,
         mapped_size,
         .{ .READ = true, .WRITE = true, .EXEC = true },
-        map_flags,
+        CodeMemory.map_flags,
         -1,
         0,
     );
     errdefer std.posix.munmap(pages);
     const addresses = try gpa.alloc(*const anyopaque, spans.len);
 
-    const jit_write_gate = builtin.os.tag == .macos and
-        jit.pthread_jit_write_protect_supported_np() != 0;
-    var write_gate_open = false;
-    if (jit_write_gate) {
-        jit.pthread_jit_write_protect_np(0);
-        write_gate_open = true;
-    }
-    defer if (write_gate_open) jit.pthread_jit_write_protect_np(1);
+    // Copy behind the write gate, then re-arm it and make the new
+    // bytes visible to the instruction fetcher — all through the
+    // platform namespace, so this body names no OS or ISA.  The
+    // errdefer re-arms only if the copy fails before the explicit
+    // close below; on success the gate closes exactly once.
+    var gate_open = CodeMemory.openWrite();
+    errdefer CodeMemory.closeWrite(gate_open);
     var at: usize = 0;
     for (spans, addresses) |span, *address| {
         @memcpy(pages[at..][0..span.len], span);
         address.* = @ptrCast(&pages[at]);
         at += try alignForwardChecked(span.len, 16);
     }
-    if (builtin.os.tag == .macos) {
-        if (write_gate_open) {
-            jit.pthread_jit_write_protect_np(1);
-            write_gate_open = false;
-        }
-        jit.sys_icache_invalidate(pages.ptr, pages.len);
-    } else if (builtin.cpu.arch == .aarch64) {
-        __clear_cache(pages.ptr, pages.ptr + pages.len);
-    }
+    CodeMemory.closeWrite(gate_open);
+    gate_open = false;
+    CodeMemory.syncInstructionCache(pages);
     return .{ .pages = pages, .addresses = addresses };
 }
-
-const map_flags: std.posix.MAP = if (builtin.os.tag == .macos)
-    .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .JIT = true }
-else
-    .{ .TYPE = .PRIVATE, .ANONYMOUS = true };
 
 // ---------------------------------------------------------------------------
 // Tests

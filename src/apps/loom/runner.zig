@@ -7,7 +7,6 @@
 //! and the screen is restored before any trap is reported.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const luce = @import("luce");
 const files = @import("files");
 const host_mod = @import("host.zig");
@@ -54,7 +53,11 @@ fn selectEngine(policy: Engine, zig_ok: bool, mir_ok: bool) SelectedEngine {
         .interpreter => .interpreter,
         .zig => if (zig_ok) .zig else .unavailable,
         .mir => if (mir_ok) .mir else .unavailable,
-        .auto => if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos and zig_ok)
+        // The self-written backend is the default only where it says
+        // it is mature enough (codegen.mature_default); elsewhere auto
+        // prefers MIR.  The ladder holds no arch/OS knowledge of its
+        // own — that lives in the backend it selects.
+        .auto => if (luce.codegen.mature_default and zig_ok)
             .zig
         else if (mir_ok)
             .mir
@@ -451,10 +454,7 @@ test "engine policy is strict when forced and auto follows the platform ladder" 
     try std.testing.expectEqual(SelectedEngine.mir, selectEngine(.mir, true, true));
     try std.testing.expectEqual(SelectedEngine.unavailable, selectEngine(.mir, true, false));
 
-    const auto_with_both: SelectedEngine = if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos)
-        .zig
-    else
-        .mir;
+    const auto_with_both: SelectedEngine = if (luce.codegen.mature_default) .zig else .mir;
     try std.testing.expectEqual(auto_with_both, selectEngine(.auto, true, true));
     try std.testing.expectEqual(SelectedEngine.mir, selectEngine(.auto, false, true));
     try std.testing.expectEqual(SelectedEngine.interpreter, selectEngine(.auto, false, false));

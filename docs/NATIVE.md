@@ -279,6 +279,41 @@ next step, transferring the aarch64 M2 arm by arm.
 Targets: aarch64 macOS/Linux and x86-64 Linux now, Windows when
 image.zig grows VirtualAlloc.
 
+## Where platform and ISA code is allowed to live
+
+Machine-specific knowledge is confined to four places, and nowhere
+else names an OS tag or an instruction encoding:
+
+- **ISA (instruction encoding, registers, ABI-in-registers)** lives
+  only in the code generators — `codegen.zig` (aarch64) and
+  `codegen_x86.zig` (x86-64).  `codegen.zig` dispatches to the x86
+  twin by arch; neither file's emitter body references the other's
+  ISA.  Each declares its own `available`, `supported`, and
+  `mature_default` (whether it is complete enough to be loom's
+  default engine here — aarch64 yes, x86-64 not until milestone 2).
+- **OS (executable memory: mmap flags, the W^X write gate,
+  instruction-cache sync)** lives only in `image.zig`, behind a
+  comptime-selected `CodeMemory` namespace (`MacosCodeMemory` /
+  `LinuxCodeMemory` / an unsupported stub).  A platform's externs are
+  declared *inside* its namespace, so a build for another platform
+  never references — nor demands from the linker — a symbol it has
+  not got.  `map()` itself names no OS or ISA; adding Windows is one
+  more prong there.
+- **Filesystem OS differences** (POSIX permissions, symlink
+  privileges) live in `src/apps/files.zig`; **terminal control**
+  (termios, raw mode, window size) in `src/apps/loom/host.zig`.  Both
+  are the app layer owning its own host boundary.
+
+Everything else — the language pipeline, `native.zig`'s runtime and
+`abi` contract, the runner's engine ladder — is target-neutral.
+`native.zig` knows an arch/OS tag in exactly two spots, both its
+own concern: the MIR engine's `available` gate and the image
+`fingerprint` (which must include the target so images never
+cross-load).  The runner asks `codegen.mature_default` rather than
+testing arch itself.  The rule for new code: if a file that is not
+one of the four above needs a `builtin.os.tag` or `builtin.cpu.arch`
+branch, the concern belongs behind one of them instead.
+
 ## Where a wall would send us
 
 The engine seam is the contract: everything above it (`backend.zig`

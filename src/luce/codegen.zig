@@ -52,6 +52,16 @@ const AddressTable = native.AddressTable;
 pub const available = (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64) and image.supported;
 const on_x86 = builtin.cpu.arch == .x86_64;
 
+/// Whether the self-written backend is complete and proven enough on
+/// this target to be loom's *default* engine (LOOM_ENGINE=auto),
+/// rather than the opt-in racer.  aarch64 carries the whole language
+/// (milestone 2); x86-64 is still the scalar-core milestone 1, so it
+/// stays opt-in and auto keeps MIR there.  The runner asks this
+/// instead of hardcoding targets — backend maturity is the backend's
+/// own concern, not the ladder's.
+pub const mature_default = available and
+    builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
+
 /// Arguments travel in registers only: x1-x7 for values, d0-d7 for
 /// floats.  Wider signatures fall back to MIR (which speaks the full
 /// C ABI) through the runner's engine ladder.
