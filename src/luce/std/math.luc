@@ -30,18 +30,18 @@ func exp(x: Float) -> Float:
     let k = Int(floor(x / ln2 + 0.5))
     let r = x - Float(k) * ln2
     var term = 1.0
-    var sum = 1.0
+    var total = 1.0
     for i in range(1, 15):
         term *= r / Float(i)
-        sum += term
-    var scale = 1.0
+        total += term
+    var factor = 1.0
     if k >= 0:
         for i in range(0, k):
-            scale *= 2.0
+            factor *= 2.0
     else:
         for i in range(0, 0 - k):
-            scale *= 0.5
-    return sum * scale
+            factor *= 0.5
+    return total * factor
 
 # Natural logarithm.  Non-positive input is a bug, not a value: trap.
 func ln(x: Float) -> Float:
@@ -60,11 +60,11 @@ func ln(x: Float) -> Float:
     let t = (m - 1.0) / (m + 1.0)
     let t2 = t * t
     var term = t
-    var sum = t
+    var total = t
     for i in range(1, 14):
         term *= t2
-        sum += term / Float(2 * i + 1)
-    return 2.0 * sum + Float(k) * ln2
+        total += term / Float(2 * i + 1)
+    return 2.0 * total + Float(k) * ln2
 
 func log2(x: Float) -> Float:
     return ln(x) / ln2
@@ -114,11 +114,11 @@ func sin(x: Float) -> Float:
     if r > pi:
         r -= tau
     var term = r
-    var sum = r
+    var total = r
     for i in range(1, 11):
         term *= (0.0 - r * r) / Float((2 * i) * (2 * i + 1))
-        sum += term
-    return sum
+        total += term
+    return total
 
 func cos(x: Float) -> Float:
     return sin(x + pi / 2.0)
@@ -127,6 +127,86 @@ func cos(x: Float) -> Float:
 # result is a large float, as IEEE division dictates.
 func tan(x: Float) -> Float:
     return sin(x) / cos(x)
+
+# -- vectors and statistics --------------------------------------------
+#
+# Whole-array operations over Array(Float, _), the numeric vector
+# type.  Sums accumulate left to right — the same order both engines
+# and the C benchmark twins use, so results are bit-reproducible.
+# Empty arrays: sum is 0.0; the operations that have no empty answer
+# (mean, vmin, vmax, variance) trap.
+
+func sum(xs: Array(Float, _)) -> Float:
+    var total = 0.0
+    for i in range(0, len(xs)):
+        total += xs[i]
+    return total
+
+func mean(xs: Array(Float, _)) -> Float:
+    if len(xs) == 0:
+        trap("mean of an empty array")
+    return sum(xs) / Float(len(xs))
+
+func vmin(xs: Array(Float, _)) -> Float:
+    if len(xs) == 0:
+        trap("vmin of an empty array")
+    var smallest = xs[0]
+    for i in range(1, len(xs)):
+        smallest = min(smallest, xs[i])
+    return smallest
+
+func vmax(xs: Array(Float, _)) -> Float:
+    if len(xs) == 0:
+        trap("vmax of an empty array")
+    var largest = xs[0]
+    for i in range(1, len(xs)):
+        largest = max(largest, xs[i])
+    return largest
+
+# The dot product; lengths must agree.
+func dot(xs: Array(Float, _), ys: Array(Float, _)) -> Float:
+    if len(xs) != len(ys):
+        trap("dot needs arrays of one length")
+    var total = 0.0
+    for i in range(0, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+# The Euclidean norm.
+func norm(xs: Array(Float, _)) -> Float:
+    return sqrt(dot(xs, xs))
+
+# Population variance (mean of squared deviations) and its root.
+func variance(xs: Array(Float, _)) -> Float:
+    if len(xs) == 0:
+        trap("variance of an empty array")
+    let center = mean(xs)
+    var total = 0.0
+    for i in range(0, len(xs)):
+        let d = xs[i] - center
+        total += d * d
+    return total / Float(len(xs))
+
+func stddev(xs: Array(Float, _)) -> Float:
+    return sqrt(variance(xs))
+
+# xs[i] = value for every element — a typed fill.
+func fill(xs: Array(Float, _), value: Float):
+    for i in range(0, len(xs)):
+        xs[i] = value
+
+# xs[i] *= factor for every element.
+func scale(xs: Array(Float, _), factor: Float):
+    for i in range(0, len(xs)):
+        xs[i] *= factor
+
+# xs[i] += factor * ys[i] — the BLAS axpy, the shape most numeric
+# loops reduce to.
+func axpy(xs: Array(Float, _), factor: Float, ys: Array(Float, _)):
+    if len(xs) != len(ys):
+        trap("axpy needs arrays of one length")
+    for i in range(0, len(xs)):
+        xs[i] += factor * ys[i]
 
 # -- randomness --------------------------------------------------------
 #

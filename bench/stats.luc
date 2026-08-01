@@ -1,0 +1,25 @@
+# Vector statistics through std math — sum, extrema, dot, norm,
+# variance over two million-element Float arrays.  Every reduction
+# accumulates left to right, exactly as the C twin does, so results
+# are bit-identical; sqrt is IEEE-exact on both sides.  This is the
+# std-is-written-in-Luce bet measured on numeric code, and a second
+# SIMD datapoint: C vectorizes every one of these loops.  The C twin
+# is bench/stats.c.
+
+import math
+
+func main():
+    let n = 2000000
+    var a = new Array(Float, n)
+    var b = new Array(Float, n)
+    for i in range(0, n):
+        a[i] = Float((i * 7) % 32) * 0.25
+        b[i] = Float((i * 13) % 32) * 0.25
+    var checksum = 0.0
+    for r in range(0, 6):
+        checksum += math.dot(a, b)
+        checksum += math.variance(a)
+        checksum += math.norm(b)
+    let low = Int(math.vmin(b) * 4.0)
+    let high = Int(math.vmax(b) * 4.0)
+    print(f"{Int(math.sum(a))} {low} {high} {Int(checksum)}")

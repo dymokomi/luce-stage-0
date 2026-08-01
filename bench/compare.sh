@@ -33,7 +33,7 @@ echo "building base ($ref)..."
 echo "building working tree..."
 zig build --prefix build -Doptimize=ReleaseSafe >/dev/null 2>&1
 
-names="loops math strings arrays"
+names="loops math strings arrays matmul stats"
 mkdir -p build/bench "$base/build/bench"
 for name in $names; do
     build/luce build "bench/$name.luc" -o "build/bench/$name.lc" --release >/dev/null

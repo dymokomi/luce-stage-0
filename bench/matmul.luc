@@ -1,0 +1,25 @@
+# Dense matrix multiply, the linear-algebra workload a C compiler
+# turns into packed SIMD: n x n floats over rank-1 arrays with
+# manual row indexing (rank-1 keeps the Luce side on inline view
+# access), ikj loop order so the innermost loop walks both C and B
+# rows contiguously — the same order the C twin vectorizes.  Values
+# are quarter-integers, so every product and sum is exact and the
+# checksum compares exactly.  The C twin is bench/matmul.c.
+
+func main():
+    let n = 400
+    var a = new Array(Float, n * n)
+    var b = new Array(Float, n * n)
+    var c = new Array(Float, n * n)
+    for i in range(0, n * n):
+        a[i] = Float((i * 7) % 16) * 0.25
+        b[i] = Float((i * 13) % 16) * 0.25
+    for i in range(0, n):
+        for k in range(0, n):
+            let pivot = a[i * n + k]
+            for j in range(0, n):
+                c[i * n + j] += pivot * b[k * n + j]
+    var checksum = 0.0
+    for i in range(0, n * n):
+        checksum += c[i]
+    print(str(Int(checksum)))

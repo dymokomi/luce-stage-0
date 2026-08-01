@@ -47,6 +47,26 @@ math.ipow(base, n)     # Int power by squaring; checked (overflow
 math.sin(x)  math.cos(x)  math.tan(x)  # radians, any magnitude
 ```
 
+### Vectors and statistics
+
+Whole-array operations over `Array(Float, _)`, the numeric vector
+type — the numpy-shaped tranche.  Reductions accumulate left to
+right (bit-reproducible across engines and against the benchmark C
+twins); operations with no empty answer trap on empty arrays, and
+shape mismatches trap.
+
+```luce
+import math
+
+math.sum(xs)            math.mean(xs)
+math.vmin(xs)           math.vmax(xs)      # extrema (min/max are
+                                           # the scalar builtins)
+math.dot(xs, ys)        math.norm(xs)      # Euclidean
+math.variance(xs)       math.stddev(xs)    # population
+math.fill(xs, value)    math.scale(xs, factor)
+math.axpy(xs, factor, ys)                  # xs[i] += factor * ys[i]
+```
+
 **Randomness** is a Lehmer/MINSTD generator whose state lives in a
 `List(Int)` the caller owns — mutation through a borrow is ordinary
 Luce, so there are no hidden globals and every stream is

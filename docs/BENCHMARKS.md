@@ -31,6 +31,18 @@ timings include process startup; best of three.
   product.  The workload a C compiler vectorizes (SIMD); the
   interpreter runs it scalar, and the ratio is the honest measure of
   that gap.
+- **matmul** — a 400x400 dense Float matrix multiply over rank-1
+  arrays with manual row indexing, ikj order.  The classic
+  linear-algebra kernel: C turns the inner loop into packed SIMD,
+  and at ~10x this is the widest honest vectorization gap in the
+  suite — the datapoint the whole-array-intrinsics / SIMD decision
+  keeps score against.
+- **stats** — sum, extrema, dot, norm, variance over two
+  2M-element Float arrays, all through `std math`'s vector
+  operations.  Reductions C vectorizes; on the Luce side this is
+  the std-is-written-in-Luce bet measured on numeric code.  Every
+  accumulation is left-to-right on both sides and sqrt is
+  IEEE-exact, so the outputs compare exactly.
 
 ## The interpreter's own build mode matters most
 

@@ -24,7 +24,7 @@ if [ ! -x build/luce ] || [ ! -x build/loom ]; then
 fi
 mkdir -p build/bench
 
-names="loops math strings arrays"
+names="loops math strings arrays matmul stats"
 
 # -ffp-contract=off: Luce's determinism guarantee is strict IEEE
 # (no fused multiply-add), so C plays by the same float rules —
