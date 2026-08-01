@@ -4,3 +4,4 @@
 /zig-out/
 .bench-base/
 *.lci
+core
