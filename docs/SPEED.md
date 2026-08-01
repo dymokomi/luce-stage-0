@@ -757,3 +757,54 @@ checks — MIR's GVN carries them across iterations, this backend
 re-checks per access.  Recorded as the next optimization frontier
 rather than patched around: it is the same loop analysis that
 vectorization will need.
+
+## 19. Closing the array gap: coverage, then redundant checks
+
+Two gaps stood between the Zig backend and retiring MIR, and both are
+now measured and mostly closed.
+
+**Coverage (gap 1).**  The backend passed arguments in registers
+only, so a function wider than the argument registers fell back to
+MIR.  Both backends now spill the overflow to the stack per the
+platform ABI (a shared `argPlacements` keeps caller and callee in
+agreement), so the gate is exactly `native.supported()`: everything
+MIR runs on this platform, wide signatures included.  A wide-argument
+oracle program — value and float args past the registers, a struct
+argument, recursion — runs identically on all engines.
+
+**The array gap (gap 2), measured before touched.**  The honest
+first move was to attribute it: stubbing the per-access null/alive
+check recovered the bulk of it, and `math` (a float loop, no arrays)
+was already at parity — so the gap was array-specific and it was the
+*check*, not the bounds math.  The view is null-checked, then its
+alive flag is fetched through a pointer and checked, every iteration;
+the dependent load stalls more than its four instructions suggest.
+
+MIR proves those checks redundant and drops them.  To match, a new IR
+analysis (`loops.zig`, tested on hand-built CFGs): dominators, natural
+loops, and `hoistableArrays` — array locals whose null/alive check is
+*provably* redundant, so dropping it is sound rather than speculative.
+The conditions: a single `new Array(...)` definition (never null, born
+alive) that dominates every use, indexed at least once, never freed or
+given away.  A freed or conditionally-defined array is excluded, and
+the three-engine oracle proves every array program still agrees.
+
+Result (arm, zig vs MIR): **arrays 1.37x → 1.04x — parity** — and
+matmul 1.19x, validated green on real x86-64.  The full table:
+
+| bench | zig/MIR |
+|---|---|
+| loops | 1.03 |
+| strings | 1.02 |
+| math | 1.05 |
+| arrays | **1.04** |
+| matmul | 1.19 |
+
+What is left is matmul's residue: the loop-invariant view *fields*
+(the element pointer and length, still reloaded per access) and the
+recomputed index arithmetic (`i*n+j`).  Both want register-budgeted
+loop-invariant hoisting and strength reduction — the same loop
+analysis just built, now feeding the vectorization milestone rather
+than a separate detour.  With arrays at parity and matmul within
+~1.2x, MIR's remaining edge is one workload class, and it is a
+codegen-quality gap, not a coverage one.
