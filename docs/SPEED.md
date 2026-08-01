@@ -617,3 +617,59 @@ whole JIT cost), the do-nothing floor 2.0 → 1.6ms;
 the rest in noise.  The remaining floor is process startup, `.lc`
 decode + verify, the text hash, and the page map — the same shape
 of fixed cost any executable pays its loader.
+
+---
+
+## 16. The Zig backend: absorb MIR's knowledge, not its code
+
+With the compile stage out of the runtime, the question became
+whether to *absorb* MIR — port its ~40k lines to Zig as the base of
+the self-written backend — or write the backend fresh.  Decided:
+**fresh, with MIR kept as the racing baseline and strip-mined as a
+reference.**  The reasons, recorded:
+
+- Of the 40k vendored lines, ~12.6k are flatly unused (four other
+  architectures, MIR's interpreter), and much of the rest exists to
+  compile C-shaped programs — varargs, long double, alloca,
+  aggregates, C-ABI marshaling — none of which Luce can express.  A
+  port spends months faithfully translating generality the language
+  cannot reach, and inherits a second IR forever, against §8's own
+  no-new-IL rule.
+- A port has no intermediate value and no oracle: it is only done
+  when all of it is done, and different codegen means the
+  byte-comparison oracle cannot vouch for it — only the behavior
+  oracle can, which applies equally to a fresh backend.
+- Milestones 5a/5b quietly built the fresh backend's runway: every
+  call goes through the State table, so the backend owns its entire
+  internal calling convention (the only ABI edges are 18 service
+  signatures and the entry); the image format is spans + table with
+  no relocations, so a new backend emits into it directly; and we
+  *measured* that MIR's link-time inlining contributes nothing here
+  (±1% when M1 removed it) — the part of MIR worth having is its
+  register allocator and instruction selection, which are exactly
+  the parts best re-derived for a smaller problem.
+- Luce IR makes the problem smaller by construction: registers
+  never cross blocks (only locals do), so register allocation
+  decomposes into block-local temporaries plus pinning hot locals —
+  a fraction of general live-range allocation.
+
+**M0 shipped the same day** (`codegen.zig`, opt-in via
+LOOM_ENGINE=zig): aarch64 (macOS and Linux — the encoder is
+OS-blind; image.map does the OS work), single-function programs,
+Int/Bool/String values, the full checked-arithmetic trap semantics,
+control flow, and print/str/assert/trap.  It emits hermetic spans
+against `native.abi` and runs through the same image.map + runCode
+machinery as a cached image — one seam, four ways to fill it.  The
+three-way oracle in native_spec holds it to interpreter-identical
+prints, trap codes, and messages across a ten-program corpus of
+every trap and formatting path in its core.
+
+First numbers, every value in a stack slot and no register
+allocation at all: the loops bench at **8.2x C — 13x faster than
+the interpreter** — inside the 5-10x band §8 predicted for exactly
+this stage.  Target roster from here: register allocation and the
+rest of the language on aarch64, then x86-64 for Linux, then
+Windows once image.zig grows VirtualAlloc.  MIR stays the default
+and the ratchet: the Zig backend becomes the default per-program
+when it wins `bench/compare.sh`, and sovereignty — deleting
+vendor/mir and the libc link — comes when it wins everywhere.

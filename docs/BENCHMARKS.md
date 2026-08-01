@@ -182,13 +182,17 @@ MIR experiment said it would.  What remains, in value order:
    numbers the way C's did: by not happening at run time.  The
    tables above are warm-cache numbers by construction (best-of-N
    timing; the first round writes the image).
-4. **`List.append` on the generic path** — what `split` is actually
-   bounded by now; element adoption is ownership, so a fast service
-   has to carry that.
-4. **The self-written Zig backend** — grows unhurried behind the
-   same seam, racing MIR under the same oracle and this table;
-   sovereignty when it wins.
-5. **SIMD / the last 2x** — MIR does not vectorize; `arrays` will
+4. ~~**`List.append` on the generic path**~~ — shipped: value-typed
+   elements (scalars, String) adopt nothing, so they take a direct
+   service like the Builder's; strings read −12.2% on the A/B.
+   Object-element lists keep the generic path (ownership).
+5. **The self-written Zig backend** — M0 shipped (`codegen.zig`,
+   LOOM_ENGINE=zig): aarch64, single-function integer core, every
+   trap identical, ~8x C with every value in a stack slot and no
+   register allocation yet.  Next: register allocation, the rest of
+   the language, x86-64 Linux, then Windows; it becomes the default
+   per-program when it wins this table (docs/SPEED.md §16).
+6. **SIMD / the last 2x** — MIR does not vectorize; `arrays` will
    plateau a few x above C until an LLVM-backed engine is ever
    judged worth its 200MB.  Whole-array std intrinsics (dot, fill)
    are the cheap VEX-style alternative when a real program wants

@@ -37,6 +37,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     const editor_override = environ_map.get("LOOM_EDITOR");
     if (environ_map.get("LOOM_ENGINE")) |wanted| {
         if (std.mem.eql(u8, wanted, "interpreter")) runner.engine = .interpreter;
+        if (std.mem.eql(u8, wanted, "zig")) runner.engine = .zig;
     }
     if (environ_map.get("LOOM_IMAGE")) |wanted| {
         if (std.mem.eql(u8, wanted, "off")) runner.image = .off;

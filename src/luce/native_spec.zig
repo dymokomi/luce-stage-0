@@ -12,6 +12,7 @@ const backend = @import("backend.zig");
 const interpreter = @import("interpreter.zig");
 const native = @import("native.zig");
 const image = @import("image.zig");
+const codegen = @import("codegen.zig");
 
 const testing = std.testing;
 
@@ -504,6 +505,120 @@ test "oracle: the std math module runs natively" {
         \\    print(str(min(3, 7) + max(3, 7) + clamp(10, 0, 5)))
         \\
     , roomy);
+}
+
+test "the zig backend agrees with the interpreter on its integer core" {
+    // The self-written backend (codegen.zig, docs/SPEED.md §16) held
+    // to the same contract as every other engine: identical prints,
+    // trap codes, and messages, through the real pipeline — emit,
+    // map into executable pages, run with native.runCode.  The
+    // corpus walks the whole M0 surface: nested loops, every checked
+    // arithmetic trap, comparisons, branches, negation, not,
+    // literals, assert, trap messages, and str(Int) formatting.
+    if (!codegen.available) return;
+    const sources = [_][]const u8{
+        \\func main():
+        \\    var total = 0
+        \\    for i in range(0, 40):
+        \\        for j in range(0, 40):
+        \\            total += (i * j) % 7 - i / 3
+        \\    print(str(total))
+        \\    print(str(-total))
+        \\    print(str(total == 1867))
+        \\
+        ,
+        \\func main():
+        \\    var a = 9223372036854775807
+        \\    var b = a
+        \\    print(str(a + b))
+        \\
+        ,
+        \\func main():
+        \\    var z = 0
+        \\    print(str(10 / z))
+        \\
+        ,
+        \\func main():
+        \\    var z = 0
+        \\    print(str(10 % z))
+        \\
+        ,
+        \\func main():
+        \\    var lowest = -9223372036854775807 - 1
+        \\    var minus = 1 - 2
+        \\    print(str(lowest / minus))
+        \\
+        ,
+        \\func main():
+        \\    var lowest = -9223372036854775807 - 1
+        \\    print(str(-lowest))
+        \\
+        ,
+        \\func main():
+        \\    var lowest = -9223372036854775807 - 1
+        \\    var seven = 7
+        \\    print(str(lowest / seven))
+        \\    print(str(lowest % seven))
+        \\    print(str(0 - 3 % 2))
+        \\
+        ,
+        \\func main():
+        \\    var flag = 5 > 3
+        \\    if not flag:
+        \\        print("wrong")
+        \\    else:
+        \\        print("right")
+        \\    var n = 1
+        \\    while n < 1000:
+        \\        n = n * 3
+        \\    print(str(n))
+        \\
+        ,
+        \\func main():
+        \\    var answer = 41
+        \\    assert(answer == 42)
+        \\
+        ,
+        \\func main():
+        \\    print("before")
+        \\    trap("torn seam")
+        \\
+    };
+    for (sources) |source| {
+        var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+        defer result.deinit();
+        try testing.expect(result == .success);
+        const program = &result.success;
+        try testing.expect(codegen.supported(program));
+
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const reference = try runEngine(arena.allocator(), program, roomy, .interpreter);
+
+        const spans = try codegen.compile(arena.allocator(), program);
+        var loaded = try image.map(testing.allocator, spans);
+        defer loaded.deinit(testing.allocator);
+        var capture: Capture = .{ .arena = arena.allocator() };
+        const outputs = try arena.allocator().alloc(?backend.RuntimeValue, 0);
+        const candidate = try native.runCode(
+            arena.allocator(),
+            program,
+            loaded.addresses,
+            &.{},
+            outputs,
+            roomy,
+            capture.host(),
+        );
+        try testing.expectEqualStrings(reference.printed, capture.lines.items);
+        try testing.expectEqual(
+            std.meta.activeTag(reference.result),
+            std.meta.activeTag(candidate),
+        );
+        if (reference.result == .trap) {
+            try testing.expectEqual(reference.result.trap.code, candidate.trap.code);
+            try testing.expectEqualStrings(reference.result.trap.message, candidate.trap.message);
+        }
+    }
 }
 
 test "the image is a third engine with identical semantics" {

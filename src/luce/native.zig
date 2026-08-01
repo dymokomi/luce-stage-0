@@ -293,6 +293,32 @@ const AddressTable = struct {
     }
 };
 
+/// The contract between the State and any code generator — this
+/// file's MIR lowering and the self-written backend (codegen.zig):
+/// the State word offsets and the address-table layout.  The
+/// comptime asserts above tie the numbers to the real structs; a
+/// second backend emitting against this namespace stays honest by
+/// construction and runs through the same runCode/image machinery.
+pub const abi = struct {
+    pub const trap_offset: u64 = 0;
+    pub const trap_function_offset: u64 = 8;
+    pub const trap_instruction_offset: u64 = 16;
+    pub const depth_offset: u64 = 24;
+    pub const slots_offset: u64 = State.slots_offset;
+
+    pub fn serviceOffset(name: []const u8) u64 {
+        return AddressTable.service(name);
+    }
+
+    pub fn constantOffset(index: usize) u64 {
+        return AddressTable.constant(index);
+    }
+
+    pub fn trap(code: ir.TrapCode) i64 {
+        return trapWord(code);
+    }
+};
+
 /// Scalar arrays of any rank use the view representation.
 fn viewable(program: *const ir.Program, heap_index: u32) bool {
     return switch (program.heap_types[heap_index]) {

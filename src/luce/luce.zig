@@ -23,6 +23,7 @@ pub const backend = @import("backend.zig");
 pub const interpreter = @import("interpreter.zig");
 pub const native = @import("native.zig");
 pub const image = @import("image.zig");
+pub const codegen = @import("codegen.zig");
 pub const native_spec = @import("native_spec.zig");
 pub const ownership_spec = @import("ownership_spec.zig");
 pub const behavior_spec = @import("behavior_spec.zig");
@@ -46,6 +47,7 @@ test {
     _ = interpreter;
     _ = native;
     _ = image;
+    _ = codegen;
     _ = native_spec;
     _ = ownership_spec;
     _ = behavior_spec;

@@ -32,7 +32,7 @@ const max_printed_frames = 12;
 /// `auto` picks native when the program fits, `interpreter` forces
 /// the reference engine (semantics are identical; this is for
 /// debugging and benchmarking the engines against each other).
-pub const Engine = enum { auto, interpreter };
+pub const Engine = enum { auto, interpreter, zig };
 pub var engine: Engine = .auto;
 
 /// Process-wide image policy, set once at startup from LOOM_IMAGE:
@@ -185,6 +185,26 @@ fn runNative(
     return compiled.run(arena, program, inputs, outputs, program_budget, host);
 }
 
+/// The self-written backend's path: emit, map, run — the exact
+/// pipeline a cached image takes, so it shares every downstream
+/// piece with the other engines.
+fn runZig(
+    gpa: Allocator,
+    arena: Allocator,
+    program: *const luce.ir.Program,
+    inputs: []const luce.backend.InputValue,
+    outputs: []?luce.backend.RuntimeValue,
+    host: ?luce.backend.Host,
+) !luce.backend.Result {
+    const spans = try luce.codegen.compile(arena, program);
+    var loaded = luce.image.map(gpa, spans) catch |mistake| switch (mistake) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.NativeFailed,
+    };
+    defer loaded.deinit(gpa);
+    return luce.native.runCode(arena, program, loaded.addresses, inputs, outputs, program_budget, host);
+}
+
 /// FILE.lc gets FILE.lci beside it; anything else gets .lci appended.
 fn imagePath(arena: Allocator, module_path: []const u8) error{OutOfMemory}![]const u8 {
     if (std.mem.endsWith(u8, module_path, ".lc")) {
@@ -218,10 +238,28 @@ pub fn run(
     // Engine choice: native (MIR-compiled at load) whenever the whole
     // program fits its supported core, the interpreter otherwise —
     // identical semantics either way.
+    // LOOM_ENGINE=zig opts into the self-written backend where its
+    // core covers the program (codegen.zig; falls back to the
+    // interpreter beyond it) — the racing seam, not yet the default.
+    const use_zig = engine == .zig and
+        luce.codegen.available and
+        luce.codegen.supported(program);
     const use_native = engine == .auto and
         luce.native.available and
         luce.native.supported(program);
-    const result = if (use_native)
+    const result = if (use_zig)
+        runZig(gpa, arena.allocator(), program, inputs, outputs, services.host()) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NativeFailed => try luce.backend.evaluateHosted(
+                arena.allocator(),
+                program,
+                inputs,
+                outputs,
+                program_budget,
+                services.host(),
+            ),
+        }
+    else if (use_native)
         runNative(gpa, io, arena.allocator(), program, artifact, inputs, outputs, services.host()) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
             // A native-compile failure is a loom bug; the program
