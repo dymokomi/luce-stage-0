@@ -102,8 +102,14 @@ const Location = union(enum) {
 
 // General registers (SysV): callee-saved rbx(3), r12(12) pin locals;
 // r13(13) is the call target; r14(14)=serial, r15(15)=State.  The
-// value scratch pool is caller-saved r10,r11; rax,rdx are transient.
-const scratch_pool = [_]u4{ 10, 11 };
+// value scratch pool is caller-saved r8-r11; rax,rdx are transient.
+// Four registers, matching the aarch64 backend: a binary op can lock
+// both operands (mid-use) and still need a distinct destination when
+// neither dies, so a two-register pool exhausts (bf hit exactly
+// that).  r8/r9 double as the 5th/6th SysV argument registers, but
+// spillForCall stores the whole pool to slots before any argument
+// marshaling, so they never collide with a call.
+const scratch_pool = [_]u4{ 10, 11, 8, 9 };
 const float_pool = [_]u4{ 0, 1, 2, 3 }; // xmm0-xmm3
 const pinned_pool = [_]u4{ 3, 12 };
 // No XMM is callee-saved on SysV, so a float local can only pin when
