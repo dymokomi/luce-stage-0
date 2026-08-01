@@ -187,7 +187,7 @@ const ArrayView = extern struct {
 /// Where a RuntimeValue keeps each scalar payload — measured at run
 /// time (the union's layout is the compiler's business), embedded as
 /// constants in the emitted text.
-const Payloads = struct {
+pub const Payloads = struct {
     int: u64,
     float: u64,
     boolean: u64,
@@ -213,7 +213,7 @@ const value_stride: u64 = @sizeOf(RuntimeValue);
 /// address_table_offset).  The lowering computes offsets and never
 /// addresses: hermeticity by construction — the emitted text cannot
 /// embed a host address it never sees.  run() fills the entries.
-const AddressTable = struct {
+pub const AddressTable = struct {
     constant_count: usize,
     function_count: usize,
     /// Every distinct float constant in the program, as raw bits, in
@@ -227,7 +227,7 @@ const AddressTable = struct {
 
     /// The same deterministic walk builds the table for lowering and
     /// fills it at run time.
-    fn collect(arena: Allocator, program: *const ir.Program) error{OutOfMemory}!AddressTable {
+    pub fn collect(arena: Allocator, program: *const ir.Program) error{OutOfMemory}!AddressTable {
         var floats: std.ArrayList(u64) = .empty;
         for (program.functions) |*each| {
             for (each.instructions) |instruction| {
@@ -257,14 +257,14 @@ const AddressTable = struct {
         };
     }
 
-    fn floatOffset(self: AddressTable, value: f64) u64 {
+    pub fn floatOffset(self: AddressTable, value: f64) u64 {
         const bits: u64 = @bitCast(value);
         const index = std.mem.indexOfScalar(u64, self.floats, bits).?;
         return State.address_table_offset +
             8 * @as(u64, @intCast(services.len + self.constant_count + 1 + self.function_count + index));
     }
 
-    fn service(name: []const u8) u64 {
+    pub fn service(name: []const u8) u64 {
         for (services, 0..) |entry, index| {
             if (std.mem.eql(u8, entry.name, name)) {
                 return State.address_table_offset + 8 * @as(u64, @intCast(index));
@@ -275,20 +275,20 @@ const AddressTable = struct {
 
     /// Constant descriptor `index`; index constant_count is the
     /// trailing "" descriptor, the String zero value.
-    fn constant(index: usize) u64 {
+    pub fn constant(index: usize) u64 {
         return State.address_table_offset + 8 * @as(u64, @intCast(services.len + index));
     }
 
-    fn emptyString(self: AddressTable) u64 {
+    pub fn emptyString(self: AddressTable) u64 {
         return constant(self.constant_count);
     }
 
-    fn function(self: AddressTable, index: usize) u64 {
+    pub fn function(self: AddressTable, index: usize) u64 {
         return State.address_table_offset +
             8 * @as(u64, @intCast(services.len + self.constant_count + 1 + index));
     }
 
-    fn entryCount(self: AddressTable) usize {
+    pub fn entryCount(self: AddressTable) usize {
         return services.len + self.constant_count + 1 + self.function_count + self.floats.len;
     }
 };
@@ -316,6 +316,25 @@ pub const abi = struct {
 
     pub fn trap(code: ir.TrapCode) i64 {
         return trapWord(code);
+    }
+
+    /// Objects reachable through a value of this type — what decides
+    /// return-value loosening (S16).
+    pub fn objectCarrying(program: *const ir.Program, of: types.Type) bool {
+        return carriesObjects(program, of);
+    }
+
+    /// Whether a function's bindings want a real frame serial.
+    pub fn wantsSerial(program: *const ir.Program, function: *const ir.Function) bool {
+        return needsSerial(program, function);
+    }
+
+    /// The RuntimeValue element stride and payload offsets the
+    /// inline array access hardcodes (loom-build-stable).
+    pub const element_stride: u64 = value_stride;
+
+    pub fn payloadOffsets() Payloads {
+        return Payloads.measure();
     }
 };
 

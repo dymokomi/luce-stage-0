@@ -56,7 +56,37 @@ fn runEngine(
     return .{ .result = result, .printed = capture.lines.items };
 }
 
-/// Compile, run under both engines, and demand identical outcomes.
+/// Run a program through the zig backend's full pipeline — emit,
+/// map into fresh executable pages, execute with native.runCode.
+fn runZigBackend(
+    arena: std.mem.Allocator,
+    program: *const ir.Program,
+    budget: backend.Budget,
+) !Outcome {
+    var capture: Capture = .{ .arena = arena };
+    const outputs = try arena.alloc(?backend.RuntimeValue, 0);
+    const spans = try codegen.compile(arena, program);
+    var loaded = try image.map(testing.allocator, spans);
+    defer loaded.deinit(testing.allocator);
+    const result = try native.runCode(arena, program, loaded.addresses, &.{}, outputs, budget, capture.host());
+    return .{ .result = result, .printed = capture.lines.items };
+}
+
+fn expectSameOutcome(reference: Outcome, candidate: Outcome) !void {
+    try testing.expectEqualStrings(reference.printed, candidate.printed);
+    try testing.expectEqual(
+        std.meta.activeTag(reference.result),
+        std.meta.activeTag(candidate.result),
+    );
+    if (reference.result == .trap) {
+        try testing.expectEqual(reference.result.trap.code, candidate.result.trap.code);
+        try testing.expectEqualStrings(reference.result.trap.message, candidate.result.trap.message);
+    }
+}
+
+/// Compile, run under every engine, and demand identical outcomes —
+/// the interpreter is the reference, the MIR engine and the zig
+/// backend the candidates.
 fn oracle(source: []const u8, budget: backend.Budget) !void {
     var result = try compile_mod.compile(testing.allocator, source, .{}, script);
     defer result.deinit();
@@ -77,20 +107,26 @@ fn oracle(source: []const u8, budget: backend.Budget) !void {
     const reference = try runEngine(arena.allocator(), program, budget, .interpreter);
     const candidate = try runEngine(arena.allocator(), program, budget, .native);
 
-    try testing.expectEqualStrings(reference.printed, candidate.printed);
-    try testing.expectEqual(
-        std.meta.activeTag(reference.result),
-        std.meta.activeTag(candidate.result),
-    );
-    if (reference.result == .trap) {
-        try testing.expectEqual(reference.result.trap.code, candidate.result.trap.code);
-        try testing.expectEqualStrings(reference.result.trap.message, candidate.result.trap.message);
-    }
+    try expectSameOutcome(reference, candidate);
     if (reference.result == .success) {
         try testing.expectEqual(
             reference.result.success.leaked_objects,
             candidate.result.success.leaked_objects,
         );
+    }
+    // The zig backend covers everything the MIR core covers on
+    // aarch64 (its gate is native.supported narrowed by ABI limits),
+    // so every oracle program must run on it identically too.
+    if (codegen.available) {
+        try testing.expect(codegen.supported(program));
+        const third = try runZigBackend(arena.allocator(), program, budget);
+        try expectSameOutcome(reference, third);
+        if (reference.result == .success) {
+            try testing.expectEqual(
+                reference.result.success.leaked_objects,
+                third.result.success.leaked_objects,
+            );
+        }
     }
 }
 

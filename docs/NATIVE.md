@@ -224,21 +224,29 @@ fill the table.
 
 ## The Zig backend (M0, opt-in)
 
-The self-written backend of docs/SPEED.md §16-17 lives in
+The self-written backend of docs/SPEED.md §16-18 lives in
 `codegen.zig` and is reached with LOOM_ENGINE=zig: Luce IR emitted
 straight to aarch64 machine code — no MIR, no C — against the same
 `native.abi` contract (State offsets, address table), producing the
 same hermetic spans, mapped and run by the same image.map +
-native.runCode path, held to the same oracle.  It covers
-single-function integer programs with the full trap semantics, and
-with milestone 1's allocator — locals pinned in callee-saved
-registers, block-local temporaries in a small spilling pool, lazy
-constants feeding immediate forms and guard elision, comparison/
-branch fusion — it runs the loops bench **at parity with MIR**
-(zig/MIR ≈ 1.00, ~1.15x C).  A program outside its core simply is
-not `supported()` and takes the usual engines.  Targets: aarch64
-macOS/Linux now, x86-64 Linux next, Windows when image.zig grows
-VirtualAlloc.
+native.runCode path.  Since milestone 2 it covers **everything the
+MIR core covers** — floats as a second register class (pinned
+d8-d12, pool d13-d15, all callee-saved), Int(Float) with the NaN
+and range guards, multi-function calls over the C ABI, the
+ownership serial in x28 and return loosening, the full
+generic-service marshaling, every fast service, inline view and
+string access — its gate is `native.supported()` narrowed only by
+ABI limits (register-passed arguments), and the runner ladder falls
+zig → MIR → interpreter.  The oracle runs its whole corpus on all
+three engines; real programs (sort, dice, stats, wordcount) agree
+byte-for-byte.
+
+Standing: loops/strings/math at **1.02-1.05x MIR**, arrays at
+~1.37x — the one open gap is loop-invariant hoisting of the inline
+view checks, which MIR's GVN gets and this backend does not yet
+attempt (recorded, not disguised; it is also where vectorization
+work lands later).  Targets: aarch64 macOS/Linux now, x86-64 Linux
+next, Windows when image.zig grows VirtualAlloc.
 
 ## Where a wall would send us
 

@@ -1,35 +1,38 @@
 //! The self-written backend — Luce IR emitted straight to machine
-//! code, no MIR, no C (docs/SPEED.md §16).
+//! code, no MIR, no C (docs/SPEED.md §16-17).
 //!
 //! This is the sovereignty engine growing behind the same seam as
 //! the others: it emits against `native.abi` (the State word offsets
 //! and the address table), produces the same hermetic spans as the
-//! MIR engine — no host address in the bytes, every call target and
-//! constant read from the table — and runs through the same
-//! `image.map` + `native.runCode` machinery, under the same oracle.
-//! MIR remains the racing baseline; a program this backend cannot
-//! compile simply is not `supported()` and takes the usual path.
+//! MIR engine — no host address in the bytes, every call target,
+//! constant, and float read from the table — and runs through the
+//! same `image.map` + `native.runCode` machinery, under the same
+//! oracle.  MIR remains the racing baseline; the runner falls from
+//! this backend to MIR to the interpreter per program.
 //!
-//! Scope (milestone 1: registers), still deliberately narrow: one
-//! aarch64 target (macOS/Linux — the encoder is OS-blind, image.map
-//! does the OS work), a single-function program, Int/Bool/String
-//! values, Int arithmetic with the full trap semantics, control
-//! flow, and print/str/assert/trap.  Opt-in via LOOM_ENGINE=zig.
-//! x86-64 is the next target; Windows follows once image.zig grows
-//! VirtualAlloc.
+//! Milestone 2 transfers MIR's whole aarch64 core: every arm of
+//! native.zig's lowering has its twin here — floats as a second
+//! register class, Int(Float) with the NaN and range guards,
+//! multi-function calls over the C ABI, the ownership serial and
+//! return loosening, the full generic-service marshaling for
+//! heap-shaped instructions, all the fast services, inline view
+//! and string access, and typed local zeros.  The gate is
+//! `native.supported()` narrowed by this backend's own ABI limits,
+//! so it never claims a program MIR could not run.  Targets:
+//! aarch64 macOS/Linux (the encoder is OS-blind; image.map does the
+//! OS work); x86-64 next; Windows once image.zig grows VirtualAlloc.
 //!
-//! Code shape after milestone 1: locals live pinned in callee-saved
-//! registers (x20-x26, slots beyond that), block-local temporaries
-//! in a small scratch pool with spilling — sound because the IR
-//! guarantees registers never cross blocks, so temporary lifetimes
-//! are single-block and single-assignment.  Constants stay lazy
-//! until a use forces them, which is what makes immediate forms
-//! (add/sub/cmp #imm) and constant-divisor guard elision fall out;
-//! a comparison feeding the adjacent branch fuses to cmp + b.cond.
-//! x19 holds the State; x13/x14 are transient scratch the allocator
-//! never owns; x16 is the call target.  The trap protocol, depth
-//! budget, and service marshaling mirror the MIR lowering exactly,
-//! and native_spec holds the engines to identical behavior.
+//! Code shape: locals pinned in callee-saved registers (x20-x26 for
+//! values, d8-d11 for floats; frame slots beyond), block-local
+//! temporaries in small spilling pools (x9-x12, d12-d15) — sound
+//! because the IR guarantees registers never cross blocks.  Values
+//! stay lazy until a use forces them, which is what immediate
+//! forms, constant-divisor guard elision, and direct pinned reads
+//! fall out of; comparisons feeding the adjacent branch fuse to
+//! cmp + b.cond; producers feeding the adjacent local_set of a
+//! pinned local write it directly.  x19 holds the State, x28 the
+//! frame serial; x13/x14 and d16 are transient scratch the
+//! allocator never owns; x16 is the call target.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -40,71 +43,59 @@ const image = @import("image.zig");
 
 const Allocator = std.mem.Allocator;
 const abi = native.abi;
+const AddressTable = native.AddressTable;
 
 pub const available = builtin.cpu.arch == .aarch64 and image.supported;
 
 /// Frame slots are addressed with a scaled 12-bit immediate.
 const max_slots = 4000;
+/// Arguments travel in registers only: x1-x7 for values, d0-d7 for
+/// floats.  Wider signatures fall back to MIR (which speaks the full
+/// C ABI) through the runner's engine ladder.
+const max_value_arguments = 7;
+const max_float_arguments = 8;
 
-/// Whether the whole program fits this backend's core.  One function
-/// (post-prune scripts with no calls), value types Int/Bool/String,
-/// integer arithmetic, control flow, and the four supported
-/// intrinsics.
+/// Whether the whole program fits this backend: everything MIR's
+/// core takes, minus the shapes this emitter's ABI does not carry
+/// yet.
 pub fn supported(program: *const ir.Program) bool {
     if (!available) return false;
-    if (program.functions.len != 1) return false;
-    const function = &program.functions[0];
-    if (function.parameter_count != 0) return false;
-    if (function.return_type != .none) return false;
-    if (function.locals.len + function.instructions.len > max_slots) return false;
-    for (function.locals) |local| {
-        if (!valueShaped(local.local_type)) return false;
-    }
-    for (function.result_types) |result| {
-        if (result != .none and !valueShaped(result)) return false;
-    }
-    for (function.instructions) |instruction| {
-        switch (instruction) {
-            .const_boolean, .const_int, .const_data => {},
-            .local_get, .local_set => {},
-            .jump, .branch, .trap => {},
-            .ret => |value| if (value != null) return false,
-            .unary => {},
-            .binary => |operation| if (operation.operand_type != .int) return false,
-            .intrinsic => |call| switch (call.kind) {
-                .assert_true, .trap_message, .print => {},
-                .str_value => switch (function.result_types[call.arguments[0]]) {
-                    .int, .boolean, .string => {},
-                    else => return false,
-                },
-                else => return false,
-            },
-            else => return false,
+    if (!native.supported(program)) return false;
+    for (program.functions) |*function| {
+        if (function.locals.len + function.instructions.len > max_slots) return false;
+        var value_arguments: usize = 0;
+        var float_arguments: usize = 0;
+        for (function.locals[0..function.parameter_count]) |local| {
+            if (local.local_type == .float) {
+                float_arguments += 1;
+            } else {
+                value_arguments += 1;
+            }
         }
+        if (value_arguments > max_value_arguments) return false;
+        if (float_arguments > max_float_arguments) return false;
     }
     return true;
 }
 
-fn valueShaped(of: types.Type) bool {
-    return switch (of) {
-        .int, .boolean, .string => true,
-        else => false,
-    };
-}
-
-/// Compile the program to one hermetic span per function (currently
-/// exactly one).  Callers map the spans executable (image.map) and
-/// run them with native.runCode — the same path a cached image
-/// takes.  Assumes supported() said yes.
+/// Compile the program to one hermetic span per function.  Callers
+/// map the spans executable (image.map) and run them with
+/// native.runCode — the same path a cached image takes.  Assumes
+/// supported() said yes.
 pub fn compile(arena: Allocator, program: *const ir.Program) error{OutOfMemory}![]const []const u8 {
-    var emitter: Emitter = .{
-        .arena = arena,
-        .program = program,
-        .function = &program.functions[0],
-    };
-    try emitter.emitFunction();
-    const spans = try arena.alloc([]const u8, 1);
-    spans[0] = emitter.code.items;
+    const table = try AddressTable.collect(arena, program);
+    const spans = try arena.alloc([]const u8, program.functions.len);
+    for (program.functions, spans, 0..) |*function, *span, index| {
+        var emitter: Emitter = .{
+            .arena = arena,
+            .program = program,
+            .table = table,
+            .function = function,
+            .function_index = @intCast(index),
+        };
+        try emitter.emitFunction();
+        span.* = emitter.code.items;
+    }
     return spans;
 }
 
@@ -132,26 +123,33 @@ const TrapSite = struct {
 const Location = union(enum) {
     /// Not defined yet, or dead past its last use.
     nowhere,
-    /// In a scratch-pool register the allocator owns.
+    /// In a value scratch-pool register the allocator owns.
     register: u5,
+    /// In a float scratch-pool register the allocator owns.
+    fregister: u5,
     /// Spilled to (or only ever in) its frame slot.
     slot,
     /// A lazy integer/boolean constant.
     immediate: i64,
-    /// A lazy string constant (index into the program's pool).
-    constant: u32,
+    /// A lazy table load (a constant string's descriptor address, or
+    /// a float constant's bits) at this byte offset off the State.
+    table: u64,
     /// A lazy local_get: valid while the local's version matches —
     /// a local_set in between materializes live aliases first.
     alias: struct { local: u32, version: u32 },
 };
 
 const scratch_pool = [_]u5{ 9, 10, 11, 12 };
+const float_pool = [_]u5{ 13, 14, 15 }; // d13-d15, callee-saved
 const pinned_pool = [_]u5{ 20, 21, 22, 23, 24, 25, 26 };
+const float_pinned_pool = [_]u5{ 8, 9, 10, 11, 12 }; // d8-d12, callee-saved
 
 const Emitter = struct {
     arena: Allocator,
     program: *const ir.Program,
+    table: AddressTable,
     function: *const ir.Function,
+    function_index: u32,
     code: std.ArrayList(u8) = .empty,
     marks: std.ArrayList(?usize) = .empty,
     fixups: std.ArrayList(Fixup) = .empty,
@@ -160,6 +158,7 @@ const Emitter = struct {
     epilogue: u32 = 0,
     propagate: u32 = 0,
     frame_size: u64 = 0,
+    uses_floats: bool = false,
 
     // Analysis (emission order = block order, one position per item).
     positions: []u32 = &.{},
@@ -169,6 +168,7 @@ const Emitter = struct {
     // Allocation state.
     location: []Location = &.{},
     scratch_owner: [scratch_pool.len]?ir.Register = @splat(null),
+    float_owner: [float_pool.len]?ir.Register = @splat(null),
     pinned: []?u5 = &.{},
     local_version: []u32 = &.{},
     position: u32 = 0,
@@ -185,17 +185,23 @@ const Emitter = struct {
 
     const eq: u4 = 0x0;
     const ne: u4 = 0x1;
+    const hs: u4 = 0x2;
+    const mi: u4 = 0x4;
     const vs: u4 = 0x6;
+    const hi: u4 = 0x8;
+    const ls: u4 = 0x9;
     const ge: u4 = 0xA;
     const lt: u4 = 0xB;
     const gt: u4 = 0xC;
     const le: u4 = 0xD;
 
     const state: u5 = 19;
+    const serial: u5 = 28;
     const zr: u5 = 31;
     /// Transient scratch the allocator never owns.
     const helper: u5 = 13;
     const helper2: u5 = 14;
+    const fhelper: u5 = 16; // d16, caller-saved, never allocated
 
     fn word(self: *Emitter, encoded: u32) error{OutOfMemory}!void {
         try self.code.appendSlice(self.arena, &std.mem.toBytes(std.mem.nativeToLittle(u32, encoded)));
@@ -214,7 +220,15 @@ const Emitter = struct {
         self.marks.items[mark] = self.here();
     }
 
-    // -- encodings ---------------------------------------------------------
+    fn typeOf(self: *const Emitter, register: ir.Register) types.Type {
+        return self.function.result_types[register];
+    }
+
+    fn isFloat(self: *const Emitter, register: ir.Register) bool {
+        return self.typeOf(register) == .float;
+    }
+
+    // -- encodings, integer ------------------------------------------------
 
     fn movz(self: *Emitter, rd: u5, chunk: u16, half: u2) !void {
         try self.word(0xD2800000 | @as(u32, half) << 21 | @as(u32, chunk) << 5 | rd);
@@ -246,6 +260,14 @@ const Emitter = struct {
     fn storeWord(self: *Emitter, rt: u5, rn: u5, byte_offset: u64) !void {
         const scaled: u12 = @intCast(byte_offset / 8);
         try self.word(0xF9000000 | @as(u32, scaled) << 10 | @as(u32, rn) << 5 | rt);
+    }
+
+    fn loadByte(self: *Emitter, rt: u5, rn: u5, byte_offset: u64) !void {
+        try self.word(0x39400000 | @as(u32, @intCast(byte_offset)) << 10 | @as(u32, rn) << 5 | rt);
+    }
+
+    fn storeByte(self: *Emitter, rt: u5, rn: u5, byte_offset: u64) !void {
+        try self.word(0x39000000 | @as(u32, @intCast(byte_offset)) << 10 | @as(u32, rn) << 5 | rt);
     }
 
     /// ldr rt, [state, offset] — offsets can pass the immediate
@@ -308,6 +330,45 @@ const Emitter = struct {
         try self.word(0xD63F0000 | @as(u32, rn) << 5);
     }
 
+    // -- encodings, float --------------------------------------------------
+
+    fn fmovRegs(self: *Emitter, rd: u5, rn: u5) !void {
+        try self.word(0x1E604000 | @as(u32, rn) << 5 | rd);
+    }
+
+    /// fmov dN, xM — also the +0.0 zero via xzr.
+    fn fmovFromValue(self: *Emitter, rd: u5, rn: u5) !void {
+        try self.word(0x9E670000 | @as(u32, rn) << 5 | rd);
+    }
+
+    fn floadWord(self: *Emitter, rt: u5, rn: u5, byte_offset: u64) !void {
+        const scaled: u12 = @intCast(byte_offset / 8);
+        try self.word(0xFD400000 | @as(u32, scaled) << 10 | @as(u32, rn) << 5 | rt);
+    }
+
+    fn fstoreWord(self: *Emitter, rt: u5, rn: u5, byte_offset: u64) !void {
+        const scaled: u12 = @intCast(byte_offset / 8);
+        try self.word(0xFD000000 | @as(u32, scaled) << 10 | @as(u32, rn) << 5 | rt);
+    }
+
+    fn floadTable(self: *Emitter, rt: u5, offset: u64) !void {
+        try self.materialize(helper, offset);
+        // ldr d, [state, helper]
+        try self.word(0xFC606800 | @as(u32, helper) << 16 | @as(u32, state) << 5 | rt);
+    }
+
+    fn floadSlot(self: *Emitter, rt: u5, slot: usize) !void {
+        try self.floadWord(rt, 31, @as(u64, slot) * 8);
+    }
+
+    fn fstoreSlot(self: *Emitter, rt: u5, slot: usize) !void {
+        try self.fstoreWord(rt, 31, @as(u64, slot) * 8);
+    }
+
+    fn fcompare(self: *Emitter, rn: u5, rm: u5) !void {
+        try self.word(0x1E602000 | @as(u32, rm) << 16 | @as(u32, rn) << 5);
+    }
+
     // -- the trap protocol -------------------------------------------------
 
     fn trapSite(self: *Emitter, code: ir.TrapCode, instruction: u32) error{OutOfMemory}!u32 {
@@ -316,8 +377,8 @@ const Emitter = struct {
         return mark;
     }
 
-    /// After a service call: any recorded trap propagates.  Reads
-    /// through the helper — the pool may be holding values.
+    /// After a call: any recorded trap propagates.  Reads through the
+    /// helper — the pools may be holding values.
     fn trapCheck(self: *Emitter) !void {
         try self.loadWord(helper, state, abi.trap_offset);
         try self.branchZero(helper, self.propagate, false);
@@ -336,6 +397,10 @@ const Emitter = struct {
                 buffer[0] = operation.operand;
                 return buffer[0..1];
             },
+            .convert => |operation| {
+                buffer[0] = operation.operand;
+                return buffer[0..1];
+            },
             .local_set => |set| {
                 buffer[0] = set.value;
                 return buffer[0..1];
@@ -344,7 +409,34 @@ const Emitter = struct {
                 buffer[0] = branching.condition;
                 return buffer[0..1];
             },
+            .ret => |value| {
+                if (value) |register| {
+                    buffer[0] = register;
+                    return buffer[0..1];
+                }
+                return buffer[0..0];
+            },
+            .call => |call| return call.arguments,
             .intrinsic => |call| return call.arguments,
+            .heap_new => |new| return new.dims,
+            .struct_make => |make| return make.fields,
+            .struct_get => |get| {
+                buffer[0] = get.target;
+                return buffer[0..1];
+            },
+            .struct_set => |set| {
+                buffer[0] = set.target;
+                buffer[1] = set.value;
+                return buffer[0..2];
+            },
+            .object_bind => |bound| {
+                buffer[0] = bound.value;
+                return buffer[0..1];
+            },
+            .object_unbind => |unbound| {
+                buffer[0] = unbound.value;
+                return buffer[0..1];
+            },
             else => return buffer[0..0],
         }
     }
@@ -371,6 +463,12 @@ const Emitter = struct {
                 position += 1;
             }
         }
+        for (function.result_types) |result| {
+            if (result == .float) self.uses_floats = true;
+        }
+        for (function.locals) |local| {
+            if (local.local_type == .float) self.uses_floats = true;
+        }
     }
 
     // -- the allocator -----------------------------------------------------
@@ -386,9 +484,16 @@ const Emitter = struct {
         unreachable;
     }
 
-    /// A free pool register, evicting the longest-lived owner if the
-    /// pool is full.  Registers in `locked` (operands mid-use) are
-    /// never evicted.
+    fn floatPoolIndexOf(register: u5) usize {
+        for (float_pool, 0..) |candidate, index| {
+            if (candidate == register) return index;
+        }
+        unreachable;
+    }
+
+    /// A free value-pool register, evicting the longest-lived owner
+    /// if the pool is full.  Registers in `locked` (operands mid-use)
+    /// are never evicted.
     fn allocScratch(self: *Emitter, owner: ir.Register, locked: []const u5) error{OutOfMemory}!u5 {
         for (scratch_pool, 0..) |candidate, index| {
             if (self.scratch_owner[index] == null and !contains(locked, candidate)) {
@@ -414,6 +519,31 @@ const Emitter = struct {
         return scratch_pool[index];
     }
 
+    fn allocFloat(self: *Emitter, owner: ir.Register, locked: []const u5) error{OutOfMemory}!u5 {
+        for (float_pool, 0..) |candidate, index| {
+            if (self.float_owner[index] == null and !contains(locked, candidate)) {
+                self.float_owner[index] = owner;
+                return candidate;
+            }
+        }
+        var victim_index: ?usize = null;
+        for (float_pool, 0..) |candidate, index| {
+            if (contains(locked, candidate)) continue;
+            const resident = self.float_owner[index].?;
+            if (victim_index == null or
+                self.last_use[resident] > self.last_use[self.float_owner[victim_index.?].?])
+            {
+                victim_index = index;
+            }
+        }
+        const index = victim_index.?;
+        const evicted = self.float_owner[index].?;
+        try self.fstoreSlot(float_pool[index], self.slotOf(evicted));
+        self.location[evicted] = .slot;
+        self.float_owner[index] = owner;
+        return float_pool[index];
+    }
+
     fn contains(haystack: []const u5, needle: u5) bool {
         for (haystack) |candidate| {
             if (candidate == needle) return true;
@@ -424,6 +554,7 @@ const Emitter = struct {
     fn release(self: *Emitter, register: ir.Register) void {
         switch (self.location[register]) {
             .register => |physical| self.scratch_owner[poolIndexOf(physical)] = null,
+            .fregister => |physical| self.float_owner[floatPoolIndexOf(physical)] = null,
             else => {},
         }
         self.location[register] = .nowhere;
@@ -436,12 +567,14 @@ const Emitter = struct {
         }
     }
 
-    /// The value in a physical register, forcing lazy locations.
-    /// Returned pool registers stay owned; pinned-local reads return
-    /// the pinned register itself (never evictable, never a dest).
+    /// The value in a physical register of its class, forcing lazy
+    /// locations.  Pinned-local reads return the pinned register
+    /// itself (never evictable, never a dest).
     fn operandRegister(self: *Emitter, register: ir.Register, locked: []const u5) error{OutOfMemory}!u5 {
+        if (self.isFloat(register)) return self.operandFloat(register, locked);
         switch (self.location[register]) {
             .register => |physical| return physical,
+            .fregister => unreachable,
             .nowhere => unreachable, // verifier: uses follow defs
             .slot => {
                 const physical = try self.allocScratch(register, locked);
@@ -455,9 +588,9 @@ const Emitter = struct {
                 self.location[register] = .{ .register = physical };
                 return physical;
             },
-            .constant => |index| {
+            .table => |offset| {
                 const physical = try self.allocScratch(register, locked);
-                try self.loadTable(physical, abi.constantOffset(index));
+                try self.loadTable(physical, offset);
                 self.location[register] = .{ .register = physical };
                 return physical;
             },
@@ -465,9 +598,6 @@ const Emitter = struct {
                 if (self.local_version[lazy.local] == lazy.version) {
                     if (self.pinned[lazy.local]) |physical| return physical;
                 }
-                // The local moved on (or lives in a slot): the value
-                // was materialized at the local_set (or never left
-                // its slot) — load our own copy.
                 const physical = try self.allocScratch(register, locked);
                 if (self.local_version[lazy.local] == lazy.version) {
                     try self.loadSlot(physical, lazy.local);
@@ -480,15 +610,50 @@ const Emitter = struct {
         }
     }
 
-    /// Fetch a value into a specific register (ABI marshaling) —
-    /// never touches pool ownership.
+    fn operandFloat(self: *Emitter, register: ir.Register, locked: []const u5) error{OutOfMemory}!u5 {
+        switch (self.location[register]) {
+            .fregister => |physical| return physical,
+            .register, .immediate => unreachable,
+            .nowhere => unreachable,
+            .slot => {
+                const physical = try self.allocFloat(register, locked);
+                try self.floadSlot(physical, self.slotOf(register));
+                self.location[register] = .{ .fregister = physical };
+                return physical;
+            },
+            .table => |offset| {
+                const physical = try self.allocFloat(register, locked);
+                try self.floadTable(physical, offset);
+                self.location[register] = .{ .fregister = physical };
+                return physical;
+            },
+            .alias => |lazy| {
+                if (self.local_version[lazy.local] == lazy.version) {
+                    if (self.pinned[lazy.local]) |physical| return physical;
+                }
+                const physical = try self.allocFloat(register, locked);
+                if (self.local_version[lazy.local] == lazy.version) {
+                    try self.floadSlot(physical, lazy.local);
+                } else {
+                    try self.floadSlot(physical, self.slotOf(register));
+                }
+                self.location[register] = .{ .fregister = physical };
+                return physical;
+            },
+        }
+    }
+
+    /// Fetch a value into a specific register of its class (ABI
+    /// marshaling) — never touches pool ownership.
     fn fetchInto(self: *Emitter, target: u5, register: ir.Register) error{OutOfMemory}!void {
+        if (self.isFloat(register)) return self.ffetchInto(target, register);
         switch (self.location[register]) {
             .register => |physical| try self.movReg(target, physical),
+            .fregister => unreachable,
             .nowhere => unreachable,
             .slot => try self.loadSlot(target, self.slotOf(register)),
             .immediate => |value| try self.materialize(target, @bitCast(value)),
-            .constant => |index| try self.loadTable(target, abi.constantOffset(index)),
+            .table => |offset| try self.loadTable(target, offset),
             .alias => |lazy| {
                 if (self.local_version[lazy.local] == lazy.version) {
                     if (self.pinned[lazy.local]) |physical| {
@@ -503,17 +668,45 @@ const Emitter = struct {
         }
     }
 
+    fn ffetchInto(self: *Emitter, target: u5, register: ir.Register) error{OutOfMemory}!void {
+        switch (self.location[register]) {
+            .fregister => |physical| try self.fmovRegs(target, physical),
+            .register, .immediate => unreachable,
+            .nowhere => unreachable,
+            .slot => try self.floadSlot(target, self.slotOf(register)),
+            .table => |offset| try self.floadTable(target, offset),
+            .alias => |lazy| {
+                if (self.local_version[lazy.local] == lazy.version) {
+                    if (self.pinned[lazy.local]) |physical| {
+                        try self.fmovRegs(target, physical);
+                    } else {
+                        try self.floadSlot(target, lazy.local);
+                    }
+                } else {
+                    try self.floadSlot(target, self.slotOf(register));
+                }
+            },
+        }
+    }
+
     /// Before a local is overwritten: any live lazy alias to it gets
-    /// its own copy of the current value (spilled to the alias's own
-    /// frame slot — rare, so the slot is fine).
+    /// its own copy of the current value.
     fn materializeAliases(self: *Emitter, local: u32) error{OutOfMemory}!void {
         const version = self.local_version[local];
+        const floaty = self.function.locals[local].local_type == .float;
         for (self.location, 0..) |current, register| {
             if (current != .alias) continue;
             if (current.alias.local != local or current.alias.version != version) continue;
             if (self.last_use[register] <= self.position) continue;
             if (self.pinned[local]) |physical| {
-                try self.storeSlot(physical, self.slotOf(@intCast(register)));
+                if (floaty) {
+                    try self.fstoreSlot(physical, self.slotOf(@intCast(register)));
+                } else {
+                    try self.storeSlot(physical, self.slotOf(@intCast(register)));
+                }
+            } else if (floaty) {
+                try self.floadSlot(fhelper, local);
+                try self.fstoreSlot(fhelper, self.slotOf(@intCast(register)));
             } else {
                 try self.loadSlot(helper, local);
                 try self.storeSlot(helper, self.slotOf(@intCast(register)));
@@ -522,8 +715,9 @@ const Emitter = struct {
         }
     }
 
-    /// Before a call: pool registers do not survive the C ABI, so
-    /// every live pool value spills to its slot.
+    /// Before a call: value-pool registers do not survive the C ABI,
+    /// so every live one spills to its slot.  The float pool is
+    /// callee-saved (d12-d15) and rides through.
     fn spillForCall(self: *Emitter) error{OutOfMemory}!void {
         for (scratch_pool, 0..) |physical, index| {
             const resident = self.scratch_owner[index] orelse continue;
@@ -537,9 +731,10 @@ const Emitter = struct {
         }
     }
 
-    /// A destination register for `item`, preferring to reuse a
-    /// dying operand's pool register.
+    /// A destination register for `item` in its class, preferring to
+    /// reuse a dying operand's pool register.
     fn destRegister(self: *Emitter, item: ir.Register, operands: []const ir.Register, locked: []const u5) error{OutOfMemory}!u5 {
+        if (self.isFloat(item)) return self.destFloat(item, operands, locked);
         for (operands) |operand| {
             if (self.last_use[operand] > self.position) continue;
             switch (self.location[operand]) {
@@ -555,6 +750,45 @@ const Emitter = struct {
         const physical = try self.allocScratch(item, locked);
         self.location[item] = .{ .register = physical };
         return physical;
+    }
+
+    fn destFloat(self: *Emitter, item: ir.Register, operands: []const ir.Register, locked: []const u5) error{OutOfMemory}!u5 {
+        for (operands) |operand| {
+            if (self.last_use[operand] > self.position) continue;
+            switch (self.location[operand]) {
+                .fregister => |physical| {
+                    self.float_owner[floatPoolIndexOf(physical)] = item;
+                    self.location[operand] = .nowhere;
+                    self.location[item] = .{ .fregister = physical };
+                    return physical;
+                },
+                else => {},
+            }
+        }
+        const physical = try self.allocFloat(item, locked);
+        self.location[item] = .{ .fregister = physical };
+        return physical;
+    }
+
+    /// When `item`'s only use is the adjacent local_set of a pinned
+    /// local of the same class, the producer writes the pinned
+    /// register directly — no temporary, no mov.
+    fn absorbTarget(self: *Emitter, item: ir.Register, following: ?ir.Register) error{OutOfMemory}!?u5 {
+        const next = following orelse return null;
+        if (self.use_count[item] != 1) return null;
+        switch (self.function.instructions[next]) {
+            .local_set => |set| {
+                if (set.value != item) return null;
+                const physical = self.pinned[set.local] orelse return null;
+                const local_floaty = self.function.locals[set.local].local_type == .float;
+                if (local_floaty != self.isFloat(item)) return null;
+                try self.materializeAliases(set.local);
+                self.pending_absorb = set.local;
+                self.location[item] = .nowhere;
+                return physical;
+            },
+            else => return null,
+        }
     }
 
     /// The destination for a producing instruction: the pinned local
@@ -586,18 +820,37 @@ const Emitter = struct {
         self.pinned = try self.arena.alloc(?u5, function.locals.len);
         self.local_version = try self.arena.alloc(u32, function.locals.len);
         @memset(self.local_version, 0);
-        for (self.pinned, 0..) |*slot, index| {
-            slot.* = if (index < pinned_pool.len) pinned_pool[index] else null;
+        var next_pinned: usize = 0;
+        var next_float_pinned: usize = 0;
+        for (self.pinned, function.locals) |*slot, local| {
+            if (local.local_type == .float) {
+                slot.* = if (next_float_pinned < float_pinned_pool.len) blk: {
+                    defer next_float_pinned += 1;
+                    break :blk float_pinned_pool[next_float_pinned];
+                } else null;
+            } else {
+                slot.* = if (next_pinned < pinned_pool.len) blk: {
+                    defer next_pinned += 1;
+                    break :blk pinned_pool[next_pinned];
+                } else null;
+            }
         }
 
-        // Prologue: saves, frame, the State register, the depth
-        // budget (the same subtract-store-check the MIR lowering
-        // emits), typed zeros for the locals.
+        // Prologue: saves (x19-x28 always; d8-d15 when floats are in
+        // play), frame, the State register, the depth budget, the
+        // frame serial, parameters into their homes, typed zeros.
         try self.word(0xA9BF7BFD); // stp x29, x30, [sp, #-16]!
         try self.word(0xA9BF53F3); // stp x19, x20, [sp, #-16]!
         try self.word(0xA9BF5BF5); // stp x21, x22, [sp, #-16]!
         try self.word(0xA9BF63F7); // stp x23, x24, [sp, #-16]!
         try self.word(0xA9BF6BF9); // stp x25, x26, [sp, #-16]!
+        try self.word(0xA9BF73FB); // stp x27, x28, [sp, #-16]!
+        if (self.uses_floats) {
+            try self.word(0x6DBF27E8); // stp d8, d9, [sp, #-16]!
+            try self.word(0x6DBF2FEA); // stp d10, d11, [sp, #-16]!
+            try self.word(0x6DBF37EC); // stp d12, d13, [sp, #-16]!
+            try self.word(0x6DBF3FEE); // stp d14, d15, [sp, #-16]!
+        }
         if (self.frame_size <= 4095) {
             try self.subImmediate(31, 31, @intCast(self.frame_size));
         } else {
@@ -605,30 +858,96 @@ const Emitter = struct {
             try self.word(0xCB2D63FF); // sub sp, sp, x13 (extended)
         }
         try self.movReg(state, 0);
+
         const depth = try self.trapSite(.call_depth_exceeded, 0);
         try self.loadWord(helper, state, abi.depth_offset);
         try self.word(0xF10005AD); // subs x13, x13, #1
         try self.storeWord(helper, state, abi.depth_offset);
         try self.branchCond(lt, depth);
-        for (function.locals, 0..) |local, index| {
-            const target = self.pinned[index];
+
+        // Parameters arrive per the C ABI — x1.. for values, d0.. for
+        // floats — and move into their pinned homes or slots before
+        // anything can clobber the argument registers.
+        var value_argument: u5 = 1;
+        var float_argument: u5 = 0;
+        for (function.locals[0..function.parameter_count], 0..) |local, index| {
+            const floaty = local.local_type == .float;
+            const incoming = if (floaty) float_argument else value_argument;
+            if (floaty) float_argument += 1 else value_argument += 1;
+            if (self.pinned[index]) |physical| {
+                if (floaty) {
+                    try self.fmovRegs(physical, incoming);
+                } else {
+                    try self.movReg(physical, incoming);
+                }
+            } else if (floaty) {
+                try self.fstoreSlot(incoming, index);
+            } else {
+                try self.storeSlot(incoming, index);
+            }
+        }
+
+        // The frame serial (x28): bindings want a real one; every
+        // other function passes zero, exactly as MIR emits.
+        if (abi.wantsSerial(self.program, function)) {
+            try self.movReg(0, state);
+            try self.loadTable(16, abi.serviceOffset("svc_serial"));
+            try self.callRegister(16);
+            try self.movReg(serial, 0);
+        } else {
+            try self.movReg(serial, zr);
+        }
+
+        // Typed zeros for non-parameter locals (S40 late declarations).
+        for (function.locals[function.parameter_count..], function.parameter_count..) |local, index| {
+            const home = self.pinned[index];
             switch (local.local_type) {
-                .int, .boolean => {
-                    if (target) |physical| {
-                        try self.movReg(physical, zr);
+                .float => {
+                    if (home) |physical| {
+                        try self.fmovFromValue(physical, zr);
                     } else {
                         try self.storeSlot(zr, index);
                     }
                 },
                 .string => {
-                    if (target) |physical| {
-                        try self.loadTable(physical, abi.constantOffset(self.program.constants.len));
+                    const offset = AddressTable.constant(self.program.constants.len);
+                    if (home) |physical| {
+                        try self.loadTable(physical, offset);
                     } else {
-                        try self.loadTable(helper2, abi.constantOffset(self.program.constants.len));
+                        try self.loadTable(helper2, offset);
                         try self.storeSlot(helper2, index);
                     }
                 },
-                else => unreachable, // supported() refused the rest
+                .heap => |heap_index| {
+                    // Null: a zero view for viewable arrays, the null
+                    // handle for everything else.
+                    const null_value: u64 = if (viewable(self.program, heap_index)) 0 else 0xFFFF_FFFF;
+                    if (home) |physical| {
+                        try self.materialize(physical, null_value);
+                    } else {
+                        try self.materialize(helper2, null_value);
+                        try self.storeSlot(helper2, index);
+                    }
+                },
+                .strukt => |struct_layout| {
+                    try self.movReg(0, state);
+                    try self.materialize(1, struct_layout);
+                    try self.loadTable(16, abi.serviceOffset("svc_zero_strukt"));
+                    try self.callRegister(16);
+                    if (home) |physical| {
+                        try self.movReg(physical, 0);
+                    } else {
+                        try self.storeSlot(0, index);
+                    }
+                    try self.trapCheck();
+                },
+                else => {
+                    if (home) |physical| {
+                        try self.movReg(physical, zr);
+                    } else {
+                        try self.storeSlot(zr, index);
+                    }
+                },
             }
         }
 
@@ -636,15 +955,15 @@ const Emitter = struct {
             self.bind(self.block_marks[index]);
             self.current_block = @intCast(index);
             // Temporaries never cross blocks (the IR guarantees it),
-            // so the pool resets clean at every block edge.
+            // so the pools reset clean at every block edge.
             self.scratch_owner = @splat(null);
+            self.float_owner = @splat(null);
             self.pending_compare = null;
             for (block.items, 0..) |item, at| {
                 const following: ?ir.Register =
                     if (at + 1 < block.items.len) block.items[at + 1] else null;
                 try self.emitInstruction(item, following);
                 self.position += 1;
-                self.pendingExpired(item);
             }
         }
 
@@ -653,14 +972,20 @@ const Emitter = struct {
             self.bind(site.mark);
             try self.materialize(helper, @bitCast(abi.trap(site.code)));
             try self.storeWord(helper, state, abi.trap_offset);
-            try self.materialize(helper, 0); // function index — one function
+            try self.materialize(helper, self.function_index);
             try self.storeWord(helper, state, abi.trap_function_offset);
             try self.materialize(helper, site.instruction);
             try self.storeWord(helper, state, abi.trap_instruction_offset);
             try self.branchTo(self.propagate);
         }
         self.bind(self.propagate);
-        // main returns nothing; a trap abandons the depth budget.
+        // The default return: zero of the return type; a trap
+        // abandons the depth budget.
+        switch (function.return_type) {
+            .none => {},
+            .float => try self.fmovFromValue(0, zr),
+            else => try self.movReg(0, zr),
+        }
         try self.branchTo(self.epilogue);
         self.bind(self.epilogue);
         if (self.frame_size <= 4095) {
@@ -669,6 +994,13 @@ const Emitter = struct {
             try self.materialize(helper, self.frame_size);
             try self.word(0x8B2D63FF); // add sp, sp, x13 (extended)
         }
+        if (self.uses_floats) {
+            try self.word(0x6CC13FEE); // ldp d14, d15, [sp], #16
+            try self.word(0x6CC137EC); // ldp d12, d13, [sp], #16
+            try self.word(0x6CC12FEA); // ldp d10, d11, [sp], #16
+            try self.word(0x6CC127E8); // ldp d8, d9, [sp], #16
+        }
+        try self.word(0xA8C173FB); // ldp x27, x28, [sp], #16
         try self.word(0xA8C16BF9); // ldp x25, x26, [sp], #16
         try self.word(0xA8C163F7); // ldp x23, x24, [sp], #16
         try self.word(0xA8C15BF5); // ldp x21, x22, [sp], #16
@@ -677,18 +1009,6 @@ const Emitter = struct {
         try self.word(0xD65F03C0); // ret
 
         self.patch();
-    }
-
-    /// A fused comparison's flags live for exactly one following
-    /// item (the branch that consumes them).
-    fn pendingExpired(self: *Emitter, just_emitted: ir.Register) void {
-        if (self.pending_compare) |pending| {
-            if (pending.register != just_emitted and
-                self.positions[pending.register] + 1 < self.position)
-            {
-                self.pending_compare = null;
-            }
-        }
     }
 
     fn patch(self: *Emitter) void {
@@ -706,33 +1026,14 @@ const Emitter = struct {
         }
     }
 
-    /// When `item`'s only use is the adjacent local_set of a pinned
-    /// local, the producer can write the pinned register directly —
-    /// no temporary, no mov.  Live aliases of the local are
-    /// materialized here, before the early write.
-    fn absorbTarget(self: *Emitter, item: ir.Register, following: ?ir.Register) error{OutOfMemory}!?u5 {
-        const next = following orelse return null;
-        if (self.use_count[item] != 1) return null;
-        switch (self.function.instructions[next]) {
-            .local_set => |set| {
-                if (set.value != item) return null;
-                const physical = self.pinned[set.local] orelse return null;
-                try self.materializeAliases(set.local);
-                self.pending_absorb = set.local;
-                self.location[item] = .nowhere;
-                return physical;
-            },
-            else => return null,
-        }
-    }
-
     fn emitInstruction(self: *Emitter, item: ir.Register, following: ?ir.Register) error{OutOfMemory}!void {
         const function = self.function;
         switch (function.instructions[item]) {
             // Constants and local reads stay lazy; a use forces them.
             .const_int => |value| self.location[item] = .{ .immediate = value },
             .const_boolean => |value| self.location[item] = .{ .immediate = @intFromBool(value) },
-            .const_data => |data| self.location[item] = .{ .constant = data.constant },
+            .const_float => |value| self.location[item] = .{ .table = self.table.floatOffset(value) },
+            .const_data => |data| self.location[item] = .{ .table = AddressTable.constant(data.constant) },
             .local_get => |local| self.location[item] = .{
                 .alias = .{ .local = local, .version = self.local_version[local] },
             },
@@ -747,8 +1048,12 @@ const Emitter = struct {
                     }
                 }
                 try self.materializeAliases(set.local);
+                const floaty = function.locals[set.local].local_type == .float;
                 if (self.pinned[set.local]) |physical| {
                     try self.fetchInto(physical, set.value);
+                } else if (floaty) {
+                    try self.ffetchInto(fhelper, set.value);
+                    try self.fstoreSlot(fhelper, set.local);
                 } else {
                     try self.fetchInto(helper, set.value);
                     try self.storeSlot(helper, set.local);
@@ -790,15 +1095,52 @@ const Emitter = struct {
                     }
                 }
             },
-            .ret => {
-                // Success restores the depth budget; traps do not.
+            .ret => |value| {
+                // Return-value ownership first (S16): what the frame
+                // still owned in the value goes loose for the caller,
+                // through the marshaling slot the service reads.
+                if (value) |register| {
+                    if (abi.objectCarrying(self.program, function.return_type)) {
+                        try self.fetchInto(helper2, register);
+                        try self.storeWord(helper2, state, abi.slots_offset);
+                        try self.spillForCall();
+                        try self.movReg(0, state);
+                        try self.materialize(1, self.function_index);
+                        try self.movReg(2, serial);
+                        try self.loadTable(16, abi.serviceOffset("svc_loosen"));
+                        try self.callRegister(16);
+                        // Success restores the depth budget.
+                        try self.loadWord(helper, state, abi.depth_offset);
+                        try self.addImmediate(helper, helper, 1);
+                        try self.storeWord(helper, state, abi.depth_offset);
+                        try self.loadWord(0, state, abi.slots_offset);
+                        try self.branchTo(self.epilogue);
+                        return;
+                    }
+                }
                 try self.loadWord(helper, state, abi.depth_offset);
                 try self.addImmediate(helper, helper, 1);
                 try self.storeWord(helper, state, abi.depth_offset);
+                if (value) |register| {
+                    if (self.isFloat(register)) {
+                        try self.ffetchInto(0, register);
+                    } else {
+                        try self.fetchInto(0, register);
+                    }
+                    self.freeDead(&.{register});
+                }
                 try self.branchTo(self.epilogue);
             },
             .trap => |code| try self.branchTo(try self.trapSite(code, item)),
+            .call => |call| try self.emitCall(item, call, following),
             .unary => |operation| {
+                if (function.result_types[item] == .float and operation.op == .negate) {
+                    const operand = try self.operandFloat(operation.operand, &.{});
+                    const dest = try self.resultRegister(item, following, &.{operation.operand}, &.{operand});
+                    try self.word(0x1E614000 | @as(u32, operand) << 5 | dest); // fneg
+                    self.freeDead(&.{operation.operand});
+                    return;
+                }
                 const operand = try self.operandRegister(operation.operand, &.{});
                 switch (operation.op) {
                     .negate => {
@@ -816,11 +1158,280 @@ const Emitter = struct {
                 }
                 self.freeDead(&.{operation.operand});
             },
+            .convert => |operation| switch (operation.kind) {
+                .int_to_float => {
+                    const operand = try self.operandRegister(operation.operand, &.{});
+                    const dest = try self.resultRegister(item, following, &.{operation.operand}, &.{});
+                    try self.word(0x9E620000 | @as(u32, operand) << 5 | dest); // scvtf
+                    self.freeDead(&.{operation.operand});
+                },
+                .float_to_int => {
+                    // NaN, below -2^63, or at/above 2^63 traps;
+                    // in-range truncates toward zero exactly like the
+                    // interpreter (fcmp with itself raises V on NaN).
+                    const range = try self.trapSite(.conversion_range, item);
+                    const operand = try self.operandFloat(operation.operand, &.{});
+                    try self.fcompare(operand, operand);
+                    try self.branchCond(vs, range);
+                    try self.floadTable(fhelper, self.table.floatOffset(-9223372036854775808.0));
+                    try self.fcompare(operand, fhelper);
+                    try self.branchCond(mi, range);
+                    try self.floadTable(fhelper, self.table.floatOffset(9223372036854775808.0));
+                    try self.fcompare(operand, fhelper);
+                    try self.branchCond(ge, range);
+                    const dest = try self.resultRegister(item, following, &.{operation.operand}, &.{});
+                    try self.word(0x9E780000 | @as(u32, operand) << 5 | dest); // fcvtzs
+                    self.freeDead(&.{operation.operand});
+                },
+            },
             .binary => |operation| try self.emitBinary(item, operation, following),
-            .intrinsic => |call| try self.emitIntrinsic(item, call),
+            .intrinsic => |call| try self.emitIntrinsic(item, call, following),
+            .struct_make, .struct_get, .struct_set, .heap_new, .object_bind, .object_unbind => {
+                try self.emitGeneric(item, following);
+            },
             else => unreachable, // supported() refused everything else
         }
     }
+
+    // -- calls and services ------------------------------------------------
+
+    /// A Luce-to-Luce call: target from the function table, arguments
+    /// per the C ABI in declaration order, trap check after.
+    fn emitCall(self: *Emitter, item: ir.Register, call: anytype, following: ?ir.Register) error{OutOfMemory}!void {
+        _ = following;
+        const callee = &self.program.functions[call.function];
+        var value_argument: u5 = 1;
+        var float_argument: u5 = 0;
+        for (call.arguments, 0..) |argument, index| {
+            const floaty = callee.locals[index].local_type == .float;
+            if (floaty) {
+                try self.ffetchInto(float_argument, argument);
+                float_argument += 1;
+            } else {
+                try self.fetchInto(value_argument, argument);
+                value_argument += 1;
+            }
+        }
+        self.freeDead(call.arguments);
+        try self.spillForCall();
+        try self.movReg(0, state);
+        try self.loadTable(16, self.table.function(call.function));
+        try self.callRegister(16);
+        if (callee.return_type != .none) {
+            if (callee.return_type == .float) {
+                const dest = try self.destFloat(item, &.{}, &.{});
+                try self.fmovRegs(dest, 0);
+            } else {
+                const dest = try self.destRegister(item, &.{}, &.{});
+                try self.movReg(dest, 0);
+            }
+        }
+        try self.trapCheck();
+    }
+
+    /// The generic service protocol, mirroring the MIR lowering:
+    /// operands into the State's marshaling slots by type, then
+    /// svc_instr_{i,d,v}(state, function, instruction, serial), the
+    /// result register chosen by the instruction's result type.
+    fn emitGeneric(self: *Emitter, item: ir.Register, following: ?ir.Register) error{OutOfMemory}!void {
+        _ = following;
+        var buffer: [2]ir.Register = undefined;
+        const operands = operandsOf(&self.function.instructions[item], &buffer);
+        for (operands, 0..) |operand, slot| {
+            const offset = abi.slots_offset + 8 * @as(u64, slot);
+            if (self.isFloat(operand)) {
+                try self.ffetchInto(fhelper, operand);
+                try self.fstoreWord(fhelper, state, offset);
+            } else {
+                try self.fetchInto(helper2, operand);
+                try self.storeWord(helper2, state, offset);
+            }
+        }
+        self.freeDead(operands);
+        try self.spillForCall();
+        try self.movReg(0, state);
+        try self.materialize(1, self.function_index);
+        try self.materialize(2, item);
+        try self.movReg(3, serial);
+        switch (self.typeOf(item)) {
+            .none => {
+                try self.loadTable(16, abi.serviceOffset("svc_instr_v"));
+                try self.callRegister(16);
+            },
+            .float => {
+                try self.loadTable(16, abi.serviceOffset("svc_instr_d"));
+                try self.callRegister(16);
+                const dest = try self.destFloat(item, &.{}, &.{});
+                try self.fmovRegs(dest, 0);
+            },
+            else => {
+                try self.loadTable(16, abi.serviceOffset("svc_instr_i"));
+                try self.callRegister(16);
+                const dest = try self.destRegister(item, &.{}, &.{});
+                try self.movReg(dest, 0);
+            },
+        }
+        try self.trapCheck();
+    }
+
+    /// A fast service call: arguments fetched straight into ABI
+    /// registers (they never collide with the pools), result in
+    /// x0/d0, trap check after.  `arguments` pairs ABI slots with IR
+    /// registers; a null IR register means the literal goes in
+    /// directly.
+    const ServiceArgument = union(enum) {
+        register: ir.Register,
+        literal: u64,
+        state_pointer,
+        serial_word,
+    };
+
+    fn emitService(
+        self: *Emitter,
+        item: ir.Register,
+        service: []const u8,
+        arguments: []const ServiceArgument,
+        free: []const ir.Register,
+        result: enum { none, value, float },
+        check: bool,
+    ) error{OutOfMemory}!void {
+        var value_slot: u5 = 0;
+        var float_slot: u5 = 0;
+        for (arguments) |argument| {
+            switch (argument) {
+                .state_pointer => {
+                    try self.movReg(value_slot, state);
+                    value_slot += 1;
+                },
+                .serial_word => {
+                    try self.movReg(value_slot, serial);
+                    value_slot += 1;
+                },
+                .literal => |value| {
+                    try self.materialize(value_slot, value);
+                    value_slot += 1;
+                },
+                .register => |register| {
+                    if (self.isFloat(register)) {
+                        try self.ffetchInto(float_slot, register);
+                        float_slot += 1;
+                    } else {
+                        try self.fetchInto(value_slot, register);
+                        value_slot += 1;
+                    }
+                },
+            }
+        }
+        self.freeDead(free);
+        try self.spillForCall();
+        try self.loadTable(16, abi.serviceOffset(service));
+        try self.callRegister(16);
+        switch (result) {
+            .none => {},
+            .value => {
+                const dest = try self.destRegister(item, &.{}, &.{});
+                try self.movReg(dest, 0);
+            },
+            .float => {
+                const dest = try self.destFloat(item, &.{}, &.{});
+                try self.fmovRegs(dest, 0);
+            },
+        }
+        if (check) try self.trapCheck();
+    }
+
+    // -- inline access (milestone 3's unboxed reads, transferred) ----------
+
+    /// Null and liveness checks on a view register: the same traps
+    /// the interpreter's resolve raises, inline.
+    fn emitViewPrelude(self: *Emitter, item: ir.Register, view: u5) error{OutOfMemory}!void {
+        const null_stub = try self.trapSite(.null_object, item);
+        const dead_stub = try self.trapSite(.use_after_free, item);
+        try self.branchZero(view, null_stub, true);
+        try self.loadWord(helper, view, 16);
+        try self.loadByte(helper, helper, 0);
+        try self.branchZero(helper, dead_stub, true);
+    }
+
+    /// helper = helper + index * element_stride — one shifted add
+    /// when the stride is a power of two (it is: RuntimeValue is a
+    /// power-of-two-sized union), the generic multiply otherwise.
+    fn emitElementAddress(self: *Emitter, index: u5) error{OutOfMemory}!void {
+        const stride = abi.element_stride;
+        if (std.math.isPowerOfTwo(stride)) {
+            const shift: u6 = @intCast(std.math.log2_int(u64, stride));
+            // add helper, helper, index, lsl #shift
+            try self.word(0x8B000000 | @as(u32, index) << 16 |
+                @as(u32, shift) << 10 | @as(u32, helper) << 5 | helper);
+        } else if (stride == 24) {
+            // stride 24: index*3 by one shifted add, then *8 into the
+            // base — two adds, no multiply, no constant.
+            // add helper2, index, index, lsl #1   (helper2 = 3*index)
+            try self.word(0x8B000400 | @as(u32, index) << 16 | @as(u32, index) << 5 | helper2);
+            // add helper, helper, helper2, lsl #3
+            try self.word(0x8B000C00 | @as(u32, helper2) << 16 | @as(u32, helper) << 5 | helper);
+        } else {
+            try self.materialize(helper2, stride);
+            try self.word(0x9B000000 | @as(u32, helper2) << 16 | @as(u32, helper) << 10 |
+                @as(u32, index) << 5 | helper);
+        }
+    }
+
+    /// Inline rank-1 array indexing: bounds check against the view,
+    /// then a typed load or store at elements + index * stride +
+    /// payload offset.
+    fn emitArrayAccess(
+        self: *Emitter,
+        item: ir.Register,
+        call: ir.Instruction.IntrinsicCall,
+        element: types.Type,
+        following: ?ir.Register,
+    ) error{OutOfMemory}!void {
+        const payloads = abi.payloadOffsets();
+        const view = try self.operandRegister(call.arguments[0], &.{});
+        const index = try self.operandRegister(call.arguments[1], &.{view});
+        try self.emitViewPrelude(item, view);
+        const bounds = try self.trapSite(.index_bounds, item);
+        try self.loadWord(helper, view, 8);
+        // Unsigned compare: a negative index reads as huge.
+        try self.word(0xEB00001F | @as(u32, helper) << 16 | @as(u32, index) << 5); // cmp index, helper
+        try self.branchCond(hs, bounds);
+        // The destination (or store value) settles before the element
+        // address lives in the helper — resultRegister's absorption
+        // path may borrow the helper for alias copies.
+        if (call.kind == .index_get) {
+            const dest = switch (element) {
+                .float => try self.resultRegister(item, following, &.{ call.arguments[0], call.arguments[1] }, &.{}),
+                else => try self.resultRegister(item, following, &.{ call.arguments[0], call.arguments[1] }, &.{ view, index }),
+            };
+            try self.loadWord(helper, view, 0);
+            try self.emitElementAddress(index);
+            switch (element) {
+                .float => try self.floadWord(dest, helper, payloads.float),
+                .int => try self.loadWord(dest, helper, payloads.int),
+                .boolean => try self.loadByte(dest, helper, payloads.boolean),
+                else => unreachable,
+            }
+            self.freeDead(&.{ call.arguments[0], call.arguments[1] });
+        } else {
+            const value = call.arguments[2];
+            const from = if (element == .float)
+                try self.operandFloat(value, &.{})
+            else
+                try self.operandRegister(value, &.{ view, index });
+            try self.loadWord(helper, view, 0);
+            try self.emitElementAddress(index);
+            switch (element) {
+                .float => try self.fstoreWord(from, helper, payloads.float),
+                .int => try self.storeWord(from, helper, payloads.int),
+                .boolean => try self.storeByte(from, helper, payloads.boolean),
+                else => unreachable,
+            }
+            self.freeDead(&.{ call.arguments[0], call.arguments[1], value });
+        }
+    }
+
+    // -- binaries ----------------------------------------------------------
 
     fn immediateOperand(self: *const Emitter, register: ir.Register) ?i64 {
         return switch (self.location[register]) {
@@ -829,7 +1440,21 @@ const Emitter = struct {
         };
     }
 
-    fn conditionOf(op: ir.BinaryOp) u4 {
+    fn conditionOf(op: ir.BinaryOp, float: bool) u4 {
+        if (float) {
+            // IEEE comparisons: false on NaN for everything but !=,
+            // which these condition codes encode exactly (unordered
+            // sets C and V; MI/LS/GT/GE/EQ all read false there).
+            return switch (op) {
+                .equal => eq,
+                .not_equal => ne,
+                .less => mi,
+                .less_equal => ls,
+                .greater => gt,
+                .greater_equal => ge,
+                else => unreachable,
+            };
+        }
         return switch (op) {
             .equal => eq,
             .not_equal => ne,
@@ -858,11 +1483,29 @@ const Emitter = struct {
     }
 
     fn emitBinary(self: *Emitter, item: ir.Register, operation: anytype, following: ?ir.Register) error{OutOfMemory}!void {
+        switch (operation.operand_type) {
+            // String concatenation has a direct service; string
+            // ordering and struct equality live in the reference
+            // implementation, like MIR's lowering.
+            .string => {
+                if (operation.op == .add) {
+                    try self.emitService(item, "svc_str_concat", &.{
+                        .state_pointer,
+                        .{ .register = operation.left },
+                        .{ .register = operation.right },
+                    }, &.{ operation.left, operation.right }, .value, true);
+                    return;
+                }
+                return self.emitGeneric(item, following);
+            },
+            .strukt => return self.emitGeneric(item, following),
+            .float => return self.emitFloatBinary(item, operation, following),
+            else => {},
+        }
         if (operation.op.isComparison()) {
-            // Immediate forms, swapping when the constant is on the
-            // left; then either fuse into the adjacent consuming
-            // branch (no boolean ever materializes) or cset.
-            var condition = conditionOf(operation.op);
+            // Heap handles and booleans compare as their words, like
+            // Int — reference equality for objects.
+            var condition = conditionOf(operation.op, false);
             if (self.immediateOperand(operation.right)) |value| blk: {
                 if (!fitsImmediate(value)) break :blk;
                 const left = try self.operandRegister(operation.left, &.{});
@@ -974,6 +1617,33 @@ const Emitter = struct {
         }
     }
 
+    fn emitFloatBinary(self: *Emitter, item: ir.Register, operation: anytype, following: ?ir.Register) error{OutOfMemory}!void {
+        if (operation.op.isComparison()) {
+            const left = try self.operandFloat(operation.left, &.{});
+            const right = try self.operandFloat(operation.right, &.{left});
+            try self.fcompare(left, right);
+            self.freeDead(&.{ operation.left, operation.right });
+            return self.finishComparison(item, conditionOf(operation.op, true), following);
+        }
+        if (operation.op == .remainder) {
+            // Float remainder lives in the reference implementation,
+            // like MIR's lowering.
+            return self.emitGeneric(item, following);
+        }
+        const left = try self.operandFloat(operation.left, &.{});
+        const right = try self.operandFloat(operation.right, &.{left});
+        const dest = try self.resultRegister(item, following, &.{ operation.left, operation.right }, &.{ left, right });
+        const base: u32 = switch (operation.op) {
+            .add => 0x1E602800,
+            .subtract => 0x1E603800,
+            .multiply => 0x1E600800,
+            .divide => 0x1E601800,
+            else => unreachable,
+        };
+        try self.word(base | @as(u32, right) << 16 | @as(u32, left) << 5 | dest);
+        self.freeDead(&.{ operation.left, operation.right });
+    }
+
     /// A comparison's flags either fuse into the adjacent consuming
     /// branch or become a boolean via cset.
     fn finishComparison(self: *Emitter, item: ir.Register, condition: u4, following: ?ir.Register) error{OutOfMemory}!void {
@@ -992,7 +1662,10 @@ const Emitter = struct {
         try self.setCond(dest, condition);
     }
 
-    fn emitIntrinsic(self: *Emitter, item: ir.Register, call: ir.Instruction.IntrinsicCall) error{OutOfMemory}!void {
+    // -- intrinsics ----------------------------------------------------------
+
+    fn emitIntrinsic(self: *Emitter, item: ir.Register, call: ir.Instruction.IntrinsicCall, following: ?ir.Register) error{OutOfMemory}!void {
+        const function = self.function;
         switch (call.kind) {
             .assert_true => {
                 const failed = try self.trapSite(.assertion_failed, item);
@@ -1000,101 +1673,234 @@ const Emitter = struct {
                 self.freeDead(&.{call.arguments[0]});
                 try self.branchZero(value, failed, true);
             },
-            .str_value => switch (self.function.result_types[call.arguments[0]]) {
+            .str_value => switch (function.result_types[call.arguments[0]]) {
                 // str on a String is a move, exactly as MIR lowers
-                // it.  Fetch before any dest bookkeeping — reusing a
-                // dying operand's register would clear the location
-                // this fetch still needs.
+                // it.  Fetch before any dest bookkeeping.
                 .string => {
                     const dest = try self.destRegister(item, &.{}, &.{});
                     try self.fetchInto(dest, call.arguments[0]);
                     self.freeDead(&.{call.arguments[0]});
                 },
-                // Int gets the fast service: svc_str_int(state,
-                // value) -> descriptor, then the OOM check.
-                .int => {
-                    try self.fetchInto(1, call.arguments[0]);
-                    self.freeDead(&.{call.arguments[0]});
-                    try self.spillForCall();
-                    try self.movReg(0, state);
-                    try self.loadTable(16, abi.serviceOffset("svc_str_int"));
-                    try self.callRegister(16);
-                    const dest = try self.destRegister(item, &.{}, &.{});
-                    try self.movReg(dest, 0);
-                    try self.trapCheck();
-                },
-                // Everything else the gate admits (Bool) goes through
-                // the generic path, like MIR's lowering.
-                else => try self.genericCall(item, call, .value),
+                .int => try self.emitService(item, "svc_str_int", &.{
+                    .state_pointer,
+                    .{ .register = call.arguments[0] },
+                }, &.{call.arguments[0]}, .value, true),
+                else => try self.emitGeneric(item, following),
             },
-            .print, .trap_message => try self.genericCall(item, call, .nothing),
-            else => unreachable, // supported() refused the rest
+            .chr_code => try self.emitService(item, "svc_chr", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+            }, &.{call.arguments[0]}, .value, true),
+            .string_find_byte => try self.emitService(item, "svc_str_find_byte", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+                .{ .register = call.arguments[1] },
+                .{ .register = call.arguments[2] },
+            }, call.arguments, .value, true),
+            .append_ascii => try self.emitService(item, "svc_builder_append_ascii", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+                .{ .register = call.arguments[1] },
+            }, call.arguments, .none, true),
+            .string_slice => try self.emitService(item, "svc_str_slice", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+                .{ .register = call.arguments[1] },
+                .{ .register = call.arguments[2] },
+            }, call.arguments, .value, true),
+            .string_byte => {
+                // Inline: bounds against the descriptor, one byte
+                // load (unsigned compare treats negatives as huge).
+                const bounds = try self.trapSite(.string_bounds, item);
+                const text = try self.operandRegister(call.arguments[0], &.{});
+                const index = try self.operandRegister(call.arguments[1], &.{text});
+                try self.loadWord(helper, text, 8);
+                try self.word(0xEB00001F | @as(u32, helper) << 16 | @as(u32, index) << 5);
+                try self.branchCond(hs, bounds);
+                const dest = try self.resultRegister(item, following, &.{ call.arguments[0], call.arguments[1] }, &.{ text, index });
+                try self.loadWord(helper, text, 0);
+                // ldrb dest, [helper, index]
+                try self.word(0x38606800 | @as(u32, index) << 16 | @as(u32, helper) << 5 | dest);
+                self.freeDead(&.{ call.arguments[0], call.arguments[1] });
+            },
+            .len => {
+                const operand = call.arguments[0];
+                const of = function.result_types[operand];
+                if (of == .string) {
+                    // A string is a {ptr, len} descriptor: one load.
+                    const text = try self.operandRegister(operand, &.{});
+                    const dest = try self.resultRegister(item, following, &.{operand}, &.{text});
+                    try self.loadWord(dest, text, 8);
+                    self.freeDead(&.{operand});
+                } else if (of == .heap and viewable(self.program, of.heap)) {
+                    const view = try self.operandRegister(operand, &.{});
+                    try self.emitViewPrelude(item, view);
+                    const dest = try self.resultRegister(item, following, &.{operand}, &.{view});
+                    try self.loadWord(dest, view, 8);
+                    self.freeDead(&.{operand});
+                } else {
+                    try self.emitService(item, "svc_obj_len", &.{
+                        .state_pointer,
+                        .{ .literal = self.function_index },
+                        .{ .literal = item },
+                        .{ .register = operand },
+                    }, &.{operand}, .value, true);
+                }
+            },
+            .append_value => {
+                const receiver = function.result_types[call.arguments[0]];
+                const shape: ?types.HeapType = if (receiver == .heap)
+                    self.program.heap_types[receiver.heap]
+                else
+                    null;
+                if (shape != null and shape.? == .builder) {
+                    try self.emitService(item, "svc_builder_append", &.{
+                        .state_pointer,
+                        .{ .literal = self.function_index },
+                        .{ .literal = item },
+                        .{ .register = call.arguments[0] },
+                        .{ .register = call.arguments[1] },
+                    }, call.arguments, .none, true);
+                } else if (shape != null and shape.? == .list and switch (shape.?.list) {
+                    .int, .boolean, .float, .string => true,
+                    else => false,
+                }) {
+                    const service: []const u8 = switch (shape.?.list) {
+                        .int => "svc_list_append_i",
+                        .boolean => "svc_list_append_b",
+                        .float => "svc_list_append_d",
+                        .string => "svc_list_append_s",
+                        else => unreachable,
+                    };
+                    try self.emitService(item, service, &.{
+                        .state_pointer,
+                        .{ .literal = self.function_index },
+                        .{ .literal = item },
+                        .{ .register = call.arguments[0] },
+                        .{ .register = call.arguments[1] },
+                    }, call.arguments, .none, true);
+                } else {
+                    try self.emitGeneric(item, following);
+                }
+            },
+            .index_get, .index_set => {
+                if (self.arrayInlineElement(call)) |element| {
+                    try self.emitArrayAccess(item, call, element, following);
+                } else if (self.fastSeqElement(call)) |element| {
+                    const getter = call.kind == .index_get;
+                    const service: []const u8 = if (getter)
+                        (if (element == .float) "svc_seq_get_d" else "svc_seq_get_i")
+                    else
+                        (if (element == .float) "svc_seq_set_d" else "svc_seq_set_i");
+                    var arguments: [6]ServiceArgument = undefined;
+                    arguments[0] = .state_pointer;
+                    arguments[1] = .{ .literal = self.function_index };
+                    arguments[2] = .{ .literal = item };
+                    arguments[3] = .{ .register = call.arguments[0] };
+                    arguments[4] = .{ .register = call.arguments[1] };
+                    var count: usize = 5;
+                    if (!getter) {
+                        arguments[5] = .{ .register = call.arguments[2] };
+                        count = 6;
+                    }
+                    try self.emitService(item, service, arguments[0..count], call.arguments, if (!getter)
+                        .none
+                    else if (element == .float)
+                        .float
+                    else
+                        .value, true);
+                } else {
+                    try self.emitGeneric(item, following);
+                }
+            },
+            else => try self.emitGeneric(item, following),
         }
     }
 
-    /// The generic service protocol, mirroring the MIR lowering:
-    /// operands into the State's marshaling slots, then
-    /// svc_instr_{i,v}(state, function, instruction, serial).  These
-    /// programs bind nothing, so the serial is zero, exactly as MIR
-    /// emits for serial-free functions.
-    fn genericCall(
-        self: *Emitter,
-        item: ir.Register,
-        call: ir.Instruction.IntrinsicCall,
-        result: enum { value, nothing },
-    ) error{OutOfMemory}!void {
-        for (call.arguments, 0..) |argument, slot| {
-            try self.fetchInto(helper2, argument);
-            try self.storeWord(helper2, state, abi.slots_offset + 8 * @as(u64, slot));
-        }
-        self.freeDead(call.arguments);
-        try self.spillForCall();
-        try self.movReg(0, state);
-        try self.materialize(1, 0);
-        try self.materialize(2, item);
-        try self.materialize(3, 0);
-        try self.loadTable(16, abi.serviceOffset(
-            if (result == .value) "svc_instr_i" else "svc_instr_v",
-        ));
-        try self.callRegister(16);
-        if (result == .value) {
-            const dest = try self.destRegister(item, &.{}, &.{});
-            try self.movReg(dest, 0);
-        }
-        try self.trapCheck();
+    // -- gates shared with the MIR lowering's shape ------------------------
+
+    fn viewable(program: *const ir.Program, heap_index: u32) bool {
+        return switch (program.heap_types[heap_index]) {
+            .array => |shape| switch (shape.element) {
+                .int, .boolean, .float => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn fastSeqElement(self: *const Emitter, call: ir.Instruction.IntrinsicCall) ?types.Type {
+        const of = self.function.result_types[call.arguments[0]];
+        if (of != .heap) return null;
+        const wanted: usize = if (call.kind == .index_get) 2 else 3;
+        if (call.arguments.len != wanted) return null;
+        const element = switch (self.program.heap_types[of.heap]) {
+            .list => |element| element,
+            else => return null,
+        };
+        return switch (element) {
+            .int, .boolean, .float => element,
+            else => null,
+        };
+    }
+
+    fn arrayInlineElement(self: *const Emitter, call: ir.Instruction.IntrinsicCall) ?types.Type {
+        const of = self.function.result_types[call.arguments[0]];
+        if (of != .heap) return null;
+        const wanted: usize = if (call.kind == .index_get) 2 else 3;
+        if (call.arguments.len != wanted) return null;
+        return switch (self.program.heap_types[of.heap]) {
+            .array => |shape| if (shape.rank == 1) switch (shape.element) {
+                .int, .boolean, .float => shape.element,
+                else => null,
+            } else null,
+            else => null,
+        };
     }
 };
 
 // ---------------------------------------------------------------------------
-// Tests — behavior is proven in native_spec.zig's three-way oracle;
-// here the gate itself.
+// Tests — behavior is proven by native_spec's oracle, which runs
+// every corpus program on this backend too; here the gate itself.
 // ---------------------------------------------------------------------------
 
 const compile_mod = @import("compile.zig");
 const testing = std.testing;
 
-test "the gate admits the integer core and refuses the rest" {
-    const admitted =
-        \\func main():
-        \\    var total = 0
-        \\    for i in range(0, 10):
-        \\        for j in range(0, 10):
-        \\            total += (i * j) % 7
-        \\    assert(total > 0)
-        \\    print(str(total))
-    ;
-    const refused_float =
-        \\func main():
-        \\    print(str(1.5 * 2.0))
-    ;
-    const refused_call =
-        \\func double(x: Int) -> Int:
-        \\    return x * 2
+test "the gate is MIR's core narrowed by the ABI limits" {
+    const whole_language =
+        \\import strings
+        \\
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\func total(p: Point, tail: String) -> Float:
+        \\    return p.x + p.y + Float(len(tail))
         \\
         \\func main():
-        \\    print(str(double(21)))
+        \\    var xs: List(Int) = [3, 1, 2]
+        \\    xs.sort()
+        \\    let p = Point(x = 1.5, y = 2.5)
+        \\    print(str(total(p, "abc".upper())))
+        \\    print(str(xs[0]))
     ;
-    inline for (.{ admitted, refused_float, refused_call }, 0..) |source, index| {
+    const too_many_arguments =
+        \\func wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) -> Int:
+        \\    return a + b + c + d + e + f + g + h
+        \\
+        \\func main():
+        \\    print(str(wide(1, 2, 3, 4, 5, 6, 7, 8)))
+    ;
+    inline for (.{ whole_language, too_many_arguments }, 0..) |source, index| {
         var result = try compile_mod.compile(testing.allocator, source ++ "\n", .{}, .{
             .entry_mode = .script,
             .allow_host = true,

@@ -718,3 +718,42 @@ its mass (codegen.zig is ~1.1k lines against the ~24k of MIR loom
 exercises).  Next: the rest of the language behind the same gate,
 x86-64 for Linux, Windows via image.zig's VirtualAlloc — each
 extension racing MIR per-program before it takes over.
+
+---
+
+## 18. Backend milestone 2: the whole language, same day
+
+"Absolutely finished on ARM64" meant auditing MIR's lowering arm by
+arm and transferring all of it: floats as a second register class
+(pinned d8-d12, pool d13-d15 — all callee-saved, so calls spill
+nothing), `Int(Float)` with the NaN guard spelled as fcmp-with-
+itself raising V, multi-function calls over the C ABI with typed
+argument assignment, the ownership serial living in x28, return
+loosening through `svc_loosen`, the generic marshaling protocol for
+every heap-shaped instruction, all 22 fast services, milestone 3's
+inline view and string access (with the stride-24 element address
+as two shifted adds), typed local zeros including `svc_zero_strukt`,
+and heap-handle reference equality.  The gate became
+`native.supported()` narrowed by ABI limits, so the backend can
+never claim less than MIR on this machine, and the engine ladder
+falls zig → MIR → interpreter.
+
+The proof is the oracle running its **entire corpus on all three
+engines** — every collection, ownership, struct, std, trap, and
+formatting test identical, leaked-object counts included — plus the
+bundled programs agreeing byte-for-byte.  The race, after two float
+fixes the benches caught (a fifth pinned float register for
+mandelbrot's locals took math from 1.58x to 1.05x MIR):
+
+| bench | zig/MIR |
+|---|---|
+| loops | 1.03 |
+| strings | 1.02 |
+| math | 1.05 |
+| arrays | 1.37 |
+
+The arrays residue is loop-invariant hoisting of the inline view
+checks — MIR's GVN carries them across iterations, this backend
+re-checks per access.  Recorded as the next optimization frontier
+rather than patched around: it is the same loop analysis that
+vectorization will need.

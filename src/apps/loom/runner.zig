@@ -239,12 +239,13 @@ pub fn run(
     // program fits its supported core, the interpreter otherwise —
     // identical semantics either way.
     // LOOM_ENGINE=zig opts into the self-written backend where its
-    // core covers the program (codegen.zig; falls back to the
-    // interpreter beyond it) — the racing seam, not yet the default.
+    // core covers the program (codegen.zig) — the racing seam, not
+    // yet the default.  Beyond its gate the ladder continues down:
+    // MIR, then the interpreter.
     const use_zig = engine == .zig and
         luce.codegen.available and
         luce.codegen.supported(program);
-    const use_native = engine == .auto and
+    const use_native = (engine == .auto or (engine == .zig and !use_zig)) and
         luce.native.available and
         luce.native.supported(program);
     const result = if (use_zig)
