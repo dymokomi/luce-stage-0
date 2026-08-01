@@ -38,6 +38,9 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     if (environ_map.get("LOOM_ENGINE")) |wanted| {
         if (std.mem.eql(u8, wanted, "interpreter")) runner.engine = .interpreter;
     }
+    if (environ_map.get("LOOM_IMAGE")) |wanted| {
+        if (std.mem.eql(u8, wanted, "off")) runner.image = .off;
+    }
 
     var err_writer = std.Io.File.stderr().writer(io, &.{});
     const err = &err_writer.interface;

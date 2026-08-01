@@ -89,7 +89,11 @@ pulls a ratio toward 1.**
 Both fixes are applied.  The `floor` row times a do-nothing program
 through the same harness, so the reader can see what is not
 computation; and the benchmarks are sized so that floor is a small
-fraction of every row.  They were once sized for a ~1s *interpreter*
+fraction of every row.  Since the native image landed
+(docs/NATIVE.md milestone 5b), best-of-N timing measures warm-cache
+runs: the first round JITs and writes the `.lci`, later rounds map
+it and run with zero codegen — the same accounting C gets, whose
+compile is never timed at all.  They were once sized for a ~1s *interpreter*
 run, which the native engine then made 10ms — small enough that
 fixed cost dominated and `strings` read ~2.8x where the honest
 figure was ~11x.  Sizing rule now: **native should run ~100ms, so
@@ -171,13 +175,13 @@ MIR experiment said it would.  What remains, in value order:
    `ir.prune`, dead-code elimination in the compiler: an unused
    `import strings` went from 12308 to 178 bytes of `.lc` and from
    +4.11ms of load-time compile to free (docs/SPEED.md §12).
-3. ~~**Hermetic codegen (M1)**~~ — shipped at zero measured cost:
-   every host-absolute address now lives behind the State pointer
-   and the byte-identical-code oracle enforces it (docs/NATIVE.md
-   milestone 5; docs/SPEED.md §14).  **The native image (M2)**
-   remains: cache the captured code beside the `.lc` so `loom run`
-   does zero codegen — compile time then leaves these numbers the
-   same way C's did, by not happening at run time.
+3. ~~**Hermetic codegen (M1)**~~ and ~~**the native image (M2)**~~
+   — shipped (docs/NATIVE.md milestone 5; docs/SPEED.md §14-15).
+   `loom run` now caches machine code in a `.lci` beside the `.lc`
+   and warm runs do zero codegen, so compile time left these
+   numbers the way C's did: by not happening at run time.  The
+   tables above are warm-cache numbers by construction (best-of-N
+   timing; the first round writes the image).
 4. **`List.append` on the generic path** — what `split` is actually
    bounded by now; element adoption is ownership, so a fast service
    has to carry that.

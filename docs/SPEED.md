@@ -569,3 +569,51 @@ What §12 measured as "the JIT" is now a deterministic, hermetic,
 capturable code generator.  All that separates today from a `.lc`
 running with zero codegen at load is M2's file format and loader —
 docs/NATIVE.md milestone 5, second half.
+
+---
+
+## 15. M2 landed: the compile stage has left the runtime
+
+`loom run FILE.lc` now caches the generated machine code in a
+`.lci` beside the artifact and, on every warm run, maps it and
+jumps — **no code generation, no MIR context** (mechanics in
+docs/NATIVE.md milestone 5b).  The sentence §13 promised is now
+literal: the toolchain's last stage runs at most once per
+(program, loom build), and the benchmark's numbers include codegen
+exactly as often as C's include `cc` — effectively never.
+
+Two findings from building it, both instrument lessons:
+
+- **The hermeticity oracle had a blind spot.**  M1's two-context
+  byte comparison ran the contexts *sequentially*; the second
+  context's allocations landed exactly where the first's had been
+  freed, so an embedded absolute address compared byte-identical.
+  Behind that mask sat a real leak: MIR converts a float
+  *immediate* into a module data item and bakes its malloc address
+  into the code.  The image path exposed it instantly (float
+  constants read as zeros from fresh pages).  Fix: float constants
+  travel through the State table as bit-pattern *values* — data,
+  not addresses — and the oracle now holds both contexts alive
+  simultaneously.  A comparison oracle is only as good as its
+  ability to make the compared worlds actually differ.
+
+- **Header keys are not integrity.**  The first image format
+  validated provenance (fingerprint, module hash, lowered-text
+  hash) and jumped into whatever bytes followed; one flipped bit
+  segfaulted.  The body hash makes corruption a cache miss, the
+  same bar `module.decode` holds the `.lc` to; the segfault is now
+  a unit test.
+
+The staleness design is worth keeping for its own sake: rather
+than a version constant someone must remember to bump, the image
+stores a hash of the **lowered MIR text**, which loom recomputes
+from the `.lc` at load for well under a millisecond.  Lowering is
+pure, so any change to the code generator changes the text, which
+invalidates every image everywhere, automatically.
+
+Measured on the M4 Max: warm `strings` 68.4 → 65.1ms (−3.3ms, the
+whole JIT cost), the do-nothing floor 2.0 → 1.6ms;
+`bench/compare.sh` against the M1 commit reads strings −2.9% with
+the rest in noise.  The remaining floor is process startup, `.lc`
+decode + verify, the text hash, and the page map — the same shape
+of fixed cost any executable pays its loader.

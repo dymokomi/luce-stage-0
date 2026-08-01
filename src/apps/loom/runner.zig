@@ -35,6 +35,14 @@ const max_printed_frames = 12;
 pub const Engine = enum { auto, interpreter };
 pub var engine: Engine = .auto;
 
+/// Process-wide image policy, set once at startup from LOOM_IMAGE:
+/// `auto` reads and writes the .lci cache beside a .lc (the native
+/// image, docs/NATIVE.md milestone 5b), `off` neither reads nor
+/// writes it.  Scripts (.luc) compile in memory and never touch
+/// images.
+pub const Image = enum { auto, off };
+pub var image: Image = .auto;
+
 pub const compile_options: luce.types.CompileOptions = .{
     .entry_mode = .script,
     .allow_host = true,
@@ -67,8 +75,15 @@ pub fn runModule(
         },
     };
     defer program.deinit();
-    return run(gpa, io, out, err, &program, arguments);
+    return run(gpa, io, out, err, &program, .{ .path = path, .encoded = encoded }, arguments);
 }
+
+/// The on-disk identity of a module being run, when there is one:
+/// what the image cache keys on and sits beside.
+pub const Artifact = struct {
+    path: []const u8,
+    encoded: []const u8,
+};
 
 /// Compile a .luc source file (plus the modules it imports, resolved
 /// beside it) and run it immediately.
@@ -115,7 +130,67 @@ pub fn runSource(
     }
     var program = result.success;
     defer program.deinit();
-    return run(gpa, io, out, err, &program, arguments);
+    return run(gpa, io, out, err, &program, null, arguments);
+}
+
+/// The native path with the image cache around it (docs/NATIVE.md
+/// milestone 5b).  A valid `.lci` beside the `.lc` runs with zero
+/// code generation and no MIR context; anything else — no image, a
+/// stale one, a foreign one — falls through to the JIT, which then
+/// rewrites the cache best-effort before the program runs (it may
+/// never return).  Cache failures are never the program's problem.
+fn runNative(
+    gpa: Allocator,
+    io: std.Io,
+    arena: Allocator,
+    program: *const luce.ir.Program,
+    artifact: ?Artifact,
+    inputs: []const luce.backend.InputValue,
+    outputs: []?luce.backend.RuntimeValue,
+    host: ?luce.backend.Host,
+) !luce.backend.Result {
+    const cache = image == .auto and luce.image.supported and artifact != null;
+    const keys: ?luce.image.Keys = if (cache) .{
+        .fingerprint = luce.native.fingerprint(),
+        .module_hash = luce.image.hashModule(artifact.?.encoded),
+        .text_hash = try luce.native.textHash(arena, program),
+    } else null;
+
+    if (keys) |wanted| from_image: {
+        const image_path = try imagePath(arena, artifact.?.path);
+        const bytes = files.readWhole(arena, io, image_path) catch break :from_image;
+        const spans = luce.image.decode(arena, bytes, wanted, program.functions.len) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => break :from_image,
+        };
+        var loaded = luce.image.map(gpa, spans) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => break :from_image,
+        };
+        defer loaded.deinit(gpa);
+        return luce.native.runCode(arena, program, loaded.addresses, inputs, outputs, program_budget, host);
+    }
+
+    const compiled = try luce.native.compile(arena, program);
+    defer compiled.deinit();
+
+    if (keys) |fresh| write_image: {
+        const spans = try arena.alloc([]const u8, program.functions.len);
+        for (spans, 0..) |*span, index| span.* = compiled.code(index);
+        const bytes = try luce.image.encode(arena, spans, fresh);
+        const image_path = try imagePath(arena, artifact.?.path);
+        files.writeWhole(io, image_path, bytes) catch break :write_image;
+    }
+
+    return compiled.run(arena, program, inputs, outputs, program_budget, host);
+}
+
+/// FILE.lc gets FILE.lci beside it; anything else gets .lci appended.
+fn imagePath(arena: Allocator, module_path: []const u8) error{OutOfMemory}![]const u8 {
+    if (std.mem.endsWith(u8, module_path, ".lc")) {
+        return std.fmt.allocPrint(arena, "{s}i", .{module_path});
+    }
+    return std.fmt.allocPrint(arena, "{s}.lci", .{module_path});
 }
 
 /// The execution boundary: one hosted evaluation against the real
@@ -126,6 +201,7 @@ pub fn run(
     out: *std.Io.Writer,
     err: *std.Io.Writer,
     program: *const luce.ir.Program,
+    artifact: ?Artifact,
     arguments: []const []const u8,
 ) !u8 {
     var services: host_mod.Host = undefined;
@@ -146,14 +222,7 @@ pub fn run(
         luce.native.available and
         luce.native.supported(program);
     const result = if (use_native)
-        luce.native.run(
-            arena.allocator(),
-            program,
-            inputs,
-            outputs,
-            program_budget,
-            services.host(),
-        ) catch |mistake| switch (mistake) {
+        runNative(gpa, io, arena.allocator(), program, artifact, inputs, outputs, services.host()) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
             // A native-compile failure is a loom bug; the program
             // still runs, on the reference engine.

@@ -179,20 +179,48 @@ noise (±1%) — the feared loss of MIR's link-time inlining did not
 materialize, and one table load is no worse than materializing a
 64-bit absolute address inline.
 
-## Milestone 5, second half — the image (planned)
+## Milestone 5, second half — the image (shipped)
 
-**M2 (1-2 weeks).**  Each function's generated code is one
-contiguous buffer (constant pool appended), already captured whole
-by `native.generatedCode`.  The image sits **beside** the `.lc` — the
-`.lc` stays the portable verified artifact — keyed on the `.lc`
-hash, the loom build fingerprint (payload offsets included), and
-the target triple: header, concatenated bodies, offset table, entry
-index.  Loading maps it into executable pages (macOS arm64: the
-MAP_JIT + `pthread_jit_write_protect_np` + `sys_icache_invalidate`
-recipe already in `mir-code-alloc-default.c`), fills the State
-tables, and calls the entry — **zero code generation, no MIR
-context at load**.  Stale or foreign images fall back to the JIT,
-then the interpreter — per-program, never mixed.
+`loom run FILE.lc` now keeps a **`.lci` image** beside the `.lc`
+(`image.zig`; `LOOM_IMAGE=off` disables): the first run JITs and
+writes it, every later run maps the machine code into executable
+pages — the same MAP_JIT + `pthread_jit_write_protect_np` +
+`sys_icache_invalidate` recipe as the JIT's own allocator — fills
+the State address table, and calls the entry.  **No code
+generation, no MIR context.**  The `.lc` stays the only portable
+artifact; scripts (`.luc`) compile in memory and never touch
+images.
+
+Validity is three keys checked cheapest-first, plus integrity: the
+ABI fingerprint (`native.fingerprint()` — target, layout offsets,
+the service roster whose order is the table's), the `.lc` bytes'
+hash, and the **lowered-text hash** — lowering is pure and costs
+well under a millisecond, so `loom` recomputes it at load and any
+change to the code generator invalidates every image automatically,
+with no version constant to remember to bump.  A body hash guards
+the code bytes themselves: a torn write or flipped bit is a clean
+cache miss (the pre-hash prototype jumped into corrupt machine code
+— that segfault is now a unit test).  Every rejection falls back to
+the JIT, which rewrites the cache; the interpreter remains the
+per-program fallback beneath that.
+
+Building it flushed out the one absolute address M1 had missed:
+**MIR turns a float immediate into a module data item and bakes the
+item's malloc address into the code** (movz/movk on aarch64).  The
+two-context hermeticity oracle had been blind to it because
+sequential contexts free and reallocate at identical addresses —
+identical bytes, leaked address.  Both are fixed: float constants
+now travel through the State table *as bit-pattern values* (the one
+table section that is pure data, position-independent by nature —
+`Int(Float)` range limits and the float zero included), and the
+oracle holds both contexts alive simultaneously so allocator reuse
+can never mask an embed again.
+
+Measured (M4 Max): a warm run drops exactly the codegen —
+`strings` −3.3ms (~5%), the do-nothing floor 2.0 → 1.6ms; big
+single-function benches move within noise.  What remains at load:
+read + decode + verify the `.lc`, hash the lowered text, map pages,
+fill the table.
 
 ## Where a wall would send us
 

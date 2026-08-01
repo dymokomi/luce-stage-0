@@ -11,6 +11,7 @@ const ir = @import("ir.zig");
 const backend = @import("backend.zig");
 const interpreter = @import("interpreter.zig");
 const native = @import("native.zig");
+const image = @import("image.zig");
 
 const testing = std.testing;
 
@@ -505,6 +506,84 @@ test "oracle: the std math module runs natively" {
     , roomy);
 }
 
+test "the image is a third engine with identical semantics" {
+    // The full milestone-5b pipeline — compile, capture, encode,
+    // decode, map into fresh executable pages, run with no MIR
+    // context — held to the oracle's contract: prints and traps
+    // identical to the interpreter, on a program that computes and
+    // on one that traps (origins resolve from the .lc side, never
+    // from code).
+    if (!native.available or !image.supported) return;
+    const sources = [_][]const u8{
+        \\import strings
+        \\
+        \\func shout(text: String) -> String:
+        \\    return text.upper()
+        \\
+        \\func main():
+        \\    var xs: List(Int) = [3, 1, 2]
+        \\    xs.sort()
+        \\    print(f"{xs[0]}{xs[1]}{xs[2]} {shout("ok")} {1.5 * 4.0}")
+        \\
+        ,
+        \\func half(value: Int) -> Int:
+        \\    return 10 / value
+        \\
+        \\func main():
+        \\    print(str(half(2)))
+        \\    print(str(half(0)))
+        \\
+    };
+    for (sources) |source| {
+        var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+        defer result.deinit();
+        try testing.expect(result == .success);
+        const program = &result.success;
+        try testing.expect(native.supported(program));
+
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const reference = try runEngine(arena.allocator(), program, roomy, .interpreter);
+
+        // Capture through the real cache pipeline.
+        const keys: image.Keys = .{
+            .fingerprint = native.fingerprint(),
+            .module_hash = 1,
+            .text_hash = try native.textHash(arena.allocator(), program),
+        };
+        const compiled = try native.compile(arena.allocator(), program);
+        const spans = try arena.allocator().alloc([]const u8, program.functions.len);
+        for (spans, 0..) |*span, index| span.* = compiled.code(index);
+        const encoded = try image.encode(arena.allocator(), spans, keys);
+        compiled.deinit(); // the image must carry the code on its own
+
+        const decoded = try image.decode(arena.allocator(), encoded, keys, program.functions.len);
+        var loaded = try image.map(testing.allocator, decoded);
+        defer loaded.deinit(testing.allocator);
+
+        var capture: Capture = .{ .arena = arena.allocator() };
+        const outputs = try arena.allocator().alloc(?backend.RuntimeValue, 0);
+        const candidate = try native.runCode(
+            arena.allocator(),
+            program,
+            loaded.addresses,
+            &.{},
+            outputs,
+            roomy,
+            capture.host(),
+        );
+        try testing.expectEqualStrings(reference.printed, capture.lines.items);
+        try testing.expectEqual(
+            std.meta.activeTag(reference.result),
+            std.meta.activeTag(candidate),
+        );
+        if (reference.result == .trap) {
+            try testing.expectEqual(reference.result.trap.code, candidate.trap.code);
+            try testing.expectEqualStrings(reference.result.trap.message, candidate.trap.message);
+        }
+    }
+}
+
 test "hermeticity: generated code is byte-identical across contexts" {
     // The M1 contract (docs/NATIVE.md milestone 5): the emitted code
     // contains no host address — services, constant descriptors, and
@@ -540,7 +619,7 @@ test "hermeticity: generated code is byte-identical across contexts" {
         \\    let pieces = text.split(";")
         \\    let p = Point(x = grid[1], y = grid[2])
         \\    print(str(total(p, text.upper())))
-        \\    print(str(len(pieces) + text.find_byte(59, 0)))
+        \\    print(str(len(pieces) + text.find_byte(59, 0) + Int(p.x)))
         \\
     ;
     var result = try compile_mod.compile(testing.allocator, source, .{}, script);
@@ -550,11 +629,22 @@ test "hermeticity: generated code is byte-identical across contexts" {
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const first = try native.generatedCode(arena.allocator(), &result.success);
-    const second = try native.generatedCode(arena.allocator(), &result.success);
-    try testing.expectEqual(first.len, second.len);
-    for (first, second, 0..) |one, two, index| {
+    // Both contexts stay alive until after the comparison: a
+    // sequential compile-free-compile can land its allocations at
+    // the exact addresses the freed context vacated, and identical
+    // baked-in addresses would read as identical bytes.  That
+    // masking is precisely how the float-constant leak (module data
+    // items, milestone 5b) escaped this oracle's first edition.
+    const first = try native.compile(arena.allocator(), &result.success);
+    defer first.deinit();
+    const second = try native.compile(arena.allocator(), &result.success);
+    defer second.deinit();
+    try testing.expectEqual(first.addresses.len, second.addresses.len);
+    for (0..first.addresses.len) |index| {
+        const one = first.code(index);
+        const two = second.code(index);
         try testing.expect(one.len > 0);
+        try testing.expect(first.addresses[index] != second.addresses[index]);
         testing.expectEqualSlices(u8, one, two) catch |mistake| {
             std.debug.print("function {d} code differs between contexts\n", .{index});
             return mistake;

@@ -47,6 +47,7 @@ const ir = @import("ir.zig");
 const types = @import("types.zig");
 const backend = @import("backend.zig");
 const interpreter = @import("interpreter.zig");
+const module = @import("module.zig");
 
 const Allocator = std.mem.Allocator;
 const RuntimeValue = backend.RuntimeValue;
@@ -214,6 +215,54 @@ const value_stride: u64 = @sizeOf(RuntimeValue);
 /// embed a host address it never sees.  run() fills the entries.
 const AddressTable = struct {
     constant_count: usize,
+    function_count: usize,
+    /// Every distinct float constant in the program, as raw bits, in
+    /// first-appearance order.  MIR turns a float *immediate* into a
+    /// module data item whose malloc address gets baked into the
+    /// code, so float constants go through the table like every
+    /// other would-be absolute — and as position-independent values,
+    /// not addresses: runCode writes the bits straight into the
+    /// entries and the code reads them with one d-load.
+    floats: []const u64,
+
+    /// The same deterministic walk builds the table for lowering and
+    /// fills it at run time.
+    fn collect(arena: Allocator, program: *const ir.Program) error{OutOfMemory}!AddressTable {
+        var floats: std.ArrayList(u64) = .empty;
+        for (program.functions) |*each| {
+            for (each.instructions) |instruction| {
+                const bits: u64 = switch (instruction) {
+                    .const_float => |value| @bitCast(value),
+                    else => continue,
+                };
+                if (std.mem.indexOfScalar(u64, floats.items, bits) == null) {
+                    try floats.append(arena, bits);
+                }
+            }
+        }
+        // Three floats every program may need regardless of its own
+        // constants: the float zero (local zeroing, default returns)
+        // and the two Int(Float) range limits.  24 bytes buys never
+        // having to reason about which lowering paths a program hit.
+        for ([_]f64{ 0.0, -9223372036854775808.0, 9223372036854775808.0 }) |always| {
+            const bits: u64 = @bitCast(always);
+            if (std.mem.indexOfScalar(u64, floats.items, bits) == null) {
+                try floats.append(arena, bits);
+            }
+        }
+        return .{
+            .constant_count = program.constants.len,
+            .function_count = program.functions.len,
+            .floats = try floats.toOwnedSlice(arena),
+        };
+    }
+
+    fn floatOffset(self: AddressTable, value: f64) u64 {
+        const bits: u64 = @bitCast(value);
+        const index = std.mem.indexOfScalar(u64, self.floats, bits).?;
+        return State.address_table_offset +
+            8 * @as(u64, @intCast(services.len + self.constant_count + 1 + self.function_count + index));
+    }
 
     fn service(name: []const u8) u64 {
         for (services, 0..) |entry, index| {
@@ -239,8 +288,8 @@ const AddressTable = struct {
             8 * @as(u64, @intCast(services.len + self.constant_count + 1 + index));
     }
 
-    fn entryCount(self: AddressTable, function_count: usize) usize {
-        return services.len + self.constant_count + 1 + function_count;
+    fn entryCount(self: AddressTable) usize {
+        return services.len + self.constant_count + 1 + self.function_count + self.floats.len;
     }
 };
 
@@ -827,7 +876,7 @@ const FunctionLowering = struct {
 };
 
 fn lowerProgram(arena: Allocator, program: *const ir.Program, payloads: Payloads) error{OutOfMemory}![:0]const u8 {
-    const table: AddressTable = .{ .constant_count = program.constants.len };
+    const table = try AddressTable.collect(arena, program);
     var text: Text = .{ .arena = arena };
     try text.print("luce: module\n", .{});
 
@@ -951,7 +1000,7 @@ fn lowerFunction(
     }
     for (function.locals[function.parameter_count..], function.parameter_count..) |local, number| {
         switch (local.local_type) {
-            .float => try text.print("    dmov l{d}, 0.0\n", .{number}),
+            .float => try text.print("    dmov l{d}, d:{d}(s)\n", .{ number, table.floatOffset(0.0) }),
             .string => try text.print("    mov l{d}, i64:{d}(s)\n", .{ number, table.emptyString() }),
             .heap => |heap_index| try text.print("    mov l{d}, {d}\n", .{
                 number,
@@ -991,17 +1040,17 @@ fn lowerFunction(
         \\PROP{d}:
         \\
     , .{ index, index, index });
-    try emitDefaultReturn(text, function.return_type);
+    try emitDefaultReturn(text, table, function.return_type);
     try text.print("DEPTH{d}: mov to, 0\n    mov tc, {d}\n    jmp TRAP{d}\n", .{
         index, trapWord(.call_depth_exceeded), index,
     });
     try text.print("endfunc\n", .{});
 }
 
-fn emitDefaultReturn(text: *Text, return_type: types.Type) error{OutOfMemory}!void {
+fn emitDefaultReturn(text: *Text, table: AddressTable, return_type: types.Type) error{OutOfMemory}!void {
     switch (return_type) {
         .none => try text.print("    ret\n", .{}),
-        .float => try text.print("    dmov dt, 0.0\n    ret dt\n", .{}),
+        .float => try text.print("    dmov dt, d:{d}(s)\n    ret dt\n", .{table.floatOffset(0.0)}),
         else => try text.print("    mov t, 0\n    ret t\n", .{}),
     }
 }
@@ -1185,7 +1234,12 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
     switch (instruction) {
         .const_boolean => |value| try text.print("    mov r{d}, {d}\n", .{ item, @intFromBool(value) }),
         .const_int => |value| try text.print("    mov r{d}, {d}\n", .{ item, value }),
-        .const_float => |value| try emitFloatMove(text, item, value),
+        // A float constant is its bits in the table — one d-load; a
+        // float *immediate* would become MIR module data with its
+        // malloc address baked into the code.
+        .const_float => |value| try text.print("    dmov r{d}, d:{d}(s)\n", .{
+            item, lowering.table.floatOffset(value),
+        }),
         // A constant string is its descriptor's address, read from
         // the table — never embedded.
         .const_data => |data| try text.print("    mov r{d}, i64:{d}(s)\n", .{
@@ -1222,15 +1276,22 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 try text.print(
                     \\    dne t, r{1d}, r{1d}
                     \\    bt S{2d}_{3d}, t
-                    \\    dmov dt, -9223372036854775808.0
+                    \\    dmov dt, d:{4d}(s)
                     \\    dlt t, r{1d}, dt
                     \\    bt S{2d}_{3d}, t
-                    \\    dmov dt, 9223372036854775808.0
+                    \\    dmov dt, d:{5d}(s)
                     \\    dge t, r{1d}, dt
                     \\    bt S{2d}_{3d}, t
                     \\    d2i r{0d}, r{1d}
                     \\
-                , .{ item, operation.operand, lowering.index, range });
+                , .{
+                    item,
+                    operation.operand,
+                    lowering.index,
+                    range,
+                    lowering.table.floatOffset(-9223372036854775808.0),
+                    lowering.table.floatOffset(9223372036854775808.0),
+                });
             },
         },
         .call => |call| {
@@ -1410,15 +1471,6 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
     }
 }
 
-fn emitFloatMove(text: *Text, item: ir.Register, value: f64) error{OutOfMemory}!void {
-    // Full decimal notation ({d} on 1.0e300 is ~300 digits), with a
-    // ".0" appended when the value prints integral — MIR's scanner
-    // types the literal by the dot.
-    const digits = try std.fmt.allocPrint(text.arena, "{d}", .{value});
-    const fractional = std.mem.indexOfAny(u8, digits, ".e") != null;
-    try text.print("    dmov r{d}, {s}{s}\n", .{ item, digits, if (fractional) "" else ".0" });
-}
-
 fn lowerBinary(lowering: *FunctionLowering, item: ir.Register) error{OutOfMemory}!void {
     const text = lowering.text;
     const operation = lowering.function.instructions[item].binary;
@@ -1543,14 +1595,33 @@ fn compileBody(payload: ?*anyopaque) callconv(.c) void {
 }
 
 /// A compiled program: the MIR context that owns the executable
-/// pages, and each function's code span.  Deinit tears the context
-/// (and the code) down — nothing may run it afterwards.
-const Compiled = struct {
+/// pages, and each function's code span.  `run` executes it, `code`
+/// exposes a span for image capture (docs/NATIVE.md milestone 5b).
+/// Deinit tears the context (and the code) down — nothing may run
+/// or read it afterwards.
+pub const Compiled = struct {
     ctx: c.Context,
-    addresses: []?*const anyopaque,
-    lengths: []usize,
+    addresses: []const *const anyopaque,
+    lengths: []const usize,
 
-    fn deinit(self: Compiled) void {
+    pub fn code(self: *const Compiled, index: usize) []const u8 {
+        const bytes: [*]const u8 = @ptrCast(self.addresses[index]);
+        return bytes[0..self.lengths[index]];
+    }
+
+    pub fn run(
+        self: *const Compiled,
+        arena: Allocator,
+        program: *const ir.Program,
+        inputs: []const InputValue,
+        outputs: []?RuntimeValue,
+        budget: Budget,
+        host: ?backend.Host,
+    ) RunError!Result {
+        return runCode(arena, program, self.addresses, inputs, outputs, budget, host);
+    }
+
+    pub fn deinit(self: Compiled) void {
         c.MIR_gen_finish(self.ctx);
         c.MIR_finish(self.ctx);
     }
@@ -1560,7 +1631,8 @@ const Compiled = struct {
 /// failure after an MIR error the context is abandoned (its state
 /// after the longjmp is unknown — a small, one-time leak on what is
 /// by definition a lowering bug).
-fn compileNative(arena: Allocator, program: *const ir.Program) RunError!Compiled {
+pub fn compile(arena: Allocator, program: *const ir.Program) RunError!Compiled {
+    if (!available) return error.NativeFailed;
     const text = try lowerProgram(arena, program, Payloads.measure());
     const ctx = c.luce_mir_init() orelse return error.NativeFailed;
     var job: CompileJob = .{
@@ -1572,38 +1644,55 @@ fn compileNative(arena: Allocator, program: *const ir.Program) RunError!Compiled
     @memset(job.addresses, null);
     @memset(job.lengths, 0);
     if (c.luce_mir_protected(ctx, &compileBody, &job) != 0) return error.NativeFailed;
-    for (job.addresses) |address| {
-        if (address != null) continue;
-        // The context is healthy (no longjmp) — tear it down normally.
-        c.MIR_gen_finish(ctx);
-        c.MIR_finish(ctx);
-        return error.NativeFailed;
+    const solid = try arena.alloc(*const anyopaque, job.addresses.len);
+    for (job.addresses, solid) |address, *slot| {
+        slot.* = address orelse {
+            // The context is healthy (no longjmp) — tear it down
+            // normally.
+            c.MIR_gen_finish(ctx);
+            c.MIR_finish(ctx);
+            return error.NativeFailed;
+        };
     }
-    return .{ .ctx = ctx, .addresses = job.addresses, .lengths = job.lengths };
+    return .{ .ctx = ctx, .addresses = solid, .lengths = job.lengths };
 }
 
-/// Every function's generated machine code, copied out of the
-/// context: the capture seam for the hermeticity oracle
-/// (native_spec.zig) and the planned native image (docs/NATIVE.md
-/// milestone 5).
-pub fn generatedCode(arena: Allocator, program: *const ir.Program) RunError![][]const u8 {
-    if (!available) return error.NativeFailed;
-    const compiled = try compileNative(arena, program);
-    defer compiled.deinit();
-    const copies = try arena.alloc([]const u8, compiled.addresses.len);
-    for (compiled.addresses, compiled.lengths, copies) |address, length, *copy| {
-        const code: [*]const u8 = @ptrCast(address.?);
-        copy.* = try arena.dupe(u8, code[0..length]);
-    }
-    return copies;
+/// The ABI half of an image's validity key (docs/NATIVE.md milestone
+/// 5b): target, the layouts the emitted text hardcodes, and the
+/// service roster whose order is the address table's.  The codegen
+/// half is textHash — together they invalidate a cached image on any
+/// change that could make its bytes wrong.
+pub fn fingerprint() u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(@tagName(builtin.cpu.arch));
+    hasher.update(@tagName(builtin.os.tag));
+    const payloads = Payloads.measure();
+    for ([_]u64{
+        module.format_version, State.address_table_offset,
+        State.slot_count,      value_stride,
+        payloads.int,          payloads.float,
+        payloads.boolean,
+    }) |word| hasher.update(std.mem.asBytes(&word));
+    for (services) |service| hasher.update(service.name);
+    return hasher.final();
+}
+
+/// The lowered MIR text's hash: a pure function of the program and
+/// this loom's code generator, cheap enough (well under a
+/// millisecond) to recompute at every image load — so any change to
+/// the lowering invalidates every cached image automatically.
+pub fn textHash(arena: Allocator, program: *const ir.Program) error{OutOfMemory}!u64 {
+    const text = try lowerProgram(arena, program, Payloads.measure());
+    return std.hash.Wyhash.hash(0, text);
 }
 
 pub const RunError = error{ OutOfMemory, NativeFailed };
 
-/// Compile the whole program to machine code and run its entry.  The
-/// signature mirrors the interpreter's `run`; `budget.steps` is not
-/// enforced here (native code is for programs meant to finish), the
-/// call-depth budget is.
+/// Compile the whole program to machine code and run its entry — the
+/// one-shot path; loom's runner uses compile()/runCode() so it can
+/// capture the image between the two.  The signature mirrors the
+/// interpreter's `run`; `budget.steps` is not enforced here (native
+/// code is for programs meant to finish), the call-depth budget is.
 pub fn run(
     arena: Allocator,
     program: *const ir.Program,
@@ -1612,10 +1701,26 @@ pub fn run(
     budget: Budget,
     host: ?backend.Host,
 ) RunError!Result {
-    if (!available) return error.NativeFailed;
-
-    const compiled = try compileNative(arena, program);
+    const compiled = try compile(arena, program);
     defer compiled.deinit();
+    return runCode(arena, program, compiled.addresses, inputs, outputs, budget, host);
+}
+
+/// Execute already-native code — from a fresh compile or from a
+/// mapped image (image.zig): allocate the State with its address
+/// table, fill the table (the single place host addresses exist),
+/// and call the entry.  The caller keeps the code alive for the
+/// whole call.
+pub fn runCode(
+    arena: Allocator,
+    program: *const ir.Program,
+    addresses: []const *const anyopaque,
+    inputs: []const InputValue,
+    outputs: []?RuntimeValue,
+    budget: Budget,
+    host: ?backend.Host,
+) RunError!Result {
+    if (!available) return error.NativeFailed;
 
     var runtime: Runtime = .{ .machine = .{
         .arena = arena,
@@ -1635,9 +1740,9 @@ pub fn run(
         desc.* = .{ .bytes = constant.ptr, .len = constant.len };
     }
     constant_descs[program.constants.len] = .{ .bytes = "", .len = 0 };
-    const table: AddressTable = .{ .constant_count = program.constants.len };
+    const table = try AddressTable.collect(arena, program);
     const words = try arena.alloc(u64, State.address_table_offset / 8 +
-        table.entryCount(program.functions.len));
+        table.entryCount());
     const state: *State = @ptrCast(@alignCast(words.ptr));
     state.* = .{
         .depth_left = @intCast(budget.call_depth),
@@ -1650,11 +1755,15 @@ pub fn run(
     for (constant_descs, entries[services.len..][0..constant_descs.len]) |*desc, *entry| {
         entry.* = @intFromPtr(desc);
     }
-    for (compiled.addresses, entries[services.len + constant_descs.len ..]) |address, *entry| {
-        entry.* = @intFromPtr(address.?);
+    for (addresses, entries[services.len + constant_descs.len ..][0..addresses.len]) |address, *entry| {
+        entry.* = @intFromPtr(address);
     }
+    // Float constants: bits, not addresses — the one table section
+    // that is pure value and never host-specific.
+    const float_entries = entries[services.len + constant_descs.len + addresses.len ..];
+    @memcpy(float_entries[0..table.floats.len], table.floats);
 
-    const entry_code = compiled.addresses[program.entry_function].?;
+    const entry_code = addresses[program.entry_function];
     const main: *const fn (*State) callconv(.c) void = @ptrCast(@alignCast(entry_code));
     main(state);
 
