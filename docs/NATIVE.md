@@ -247,7 +247,7 @@ inline view checks, which MIR's GVN gets and this backend does not
 yet attempt (recorded, not disguised; it is also where vectorization
 work lands later).
 
-### x86-64 (milestone 2 — the whole language, opt-in)
+### x86-64 (milestone 2 + Phase B — the whole language, fast, opt-in)
 
 `codegen_x86.zig` is the twin emitter, reached the same way
 (LOOM_ENGINE=zig) against the same `native.abi` contract, hermetic
@@ -276,22 +276,42 @@ native backends.  Object handles, the per-frame ownership serial (r14
 for functions with bindings), and return-value loosening all travel
 the same seams the MIR engine defined; the viewable-array
 representation matches too, so `supported()` is the only arch-specific
-line.  The fast direct services and unboxed inline access (aarch64's
-M3/M4) are **not** ported yet: heap, array, and string work runs
-through the generic boundary, correct but not fast.
+line.
+
+**Phase B** transfers aarch64's M3/M4 speed arms — the same seams,
+now emitted as x86 encodings.  Unboxed inline access: a String is the
+address of a `{ptr, len}` descriptor, so `byte_at` compiles to a
+bounds check (`cmp`/`jae`) and a `movzx`, `len` to one load; a scalar
+rank-1 Array travels as the address of a view `{elements, len, alive,
+handle}`, so indexing inlines the null/alive/bounds checks and a
+typed load or store at `elements + index*stride + payload` — the
+element address built with two `lea`s (the stride is 24), the payload
+offsets and stride embedded as immediates exactly as MIR and aarch64
+embed them.  The producers become fast direct services reached with
+args straight in the SysV registers (`svc_str_int`, `svc_chr`,
+`svc_str_concat`, `svc_str_slice`, `svc_str_find_byte` — the SIMD
+scan — `svc_builder_append`/`_ascii`, `svc_list_append_*`,
+`svc_seq_get`/`set`, `svc_obj_len`).  One x86-only wrinkle: the float
+scratch pool (xmm0-3) overlaps the float argument registers, so a
+service call spills the pool *before* loading arguments (aarch64's
+float pool is callee-saved and disjoint, and can fetch first).
 
 The oracle proves it: on x86 the strong "covers everything" assert
-holds again (the M2 gate is the whole core), so every program in the
-corpus — collections, maps, builders, arrays, structs, ownership
-traps, the std modules — runs on the zig backend byte-for-byte
-identical to the interpreter, with the same leak counts and trap
-codes.  Standing (Intel Xeon container): scalar loops/math at
-**~1.0-1.05x MIR**; array/string/allocation-heavy code is much slower
-than MIR (the generic per-instruction service call, e.g. matmul's
-n³ indexed reads), pending the Phase B fast-service/inline-access
-port.  Because that speed gap remains, `mature_default` stays aarch64-
-only: on x86 the `auto` ladder still defaults to MIR, and
-LOOM_ENGINE=zig opts in.
+holds (the gate is the whole core), so every program in the corpus —
+collections, maps, builders, arrays, structs, ownership traps, the
+std modules — runs on the zig backend byte-for-byte identical to the
+interpreter, same leak counts and trap codes, and the inline
+immediates keep the two-context hermeticity oracle and the `.lci`
+image green.  Standing (Intel Xeon container): scalar loops and
+strings at **~1.05x MIR** (parity), math/matmul/arrays **~1.6-1.9x**
+— the checked-scalar gap a no-GVN backend leaves against MIR's
+redundant-bounds-check elimination, the same shape aarch64 shows at a
+smaller margin.  Before Phase B the heap benches ran the generic
+service per instruction (matmul ~100x slower); they are now within
+~2x.  `mature_default` still stays aarch64-only — flipping x86's
+`auto` default from MIR to the self-written backend is the remaining
+sovereignty step (docs/SPEED.md §16-17), a policy call once the
+array/float margin closes; today LOOM_ENGINE=zig opts in.
 
 Targets: aarch64 macOS/Linux and x86-64 Linux now, Windows when
 image.zig grows VirtualAlloc.

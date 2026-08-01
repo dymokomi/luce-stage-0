@@ -275,6 +275,50 @@ const Emitter = struct {
         try self.loadMem(dst, state, @intCast(offset));
     }
 
+    /// movzx dst, byte [base + disp] — a zero-extended byte load.
+    fn loadByte(self: *Emitter, dst: u4, base: u4, disp: i32) error{OutOfMemory}!void {
+        try self.rex(true, dst, 0, base);
+        try self.byte(0x0F);
+        try self.byte(0xB6); // movzx r64, r/m8
+        try self.modrmMem(dst, base, disp);
+    }
+
+    /// mov byte [base + disp], src — store the low byte of src.  A REX
+    /// prefix is needed to name spl/bpl/sil/dil or r8b-r15b as the byte
+    /// source and to reach a high base; a bare W=0 REX serves.
+    fn storeByte(self: *Emitter, src: u4, base: u4, disp: i32) error{OutOfMemory}!void {
+        if (src >= 4 or base >= 8) try self.rex(false, src, 0, base);
+        try self.byte(0x88); // mov r/m8, r8
+        try self.modrmMem(src, base, disp);
+    }
+
+    /// lea dst, [base + index*(1<<scale) + disp].  index may be any
+    /// register except rsp; r12 as index works because REX.X selects
+    /// it (index field 100b is "no index" only when REX.X is clear).
+    fn leaScaled(self: *Emitter, dst: u4, base: u4, index: u4, scale: u2, disp: i32) error{OutOfMemory}!void {
+        try self.rex(true, dst, index, base);
+        try self.byte(0x8D); // lea
+        try self.byte(0x80 | (@as(u8, dst & 7) << 3) | 0x04); // mod=disp32, rm=SIB
+        try self.byte((@as(u8, scale) << 6) | (@as(u8, index & 7) << 3) | (base & 7));
+        try self.imm32(disp);
+    }
+
+    /// shl reg, amount.
+    fn shlImm(self: *Emitter, reg: u4, amount: u8) error{OutOfMemory}!void {
+        try self.rex(true, 0, 0, reg);
+        try self.byte(0xC1);
+        try self.byte(0xE0 | @as(u8, reg & 7)); // /4
+        try self.byte(amount);
+    }
+
+    /// imul dst, src, imm32.
+    fn imulImm(self: *Emitter, dst: u4, src: u4, imm: i32) error{OutOfMemory}!void {
+        try self.rex(true, dst, 0, src);
+        try self.byte(0x69);
+        try self.modrmReg(dst, src);
+        try self.imm32(imm);
+    }
+
     // -- float moves & memory ---------------------------------------------
 
     /// movsd for [base + disp]; opcode selects load (0x10) or store
@@ -1239,13 +1283,22 @@ const Emitter = struct {
 
     fn emitBinary(self: *Emitter, item: ir.Register, operation: anytype, following: ?ir.Register) error{OutOfMemory}!void {
         if (operation.operand_type == .float) return self.emitFloatBinary(item, operation, following);
-        // String concatenation and comparison, and struct equality,
-        // live in the reference implementation — the generic service
-        // (String + has a dedicated fast service added in the next
-        // pass; correctness lives here first).  Heap/bool/int compare
-        // as words below.
+        // String concatenation has a direct service; string ordering
+        // and struct equality stay in the reference implementation
+        // through the generic path, exactly as MIR lowers them.
+        // Heap/bool/int compare as words below.
         switch (operation.operand_type) {
-            .string, .strukt => return self.emitGeneric(item),
+            .string => {
+                if (operation.op == .add) {
+                    return self.emitService(item, "svc_str_concat", &.{
+                        .state_pointer,
+                        .{ .register = operation.left },
+                        .{ .register = operation.right },
+                    }, &.{ operation.left, operation.right }, .value, true);
+                }
+                return self.emitGeneric(item);
+            },
+            .strukt => return self.emitGeneric(item),
             else => {},
         }
         if (operation.op.isComparison()) {
@@ -1529,6 +1582,200 @@ const Emitter = struct {
         try self.trapCheck();
     }
 
+    // -- fast direct services (milestone 4's producers, transferred) -------
+
+    /// A fast service call: arguments fetched straight into ABI
+    /// registers, result in rax/xmm0, trap check after.  A null IR
+    /// register is not used here — literals and the State/serial words
+    /// travel as their own variants.
+    const ServiceArgument = union(enum) {
+        register: ir.Register,
+        literal: u64,
+        state_pointer,
+        serial_word,
+    };
+
+    fn emitService(
+        self: *Emitter,
+        item: ir.Register,
+        service: []const u8,
+        arguments: []const ServiceArgument,
+        free: []const ir.Register,
+        result: enum { none, value, float },
+        check: bool,
+    ) error{OutOfMemory}!void {
+        // Spill first, then load args.  The float scratch pool (xmm0-3)
+        // overlaps the float argument registers, so — unlike aarch64,
+        // whose float pool is callee-saved and disjoint — a fetch into
+        // an argument register must not precede the spill (this is the
+        // order emitCall already uses on x86).
+        try self.spillForCall();
+        // SysV value args rdi,rsi,rdx,rcx,r8,r9; float args xmm0-7.
+        const value_arg_regs = [_]u4{ 7, 6, 2, 1, 8, 9 };
+        var value_slot: usize = 0;
+        var float_slot: u4 = 0;
+        for (arguments) |argument| {
+            switch (argument) {
+                .state_pointer => {
+                    try self.movReg(value_arg_regs[value_slot], state);
+                    value_slot += 1;
+                },
+                .serial_word => {
+                    try self.movReg(value_arg_regs[value_slot], serial);
+                    value_slot += 1;
+                },
+                .literal => |value| {
+                    try self.materialize(value_arg_regs[value_slot], value);
+                    value_slot += 1;
+                },
+                .register => |register| {
+                    if (self.isFloat(register)) {
+                        try self.ffetchInto(float_slot, register);
+                        float_slot += 1;
+                    } else {
+                        try self.fetchInto(value_arg_regs[value_slot], register);
+                        value_slot += 1;
+                    }
+                },
+            }
+        }
+        self.freeDead(free);
+        try self.loadTable(call_target, abi.serviceOffset(service));
+        try self.callReg(call_target);
+        switch (result) {
+            .none => {},
+            .value => {
+                const dest = try self.destRegister(item, &.{}, &.{});
+                try self.movReg(dest, 0);
+            },
+            .float => {
+                const dest = try self.destFloat(item, &.{}, &.{});
+                try self.fmovRegs(dest, 0);
+            },
+        }
+        if (check) try self.trapCheck();
+    }
+
+    // -- inline access (milestone 3's unboxed reads, transferred) ----------
+
+    /// Null and liveness checks on a view register: the same traps the
+    /// interpreter's resolve raises, inline.  view is untouched; helper
+    /// (rax) is the scratch.
+    fn emitViewPrelude(self: *Emitter, item: ir.Register, view: u4) error{OutOfMemory}!void {
+        const null_stub = try self.trapSite(.null_object, item);
+        const dead_stub = try self.trapSite(.use_after_free, item);
+        try self.branchZero(view, null_stub, true);
+        try self.loadWord(helper, view, 16); // alive pointer
+        try self.loadByte(helper, helper, 0);
+        try self.branchZero(helper, dead_stub, true);
+    }
+
+    /// helper = helper + index * element_stride.  index is copied into
+    /// helper2 (rdx) first, so a pinned or high index register never
+    /// reaches the SIB byte directly.
+    fn emitElementAddress(self: *Emitter, index: u4) error{OutOfMemory}!void {
+        const stride = abi.element_stride;
+        try self.movReg(helper2, index); // rdx = index
+        if (stride == 24) {
+            // helper2 = 3*index via [rdx + rdx*2], then helper += 8*that.
+            try self.leaScaled(helper2, helper2, helper2, 1, 0);
+            try self.leaScaled(helper, helper, helper2, 3, 0);
+        } else if (std.math.isPowerOfTwo(stride)) {
+            const shift: u3 = @intCast(std.math.log2_int(u64, stride));
+            if (shift <= 3) {
+                try self.leaScaled(helper, helper, helper2, @intCast(shift), 0);
+            } else {
+                try self.shlImm(helper2, shift);
+                try self.alu(0x01, helper, helper2); // add helper, helper2
+            }
+        } else {
+            try self.imulImm(helper2, helper2, @intCast(stride));
+            try self.alu(0x01, helper, helper2);
+        }
+    }
+
+    /// Inline rank-1 array indexing: null/alive checks, bounds against
+    /// the view, then a typed load or store at
+    /// elements + index * stride + payload offset.
+    fn emitArrayAccess(
+        self: *Emitter,
+        item: ir.Register,
+        call: ir.Instruction.IntrinsicCall,
+        element: types.Type,
+    ) error{OutOfMemory}!void {
+        const payloads = abi.payloadOffsets();
+        const view = try self.operandRegister(call.arguments[0], &.{});
+        const index = try self.operandRegister(call.arguments[1], &.{view});
+        try self.emitViewPrelude(item, view);
+        const bounds = try self.trapSite(.index_bounds, item);
+        try self.loadWord(helper, view, 8); // len
+        try self.compareRegisters(index, helper); // index - len
+        try self.branchCond(cc_ae, bounds); // unsigned >=: negatives read huge
+        if (call.kind == .index_get) {
+            const dest = switch (element) {
+                .float => try self.destFloat(item, &.{ call.arguments[0], call.arguments[1] }, &.{}),
+                else => try self.destRegister(item, &.{ call.arguments[0], call.arguments[1] }, &.{ view, index }),
+            };
+            try self.loadWord(helper, view, 0); // elements
+            try self.emitElementAddress(index);
+            switch (element) {
+                .float => try self.floadWord(dest, helper, payloads.float),
+                .int => try self.loadWord(dest, helper, payloads.int),
+                .boolean => try self.loadByte(dest, helper, @intCast(payloads.boolean)),
+                else => unreachable,
+            }
+            self.freeDead(&.{ call.arguments[0], call.arguments[1] });
+        } else {
+            const value = call.arguments[2];
+            const from = if (element == .float)
+                try self.operandFloat(value, &.{})
+            else
+                try self.operandRegister(value, &.{ view, index });
+            try self.loadWord(helper, view, 0); // elements
+            try self.emitElementAddress(index);
+            switch (element) {
+                .float => try self.fstoreWord(from, helper, payloads.float),
+                .int => try self.storeWord(from, helper, payloads.int),
+                .boolean => try self.storeByte(from, helper, @intCast(payloads.boolean)),
+                else => unreachable,
+            }
+            self.freeDead(&.{ call.arguments[0], call.arguments[1], value });
+        }
+    }
+
+    // -- gates shared with the MIR lowering's shape ------------------------
+
+    fn fastSeqElement(self: *const Emitter, call: ir.Instruction.IntrinsicCall) ?types.Type {
+        const of = self.function.result_types[call.arguments[0]];
+        if (of != .heap) return null;
+        const wanted: usize = if (call.kind == .index_get) 2 else 3;
+        if (call.arguments.len != wanted) return null;
+        const element = switch (self.program.heap_types[of.heap]) {
+            .list => |element| element,
+            else => return null,
+        };
+        return switch (element) {
+            .int, .boolean, .float => element,
+            else => null,
+        };
+    }
+
+    fn arrayInlineElement(self: *const Emitter, call: ir.Instruction.IntrinsicCall) ?types.Type {
+        const of = self.function.result_types[call.arguments[0]];
+        if (of != .heap) return null;
+        // Only rank-1 access is inlined (one index operand); higher
+        // ranks keep the generic path.
+        const wanted: usize = if (call.kind == .index_get) 2 else 3;
+        if (call.arguments.len != wanted) return null;
+        return switch (self.program.heap_types[of.heap]) {
+            .array => |shape| if (shape.rank == 1) switch (shape.element) {
+                .int, .boolean, .float => shape.element,
+                else => null,
+            } else null,
+            else => null,
+        };
+    }
+
     fn emitIntrinsic(self: *Emitter, item: ir.Register, call: ir.Instruction.IntrinsicCall) error{OutOfMemory}!void {
         switch (call.kind) {
             .assert_true => {
@@ -1537,25 +1784,156 @@ const Emitter = struct {
                 self.freeDead(&.{call.arguments[0]});
                 try self.branchZero(condition, failed, true);
             },
-            .str_value => {
-                // str on a String is a move; every other value goes
-                // through the generic marshaling service.
-                if (self.typeOf(call.arguments[0]) == .string) {
+            .str_value => switch (self.typeOf(call.arguments[0])) {
+                // str on a String is a move; Int gets a fast service;
+                // everything else marshals through the generic path.
+                .string => {
                     const source = try self.operandRegister(call.arguments[0], &.{});
                     const dest = try self.destRegister(item, &.{call.arguments[0]}, &.{source});
                     try self.movReg(dest, source);
                     self.freeDead(&.{call.arguments[0]});
+                },
+                .int => try self.emitService(item, "svc_str_int", &.{
+                    .state_pointer,
+                    .{ .register = call.arguments[0] },
+                }, &.{call.arguments[0]}, .value, true),
+                else => try self.emitGeneric(item),
+            },
+            .chr_code => try self.emitService(item, "svc_chr", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+            }, &.{call.arguments[0]}, .value, true),
+            .string_find_byte => try self.emitService(item, "svc_str_find_byte", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+                .{ .register = call.arguments[1] },
+                .{ .register = call.arguments[2] },
+            }, call.arguments, .value, true),
+            .append_ascii => try self.emitService(item, "svc_builder_append_ascii", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+                .{ .register = call.arguments[1] },
+            }, call.arguments, .none, true),
+            .string_slice => try self.emitService(item, "svc_str_slice", &.{
+                .state_pointer,
+                .{ .literal = self.function_index },
+                .{ .literal = item },
+                .{ .register = call.arguments[0] },
+                .{ .register = call.arguments[1] },
+                .{ .register = call.arguments[2] },
+            }, call.arguments, .value, true),
+            .string_byte => {
+                // Inline: bounds against the descriptor length, one
+                // unsigned-checked byte load from its data pointer.
+                const bounds = try self.trapSite(.string_bounds, item);
+                const text = try self.operandRegister(call.arguments[0], &.{});
+                const index = try self.operandRegister(call.arguments[1], &.{text});
+                try self.loadWord(helper, text, 8); // len
+                try self.compareRegisters(index, helper);
+                try self.branchCond(cc_ae, bounds);
+                const dest = try self.destRegister(item, &.{ call.arguments[0], call.arguments[1] }, &.{ text, index });
+                try self.loadWord(helper, text, 0); // data pointer
+                try self.alu(0x01, helper, index); // helper += index
+                try self.loadByte(dest, helper, 0);
+                self.freeDead(&.{ call.arguments[0], call.arguments[1] });
+            },
+            .len => {
+                const operand = call.arguments[0];
+                const of = self.typeOf(operand);
+                if (of == .string) {
+                    // A string is a {ptr, len} descriptor: one load.
+                    const text = try self.operandRegister(operand, &.{});
+                    const dest = try self.destRegister(item, &.{operand}, &.{text});
+                    try self.loadWord(dest, text, 8);
+                    self.freeDead(&.{operand});
+                } else if (of == .heap and abi.viewableHeap(self.program, of.heap)) {
+                    const view = try self.operandRegister(operand, &.{});
+                    try self.emitViewPrelude(item, view);
+                    const dest = try self.destRegister(item, &.{operand}, &.{view});
+                    try self.loadWord(dest, view, 8);
+                    self.freeDead(&.{operand});
+                } else {
+                    try self.emitService(item, "svc_obj_len", &.{
+                        .state_pointer,
+                        .{ .literal = self.function_index },
+                        .{ .literal = item },
+                        .{ .register = operand },
+                    }, &.{operand}, .value, true);
+                }
+            },
+            .append_value => {
+                const receiver = self.typeOf(call.arguments[0]);
+                const shape: ?types.HeapType = if (receiver == .heap)
+                    self.program.heap_types[receiver.heap]
+                else
+                    null;
+                if (shape != null and shape.? == .builder) {
+                    try self.emitService(item, "svc_builder_append", &.{
+                        .state_pointer,
+                        .{ .literal = self.function_index },
+                        .{ .literal = item },
+                        .{ .register = call.arguments[0] },
+                        .{ .register = call.arguments[1] },
+                    }, call.arguments, .none, true);
+                } else if (shape != null and shape.? == .list and switch (shape.?.list) {
+                    .int, .boolean, .float, .string => true,
+                    else => false,
+                }) {
+                    const service: []const u8 = switch (shape.?.list) {
+                        .int => "svc_list_append_i",
+                        .boolean => "svc_list_append_b",
+                        .float => "svc_list_append_d",
+                        .string => "svc_list_append_s",
+                        else => unreachable,
+                    };
+                    try self.emitService(item, service, &.{
+                        .state_pointer,
+                        .{ .literal = self.function_index },
+                        .{ .literal = item },
+                        .{ .register = call.arguments[0] },
+                        .{ .register = call.arguments[1] },
+                    }, call.arguments, .none, true);
                 } else {
                     try self.emitGeneric(item);
                 }
             },
-            // Everything else — collections, string manipulation,
-            // conversions, host builtins — runs through the generic
-            // marshaling service, which reconstructs the instruction
-            // and runs the interpreter's own implementation.  The
-            // fast-service and inline-access optimizations layer on
-            // top of this in the next pass; the generic path is the
-            // correctness floor.
+            .index_get, .index_set => {
+                if (self.arrayInlineElement(call)) |element| {
+                    try self.emitArrayAccess(item, call, element);
+                } else if (self.fastSeqElement(call)) |element| {
+                    const getter = call.kind == .index_get;
+                    const service: []const u8 = if (getter)
+                        (if (element == .float) "svc_seq_get_d" else "svc_seq_get_i")
+                    else
+                        (if (element == .float) "svc_seq_set_d" else "svc_seq_set_i");
+                    var arguments: [6]ServiceArgument = undefined;
+                    arguments[0] = .state_pointer;
+                    arguments[1] = .{ .literal = self.function_index };
+                    arguments[2] = .{ .literal = item };
+                    arguments[3] = .{ .register = call.arguments[0] };
+                    arguments[4] = .{ .register = call.arguments[1] };
+                    var count: usize = 5;
+                    if (!getter) {
+                        arguments[5] = .{ .register = call.arguments[2] };
+                        count = 6;
+                    }
+                    try self.emitService(item, service, arguments[0..count], call.arguments, if (!getter)
+                        .none
+                    else if (element == .float)
+                        .float
+                    else
+                        .value, true);
+                } else {
+                    try self.emitGeneric(item);
+                }
+            },
+            // Everything else marshals through the generic service.
             else => try self.emitGeneric(item),
         }
     }
