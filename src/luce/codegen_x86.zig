@@ -42,9 +42,6 @@ pub const available = builtin.cpu.arch == .x86_64 and image.supported;
 
 /// Calls take value args in rsi,rdx,rcx,r8,r9 and float args in
 /// xmm0-xmm7; wider signatures fall to MIR through the ladder.
-const max_value_arguments = 5;
-const max_float_arguments = 8;
-
 /// Whether the whole program fits this backend: since milestone 2,
 /// everything MIR's core takes (native.supported), narrowed only by
 /// this ABI's register-passed argument counts and the shared frame
@@ -54,13 +51,6 @@ pub fn supported(program: *const ir.Program) bool {
     if (!native.supported(program)) return false;
     for (program.functions) |*function| {
         if (function.locals.len + function.instructions.len > native.max_function_slots) return false;
-        var value_arguments: usize = 0;
-        var float_arguments: usize = 0;
-        for (function.locals[0..function.parameter_count]) |local| {
-            if (local.local_type == .float) float_arguments += 1 else value_arguments += 1;
-        }
-        if (value_arguments > max_value_arguments) return false;
-        if (float_arguments > max_float_arguments) return false;
     }
     return true;
 }
@@ -110,6 +100,18 @@ const Location = union(enum) {
 // spillForCall stores the whole pool to slots before any argument
 // marshaling, so they never collide with a call.
 const scratch_pool = [_]u4{ 10, 11, 8, 9 };
+const value_arg_regs = [_]u4{ 6, 2, 1, 8, 9 }; // rsi,rdx,rcx,r8,r9 (rdi = State)
+const float_arg_regs = [_]u4{ 0, 1, 2, 3, 4, 5, 6, 7 }; // xmm0-xmm7
+
+/// Where one argument / parameter travels: an argument register of
+/// its class, or a stack slot (index into the outgoing area).  Caller
+/// and callee compute it identically from the parameter list.
+const Placement = union(enum) {
+    value_reg: u4,
+    float_reg: u4,
+    stack: usize,
+};
+
 const float_pool = [_]u4{ 0, 1, 2, 3 }; // xmm0-xmm3
 const pinned_pool = [_]u4{ 3, 12 };
 // No XMM is callee-saved on SysV, so a float local can only pin when
@@ -994,6 +996,36 @@ const Emitter = struct {
 
     // -- the function ------------------------------------------------------
 
+    /// Every parameter's placement and the overflow stack-slot count.
+    /// Int and float draw from separate register files; overflow goes
+    /// on the stack in declaration order (SysV, self-consistent).
+    fn argPlacements(self: *Emitter, function: *const ir.Function) error{OutOfMemory}!struct { placements: []Placement, stack_slots: usize } {
+        const placements = try self.arena.alloc(Placement, function.parameter_count);
+        var value_next: usize = 0;
+        var float_next: usize = 0;
+        var stack_next: usize = 0;
+        for (function.locals[0..function.parameter_count], 0..) |local, index| {
+            if (local.local_type == .float) {
+                if (float_next < float_arg_regs.len) {
+                    placements[index] = .{ .float_reg = float_arg_regs[float_next] };
+                    float_next += 1;
+                } else {
+                    placements[index] = .{ .stack = stack_next };
+                    stack_next += 1;
+                }
+            } else {
+                if (value_next < value_arg_regs.len) {
+                    placements[index] = .{ .value_reg = value_arg_regs[value_next] };
+                    value_next += 1;
+                } else {
+                    placements[index] = .{ .stack = stack_next };
+                    stack_next += 1;
+                }
+            }
+        }
+        return .{ .placements = placements, .stack_slots = stack_next };
+    }
+
     fn emitFunction(self: *Emitter) error{OutOfMemory}!void {
         const function = self.function;
         try self.analyze();
@@ -1046,24 +1078,35 @@ const Emitter = struct {
         try self.branchCond(cc_l, depth); // signed < 0
 
         // Parameters: value args rsi,rdx,rcx,r8,r9; float args
-        // xmm0-xmm7 — into pinned homes or slots before anything can
-        // clobber the argument registers.
-        const value_arg_regs = [_]u4{ 6, 2, 1, 8, 9 };
-        var value_argument: usize = 0;
-        var float_argument: u4 = 0;
+        // xmm0-xmm7; the overflow on the caller's stack, which the
+        // frame-pointer model puts at a fixed [rbp + 16 + k*8] (the
+        // saved rbp and the return address sit below).  Move them into
+        // pinned homes or slots before anything clobbers a register.
+        const params = try self.argPlacements(function);
         for (function.locals[0..function.parameter_count], 0..) |local, index| {
-            if (local.local_type == .float) {
-                const incoming = float_argument;
-                float_argument += 1;
-                try self.fstoreSlot(incoming, index);
-            } else {
-                const incoming = value_arg_regs[value_argument];
-                value_argument += 1;
-                if (self.pinned[index]) |physical| {
-                    try self.movReg(physical, incoming);
-                } else {
-                    try self.storeSlot(incoming, index);
-                }
+            switch (params.placements[index]) {
+                .value_reg => |incoming| {
+                    if (self.pinned[index]) |physical| {
+                        try self.movReg(physical, incoming);
+                    } else {
+                        try self.storeSlot(incoming, index);
+                    }
+                },
+                .float_reg => |incoming| try self.fstoreSlot(incoming, index),
+                .stack => |k| {
+                    const at: i32 = @intCast(16 + k * 8);
+                    if (local.local_type == .float) {
+                        try self.fmem(0x10, fhelper, 5, at); // movsd xmm5, [rbp+at]
+                        try self.fstoreSlot(fhelper, index);
+                    } else {
+                        try self.loadMem(helper2, 5, at);
+                        if (self.pinned[index]) |physical| {
+                            try self.movReg(physical, helper2);
+                        } else {
+                            try self.storeSlot(helper2, index);
+                        }
+                    }
+                },
             }
         }
 
@@ -1205,6 +1248,14 @@ const Emitter = struct {
         try self.rex(true, 0, 0, 4);
         try self.byte(0x81);
         try self.byte(0xEC); // /5, rm=rsp
+        try self.imm32(@intCast(amount));
+    }
+
+    fn addRspImm(self: *Emitter, amount: u64) error{OutOfMemory}!void {
+        // add rsp, imm32.
+        try self.rex(true, 0, 0, 4);
+        try self.byte(0x81);
+        try self.byte(0xC4); // /0, rm=rsp
         try self.imm32(@intCast(amount));
     }
 
@@ -1699,27 +1750,41 @@ const Emitter = struct {
 
     fn emitCall(self: *Emitter, item: ir.Register, call: anytype) error{OutOfMemory}!void {
         const callee = &self.program.functions[call.function];
+        const params = try self.argPlacements(callee);
+        const stack_bytes = std.mem.alignForward(u64, params.stack_slots * 8, 16);
         // Spill the pool to slots first, then load args from their now
-        // stable locations (slot / immediate / table / pinned) into
-        // the ABI registers.  Fetch reads never touch the pool or the
-        // arg registers' sources, so this order is safe.
+        // stable (rbp-relative) locations.  Outgoing stack args go
+        // into a fresh 16-aligned region below rsp; slots are
+        // rbp-relative, so moving rsp does not disturb them.
         try self.spillForCall();
-        const value_arg_regs = [_]u4{ 6, 2, 1, 8, 9 };
-        var value_argument: usize = 0;
-        var float_argument: u4 = 0;
+        if (stack_bytes > 0) try self.subRspImm(stack_bytes);
         for (call.arguments, 0..) |argument, index| {
-            if (callee.locals[index].local_type == .float) {
-                try self.ffetchInto(float_argument, argument);
-                float_argument += 1;
-            } else {
-                try self.fetchInto(value_arg_regs[value_argument], argument);
-                value_argument += 1;
+            switch (params.placements[index]) {
+                .stack => |k| {
+                    const at: i32 = @intCast(k * 8);
+                    if (self.isFloat(argument)) {
+                        try self.ffetchInto(fhelper, argument);
+                        try self.fmem(0x11, fhelper, 4, at); // movsd [rsp+at], xmm5
+                    } else {
+                        try self.fetchInto(helper2, argument);
+                        try self.storeMem(helper2, 4, at);
+                    }
+                },
+                else => {},
+            }
+        }
+        for (call.arguments, 0..) |argument, index| {
+            switch (params.placements[index]) {
+                .value_reg => |reg| try self.fetchInto(reg, argument),
+                .float_reg => |reg| try self.ffetchInto(reg, argument),
+                .stack => {},
             }
         }
         self.freeDead(call.arguments);
         try self.movReg(7, state); // rdi = State
         try self.loadTable(call_target, self.table.function(call.function));
         try self.callReg(call_target);
+        if (stack_bytes > 0) try self.addRspImm(stack_bytes);
         if (callee.return_type != .none) {
             if (callee.return_type == .float) {
                 const dest = try self.destFloat(item, &.{}, &.{});
@@ -1806,21 +1871,21 @@ const Emitter = struct {
         // order emitCall already uses on x86).
         try self.spillForCall();
         // SysV value args rdi,rsi,rdx,rcx,r8,r9; float args xmm0-7.
-        const value_arg_regs = [_]u4{ 7, 6, 2, 1, 8, 9 };
+        const service_value_regs = [_]u4{ 7, 6, 2, 1, 8, 9 };
         var value_slot: usize = 0;
         var float_slot: u4 = 0;
         for (arguments) |argument| {
             switch (argument) {
                 .state_pointer => {
-                    try self.movReg(value_arg_regs[value_slot], state);
+                    try self.movReg(service_value_regs[value_slot], state);
                     value_slot += 1;
                 },
                 .serial_word => {
-                    try self.movReg(value_arg_regs[value_slot], serial);
+                    try self.movReg(service_value_regs[value_slot], serial);
                     value_slot += 1;
                 },
                 .literal => |value| {
-                    try self.materialize(value_arg_regs[value_slot], value);
+                    try self.materialize(service_value_regs[value_slot], value);
                     value_slot += 1;
                 },
                 .register => |register| {
@@ -1828,7 +1893,7 @@ const Emitter = struct {
                         try self.ffetchInto(float_slot, register);
                         float_slot += 1;
                     } else {
-                        try self.fetchInto(value_arg_regs[value_slot], register);
+                        try self.fetchInto(service_value_regs[value_slot], register);
                         value_slot += 1;
                     }
                 },

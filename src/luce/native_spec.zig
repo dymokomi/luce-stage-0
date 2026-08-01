@@ -570,6 +570,35 @@ test "oracle: the std math module runs natively" {
     , roomy);
 }
 
+test "oracle: functions wider than the argument registers use the stack" {
+    // Value args past x1-x7 / rsi.. and float args past d0-d7 / xmm0..
+    // spill to the caller stack; a struct counts as one word, and
+    // recursion proves the outgoing area is per-frame, not shared.
+    try oracle(
+        \\struct Pair:
+        \\    a: Int
+        \\    b: Int
+        \\
+        \\func many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, p: Pair) -> Int:
+        \\    if a == 0:
+        \\        return b + c + d + e + f + g + h + i + p.a + p.b
+        \\    return many(a - 1, b, c, d, e, f, g, h, i, p) + 1
+        \\
+        \\func floats(a: Float, b: Float, c: Float, d: Float, e: Float, f: Float, g: Float, h: Float, i: Float, j: Float) -> Float:
+        \\    return a + b + c + d + e + f + g + h + i + j
+        \\
+        \\func mixed(a: Int, b: Float, c: Int, d: Float, e: Int, f: Float, g: Int, h: Float, i: Int, j: Float, k: Int, l: Float) -> Float:
+        \\    return Float(a + c + e + g + i + k) + b + d + f + h + j + l
+        \\
+        \\func main():
+        \\    let p = Pair(a = 100, b = 200)
+        \\    print(str(many(5, 1, 2, 3, 4, 5, 6, 7, p.a, p)))
+        \\    print(str(Int(floats(1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5))))
+        \\    print(str(Int(mixed(1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5))))
+        \\
+    , roomy);
+}
+
 test "the zig backend agrees with the interpreter on its integer core" {
     // The self-written backend (codegen.zig, docs/SPEED.md §16) held
     // to the same contract as every other engine: identical prints,

@@ -71,9 +71,6 @@ pub const mature_default = available and switch (builtin.cpu.arch) {
 /// Arguments travel in registers only: x1-x7 for values, d0-d7 for
 /// floats.  Wider signatures fall back to MIR (which speaks the full
 /// C ABI) through the runner's engine ladder.
-const max_value_arguments = 7;
-const max_float_arguments = 8;
-
 /// The exact self-written generator which produced a cached image.
 /// Embedding this file is intentional: changing an encoder, lowering,
 /// register policy, or even a relevant constant changes the identity
@@ -142,17 +139,6 @@ pub fn supported(program: *const ir.Program) bool {
         // Frame slots use a scaled 12-bit immediate; share MIR's
         // audited bound so both native engines cap stack allocation.
         if (function.locals.len + function.instructions.len > native.max_function_slots) return false;
-        var value_arguments: usize = 0;
-        var float_arguments: usize = 0;
-        for (function.locals[0..function.parameter_count]) |local| {
-            if (local.local_type == .float) {
-                float_arguments += 1;
-            } else {
-                value_arguments += 1;
-            }
-        }
-        if (value_arguments > max_value_arguments) return false;
-        if (float_arguments > max_float_arguments) return false;
     }
     return true;
 }
@@ -221,6 +207,19 @@ const Location = union(enum) {
     alias: struct { local: u32, version: u32 },
 };
 
+const value_arg_regs = [_]u5{ 1, 2, 3, 4, 5, 6, 7 }; // x1-x7 (x0 = State)
+const float_arg_regs = [_]u5{ 0, 1, 2, 3, 4, 5, 6, 7 }; // d0-d7
+
+/// Where one call argument / incoming parameter travels: an argument
+/// register of its class, or a stack slot (index from the bottom of
+/// the outgoing-args area).  Caller and callee compute this the same
+/// way from the parameter list, so they always agree.
+const Placement = union(enum) {
+    value_reg: u5,
+    float_reg: u5,
+    stack: usize,
+};
+
 const scratch_pool = [_]u5{ 9, 10, 11, 12 };
 const float_pool = [_]u5{ 13, 14, 15 }; // d13-d15, callee-saved
 const pinned_pool = [_]u5{ 20, 21, 22, 23, 24, 25, 26 };
@@ -240,6 +239,7 @@ const Emitter = struct {
     epilogue: u32 = 0,
     propagate: u32 = 0,
     frame_size: u64 = 0,
+    outgoing_bytes: u64 = 0,
     uses_floats: bool = false,
 
     // Analysis (emission order = block order, one position per item).
@@ -360,11 +360,11 @@ const Emitter = struct {
     }
 
     fn loadSlot(self: *Emitter, rt: u5, slot: usize) !void {
-        try self.loadWord(rt, 31, @as(u64, slot) * 8);
+        try self.loadWord(rt, 31, self.outgoing_bytes + @as(u64, slot) * 8);
     }
 
     fn storeSlot(self: *Emitter, rt: u5, slot: usize) !void {
-        try self.storeWord(rt, 31, @as(u64, slot) * 8);
+        try self.storeWord(rt, 31, self.outgoing_bytes + @as(u64, slot) * 8);
     }
 
     fn addImmediate(self: *Emitter, rd: u5, rn: u5, immediate: u12) !void {
@@ -444,11 +444,11 @@ const Emitter = struct {
     }
 
     fn floadSlot(self: *Emitter, rt: u5, slot: usize) !void {
-        try self.floadWord(rt, 31, @as(u64, slot) * 8);
+        try self.floadWord(rt, 31, self.outgoing_bytes + @as(u64, slot) * 8);
     }
 
     fn fstoreSlot(self: *Emitter, rt: u5, slot: usize) !void {
-        try self.fstoreWord(rt, 31, @as(u64, slot) * 8);
+        try self.fstoreWord(rt, 31, self.outgoing_bytes + @as(u64, slot) * 8);
     }
 
     fn fcompare(self: *Emitter, rn: u5, rm: u5) !void {
@@ -891,13 +891,60 @@ const Emitter = struct {
         return self.destRegister(item, operands, locked);
     }
 
+    /// The placement of every parameter of `function`, and the number
+    /// of stack slots the overflow needs.  Int and float draw from
+    /// separate register files; anything past either goes on the
+    /// stack, in declaration order (AAPCS64, and self-consistent so
+    /// the prologue and every call site agree).
+    fn argPlacements(self: *Emitter, function: *const ir.Function) error{OutOfMemory}!struct { placements: []Placement, stack_slots: usize } {
+        const placements = try self.arena.alloc(Placement, function.parameter_count);
+        var value_next: usize = 0;
+        var float_next: usize = 0;
+        var stack_next: usize = 0;
+        for (function.locals[0..function.parameter_count], 0..) |local, index| {
+            if (local.local_type == .float) {
+                if (float_next < float_arg_regs.len) {
+                    placements[index] = .{ .float_reg = float_arg_regs[float_next] };
+                    float_next += 1;
+                } else {
+                    placements[index] = .{ .stack = stack_next };
+                    stack_next += 1;
+                }
+            } else {
+                if (value_next < value_arg_regs.len) {
+                    placements[index] = .{ .value_reg = value_arg_regs[value_next] };
+                    value_next += 1;
+                } else {
+                    placements[index] = .{ .stack = stack_next };
+                    stack_next += 1;
+                }
+            }
+        }
+        return .{ .placements = placements, .stack_slots = stack_next };
+    }
+
+    /// Bytes of outgoing stack-argument space a call to `function`
+    /// needs, 16-aligned.
+    fn outgoingBytes(self: *Emitter, function: *const ir.Function) error{OutOfMemory}!u64 {
+        const placed = try self.argPlacements(function);
+        return std.mem.alignForward(u64, placed.stack_slots * 8, 16);
+    }
+
     // -- the function ------------------------------------------------------
 
     fn emitFunction(self: *Emitter) native.RunError!void {
         const function = self.function;
         try self.analyze();
         const slots = function.locals.len + function.instructions.len;
-        self.frame_size = std.mem.alignForward(u64, @as(u64, slots) * 8, 16);
+        var outgoing: u64 = 0;
+        for (function.instructions) |instruction| {
+            if (instruction == .call) {
+                const callee = &self.program.functions[instruction.call.function];
+                outgoing = @max(outgoing, try self.outgoingBytes(callee));
+            }
+        }
+        self.outgoing_bytes = outgoing;
+        self.frame_size = std.mem.alignForward(u64, outgoing + @as(u64, slots) * 8, 16);
         self.epilogue = try self.newMark();
         self.propagate = try self.newMark();
         const block_marks = try self.arena.alloc(u32, function.blocks.len);
@@ -971,25 +1018,51 @@ const Emitter = struct {
         }
         try self.movReg(state, 0);
 
-        // Parameters arrive per the C ABI — x1.. for values, d0.. for
-        // floats — and move into their pinned homes or slots before
-        // anything can clobber the argument registers.
-        var value_argument: u5 = 1;
-        var float_argument: u5 = 0;
+        // Parameters arrive per the C ABI — x1-x7 for values, d0-d7
+        // for floats, the rest on the caller's stack just above this
+        // frame — and move into their pinned homes or slots before
+        // anything can clobber the argument registers.  The incoming
+        // stack args sit at [sp + prologue displacement + k*8]: the
+        // six GP save pairs, the float save pairs, and the frame.
+        const gp_save_bytes: u64 = 6 * 16;
+        const float_save_bytes: u64 = if (self.uses_floats) 4 * 16 else 0;
+        const incoming_base = gp_save_bytes + float_save_bytes + self.frame_size;
+        const params = try self.argPlacements(function);
         for (function.locals[0..function.parameter_count], 0..) |local, index| {
             const floaty = local.local_type == .float;
-            const incoming = if (floaty) float_argument else value_argument;
-            if (floaty) float_argument += 1 else value_argument += 1;
-            if (self.pinned[index]) |physical| {
-                if (floaty) {
-                    try self.fmovRegs(physical, incoming);
-                } else {
-                    try self.movReg(physical, incoming);
-                }
-            } else if (floaty) {
-                try self.fstoreSlot(incoming, index);
-            } else {
-                try self.storeSlot(incoming, index);
+            switch (params.placements[index]) {
+                .value_reg => |incoming| {
+                    if (self.pinned[index]) |physical| {
+                        try self.movReg(physical, incoming);
+                    } else {
+                        try self.storeSlot(incoming, index);
+                    }
+                },
+                .float_reg => |incoming| {
+                    if (self.pinned[index]) |physical| {
+                        try self.fmovRegs(physical, incoming);
+                    } else {
+                        try self.fstoreSlot(incoming, index);
+                    }
+                },
+                .stack => |k| {
+                    const at = incoming_base + k * 8;
+                    if (floaty) {
+                        try self.floadWord(fhelper, 31, at);
+                        if (self.pinned[index]) |physical| {
+                            try self.fmovRegs(physical, fhelper);
+                        } else {
+                            try self.fstoreSlot(fhelper, index);
+                        }
+                    } else {
+                        try self.loadWord(helper2, 31, at);
+                        if (self.pinned[index]) |physical| {
+                            try self.movReg(physical, helper2);
+                        } else {
+                            try self.storeSlot(helper2, index);
+                        }
+                    }
+                },
             }
         }
 
@@ -1315,16 +1388,25 @@ const Emitter = struct {
     fn emitCall(self: *Emitter, item: ir.Register, call: anytype, following: ?ir.Register) error{OutOfMemory}!void {
         _ = following;
         const callee = &self.program.functions[call.function];
-        var value_argument: u5 = 1;
-        var float_argument: u5 = 0;
+        const params = try self.argPlacements(callee);
+        // Stack args first, through the transient helpers, into the
+        // outgoing area at [sp + k*8] (the bottom of this frame, where
+        // the callee will read them).  Register args follow, into
+        // x1-x7 / d0-d7.  sp does not move — the outgoing area is
+        // reserved in the frame — so frame-slot sources stay valid.
         for (call.arguments, 0..) |argument, index| {
-            const floaty = callee.locals[index].local_type == .float;
-            if (floaty) {
-                try self.ffetchInto(float_argument, argument);
-                float_argument += 1;
-            } else {
-                try self.fetchInto(value_argument, argument);
-                value_argument += 1;
+            switch (params.placements[index]) {
+                .stack => |k| {
+                    if (self.isFloat(argument)) {
+                        try self.ffetchInto(fhelper, argument);
+                        try self.fstoreWord(fhelper, 31, k * 8);
+                    } else {
+                        try self.fetchInto(helper2, argument);
+                        try self.storeWord(helper2, 31, k * 8);
+                    }
+                },
+                .value_reg => |reg| try self.fetchInto(reg, argument),
+                .float_reg => |reg| try self.ffetchInto(reg, argument),
             }
         }
         self.freeDead(call.arguments);
@@ -2152,8 +2234,13 @@ test "the prologue guards depth before SP and links x29" {
     try testing.expectEqual(@as(i64, @intCast(frame)), 4 + displacement);
 }
 
-test "the gate is MIR's core narrowed by the ABI limits" {
-    const whole_language =
+test "the gate is exactly MIR's core — wide signatures included" {
+    // Both the whole-language program and a wide-signature one (more
+    // value/float args than the argument registers hold, now passed
+    // on the stack) are supported: the backend covers everything MIR
+    // does on this platform.  Only what MIR itself refuses — ports,
+    // Bytes, the dormant fabric — falls through to the interpreter.
+    const supported_sources = [_][]const u8{
         \\import strings
         \\
         \\struct Point:
@@ -2169,25 +2256,20 @@ test "the gate is MIR's core narrowed by the ABI limits" {
         \\    let p = Point(x = 1.5, y = 2.5)
         \\    print(str(total(p, "abc".upper())))
         \\    print(str(xs[0]))
-    ;
-    const too_many_arguments =
-        \\func wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) -> Int:
-        \\    return a + b + c + d + e + f + g + h
+        ,
+        \\func wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int) -> Int:
+        \\    return a + b + c + d + e + f + g + h + i
         \\
         \\func main():
-        \\    print(str(wide(1, 2, 3, 4, 5, 6, 7, 8)))
-    ;
-    inline for (.{ whole_language, too_many_arguments }, 0..) |source, index| {
+        \\    print(str(wide(1, 2, 3, 4, 5, 6, 7, 8, 9)))
+    };
+    inline for (supported_sources) |source| {
         var result = try compile_mod.compile(testing.allocator, source ++ "\n", .{}, .{
             .entry_mode = .script,
             .allow_host = true,
         });
         defer result.deinit();
         try testing.expect(result == .success);
-        if (available) {
-            try testing.expectEqual(index == 0, supported(&result.success));
-        } else {
-            try testing.expect(!supported(&result.success));
-        }
+        try testing.expectEqual(available, supported(&result.success));
     }
 }
