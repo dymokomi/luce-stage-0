@@ -718,6 +718,29 @@ fn svcStrConcat(state: *State, left: i64, right: i64) callconv(.c) i64 {
     return newStringDesc(state, joined);
 }
 
+fn appendList(state: *State, function: i64, instruction: i64, handle: i64, element: RuntimeValue) void {
+    const object = fastResolve(state, function, instruction, handle) orelse return;
+    object.data.list.append(state.runtime.machine.arena, element) catch {
+        state.trap = State.oom_trap;
+    };
+}
+
+fn svcListAppendI(state: *State, function: i64, instruction: i64, handle: i64, value: i64) callconv(.c) void {
+    appendList(state, function, instruction, handle, .{ .int = value });
+}
+
+fn svcListAppendB(state: *State, function: i64, instruction: i64, handle: i64, value: i64) callconv(.c) void {
+    appendList(state, function, instruction, handle, .{ .boolean = value != 0 });
+}
+
+fn svcListAppendD(state: *State, function: i64, instruction: i64, handle: i64, value: f64) callconv(.c) void {
+    appendList(state, function, instruction, handle, .{ .float = value });
+}
+
+fn svcListAppendS(state: *State, function: i64, instruction: i64, handle: i64, text_handle: i64) callconv(.c) void {
+    appendList(state, function, instruction, handle, .{ .string = descText(@bitCast(text_handle)) });
+}
+
 const Service = struct { name: [:0]const u8, address: *anyopaque };
 
 const services = [_]Service{
@@ -739,6 +762,10 @@ const services = [_]Service{
     .{ .name = "svc_str_int", .address = @ptrCast(@constCast(&svcStrInt)) },
     .{ .name = "svc_chr", .address = @ptrCast(@constCast(&svcChr)) },
     .{ .name = "svc_str_concat", .address = @ptrCast(@constCast(&svcStrConcat)) },
+    .{ .name = "svc_list_append_i", .address = @ptrCast(@constCast(&svcListAppendI)) },
+    .{ .name = "svc_list_append_b", .address = @ptrCast(@constCast(&svcListAppendB)) },
+    .{ .name = "svc_list_append_d", .address = @ptrCast(@constCast(&svcListAppendD)) },
+    .{ .name = "svc_list_append_s", .address = @ptrCast(@constCast(&svcListAppendS)) },
 };
 
 // ---------------------------------------------------------------------------
@@ -904,6 +931,10 @@ fn lowerProgram(arena: Allocator, program: *const ir.Program, payloads: Payloads
         \\p_svc_str_int: proto i64, i64:s, i64:v
         \\p_svc_chr: proto i64, i64:s, i64:f, i64:i, i64:c
         \\p_svc_str_concat: proto i64, i64:s, i64:a, i64:b
+        \\p_svc_list_append_i: proto i64:s, i64:f, i64:i, i64:h, i64:v
+        \\p_svc_list_append_b: proto i64:s, i64:f, i64:i, i64:h, i64:v
+        \\p_svc_list_append_d: proto i64:s, i64:f, i64:i, i64:h, d:v
+        \\p_svc_list_append_s: proto i64:s, i64:f, i64:i, i64:h, i64:v
         \\
     , .{});
     for (program.functions, 0..) |*function, index| {
@@ -1387,13 +1418,42 @@ fn lowerInstruction(lowering: *FunctionLowering, item: ir.Register) error{OutOfM
                 try emitTrapCheck(lowering);
             },
             .append_value => {
-                // Builder appends are hot in std strings; list appends
-                // keep the generic path (element adoption is ownership).
+                // Builder appends are hot in std strings, and List
+                // appends of value-typed elements (scalars, String)
+                // adopt nothing — adoption is only for objects — so
+                // both skip the generic path; object-element lists
+                // keep it (ownership).
                 const receiver = function.result_types[call.arguments[0]];
-                if (receiver == .heap and lowering.program.heap_types[receiver.heap] == .builder) {
+                const shape: ?types.HeapType = if (receiver == .heap)
+                    lowering.program.heap_types[receiver.heap]
+                else
+                    null;
+                if (shape != null and shape.? == .builder) {
                     try emitTarget(text, "svc_builder_append");
                     try text.print("    call p_svc_builder_append, t, s, {d}, {d}, r{d}, r{d}\n", .{
                         lowering.index, item, call.arguments[0], call.arguments[1],
+                    });
+                    try emitTrapCheck(lowering);
+                } else if (shape != null and shape.? == .list and switch (shape.?.list) {
+                    .int, .boolean, .float, .string => true,
+                    else => false,
+                }) {
+                    const suffix: []const u8 = switch (shape.?.list) {
+                        .int => "i",
+                        .boolean => "b",
+                        .float => "d",
+                        .string => "s",
+                        else => unreachable,
+                    };
+                    try emitTarget(text, switch (shape.?.list) {
+                        .int => "svc_list_append_i",
+                        .boolean => "svc_list_append_b",
+                        .float => "svc_list_append_d",
+                        .string => "svc_list_append_s",
+                        else => unreachable,
+                    });
+                    try text.print("    call p_svc_list_append_{s}, t, s, {d}, {d}, r{d}, r{d}\n", .{
+                        suffix, lowering.index, item, call.arguments[0], call.arguments[1],
                     });
                     try emitTrapCheck(lowering);
                 } else {
