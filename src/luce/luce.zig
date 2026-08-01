@@ -25,6 +25,7 @@ pub const interpreter = @import("interpreter.zig");
 pub const native = @import("native.zig");
 pub const image = @import("image.zig");
 pub const codegen = @import("codegen.zig");
+pub const codegen_wasm = @import("codegen_wasm.zig");
 pub const codegen_x86 = @import("codegen_x86.zig");
 pub const native_spec = @import("native_spec.zig");
 pub const ownership_spec = @import("ownership_spec.zig");
@@ -51,6 +52,7 @@ test {
     _ = native;
     _ = image;
     _ = codegen;
+    _ = codegen_wasm;
     _ = codegen_x86;
     _ = native_spec;
     _ = ownership_spec;

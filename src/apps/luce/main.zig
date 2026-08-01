@@ -55,6 +55,15 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         }
         return build(gpa, io, err, out, path, output_path, release);
     }
+    if (std.mem.eql(u8, command, "wasm")) {
+        var output_path: []const u8 = "";
+        if (arguments.len == 5 and std.mem.eql(u8, arguments[3], "-o")) {
+            output_path = arguments[4];
+        } else if (arguments.len != 3) {
+            return usage(err);
+        }
+        return buildWasm(gpa, io, err, out, path, output_path);
+    }
     if (std.mem.eql(u8, command, "check")) {
         if (arguments.len != 3) return usage(err);
         var program = (try compilePath(gpa, io, err, path)) orelse return 1;
@@ -90,6 +99,7 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce build FILE.luc [-o FILE.lc] [--release]\n" ++
             "  luce check FILE.luc\n" ++
             "  luce ir FILE.luc [--full]\n" ++
+            "  luce wasm FILE.luc [-o FILE.wasm]\n" ++
             "\n" ++
             "build is a debug build unless --release: the module\n" ++
             "carries source locations, so traps report file:line\n" ++
@@ -143,6 +153,35 @@ fn modulePath(gpa: std.mem.Allocator, source_path: []const u8) ![]u8 {
 
 /// Compile one script file; renders diagnostics to `err` and returns
 /// null on failure.  The caller owns the returned program.
+fn buildWasm(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    err: *std.Io.Writer,
+    out: *std.Io.Writer,
+    path: []const u8,
+    output_path: []const u8,
+) !u8 {
+    var program = (try compilePath(gpa, io, err, path)) orelse return 1;
+    defer program.deinit();
+    if (!luce.codegen_wasm.supported(&program)) {
+        try err.print("{s}: outside the wasm backend's core (milestone 0: integer/bool, print(str(Int)))\n", .{path});
+        return 1;
+    }
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const bytes = try luce.codegen_wasm.compile(arena_state.allocator(), &program);
+    const target = if (output_path.len != 0) output_path else try defaultWasmPath(arena_state.allocator(), path);
+    try files.writeWhole(io, target, bytes);
+    try out.print("{s}\n", .{target});
+    try out.flush();
+    return 0;
+}
+
+fn defaultWasmPath(arena: std.mem.Allocator, source: []const u8) ![]const u8 {
+    const stem = if (std.mem.endsWith(u8, source, ".luc")) source[0 .. source.len - 4] else source;
+    return std.fmt.allocPrint(arena, "{s}.wasm", .{stem});
+}
+
 fn compilePath(
     gpa: std.mem.Allocator,
     io: std.Io,

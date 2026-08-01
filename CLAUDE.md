@@ -28,7 +28,7 @@ LuciaOS **v2** is language-first: **Luce**, the small statically typed language,
 
 Two binaries from one language module:
 
-- `luce` (src/apps/luce/) — the compiler: `luce build FILE.luc [-o FILE.lc] [--release]`, `luce check`, `luce ir`. Debug builds (default) embed trap locations; `--release` strips them, changing nothing else (`docs/MODES.md`).
+- `luce` (src/apps/luce/) — the compiler: `luce build FILE.luc [-o FILE.lc] [--release]`, `luce check`, `luce ir`, `luce wasm FILE.luc [-o FILE.wasm]` (the WebAssembly distribution target — milestone 0 integer core, `docs/NATIVE.md`). Debug builds (default) embed trap locations; `--release` strips them, changing nothing else (`docs/MODES.md`).
 - `loom` (src/apps/loom/) — the environment: an interactive colored shell (`run`, `luce`, `edit`, `clear`, `exit`, bare `.lc`/`.luc` paths), plus direct CLI forms (`loom run FILE.lc [args]`, `loom luce FILE.luc`, `loom edit FILE`).
 
 ## Architecture

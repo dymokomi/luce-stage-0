@@ -327,6 +327,45 @@ generic service per instruction (matmul ~100x slower).
 Targets: aarch64 macOS/Linux and x86-64 Linux now, Windows when
 image.zig grows VirtualAlloc.
 
+## The WebAssembly backend (M0)
+
+`codegen_wasm.zig` is a *distribution* target, not another engine loom
+maps and jumps into: it emits a standalone `.wasm` module that any wasm
+runtime instantiates — the browser, wasmtime, node, deno — with the
+host effects as imports.  It reuses everything above the seam: the same
+verified Luce IR, the same trap codes, checked the same way against the
+interpreter.  Reached with `luce wasm FILE.luc [-o FILE.wasm]`.
+
+Two facts shape the lowering.  WebAssembly is a *structured* stack
+machine — no registers, no arbitrary jumps — so Luce's basic-block CFG
+becomes a **dispatch loop**: a `$pc` local selected by `br_table`,
+correct for any control-flow graph without a relooper.  And IR
+registers and locals each become a wasm *local*, so values move by
+`local.get`/`local.set` rather than by scheduling the operand stack —
+the interpreter's register-array model, transliterated.  The checked
+arithmetic is emitted inline in wasm ops (the sign-based add/sub
+overflow test, the guarded check-divide for multiply, the MIN/-1 and
+zero guards for div/rem), so a trap fires on exactly the inputs the
+interpreter traps on.
+
+The host boundary is two imports: `env.emit_i64(i64)` is where a
+computed integer leaves the module (`print(str(n))` lowers to it, so
+the numeric pipeline is observable without a string runtime yet), and
+`env.trap(code)` records a Luce trap code before `unreachable` halts
+the module.
+
+Milestone 0 is deliberately narrow — the bring-up scope the native
+backends used: one function, the Int/Bool core, integer arithmetic with
+full trap semantics, control flow, `assert`, and integer output.
+`supported()` gates exactly that; strings and the heap are milestone 1.
+Because a wasm module needs an external runtime, the oracle is a shell
+harness rather than an in-process test: `tools/wasm-test.sh` compiles a
+corpus (nested loops, the while form, every operator, the branch,
+remainder, and each checked-arithmetic trap) to `.wasm`, runs each in
+deno via `tools/wasm-run.js`, and demands the output and trap codes
+match the interpreter byte-for-byte.  The gate and module byte
+structure are proven in-process by unit tests in `codegen_wasm.zig`.
+
 ## Where platform and ISA code is allowed to live
 
 Machine-specific knowledge is confined to four places, and nowhere
