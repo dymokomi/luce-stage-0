@@ -327,7 +327,7 @@ generic service per instruction (matmul ~100x slower).
 Targets: aarch64 macOS/Linux and x86-64 Linux now, Windows when
 image.zig grows VirtualAlloc.
 
-## The WebAssembly backend (M1 — the whole scalar language)
+## The WebAssembly backend (M2 — the whole compute language)
 
 `codegen_wasm.zig` is a *distribution* target, not another engine loom
 maps and jumps into: it emits a standalone `.wasm` module that any wasm
@@ -340,61 +340,63 @@ Two facts shape the lowering.  WebAssembly is a *structured* stack
 machine — no registers, no arbitrary jumps — so each function's
 basic-block CFG becomes a **dispatch loop**: a `$pc` local selected by
 `br_table`, correct for any control-flow graph without a relooper.  And
-IR registers and locals each become a wasm *local*, so values move by
-`local.get`/`local.set` rather than by scheduling the operand stack —
-the interpreter's register-array model, transliterated.  A Luce call
-becomes a wasm `call`; parameters, return values, and recursion ride
-wasm's own call stack.
+IR registers and locals each become a wasm *local*; a Luce call becomes
+a wasm `call`, with call depth kept a budget (a global holding loom's
+`native.max_call_depth`) that traps `call_depth_exceeded` on exactly the
+interpreter's recursion (proven to the frame: 126 completes, 127 traps).
 
-Every trap is emitted inline so it fires on exactly the interpreter's
-inputs: the sign-based add/sub overflow test, the guarded check-divide
-for multiply, the MIN/-1 and zero guards for int div/rem, the
-NaN-and-range guard before `Int(Float)`'s truncation, `abs(MIN)` and
-`-MIN` overflow.  Floats are IEEE `f64` (add/sub/mul/div and the
-comparisons never trap, matching the interpreter).  **Call depth** is a
-budget, not the runtime's native stack: a mutable `i64` global holds the
-same `native.max_call_depth` loom runs every engine with, decremented
-(with a `call_depth_exceeded` trap) at each function entry and restored
-on each successful return — so a standalone module and the interpreter
-overflow on the very same recursion (proven to the exact frame: 126
-deep completes, 127 traps).
+**Values.**  Scalars are wasm scalars (Int → i64, Bool → i32, Float →
+f64).  Everything with identity lives in linear memory: a String is a
+length-prefixed byte block; a heap object (List/Map/Array/Builder) is a
+fixed record — alive flag, owner (loose/container/binding + frame
+serial + local), length/capacity/data, array dims — whose address is its
+handle; a struct is a block of 8-byte field slots with functional
+update.  A bump allocator never reclaims mid-run, which matches the
+interpreter, whose free() only marks an object dead and whose arena
+reclaims at the end.
 
-The host boundary is two imports: `env.emit_i64(i64)` is where a
-computed integer leaves the module (`print(str(n))` lowers to it, so
-the numeric pipeline is observable without a string runtime yet —
-floats are observed through `Int(...)` and `assert` until strings
-land), and `env.trap(code)` records a Luce trap code before
-`unreachable` halts the module.
+**Ownership** (docs/OWNERSHIP.md) is compiled in, monomorphized: four
+generated wasm functions per entry in the program's static heap-type
+table — free_elements, free_object, copy_object, own_elements — walk
+element types by direct call, so List(List(Int)) frees, deep-copies,
+and adopts its children with no runtime tags.  Sites speak S20-S23:
+append/insert/store adopt, overwrite/remove/clear free the old owned
+element, pop loosens, slices and map.values() adopt deep copies, scope
+exit frees what the binding still owns, give/free verify ownership
+(not_owned) and use-after-free traps exactly as the reference.
 
-Scope, following the bring-up ladder the native backends used:
-- **M0**: one function, the Int/Bool core, integer arithmetic, control
-  flow, `assert`, integer output.
-- **M1** (here): many functions with parameters and return values, and
-  floats — `f64` arithmetic and comparisons, the checked
-  `Int(Float)`/`Float(Int)` conversions, and the scalar math intrinsics
-  (`abs`, `min`/`max`/`clamp` on Int, `sqrt`, `floor`, `ceil`).
+**Exact float text and math.**  str(Float) is a full ryu port: the
+128-bit pow5 tables are generated at comptime with exact big-int math
+(they are private to std), a plain-Zig replica of binaryToDecimal plus
+positional rendering is held byte-identical to std.fmt itself (20k
+random doubles + every edge shape) by a unit test, and the wasm runtime
+transliterates the proven replica.  Float `%` is musl fmod ported to
+wasm ops, proven bit-identical with a full-mantissa probe.  Float
+min/max/clamp replicate Zig's exact NaN rule (a NaN operand loses) over
+the native opcodes.  Int(Float) guards NaN and range before truncating.
 
-`supported()` gates exactly that.  Two scalar operations are held back
-not because they are hard to reach but because matching the interpreter
-*exactly* needs its own step: float `%` (`@rem`/fmod has no wasm opcode)
-and float `min`/`max`/`clamp` (fmin/fmax NaN and signed-zero rules
-wasm's `f64.min`/`f64.max` do not share).  Strings, structs, and the
-heap are milestone 2.
+The host boundary is two imports: `env.emit_str(ptr, len)` (print
+leaves the module by reading exported memory) and `env.trap(code)`.
+Still outside the gate, each with its reason recorded in `supported()`:
+parse_float (needs a correctly-rounded reader), struct fields that own
+heap objects (the last ownership walk), bytes, and the host effects
+(arg/file/terminal — a distribution module's effects are imports, a
+design decision to take deliberately).
 
 Because a wasm module needs an external runtime, the oracle is a shell
 harness rather than an in-process test.  `tools/wasm-test.sh` runs a
-hand-written corpus (nested loops, recursion and mutual recursion,
-floats through `Int`, the conversions, every checked-arithmetic trap
-and the depth trap) through deno via `tools/wasm-run.js` and demands the
-output and trap codes match the interpreter byte-for-byte.
-`tools/wasm-fuzz.sh` goes further: a seeded generator
-(`tools/wasm-fuzz.js`) emits random type-correct scalar programs — full
-of loops, branches, calls, and float/int conversion — and diffs wasm
-against the interpreter over hundreds of them, output or trap alike
-(1200 programs, zero mismatches).  The real `bench/loops.luc` and
-`bench/math.luc` (mandelbrot) round-trip through it identically.  The
-gate, the baked depth budget, and the module byte structure are proven
-in-process by unit tests in `codegen_wasm.zig`.
+~50-case corpus — recursion, floats, strings, every container, nested
+ownership, and every trap code — through deno (`tools/wasm-run.js`) and
+demands byte-identical output against the interpreter.  Three seeded
+differential fuzzers (`tools/wasm-fuzz.js`, `-str`, `-heap`) have run
+thousands of random type-correct programs with zero mismatches; the
+real bench programs (loops, math, strings, arrays, matmul, stats) and
+programs/{sort,bf}.luc round-trip identically.  The gate, the depth
+budget, the ryu replica, and the module byte structure are proven
+in-process by unit tests in `codegen_wasm.zig`.  A production datapoint:
+bench/stats.luc runs ~15x faster under deno's JIT than the reference
+interpreter (0.22s vs 3.2s).
+
 
 ## Where platform and ISA code is allowed to live
 
