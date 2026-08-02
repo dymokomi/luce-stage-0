@@ -425,6 +425,45 @@ run_case array_neg_dim "func main():
     var g = new Array(Int, n)
     print(str(len(g)))" trap 16
 
+# -- maps (heap phase B3) ----------------------------------------------------
+
+run_case map_string "func main():
+    var m = new Map(String, Int)
+    var words = new List(String)
+    words.append(\"a\")
+    words.append(\"b\")
+    words.append(\"a\")
+    words.append(\"c\")
+    words.append(\"a\")
+    for w in words:
+        m[w] = m.get(w, 0) + 1
+    print(str(m[\"a\"]))
+    print(str(m[\"b\"]))
+    print(str(len(m)))
+    print(str(m.has(\"c\")) + \" \" + str(m.has(\"z\")))
+    var keys = m.keys()
+    keys.sort()
+    for k in keys:
+        print(k)" output
+
+run_case map_int "func main():
+    var m = new Map(Int, Int)
+    for i in range(0, 6):
+        m[i % 3] = m.get(i % 3, 0) + i
+    print(str(m[0]) + \",\" + str(m[1]) + \",\" + str(m[2]))
+    m.remove(1)
+    print(str(m.has(1)))
+    var vs = m.values()
+    var total = 0
+    for v in vs:
+        total += v
+    print(str(total))" output
+
+run_case map_missing "func main():
+    var m = new Map(String, Int)
+    m[\"a\"] = 1
+    print(str(m[\"b\"]))" trap 17
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else

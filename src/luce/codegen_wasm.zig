@@ -108,7 +108,7 @@ fn supportedHeap(program: *const ir.Program, index: u32) bool {
         .builder => true,
         .list => |element| scalarElement(element),
         .array => |shape| scalarElement(shape.element),
-        .map => false,
+        .map => |pair| scalarElement(pair.key) and scalarElement(pair.value),
     };
 }
 
@@ -130,6 +130,12 @@ fn elementMode(of: types.Type) i32 {
         .string => cmp_string,
         else => cmp_int,
     };
+}
+
+/// Map keys are Int or String (the analyzer's rule); String keys compare
+/// by bytes, Int keys by value.
+fn keyMode(of: types.Type) i32 {
+    return if (of == .string) cmp_string else cmp_int;
 }
 
 fn supportedType(program: *const ir.Program, of: types.Type) bool {
@@ -172,6 +178,7 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         .list_slice, .list_find, .list_contains => true,
         .list_sort, .list_reverse, .clear_object => true,
         .dim_size, .array_fill => true,
+        .has_key, .key_at, .value_at, .map_get, .map_keys, .map_values => true,
         // str(Float)/parse_float need Zig-exact float<->decimal; deferred.
         .str_value => a0 != .float and (a0 != .heap or isBuilder(program, a0.heap)),
         .print => a0 == .string,
@@ -514,6 +521,16 @@ const Rt = enum(u32) {
     own_free, // (i32 h, i64 serial, i32 local) -> ()   (free if that binding owns it)
     own_loosen_frame, // (i32 h, i64 serial) -> ()   (binding(serial,*) := loose)
     array_new, // (i32 rank, i32 dims_buf) -> i32   (validate dims, alloc elements)
+    // Maps: entries are 16 bytes (key 8, value 8); keys compared by mode.
+    map_find, // (i32 h, i64 key, i32 mode) -> i32   (entry index, or -1)
+    map_index, // (i32 h, i64 key, i32 mode) -> i64   (value; traps key_missing)
+    map_get_or, // (i32 h, i64 key, i32 mode, i64 def) -> i64
+    map_set, // (i32 h, i64 key, i32 mode, i64 val) -> ()
+    map_remove, // (i32 h, i64 key, i32 mode) -> ()
+    map_key_at, // (i32 h, i64 i) -> i64
+    map_value_at, // (i32 h, i64 i) -> i64
+    map_keys, // (i32 h) -> i32   (a new List of the keys)
+    map_values, // (i32 h) -> i32   (a new List of the values)
 
     const count: u32 = @typeInfo(Rt).@"enum".fields.len;
 
@@ -556,6 +573,15 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_free
     .{ .params = &.{ wasm.i32t, wasm.i64t }, .result = null }, // own_loosen_frame
     .{ .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i32t }, // array_new
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = wasm.i32t }, // map_find
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = wasm.i64t }, // map_index
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t, wasm.i64t }, .result = wasm.i64t }, // map_get_or
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t, wasm.i64t }, .result = null }, // map_set
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // map_remove
+    .{ .params = &.{ wasm.i32t, wasm.i64t }, .result = wasm.i64t }, // map_key_at
+    .{ .params = &.{ wasm.i32t, wasm.i64t }, .result = wasm.i64t }, // map_value_at
+    .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // map_keys
+    .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // map_values
 };
 
 /// Emit one runtime function's body (locals + code).  Written in the
@@ -1114,6 +1140,47 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
             // k(4), size(5,i64).
             try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i64t, wasm.i32t, wasm.i64t });
             try emitArrayNew(&a);
+        },
+        .map_find => {
+            // params: h(0), key(1), mode(2).  locals: len(3), i(4), data(5), ekey(6,i64).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t, wasm.i64t });
+            try emitMapFind(&a);
+        },
+        .map_index => {
+            // params: h(0), key(1), mode(2).  locals: at(3).
+            try locals.append(arena, wasm.i32t);
+            try emitMapIndex(&a);
+        },
+        .map_get_or => {
+            // params: h(0), key(1), mode(2), def(3).  locals: at(4).
+            try locals.append(arena, wasm.i32t);
+            try emitMapGetOr(&a);
+        },
+        .map_set => {
+            // params: h(0), key(1), mode(2), val(3).  locals: at(4), data(5), len(6).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
+            try emitMapSet(&a);
+        },
+        .map_remove => {
+            // params: h(0), key(1), mode(2).  locals: at(3), data(4), len(5).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
+            try emitMapRemove(&a);
+        },
+        .map_key_at => {
+            // params: h(0), i(1).  locals: none.
+            try emitMapEntryAt(&a, 0);
+        },
+        .map_value_at => {
+            try emitMapEntryAt(&a, 8);
+        },
+        .map_keys => {
+            // params: h(0).  locals: nl(1), i(2), len(3), data(4).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t, wasm.i32t });
+            try emitMapCollect(&a, 0);
+        },
+        .map_values => {
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t, wasm.i32t });
+            try emitMapCollect(&a, 8);
         },
     }
     try a.op(wasm.end); // end function body
@@ -2440,6 +2507,297 @@ fn emitArrayNew(a: *Asm) !void {
     try a.localGet(obj);
 }
 
+const map_entry_size = 16;
+
+/// entry key/value address: data + i*16 (+8 for the value).
+fn emitEntryAddr(a: *Asm, data_local: u32, i_local: u32, field: u32) !void {
+    try a.localGet(data_local);
+    try a.localGet(i_local);
+    try a.constI32(4); // *16
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    if (field != 0) {
+        try a.constI32(@intCast(field));
+        try a.op(wasm.i32_add);
+    }
+}
+
+/// Whether entry key `ekey_local` equals `key_local` under `mode_local`
+/// (leaves an i32 on the stack): string keys compare bytes, else i64.
+fn emitKeyEq(a: *Asm, ekey_local: u32, key_local: u32, mode_local: u32) !void {
+    try a.localGet(mode_local);
+    try a.constI32(cmp_string);
+    try a.op(wasm.i32_eq);
+    try a.op(wasm.if_);
+    try a.op(wasm.i32t);
+    try a.localGet(ekey_local);
+    try a.op(wasm.i32_wrap_i64);
+    try a.localGet(key_local);
+    try a.op(wasm.i32_wrap_i64);
+    try a.callFunc(Rt.str_cmp.index());
+    try a.op(wasm.i32_eqz);
+    try a.op(wasm.else_);
+    try a.localGet(ekey_local);
+    try a.localGet(key_local);
+    try a.op(wasm.i64_eq);
+    try a.op(wasm.end);
+}
+
+fn emitMapFind(a: *Asm) !void {
+    const key = 1;
+    const mode = 2;
+    const len = 3;
+    const i = 4;
+    const data = 5;
+    const ekey = 6;
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(len);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localSet(data);
+    try a.constI32(0);
+    try a.localSet(i);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(i);
+    try a.localGet(len);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try emitEntryAddr(a, data, i, 0);
+    try a.load(wasm.i64_load, 0);
+    try a.localSet(ekey);
+    try emitKeyEq(a, ekey, key, mode);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(i);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(i);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localSet(i);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.constI32(-1);
+}
+
+fn emitMapIndex(a: *Asm) !void {
+    const key = 1;
+    const mode = 2;
+    const at = 3;
+    try a.localGet(0);
+    try a.localGet(key);
+    try a.localGet(mode);
+    try a.callFunc(Rt.map_find.index());
+    try a.localTee(at);
+    try a.constI32(0);
+    try a.op(wasm.i32_lt_s);
+    try a.trapIf(.key_missing);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localGet(at);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    try a.load(wasm.i64_load, 8);
+}
+
+fn emitMapGetOr(a: *Asm) !void {
+    const key = 1;
+    const mode = 2;
+    const def = 3;
+    const at = 4;
+    try a.localGet(0);
+    try a.localGet(key);
+    try a.localGet(mode);
+    try a.callFunc(Rt.map_find.index());
+    try a.localTee(at);
+    try a.constI32(0);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.i64t);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localGet(at);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    try a.load(wasm.i64_load, 8);
+    try a.op(wasm.else_);
+    try a.localGet(def);
+    try a.op(wasm.end);
+}
+
+fn emitMapSet(a: *Asm) !void {
+    const key = 1;
+    const mode = 2;
+    const val = 3;
+    const at = 4;
+    const data = 5;
+    const len = 6;
+    try a.localGet(0);
+    try a.localGet(key);
+    try a.localGet(mode);
+    try a.callFunc(Rt.map_find.index());
+    try a.localTee(at);
+    try a.constI32(0);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    // replace value in place
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localGet(at);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    try a.localGet(val);
+    try a.store(wasm.i64_store, 8);
+    try a.op(wasm.else_);
+    // append a new entry
+    try a.localGet(0);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.constI32(map_entry_size);
+    try a.callFunc(Rt.reserve.index());
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localSet(data);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(len);
+    try emitEntryAddr(a, data, len, 0);
+    try a.localGet(key);
+    try a.store(wasm.i64_store, 0);
+    try emitEntryAddr(a, data, len, 0);
+    try a.localGet(val);
+    try a.store(wasm.i64_store, 8);
+    try a.localGet(0);
+    try a.localGet(len);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.store(wasm.i32_store, obj_length);
+    try a.op(wasm.end);
+}
+
+fn emitMapRemove(a: *Asm) !void {
+    const key = 1;
+    const mode = 2;
+    const at = 3;
+    const data = 4;
+    const len = 5;
+    try a.localGet(0);
+    try a.localGet(key);
+    try a.localGet(mode);
+    try a.callFunc(Rt.map_find.index());
+    try a.localTee(at);
+    try a.constI32(0);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localSet(data);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(len);
+    // copy(data+at*16, data+(at+1)*16, (len-at-1)*16)
+    try emitEntryAddr(a, data, at, 0);
+    try a.localGet(data);
+    try a.localGet(at);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    try a.localGet(len);
+    try a.localGet(at);
+    try a.op(wasm.i32_sub);
+    try a.constI32(1);
+    try a.op(wasm.i32_sub);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.memoryCopy();
+    try a.localGet(0);
+    try a.localGet(len);
+    try a.constI32(1);
+    try a.op(wasm.i32_sub);
+    try a.store(wasm.i32_store, obj_length);
+    try a.op(wasm.end);
+}
+
+/// map_key_at / map_value_at: bounds-checked entry field read.
+fn emitMapEntryAt(a: *Asm, field: u32) !void {
+    const i = 1;
+    try a.localGet(i);
+    try a.constI64(0);
+    try a.op(wasm.i64_lt_s);
+    try a.localGet(i);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.op(wasm.i64_extend_i32_u);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.i32_or);
+    try a.trapIf(.index_bounds);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localGet(i);
+    try a.op(wasm.i32_wrap_i64);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    try a.load(wasm.i64_load, field);
+}
+
+/// map_keys / map_values: a new List filled with each entry's key or
+/// value (scalar copy); reuses list_push.
+fn emitMapCollect(a: *Asm, field: u32) !void {
+    const nl = 1;
+    const i = 2;
+    const len = 3;
+    const data = 4;
+    try a.callFunc(Rt.obj_alloc.index());
+    try a.localSet(nl);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(len);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localSet(data);
+    try a.constI32(0);
+    try a.localSet(i);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(i);
+    try a.localGet(len);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(nl);
+    try emitEntryAddr(a, data, i, field);
+    try a.load(wasm.i64_load, 0);
+    try a.callFunc(Rt.list_push.index());
+    try a.localGet(i);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localSet(i);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.localGet(nl);
+}
+
 // ---------------------------------------------------------------------------
 // Per-function lowering
 // ---------------------------------------------------------------------------
@@ -2959,33 +3317,98 @@ const FunctionEmitter = struct {
                 try self.setReg(item);
             },
             .index_get => {
-                const element = self.elementType(args[0]);
-                if (self.isArray(args[0])) {
+                if (self.isMap(args[0])) {
+                    const kv = self.mapKV(args[0]);
+                    try self.resolved(args[0]);
+                    try self.getReg(args[1]);
+                    try self.emitToSlot(kv.key);
+                    try self.a.constI32(keyMode(kv.key));
+                    try self.a.callFunc(Rt.map_index.index());
+                    try self.emitFromSlot(kv.value);
+                } else if (self.isArray(args[0])) {
                     try self.emitArrayAddr(args[0], args[1..]);
                     try self.a.load(wasm.i64_load, 0);
+                    try self.emitFromSlot(self.elementType(args[0]));
                 } else {
                     try self.resolved(args[0]);
                     try self.getReg(args[1]);
                     try self.a.callFunc(Rt.list_get.index());
+                    try self.emitFromSlot(self.elementType(args[0]));
                 }
-                try self.emitFromSlot(element);
                 try self.setReg(item);
             },
             .index_set => {
-                const element = self.elementType(args[0]);
-                if (self.isArray(args[0])) {
+                if (self.isMap(args[0])) {
+                    const kv = self.mapKV(args[0]);
+                    try self.resolved(args[0]);
+                    try self.getReg(args[1]);
+                    try self.emitToSlot(kv.key);
+                    try self.a.constI32(keyMode(kv.key));
+                    try self.getReg(args[args.len - 1]);
+                    try self.emitToSlot(kv.value);
+                    try self.a.callFunc(Rt.map_set.index());
+                } else if (self.isArray(args[0])) {
                     try self.emitArrayAddr(args[0], args[1 .. args.len - 1]);
                     try self.getReg(args[args.len - 1]);
-                    try self.emitToSlot(element);
+                    try self.emitToSlot(self.elementType(args[0]));
                     try self.a.store(wasm.i64_store, 0);
                 } else {
                     try self.resolved(args[0]);
                     try self.getReg(args[1]);
                     try self.getReg(args[args.len - 1]);
-                    try self.emitToSlot(element);
+                    try self.emitToSlot(self.elementType(args[0]));
                     try self.a.callFunc(Rt.list_set.index());
                     try self.a.op(wasm.drop); // old element (scalar: nothing to free)
                 }
+            },
+            .has_key => {
+                const kv = self.mapKV(args[0]);
+                try self.resolved(args[0]);
+                try self.getReg(args[1]);
+                try self.emitToSlot(kv.key);
+                try self.a.constI32(keyMode(kv.key));
+                try self.a.callFunc(Rt.map_find.index());
+                try self.a.constI32(0);
+                try self.a.op(wasm.i32_ge_s);
+                try self.setReg(item);
+            },
+            .map_get => {
+                const kv = self.mapKV(args[0]);
+                try self.resolved(args[0]);
+                try self.getReg(args[1]);
+                try self.emitToSlot(kv.key);
+                try self.a.constI32(keyMode(kv.key));
+                try self.getReg(args[2]);
+                try self.emitToSlot(kv.value);
+                try self.a.callFunc(Rt.map_get_or.index());
+                try self.emitFromSlot(kv.value);
+                try self.setReg(item);
+            },
+            .key_at => {
+                const kv = self.mapKV(args[0]);
+                try self.resolved(args[0]);
+                try self.getReg(args[1]);
+                try self.a.callFunc(Rt.map_key_at.index());
+                try self.emitFromSlot(kv.key);
+                try self.setReg(item);
+            },
+            .value_at => {
+                const kv = self.mapKV(args[0]);
+                try self.resolved(args[0]);
+                try self.getReg(args[1]);
+                try self.a.callFunc(Rt.map_value_at.index());
+                try self.emitFromSlot(kv.value);
+                try self.setReg(item);
+            },
+            .map_keys => {
+                try self.resolved(args[0]);
+                try self.a.callFunc(Rt.map_keys.index());
+                try self.setReg(item);
+            },
+            .map_values => {
+                try self.resolved(args[0]);
+                try self.a.callFunc(Rt.map_values.index());
+                try self.setReg(item);
             },
             .dim_size => {
                 const handle = self.scratchI32a();
@@ -3082,10 +3505,19 @@ const FunctionEmitter = struct {
                 try self.a.callFunc(Rt.list_insert.index());
             },
             .remove_entry => {
-                try self.resolved(args[0]);
-                try self.getReg(args[1]);
-                try self.a.callFunc(Rt.list_remove.index());
-                try self.a.op(wasm.drop); // removed element (scalar)
+                if (self.isMap(args[0])) {
+                    const kv = self.mapKV(args[0]);
+                    try self.resolved(args[0]);
+                    try self.getReg(args[1]);
+                    try self.emitToSlot(kv.key);
+                    try self.a.constI32(keyMode(kv.key));
+                    try self.a.callFunc(Rt.map_remove.index());
+                } else {
+                    try self.resolved(args[0]);
+                    try self.getReg(args[1]);
+                    try self.a.callFunc(Rt.list_remove.index());
+                    try self.a.op(wasm.drop); // removed element (scalar)
+                }
             },
             .list_slice => {
                 try self.resolved(args[0]);
@@ -3142,6 +3574,15 @@ const FunctionEmitter = struct {
 
     fn isArray(self: *const FunctionEmitter, register: ir.Register) bool {
         return std.meta.activeTag(self.program.heap_types[self.function.result_types[register].heap]) == .array;
+    }
+
+    fn isMap(self: *const FunctionEmitter, register: ir.Register) bool {
+        return std.meta.activeTag(self.program.heap_types[self.function.result_types[register].heap]) == .map;
+    }
+
+    fn mapKV(self: *const FunctionEmitter, register: ir.Register) struct { key: types.Type, value: types.Type } {
+        const pair = self.program.heap_types[self.function.result_types[register].heap].map;
+        return .{ .key = pair.key, .value = pair.value };
     }
 
     /// Resolve an Array and leave the address of element `indices` on the
@@ -3602,15 +4043,18 @@ test "scalars and strings are supported; heap and str(Float) are not yet" {
     defer list.deinit();
     try testing.expect(supported(&list));
 
-    // A Map is still a later phase.
-    var map = (try compileOrNull(
+    // A struct is still a later phase.
+    var record = (try compileOrNull(
+        \\struct Point:
+        \\    x: Int
+        \\    y: Int
+        \\
         \\func main():
-        \\    var m = new Map(String, Int)
-        \\    m["a"] = 1
-        \\    print(str(m.has("a")))
+        \\    var p = Point(x = 1, y = 2)
+        \\    print(str(p.x + p.y))
     )).?;
-    defer map.deinit();
-    try testing.expect(!supported(&map));
+    defer record.deinit();
+    try testing.expect(!supported(&record));
 
     var floatstr = (try compileOrNull(
         \\func main():
