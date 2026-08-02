@@ -500,6 +500,51 @@ run_case copy_array "func main():
     free(a)
     free(b)" output
 
+# -- structs (heap phase B5) -------------------------------------------------
+
+run_case struct_basic "struct Vec:
+    x: Int
+    y: Int
+    z: Int
+
+func norm2(v: Vec) -> Int:
+    return v.x * v.x + v.y * v.y + v.z * v.z
+
+func main():
+    var v = Vec(x = 1, y = 2, z = 3)
+    print(str(norm2(v)))
+    var w = Vec(x = v.x + 10, y = v.y, z = v.z)
+    print(str(w.x) + \",\" + str(w.y) + \",\" + str(w.z))
+    print(str(norm2(v)))" output
+
+run_case struct_eq "struct Rec:
+    tag: String
+    n: Int
+    r: Float
+
+func main():
+    var a = Rec(tag = \"hi\", n = 5, r = 1.5)
+    var b = Rec(tag = \"hi\", n = 5, r = 1.5)
+    var c = Rec(tag = \"hi\", n = 6, r = 1.5)
+    print(str(a == b))
+    print(str(a == c))
+    print(str(a != c))
+    print(a.tag + \" \" + str(a.n) + \" \" + str(Int(a.r * 10.0)))" output
+
+run_case struct_in_list "struct P:
+    x: Int
+    y: Int
+
+func main():
+    var pts = new List(P)
+    for i in range(0, 4):
+        pts.append(P(x = i, y = i * i))
+    var total = 0
+    for p in pts:
+        total += p.x + p.y
+    print(str(total))
+    print(str(pts[2].y))" output
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else

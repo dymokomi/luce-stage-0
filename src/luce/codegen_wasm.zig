@@ -94,9 +94,20 @@ fn functionSupported(program: *const ir.Program, function: *const ir.Function) b
             .call => |callee| if (callee.function >= program.functions.len) return false,
             .heap_new => |new| if (!supportedHeap(program, new.heap)) return false,
             .object_bind, .object_unbind => {}, // value type already gated above
+            .struct_make, .struct_get, .struct_set => {}, // type gate covers the fields
             .intrinsic => |call| if (!intrinsicSupported(program, function, call)) return false,
-            else => return false, // input/output, struct_*
+            else => return false, // input/output ports
         }
+    }
+    return true;
+}
+
+/// A struct all of whose fields are scalars/strings — value records with
+/// no owned objects, so no ownership walk.  Object and nested-struct
+/// fields are a later phase.
+fn supportedStruct(program: *const ir.Program, index: u32) bool {
+    for (program.structs[index].fields) |field| {
+        if (!nonOwning(program, field.field_type)) return false;
     }
     return true;
 }
@@ -106,16 +117,33 @@ fn functionSupported(program: *const ir.Program, function: *const ir.Function) b
 fn supportedHeap(program: *const ir.Program, index: u32) bool {
     return switch (program.heap_types[index]) {
         .builder => true,
-        .list => |element| scalarElement(element),
-        .array => |shape| scalarElement(shape.element),
-        .map => |pair| scalarElement(pair.key) and scalarElement(pair.value),
+        .list => |element| nonOwning(program, element),
+        .array => |shape| nonOwning(program, shape.element),
+        // Map keys are Int/String; values may be any non-owning value.
+        .map => |pair| nonOwning(program, pair.key) and nonOwning(program, pair.value),
     };
 }
 
-fn scalarElement(of: types.Type) bool {
+/// A value that fits one 8-byte slot and owns no heap object: scalars,
+/// strings, and structs all of whose fields are themselves non-owning.
+/// Such values need no element/field ownership walk, so a container or
+/// struct built from them is safe with a plain slot copy.  A heap object
+/// field (a List inside a struct, a struct inside a List that holds
+/// objects) owns things and waits for the element-ownership phase.
+fn nonOwning(program: *const ir.Program, of: types.Type) bool {
     return switch (of) {
         .int, .boolean, .float, .string => true,
-        else => false, // objects/structs as elements: needs element ownership
+        .strukt => |index| supportedStruct(program, index),
+        else => false, // heap objects, bytes
+    };
+}
+
+/// The element type of a List or Array heap type (for gating decisions).
+fn containerElement(program: *const ir.Program, of: types.Type) types.Type {
+    return switch (program.heap_types[of.heap]) {
+        .list => |element| element,
+        .array => |shape| shape.element,
+        else => .none,
     };
 }
 
@@ -142,7 +170,8 @@ fn supportedType(program: *const ir.Program, of: types.Type) bool {
     return switch (of) {
         .int, .boolean, .float, .string => true,
         .heap => |index| supportedHeap(program, index),
-        else => false, // strukt, bytes, none-as-value
+        .strukt => |index| supportedStruct(program, index),
+        else => false, // bytes, none-as-value
     };
 }
 
@@ -152,6 +181,7 @@ fn binarySupported(op: ir.Instruction.Binary) bool {
         .string => op.op == .add or op.op.isComparison(),
         .boolean => op.op == .equal or op.op == .not_equal,
         .float => op.op != .remainder, // float % is @rem/fmod: no wasm opcode
+        .strukt => op.op == .equal or op.op == .not_equal,
         else => false,
     };
 }
@@ -162,7 +192,9 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
             return fun.result_types[register];
         }
     }.of;
-    const a0 = argType(function, call.arguments[0]);
+    // Host/fabric intrinsics (arg_count, term_*, …) take no value arg;
+    // they are unsupported, so guard the type lookup.
+    const a0 = if (call.arguments.len > 0) argType(function, call.arguments[0]) else types.Type.none;
     return switch (call.kind) {
         .assert_true, .trap_message, .null_object => true,
         .abs => a0 == .int or a0 == .float,
@@ -175,8 +207,12 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         // already gated by the type check).
         .index_get, .index_set, .append_value, .append_ascii => true,
         .pop_value, .insert_value, .remove_entry => true,
-        .list_slice, .list_find, .list_contains => true,
-        .list_sort, .list_reverse, .clear_object => true,
+        .list_slice, .list_reverse, .clear_object => true,
+        // find/contains compare elements; struct comparison in a
+        // container is deferred (sort never reaches structs — the
+        // analyzer requires orderable elements).
+        .list_find, .list_contains => std.meta.activeTag(containerElement(program, a0)) != .strukt,
+        .list_sort => true,
         .dim_size, .array_fill => true,
         .has_key, .key_at, .value_at, .map_get, .map_keys, .map_values => true,
         // give/copy/free on an object (struct values are a later phase).
@@ -3055,6 +3091,48 @@ const FunctionEmitter = struct {
             .binary => |operation| try self.emitBinary(item, operation),
             .call => |callee| try self.emitCall(item, callee),
             .intrinsic => |call| try self.emitIntrinsic(item, call),
+            .struct_make => |make| {
+                const layout = self.program.structs[make.layout];
+                const ptr = self.scratchI32a();
+                try self.a.constI32(@intCast(make.fields.len * 8));
+                try self.a.callFunc(Rt.alloc.index());
+                try self.a.localSet(ptr);
+                for (make.fields, layout.fields, 0..) |field_reg, field, index| {
+                    try self.a.localGet(ptr);
+                    try self.getReg(field_reg);
+                    try self.emitToSlot(field.field_type);
+                    try self.a.store(wasm.i64_store, @intCast(index * 8));
+                }
+                try self.a.localGet(ptr);
+                try self.setReg(item);
+            },
+            .struct_get => |get| {
+                const field = self.program.structs[get.layout].fields[get.field];
+                try self.getReg(get.target);
+                try self.a.load(wasm.i64_load, @intCast(get.field * 8));
+                try self.emitFromSlot(field.field_type);
+                try self.setReg(item);
+            },
+            .struct_set => |set| {
+                // Functional update: a fresh record, one field replaced
+                // (struct values are immutable, so sharing is safe).
+                const layout = self.program.structs[set.layout];
+                const field = layout.fields[set.field];
+                const ptr = self.scratchI32a();
+                try self.a.constI32(@intCast(layout.fields.len * 8));
+                try self.a.callFunc(Rt.alloc.index());
+                try self.a.localSet(ptr);
+                try self.a.localGet(ptr);
+                try self.getReg(set.target);
+                try self.a.constI32(@intCast(layout.fields.len * 8));
+                try self.a.memoryCopy();
+                try self.a.localGet(ptr);
+                try self.getReg(set.value);
+                try self.emitToSlot(field.field_type);
+                try self.a.store(wasm.i64_store, @intCast(set.field * 8));
+                try self.a.localGet(ptr);
+                try self.setReg(item);
+            },
             .heap_new => |new| {
                 if (new.dims.len == 0) {
                     // List/Builder/Map start empty.
@@ -3181,6 +3259,7 @@ const FunctionEmitter = struct {
         switch (operation.operand_type) {
             .float => try self.emitFloatBinary(item, operation),
             .string => try self.emitStringBinary(item, operation),
+            .strukt => |layout| try self.emitStructBinary(item, operation, layout),
             .boolean => {
                 try self.getReg(operation.left);
                 try self.getReg(operation.right);
@@ -3189,6 +3268,52 @@ const FunctionEmitter = struct {
             },
             else => try self.emitIntBinary(item, operation),
         }
+    }
+
+    /// Struct equality: every field equal, compared by its own type.
+    fn emitStructBinary(self: *FunctionEmitter, item: ir.Register, operation: anytype, layout_index: u32) !void {
+        const layout = self.program.structs[layout_index];
+        const acc = self.scratchI32a();
+        const a_slot = self.scratchI64a();
+        const b_slot = self.scratchI64b();
+        try self.a.constI32(1);
+        try self.a.localSet(acc);
+        for (layout.fields, 0..) |field, index| {
+            try self.getReg(operation.left);
+            try self.a.load(wasm.i64_load, @intCast(index * 8));
+            try self.a.localSet(a_slot);
+            try self.getReg(operation.right);
+            try self.a.load(wasm.i64_load, @intCast(index * 8));
+            try self.a.localSet(b_slot);
+            switch (field.field_type) {
+                .string => {
+                    try self.a.localGet(a_slot);
+                    try self.a.op(wasm.i32_wrap_i64);
+                    try self.a.localGet(b_slot);
+                    try self.a.op(wasm.i32_wrap_i64);
+                    try self.a.callFunc(Rt.str_cmp.index());
+                    try self.a.op(wasm.i32_eqz);
+                },
+                .float => {
+                    try self.a.localGet(a_slot);
+                    try self.a.op(0xBF); // f64.reinterpret_i64
+                    try self.a.localGet(b_slot);
+                    try self.a.op(0xBF);
+                    try self.a.op(wasm.f64_eq);
+                },
+                else => {
+                    try self.a.localGet(a_slot);
+                    try self.a.localGet(b_slot);
+                    try self.a.op(wasm.i64_eq);
+                },
+            }
+            try self.a.localGet(acc);
+            try self.a.op(wasm.i32_and);
+            try self.a.localSet(acc);
+        }
+        try self.a.localGet(acc);
+        if (operation.op == .not_equal) try self.a.op(wasm.i32_eqz);
+        try self.setReg(item);
     }
 
     fn emitFloatBinary(self: *FunctionEmitter, item: ir.Register, operation: anytype) !void {
@@ -4255,7 +4380,7 @@ test "scalars and strings are supported; heap and str(Float) are not yet" {
     defer list.deinit();
     try testing.expect(supported(&list));
 
-    // A struct is still a later phase.
+    // A struct of scalars is supported (B5).
     var record = (try compileOrNull(
         \\struct Point:
         \\    x: Int
@@ -4266,7 +4391,16 @@ test "scalars and strings are supported; heap and str(Float) are not yet" {
         \\    print(str(p.x + p.y))
     )).?;
     defer record.deinit();
-    try testing.expect(!supported(&record));
+    try testing.expect(supported(&record));
+
+    // Host effects (arg/file/terminal) are not lowered — a distribution
+    // module's effects would be imports, out of the compute core's scope.
+    var hosted = (try compileOrNull(
+        \\func main():
+        \\    print(str(arg_count()))
+    )).?;
+    defer hosted.deinit();
+    try testing.expect(!supported(&hosted));
 
     var floatstr = (try compileOrNull(
         \\func main():
