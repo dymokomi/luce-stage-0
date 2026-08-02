@@ -378,6 +378,53 @@ run_case list_oob "func main():
     xs.append(1)
     print(str(xs[5]))" trap 16
 
+# -- arrays (heap phase B2) --------------------------------------------------
+
+run_case array_2d "func main():
+    var g = new Array(Int, 4, 5)
+    for r in range(0, 4):
+        for c in range(0, 5):
+            g[r, c] = r * 5 + c
+    var total = 0
+    for r in range(0, 4):
+        for c in range(0, 5):
+            total += g[r, c]
+    print(str(total))
+    print(str(g[3, 4]))
+    print(str(len(g)))" output
+
+run_case array_fill_sort "func main():
+    var v = new Array(Int, 8)
+    v.fill(3)
+    v[0] = 9
+    v[7] = 1
+    var s = 0
+    for i in range(0, 8):
+        s += v[i]
+    print(str(s))
+    v.sort()
+    print(str(v[0]) + \",\" + str(v[7]))
+    v.reverse()
+    print(str(v[0]))" output
+
+run_case array_float "func main():
+    var a = new Array(Float, 4)
+    a.fill(1.5)
+    a[1] = 2.5
+    var s = 0.0
+    for i in range(0, 4):
+        s += a[i]
+    print(str(Int(s * 10.0)))" output
+
+run_case array_oob "func main():
+    var g = new Array(Int, 2, 3)
+    print(str(g[1, 5]))" trap 16
+
+run_case array_neg_dim "func main():
+    var n = 0 - 1
+    var g = new Array(Int, n)
+    print(str(len(g)))" trap 16
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else

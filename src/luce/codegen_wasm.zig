@@ -107,7 +107,8 @@ fn supportedHeap(program: *const ir.Program, index: u32) bool {
     return switch (program.heap_types[index]) {
         .builder => true,
         .list => |element| scalarElement(element),
-        .map, .array => false,
+        .array => |shape| scalarElement(shape.element),
+        .map => false,
     };
 }
 
@@ -170,6 +171,7 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         .pop_value, .insert_value, .remove_entry => true,
         .list_slice, .list_find, .list_contains => true,
         .list_sort, .list_reverse, .clear_object => true,
+        .dim_size, .array_fill => true,
         // str(Float)/parse_float need Zig-exact float<->decimal; deferred.
         .str_value => a0 != .float and (a0 != .heap or isBuilder(program, a0.heap)),
         .print => a0 == .string,
@@ -511,6 +513,7 @@ const Rt = enum(u32) {
     own_bind, // (i32 h, i64 serial, i32 local) -> ()   (owner := binding)
     own_free, // (i32 h, i64 serial, i32 local) -> ()   (free if that binding owns it)
     own_loosen_frame, // (i32 h, i64 serial) -> ()   (binding(serial,*) := loose)
+    array_new, // (i32 rank, i32 dims_buf) -> i32   (validate dims, alloc elements)
 
     const count: u32 = @typeInfo(Rt).@"enum".fields.len;
 
@@ -552,6 +555,7 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_bind
     .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_free
     .{ .params = &.{ wasm.i32t, wasm.i64t }, .result = null }, // own_loosen_frame
+    .{ .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i32t }, // array_new
 };
 
 /// Emit one runtime function's body (locals + code).  Written in the
@@ -1105,6 +1109,12 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
         .own_bind => try emitOwnBind(&a),
         .own_free => try emitOwnFree(&a),
         .own_loosen_frame => try emitOwnLoosenFrame(&a),
+        .array_new => {
+            // params: rank(0), dims(1).  locals: obj(2), total(3,i64),
+            // k(4), size(5,i64).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i64t, wasm.i32t, wasm.i64t });
+            try emitArrayNew(&a);
+        },
     }
     try a.op(wasm.end); // end function body
 
@@ -2350,6 +2360,86 @@ fn emitOwnLoosenFrame(a: *Asm) !void {
     try a.op(wasm.end);
 }
 
+/// A safety valve matching the interpreter: one array cannot exceed
+/// this many elements (a dim or the product beyond it traps index_bounds).
+const max_array_elements: i64 = 1 << 24;
+
+fn emitArrayNew(a: *Asm) !void {
+    const rank = 0;
+    const dims = 1;
+    const obj = 2;
+    const total = 3;
+    const k = 4;
+    const size = 5;
+    try a.callFunc(Rt.obj_alloc.index());
+    try a.localSet(obj);
+    try a.constI64(1);
+    try a.localSet(total);
+    try a.constI32(0);
+    try a.localSet(k);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(k);
+    try a.localGet(rank);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    // size = dims[k]
+    try a.localGet(dims);
+    try a.localGet(k);
+    try a.constI32(3);
+    try a.op(wasm.i32_shl);
+    try a.op(wasm.i32_add);
+    try a.load(wasm.i64_load, 0);
+    try a.localSet(size);
+    // size < 0 or size > max -> index_bounds
+    try a.localGet(size);
+    try a.constI64(0);
+    try a.op(wasm.i64_lt_s);
+    try a.localGet(size);
+    try a.constI64(max_array_elements);
+    try a.op(wasm.i64_gt_s);
+    try a.op(wasm.i32_or);
+    try a.trapIf(.index_bounds);
+    // total *= size ; total > max -> index_bounds
+    try a.localGet(total);
+    try a.localGet(size);
+    try a.op(wasm.i64_mul);
+    try a.localTee(total);
+    try a.constI64(max_array_elements);
+    try a.op(wasm.i64_gt_s);
+    try a.trapIf(.index_bounds);
+    try a.localGet(k);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localSet(k);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    // elements = alloc(total * 8), zero by construction
+    try a.localGet(obj);
+    try a.localGet(total);
+    try a.op(wasm.i32_wrap_i64);
+    try a.constI32(3);
+    try a.op(wasm.i32_shl);
+    try a.callFunc(Rt.alloc.index());
+    try a.store(wasm.i32_store, obj_data);
+    try a.localGet(obj);
+    try a.localGet(total);
+    try a.op(wasm.i32_wrap_i64);
+    try a.store(wasm.i32_store, obj_length);
+    try a.localGet(obj);
+    try a.localGet(dims);
+    try a.store(wasm.i32_store, obj_dims);
+    try a.localGet(obj);
+    try a.localGet(rank);
+    try a.store(wasm.i32_store, obj_rank);
+    try a.localGet(obj);
+}
+
 // ---------------------------------------------------------------------------
 // Per-function lowering
 // ---------------------------------------------------------------------------
@@ -2365,8 +2455,23 @@ const FunctionEmitter = struct {
     pc_local: u32 = 0,
     serial_local: u32 = 0, // this frame's ownership serial (identity)
     registers_base: u32 = 0,
+    scratch_base: u32 = 0, // 4 temporaries: i32, i32, i64, i64
     scope_extra: u32 = 0,
     loop_depth: u32 = 0,
+
+    const scratch_count = 4;
+    fn scratchI32a(self: *const FunctionEmitter) u32 {
+        return self.scratch_base;
+    }
+    fn scratchI32b(self: *const FunctionEmitter) u32 {
+        return self.scratch_base + 1;
+    }
+    fn scratchI64a(self: *const FunctionEmitter) u32 {
+        return self.scratch_base + 2;
+    }
+    fn scratchI64b(self: *const FunctionEmitter) u32 {
+        return self.scratch_base + 3;
+    }
 
     fn regLocal(self: *const FunctionEmitter, register: ir.Register) u32 {
         return self.registers_base + register;
@@ -2433,10 +2538,25 @@ const FunctionEmitter = struct {
             .binary => |operation| try self.emitBinary(item, operation),
             .call => |callee| try self.emitCall(item, callee),
             .intrinsic => |call| try self.emitIntrinsic(item, call),
-            .heap_new => {
-                // List/Builder start empty; Array allocation is a later
-                // phase, so supported() admits only these two here.
-                try self.a.callFunc(Rt.obj_alloc.index());
+            .heap_new => |new| {
+                if (new.dims.len == 0) {
+                    // List/Builder/Map start empty.
+                    try self.a.callFunc(Rt.obj_alloc.index());
+                } else {
+                    // Array: fill a dims buffer, then validate + allocate.
+                    const dims_buf = self.scratchI32a();
+                    try self.a.constI32(@intCast(new.dims.len * 8));
+                    try self.a.callFunc(Rt.alloc.index());
+                    try self.a.localSet(dims_buf);
+                    for (new.dims, 0..) |dim_reg, axis| {
+                        try self.a.localGet(dims_buf);
+                        try self.getReg(dim_reg);
+                        try self.a.store(wasm.i64_store, @intCast(axis * 8));
+                    }
+                    try self.a.constI32(@intCast(new.dims.len));
+                    try self.a.localGet(dims_buf);
+                    try self.a.callFunc(Rt.array_new.index());
+                }
                 try self.setReg(item);
             },
             .object_bind => |bind| {
@@ -2774,15 +2894,20 @@ const FunctionEmitter = struct {
             },
             .len => {
                 if (self.function.result_types[args[0]] == .heap) {
-                    // list/map/array element count, or builder byte count
-                    try self.getReg(args[0]);
-                    try self.a.callFunc(Rt.live.index());
-                    try self.a.load(wasm.i32_load, obj_length);
+                    try self.resolved(args[0]);
+                    if (self.isArray(args[0])) {
+                        // an Array's length is its first dimension
+                        try self.a.load(wasm.i32_load, obj_dims);
+                        try self.a.load(wasm.i64_load, 0);
+                    } else { // list/map element count, or builder byte count
+                        try self.a.load(wasm.i32_load, obj_length);
+                        try self.a.op(wasm.i64_extend_i32_u);
+                    }
                 } else { // string byte length
                     try self.getReg(args[0]);
                     try self.a.load(wasm.i32_load, 0);
+                    try self.a.op(wasm.i64_extend_i32_u);
                 }
-                try self.a.op(wasm.i64_extend_i32_u);
                 try self.setReg(item);
             },
             .string_slice => {
@@ -2834,21 +2959,106 @@ const FunctionEmitter = struct {
                 try self.setReg(item);
             },
             .index_get => {
-                const element = self.listElement(args[0]);
-                try self.resolved(args[0]);
-                try self.getReg(args[1]);
-                try self.a.callFunc(Rt.list_get.index());
+                const element = self.elementType(args[0]);
+                if (self.isArray(args[0])) {
+                    try self.emitArrayAddr(args[0], args[1..]);
+                    try self.a.load(wasm.i64_load, 0);
+                } else {
+                    try self.resolved(args[0]);
+                    try self.getReg(args[1]);
+                    try self.a.callFunc(Rt.list_get.index());
+                }
                 try self.emitFromSlot(element);
                 try self.setReg(item);
             },
             .index_set => {
-                const element = self.listElement(args[0]);
+                const element = self.elementType(args[0]);
+                if (self.isArray(args[0])) {
+                    try self.emitArrayAddr(args[0], args[1 .. args.len - 1]);
+                    try self.getReg(args[args.len - 1]);
+                    try self.emitToSlot(element);
+                    try self.a.store(wasm.i64_store, 0);
+                } else {
+                    try self.resolved(args[0]);
+                    try self.getReg(args[1]);
+                    try self.getReg(args[args.len - 1]);
+                    try self.emitToSlot(element);
+                    try self.a.callFunc(Rt.list_set.index());
+                    try self.a.op(wasm.drop); // old element (scalar: nothing to free)
+                }
+            },
+            .dim_size => {
+                const handle = self.scratchI32a();
+                const axis = self.scratchI64a();
                 try self.resolved(args[0]);
+                try self.a.localSet(handle);
                 try self.getReg(args[1]);
-                try self.getReg(args[args.len - 1]);
+                try self.a.localSet(axis);
+                // axis < 0 or axis >= rank -> index_bounds
+                try self.a.localGet(axis);
+                try self.a.constI64(0);
+                try self.a.op(wasm.i64_lt_s);
+                try self.a.localGet(axis);
+                try self.a.localGet(handle);
+                try self.a.load(wasm.i32_load, obj_rank);
+                try self.a.op(wasm.i64_extend_i32_u);
+                try self.a.op(wasm.i64_ge_s);
+                try self.a.op(wasm.i32_or);
+                try self.a.trapIf(.index_bounds);
+                // dims[axis]
+                try self.a.localGet(handle);
+                try self.a.load(wasm.i32_load, obj_dims);
+                try self.a.localGet(axis);
+                try self.a.op(wasm.i32_wrap_i64);
+                try self.a.constI32(3);
+                try self.a.op(wasm.i32_shl);
+                try self.a.op(wasm.i32_add);
+                try self.a.load(wasm.i64_load, 0);
+                try self.setReg(item);
+            },
+            .array_fill => {
+                const element = self.elementType(args[0]);
+                const handle = self.scratchI32a();
+                const data = self.scratchI32b();
+                const value = self.scratchI64a();
+                const i = self.scratchI64b();
+                try self.resolved(args[0]);
+                try self.a.localSet(handle);
+                try self.getReg(args[1]);
                 try self.emitToSlot(element);
-                try self.a.callFunc(Rt.list_set.index());
-                try self.a.op(wasm.drop); // old element (scalar: nothing to free)
+                try self.a.localSet(value);
+                try self.a.localGet(handle);
+                try self.a.load(wasm.i32_load, obj_data);
+                try self.a.localSet(data);
+                try self.a.constI64(0);
+                try self.a.localSet(i);
+                try self.a.op(wasm.block);
+                try self.a.op(wasm.empty_type);
+                try self.a.op(wasm.loop);
+                try self.a.op(wasm.empty_type);
+                try self.a.localGet(i);
+                try self.a.localGet(handle);
+                try self.a.load(wasm.i32_load, obj_length);
+                try self.a.op(wasm.i64_extend_i32_u);
+                try self.a.op(wasm.i64_ge_s);
+                try self.a.op(wasm.br_if);
+                try self.a.u32v(1);
+                try self.a.localGet(data);
+                try self.a.localGet(i);
+                try self.a.op(wasm.i32_wrap_i64);
+                try self.a.constI32(3);
+                try self.a.op(wasm.i32_shl);
+                try self.a.op(wasm.i32_add);
+                try self.a.localGet(value);
+                try self.a.store(wasm.i64_store, 0);
+                try self.a.localGet(i);
+                try self.a.constI64(1);
+                try self.a.op(wasm.i64_add);
+                try self.a.localSet(i);
+                try self.a.op(wasm.br);
+                try self.a.u32v(0);
+                try self.a.op(wasm.end);
+                try self.a.op(wasm.end);
             },
             .append_value => try self.emitAppendValue(args),
             .append_ascii => {
@@ -2857,14 +3067,14 @@ const FunctionEmitter = struct {
                 try self.a.callFunc(Rt.builder_byte.index());
             },
             .pop_value => {
-                const element = self.listElement(args[0]);
+                const element = self.elementType(args[0]);
                 try self.resolved(args[0]);
                 try self.a.callFunc(Rt.list_pop.index());
                 try self.emitFromSlot(element);
                 try self.setReg(item);
             },
             .insert_value => {
-                const element = self.listElement(args[0]);
+                const element = self.elementType(args[0]);
                 try self.resolved(args[0]);
                 try self.getReg(args[1]);
                 try self.getReg(args[2]);
@@ -2885,7 +3095,7 @@ const FunctionEmitter = struct {
                 try self.setReg(item);
             },
             .list_find, .list_contains => {
-                const element = self.listElement(args[0]);
+                const element = self.elementType(args[0]);
                 try self.resolved(args[0]);
                 try self.getReg(args[1]);
                 try self.emitToSlot(element);
@@ -2898,7 +3108,7 @@ const FunctionEmitter = struct {
                 try self.setReg(item);
             },
             .list_sort, .list_reverse => {
-                const element = self.listElement(args[0]);
+                const element = self.elementType(args[0]);
                 try self.resolved(args[0]);
                 try self.a.constI32(elementMode(element));
                 try self.a.constI32(if (call.kind == .list_reverse) 1 else 0);
@@ -2921,9 +3131,62 @@ const FunctionEmitter = struct {
         try self.a.callFunc(Rt.live.index());
     }
 
-    /// The element type of the List in `register` (its heap type).
-    fn listElement(self: *const FunctionEmitter, register: ir.Register) types.Type {
-        return self.program.heap_types[self.function.result_types[register].heap].list;
+    /// The element type of the List or Array in `register`.
+    fn elementType(self: *const FunctionEmitter, register: ir.Register) types.Type {
+        return switch (self.program.heap_types[self.function.result_types[register].heap]) {
+            .list => |element| element,
+            .array => |shape| shape.element,
+            else => .none, // builder/map have no uniform element here
+        };
+    }
+
+    fn isArray(self: *const FunctionEmitter, register: ir.Register) bool {
+        return std.meta.activeTag(self.program.heap_types[self.function.result_types[register].heap]) == .array;
+    }
+
+    /// Resolve an Array and leave the address of element `indices` on the
+    /// stack — the interpreter's flattenIndex, with each axis bounds
+    /// checked (index_bounds) against its dimension.
+    fn emitArrayAddr(self: *FunctionEmitter, obj: ir.Register, indices: []const ir.Register) !void {
+        const handle = self.scratchI32a();
+        const flat = self.scratchI64a();
+        const idx = self.scratchI64b();
+        try self.resolved(obj);
+        try self.a.localSet(handle);
+        try self.a.constI64(0);
+        try self.a.localSet(flat);
+        for (indices, 0..) |index_reg, axis| {
+            try self.getReg(index_reg);
+            try self.a.localSet(idx);
+            try self.a.localGet(idx);
+            try self.a.constI64(0);
+            try self.a.op(wasm.i64_lt_s);
+            try self.a.localGet(idx);
+            try self.emitDimLoad(handle, axis);
+            try self.a.op(wasm.i64_ge_s);
+            try self.a.op(wasm.i32_or);
+            try self.a.trapIf(.index_bounds);
+            try self.a.localGet(flat);
+            try self.emitDimLoad(handle, axis);
+            try self.a.op(wasm.i64_mul);
+            try self.a.localGet(idx);
+            try self.a.op(wasm.i64_add);
+            try self.a.localSet(flat);
+        }
+        try self.a.localGet(handle);
+        try self.a.load(wasm.i32_load, obj_data);
+        try self.a.localGet(flat);
+        try self.a.op(wasm.i32_wrap_i64);
+        try self.a.constI32(3);
+        try self.a.op(wasm.i32_shl);
+        try self.a.op(wasm.i32_add);
+    }
+
+    /// Push dims[axis] (i64) of the array whose handle is in `handle_local`.
+    fn emitDimLoad(self: *FunctionEmitter, handle_local: u32, axis: usize) !void {
+        try self.a.localGet(handle_local);
+        try self.a.load(wasm.i32_load, obj_dims);
+        try self.a.load(wasm.i64_load, @intCast(axis * 8));
     }
 
     /// Convert a value (already on the stack, in its natural wasm type)
@@ -2955,7 +3218,7 @@ const FunctionEmitter = struct {
             try self.getReg(args[1]);
             try self.a.callFunc(Rt.builder_str.index());
         } else {
-            const element = self.listElement(args[0]);
+            const element = self.elementType(args[0]);
             try self.resolved(args[0]);
             try self.getReg(args[1]);
             try self.emitToSlot(element);
@@ -3044,6 +3307,7 @@ const FunctionEmitter = struct {
         self.pc_local = local_count;
         self.serial_local = local_count + 1;
         self.registers_base = local_count + 2;
+        self.scratch_base = self.registers_base + @as(u32, @intCast(function.result_types.len));
 
         try self.emitBody();
 
@@ -3058,6 +3322,7 @@ const FunctionEmitter = struct {
         for (function.result_types) |result| {
             try kinds.append(arena, valType(result));
         }
+        try kinds.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i64t, wasm.i64t }); // scratch
         try appendRunLength(&out, arena, kinds.items);
         try out.appendSlice(arena, self.a.code.items);
         return out.items;
