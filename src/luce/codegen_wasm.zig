@@ -117,13 +117,27 @@ fn supportedStruct(program: *const ir.Program, index: u32) bool {
 /// A List of scalars/strings, or a Builder — the heap shapes phase B1
 /// lowers.  Maps, arrays, and object-holding containers are later.
 fn supportedHeap(program: *const ir.Program, index: u32) bool {
+    // The depth cap guards against a damaged module's cyclic type table;
+    // any real chain is bounded by the table's length.
+    return supportedHeapDepth(program, index, program.heap_types.len + 1);
+}
+
+fn supportedHeapDepth(program: *const ir.Program, index: u32, depth: usize) bool {
+    if (depth == 0) return false;
     return switch (program.heap_types[index]) {
         .builder => true,
-        .list => |element| nonOwning(program, element),
-        .array => |shape| nonOwning(program, shape.element),
-        // Map keys are Int/String; values may be any non-owning value.
-        .map => |pair| nonOwning(program, pair.key) and nonOwning(program, pair.value),
+        .list => |element| elementSupported(program, element, depth),
+        .array => |shape| elementSupported(program, shape.element, depth),
+        // Map keys are Int/String (the analyzer's rule).
+        .map => |pair| nonOwning(program, pair.key) and elementSupported(program, pair.value, depth),
     };
+}
+
+/// A container element: any non-owning value, or a supported heap type
+/// (whose ownership the generated walks then carry).
+fn elementSupported(program: *const ir.Program, of: types.Type, depth: usize) bool {
+    if (of == .heap) return supportedHeapDepth(program, of.heap, depth - 1);
+    return nonOwning(program, of);
 }
 
 /// A value that fits one 8-byte slot and owns no heap object: scalars,
@@ -215,7 +229,10 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         // analyzer requires orderable elements).
         .list_find, .list_contains => std.meta.activeTag(containerElement(program, a0)) != .strukt,
         .list_sort => true,
-        .dim_size, .array_fill => true,
+        .dim_size => true,
+        // fill duplicates one value into every slot — for an object that
+        // would forge shared ownership, and the analyzer forbids it.
+        .array_fill => !heapTypeOwns(program, a0.heap),
         .has_key, .key_at, .value_at, .map_get, .map_keys, .map_values => true,
         // give/copy/free on an object (struct values are a later phase).
         .give_object, .copy_object, .free_object => a0 == .heap,
@@ -404,6 +421,15 @@ const owner_binding = 2;
 const cmp_int = 0; // i64 identity (Int, Bool)
 const cmp_float = 1; // f64 equality/order
 const cmp_string = 2; // lexicographic via str_cmp
+
+// Generated per-heap-type ownership walks (monomorphized from the
+// program's static heap-type table; function index = user_base -
+// gen_count + type*gen_kinds + kind).
+const gen_free_elements = 0; // (h) -> ()   free every owned element
+const gen_free_object = 1; // (h) -> ()   mark dead + free_elements
+const gen_copy_object = 2; // (h) -> h'   deep copy (null passes through)
+const gen_own_elements = 3; // (h) -> ()   deep-copy + adopt every element in place
+const gen_kinds = 4;
 
 /// Int(Float)'s guard boundaries, matching the interpreter: NaN or
 /// outside [-2^63, 2^63) traps conversion_range.
@@ -819,8 +845,10 @@ const Rt = enum(u32) {
     // Ownership on a single object handle (docs/OWNERSHIP.md).  A null
     // or freed handle is a no-op, matching the interpreter's liveObject.
     own_bind, // (i32 h, i64 serial, i32 local) -> ()   (owner := binding)
-    own_free, // (i32 h, i64 serial, i32 local) -> ()   (free if that binding owns it)
+    own_should_free, // (i32 h, i64 serial, i32 local) -> i32   (that binding still owns it)
     own_loosen_frame, // (i32 h, i64 serial) -> ()   (binding(serial,*) := loose)
+    own_adopt, // (i32 h) -> ()   (owner := container; S20)
+    own_loosen, // (i32 h) -> ()   (owner := loose; pop hands the element out)
     array_new, // (i32 rank, i32 dims_buf) -> i32   (validate dims, alloc elements)
     // Maps: entries are 16 bytes (key 8, value 8); keys compared by mode.
     map_find, // (i32 h, i64 key, i32 mode) -> i32   (entry index, or -1)
@@ -887,8 +915,10 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{ wasm.i32t, wasm.i32t }, .result = null }, // builder_str
     .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // builder_to_str
     .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_bind
-    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_free
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = wasm.i32t }, // own_should_free
     .{ .params = &.{ wasm.i32t, wasm.i64t }, .result = null }, // own_loosen_frame
+    .{ .params = &.{wasm.i32t}, .result = null }, // own_adopt
+    .{ .params = &.{wasm.i32t}, .result = null }, // own_loosen
     .{ .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i32t }, // array_new
     .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = wasm.i32t }, // map_find
     .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i32t }, .result = wasm.i64t }, // map_index
@@ -1461,8 +1491,10 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
             try emitBuilderToStr(&a);
         },
         .own_bind => try emitOwnBind(&a),
-        .own_free => try emitOwnFree(&a),
+        .own_should_free => try emitOwnShouldFree(&a),
         .own_loosen_frame => try emitOwnLoosenFrame(&a),
+        .own_adopt => try emitOwnSetOwner(&a, owner_container),
+        .own_loosen => try emitOwnSetOwner(&a, owner_loose),
         .array_new => {
             // params: rank(0), dims(1).  locals: obj(2), total(3,i64),
             // k(4), size(5,i64).
@@ -2777,18 +2809,264 @@ fn emitOwnBind(a: *Asm) !void {
     try a.store(wasm.i32_store, obj_owner_local);
 }
 
-fn emitOwnFree(a: *Asm) !void {
-    // B1 leaf free: containers here hold only scalars/strings, which are
-    // not objects, so freeing marks the record dead with no child walk.
-    // Nested-object containers extend this at the use site.
-    try emitLiveGuard(a);
-    try emitOwnedByBinding(a, true);
+fn emitOwnShouldFree(a: *Asm) !void {
+    // The scope-exit decision only: whether (serial, local) still owns
+    // the object.  The caller frees through the statically-typed
+    // free_object walk, so children are released too.
+    try a.localGet(0);
+    try a.op(wasm.i32_eqz);
     try a.op(wasm.if_);
     try a.op(wasm.empty_type);
-    try a.localGet(0);
     try a.constI32(0);
-    try a.store(wasm.i32_store, obj_alive);
+    try a.op(wasm.ret);
     try a.op(wasm.end);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_alive);
+    try a.op(wasm.i32_eqz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constI32(0);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try emitOwnedByBinding(a, true);
+}
+
+/// own_adopt / own_loosen: set a live object's owner kind.
+fn emitOwnSetOwner(a: *Asm, kind: i32) !void {
+    try emitLiveGuard(a);
+    try a.localGet(0);
+    try a.constI32(kind);
+    try a.store(wasm.i32_store, obj_owner_kind);
+}
+
+// ---------------------------------------------------------------------------
+// Generated ownership walks — one family per heap type, monomorphized:
+// the walks the interpreter does with runtime tags, done here with the
+// static type table (a List(List(Int))'s free calls its element type's
+// free directly).  For non-owning element types the walks collapse to
+// the plain clone/mark-dead of phase B1.
+// ---------------------------------------------------------------------------
+
+/// The function index of generated (type, kind) given where the
+/// generated block starts.
+fn genFuncIndex(gen_base: u32, type_index: u32, kind: u32) u32 {
+    return gen_base + type_index * gen_kinds + kind;
+}
+
+/// Whether this heap type's elements (or map values) own heap objects.
+fn heapTypeOwns(program: *const ir.Program, type_index: u32) bool {
+    return switch (program.heap_types[type_index]) {
+        .builder => false,
+        .list => |element| element == .heap,
+        .array => |shape| shape.element == .heap,
+        .map => |pair| pair.value == .heap,
+    };
+}
+
+/// The element/value heap-type index of an owning container.
+fn heapChildType(program: *const ir.Program, type_index: u32) u32 {
+    return switch (program.heap_types[type_index]) {
+        .list => |element| element.heap,
+        .array => |shape| shape.element.heap,
+        .map => |pair| pair.value.heap,
+        .builder => unreachable,
+    };
+}
+
+fn emitGenerated(arena: Allocator, program: *const ir.Program, type_index: u32, kind: u32) ![]const u8 {
+    var a: Asm = .{ .arena = arena };
+    var locals: std.ArrayList(u8) = .empty;
+    const gen_base = import_count + Rt.count;
+    const owns = heapTypeOwns(program, type_index);
+    // Slot geometry: maps hold their value at +8 of a 16-byte entry.
+    const is_map = std.meta.activeTag(program.heap_types[type_index]) == .map;
+    const stride: i32 = if (is_map) map_entry_size else 8;
+    const value_offset: u32 = if (is_map) 8 else 0;
+
+    switch (kind) {
+        gen_free_elements => if (owns) {
+            // locals: i(1,i32), len(2,i32), data(3,i32) — param h(0).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
+            const child = heapChildType(program, type_index);
+            try emitGenWalk(&a, stride, value_offset, struct {
+                child_index: u32,
+                base: u32,
+                fn body(self: @This(), asm_: *Asm) !void {
+                    // slot value (an element handle) is on the stack.
+                    try asm_.op(wasm.i32_wrap_i64);
+                    try asm_.callFunc(genFuncIndex(self.base, self.child_index, gen_free_object));
+                }
+            }{ .child_index = child, .base = gen_base });
+        },
+        gen_free_object => {
+            try a.localGet(0);
+            try a.op(wasm.i32_eqz);
+            try a.op(wasm.if_);
+            try a.op(wasm.empty_type);
+            try a.op(wasm.ret);
+            try a.op(wasm.end);
+            try a.localGet(0);
+            try a.load(wasm.i32_load, obj_alive);
+            try a.op(wasm.i32_eqz);
+            try a.op(wasm.if_);
+            try a.op(wasm.empty_type);
+            try a.op(wasm.ret);
+            try a.op(wasm.end);
+            try a.localGet(0);
+            try a.constI32(0);
+            try a.store(wasm.i32_store, obj_alive);
+            if (owns) {
+                try a.localGet(0);
+                try a.callFunc(genFuncIndex(gen_base, type_index, gen_free_elements));
+            }
+        },
+        gen_copy_object => {
+            // Null passes through (the interpreter's deepCopy rule).
+            try a.localGet(0);
+            try a.op(wasm.i32_eqz);
+            try a.op(wasm.if_);
+            try a.op(wasm.empty_type);
+            try a.constI32(0);
+            try a.op(wasm.ret);
+            try a.op(wasm.end);
+            switch (program.heap_types[type_index]) {
+                .array => {
+                    try a.localGet(0);
+                    try a.callFunc(Rt.array_clone.index());
+                },
+                .builder => {
+                    try a.localGet(0);
+                    try a.constI32(1);
+                    try a.callFunc(Rt.obj_clone.index());
+                },
+                .map => {
+                    try a.localGet(0);
+                    try a.constI32(map_entry_size);
+                    try a.callFunc(Rt.obj_clone.index());
+                },
+                .list => {
+                    try a.localGet(0);
+                    try a.constI32(8);
+                    try a.callFunc(Rt.obj_clone.index());
+                },
+            }
+            if (owns) {
+                // locals: clone(1,i32) — deep-copy the elements in place.
+                try locals.append(arena, wasm.i32t);
+                try a.localSet(1);
+                try a.localGet(1);
+                try a.callFunc(genFuncIndex(gen_base, type_index, gen_own_elements));
+                try a.localGet(1);
+            }
+        },
+        gen_own_elements => if (owns) {
+            // locals: i(1,i32), len(2,i32), data(3,i32) — replace each
+            // element with an adopted deep copy (list_slice/map_values/
+            // copy all need exactly this walk).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
+            const child = heapChildType(program, type_index);
+            try emitGenWalkAddr(&a, stride, value_offset, struct {
+                child_index: u32,
+                base: u32,
+                fn body(self: @This(), asm_: *Asm) !void {
+                    // slot address is in local 4; load, copy, adopt, store.
+                    try asm_.localGet(4);
+                    try asm_.load(wasm.i64_load, 0);
+                    try asm_.op(wasm.i32_wrap_i64);
+                    try asm_.callFunc(genFuncIndex(self.base, self.child_index, gen_copy_object));
+                    try asm_.localTee(5);
+                    try asm_.callFunc(Rt.own_adopt.index());
+                    try asm_.localGet(4);
+                    try asm_.localGet(5);
+                    try asm_.op(wasm.i64_extend_i32_u);
+                    try asm_.store(wasm.i64_store, 0);
+                }
+            }{ .child_index = child, .base = gen_base });
+        },
+        else => unreachable,
+    }
+    try a.op(wasm.end);
+
+    var out: std.ArrayList(u8) = .empty;
+    if (kind == gen_own_elements and owns) {
+        // The addr walk needs two extra scratch i32s (addr, copied).
+        try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t });
+    }
+    try appendRunLength(&out, arena, locals.items);
+    try out.appendSlice(arena, a.code.items);
+    return out.items;
+}
+
+/// Loop over an object's slots pushing each slot VALUE (i64) for the
+/// callback.  param h=0; locals i=1, len=2, data=3.
+fn emitGenWalk(a: *Asm, stride: i32, value_offset: u32, callback: anytype) !void {
+    try emitGenWalkSetup(a);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(1);
+    try a.localGet(2);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(3);
+    try a.localGet(1);
+    try a.constI32(stride);
+    try a.op(wasm.i32_mul);
+    try a.op(wasm.i32_add);
+    try a.load(wasm.i64_load, value_offset);
+    try callback.body(a);
+    try emitGenWalkStep(a);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+}
+
+/// Loop over an object's slots leaving each slot ADDRESS in local 4 for
+/// the callback.  param h=0; locals i=1, len=2, data=3, addr=4, tmp=5.
+fn emitGenWalkAddr(a: *Asm, stride: i32, value_offset: u32, callback: anytype) !void {
+    try emitGenWalkSetup(a);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(1);
+    try a.localGet(2);
+    try a.op(wasm.i32_ge_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(3);
+    try a.localGet(1);
+    try a.constI32(stride);
+    try a.op(wasm.i32_mul);
+    try a.op(wasm.i32_add);
+    try a.constI32(@intCast(value_offset));
+    try a.op(wasm.i32_add);
+    try a.localSet(4);
+    try callback.body(a);
+    try emitGenWalkStep(a);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+}
+
+fn emitGenWalkSetup(a: *Asm) !void {
+    try a.constI32(0);
+    try a.localSet(1);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(2);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localSet(3);
+}
+
+fn emitGenWalkStep(a: *Asm) !void {
+    try a.localGet(1);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localSet(1);
+    try a.op(wasm.br);
+    try a.u32v(0);
 }
 
 fn emitOwnLoosenFrame(a: *Asm) !void {
@@ -4508,6 +4786,7 @@ const FunctionEmitter = struct {
     constant_addr: []const u32, // linear-memory address of each string constant
     true_addr: u32 = 0, // "true"/"false" string blocks, for str(Bool)
     false_addr: u32 = 0,
+    user_base: u32 = 0, // first user function's index (after runtime + generated)
 
     pc_local: u32 = 0,
     serial_local: u32 = 0, // this frame's ownership serial (identity)
@@ -4670,10 +4949,17 @@ const FunctionEmitter = struct {
             },
             .object_unbind => |unbind| {
                 if (function.result_types[unbind.value] == .heap) {
+                    // The scope-exit release: free (with children) only
+                    // what this binding still owns.
                     try self.getReg(unbind.value);
                     try self.a.localGet(self.serial_local);
                     try self.a.constI32(@intCast(unbind.local));
-                    try self.a.callFunc(Rt.own_free.index());
+                    try self.a.callFunc(Rt.own_should_free.index());
+                    try self.a.op(wasm.if_);
+                    try self.a.op(wasm.empty_type);
+                    try self.getReg(unbind.value);
+                    try self.a.callFunc(self.genFor(unbind.value, gen_free_object));
+                    try self.a.op(wasm.end);
                 }
             },
             .jump => |target| try self.gotoBlock(target),
@@ -4962,9 +5248,26 @@ const FunctionEmitter = struct {
         try self.a.trapIf(.integer_overflow);
     }
 
+    /// The generated ownership walk (kind) for the heap type of `register`.
+    fn genFor(self: *const FunctionEmitter, register: ir.Register, kind: u32) u32 {
+        return genFuncIndex(import_count + Rt.count, self.function.result_types[register].heap, kind);
+    }
+
+    /// The generated walk for the ELEMENT/value heap type of the
+    /// container in `register` (which must be owning).
+    fn childGen(self: *const FunctionEmitter, register: ir.Register, kind: u32) u32 {
+        const child = heapChildType(self.program, self.function.result_types[register].heap);
+        return genFuncIndex(import_count + Rt.count, child, kind);
+    }
+
+    /// Whether the container in `register` has elements that own objects.
+    fn elemOwning(self: *const FunctionEmitter, register: ir.Register) bool {
+        return heapTypeOwns(self.program, self.function.result_types[register].heap);
+    }
+
     fn emitCall(self: *FunctionEmitter, item: ir.Register, callee: anytype) !void {
         for (callee.arguments) |argument| try self.getReg(argument);
-        try self.a.callFunc(callee.function + import_count + Rt.count);
+        try self.a.callFunc(callee.function + self.user_base);
         try self.emitDepthRestore();
         if (self.program.functions[callee.function].return_type != .none) {
             if (self.function.result_types[item] != .none) {
@@ -5147,8 +5450,21 @@ const FunctionEmitter = struct {
                 try self.setReg(item);
             },
             .index_set => {
+                const owning = self.elemOwning(args[0]);
                 if (self.isMap(args[0])) {
                     const kv = self.mapKV(args[0]);
+                    // An overwrite frees the old owned value first (S22);
+                    // a missing key reads the null handle, a no-op free.
+                    if (owning) {
+                        try self.resolved(args[0]);
+                        try self.getReg(args[1]);
+                        try self.emitToSlot(kv.key);
+                        try self.a.constI32(keyMode(kv.key));
+                        try self.a.constI64(0);
+                        try self.a.callFunc(Rt.map_get_or.index());
+                        try self.a.op(wasm.i32_wrap_i64);
+                        try self.a.callFunc(self.childGen(args[0], gen_free_object));
+                    }
                     try self.resolved(args[0]);
                     try self.getReg(args[1]);
                     try self.emitToSlot(kv.key);
@@ -5157,6 +5473,12 @@ const FunctionEmitter = struct {
                     try self.emitToSlot(kv.value);
                     try self.a.callFunc(Rt.map_set.index());
                 } else if (self.isArray(args[0])) {
+                    if (owning) {
+                        try self.emitArrayAddr(args[0], args[1 .. args.len - 1]);
+                        try self.a.load(wasm.i64_load, 0);
+                        try self.a.op(wasm.i32_wrap_i64);
+                        try self.a.callFunc(self.childGen(args[0], gen_free_object));
+                    }
                     try self.emitArrayAddr(args[0], args[1 .. args.len - 1]);
                     try self.getReg(args[args.len - 1]);
                     try self.emitToSlot(self.elementType(args[0]));
@@ -5167,7 +5489,18 @@ const FunctionEmitter = struct {
                     try self.getReg(args[args.len - 1]);
                     try self.emitToSlot(self.elementType(args[0]));
                     try self.a.callFunc(Rt.list_set.index());
-                    try self.a.op(wasm.drop); // old element (scalar: nothing to free)
+                    if (owning) {
+                        // The returned old element is freed (S22).
+                        try self.a.op(wasm.i32_wrap_i64);
+                        try self.a.callFunc(self.childGen(args[0], gen_free_object));
+                    } else {
+                        try self.a.op(wasm.drop);
+                    }
+                }
+                // The container adopts the stored object (S20).
+                if (owning) {
+                    try self.getReg(args[args.len - 1]);
+                    try self.a.callFunc(Rt.own_adopt.index());
                 }
             },
             .has_key => {
@@ -5218,6 +5551,12 @@ const FunctionEmitter = struct {
                 try self.resolved(args[0]);
                 try self.a.callFunc(Rt.map_values.index());
                 try self.setReg(item);
+                // Object values: the returned list independently owns
+                // deep copies (S23) — the walk type is the result list's.
+                if (self.elemOwning(item)) {
+                    try self.getReg(item);
+                    try self.a.callFunc(self.genFor(item, gen_own_elements));
+                }
             },
             .give_object => {
                 // Resolve (null/use-after-free), verify givable, pass through.
@@ -5231,20 +5570,13 @@ const FunctionEmitter = struct {
                 try self.resolved(args[0]);
                 try self.emitGivableArgs(args);
                 try self.a.callFunc(Rt.own_check.index());
-                // freeObject: mark dead (scalar containers own no objects).
+                // freeObject: the typed walk releases owned elements too.
                 try self.getReg(args[0]);
-                try self.a.constI32(0);
-                try self.a.store(wasm.i32_store, obj_alive);
+                try self.a.callFunc(self.genFor(args[0], gen_free_object));
             },
             .copy_object => {
-                if (self.isArray(args[0])) {
-                    try self.resolved(args[0]);
-                    try self.a.callFunc(Rt.array_clone.index());
-                } else {
-                    try self.resolved(args[0]);
-                    try self.a.constI32(self.heapElemSize(args[0]));
-                    try self.a.callFunc(Rt.obj_clone.index());
-                }
+                try self.resolved(args[0]);
+                try self.a.callFunc(self.genFor(args[0], gen_copy_object));
                 try self.setReg(item);
             },
             .dim_size => {
@@ -5332,6 +5664,11 @@ const FunctionEmitter = struct {
                 try self.a.callFunc(Rt.list_pop.index());
                 try self.emitFromSlot(element);
                 try self.setReg(item);
+                // pop hands the element out of the container (S22).
+                if (self.elemOwning(args[0])) {
+                    try self.getReg(item);
+                    try self.a.callFunc(Rt.own_loosen.index());
+                }
             },
             .insert_value => {
                 const element = self.elementType(args[0]);
@@ -5340,10 +5677,27 @@ const FunctionEmitter = struct {
                 try self.getReg(args[2]);
                 try self.emitToSlot(element);
                 try self.a.callFunc(Rt.list_insert.index());
+                if (self.elemOwning(args[0])) {
+                    try self.getReg(args[2]);
+                    try self.a.callFunc(Rt.own_adopt.index());
+                }
             },
             .remove_entry => {
                 if (self.isMap(args[0])) {
                     const kv = self.mapKV(args[0]);
+                    // Removing an owned value frees it (S22): take the
+                    // stored value first (null when absent — free of the
+                    // null handle is a no-op), then remove the entry.
+                    if (self.elemOwning(args[0])) {
+                        try self.resolved(args[0]);
+                        try self.getReg(args[1]);
+                        try self.emitToSlot(kv.key);
+                        try self.a.constI32(keyMode(kv.key));
+                        try self.a.constI64(0);
+                        try self.a.callFunc(Rt.map_get_or.index());
+                        try self.a.op(wasm.i32_wrap_i64);
+                        try self.a.callFunc(self.childGen(args[0], gen_free_object));
+                    }
                     try self.resolved(args[0]);
                     try self.getReg(args[1]);
                     try self.emitToSlot(kv.key);
@@ -5353,7 +5707,13 @@ const FunctionEmitter = struct {
                     try self.resolved(args[0]);
                     try self.getReg(args[1]);
                     try self.a.callFunc(Rt.list_remove.index());
-                    try self.a.op(wasm.drop); // removed element (scalar)
+                    if (self.elemOwning(args[0])) {
+                        // Removing an owned element frees it (S22).
+                        try self.a.op(wasm.i32_wrap_i64);
+                        try self.a.callFunc(self.childGen(args[0], gen_free_object));
+                    } else {
+                        try self.a.op(wasm.drop);
+                    }
                 }
             },
             .list_slice => {
@@ -5362,6 +5722,12 @@ const FunctionEmitter = struct {
                 try self.getReg(args[2]);
                 try self.a.callFunc(Rt.list_slice.index());
                 try self.setReg(item);
+                // Slices copy: object elements become adopted deep
+                // copies, never shared (S23, S31).
+                if (self.elemOwning(args[0])) {
+                    try self.getReg(item);
+                    try self.a.callFunc(self.genFor(item, gen_own_elements));
+                }
             },
             .list_find, .list_contains => {
                 const element = self.elementType(args[0]);
@@ -5384,7 +5750,11 @@ const FunctionEmitter = struct {
                 try self.a.callFunc(Rt.list_sort.index());
             },
             .clear_object => {
-                // B1: scalar elements/bytes — nothing to free, just empty.
+                // clear frees all owned elements (S22), then empties.
+                if (self.elemOwning(args[0])) {
+                    try self.resolved(args[0]);
+                    try self.a.callFunc(self.genFor(args[0], gen_free_elements));
+                }
                 try self.resolved(args[0]);
                 try self.a.constI32(0);
                 try self.a.store(wasm.i32_store, obj_length);
@@ -5526,6 +5896,11 @@ const FunctionEmitter = struct {
             try self.getReg(args[1]);
             try self.emitToSlot(element);
             try self.a.callFunc(Rt.list_push.index());
+            // The container adopts an appended object (S20).
+            if (self.elemOwning(args[0])) {
+                try self.getReg(args[1]);
+                try self.a.callFunc(Rt.own_adopt.index());
+            }
         }
     }
 
@@ -5700,13 +6075,28 @@ const Builder = struct {
         var out: std.ArrayList(u8) = .empty;
         try out.appendSlice(a, &.{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 });
 
-        // Types: 0 = emit_str (i32,i32)->(), 1 = trap (i32)->(), then one
-        // per runtime function, then one per user function.
+        // The typed ownership walks: four generated functions per heap
+        // type (free_elements, free_object, copy_object, own_elements),
+        // monomorphized from the program's static heap-type table.
+        const gen_count: u32 = gen_kinds * @as(u32, @intCast(self.program.heap_types.len));
+        const total_functions: u32 = Rt.count + gen_count + @as(u32, @intCast(functions.len));
+
+        // Types: 0 = emit_str (i32,i32)->(), 1 = trap (i32)->(), then
+        // one per runtime function, per generated function, per user
+        // function — index i's type is always import_count + i.
         var t: std.ArrayList(u8) = .empty;
-        try appendU32Raw(&t, a, @intCast(import_count + Rt.count + functions.len));
+        try appendU32Raw(&t, a, import_count + total_functions);
         try t.appendSlice(a, &.{ wasm.func_type, 2, wasm.i32t, wasm.i32t, 0 }); // emit_str
         try t.appendSlice(a, &.{ wasm.func_type, 1, wasm.i32t, 0 }); // trap
         for (rt_signatures) |sig| try appendSigType(&t, a, sig.params, sig.result);
+        var gi: u32 = 0;
+        while (gi < gen_count) : (gi += 1) {
+            if (gi % gen_kinds == gen_copy_object) {
+                try appendSigType(&t, a, &.{wasm.i32t}, wasm.i32t);
+            } else {
+                try appendSigType(&t, a, &.{wasm.i32t}, null);
+            }
+        }
         for (functions) |*function| try appendFuncType(&t, a, function);
         try section(&out, a, 1, t.items);
 
@@ -5717,11 +6107,11 @@ const Builder = struct {
         try appendImport(&im, a, "env", "trap", 1);
         try section(&out, a, 2, im.items);
 
-        // Functions: runtime then user, each referencing its type index.
+        // Functions: runtime, generated, user, each referencing its type.
         var fs: std.ArrayList(u8) = .empty;
-        try appendU32Raw(&fs, a, @intCast(Rt.count + functions.len));
+        try appendU32Raw(&fs, a, total_functions);
         var fi: u32 = 0;
-        while (fi < Rt.count + functions.len) : (fi += 1) try appendU32Raw(&fs, a, import_count + fi);
+        while (fi < total_functions) : (fi += 1) try appendU32Raw(&fs, a, import_count + fi);
         try section(&out, a, 3, fs.items);
 
         // Memory: one, min_pages, exported so the host can read strings.
@@ -5751,19 +6141,27 @@ const Builder = struct {
         try appendU32Raw(&ex, a, 2);
         try appendName(&ex, a, "main");
         try ex.append(a, 0x00);
-        try appendU32Raw(&ex, a, @intCast(import_count + Rt.count + self.program.entry_function));
+        try appendU32Raw(&ex, a, @intCast(import_count + Rt.count + gen_count + self.program.entry_function));
         try appendName(&ex, a, "memory");
         try ex.append(a, 0x02); // export kind: memory
         try appendU32Raw(&ex, a, 0);
         try section(&out, a, 7, ex.items);
 
-        // Code: runtime functions then user functions.
+        // Code: runtime, generated ownership walks, then user functions.
         var cs: std.ArrayList(u8) = .empty;
-        try appendU32Raw(&cs, a, @intCast(Rt.count + functions.len));
+        try appendU32Raw(&cs, a, total_functions);
         for (0..Rt.count) |ri| {
             const code = try emitRuntime(a, @enumFromInt(ri));
             try appendU32Raw(&cs, a, @intCast(code.len));
             try cs.appendSlice(a, code);
+        }
+        for (self.program.heap_types, 0..) |_, type_index| {
+            var kind: u32 = 0;
+            while (kind < gen_kinds) : (kind += 1) {
+                const code = try emitGenerated(a, self.program, @intCast(type_index), kind);
+                try appendU32Raw(&cs, a, @intCast(code.len));
+                try cs.appendSlice(a, code);
+            }
         }
         for (functions) |*function| {
             var emitter: FunctionEmitter = .{
@@ -5773,6 +6171,7 @@ const Builder = struct {
                 .constant_addr = constant_addr,
                 .true_addr = true_addr,
                 .false_addr = false_addr,
+                .user_base = import_count + Rt.count + gen_count,
             };
             const code = try emitter.body();
             try appendU32Raw(&cs, a, @intCast(code.len));

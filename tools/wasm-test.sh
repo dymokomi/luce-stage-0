@@ -585,6 +585,86 @@ func main():
     print(str(total))
     print(str(pts[2].y))" output
 
+# -- element ownership: containers of objects (M2 final phase) --------------
+
+run_case nested_lists "func build_row(n: Int) -> List(Int):
+    var r = new List(Int)
+    for i in range(0, n):
+        r.append(i * n)
+    return r
+
+func main():
+    var rows = new List(List(Int))
+    for n in range(1, 5):
+        rows.append(build_row(n))
+    var total = 0
+    for row in rows:
+        for x in row:
+            total += x
+    print(str(total))
+    print(str(rows[2][1]))
+    var popped = rows.pop()
+    print(str(len(popped)))
+    free(popped)
+    var copied = copy rows
+    copied[0].append(999)
+    print(str(len(rows[0])) + \" \" + str(len(copied[0])))
+    free(copied)
+    rows.clear()
+    print(str(len(rows)))
+    free(rows)" output
+
+run_case map_of_lists "func main():
+    var m = new Map(String, List(Int))
+    var a = new List(Int)
+    a.append(1)
+    a.append(2)
+    m[\"a\"] = give a
+    var b = new List(Int)
+    b.append(10)
+    m[\"b\"] = give b
+    m[\"a\"].append(3)
+    print(str(m[\"a\"][2]))
+    var vals = m.values()
+    var t = 0
+    for v in vals:
+        for x in v:
+            t += x
+    print(str(t))
+    free(vals)
+    m.remove(\"a\")
+    print(str(m.has(\"a\")))
+    free(m)" output
+
+run_case overwrite_frees "func main():
+    var xs = new List(List(Int))
+    var inner = new List(Int)
+    inner.append(7)
+    let alias = inner
+    xs.append(give inner)
+    var other = new List(Int)
+    other.append(8)
+    xs[0] = give other
+    print(str(alias[0]))" trap 19
+
+run_case container_free_children "func main():
+    var xs = new List(List(Int))
+    var inner = new List(Int)
+    inner.append(5)
+    let alias = inner
+    xs.append(give inner)
+    free(xs)
+    print(str(alias[0]))" trap 19
+
+run_case double_give "func main():
+    var xs = new List(List(Int))
+    var inner = new List(Int)
+    let alias = inner
+    xs.append(give inner)
+    var ys = new List(List(Int))
+    ys.append(give alias)
+    print(str(len(ys)))" trap 23
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else
