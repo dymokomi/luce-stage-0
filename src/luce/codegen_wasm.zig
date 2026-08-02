@@ -236,6 +236,9 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         .has_key, .key_at, .value_at, .map_get, .map_keys, .map_values => true,
         // give/copy/free on an object (struct values are a later phase).
         .give_object, .copy_object, .free_object => a0 == .heap,
+        // Host effects that cross the import boundary; the terminal
+        // vtable (term_*/key_*) is a later, deliberate ABI design.
+        .arg_count, .arg_get, .file_read, .file_write, .file_exists => true,
         // parse_float still needs a correctly-rounded reader; str(Float)
         // ships via the ryu runtime.
         .str_value => a0 != .heap or isBuilder(program, a0.heap),
@@ -380,10 +383,32 @@ const wasm = struct {
     const memory_fill_sub: u8 = 0x0B;
 };
 
-// Imports (function indices 0 and 1).
+// Imports — the host boundary.  Strings cross by a two-call protocol:
+// the module asks for a length, allocates its own block, and the host
+// copies bytes into it, so the host never allocates in module memory.
 const import_emit = 0; // emit_str(i32 ptr, i32 len)
 const import_trap = 1; // trap(i32 code)
-const import_count = 2;
+const import_arg_count = 2; // () -> i64
+const import_arg_len = 3; // (i64 index) -> i64   (-1: out of range)
+const import_arg_copy = 4; // (i64 index, i32 dest) -> ()
+const import_file_len = 5; // (i32 path, i32 path_len) -> i64   (-1: failed)
+const import_file_copy = 6; // (i32 path, i32 path_len, i32 dest) -> ()
+const import_file_write = 7; // (i32 path, i32 plen, i32 data, i32 dlen) -> i32
+const import_file_exists = 8; // (i32 path, i32 path_len) -> i32
+const import_count = 9;
+
+const ImportSpec = struct { name: []const u8, params: []const u8, result: ?u8 };
+const import_specs = [import_count]ImportSpec{
+    .{ .name = "emit_str", .params = &.{ wasm.i32t, wasm.i32t }, .result = null },
+    .{ .name = "trap", .params = &.{wasm.i32t}, .result = null },
+    .{ .name = "arg_count", .params = &.{}, .result = wasm.i64t },
+    .{ .name = "arg_len", .params = &.{wasm.i64t}, .result = wasm.i64t },
+    .{ .name = "arg_copy", .params = &.{ wasm.i64t, wasm.i32t }, .result = null },
+    .{ .name = "file_len", .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i64t },
+    .{ .name = "file_copy", .params = &.{ wasm.i32t, wasm.i32t, wasm.i32t }, .result = null },
+    .{ .name = "file_write", .params = &.{ wasm.i32t, wasm.i32t, wasm.i32t, wasm.i32t }, .result = wasm.i32t },
+    .{ .name = "file_exists", .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i32t },
+};
 
 // Globals.
 const depth_global = 0; // i64: the call-depth budget
@@ -5428,6 +5453,95 @@ const FunctionEmitter = struct {
                 try self.a.constI32(0); // the null handle
                 try self.setReg(item);
             },
+            .arg_count => {
+                try self.a.callFunc(import_arg_count);
+                try self.setReg(item);
+            },
+            .arg_get => {
+                const len = self.scratchI64a();
+                const ptr = self.scratchI32a();
+                // The interpreter's own bounds first, then the host's
+                // out-of-range answer — both argument_bounds.
+                try self.getReg(args[0]);
+                try self.a.constI64(0);
+                try self.a.op(wasm.i64_lt_s);
+                try self.getReg(args[0]);
+                try self.a.constI64(std.math.maxInt(u32));
+                try self.a.op(wasm.i64_gt_s);
+                try self.a.op(wasm.i32_or);
+                try self.a.trapIf(.argument_bounds);
+                try self.getReg(args[0]);
+                try self.a.callFunc(import_arg_len);
+                try self.a.localSet(len);
+                try self.a.localGet(len);
+                try self.a.constI64(0);
+                try self.a.op(wasm.i64_lt_s);
+                try self.a.trapIf(.argument_bounds);
+                try self.a.localGet(len);
+                try self.a.op(wasm.i32_wrap_i64);
+                try self.a.callFunc(Rt.str_new.index());
+                try self.a.localSet(ptr);
+                try self.getReg(args[0]);
+                try self.a.localGet(ptr);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.a.callFunc(import_arg_copy);
+                try self.a.localGet(ptr);
+                try self.setReg(item);
+            },
+            .file_read => {
+                const len = self.scratchI64a();
+                const ptr = self.scratchI32a();
+                try self.getReg(args[0]);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.getReg(args[0]);
+                try self.a.load(wasm.i32_load, 0);
+                try self.a.callFunc(import_file_len);
+                try self.a.localSet(len);
+                try self.a.localGet(len);
+                try self.a.constI64(0);
+                try self.a.op(wasm.i64_lt_s);
+                try self.a.trapIf(.file_read_failed);
+                try self.a.localGet(len);
+                try self.a.op(wasm.i32_wrap_i64);
+                try self.a.callFunc(Rt.str_new.index());
+                try self.a.localSet(ptr);
+                try self.getReg(args[0]);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.getReg(args[0]);
+                try self.a.load(wasm.i32_load, 0);
+                try self.a.localGet(ptr);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.a.callFunc(import_file_copy);
+                try self.a.localGet(ptr);
+                try self.setReg(item);
+            },
+            .file_write => {
+                try self.getReg(args[0]);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.getReg(args[0]);
+                try self.a.load(wasm.i32_load, 0);
+                try self.getReg(args[1]);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.getReg(args[1]);
+                try self.a.load(wasm.i32_load, 0);
+                try self.a.callFunc(import_file_write);
+                try self.setReg(item);
+            },
+            .file_exists => {
+                try self.getReg(args[0]);
+                try self.a.constI32(4);
+                try self.a.op(wasm.i32_add);
+                try self.getReg(args[0]);
+                try self.a.load(wasm.i32_load, 0);
+                try self.a.callFunc(import_file_exists);
+                try self.setReg(item);
+            },
             .index_get => {
                 if (self.isMap(args[0])) {
                     const kv = self.mapKV(args[0]);
@@ -6081,13 +6195,12 @@ const Builder = struct {
         const gen_count: u32 = gen_kinds * @as(u32, @intCast(self.program.heap_types.len));
         const total_functions: u32 = Rt.count + gen_count + @as(u32, @intCast(functions.len));
 
-        // Types: 0 = emit_str (i32,i32)->(), 1 = trap (i32)->(), then
-        // one per runtime function, per generated function, per user
-        // function — index i's type is always import_count + i.
+        // Types: one per import, then one per runtime function, per
+        // generated function, per user function — defined function i's
+        // type is always import_count + i.
         var t: std.ArrayList(u8) = .empty;
         try appendU32Raw(&t, a, import_count + total_functions);
-        try t.appendSlice(a, &.{ wasm.func_type, 2, wasm.i32t, wasm.i32t, 0 }); // emit_str
-        try t.appendSlice(a, &.{ wasm.func_type, 1, wasm.i32t, 0 }); // trap
+        for (import_specs) |spec| try appendSigType(&t, a, spec.params, spec.result);
         for (rt_signatures) |sig| try appendSigType(&t, a, sig.params, sig.result);
         var gi: u32 = 0;
         while (gi < gen_count) : (gi += 1) {
@@ -6100,11 +6213,12 @@ const Builder = struct {
         for (functions) |*function| try appendFuncType(&t, a, function);
         try section(&out, a, 1, t.items);
 
-        // Imports: env.emit_str (type 0), env.trap (type 1).
+        // Imports: every host function, from env, type i for import i.
         var im: std.ArrayList(u8) = .empty;
         try appendU32Raw(&im, a, import_count);
-        try appendImport(&im, a, "env", "emit_str", 0);
-        try appendImport(&im, a, "env", "trap", 1);
+        for (import_specs, 0..) |spec, ii| {
+            try appendImport(&im, a, "env", spec.name, @intCast(ii));
+        }
         try section(&out, a, 2, im.items);
 
         // Functions: runtime, generated, user, each referencing its type.
@@ -6372,14 +6486,22 @@ test "scalars and strings are supported; heap and str(Float) are not yet" {
     defer record.deinit();
     try testing.expect(supported(&record));
 
-    // Host effects (arg/file/terminal) are not lowered — a distribution
-    // module's effects would be imports, out of the compute core's scope.
+    // arg/file host effects cross the import boundary; the terminal
+    // vtable is a later ABI design, so term_* stays gated.
     var hosted = (try compileOrNull(
         \\func main():
         \\    print(str(arg_count()))
     )).?;
     defer hosted.deinit();
-    try testing.expect(!supported(&hosted));
+    try testing.expect(supported(&hosted));
+
+    var terminal = (try compileOrNull(
+        \\func main():
+        \\    term_clear()
+        \\    print(str(term_rows()))
+    )).?;
+    defer terminal.deinit();
+    try testing.expect(!supported(&terminal));
 
     // str(Float) is supported via the ryu runtime; parse_float still
     // waits for a correctly-rounded reader.

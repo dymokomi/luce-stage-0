@@ -32,8 +32,8 @@ run_case() {
     build/luce build "$work/$name.luc" -o "$work/$name.lc" >/dev/null
     build/luce wasm "$work/$name.luc" -o "$work/$name.wasm" >/dev/null
 
-    interp="$(LOOM_ENGINE=interpreter build/loom run "$work/$name.lc" 2>/dev/null || true)"
-    wasm_out="$(deno run --allow-read tools/wasm-run.js "$work/$name.wasm" 2>"$work/$name.err" || true)"
+    interp="$(cd "$work" && LOOM_ENGINE=interpreter "$root/build/loom" run "$work/$name.lc" 2>/dev/null || true)"
+    wasm_out="$(cd "$work" && deno run --allow-read --allow-write "$root/tools/wasm-run.js" "$work/$name.wasm" 2>"$work/$name.err" || true)"
     trap_line="$(grep '^TRAP ' "$work/$name.err" || true)"
 
     if [ "$kind" = output ]; then
@@ -664,6 +664,22 @@ run_case double_give "func main():
     var ys = new List(List(Int))
     ys.append(give alias)
     print(str(len(ys)))" trap 23
+
+# -- host effects across the import boundary (M3: arg/file) ------------------
+
+run_case file_roundtrip "func main():
+    assert(file_write(\"roundtrip.txt\", \"alpha\\nbeta\\n\"))
+    print(str(file_exists(\"roundtrip.txt\")))
+    print(str(file_exists(\"missing.txt\")))
+    var text = file_read(\"roundtrip.txt\")
+    print(str(len(text)))
+    print(text)" output
+
+run_case arg_oob "func main():
+    print(arg(0))" trap 14
+
+run_case file_missing "func main():
+    print(file_read(\"no_such_file_xyz\"))" trap 15
 
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."

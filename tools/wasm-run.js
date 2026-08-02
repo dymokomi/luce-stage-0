@@ -1,23 +1,62 @@
-// Run a Luce-compiled .wasm module (codegen_wasm) and print what it
-// emits — the host side of the two imports.  Text leaves the module
-// through emit_str(ptr, len), read straight from the instance's
-// exported linear memory.  Used to validate the WASM backend against
-// the interpreter.
-//   deno run --allow-read tools/wasm-run.js FILE.wasm
+// Run a Luce-compiled .wasm module (codegen_wasm) — the host side of
+// the import boundary.  Text leaves through emit_str(ptr, len), read
+// straight from exported memory; trap(code) records a Luce trap code.
+// Program arguments follow the module path; strings entering the module
+// use the two-call protocol (the module asks for a length, allocates,
+// and the host copies bytes in).
+//   deno run --allow-read --allow-write tools/wasm-run.js FILE.wasm [args...]
 const path = Deno.args[0];
+const args = Deno.args.slice(1);
 const bytes = await Deno.readFile(path);
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 const out = [];
 let trapped = null;
 let mem = null;
 
+const readString = (ptr, len) => decoder.decode(new Uint8Array(mem.buffer, ptr, len));
+const writeBytes = (dest, data) => new Uint8Array(mem.buffer, dest, data.length).set(data);
+
+// file_len caches the read so file_copy hands over exactly those bytes.
+const file_cache = new Map();
+
 const imports = {
   env: {
-    emit_str: (ptr, len) => {
-      const view = new Uint8Array(mem.buffer, ptr, len);
-      out.push(decoder.decode(view));
-    },
+    emit_str: (ptr, len) => { out.push(readString(ptr, len)); },
     trap: (code) => { trapped = code; throw new Error("luce-trap"); },
+    arg_count: () => BigInt(args.length),
+    arg_len: (index) => {
+      const i = Number(index);
+      return i < args.length ? BigInt(encoder.encode(args[i]).length) : -1n;
+    },
+    arg_copy: (index, dest) => { writeBytes(dest, encoder.encode(args[Number(index)])); },
+    file_len: (ptr, len) => {
+      const name = readString(ptr, len);
+      try {
+        const data = Deno.readFileSync(name);
+        file_cache.set(name, data);
+        return BigInt(data.length);
+      } catch {
+        return -1n;
+      }
+    },
+    file_copy: (ptr, len, dest) => { writeBytes(dest, file_cache.get(readString(ptr, len))); },
+    file_write: (ptr, len, data_ptr, data_len) => {
+      try {
+        Deno.writeFileSync(readString(ptr, len), new Uint8Array(mem.buffer, data_ptr, data_len).slice());
+        return 1;
+      } catch {
+        return 0;
+      }
+    },
+    file_exists: (ptr, len) => {
+      try {
+        Deno.statSync(readString(ptr, len));
+        return 1;
+      } catch {
+        return 0;
+      }
+    },
   },
 };
 

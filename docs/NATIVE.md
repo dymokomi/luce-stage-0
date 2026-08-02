@@ -375,13 +375,19 @@ wasm ops, proven bit-identical with a full-mantissa probe.  Float
 min/max/clamp replicate Zig's exact NaN rule (a NaN operand loses) over
 the native opcodes.  Int(Float) guards NaN and range before truncating.
 
-The host boundary is two imports: `env.emit_str(ptr, len)` (print
-leaves the module by reading exported memory) and `env.trap(code)`.
-Still outside the gate, each with its reason recorded in `supported()`:
-parse_float (needs a correctly-rounded reader), struct fields that own
-heap objects (the last ownership walk), bytes, and the host effects
-(arg/file/terminal — a distribution module's effects are imports, a
-design decision to take deliberately).
+**The host boundary is imports** (M3, arg/file): `env.emit_str` and
+`env.trap`, plus arguments and files by a two-call protocol — the
+module asks `arg_len`/`file_len` for a size, allocates its own block,
+and the host copies bytes in (`arg_copy`/`file_copy`), so the host
+never allocates in module memory; `file_write`/`file_exists` complete
+the set, with the interpreter's exact traps (argument_bounds,
+file_read_failed).  `tools/wasm-run.js` is the deno host.  Real hosted
+programs — hello, dice (stdout and its written file), calc, wordcount —
+run as standalone modules byte-identical to loom.  Still outside the
+gate, each with its reason recorded in `supported()`: parse_float
+(needs a correctly-rounded reader), struct fields that own heap objects
+(the last ownership walk), bytes, and the terminal vtable
+(term_*/key_* — an interactive host ABI to design deliberately).
 
 Because a wasm module needs an external runtime, the oracle is a shell
 harness rather than an in-process test.  `tools/wasm-test.sh` runs a
