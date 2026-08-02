@@ -464,6 +464,42 @@ run_case map_missing "func main():
     m[\"a\"] = 1
     print(str(m[\"b\"]))" trap 17
 
+# -- give / copy / free (heap phase B4) --------------------------------------
+
+run_case copy_independent "func main():
+    var xs = new List(Int)
+    xs.append(1)
+    xs.append(2)
+    var ys = copy xs
+    ys.append(3)
+    xs[0] = 99
+    print(str(len(xs)) + \" \" + str(len(ys)))
+    print(str(ys[0]) + \" \" + str(xs[0]))
+    free(xs)
+    free(ys)" output
+
+run_case give_free "func consume(g: give List(Int)) -> Int:
+    var t = 0
+    for x in g:
+        t += x
+    free(g)
+    return t
+
+func main():
+    var xs = new List(Int)
+    for i in range(0, 5):
+        xs.append(i)
+    print(str(consume(give xs)))" output
+
+run_case copy_array "func main():
+    var a = new Array(Int, 3)
+    a.fill(4)
+    var b = copy a
+    b[0] = 9
+    print(str(a[0]) + \" \" + str(b[0]))
+    free(a)
+    free(b)" output
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else

@@ -179,6 +179,8 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         .list_sort, .list_reverse, .clear_object => true,
         .dim_size, .array_fill => true,
         .has_key, .key_at, .value_at, .map_get, .map_keys, .map_values => true,
+        // give/copy/free on an object (struct values are a later phase).
+        .give_object, .copy_object, .free_object => a0 == .heap,
         // str(Float)/parse_float need Zig-exact float<->decimal; deferred.
         .str_value => a0 != .float and (a0 != .heap or isBuilder(program, a0.heap)),
         .print => a0 == .string,
@@ -531,6 +533,10 @@ const Rt = enum(u32) {
     map_value_at, // (i32 h, i64 i) -> i64
     map_keys, // (i32 h) -> i32   (a new List of the keys)
     map_values, // (i32 h) -> i32   (a new List of the values)
+    // give/copy/free (docs/OWNERSHIP.md S23, S31).
+    own_check, // (i32 h, i32 has_expected, i64 serial, i32 local) -> ()
+    obj_clone, // (i32 h, i32 elem_size) -> i32   (shallow buffer copy)
+    array_clone, // (i32 h) -> i32
 
     const count: u32 = @typeInfo(Rt).@"enum".fields.len;
 
@@ -582,6 +588,9 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{ wasm.i32t, wasm.i64t }, .result = wasm.i64t }, // map_value_at
     .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // map_keys
     .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // map_values
+    .{ .params = &.{ wasm.i32t, wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_check
+    .{ .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i32t }, // obj_clone
+    .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // array_clone
 };
 
 /// Emit one runtime function's body (locals + code).  Written in the
@@ -1181,6 +1190,17 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
         .map_values => {
             try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t, wasm.i32t });
             try emitMapCollect(&a, 8);
+        },
+        .own_check => try emitOwnCheck(&a),
+        .obj_clone => {
+            // params: h(0), esz(1).  locals: new(2), len(3), buf(4).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
+            try emitObjClone(&a);
+        },
+        .array_clone => {
+            // params: h(0).  locals: new(1), len(2), buf(3).
+            try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
+            try emitArrayClone(&a);
         },
     }
     try a.op(wasm.end); // end function body
@@ -2798,6 +2818,145 @@ fn emitMapCollect(a: *Asm, field: u32) !void {
     try a.localGet(nl);
 }
 
+/// checkGivable (S23): a null handle is givable; a freed one traps
+/// use_after_free; a container-owned one, or one the named binding no
+/// longer owns, traps not_owned.
+fn emitOwnCheck(a: *Asm) !void {
+    const has_expected = 1;
+    const serial = 2;
+    const local = 3;
+    try a.localGet(0);
+    try a.op(wasm.i32_eqz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_alive);
+    try a.op(wasm.i32_eqz);
+    try a.trapIf(.use_after_free);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_owner_kind);
+    try a.constI32(owner_container);
+    try a.op(wasm.i32_eq);
+    try a.trapIf(.not_owned);
+    try a.localGet(has_expected);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_owner_kind);
+    try a.constI32(owner_binding);
+    try a.op(wasm.i32_eq);
+    try a.localGet(0);
+    try a.load(wasm.i64_load, obj_owner_serial);
+    try a.localGet(serial);
+    try a.op(wasm.i64_eq);
+    try a.op(wasm.i32_and);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_owner_local);
+    try a.localGet(local);
+    try a.op(wasm.i32_eq);
+    try a.op(wasm.i32_and);
+    try a.op(wasm.i32_eqz);
+    try a.trapIf(.not_owned);
+    try a.op(wasm.end);
+}
+
+/// A shallow clone of a List/Map/Builder: a fresh loose object whose
+/// data buffer duplicates the source's (elements are scalars here, so
+/// this is a full deep copy; object elements are a later phase).
+fn emitObjClone(a: *Asm) !void {
+    const esz = 1;
+    const new = 2;
+    const len = 3;
+    const buf = 4;
+    try a.callFunc(Rt.obj_alloc.index());
+    try a.localSet(new);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(len);
+    try a.localGet(len);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(len);
+    try a.localGet(esz);
+    try a.op(wasm.i32_mul);
+    try a.callFunc(Rt.alloc.index());
+    try a.localSet(buf);
+    try a.localGet(buf);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localGet(len);
+    try a.localGet(esz);
+    try a.op(wasm.i32_mul);
+    try a.memoryCopy();
+    try a.localGet(new);
+    try a.localGet(buf);
+    try a.store(wasm.i32_store, obj_data);
+    try a.localGet(new);
+    try a.localGet(len);
+    try a.store(wasm.i32_store, obj_capacity);
+    try a.localGet(new);
+    try a.localGet(len);
+    try a.store(wasm.i32_store, obj_length);
+    try a.op(wasm.end);
+    try a.localGet(new);
+}
+
+/// A clone of an Array: duplicate its dimensions and its element buffer.
+fn emitArrayClone(a: *Asm) !void {
+    const new = 1;
+    const len = 2;
+    const buf = 3;
+    try a.callFunc(Rt.obj_alloc.index());
+    try a.localSet(new);
+    // copy dims (rank * 8 bytes)
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_rank);
+    try a.constI32(3);
+    try a.op(wasm.i32_shl);
+    try a.callFunc(Rt.alloc.index());
+    try a.localSet(buf);
+    try a.localGet(buf);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_dims);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_rank);
+    try a.constI32(3);
+    try a.op(wasm.i32_shl);
+    try a.memoryCopy();
+    try a.localGet(new);
+    try a.localGet(buf);
+    try a.store(wasm.i32_store, obj_dims);
+    try a.localGet(new);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_rank);
+    try a.store(wasm.i32_store, obj_rank);
+    // copy elements (length * 8 bytes)
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_length);
+    try a.localSet(len);
+    try a.localGet(len);
+    try a.constI32(3);
+    try a.op(wasm.i32_shl);
+    try a.callFunc(Rt.alloc.index());
+    try a.localSet(buf);
+    try a.localGet(buf);
+    try a.localGet(0);
+    try a.load(wasm.i32_load, obj_data);
+    try a.localGet(len);
+    try a.constI32(3);
+    try a.op(wasm.i32_shl);
+    try a.memoryCopy();
+    try a.localGet(new);
+    try a.localGet(buf);
+    try a.store(wasm.i32_store, obj_data);
+    try a.localGet(new);
+    try a.localGet(len);
+    try a.store(wasm.i32_store, obj_length);
+    try a.localGet(new);
+}
+
 // ---------------------------------------------------------------------------
 // Per-function lowering
 // ---------------------------------------------------------------------------
@@ -3410,6 +3569,34 @@ const FunctionEmitter = struct {
                 try self.a.callFunc(Rt.map_values.index());
                 try self.setReg(item);
             },
+            .give_object => {
+                // Resolve (null/use-after-free), verify givable, pass through.
+                try self.resolved(args[0]);
+                try self.emitGivableArgs(args);
+                try self.a.callFunc(Rt.own_check.index());
+                try self.getReg(args[0]);
+                try self.setReg(item);
+            },
+            .free_object => {
+                try self.resolved(args[0]);
+                try self.emitGivableArgs(args);
+                try self.a.callFunc(Rt.own_check.index());
+                // freeObject: mark dead (scalar containers own no objects).
+                try self.getReg(args[0]);
+                try self.a.constI32(0);
+                try self.a.store(wasm.i32_store, obj_alive);
+            },
+            .copy_object => {
+                if (self.isArray(args[0])) {
+                    try self.resolved(args[0]);
+                    try self.a.callFunc(Rt.array_clone.index());
+                } else {
+                    try self.resolved(args[0]);
+                    try self.a.constI32(self.heapElemSize(args[0]));
+                    try self.a.callFunc(Rt.obj_clone.index());
+                }
+                try self.setReg(item);
+            },
             .dim_size => {
                 const handle = self.scratchI32a();
                 const axis = self.scratchI64a();
@@ -3583,6 +3770,31 @@ const FunctionEmitter = struct {
     fn mapKV(self: *const FunctionEmitter, register: ir.Register) struct { key: types.Type, value: types.Type } {
         const pair = self.program.heap_types[self.function.result_types[register].heap].map;
         return .{ .key = pair.key, .value = pair.value };
+    }
+
+    /// Bytes per element/entry of the object in `register`.
+    fn heapElemSize(self: *const FunctionEmitter, register: ir.Register) i32 {
+        return switch (self.program.heap_types[self.function.result_types[register].heap]) {
+            .builder => 1,
+            .map => map_entry_size,
+            else => 8, // list/array
+        };
+    }
+
+    /// Push own_check's remaining arguments (has_expected, serial, local)
+    /// after the handle: `give NAME`/`free(x)` carries a second argument
+    /// naming the binding to verify against.
+    fn emitGivableArgs(self: *FunctionEmitter, args: []const ir.Register) !void {
+        if (args.len == 2) {
+            try self.a.constI32(1);
+            try self.a.localGet(self.serial_local);
+            try self.getReg(args[1]);
+            try self.a.op(wasm.i32_wrap_i64);
+        } else {
+            try self.a.constI32(0);
+            try self.a.localGet(self.serial_local);
+            try self.a.constI32(0);
+        }
     }
 
     /// Resolve an Array and leave the address of element `indices` on the
