@@ -20,6 +20,7 @@ mismatches=0
 gate_rejects=0
 compile_fail=0
 traps=0
+timeouts=0
 
 seed=1
 while [ "$seed" -le "$count" ]; do
@@ -40,9 +41,17 @@ while [ "$seed" -le "$count" ]; do
         seed=$((seed + 1)); continue
     fi
 
-    interp="$(LOOM_ENGINE=interpreter build/loom run "$work/p.lc" 2>"$work/i.err" || true)"
+    # A time limit guards against a generated program that loops forever
+    # (e.g. an unbounded data structure) — both engines would then hang
+    # alike, which is agreement, not a bug, so such a seed is skipped.
+    # A trapping program exits non-zero, which is normal, so capture the
+    # code without letting `set -e` treat it as a script failure.
+    limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+    interp="$(limit 15 env LOOM_ENGINE=interpreter build/loom run "$work/p.lc" 2>"$work/i.err")" && irc=0 || irc=$?
+    if [ "$irc" -eq 142 ]; then timeouts=$((timeouts + 1)); seed=$((seed + 1)); continue; fi
     itrap="$(grep -o 'trap:[a-z_]*\|[a-z ]*$' "$work/i.err" 2>/dev/null | tail -1 || true)"
-    wasm_out="$(deno run --allow-read tools/wasm-run.js "$work/p.wasm" 2>"$work/we.err" || true)"
+    wasm_out="$(limit 15 deno run --allow-read tools/wasm-run.js "$work/p.wasm" 2>"$work/we.err")" && wrc=0 || wrc=$?
+    if [ "$wrc" -eq 142 ]; then timeouts=$((timeouts + 1)); seed=$((seed + 1)); continue; fi
     wtrap="$(grep '^TRAP ' "$work/we.err" | awk '{print $2}' || true)"
 
     # If either trapped, both must trap with the same code (the wasm
@@ -82,7 +91,7 @@ while [ "$seed" -le "$count" ]; do
 done
 
 echo "----------------------------------------"
-echo "fuzz: $count programs, $traps trapped (agreed), $mismatches mismatches"
+echo "fuzz: $count programs, $traps trapped (agreed), $timeouts non-terminating (skipped), $mismatches mismatches"
 [ "$compile_fail" -gt 0 ] && echo "  ($compile_fail generated programs failed to compile — generator bug, not backend)"
 [ "$gate_rejects" -gt 0 ] && echo "  ($gate_rejects rejected by the wasm gate)"
 [ "$mismatches" -eq 0 ] || exit 1

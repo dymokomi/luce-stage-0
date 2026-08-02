@@ -303,6 +303,81 @@ run_case parse_bad "func main():
 run_case parse_overflow "func main():
     print(str(parse_int(\"9223372036854775808\")))" trap 21
 
+# -- lists and builders (heap phase B1) --------------------------------------
+
+run_case list_ops "func main():
+    var xs = new List(Int)
+    for i in range(0, 10):
+        xs.append((i * 7) % 13)
+    print(str(len(xs)))
+    var total = 0
+    for x in xs:
+        total += x
+    print(str(total))
+    xs[0] = 99
+    print(str(xs[0]))
+    print(str(xs.pop()))
+    xs.insert(0, 5)
+    xs.remove(1)
+    xs.sort()
+    print(str(xs[0]) + \",\" + str(xs[len(xs) - 1]))
+    xs.reverse()
+    print(str(xs[0]))
+    print(str(xs.find(5)) + \" \" + str(xs.contains(99)))" output
+
+run_case list_string "func main():
+    var ws = new List(String)
+    ws.append(\"pear\")
+    ws.append(\"apple\")
+    ws.append(\"fig\")
+    ws.sort()
+    for w in ws:
+        print(w)
+    print(str(ws.find(\"fig\")))" output
+
+run_case builder "func main():
+    var b = new Builder()
+    for i in range(0, 26):
+        b.append_ascii(97 + i)
+    b.append(\"-done\")
+    print(str(b))
+    print(str(len(b)))" output
+
+run_case list_slice "func main():
+    var xs = new List(Int)
+    for i in range(0, 6):
+        xs.append(i)
+    var ys = xs[1:4]
+    print(str(len(ys)))
+    for y in ys:
+        print(str(y))" output
+
+run_case list_return "func build(n: Int) -> List(Int):
+    var r = new List(Int)
+    for i in range(0, n):
+        r.append(i * i)
+    return r
+
+func total(xs: List(Int)) -> Int:
+    var t = 0
+    for x in xs:
+        t += x
+    return t
+
+func main():
+    var a = build(5)
+    print(str(total(a)))
+    print(str(len(a)))" output
+
+run_case list_empty_pop "func main():
+    var xs = new List(Int)
+    print(str(xs.pop()))" trap 18
+
+run_case list_oob "func main():
+    var xs = new List(Int)
+    xs.append(1)
+    print(str(xs[5]))" trap 16
+
 if [ $failed -eq 0 ]; then
     echo "wasm backend: every program matches the interpreter."
 else
