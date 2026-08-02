@@ -39,14 +39,16 @@
 //!     math intrinsics.
 //!   * M2 (here, in phases): strings — the length-prefixed runtime, the
 //!     string operators and intrinsics, `str(Int)`/`str(Bool)`, and
-//!     `print` of any text.
+//!     `print` of any text; then the object heap (List/Builder, Array,
+//!     Map), give/copy/free, structs, and float min/max/clamp with the
+//!     interpreter's exact NaN rule (a NaN operand loses).
 //! Deferred with reasons (not because they are hard to reach, but
 //! because matching the reference *exactly* is its own step): float `%`
-//! and float `min`/`max`/`clamp` (fmod / fmin-fmax semantics with no
-//! wasm opcode); `str(Float)` and `parse_float` (Zig's shortest-round-
-//! trip float formatting is an algorithm to port, not an opcode).  The
-//! object heap (List/Map/Array/Builder), structs, and ownership are the
-//! next phase.
+//! (`@rem`/fmod is bit-manipulation, not an opcode); `str(Float)` and
+//! `parse_float` (Zig's shortest-round-trip float formatting is an
+//! algorithm to port); containers whose elements themselves own heap
+//! objects (the element-ownership walk); host effects (a distribution
+//! module's effects are imports, out of the compute core's scope).
 
 const std = @import("std");
 const ir = @import("ir.zig");
@@ -198,7 +200,7 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
     return switch (call.kind) {
         .assert_true, .trap_message, .null_object => true,
         .abs => a0 == .int or a0 == .float,
-        .min, .max, .clamp => a0 == .int,
+        .min, .max, .clamp => a0 == .int or a0 == .float,
         .sqrt, .floor, .ceil => a0 == .float,
         .len => a0 == .string or a0 == .heap,
         .string_slice, .string_byte, .string_find_byte => true,
@@ -341,6 +343,8 @@ const wasm = struct {
     const f64_sub: u8 = 0xA1;
     const f64_mul: u8 = 0xA2;
     const f64_div: u8 = 0xA3;
+    const f64_min: u8 = 0xA4;
+    const f64_max: u8 = 0xA5;
 
     const i32_wrap_i64: u8 = 0xA7;
     const i64_extend_i32_s: u8 = 0xAC;
@@ -573,6 +577,11 @@ const Rt = enum(u32) {
     own_check, // (i32 h, i32 has_expected, i64 serial, i32 local) -> ()
     obj_clone, // (i32 h, i32 elem_size) -> i32   (shallow buffer copy)
     array_clone, // (i32 h) -> i32
+    // Float min/max matching Zig's @min/@max: a NaN operand loses (the
+    // other returns); wasm's own f64.min/max would propagate it.  Signed
+    // zeros the opcode already orders correctly (-0 < +0).
+    fmin, // (f64 a, f64 b) -> f64
+    fmax, // (f64 a, f64 b) -> f64
 
     const count: u32 = @typeInfo(Rt).@"enum".fields.len;
 
@@ -627,6 +636,8 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{ wasm.i32t, wasm.i32t, wasm.i64t, wasm.i32t }, .result = null }, // own_check
     .{ .params = &.{ wasm.i32t, wasm.i32t }, .result = wasm.i32t }, // obj_clone
     .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // array_clone
+    .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // fmin
+    .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // fmax
 };
 
 /// Emit one runtime function's body (locals + code).  Written in the
@@ -1238,6 +1249,7 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
             try locals.appendSlice(arena, &.{ wasm.i32t, wasm.i32t, wasm.i32t });
             try emitArrayClone(&a);
         },
+        .fmin, .fmax => try emitFloatMinMax(&a, which == .fmin),
     }
     try a.op(wasm.end); // end function body
 
@@ -2939,6 +2951,31 @@ fn emitObjClone(a: *Asm) !void {
     try a.localGet(new);
 }
 
+/// fmin/fmax bodies: `x != x` detects NaN; a NaN operand returns the
+/// other (matching Zig's @min/@max, which the interpreter uses), then
+/// the wasm opcode supplies the ordering — including -0 < +0.
+fn emitFloatMinMax(a: *Asm, want_min: bool) !void {
+    try a.localGet(0);
+    try a.localGet(0);
+    try a.op(wasm.f64_ne); // a is NaN
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(1);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(1);
+    try a.localGet(1);
+    try a.op(wasm.f64_ne); // b is NaN
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(0);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(0);
+    try a.localGet(1);
+    try a.op(if (want_min) wasm.f64_min else wasm.f64_max);
+}
+
 /// A clone of an Array: duplicate its dimensions and its element buffer.
 fn emitArrayClone(a: *Asm) !void {
     const new = 1;
@@ -3499,6 +3536,13 @@ const FunctionEmitter = struct {
                 },
             },
             .min, .max => {
+                if (self.function.result_types[args[0]] == .float) {
+                    try self.getReg(args[0]);
+                    try self.getReg(args[1]);
+                    try self.a.callFunc(if (call.kind == .min) Rt.fmin.index() else Rt.fmax.index());
+                    try self.setReg(item);
+                    return;
+                }
                 try self.getReg(args[0]);
                 try self.getReg(args[1]);
                 try self.getReg(args[0]);
@@ -3508,6 +3552,16 @@ const FunctionEmitter = struct {
                 try self.setReg(item);
             },
             .clamp => {
+                if (self.function.result_types[args[0]] == .float) {
+                    // min(max(v, low), high) — the interpreter's order.
+                    try self.getReg(args[0]);
+                    try self.getReg(args[1]);
+                    try self.a.callFunc(Rt.fmax.index());
+                    try self.getReg(args[2]);
+                    try self.a.callFunc(Rt.fmin.index());
+                    try self.setReg(item);
+                    return;
+                }
                 const dest = self.regLocal(item);
                 try self.getReg(args[0]);
                 try self.getReg(args[1]);
