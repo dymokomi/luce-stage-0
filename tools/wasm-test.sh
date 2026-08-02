@@ -531,6 +531,32 @@ func main():
     print(str(a != c))
     print(a.tag + \" \" + str(a.n) + \" \" + str(Int(a.r * 10.0)))" output
 
+# -- float min/max/clamp and float % ----------------------------------------
+
+run_case float_minmax "func main():
+    var z = 0.0
+    var nan = z / z
+    var nz = 0.0 * (0.0 - 1.0)
+    print(str(Int(min(nan, 3.0))))
+    print(str(Int(max(nan, 7.0))))
+    print(str(1.0 / min(nz, 0.0) < 0.0))
+    print(str(1.0 / max(nz, 0.0) < 0.0))
+    print(str(Int(clamp(9.0, 1.0, 5.0))))
+    print(str(Int(min(2.5, 7.5) * 10.0)))" output
+
+run_case float_rem "func main():
+    var r = 5.5 % 2.0
+    print(str(Int(r * 10.0)))
+    var s = (0.0 - 5.5) % 2.0
+    print(str(1.0 / s < 0.0))
+    print(str(Int(abs(s) * 10.0)))
+    var t = 6.0 % 3.0
+    print(str(1.0 / t < 0.0))
+    var big = 1.0e300 % 3.7
+    print(str(Int(big * 1000000.0)))
+    var bad = 1.0 % 0.0
+    print(str(bad != bad))" output
+
 run_case struct_in_list "struct P:
     x: Int
     y: Int

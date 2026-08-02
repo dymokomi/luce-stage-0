@@ -182,7 +182,7 @@ fn binarySupported(op: ir.Instruction.Binary) bool {
         .int => true,
         .string => op.op == .add or op.op.isComparison(),
         .boolean => op.op == .equal or op.op == .not_equal,
-        .float => op.op != .remainder, // float % is @rem/fmod: no wasm opcode
+        .float => true, // % lowers to the runtime's bit-exact fmod
         .strukt => op.op == .equal or op.op == .not_equal,
         else => false,
     };
@@ -327,6 +327,9 @@ const wasm = struct {
     const i64_and: u8 = 0x83;
     const i64_or: u8 = 0x84;
     const i64_xor: u8 = 0x85;
+    const i64_shl: u8 = 0x86;
+    const i64_shr_u: u8 = 0x88;
+    const i64_le_u: u8 = 0x58;
 
     const f64_eq: u8 = 0x61;
     const f64_ne: u8 = 0x62;
@@ -351,6 +354,8 @@ const wasm = struct {
     const i64_extend_i32_u: u8 = 0xAD;
     const i64_trunc_f64_s: u8 = 0xB0;
     const f64_convert_i64_s: u8 = 0xB9;
+    const i64_reinterpret_f64: u8 = 0xBD;
+    const f64_reinterpret_i64: u8 = 0xBF;
 
     const misc: u8 = 0xFC; // prefix for memory.copy/fill
     const memory_copy_sub: u8 = 0x0A;
@@ -582,6 +587,7 @@ const Rt = enum(u32) {
     // zeros the opcode already orders correctly (-0 < +0).
     fmin, // (f64 a, f64 b) -> f64
     fmax, // (f64 a, f64 b) -> f64
+    frem, // (f64 x, f64 y) -> f64   (fmod: @rem's float semantics, bit-exact)
 
     const count: u32 = @typeInfo(Rt).@"enum".fields.len;
 
@@ -638,6 +644,7 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{wasm.i32t}, .result = wasm.i32t }, // array_clone
     .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // fmin
     .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // fmax
+    .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // frem
 };
 
 /// Emit one runtime function's body (locals + code).  Written in the
@@ -1250,6 +1257,12 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
             try emitArrayClone(&a);
         },
         .fmin, .fmax => try emitFloatMinMax(&a, which == .fmin),
+        .frem => {
+            // params: x(0,f64), y(1,f64).
+            // locals: uxi(2), uyi(3), ex(4), ey(5), sx(6), i(7) — all i64.
+            try locals.appendSlice(arena, &.{ wasm.i64t, wasm.i64t, wasm.i64t, wasm.i64t, wasm.i64t, wasm.i64t });
+            try emitFrem(&a);
+        },
     }
     try a.op(wasm.end); // end function body
 
@@ -2976,6 +2989,263 @@ fn emitFloatMinMax(a: *Asm, want_min: bool) !void {
     try a.op(if (want_min) wasm.f64_min else wasm.f64_max);
 }
 
+/// frem body: fmod(x, y), musl's integer-shift algorithm — the same
+/// one Zig's compiler_rt gives @rem on doubles, so results (value,
+/// result sign on ±0, NaN-ness) are bit-identical to the interpreter.
+/// Locals: x=0, y=1 (f64); uxi=2, uyi=3, ex=4, ey=5, sx=6, i=7 (i64).
+fn emitFrem(a: *Asm) !void {
+    const x = 0;
+    const y = 1;
+    const uxi = 2;
+    const uyi = 3;
+    const ex = 4;
+    const ey = 5;
+    const sx = 6;
+    const iv = 7;
+    const implicit_bit: i64 = 1 << 52;
+
+    try a.localGet(x);
+    try a.op(wasm.i64_reinterpret_f64);
+    try a.localSet(uxi);
+    try a.localGet(y);
+    try a.op(wasm.i64_reinterpret_f64);
+    try a.localSet(uyi);
+    // ex/ey: biased exponents; sx: x's sign bit.
+    try a.localGet(uxi);
+    try a.constI64(52);
+    try a.op(wasm.i64_shr_u);
+    try a.constI64(0x7FF);
+    try a.op(wasm.i64_and);
+    try a.localSet(ex);
+    try a.localGet(uyi);
+    try a.constI64(52);
+    try a.op(wasm.i64_shr_u);
+    try a.constI64(0x7FF);
+    try a.op(wasm.i64_and);
+    try a.localSet(ey);
+    try a.localGet(uxi);
+    try a.constI64(63);
+    try a.op(wasm.i64_shr_u);
+    try a.localSet(sx);
+
+    // y == ±0, y NaN, or x inf/NaN -> NaN via (x*y)/(x*y).
+    try a.localGet(uyi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.op(wasm.i64_eqz);
+    try a.localGet(y);
+    try a.localGet(y);
+    try a.op(wasm.f64_ne);
+    try a.op(wasm.i32_or);
+    try a.localGet(ex);
+    try a.constI64(0x7FF);
+    try a.op(wasm.i64_eq);
+    try a.op(wasm.i32_or);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(x);
+    try a.localGet(y);
+    try a.op(wasm.f64_mul);
+    try a.localGet(x);
+    try a.localGet(y);
+    try a.op(wasm.f64_mul);
+    try a.op(wasm.f64_div);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+
+    // |x| <= |y|: equal magnitudes -> ±0 with x's sign; else x itself.
+    try a.localGet(uxi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.localGet(uyi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.op(wasm.i64_le_u);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(uxi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.localGet(uyi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.op(wasm.i64_eq);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constF64(0.0);
+    try a.localGet(x);
+    try a.op(wasm.f64_mul); // 0*x: ±0 with x's sign
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(x);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+
+    // Normalize x: subnormals shift their mantissa up; normals get the
+    // implicit bit made explicit.
+    try emitFremNormalize(a, ex, uxi, iv);
+    // Normalize y likewise.
+    try emitFremNormalize(a, ey, uyi, iv);
+
+    // The division loop: while ex > ey, subtract-and-shift.
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(ex);
+    try a.localGet(ey);
+    try a.op(wasm.i64_le_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try emitFremStep(a, uxi, uyi, iv, x);
+    try a.localGet(uxi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.localSet(uxi);
+    try a.localGet(ex);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localSet(ex);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    // One final subtract at equal exponents.
+    try emitFremStep(a, uxi, uyi, iv, x);
+
+    // Renormalize the remainder mantissa.
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(uxi);
+    try a.constI64(52);
+    try a.op(wasm.i64_shr_u);
+    try a.constI64(0);
+    try a.op(wasm.i64_ne);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(uxi);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.localSet(uxi);
+    try a.localGet(ex);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localSet(ex);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+
+    // Scale back: a positive exponent re-biases; otherwise subnormal.
+    try a.localGet(ex);
+    try a.constI64(0);
+    try a.op(wasm.i64_gt_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(uxi);
+    try a.constI64(implicit_bit);
+    try a.op(wasm.i64_sub);
+    try a.localGet(ex);
+    try a.constI64(52);
+    try a.op(wasm.i64_shl);
+    try a.op(wasm.i64_or);
+    try a.localSet(uxi);
+    try a.op(wasm.else_);
+    try a.localGet(uxi);
+    try a.constI64(1);
+    try a.localGet(ex);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i64_shr_u);
+    try a.localSet(uxi);
+    try a.op(wasm.end);
+    // Restore x's sign and reinterpret.
+    try a.localGet(uxi);
+    try a.localGet(sx);
+    try a.constI64(63);
+    try a.op(wasm.i64_shl);
+    try a.op(wasm.i64_or);
+    try a.op(wasm.f64_reinterpret_i64);
+}
+
+/// Normalize one operand for frem: a zero exponent (subnormal) walks
+/// the mantissa left until the would-be implicit bit reaches the top,
+/// decrementing the exponent; a normal masks and sets the implicit bit.
+fn emitFremNormalize(a: *Asm, e_local: u32, u_local: u32, i_local: u32) !void {
+    try a.localGet(e_local);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    // i = u << 12; while i >= 0 (top bit clear): e--; i <<= 1
+    try a.localGet(u_local);
+    try a.constI64(12);
+    try a.op(wasm.i64_shl);
+    try a.localSet(i_local);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(i_local);
+    try a.constI64(0);
+    try a.op(wasm.i64_lt_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(e_local);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localSet(e_local);
+    try a.localGet(i_local);
+    try a.constI64(1);
+    try a.op(wasm.i64_shl);
+    try a.localSet(i_local);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    // u <<= (1 - e)
+    try a.localGet(u_local);
+    try a.constI64(1);
+    try a.localGet(e_local);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i64_shl);
+    try a.localSet(u_local);
+    try a.op(wasm.else_);
+    try a.localGet(u_local);
+    try a.constI64(0xFFFFFFFFFFFFF);
+    try a.op(wasm.i64_and);
+    try a.constI64(1 << 52);
+    try a.op(wasm.i64_or);
+    try a.localSet(u_local);
+    try a.op(wasm.end);
+}
+
+/// One subtract step of frem: i = ux - uy; if i >= 0 { if i == 0
+/// return ±0 with x's sign; ux = i }.
+fn emitFremStep(a: *Asm, ux_local: u32, uy_local: u32, i_local: u32, x_local: u32) !void {
+    try a.localGet(ux_local);
+    try a.localGet(uy_local);
+    try a.op(wasm.i64_sub);
+    try a.localSet(i_local);
+    try a.localGet(i_local);
+    try a.constI64(0);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(i_local);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constF64(0.0);
+    try a.localGet(x_local);
+    try a.op(wasm.f64_mul);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(i_local);
+    try a.localSet(ux_local);
+    try a.op(wasm.end);
+}
+
 /// A clone of an Array: duplicate its dimensions and its element buffer.
 fn emitArrayClone(a: *Asm) !void {
     const new = 1;
@@ -3356,19 +3626,23 @@ const FunctionEmitter = struct {
     fn emitFloatBinary(self: *FunctionEmitter, item: ir.Register, operation: anytype) !void {
         try self.getReg(operation.left);
         try self.getReg(operation.right);
-        try self.a.op(switch (operation.op) {
-            .add => wasm.f64_add,
-            .subtract => wasm.f64_sub,
-            .multiply => wasm.f64_mul,
-            .divide => wasm.f64_div,
-            .equal => wasm.f64_eq,
-            .not_equal => wasm.f64_ne,
-            .less => wasm.f64_lt,
-            .less_equal => wasm.f64_le,
-            .greater => wasm.f64_gt,
-            .greater_equal => wasm.f64_ge,
-            .remainder => unreachable,
-        });
+        if (operation.op == .remainder) {
+            try self.a.callFunc(Rt.frem.index());
+        } else {
+            try self.a.op(switch (operation.op) {
+                .add => wasm.f64_add,
+                .subtract => wasm.f64_sub,
+                .multiply => wasm.f64_mul,
+                .divide => wasm.f64_div,
+                .equal => wasm.f64_eq,
+                .not_equal => wasm.f64_ne,
+                .less => wasm.f64_lt,
+                .less_equal => wasm.f64_le,
+                .greater => wasm.f64_gt,
+                .greater_equal => wasm.f64_ge,
+                .remainder => unreachable,
+            });
+        }
         try self.setReg(item);
     }
 
