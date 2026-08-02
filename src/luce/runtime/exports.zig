@@ -1,0 +1,703 @@
+//! The C surface of `libluce_rt` — what a compiled Luce artifact
+//! actually calls.
+//!
+//! Everything here is `callconv(.c)` over plain scalars and pointers to
+//! `Value`; no Zig-only type crosses this line, so the same library
+//! links into a native executable, a shared `.lc`, or a wasm32 module
+//! (docs/CODEGEN.md).
+//!
+//! ## Conventions, all three of them
+//!
+//! * **A fallible call returns `i32`: 1 means the program trapped.**
+//!   That is the convention generated code already uses for Luce
+//!   functions (`08_llvm/lower.zig`), so a runtime call propagates
+//!   through the same `if (trapped) return true` edge as any other Luce
+//!   call, with no second mechanism to keep in step.  It is an `i32`
+//!   rather than a C `_Bool` because `_Bool` is the one scalar whose
+//!   width and extension rules differ between LLVM's IR-level `i1` and
+//!   the platform ABI's byte; a full word cannot be got wrong.
+//! * **Results travel through an out-pointer**, again as Luce functions
+//!   do.  Nothing is returned by value except a plain scalar answer.
+//! * **The trap is announced once, when the program has stopped.**  A
+//!   trap raised inline by generated code and a trap raised inside this
+//!   library both land in `Runtime.pending`; every frame records itself
+//!   on the way out; and `luce_rt_report` hands the host the code, the
+//!   words, and the finished call trace together.  One trap channel,
+//!   and it reports the whole trap rather than half of it — the trace
+//!   does not exist until unwinding is over (trace.zig).
+//!
+//! Allocation failure is not a Luce trap: no program can cause it
+//! deliberately and none can catch it.  It sets `Runtime.exhausted`,
+//! reports itself as a trapped call, and `luce_rt_status` turns it into
+//! a status of its own so a host can tell "the program failed" from
+//! "the machine ran out".
+
+const builtin = @import("builtin");
+const std = @import("std");
+const mir = @import("../06_mir.zig");
+const containers = @import("containers.zig");
+const heap = @import("heap.zig");
+const operators = @import("operators.zig");
+const text = @import("text.zig");
+const trace = @import("trace.zig");
+const value = @import("value.zig");
+
+const Runtime = heap.Runtime;
+const Value = value.Value;
+
+/// What `luce_rt_status` answers, and what `luce_main` returns.
+pub const Status = enum(i32) {
+    ok = 0,
+    trapped = 1,
+    /// The arena gave up; nothing about the program was wrong.
+    exhausted = 2,
+};
+
+/// The two answers a fallible call gives.
+const survived: i32 = 0;
+const raised_trap: i32 = 1;
+
+/// The runtime plus the memory it draws on, for the C entry point that
+/// has no allocator to be given.  Heap-allocated and never moved: the
+/// runtime holds an allocator pointing into `arena`.
+const Owned = struct {
+    arena: std.heap.ArenaAllocator,
+    runtime: Runtime,
+};
+
+/// Where a compiled artifact's heap objects live.  Unlike the values
+/// arena this one has to give memory back — scope ownership frees
+/// objects while the program runs (`heap.Memory`) — so it is a real
+/// general-purpose allocator rather than a bump.
+///
+/// libc's is the one to use when there is a libc, and there is: the
+/// library is built with `link_libc`.  The alternative was measured
+/// rather than assumed — a loop creating and freeing 300k small lists
+/// peaks at 1 MB under `c_allocator` and 514 MB under
+/// `smp_allocator`, which bump-allocates a slab per size class and did
+/// not reuse this pattern, at identical speed.  The fallback is only
+/// for a future freestanding build, which has no other option.
+const object_allocator = if (builtin.link_libc)
+    std.heap.c_allocator
+else
+    std.heap.smp_allocator;
+
+/// Where a compiled artifact's Strings and struct runs live: a bump
+/// arena over whole pages, dropped in one go by `luce_rt_close`.
+const value_pages = std.heap.page_allocator;
+
+/// Start a run.  `functions` describes the artifact's own functions —
+/// their names, their source files, and (in a debug build) where each
+/// instruction came from — which is what turns a recorded frame into a
+/// line of a call trace (trace.zig).  Null when there is no memory to
+/// start in.
+export fn luce_rt_open(
+    functions: ?[*]const trace.FunctionInfo,
+    count: i64,
+) callconv(.c) ?*Runtime {
+    const owned = object_allocator.create(Owned) catch return null;
+    owned.arena = .init(value_pages);
+    owned.runtime = .init(.{
+        .arena = owned.arena.allocator(),
+        .objects = object_allocator,
+    });
+    if (functions) |described| owned.runtime.functions = described[0..@intCast(count)];
+    return &owned.runtime;
+}
+
+/// End a run: every object still alive, every string, and the object
+/// table go at once.  The runtime pointer is invalid afterwards.
+export fn luce_rt_close(runtime: *Runtime) callconv(.c) void {
+    const owned: *Owned = @fieldParentPtr("runtime", runtime);
+    owned.runtime.deinit();
+    owned.arena.deinit();
+    object_allocator.destroy(owned);
+}
+
+/// Objects allocated and never freed — the leak census.  Memory is
+/// explicit in Luce, so this is part of what a run did, and every host
+/// (native, wasm, the specs) reads it from here.
+export fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64 {
+    return runtime.live;
+}
+
+/// How the run ended, given whether the entry function unwound.
+export fn luce_rt_status(runtime: *const Runtime, trapped: i32) callconv(.c) Status {
+    if (runtime.exhausted) return .exhausted;
+    return if (trapped != 0) .trapped else .ok;
+}
+
+// ---------------------------------------------------------------------------
+// Traps and the trace they carry
+// ---------------------------------------------------------------------------
+
+/// A trap generated code raised itself — a failed check, an explicit
+/// `trap("...")`.  It lands in the same place as a trap raised inside
+/// this library, so the host hears about both the same way.
+///
+/// `message` must outlive the run: either static text in the artifact
+/// or a Luce String, both of which do.  `code` is `mir.TrapCode` from
+/// the build that generated the code, which is this one — an artifact
+/// carrying anything else is corrupt, and the conversion says so
+/// loudly rather than inventing a trap.
+export fn luce_rt_raise(
+    runtime: *Runtime,
+    code: i32,
+    message: [*]const u8,
+    length: i64,
+) callconv(.c) void {
+    const raised: mir.TrapCode = @enumFromInt(code);
+    runtime.failMessage(raised, message[0..@intCast(length)]) catch {};
+}
+
+/// One frame of the unwinding stack, recorded on the way out: the
+/// function it was in and the instruction it was at.  Called once per
+/// frame, innermost first, so what arrives is the trace in order.
+export fn luce_rt_unwound(
+    runtime: *Runtime,
+    function: u32,
+    instruction: u32,
+) callconv(.c) void {
+    runtime.recordFrame(function, instruction);
+}
+
+/// Hand the host the whole trap: its code, its words, and the call
+/// trace the unwind collected.  Called once, from `luce_main`, after
+/// the program has stopped — nothing is reported for a run that ended
+/// any other way, and a run that ran out of memory reports nothing at
+/// all because nothing about the program was wrong.
+export fn luce_rt_report(
+    runtime: *const Runtime,
+    context: ?*anyopaque,
+    report: trace.ReportFn,
+) callconv(.c) void {
+    if (runtime.exhausted) return;
+    const raised = runtime.pending orelse return;
+    report(
+        context,
+        @intFromEnum(raised.code),
+        raised.message.ptr,
+        @intCast(raised.message.len),
+        runtime.unwound.items.ptr,
+        @intCast(runtime.unwound.items.len),
+        runtime.dropped_frames,
+    );
+}
+
+/// A serial no other live frame carries — one per call, so ownership
+/// bindings from two frames of the same function never collide.
+export fn luce_rt_serial(runtime: *Runtime) callconv(.c) u64 {
+    return runtime.takeSerial();
+}
+
+/// The host ran out of memory inside a service call.  Nothing about
+/// the program was wrong, so this is not a trap: the run ends
+/// `exhausted`, exactly as it does when the arena gives up.
+export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
+    runtime.exhausted = true;
+}
+
+/// Copy host-owned bytes into the run's arena as a Luce String.  Every
+/// string a host service hands back is borrowed for the duration of
+/// that call only; this is where it becomes a value that lives as long
+/// as the run does.
+export fn luce_rt_intern_text(
+    runtime: *Runtime,
+    bytes: [*]const u8,
+    length: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    const copied = runtime.arena.dupe(u8, bytes[0..@intCast(length)]) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = Value.ofString(copied);
+    return survived;
+}
+
+/// Remember the text payload of the key just read, for `key_text`.
+export fn luce_rt_set_key_text(
+    runtime: *Runtime,
+    bytes: [*]const u8,
+    length: i64,
+) callconv(.c) i32 {
+    const copied = runtime.arena.dupe(u8, bytes[0..@intCast(length)]) catch |mistake|
+        return failed(runtime, mistake);
+    runtime.last_key_text = copied;
+    return survived;
+}
+
+/// The text payload of the most recent `key_read`.
+export fn luce_rt_key_text(runtime: *const Runtime, out: *Value) callconv(.c) void {
+    out.* = Value.ofString(runtime.last_key_text);
+}
+
+/// Record allocation failure and report the call as trapped.  Every
+/// export funnels its errors through here, so `error.OutOfMemory` never
+/// escapes into C as a silent success.
+fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
+    switch (mistake) {
+        error.OutOfMemory => runtime.exhausted = true,
+        error.Trap => {},
+    }
+    return raised_trap;
+}
+
+// ---------------------------------------------------------------------------
+// Objects and ownership
+// ---------------------------------------------------------------------------
+
+export fn luce_rt_new_list(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+    out.* = runtime.newList() catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_new_map(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+    out.* = runtime.newMap() catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_new_builder(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+    out.* = runtime.newBuilder() catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_new_array(
+    runtime: *Runtime,
+    dims: [*]const i64,
+    rank: i64,
+    zero: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.newArray(dims[0..@intCast(rank)], zero.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_bind(
+    runtime: *Runtime,
+    held: *const Value,
+    serial: u64,
+    local: u32,
+) callconv(.c) void {
+    runtime.bind(held.*, serial, local);
+}
+
+export fn luce_rt_unbind(
+    runtime: *Runtime,
+    held: *const Value,
+    serial: u64,
+    local: u32,
+) callconv(.c) void {
+    runtime.unbind(held.*, serial, local);
+}
+
+export fn luce_rt_loosen_from_frame(
+    runtime: *Runtime,
+    held: *const Value,
+    serial: u64,
+) callconv(.c) void {
+    runtime.loosenFromFrame(held.*, serial);
+}
+
+export fn luce_rt_free(
+    runtime: *Runtime,
+    held: *const Value,
+    owned: i32,
+    serial: u64,
+    local: u32,
+) callconv(.c) i32 {
+    const expected: ?heap.OwnedBy = if (owned != 0) .{ .serial = serial, .local = local } else null;
+    containers.freeVerb(runtime, held.*, expected) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_give(
+    runtime: *Runtime,
+    held: *const Value,
+    owned: i32,
+    serial: u64,
+    local: u32,
+    out: *Value,
+) callconv(.c) i32 {
+    const expected: ?heap.OwnedBy = if (owned != 0) .{ .serial = serial, .local = local } else null;
+    out.* = containers.giveVerb(runtime, held.*, expected) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = containers.copyVerb(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+// ---------------------------------------------------------------------------
+// Struct values
+// ---------------------------------------------------------------------------
+//
+// A struct travels as a pointer to `count` consecutive `Value`s, and
+// the run that backs it is never written to after it is built — so
+// generated code copies a struct by copying the pointer, and both
+// entry points below allocate a fresh run.
+
+export fn luce_rt_struct_make(
+    runtime: *Runtime,
+    fields: [*]const Value,
+    count: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.makeStruct(fields[0..@intCast(count)]) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_struct_set(
+    runtime: *Runtime,
+    held: *const Value,
+    field: i64,
+    to: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.setField(held.*, @intCast(field), to.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+// ---------------------------------------------------------------------------
+// Containers
+// ---------------------------------------------------------------------------
+
+export fn luce_rt_len(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = containers.length(runtime, target.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_index_get(
+    runtime: *Runtime,
+    target: *const Value,
+    indices: [*]const Value,
+    rank: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.indexGet(runtime, target.*, indices[0..@intCast(rank)]) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_index_set(
+    runtime: *Runtime,
+    target: *const Value,
+    indices: [*]const Value,
+    rank: i64,
+    held: *const Value,
+) callconv(.c) i32 {
+    containers.indexSet(runtime, target.*, indices[0..@intCast(rank)], held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_list_slice(
+    runtime: *Runtime,
+    target: *const Value,
+    start: i64,
+    end: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.listSlice(runtime, target.*, start, end) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_append(
+    runtime: *Runtime,
+    target: *const Value,
+    held: *const Value,
+) callconv(.c) i32 {
+    containers.append(runtime, target.*, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_append_ascii(
+    runtime: *Runtime,
+    target: *const Value,
+    code: i64,
+) callconv(.c) i32 {
+    containers.appendAscii(runtime, target.*, code) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = containers.pop(runtime, target.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_insert(
+    runtime: *Runtime,
+    target: *const Value,
+    index: i64,
+    held: *const Value,
+) callconv(.c) i32 {
+    containers.insert(runtime, target.*, index, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_remove(
+    runtime: *Runtime,
+    target: *const Value,
+    which: *const Value,
+) callconv(.c) i32 {
+    containers.remove(runtime, target.*, which.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_has_key(
+    runtime: *Runtime,
+    target: *const Value,
+    key: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.hasKey(runtime, target.*, key.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_key_at(
+    runtime: *Runtime,
+    target: *const Value,
+    index: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.keyAt(runtime, target.*, index) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_value_at(
+    runtime: *Runtime,
+    target: *const Value,
+    index: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.valueAt(runtime, target.*, index) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_dim_size(
+    runtime: *Runtime,
+    target: *const Value,
+    axis: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.dimSize(runtime, target.*, axis) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_sort(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
+    containers.sort(runtime, target.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_reverse(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
+    containers.reverse(runtime, target.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_find(
+    runtime: *Runtime,
+    target: *const Value,
+    wanted: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = Value.ofInt(at);
+    return survived;
+}
+
+export fn luce_rt_contains(
+    runtime: *Runtime,
+    target: *const Value,
+    wanted: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = Value.ofBoolean(at != -1);
+    return survived;
+}
+
+export fn luce_rt_clear(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
+    containers.clear(runtime, target.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_map_keys(
+    runtime: *Runtime,
+    target: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.mapKeys(runtime, target.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_map_values(
+    runtime: *Runtime,
+    target: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.mapValues(runtime, target.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_map_get(
+    runtime: *Runtime,
+    target: *const Value,
+    key: *const Value,
+    fallback: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.mapGet(runtime, target.*, key.*, fallback.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_array_fill(
+    runtime: *Runtime,
+    target: *const Value,
+    held: *const Value,
+) callconv(.c) i32 {
+    containers.arrayFill(runtime, target.*, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+// ---------------------------------------------------------------------------
+// Strings and conversions
+// ---------------------------------------------------------------------------
+
+export fn luce_rt_concat(
+    runtime: *Runtime,
+    left: *const Value,
+    right: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = text.concat(runtime, left.asString(), right.asString()) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_string_slice(
+    runtime: *Runtime,
+    held: *const Value,
+    start: i64,
+    end: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = text.slice(runtime, held.*, start, end) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_string_byte(
+    runtime: *Runtime,
+    held: *const Value,
+    index: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = text.byteAt(runtime, held.*, index) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_string_find_byte(
+    runtime: *Runtime,
+    held: *const Value,
+    byte: i64,
+    start: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = text.findByte(runtime, held.*, byte, start) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = text.str(runtime, held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_parse_int(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = text.parseInt(runtime, held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_parse_float(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = text.parseFloat(runtime, held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_chr(runtime: *Runtime, code: i64, out: *Value) callconv(.c) i32 {
+    out.* = text.chr(runtime, code) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+    out.* = text.ord(runtime, held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+// ---------------------------------------------------------------------------
+// Operators
+// ---------------------------------------------------------------------------
+
+/// `min`/`max` and `clamp` on Float, which generated code calls rather
+/// than emitting `llvm.minnum`.
+///
+/// The intrinsic is not wrong; it is not *decidable*.  `minnum` leaves
+/// the answer for `(-0.0, +0.0)` unspecified, and the two ways of
+/// producing it disagree: LLVM's constant folder answers the first
+/// operand, while every target's min instruction answers `-0.0`.  Zig's
+/// own `@min` shows the same split between comptime and runtime.  There
+/// is one right answer here — whatever the interpreter gives — so
+/// compiled code asks for it rather than guessing.
+export fn luce_rt_float_extremum(
+    wants_minimum: i32,
+    left: f64,
+    right: f64,
+) callconv(.c) f64 {
+    return operators.extremum(
+        wants_minimum != 0,
+        Value.ofFloat(left),
+        Value.ofFloat(right),
+    ).asFloat();
+}
+
+export fn luce_rt_float_clamp(held: f64, low: f64, high: f64) callconv(.c) f64 {
+    return operators.clamp(
+        Value.ofFloat(held),
+        Value.ofFloat(low),
+        Value.ofFloat(high),
+    ).asFloat();
+}
+
+/// Comparison for the types generated code cannot compare inline —
+/// String, Bytes, structs.  The one export that answers its result
+/// directly rather than through an out-pointer, because comparison is
+/// the one operation here that cannot fail.  `op` is `mir.BinaryOp`.
+export fn luce_rt_compare(
+    op: i32,
+    left: *const Value,
+    right: *const Value,
+) callconv(.c) i32 {
+    return @intFromBool(operators.compare(@enumFromInt(op), left.*, right.*));
+}

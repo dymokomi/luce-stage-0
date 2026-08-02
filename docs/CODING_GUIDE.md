@@ -3,12 +3,13 @@
 Write code that a tired reader can understand a week later.
 Prefer plain, old-school code over clever modern ceremony.
 
-Everything is Zig 0.16.  `src/luce/module.zig` is the reference
+Everything is Zig 0.16.  `src/luce/06_mir/module.zig` is the reference
 style: one clear job, explicit ownership, tests beside the code.
 North star for architecture: [V2.md](V2.md) (Luce the language, loom
-the terminal); [LANGUAGE.md](LANGUAGE.md) is the language itself and
-[OWNERSHIP.md](OWNERSHIP.md) its memory model.  The v1 guide this
-revises is preserved at `v1/CODING_GUIDE.md`.
+the terminal); [LANGUAGE.md](LANGUAGE.md) is the language itself,
+[OWNERSHIP.md](OWNERSHIP.md) its memory model, and
+[docs/CODEGEN.md](docs/CODEGEN.md) why there is one code generator.  The v1
+guide this revises is preserved at `v1/CODING_GUIDE.md`.
 
 ## Goals
 
@@ -80,27 +81,56 @@ can find the contract.
 
 ```text
 build.zig  build.zig.zon      zig build test runs everything; ./build.sh installs
-src/luce/                     the language, one file per stage:
-  lexer parser ast            source to tree
-  analyzer                    checking + IR lowering + ownership + constants, one walk
-  ir                          the typed IR, verifier, printer
-  interpreter                 the deterministic engine (owner-tracked heap)
-  module                      the .lc on-disk format (decode re-verifies)
-  compile                     the pipeline driver and project/import loading
-  backend types diagnostics   the execution boundary, types, and reporting
-  ownership_spec              the executable form of docs/OWNERSHIP.md
+src/luce/                     the language, one numbered folder per stage:
+  compile.zig                 the driver: the stage sequence, in order
+  01_source 02_lex 03_parse   bytes to tokens to tree
+  04_semantics                resolve + type-check + validate (and, still, the MIR lowering)
+  05_hir                      a named seam; nothing in it yet
+  06_mir                      the typed MIR, verifier, printer, and the .lc format
+  07_optimize                 MIR passes; dead-code elimination is the only one
+  08_llvm                     MIR to LLVM IR to an object; the host ABI
+  runtime                     libluce_rt: the heap, ownership, containers, text
+  interpreter                 the reference engine over that runtime
+  backend.zig                 the execution boundary
+  support/                    types and diagnostics, used by every stage
+  specs/                      the executable form of the ratified documents
 src/apps/luce/                the compiler CLI (build, check, ir)
 src/apps/loom/                the terminal: shell, runner, host, keys, palette
 src/apps/files.zig            file access shared by both executables
 programs/                     userland, written in Luce; editor.luc is embedded in loom
-docs/                         V2.md LANGUAGE.md OWNERSHIP.md MEMORY.md AUDIT.md; v1/ is history
+docs/                         V2.md LANGUAGE.md OWNERSHIP.md docs/CODEGEN.md CODEGEN.md; v1/ is history
 ```
+
+A stage that outgrows one file becomes a directory beside a
+same-named barrel that re-exports its public API and pulls in its
+tests: `03_parse.zig` + `03_parse/`, `06_mir.zig` + `06_mir/`, `runtime.zig` +
+`runtime/`.  The barrel is the stage's public surface; the directory
+is its inside.
 
 Rules:
 
-- One file, one stage; one clear idea per file
+- One stage, one name; one clear idea per file
 - Public contracts stay small; implementation details stay private
 - The apps consume only the `luce` module's public surface
+
+### When to split a file
+
+**Split when a subproblem has a one-to-three-function interface and
+can be understood without the parent's state.  Never split because a
+file is long.**
+
+Length is not the signal, and the projects we take our practice from
+say so plainly: rustc's `late.rs` is 5,735 lines, and Zig's
+`x86_64/CodeGen.zig` is 190,207 — both single cohesive files, both
+maintained by teams.  A 4,000-line file with one job and a small
+surface is easier to hold than the same code in nine files that all
+reach into each other.
+
+**A file boundary in Zig is a privacy boundary**, so split only where
+you would also draw an API boundary.  The test: if a split forces a
+declaration `pub` purely so a sibling — or a sibling's test — can
+reach it, the split is in the wrong place.  Put it back and find the
+seam where the exported surface is genuinely small.
 
 Dependency rule:
 
@@ -118,8 +148,9 @@ IR internals.
 - Compiler diagnostics carry stable codes (`luce.sema.own`,
   `luce.parse.top`, ...) and byte spans; tests assert the code, not
   the wording
-- Runtime failures are traps with stable codes; the interpreter
-  records a pending trap and the dispatch loop reports it once
+- Runtime failures are traps with stable codes, raised through one
+  channel: the runtime reports a trap where it happens, and the
+  caller — interpreter dispatch loop or generated code — unwinds
 - Do not hide durability: callers call `flush()`/`sync` when
   durability matters
 
@@ -129,9 +160,11 @@ IR internals.
   what they prove: `test "truncated, oversold, and damaged modules
   are rejected"`
 - Ratified specifications get an executable form:
-  `ownership_spec.zig` mirrors OWNERSHIP.md's numbering, and every
-  situation is proven three ways — the behavior works, misuse is a
-  compile error with a stable code, the dynamic backstop traps
+  `specs/ownership_spec.zig` mirrors OWNERSHIP.md's numbering, and
+  every situation is proven three ways — the behavior works, misuse
+  is a compile error with a stable code, the dynamic backstop traps
+- Nothing is made `pub` for a test.  A test lives with the code it
+  proves, inside the same privacy boundary
 - Cover success, bounds failure, and round-trip/rejection where
   relevant; everything runs leak-checked under
   `std.testing.allocator`

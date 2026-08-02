@@ -3,7 +3,7 @@
 //! Everything in front of this file — lexer, parser, analysis, Luce IR
 //! and its verifier — is backend-independent.  This boundary runs one
 //! verified program against an Input frame and a scratch Output frame
-//! under an explicit budget, per docs/LUCE.md's evaluation model:
+//! under an explicit budget, per the v1 evaluation model (docs/v1/LUCE.md):
 //! immutable inputs, candidate outputs, publish-nothing on failure.
 //!
 //! The first engine behind the boundary is the deterministic Luce IR
@@ -12,8 +12,8 @@
 //! anything in front of the boundary.
 
 const std = @import("std");
-const ir = @import("ir.zig");
-const fabric = @import("fabric.zig");
+const mir = @import("06_mir.zig");
+const runtime = @import("runtime.zig");
 const interpreter = @import("interpreter.zig");
 
 const Allocator = std.mem.Allocator;
@@ -26,31 +26,13 @@ const Allocator = std.mem.Allocator;
 /// from the program, the caller's input frame, or the evaluation arena
 /// — nothing here owns memory, and nothing outlives the evaluation
 /// unless the caller copies it out.  Heap objects (lists, maps,
-/// arrays, builders) live in the interpreter's object table; a value
-/// only carries the handle.
-pub const RuntimeValue = union(enum) {
-    none,
-    boolean: bool,
-    int: i64,
-    float: f64,
-    string: []const u8,
-    bytes: []const u8,
-    strukt: []RuntimeValue,
-    object: ObjectHandle,
-};
-
-/// A reference to one heap object for the duration of an evaluation.
-/// The zero value of an object-typed place is the null handle; using
-/// it traps instead of touching anything.
-pub const ObjectHandle = struct {
-    index: u32,
-
-    pub const null_object: ObjectHandle = .{ .index = std.math.maxInt(u32) };
-
-    pub fn isNull(self: ObjectHandle) bool {
-        return self.index == std.math.maxInt(u32);
-    }
-};
+/// arrays, builders) live in the runtime library's object table; a
+/// value only carries the handle.
+///
+/// This is `libluce_rt`'s own value, not a second one: the boundary
+/// hands the engines exactly what the runtime library operates on, so
+/// nothing is converted on the way in or out (docs/CODEGEN.md).
+pub const RuntimeValue = runtime.Value;
 
 /// One input port slot: a value borrowed for the duration of the
 /// evaluation, or unavailable.
@@ -69,7 +51,7 @@ pub const TraceFrame = struct {
 };
 
 pub const Trap = struct {
-    code: ir.TrapCode,
+    code: mir.TrapCode,
     /// Arena-owned or static; valid until the evaluation arena frees.
     message: []const u8,
     /// The call stack at the trap, innermost first (arena-owned).
@@ -79,9 +61,6 @@ pub const Trap = struct {
 };
 
 pub const Success = struct {
-    /// Intents the program computed (arena-owned, often empty); the
-    /// trusted host applies them after publication.
-    intents: fabric.Intents = .{},
     /// Heap objects still alive when the program returned — memory is
     /// explicit in Luce, so the host reports what was not freed.
     leaked_objects: u32 = 0,
@@ -90,8 +69,7 @@ pub const Success = struct {
 pub const Result = union(enum) {
     /// The output frame holds every written output.
     success: Success,
-    /// The evaluator failed; the output frame must not be published
-    /// and any intents are discarded.
+    /// The evaluator failed; the output frame must not be published.
     trap: Trap,
     /// An input the program reads was unavailable; nothing ran.
     unavailable,
@@ -176,32 +154,39 @@ pub const KeyEvent = struct {
 // Evaluation
 // ---------------------------------------------------------------------------
 
+/// Where an evaluation's memory comes from: a run-lifetime arena for
+/// values, and an ordinary freeing allocator for heap objects, which
+/// scope ownership reclaims while the program runs.  This is the
+/// runtime library's own `Memory`, not a second one.
+pub const Memory = runtime.Memory;
+
 /// Run the program's evaluate entry.  `inputs` parallels
 /// program.inputs; `outputs` parallels program.outputs and starts
 /// empty — on success, written slots carry the candidate outputs
-/// (allocated from `arena` where they need storage).  The caller owns
-/// the arena and copies out what it publishes before freeing it.
+/// (allocated from `memory.arena` where they need storage).  The caller
+/// owns both allocators and copies out what it publishes before
+/// freeing the arena.
 pub fn evaluate(
-    arena: Allocator,
-    program: *const ir.Program,
+    memory: Memory,
+    program: *const mir.Program,
     inputs: []const InputValue,
     outputs: []?RuntimeValue,
     budget: Budget,
 ) error{OutOfMemory}!Result {
-    return evaluateHosted(arena, program, inputs, outputs, budget, null);
+    return evaluateHosted(memory, program, inputs, outputs, budget, null);
 }
 
 /// Hosted evaluation.  The default `evaluate` API remains pure and
 /// supplies no ambient host services.
 pub fn evaluateHosted(
-    arena: Allocator,
-    program: *const ir.Program,
+    memory: Memory,
+    program: *const mir.Program,
     inputs: []const InputValue,
     outputs: []?RuntimeValue,
     budget: Budget,
     host: ?Host,
 ) error{OutOfMemory}!Result {
-    return interpreter.run(arena, program, inputs, outputs, budget, host);
+    return interpreter.run(memory, program, inputs, outputs, budget, host);
 }
 
 test {

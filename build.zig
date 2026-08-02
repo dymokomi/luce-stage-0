@@ -13,30 +13,46 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // MIR (vendor/mir, MIT): the JIT behind the native engine.  Two
-    // translation units, always optimized — the C library's build
-    // mode has nothing to do with debugging Luce — plus our glue.
-    const mir_module = b.createModule(.{
-        .target = target,
-        .optimize = .ReleaseFast,
-        .link_libc = true,
-    });
-    mir_module.addIncludePath(b.path("vendor/mir"));
-    mir_module.addCSourceFiles(.{
-        .files = &.{ "vendor/mir/mir.c", "vendor/mir/mir-gen.c", "src/luce/mir_glue.c" },
-        .flags = &.{ "-std=gnu11", "-DNDEBUG", "-fsigned-char", "-fno-sanitize=undefined" },
-    });
-    const mir_lib = b.addLibrary(.{ .name = "mir", .root_module = mir_module });
+    // libLLVM is a hard dependency of the language module: the one
+    // code generator calls it in-process (docs/CODEGEN.md).  Both
+    // executables carry it, because loom compiles too (`loom luce
+    // FILE.luc`, and the shell accepts bare .luc paths).
+    const llvm = discoverLlvm(b);
 
-    // Luce: the language — lexer through IR, interpreter, native
-    // engine, .lc format.
+    // libluce_rt: Luce's semantics as a linkable library — the object
+    // heap, ownership, containers, strings, conversions (docs/
+    // CODEGEN.md).  Every compiled artifact links it, so it is built
+    // as a real static library and installed beside the binaries; the
+    // language module below reaches the same source directly, which is
+    // how the interpreter and compiled code stay one implementation.
+    const runtime_library = b.addLibrary(.{
+        .name = "luce_rt",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/luce/runtime.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    b.installArtifact(runtime_library);
+
+    // Luce: the language — lexer through IR, the interpreter, the
+    // LLVM backend, the .lc format.
     const luce = b.addModule("luce", .{
         .root_source_file = b.path("src/luce/luce.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
     });
-    luce.linkLibrary(mir_lib);
+    linkLlvm(luce, llvm);
+
+    // Where the codegen tests find the library to link a compiled
+    // program against.  A path rather than a linked dependency: the
+    // test drives `cc` itself, because the link is part of what it
+    // proves.
+    const runtime_path = b.addOptions();
+    runtime_path.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    luce.addOptions("build_options", runtime_path);
     const luce_tests = b.addTest(.{ .root_module = luce });
     const run_luce_tests = b.addRunArtifact(luce_tests);
     const test_step = b.step("test", "Run the Luce and loom test suites");
@@ -140,4 +156,102 @@ pub fn build(b: *std.Build) void {
         _ = compile_bench.addOutputFileArg(b.fmt("{s}.lc", .{name}));
         test_step.dependOn(&compile_bench.step);
     }
+}
+
+// ---------------------------------------------------------------------------
+// libLLVM discovery
+// ---------------------------------------------------------------------------
+
+/// Where an installed LLVM keeps its headers, its library, and what
+/// that library needs alongside it.  Everything is discovered by
+/// asking `llvm-config`, so a Homebrew, distribution, or hand-built
+/// LLVM all work without editing this file.
+const Llvm = struct {
+    include_dir: []const u8,
+    lib_dir: []const u8,
+    /// Library names, without the leading `-l`.
+    libraries: []const []const u8,
+    /// Absolute paths `llvm-config` handed back instead of `-l` names.
+    objects: []const []const u8,
+    /// The C++ runtime LLVM was built against ("c++" or "stdc++").
+    cxx_runtime: []const u8,
+};
+
+fn discoverLlvm(b: *std.Build) Llvm {
+    const configured = b.option(
+        []const u8,
+        "llvm-config",
+        "Path to llvm-config (default: found on PATH or in the usual prefixes)",
+    );
+    const program = configured orelse b.findProgram(
+        &.{ "llvm-config", "llvm-config-22", "llvm-config-21", "llvm-config-20" },
+        &.{ "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin", "/usr/lib/llvm/bin" },
+    ) catch std.process.fatal(
+        \\cannot find llvm-config.
+        \\
+        \\Luce compiles through LLVM in-process (docs/CODEGEN.md), so
+        \\libLLVM and its headers must be installed.  Install LLVM
+        \\(macOS: `brew install llvm`; Debian/Ubuntu: `apt install
+        \\llvm-dev`) or point the build at it:
+        \\
+        \\    zig build -Dllvm-config=/path/to/llvm-config
+        \\
+    , .{});
+
+    const cxx_flags = ask(b, program, "--cxxflags");
+    const linked = [_][]const u8{
+        ask(b, program, "--libs"),
+        ask(b, program, "--system-libs"),
+    };
+    return .{
+        .include_dir = ask(b, program, "--includedir"),
+        .lib_dir = ask(b, program, "--libdir"),
+        .libraries = splitLinkerFlags(b, &linked, .names),
+        .objects = splitLinkerFlags(b, &linked, .paths),
+        .cxx_runtime = if (std.mem.indexOf(u8, cxx_flags, "-stdlib=libc++") != null)
+            "c++"
+        else
+            "stdc++",
+    };
+}
+
+/// One `llvm-config` query, trimmed.
+fn ask(b: *std.Build, program: []const u8, question: []const u8) []const u8 {
+    var code: u8 = undefined;
+    const answered = b.runAllowFail(&.{ program, question }, &code, .inherit) catch
+        std.process.fatal("`{s} {s}` failed; is the LLVM installation complete?", .{ program, question });
+    return std.mem.trim(u8, answered, " \t\r\n");
+}
+
+/// `llvm-config` answers in linker-flag form: `-lLLVM-22` for a library
+/// name, an absolute path for anything it cannot name.  Split the
+/// answers into whichever of the two the caller wants.
+fn splitLinkerFlags(
+    b: *std.Build,
+    answers: []const []const u8,
+    wanted: enum { names, paths },
+) []const []const u8 {
+    var collected: std.ArrayList([]const u8) = .empty;
+    for (answers) |answer| {
+        var remaining = std.mem.tokenizeAny(u8, answer, " \t\r\n");
+        while (remaining.next()) |flag| {
+            const is_name = std.mem.startsWith(u8, flag, "-l");
+            switch (wanted) {
+                .names => if (is_name) collected.append(b.allocator, flag[2..]) catch @panic("OOM"),
+                .paths => if (!is_name and std.fs.path.isAbsolute(flag)) {
+                    collected.append(b.allocator, flag) catch @panic("OOM");
+                },
+            }
+        }
+    }
+    return collected.toOwnedSlice(b.allocator) catch @panic("OOM");
+}
+
+fn linkLlvm(module: *std.Build.Module, llvm: Llvm) void {
+    module.addIncludePath(.{ .cwd_relative = llvm.include_dir });
+    module.addLibraryPath(.{ .cwd_relative = llvm.lib_dir });
+    for (llvm.libraries) |name| module.linkSystemLibrary(name, .{});
+    for (llvm.objects) |path| module.addObjectFile(.{ .cwd_relative = path });
+    module.linkSystemLibrary(llvm.cxx_runtime, .{});
+    module.link_libc = true;
 }

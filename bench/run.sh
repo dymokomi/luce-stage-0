@@ -5,15 +5,14 @@
 # algorithm and printing the same output; the harness refuses to time
 # anything whose outputs disagree, so this doubles as a correctness
 # check.  C compiles with `zig cc -O3 -march=native` (auto-vectorized,
-# full speed); Luce compiles --release and runs under loom's strict
-# platform engine: Zig on Darwin arm64, MIR everywhere else.  Both
+# full speed); Luce compiles --release and runs under loom.  Both
 # timings include process startup.  Best of five runs.
 #
 #   ./build.sh && bench/run.sh
 #
 # Ratios are the number to watch across interpreter changes; absolute
 # times move with the machine.  The current snapshot lives in
-# docs/BENCHMARKS.md.
+# docs/CODEGEN.md.
 
 set -e
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,19 +26,6 @@ mkdir -p build/bench
 
 names="loops math strings arrays matmul stats"
 
-# ARM macOS is the self-written backend's release platform; every
-# other host keeps MIR as the native baseline.  Both policies are
-# strict in loom: an unsupported program or engine failure stops the
-# benchmark instead of silently timing a fallback.
-case "$(uname -s):$(uname -m)" in
-Darwin:arm64) bench_engine=zig ;;
-*) bench_engine=mir ;;
-esac
-
-native_loom() {
-    LOOM_ENGINE="$bench_engine" build/loom "$@"
-}
-
 # -ffp-contract=off: Luce's determinism guarantee is strict IEEE
 # (no fused multiply-add), so C plays by the same float rules —
 # otherwise the mandelbrot checksums genuinely differ.  Everything
@@ -48,10 +34,6 @@ for name in $names; do
     build/luce build "bench/$name.luc" -o "build/bench/$name.lc" --release >/dev/null
     zig cc -O3 -march=native -ffp-contract=off -o "build/bench/$name" "bench/$name.c"
 done
-
-interp_loom() {
-    LOOM_ENGINE=interpreter build/loom "$@"
-}
 
 time_once() {
     start=$(date +%s%N)
@@ -71,16 +53,13 @@ keep_min() {
     fi
 }
 
-# Three implementations of every benchmark: C at full optimization,
-# Luce on the strict platform engine selected above, and Luce on the
-# interpreter.  All three outputs must agree before anything is timed;
-# a benchmark beyond the selected engine's core is a hard failure.
+# Two implementations of every benchmark: C at full optimization and
+# Luce under loom.  Both outputs must agree before anything is timed.
 for name in $names; do
     c_out=$(build/bench/"$name")
-    native_out=$(native_loom run build/bench/"$name".lc)
-    interp_out=$(LOOM_ENGINE=interpreter build/loom run build/bench/"$name".lc)
-    if [ "$c_out" != "$native_out" ] || [ "$c_out" != "$interp_out" ]; then
-        echo "bench: $name output mismatch — C:'$c_out' native:'$native_out' interp:'$interp_out'" >&2
+    luce_out=$(build/loom run build/bench/"$name".lc)
+    if [ "$c_out" != "$luce_out" ]; then
+        echo "bench: $name output mismatch — C:'$c_out' luce:'$luce_out'" >&2
         exit 1
     fi
 done
@@ -98,34 +77,25 @@ host_stamp() {
     fi
 }
 echo "host: $(host_stamp) ($(uname -sm))"
-echo "engine: $bench_engine (strict)"
 
 # Interleaved rounds, best of five: slow host drift lands on every
-# column equally instead of biasing whichever ran last.  The
-# interpreter is ~50x slower and correspondingly stable, so it takes
-# a single pass — five would dominate the suite's wall clock and buy
-# no precision.
+# column equally instead of biasing whichever ran last.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 for round in 1 2 3 4 5; do
     for name in $names; do
         elapsed=$(time_once build/bench/"$name")
         keep_min "$tmp/$name.c" "$elapsed"
-        elapsed=$(time_once native_loom run build/bench/"$name".lc)
-        keep_min "$tmp/$name.native" "$elapsed"
+        elapsed=$(time_once build/loom run build/bench/"$name".lc)
+        keep_min "$tmp/$name.luce" "$elapsed"
     done
 done
-for name in $names; do
-    elapsed=$(time_once interp_loom run build/bench/"$name".lc)
-    keep_min "$tmp/$name.interp" "$elapsed"
-done
-
 # The floor: what a do-nothing program costs on each side — process
-# startup for C, and for loom startup plus the JIT compile of the
-# program and every std function it imports.  Printed rather than
+# startup for C, and for loom startup plus decoding the program and
+# every std function it imports.  Printed rather than
 # subtracted, so the reader can see how much of a row is not
 # computation.  Keep the benchmarks large enough that this stays
-# small; see docs/BENCHMARKS.md.
+# small; see docs/CODEGEN.md.
 printf 'func main():\n    print("")\n' > "$tmp/floor.luc"
 printf 'int main(void){return 0;}\n' > "$tmp/floor.c"
 build/luce build "$tmp/floor.luc" -o "$tmp/floor.lc" --release >/dev/null
@@ -133,19 +103,17 @@ zig cc -O3 -o "$tmp/floor" "$tmp/floor.c"
 for round in 1 2 3; do
     elapsed=$(time_once "$tmp/floor")
     keep_min "$tmp/floor.c.ns" "$elapsed"
-    elapsed=$(time_once native_loom run "$tmp/floor.lc")
-    keep_min "$tmp/floor.native.ns" "$elapsed"
+    elapsed=$(time_once build/loom run "$tmp/floor.lc")
+    keep_min "$tmp/floor.luce.ns" "$elapsed"
 done
 
-printf '%-10s %12s %12s %12s %10s\n' "benchmark" "C" "$bench_engine" "interp" "$bench_engine/C"
+printf '%-10s %12s %12s %10s\n' "benchmark" "C" "luce" "luce/C"
 for name in $names; do
-    awk -v name="$name" -v c="$(cat "$tmp/$name.c")" -v native="$(cat "$tmp/$name.native")" \
-        -v interp="$(cat "$tmp/$name.interp")" 'BEGIN {
-        printf "%-10s %10.1fms %10.1fms %10.1fms %9.1fx\n",
-            name, c / 1e6, native / 1e6, interp / 1e6, native / c
+    awk -v name="$name" -v c="$(cat "$tmp/$name.c")" -v luce="$(cat "$tmp/$name.luce")" 'BEGIN {
+        printf "%-10s %10.1fms %10.1fms %9.1fx\n", name, c / 1e6, luce / 1e6, luce / c
     }'
 done
-awk -v c="$(cat "$tmp/floor.c.ns")" -v native="$(cat "$tmp/floor.native.ns")" 'BEGIN {
-    printf "%-10s %10.1fms %10.1fms %12s %10s   (do-nothing program)\n",
-        "floor", c / 1e6, native / 1e6, "-", "-"
+awk -v c="$(cat "$tmp/floor.c.ns")" -v luce="$(cat "$tmp/floor.luce.ns")" 'BEGIN {
+    printf "%-10s %10.1fms %10.1fms %10s   (do-nothing program)\n",
+        "floor", c / 1e6, luce / 1e6, "-"
 }'

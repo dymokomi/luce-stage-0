@@ -1,60 +1,58 @@
-//! Luce — the small, native language for Texel evaluators.
+//! Luce — a small, statically typed, compiled language.
 //!
-//! docs/LUCE.md is the plan.  A Texel owns Luce source as content; the
-//! compiler receives source bytes plus the Texel's Port schema and
-//! produces a verified program.  The first execution engine is a
-//! deterministic Luce IR interpreter behind the backend boundary; a
-//! native code generator slots in behind the same boundary later
-//! without changing Luce programs.
+//! `docs/LANGUAGE.md` is the surface, `docs/OWNERSHIP.md` the memory
+//! model, and `docs/PIPELINE.md` the stage-by-stage status table.
+//!
+//! `compile.zig` is the driver and the place to start reading: it
+//! walks a source file through the numbered stage folders below, in
+//! order, and produces verified MIR.  From there, either the
+//! interpreter runs the program or `08_llvm` compiles it; both call
+//! `runtime`, so there is one implementation of every semantic.
+//!
+//! Exported names drop the numbers — the prefixes order the directory
+//! listing, they are not part of the vocabulary.
 
-pub const source = @import("source.zig");
-pub const token = @import("token.zig");
-pub const lexer = @import("lexer.zig");
-pub const diagnostics = @import("diagnostics.zig");
-pub const ast = @import("ast.zig");
-pub const parser = @import("parser.zig");
-pub const types = @import("types.zig");
-pub const analyzer = @import("analyzer.zig");
-pub const ir = @import("ir.zig");
-pub const loops = @import("loops.zig");
-pub const module = @import("module.zig");
+// The pipeline, in order.
+pub const source = @import("01_source.zig");
+pub const lex = @import("02_lex.zig");
+pub const parse = @import("03_parse.zig");
+pub const semantics = @import("04_semantics.zig");
+pub const hir = @import("05_hir.zig");
+pub const mir = @import("06_mir.zig");
+pub const optimize = @import("07_optimize.zig");
+pub const llvm = @import("08_llvm.zig");
 pub const compile = @import("compile.zig");
-pub const fabric = @import("fabric.zig");
+
+// Running a program, and the semantics both engines share.
+pub const runtime = @import("runtime.zig");
 pub const backend = @import("backend.zig");
 pub const interpreter = @import("interpreter.zig");
-pub const native = @import("native.zig");
-pub const image = @import("image.zig");
-pub const codegen = @import("codegen.zig");
-pub const codegen_wasm = @import("codegen_wasm.zig");
-pub const codegen_x86 = @import("codegen_x86.zig");
-pub const native_spec = @import("native_spec.zig");
-pub const ownership_spec = @import("ownership_spec.zig");
-pub const behavior_spec = @import("behavior_spec.zig");
-pub const errors_spec = @import("errors_spec.zig");
-pub const std_spec = @import("std_spec.zig");
+
+// Cross-cutting support: not a stage, used by all of them.
+pub const diagnostics = @import("support/diagnostics.zig");
+pub const types = @import("support/types.zig");
+
+// The executable specification.
+pub const ownership_spec = @import("specs/ownership_spec.zig");
+pub const behavior_spec = @import("specs/behavior_spec.zig");
+pub const errors_spec = @import("specs/errors_spec.zig");
+pub const std_spec = @import("specs/std_spec.zig");
 
 test {
     _ = source;
-    _ = token;
-    _ = lexer;
-    _ = diagnostics;
-    _ = ast;
-    _ = parser;
-    _ = types;
-    _ = analyzer;
-    _ = ir;
-    _ = loops;
-    _ = module;
+    _ = lex;
+    _ = parse;
+    _ = semantics;
+    _ = hir;
+    _ = mir;
+    _ = optimize;
+    _ = llvm;
     _ = compile;
-    _ = fabric;
+    _ = runtime;
     _ = backend;
     _ = interpreter;
-    _ = native;
-    _ = image;
-    _ = codegen;
-    _ = codegen_wasm;
-    _ = codegen_x86;
-    _ = native_spec;
+    _ = diagnostics;
+    _ = types;
     _ = ownership_spec;
     _ = behavior_spec;
     _ = errors_spec;

@@ -22,19 +22,6 @@ cd "$root"
 ref="${1:?usage: bench/compare.sh GIT-REF}"
 base="$root/.bench-base"
 
-# Keep the A/B on the platform's release engine: the self-written Zig
-# backend on ARM macOS, MIR everywhere else.  Explicit policies are
-# strict, so neither side can silently turn an engine failure into an
-# interpreter measurement.
-case "$(uname -s):$(uname -m)" in
-Darwin:arm64) bench_engine=zig ;;
-*) bench_engine=mir ;;
-esac
-
-native_loom() {
-    LOOM_ENGINE="$bench_engine" "$@"
-}
-
 if [ -e "$base" ]; then
     git worktree remove --force "$base" 2>/dev/null || rm -rf "$base"
 fi
@@ -66,7 +53,6 @@ host_stamp() {
     fi
 }
 echo "host: $(host_stamp) ($(uname -sm))"
-echo "engine: $bench_engine (strict)"
 
 tmp="$(mktemp -d)"
 old_trap='git worktree remove --force "$base" >/dev/null 2>&1 || true'
@@ -93,10 +79,10 @@ keep_min() {
 for round in 1 2 3 4 5; do
     for name in $names; do
         if [ -f "$base/build/bench/$name.lc" ]; then
-            elapsed=$(time_once native_loom "$base/build/loom" run "$base/build/bench/$name.lc")
+            elapsed=$(time_once "$base/build/loom" run "$base/build/bench/$name.lc")
             keep_min "$tmp/$name.base" "$elapsed"
         fi
-        elapsed=$(time_once native_loom build/loom run "build/bench/$name.lc")
+        elapsed=$(time_once build/loom run "build/bench/$name.lc")
         keep_min "$tmp/$name.head" "$elapsed"
     done
 done

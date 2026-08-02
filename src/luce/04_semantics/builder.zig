@@ -1,0 +1,3123 @@
+//! IR-emitting walk of a verified function body.
+//!
+//! The FunctionBuilder struct and all its methods: block and
+//! instruction emission, scope management, local declaration, ownership
+//! tracking and release, operand lowering, statement lowering,
+//! expression lowering, call resolution, and builtin intrinsics.
+
+const std = @import("std");
+const source_mod = @import("../01_source.zig");
+const ast = @import("../03_parse.zig").ast;
+const types = @import("../support/types.zig");
+const mir = @import("../06_mir.zig");
+const helpers = @import("helpers.zig");
+
+const declarations = @import("declarations.zig");
+const Analyzed = declarations.Analyzed;
+const ModuleTree = declarations.ModuleTree;
+const FunctionInfo = declarations.FunctionInfo;
+const ConstantValue = declarations.ConstantValue;
+const Analyzer = declarations.Analyzer;
+const OwnershipClass = declarations.OwnershipClass;
+const Poison = declarations.Poison;
+const LocalInfo = declarations.LocalInfo;
+const Scope = declarations.Scope;
+const FoundLocal = declarations.FoundLocal;
+const LoopFrame = declarations.LoopFrame;
+const isReserved = declarations.isReserved;
+const Error = declarations.Error;
+
+const Allocator = std.mem.Allocator;
+const Span = source_mod.Span;
+const Type = types.Type;
+const PortSchema = types.PortSchema;
+const StructLayout = types.StructLayout;
+const Register = mir.Register;
+const BlockId = mir.BlockId;
+const LocalId = mir.LocalId;
+
+// ---------------------------------------------------------------------------
+// FunctionBuilder
+// ---------------------------------------------------------------------------
+
+const Value = struct {
+    register: Register,
+    value_type: Type,
+};
+
+const BlockBuilder = struct {
+    items: std.ArrayList(Register) = .empty,
+    terminated: bool = false,
+};
+
+pub const FunctionBuilder = struct {
+    analyzer: *Analyzer,
+    module: usize,
+    prefix: []const u8,
+    return_type: Type,
+    has_frames: bool,
+    locals: std.ArrayList(mir.Local) = .empty,
+    instructions: std.ArrayList(mir.Instruction) = .empty,
+    result_types: std.ArrayList(Type) = .empty,
+    blocks: std.ArrayList(BlockBuilder) = .empty,
+    current: BlockId = 0,
+    scopes: std.ArrayList(Scope) = .empty,
+    loops: std.ArrayList(LoopFrame) = .empty,
+    /// Statement temporaries (S3): every fresh, unowned object is
+    /// parked in a hidden local; the end of the statement releases the
+    /// ones nothing adopted.  Adoption is a runtime re-owning, so a
+    /// stale release is a safe no-op.
+    temps: std.ArrayList(TempSlot) = .empty,
+    /// Debug info: the source offset stamped on every emitted
+    /// instruction (statement granularity), parallel to instructions.
+    origin_offsets: std.ArrayList(u32) = .empty,
+    origin: u32 = 0,
+
+    const TempSlot = struct { local: LocalId, register: Register };
+
+    fn arena(self: *FunctionBuilder) Allocator {
+        return self.analyzer.arena;
+    }
+
+    fn temporary(self: *FunctionBuilder) Allocator {
+        return self.analyzer.temporary;
+    }
+
+    pub fn deinitScratch(self: *FunctionBuilder) void {
+        for (self.scopes.items) |*scope| {
+            scope.names.deinit(self.temporary());
+            scope.owned.deinit(self.temporary());
+        }
+        self.scopes.deinit(self.temporary());
+        self.loops.deinit(self.temporary());
+        self.temps.deinit(self.temporary());
+        self.origin_offsets.deinit(self.temporary());
+    }
+
+    fn fail(self: *FunctionBuilder, code: []const u8, span: Span, comptime format: []const u8, arguments: anytype) Error!void {
+        try self.analyzer.fail(code, span, format, arguments);
+    }
+
+    // Blocks and emission --------------------------------------------------
+
+    pub fn openBlock(self: *FunctionBuilder) Error!void {
+        try self.blocks.append(self.arena(), .{});
+        self.current = @intCast(self.blocks.items.len - 1);
+    }
+
+    fn reserveBlock(self: *FunctionBuilder) Error!BlockId {
+        try self.blocks.append(self.arena(), .{});
+        return @intCast(self.blocks.items.len - 1);
+    }
+
+    fn switchTo(self: *FunctionBuilder, block: BlockId) void {
+        self.current = block;
+    }
+
+    pub fn emit(self: *FunctionBuilder, instruction: mir.Instruction, result: Type) Error!Register {
+        const register: Register = @intCast(self.instructions.items.len);
+        try self.instructions.append(self.arena(), instruction);
+        try self.result_types.append(self.arena(), result);
+        try self.origin_offsets.append(self.temporary(), self.origin);
+        const block = &self.blocks.items[self.current];
+        if (!block.terminated) {
+            try block.items.append(self.arena(), register);
+            if (instruction.isTerminator()) block.terminated = true;
+        }
+        return register;
+    }
+
+    /// Every block a function ends with must terminate; unreachable or
+    /// fall-through ends get an explicit terminator.
+    pub fn sealOpenBlocks(self: *FunctionBuilder) Error!void {
+        for (self.blocks.items, 0..) |*block, index| {
+            if (block.terminated and block.items.items.len > 0) continue;
+            self.current = @intCast(index);
+            block.terminated = false;
+            if (self.return_type == .none) {
+                _ = try self.emit(.{ .ret = null }, .none);
+            } else {
+                _ = try self.emit(.{ .trap = .missing_return }, .none);
+            }
+        }
+    }
+
+    pub fn finishBlocks(self: *FunctionBuilder) Error![]mir.Block {
+        const finished = try self.arena().alloc(mir.Block, self.blocks.items.len);
+        for (self.blocks.items, finished) |*builder, *block| {
+            block.* = .{ .items = try builder.items.toOwnedSlice(self.arena()) };
+        }
+        self.blocks.deinit(self.arena());
+        return finished;
+    }
+
+    // Scopes and locals ----------------------------------------------------
+
+    pub fn pushScope(self: *FunctionBuilder) Error!void {
+        try self.scopes.append(self.temporary(), .{});
+    }
+
+    pub fn popScope(self: *FunctionBuilder) void {
+        var scope = self.scopes.pop().?;
+        scope.names.deinit(self.temporary());
+        scope.owned.deinit(self.temporary());
+    }
+
+    fn findLocal(self: *FunctionBuilder, name: []const u8) ?FoundLocal {
+        var index = self.scopes.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.scopes.items[index].names.getPtr(name)) |found| {
+                return .{ .info = found, .depth = index };
+            }
+        }
+        return null;
+    }
+
+    // Ownership releases -------------------------------------------------
+
+    /// Release one owned local: free whatever objects in its slot are
+    /// still bound to it.  Safe on any path — objects given away or
+    /// adopted elsewhere are skipped at run time.
+    fn emitRelease(self: *FunctionBuilder, local: LocalId) Error!void {
+        const value = try self.emit(.{ .local_get = local }, self.locals.items[local].local_type);
+        _ = try self.emit(.{ .object_unbind = .{ .local = local, .value = value } }, .none);
+    }
+
+    /// Emit releases for the owned locals of every scope at or above
+    /// `from`, innermost first, skipping `moved` (a returned binding —
+    /// its object moves to the caller, S16).
+    fn emitScopeReleases(self: *FunctionBuilder, from: usize, moved: ?LocalId) Error!void {
+        var scope_index = self.scopes.items.len;
+        while (scope_index > from) {
+            scope_index -= 1;
+            const owned = self.scopes.items[scope_index].owned.items;
+            var owned_index = owned.len;
+            while (owned_index > 0) {
+                owned_index -= 1;
+                if (moved != null and owned[owned_index] == moved.?) continue;
+                try self.emitRelease(owned[owned_index]);
+            }
+        }
+    }
+
+    /// Emit releases for the innermost scope, in reverse declaration
+    /// order, without popping it: the normal end of a block.
+    pub fn emitScopeEnd(self: *FunctionBuilder) Error!void {
+        try self.emitScopeReleases(self.scopes.items.len - 1, null);
+    }
+
+    /// Park a fresh, unowned object in a hidden local so the end of
+    /// the statement can release it if nothing adopted it (S3, S19).
+    fn registerTemp(self: *FunctionBuilder, value: Value) Error!void {
+        const local = try self.hiddenLocal(value.value_type);
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+        _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+        try self.temps.append(self.temporary(), .{ .local = local, .register = value.register });
+    }
+
+    /// Emit releases for the temporaries above `from` without
+    /// forgetting them (unwinding paths: return, break, continue).
+    fn emitTempReleases(self: *FunctionBuilder, from: usize) Error!void {
+        var index = self.temps.items.len;
+        while (index > from) {
+            index -= 1;
+            try self.emitRelease(self.temps.items[index].local);
+        }
+    }
+
+    /// Release and forget the temporaries above `from`: the end of the
+    /// statement (or of a condition) that created them.
+    fn flushTemps(self: *FunctionBuilder, from: usize) Error!void {
+        try self.emitTempReleases(from);
+        self.temps.shrinkRetainingCapacity(from);
+    }
+
+    /// Resolve a written declaration name from this module's point of
+    /// view: bare names are module-local; a dotted name is either a
+    /// module-local struct namespace (Text.width) or an imported one
+    /// (geo.helper, geo.Text.width).
+    fn resolveDeclared(self: *FunctionBuilder, written: []const u8, span: Span) Error!?[]const u8 {
+        if (std.mem.indexOfScalar(u8, written, '.')) |dot| {
+            const head = written[0..dot];
+            const local_head = try self.analyzer.qualify(self.prefix, head);
+            if (self.analyzer.struct_names.contains(local_head)) {
+                return try self.analyzer.qualify(self.prefix, written);
+            }
+            if (self.analyzer.importsModule(self.module, head)) {
+                return written;
+            }
+            try self.fail("luce.sema.import", span, "unknown namespace {s}; import {s} to use it", .{ head, head });
+            return null;
+        }
+        return try self.analyzer.qualify(self.prefix, written);
+    }
+
+    pub fn declareLocal(
+        self: *FunctionBuilder,
+        name: []const u8,
+        local_type: Type,
+        mutable: bool,
+        class: OwnershipClass,
+        span: Span,
+    ) Error!?LocalId {
+        if (isReserved(name) or std.mem.eql(u8, name, "evaluate")) {
+            try self.fail("luce.sema.reserved", span, "{s} is a reserved name", .{name});
+            return null;
+        }
+        if (self.findLocal(name) != null) {
+            try self.fail("luce.sema.duplicate", span, "{s} is already declared", .{name});
+            return null;
+        }
+        const qualified = try self.analyzer.qualify(self.prefix, name);
+        if (self.analyzer.function_names.contains(qualified) or
+            self.analyzer.struct_names.contains(qualified) or
+            self.analyzer.constant_names.contains(qualified))
+        {
+            try self.fail("luce.sema.duplicate", span, "{s} is already a declaration", .{name});
+            return null;
+        }
+        const carries = self.analyzer.carriesObjects(local_type);
+        const local: LocalId = @intCast(self.locals.items.len);
+        try self.locals.append(self.arena(), .{
+            .name = try self.arena().dupe(u8, name),
+            .local_type = local_type,
+        });
+        const scope = &self.scopes.items[self.scopes.items.len - 1];
+        try scope.names.put(self.temporary(), name, .{
+            .local = local,
+            .mutable = mutable,
+            .class = if (carries) class else .alias,
+            .carries = carries,
+        });
+        if (carries and class == .owned) {
+            try scope.owned.append(self.temporary(), local);
+        }
+        return local;
+    }
+
+    fn hiddenLocal(self: *FunctionBuilder, local_type: Type) Error!LocalId {
+        const local: LocalId = @intCast(self.locals.items.len);
+        try self.locals.append(self.arena(), .{
+            .name = try self.arena().dupe(u8, "(temporary)"),
+            .local_type = local_type,
+        });
+        return local;
+    }
+
+    /// True when lowering this expression may end in a different basic
+    /// block than it started: short-circuit `and`/`or` anywhere inside
+    /// it branches and merges.
+    fn splitsBlocks(expression: *const ast.Expression) bool {
+        return switch (expression.*) {
+            .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
+                splitsBlocks(binary.left) or splitsBlocks(binary.right),
+            .unary => |unary| splitsBlocks(unary.operand),
+            .field => |field| splitsBlocks(field.target),
+            .call => |call| for (call.arguments) |argument| {
+                if (splitsBlocks(argument.value)) break true;
+            } else false,
+            .new_object => |new| for (new.dims) |dimension| {
+                if (splitsBlocks(dimension)) break true;
+            } else false,
+            .list_literal => |literal| for (literal.elements) |element| {
+                if (splitsBlocks(element)) break true;
+            } else false,
+            .index => |index| splitsBlocks(index.target) or for (index.indices) |item| {
+                if (splitsBlocks(item)) break true;
+            } else false,
+            .slice_range => |slice| splitsBlocks(slice.target) or
+                (slice.start != null and splitsBlocks(slice.start.?)) or
+                (slice.end != null and splitsBlocks(slice.end.?)),
+            .method => |method| splitsBlocks(method.target) or for (method.arguments) |argument| {
+                if (splitsBlocks(argument.value)) break true;
+            } else false,
+            .give => |give| splitsBlocks(give.operand),
+            .copy => |copied| splitsBlocks(copied.operand),
+            else => false,
+        };
+    }
+
+    // Ownership classification ---------------------------------------------
+
+    /// Value methods whose result is a fresh object the caller owns
+    /// (S22).  The ownership classifier below and the method tables
+    /// (sequenceMethod/stringMethod/objectMethod result types) must
+    /// agree on this list.
+    const fresh_object_methods = [_][]const u8{ "pop", "split", "keys", "values" };
+
+    /// True when evaluating this expression yields an object the
+    /// receiver may own: something fresh (new, a literal, a slice, a
+    /// call result, pop/split/keys), a give, or a copy.  Names and
+    /// element/field reads are borrows (S8, S22).  Only consulted for
+    /// object-carrying types, so value-typed calls answering true is
+    /// harmless.
+    fn yieldsOwnership(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
+        return switch (expression.*) {
+            .new_object, .list_literal, .slice_range, .call, .give, .copy => true,
+            .method => |method| blk: {
+                if (try self.methodIsNamespaced(method)) break :blk true;
+                for (fresh_object_methods) |name| {
+                    if (std.mem.eql(u8, method.name, name)) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+
+    /// Side-effect-free twin of methodNamespace: does target.name(...)
+    /// resolve to a declaration (whose result the caller owns, S16)
+    /// rather than a builtin method on a value?
+    fn methodIsNamespaced(self: *FunctionBuilder, method: ast.Method) Error!bool {
+        const chain = helpers.dottedChain(method.target) orelse return false;
+        const head = chain.head();
+        if (self.findLocal(head) != null) return false;
+        const head_qualified = try self.analyzer.qualify(self.prefix, head);
+        if (self.analyzer.struct_names.contains(head_qualified)) return true;
+        return self.analyzer.importsModule(self.module, head);
+    }
+
+    /// Report a use of a poisoned name (S10, S29); true when poisoned.
+    fn checkPoisoned(self: *FunctionBuilder, info: *const LocalInfo, name: []const u8, span: Span) Error!bool {
+        const why = info.poisoned orelse return false;
+        try self.fail(
+            "luce.sema.own",
+            span,
+            "{s} was {s} and cannot be touched again in this scope [OWNERSHIP.md {s}]",
+            .{
+                name,
+                if (why == .given) @as([]const u8, "given away") else "freed",
+                if (why == .given) @as([]const u8, "S10, S29") else "S6",
+            },
+        );
+        return true;
+    }
+
+    /// Lower a left-to-right operand sequence whose registers must all
+    /// be usable together afterwards.  Registers are block-local, so
+    /// every operand followed by a block-splitting one is carried
+    /// across the split in a hidden local and re-loaded at the end.
+    /// The returned values live in the arena.
+    fn lowerOperands(self: *FunctionBuilder, expressions: []const *ast.Expression) Error!?[]Value {
+        const values = try self.arena().alloc(Value, expressions.len);
+        const spills = try self.temporary().alloc(?LocalId, expressions.len);
+        defer self.temporary().free(spills);
+
+        var later_splits = try self.temporary().alloc(bool, expressions.len);
+        defer self.temporary().free(later_splits);
+        var any_split = false;
+        var backwards = expressions.len;
+        while (backwards > 0) {
+            backwards -= 1;
+            later_splits[backwards] = any_split;
+            if (splitsBlocks(expressions[backwards])) any_split = true;
+        }
+
+        for (expressions, 0..) |expression, index| {
+            const value = (try self.lowerExpression(expression, false)) orelse return null;
+            values[index] = value;
+            spills[index] = null;
+            if (later_splits[index] and value.value_type != .none) {
+                const local = try self.hiddenLocal(value.value_type);
+                _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+                spills[index] = local;
+            }
+        }
+        for (spills, 0..) |spill, index| {
+            if (spill) |local| {
+                values[index].register = try self.emit(.{ .local_get = local }, values[index].value_type);
+            }
+        }
+        return values;
+    }
+
+    // Statements -----------------------------------------------------------
+
+    pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
+        try self.pushScope();
+        for (block.statements) |statement| {
+            // Fresh objects nothing adopted die with their statement
+            // (S3); the release is a no-op for everything adopted.
+            const temps_floor = self.temps.items.len;
+            try self.lowerStatement(statement);
+            try self.flushTemps(temps_floor);
+        }
+        try self.emitScopeEnd();
+        self.popScope();
+    }
+
+    fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {
+        // Statement granularity is the trap-location contract: every
+        // instruction a statement lowers to reports the statement's
+        // own line, the way Python tracebacks do.
+        self.origin = @intCast(statement.span().start);
+        switch (statement) {
+            .let => |binding| try self.lowerBinding(binding.name, binding.annotation, binding.value, false, binding.span),
+            .variable => |binding| {
+                if (binding.value) |value| {
+                    try self.lowerBinding(binding.name, binding.annotation, value, true, binding.span);
+                } else {
+                    try self.lowerLateDeclaration(binding.name, binding.annotation.?, binding.span);
+                }
+            },
+            .assign => |assign| try self.lowerAssign(assign),
+            .conditional => |conditional| try self.lowerConditional(conditional),
+            .while_loop => |loop| try self.lowerWhile(loop),
+            .for_range => |loop| try self.lowerForRange(loop),
+            .for_each => |loop| try self.lowerForEach(loop),
+            .return_statement => |returned| try self.lowerReturn(returned),
+            .break_statement => |broke| {
+                if (self.loops.items.len == 0) {
+                    try self.fail("luce.sema.loop", broke.span, "break outside a loop", .{});
+                    return;
+                }
+                const frame = self.loops.items[self.loops.items.len - 1];
+                // Early exits unwind what the scopes they leave still
+                // own (S4).
+                try self.emitTempReleases(frame.temps_depth);
+                try self.emitScopeReleases(frame.scope_depth, null);
+                _ = try self.emit(.{ .jump = frame.exit_block }, .none);
+            },
+            .continue_statement => |continued| {
+                if (self.loops.items.len == 0) {
+                    try self.fail("luce.sema.loop", continued.span, "continue outside a loop", .{});
+                    return;
+                }
+                const frame = self.loops.items[self.loops.items.len - 1];
+                try self.emitTempReleases(frame.temps_depth);
+                try self.emitScopeReleases(frame.scope_depth, null);
+                _ = try self.emit(.{ .jump = frame.continue_block }, .none);
+            },
+            .expression => |expression| {
+                _ = try self.lowerExpression(expression.value, true);
+            },
+        }
+    }
+
+    fn lowerBinding(
+        self: *FunctionBuilder,
+        name: []const u8,
+        annotation: ?ast.TypeName,
+        value_expression: *ast.Expression,
+        mutable: bool,
+        span: Span,
+    ) Error!void {
+        // An empty [] has no element type of its own; the annotation
+        // supplies it: var xs: List(Int) = []
+        if (value_expression.* == .list_literal and value_expression.list_literal.elements.len == 0) {
+            const written = annotation orelse {
+                try self.fail(
+                    "luce.sema.type",
+                    span,
+                    "an empty [] needs an annotation: var {s}: List(T) = []",
+                    .{name},
+                );
+                return;
+            };
+            const expected = (try self.analyzer.resolveType(self.module, written)) orelse return;
+            const descriptor = self.analyzer.heapOf(expected);
+            if (descriptor == null or descriptor.? != .list) {
+                try self.fail("luce.sema.type", span, "[] builds a List, but {s} is annotated {s}", .{
+                    name,
+                    try self.analyzer.typeName(expected),
+                });
+                return;
+            }
+            const list = try self.emit(.{ .heap_new = .{ .heap = expected.heap, .dims = &.{} } }, expected);
+            const local = (try self.declareLocal(name, expected, mutable, .owned, span)) orelse return;
+            _ = try self.emit(.{ .local_set = .{ .local = local, .value = list } }, .none);
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = list } }, .none);
+            return;
+        }
+
+        const value = (try self.lowerExpression(value_expression, false)) orelse return;
+        if (annotation) |written| {
+            const expected = (try self.analyzer.resolveType(self.module, written)) orelse return;
+            if (!value.value_type.eql(expected)) {
+                try self.fail(
+                    "luce.sema.type",
+                    span,
+                    "{s} declared {s} but initialized with {s} (conversions are explicit: {s}(...))",
+                    .{ name, try self.analyzer.typeName(expected), try self.analyzer.typeName(value.value_type), try self.analyzer.typeName(expected) },
+                );
+                return;
+            }
+        }
+        // A binding that received something fresh (or a give, or a
+        // copy) owns the object; receiving another name is an alias
+        // (S1, S8).
+        const owns = self.analyzer.carriesObjects(value.value_type) and
+            try self.yieldsOwnership(value_expression);
+        const local = (try self.declareLocal(
+            name,
+            value.value_type,
+            mutable,
+            if (owns) .owned else .alias,
+            span,
+        )) orelse return;
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = value.register } }, .none);
+        if (owns) {
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value.register } }, .none);
+        }
+    }
+
+    /// var name: Type — a late declaration (OWNERSHIP.md S40): the
+    /// slot starts at the type's zero value; the zero of an object
+    /// type is the null object, which traps on use until assigned.
+    fn lowerLateDeclaration(
+        self: *FunctionBuilder,
+        name: []const u8,
+        written: ast.TypeName,
+        span: Span,
+    ) Error!void {
+        const declared = (try self.analyzer.resolveType(self.module, written)) orelse return;
+        const zero = try self.emitZero(declared);
+        // The declaration establishes the binding and its scope; the
+        // scope owns whatever a later assignment fills in (S36, S40).
+        const local = (try self.declareLocal(name, declared, true, .owned, span)) orelse return;
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = zero } }, .none);
+    }
+
+    /// The zero value of a type, as instructions: numbers zero, Bool
+    /// false, text empty, structs zeroed field by field, objects null.
+    fn emitZero(self: *FunctionBuilder, of: Type) Error!Register {
+        return switch (of) {
+            .none => unreachable, // no annotation resolves to None
+            .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
+            .int => try self.emit(.{ .const_int = 0 }, .int),
+            .float => try self.emit(.{ .const_float = 0.0 }, .float),
+            .string, .bytes => blk: {
+                const constant = try self.analyzer.internConstant("");
+                break :blk try self.emit(
+                    .{ .const_data = .{ .constant = constant, .data_type = of } },
+                    of,
+                );
+            },
+            .heap => try self.emit(
+                .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
+                of,
+            ),
+            .strukt => |layout_index| blk: {
+                const layout = self.analyzer.structs.items[layout_index];
+                const fields = try self.arena().alloc(Register, layout.fields.len);
+                for (layout.fields, fields) |field, *slot| {
+                    slot.* = try self.emitZero(field.field_type);
+                }
+                break :blk try self.emit(
+                    .{ .struct_make = .{ .layout = layout_index, .fields = fields } },
+                    of,
+                );
+            },
+        };
+    }
+
+    fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
+        switch (assign.target) {
+            .name => |name| try self.lowerAssignName(name.text, name.span, assign),
+            .field => |field| try self.lowerAssignField(field, assign),
+            .index => |index| try self.lowerAssignIndex(index, assign),
+            .chain => |chain| try self.lowerAssignChain(chain, assign),
+        }
+    }
+
+    /// One step down a nested place: a struct field, or an index into
+    /// a container.  Recorded on the way down so the way up can
+    /// rebuild — struct fields functionally update and propagate to
+    /// the root; a container index writes in place and stops (objects
+    /// are references).
+    const Accessor = union(enum) {
+        field: struct { parent: Register, layout: u32, field_index: u32 },
+        index: struct { object: Register, index_registers: []Register },
+    };
+
+    /// place = value / place OP= value for a nested place
+    /// (`root.a.b`, `cells[0].value`).  The chain is read exactly once
+    /// (every subscript evaluated once), then rebuilt from the leaf:
+    /// structs functionally update up to the root local, and the first
+    /// container index writes in place and stops.  Restricted to
+    /// value leaves and value structs — nesting object ownership
+    /// through a chain stays the single-level form's job.
+    fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.Assign) Error!void {
+        // Collect the accessor chain outer-to-inner, then find the
+        // root name.
+        var steps: std.ArrayList(*const ast.Expression) = .empty;
+        defer steps.deinit(self.temporary());
+        var walk: *const ast.Expression = chain.place;
+        const root: ast.Name = while (true) {
+            switch (walk.*) {
+                .name => |name| break name,
+                .field => |field| {
+                    try steps.append(self.temporary(), walk);
+                    walk = field.target;
+                },
+                .index => |index| {
+                    try steps.append(self.temporary(), walk);
+                    walk = index.target;
+                },
+                else => {
+                    try self.fail("luce.parse.assign", chain.span, "assignment targets a name, a field, or an index of one", .{});
+                    return;
+                },
+            }
+        };
+        std.mem.reverse(*const ast.Expression, steps.items);
+
+        // The root must be a mutable, usable local.
+        if (std.mem.eql(u8, root.text, "input") or std.mem.eql(u8, root.text, "output")) {
+            try self.fail("luce.sema.name", root.span, "ports are not nested places", .{});
+            return;
+        }
+        const found = self.findLocal(root.text) orelse {
+            try self.fail("luce.sema.name", root.span, "unknown name {s}", .{root.text});
+            return;
+        };
+        const info = found.info;
+        if (!info.mutable) {
+            try self.fail("luce.sema.let", root.span, "{s} is let-bound; use var for reassignment", .{root.text});
+            return;
+        }
+        if (try self.checkPoisoned(info, root.text, root.span)) return;
+        const root_local = info.local;
+        const root_type = self.locals.items[root_local].local_type;
+
+        // Lower every subscript across the chain plus the right-hand
+        // side in one pass: lowerOperands keeps them all live together
+        // even across short-circuit block splits, so the descent and
+        // rebuild below emit only non-splitting struct/index
+        // instructions and every cached register stays valid.
+        var operand_list: std.ArrayList(*ast.Expression) = .empty;
+        defer operand_list.deinit(self.temporary());
+        for (steps.items) |node| {
+            if (node.* == .index) {
+                for (node.index.indices) |subscript| try operand_list.append(self.temporary(), subscript);
+            }
+        }
+        try operand_list.append(self.temporary(), assign.value);
+        const operands = (try self.lowerOperands(operand_list.items)) orelse return;
+        const value = operands[operands.len - 1];
+        var next_operand: usize = 0;
+
+        // Descend, reading the current value at each step and caching
+        // what the rebuild needs.
+        const accessors = try self.arena().alloc(Accessor, steps.items.len);
+        var current = try self.emit(.{ .local_get = root_local }, root_type);
+        var current_type = root_type;
+        for (steps.items, accessors) |node, *accessor| {
+            switch (node.*) {
+                .field => |field| {
+                    if (current_type != .strukt) {
+                        try self.fail("luce.sema.field", field.span, "{s} has no fields", .{
+                            try self.analyzer.typeName(current_type),
+                        });
+                        return;
+                    }
+                    const layout_index = current_type.strukt;
+                    const layout = self.analyzer.structs.items[layout_index];
+                    const field_index = layout.findField(field.name) orelse {
+                        try self.fail("luce.sema.field", field.span, "{s} has no field {s}", .{ layout.name, field.name });
+                        return;
+                    };
+                    accessor.* = .{ .field = .{ .parent = current, .layout = layout_index, .field_index = field_index } };
+                    current = try self.emit(.{ .struct_get = .{
+                        .target = current,
+                        .layout = layout_index,
+                        .field = field_index,
+                    } }, layout.fields[field_index].field_type);
+                    current_type = layout.fields[field_index].field_type;
+                },
+                .index => |index| {
+                    const lowered = operands[next_operand .. next_operand + index.indices.len];
+                    next_operand += index.indices.len;
+                    const object_value: Value = .{ .register = current, .value_type = current_type };
+                    const element_type = (try self.checkIndex(object_value, lowered, index.span)) orelse return;
+                    // Writing the element back frees the old one, so a
+                    // container of object-carrying structs can't be a
+                    // nested-place step (it would free objects the
+                    // rebuilt struct still shares).
+                    if (self.analyzer.carriesObjects(element_type)) {
+                        try self.fail("luce.sema.own", index.span, "cannot assign through an index into object-carrying elements; rebuild the element and store it whole [OWNERSHIP.md S22]", .{});
+                        return;
+                    }
+                    const index_registers = try self.arena().alloc(Register, lowered.len);
+                    for (lowered, index_registers) |value_operand, *slot| slot.* = value_operand.register;
+                    accessor.* = .{ .index = .{ .object = current, .index_registers = index_registers } };
+                    const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
+                    read_arguments[0] = current;
+                    @memcpy(read_arguments[1..], index_registers);
+                    current = try self.emit(
+                        .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
+                        element_type,
+                    );
+                    current_type = element_type;
+                },
+                else => unreachable, // only field/index steps are collected
+            }
+        }
+
+        // The leaf must be a value; nesting object ownership through a
+        // chain is not supported here.
+        if (self.analyzer.carriesObjects(current_type)) {
+            try self.fail("luce.sema.own", chain.span, "a nested place assigns a value; replace the whole object slot with the single-level form [OWNERSHIP.md S21, S25]", .{});
+            return;
+        }
+        if (!value.value_type.eql(current_type)) {
+            try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
+                try self.analyzer.typeName(current_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        var new_value = value.register;
+        if (assign.compound) |op| {
+            new_value = (try self.compoundCombine(op, current, current_type, value, assign.span)) orelse return;
+        }
+
+        // Rebuild from the leaf: struct fields functionally update and
+        // carry to the root; the first container index writes in place
+        // and stops (the object is shared by reference).
+        var index = accessors.len;
+        while (index > 0) {
+            index -= 1;
+            switch (accessors[index]) {
+                .field => |field| {
+                    // struct_set copies the parent struct with one
+                    // field replaced, so its result type is the
+                    // parent register's type.
+                    const parent_type = self.result_types.items[field.parent];
+                    new_value = try self.emit(.{ .struct_set = .{
+                        .target = field.parent,
+                        .layout = field.layout,
+                        .field = field.field_index,
+                        .value = new_value,
+                    } }, parent_type);
+                },
+                .index => |index_step| {
+                    const write_arguments = try self.arena().alloc(Register, index_step.index_registers.len + 2);
+                    write_arguments[0] = index_step.object;
+                    @memcpy(write_arguments[1 .. 1 + index_step.index_registers.len], index_step.index_registers);
+                    write_arguments[write_arguments.len - 1] = new_value;
+                    _ = try self.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = write_arguments } }, .none);
+                    return; // the object mutated in place — nothing above to update
+                },
+            }
+        }
+        // Reached the root through struct fields only: store it back.
+        _ = try self.emit(.{ .local_set = .{ .local = root_local, .value = new_value } }, .none);
+    }
+
+    /// Combine the current value of a compound-assignment place with
+    /// the right-hand side under OP — `place OP= value` reads the
+    /// place once (the caller supplies `current`) and stores this.
+    /// Type rules are a binary expression's exactly: numeric
+    /// arithmetic, plus String concat for `+=`.  Returns the register
+    /// holding the combined value, or null after reporting.
+    fn compoundCombine(
+        self: *FunctionBuilder,
+        op: ast.BinaryOp,
+        current: Register,
+        place_type: Type,
+        value: Value,
+        span: Span,
+    ) Error!?Register {
+        if (!value.value_type.eql(place_type)) {
+            try self.fail("luce.sema.type", span, "compound assignment needs matching types: place is {s}, value is {s}", .{
+                try self.analyzer.typeName(place_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return null;
+        }
+        const string_concat = op == .add and place_type == .string;
+        if (!place_type.isNumeric() and !string_concat) {
+            try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String)", .{
+                try self.analyzer.typeName(place_type),
+            });
+            return null;
+        }
+        const operation: mir.BinaryOp = switch (op) {
+            .add => .add,
+            .subtract => .subtract,
+            .multiply => .multiply,
+            .divide => .divide,
+            .remainder => .remainder,
+            else => unreachable, // the parser only builds these five
+        };
+        return try self.emit(.{ .binary = .{
+            .op = operation,
+            .operand_type = place_type,
+            .left = current,
+            .right = value.register,
+        } }, place_type);
+    }
+
+    fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
+        if (std.mem.eql(u8, base, "output")) {
+            try self.fail("luce.sema.output", span, "assign to output.NAME", .{});
+            return;
+        }
+        if (std.mem.eql(u8, base, "input")) {
+            try self.fail("luce.sema.input", span, "input ports are read-only", .{});
+            return;
+        }
+        const found = self.findLocal(base) orelse {
+            const qualified = try self.analyzer.qualify(self.prefix, base);
+            if (self.analyzer.constant_names.contains(qualified)) {
+                try self.fail("luce.sema.let", span, "{s} is a file-scope constant and cannot be assigned", .{base});
+            } else {
+                try self.fail("luce.sema.name", span, "unknown name {s}", .{base});
+            }
+            return;
+        };
+        const info = found.info;
+        if (!info.mutable) {
+            try self.fail("luce.sema.let", span, "{s} is let-bound; use var for reassignment", .{base});
+            return;
+        }
+        if (try self.checkPoisoned(info, base, span)) return;
+        if (info.iterating) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "{s} is being iterated; reassigning it would free the collection under the loop [OWNERSHIP.md S5, S9]",
+                .{base},
+            );
+            return;
+        }
+        const local = info.local;
+        const class = info.class;
+        const local_type = self.locals.items[local].local_type;
+        // Compound assignment is value-only arithmetic, so an object
+        // place gets a clear message here instead of the ownership
+        // check firing on the (non-fresh) right-hand side.
+        if (assign.compound != null and info.carries) {
+            try self.fail("luce.sema.type", assign.span, "{s} has no compound assignment (numbers, or += on String)", .{
+                try self.analyzer.typeName(local_type),
+            });
+            return;
+        }
+        if (info.carries) {
+            const yields = try self.yieldsOwnership(assign.value);
+            if (class == .owned and !yields) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "{s} owns its object; assign something fresh, give NAME, or copy NAME [OWNERSHIP.md S5, S21]",
+                    .{base},
+                );
+                return;
+            }
+            if (class != .owned and yields) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "{s} aliases another binding's object and cannot own a fresh one; declare a new name [OWNERSHIP.md S8]",
+                    .{base},
+                );
+                return;
+            }
+        }
+        const value = (try self.lowerExpression(assign.value, false)) orelse return;
+        if (!value.value_type.eql(local_type)) {
+            try self.fail("luce.sema.type", assign.span, "{s} is {s} but the value is {s}", .{
+                base,
+                try self.analyzer.typeName(local_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        var store = value.register;
+        if (assign.compound) |op| {
+            const current = try self.emit(.{ .local_get = local }, local_type);
+            store = (try self.compoundCombine(op, current, local_type, value, assign.span)) orelse return;
+        }
+        // Reassigning an owning var frees the old object immediately
+        // (S5); the very first assignment finds only the null object.
+        // Compound assignment is value-only, so `carries` is false.
+        if (info.carries and class == .owned) {
+            try self.emitRelease(local);
+        }
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = store } }, .none);
+        if (info.carries and class == .owned) {
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = store } }, .none);
+        }
+    }
+
+    fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
+        if (std.mem.eql(u8, target.base, "output")) {
+            if (!self.has_frames) {
+                try self.fail("luce.sema.name", target.span, "output exists only in the evaluator entry", .{});
+                return;
+            }
+            const port = self.analyzer.schema.findOutput(target.field) orelse {
+                try self.fail("luce.sema.port", target.span, "no output port named {s}", .{target.field});
+                return;
+            };
+            if (assign.compound != null) {
+                try self.fail("luce.sema.output", target.span, "output ports are write-only; compound assignment must read the place", .{});
+                return;
+            }
+            const expected = Type.fromPort(self.analyzer.schema.outputs[port].declared);
+            const value = (try self.lowerExpression(assign.value, false)) orelse return;
+            if (!value.value_type.eql(expected)) {
+                try self.fail("luce.sema.type", assign.span, "output.{s} is {s} but the value is {s}", .{
+                    target.field,
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(value.value_type),
+                });
+                return;
+            }
+            _ = try self.emit(.{ .output_store = .{ .port = port, .value = value.register } }, .none);
+            return;
+        }
+        if (std.mem.eql(u8, target.base, "input")) {
+            if (self.has_frames) {
+                try self.fail("luce.sema.input", target.span, "input ports are read-only", .{});
+            } else {
+                try self.fail("luce.sema.name", target.span, "input exists only in the evaluator entry", .{});
+            }
+            return;
+        }
+
+        const found = self.findLocal(target.base) orelse {
+            try self.fail("luce.sema.name", target.span, "unknown name {s}", .{target.base});
+            return;
+        };
+        const info = found.info;
+        if (!info.mutable) {
+            try self.fail("luce.sema.let", target.span, "{s} is let-bound; use var for reassignment", .{target.base});
+            return;
+        }
+        if (try self.checkPoisoned(info, target.base, target.span)) return;
+        const local = info.local;
+        const local_type = self.locals.items[local].local_type;
+        if (local_type != .strukt) {
+            try self.fail("luce.sema.field", target.span, "{s} is {s}, not a struct", .{
+                target.base,
+                try self.analyzer.typeName(local_type),
+            });
+            return;
+        }
+        const layout_index = local_type.strukt;
+        const layout = self.analyzer.structs.items[layout_index];
+        const field_index = layout.findField(target.field) orelse {
+            try self.fail("luce.sema.field", target.span, "{s} has no field {s}", .{ layout.name, target.field });
+            return;
+        };
+        const expected = layout.fields[field_index].field_type;
+        // An object field follows the verb rule and its owner drops
+        // the old value (S25); only the owning binding can restock it.
+        const field_carries = self.analyzer.carriesObjects(expected);
+        if (field_carries) {
+            if (info.class != .owned) {
+                try self.fail(
+                    "luce.sema.own",
+                    target.span,
+                    "{s} does not own its objects; assign the field through the owning name [OWNERSHIP.md S25, S26]",
+                    .{target.base},
+                );
+                return;
+            }
+            if (!(try self.yieldsOwnership(assign.value))) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "this field keeps its object; assign something fresh, give NAME, or copy NAME [OWNERSHIP.md S21, S25]",
+                    .{},
+                );
+                return;
+            }
+        }
+        const value = (try self.lowerExpression(assign.value, false)) orelse return;
+        if (!value.value_type.eql(expected)) {
+            try self.fail("luce.sema.type", assign.span, "{s}.{s} is {s} but the value is {s}", .{
+                target.base,
+                target.field,
+                try self.analyzer.typeName(expected),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        const current = try self.emit(.{ .local_get = local }, local_type);
+        var store = value.register;
+        if (assign.compound) |op| {
+            // Read the field once, combine, store back (fields that
+            // carry objects can't be compound-assigned — value-only).
+            const old_value = try self.emit(.{ .struct_get = .{
+                .target = current,
+                .layout = layout_index,
+                .field = field_index,
+            } }, expected);
+            store = (try self.compoundCombine(op, old_value, expected, value, assign.span)) orelse return;
+        }
+        if (field_carries) {
+            const old_field = try self.emit(.{ .struct_get = .{
+                .target = current,
+                .layout = layout_index,
+                .field = field_index,
+            } }, expected);
+            _ = try self.emit(.{ .object_unbind = .{ .local = local, .value = old_field } }, .none);
+        }
+        const updated = try self.emit(.{ .struct_set = .{
+            .target = current,
+            .layout = layout_index,
+            .field = field_index,
+            .value = store,
+        } }, local_type);
+        _ = try self.emit(.{ .local_set = .{ .local = local, .value = updated } }, .none);
+        if (field_carries) {
+            _ = try self.emit(.{ .object_bind = .{ .local = local, .value = store } }, .none);
+        }
+    }
+
+    /// place[i] = v, grid[r, c] = v, m[key] = v.  The base may be any
+    /// expression: objects mutate through the reference, so no local
+    /// write-back is needed.
+    fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast.Assign) Error!void {
+        const expressions = try self.arena().alloc(*ast.Expression, target.indices.len + 2);
+        expressions[0] = target.base;
+        @memcpy(expressions[1 .. 1 + target.indices.len], target.indices);
+        expressions[expressions.len - 1] = assign.value;
+        const values = (try self.lowerOperands(expressions)) orelse return;
+
+        const object = values[0];
+        const indices = values[1 .. values.len - 1];
+        const value = values[values.len - 1];
+        const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
+        // Containers own their object elements: storing one takes a
+        // fresh value, a give, or a copy (S20, S21).
+        if (self.analyzer.carriesObjects(element_type) and
+            !(try self.yieldsOwnership(assign.value)))
+        {
+            try self.fail(
+                "luce.sema.own",
+                assign.span,
+                "a container keeps its object elements; store something fresh, give NAME, or copy NAME [OWNERSHIP.md S21]",
+                .{},
+            );
+            return;
+        }
+        if (!value.value_type.eql(element_type)) {
+            try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
+                try self.analyzer.typeName(element_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
+        var store = value.register;
+        if (assign.compound) |op| {
+            // Read the element once (the base and indices were lowered
+            // once, above), combine, and store back.
+            const read_arguments = try self.arena().alloc(Register, indices.len + 1);
+            read_arguments[0] = object.register;
+            for (indices, read_arguments[1..]) |index_value, *slot| slot.* = index_value.register;
+            const current = try self.emit(
+                .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
+                element_type,
+            );
+            store = (try self.compoundCombine(op, current, element_type, value, assign.span)) orelse return;
+        }
+        const arguments = try self.arena().alloc(Register, values.len);
+        for (values, arguments) |lowered, *slot| slot.* = lowered.register;
+        arguments[arguments.len - 1] = store;
+        _ = try self.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
+    }
+
+    /// Type-check lowered index values against a heap object: lists
+    /// take one Int, arrays take rank Ints, maps take one key.
+    /// Returns the element/value type.
+    fn checkIndex(
+        self: *FunctionBuilder,
+        object: Value,
+        indices: []const Value,
+        span: Span,
+    ) Error!?Type {
+        const descriptor = self.analyzer.heapOf(object.value_type) orelse {
+            if (object.value_type == .string) {
+                try self.fail("luce.sema.index", span, "strings are sliced (s[a:b] or slice), not indexed; byte_at reads bytes", .{});
+            } else {
+                try self.fail("luce.sema.index", span, "{s} cannot be indexed", .{
+                    try self.analyzer.typeName(object.value_type),
+                });
+            }
+            return null;
+        };
+        if (indices.len > 4) {
+            try self.fail("luce.sema.index", span, "at most 4 index dimensions", .{});
+            return null;
+        }
+
+        switch (descriptor) {
+            .list => |element| {
+                if (indices.len != 1 or indices[0].value_type != .int) {
+                    try self.fail("luce.sema.index", span, "lists index with one Int", .{});
+                    return null;
+                }
+                return element;
+            },
+            .array => |shape| {
+                if (indices.len != shape.rank) {
+                    try self.fail("luce.sema.index", span, "this array has {d} dimensions, got {d} indices", .{
+                        shape.rank,
+                        indices.len,
+                    });
+                    return null;
+                }
+                for (indices) |index_value| {
+                    if (index_value.value_type != .int) {
+                        try self.fail("luce.sema.index", span, "array indices are Int", .{});
+                        return null;
+                    }
+                }
+                return shape.element;
+            },
+            .map => |pair| {
+                if (indices.len != 1 or !indices[0].value_type.eql(pair.key)) {
+                    try self.fail("luce.sema.index", span, "this map is keyed by {s}", .{
+                        try self.analyzer.typeName(pair.key),
+                    });
+                    return null;
+                }
+                return pair.value;
+            },
+            .builder => {
+                try self.fail("luce.sema.index", span, "Builder has no index; str(b) reads it", .{});
+                return null;
+            },
+        }
+    }
+
+    fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Value {
+        const condition = (try self.lowerExpression(expression, false)) orelse return null;
+        if (condition.value_type != .boolean) {
+            try self.fail("luce.sema.type", expression.span(), "condition must be Bool, not {s}", .{
+                try self.analyzer.typeName(condition.value_type),
+            });
+            return null;
+        }
+        return condition;
+    }
+
+    fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!void {
+        const temps_floor = self.temps.items.len;
+        const condition = (try self.lowerCondition(conditional.condition)) orelse return;
+        // Condition temporaries die before the branch: the condition
+        // value is a Bool, so nothing still needs them.
+        try self.flushTemps(temps_floor);
+        const then_block = try self.reserveBlock();
+        const merge_block = try self.reserveBlock();
+        var else_target = merge_block;
+        if (conditional.else_block != null) {
+            else_target = try self.reserveBlock();
+        }
+        _ = try self.emit(.{ .branch = .{
+            .condition = condition.register,
+            .then_block = then_block,
+            .else_block = else_target,
+        } }, .none);
+
+        self.switchTo(then_block);
+        try self.lowerBlock(conditional.then_block);
+        _ = try self.emit(.{ .jump = merge_block }, .none);
+
+        if (conditional.else_block) |else_block| {
+            self.switchTo(else_target);
+            try self.lowerBlock(else_block);
+            _ = try self.emit(.{ .jump = merge_block }, .none);
+        }
+        self.switchTo(merge_block);
+    }
+
+    fn lowerWhile(self: *FunctionBuilder, loop: ast.While) Error!void {
+        const header = try self.reserveBlock();
+        const body = try self.reserveBlock();
+        const exit = try self.reserveBlock();
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(header);
+        // The frame is pushed before the condition lowers: the header
+        // re-runs every iteration, so the S30 give/free guard must see
+        // the loop there too.
+        try self.loops.append(self.temporary(), .{
+            .continue_block = header,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
+        const temps_floor = self.temps.items.len;
+        const condition = (try self.lowerCondition(loop.condition)) orelse {
+            _ = self.loops.pop();
+            _ = try self.emit(.{ .jump = exit }, .none);
+            self.switchTo(exit);
+            return;
+        };
+        // The header re-runs every iteration: its temporaries must die
+        // in it, not after the loop.
+        try self.flushTemps(temps_floor);
+        _ = try self.emit(.{ .branch = .{
+            .condition = condition.register,
+            .then_block = body,
+            .else_block = exit,
+        } }, .none);
+
+        self.switchTo(body);
+        try self.lowerBlock(loop.body);
+        _ = self.loops.pop();
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(exit);
+    }
+
+    fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
+        const temps_floor = self.temps.items.len;
+        const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
+        const start = bounds[0];
+        const end = bounds[1];
+        if (start.value_type != .int or end.value_type != .int) {
+            try self.fail("luce.sema.type", loop.span, "range bounds must be Int", .{});
+            return;
+        }
+        // Bound temporaries die before the loop starts.
+        try self.flushTemps(temps_floor);
+
+        try self.pushScope();
+        defer self.popScope();
+        const index_local = (try self.declareLocal(loop.name, .int, false, .alias, loop.span)) orelse return;
+        const limit_local = try self.hiddenLocal(.int);
+        _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = start.register } }, .none);
+        _ = try self.emit(.{ .local_set = .{ .local = limit_local, .value = end.register } }, .none);
+
+        const header = try self.reserveBlock();
+        const body = try self.reserveBlock();
+        const step = try self.reserveBlock();
+        const exit = try self.reserveBlock();
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(header);
+        const index_value = try self.emit(.{ .local_get = index_local }, .int);
+        const limit_value = try self.emit(.{ .local_get = limit_local }, .int);
+        const keep_going = try self.emit(.{ .binary = .{
+            .op = .less,
+            .operand_type = .int,
+            .left = index_value,
+            .right = limit_value,
+        } }, .boolean);
+        _ = try self.emit(.{ .branch = .{
+            .condition = keep_going,
+            .then_block = body,
+            .else_block = exit,
+        } }, .none);
+
+        self.switchTo(body);
+        try self.loops.append(self.temporary(), .{
+            .continue_block = step,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
+        try self.lowerBlock(loop.body);
+        _ = self.loops.pop();
+        _ = try self.emit(.{ .jump = step }, .none);
+
+        self.switchTo(step);
+        const stepped_index = try self.emit(.{ .local_get = index_local }, .int);
+        const one = try self.emit(.{ .const_int = 1 }, .int);
+        const incremented = try self.emit(.{ .binary = .{
+            .op = .add,
+            .operand_type = .int,
+            .left = stepped_index,
+            .right = one,
+        } }, .int);
+        _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = incremented } }, .none);
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(exit);
+    }
+
+    /// for x in xs: — a hidden object local and a hidden Int index
+    /// drive the loop; the element (or map key) binds immutably each
+    /// iteration.  Length is re-read every step, so mutation during
+    /// iteration stays bounds-safe.
+    fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
+        const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
+        const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
+            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map, not {s}", .{
+                try self.analyzer.typeName(iterable.value_type),
+            });
+            return;
+        };
+        // Each collection has a "position" (a Map's key, or a
+        // List/Array's Int index) and a "payload" (a Map's value, or
+        // the element).  `for x in c:` binds the payload for
+        // sequences and the key for maps (Python's habit); `for a, b
+        // in c:` binds position then payload.
+        var payload_kind: mir.Intrinsic = .index_get;
+        var position_kind: ?mir.Intrinsic = null; // null = the raw Int index
+        var position_type: Type = .int;
+        const payload_type: Type = switch (descriptor) {
+            .list => |element| element,
+            .array => |shape| blk: {
+                if (shape.rank != 1) {
+                    try self.fail("luce.sema.loop", loop.span, "for iterates rank-1 arrays; index higher ranks explicitly", .{});
+                    return;
+                }
+                break :blk shape.element;
+            },
+            .map => |pair| blk: {
+                position_kind = .key_at;
+                position_type = pair.key;
+                payload_kind = .value_at;
+                break :blk pair.value;
+            },
+            .builder => {
+                try self.fail("luce.sema.loop", loop.span, "Builder is not iterable", .{});
+                return;
+            },
+        };
+
+        try self.pushScope();
+        defer self.popScope();
+        const object_local = try self.hiddenLocal(iterable.value_type);
+        const index_local = try self.hiddenLocal(.int);
+
+        // Which intrinsic and type each declared name binds to.
+        const two_names = loop.value_name != null;
+        const map_like = descriptor == .map;
+        // Single name: payload for sequences, key for maps.  Two
+        // names: first = position, second = payload.
+        const first_kind: ?mir.Intrinsic = if (two_names or map_like) position_kind else payload_kind;
+        const first_type: Type = if (two_names or map_like) position_type else payload_type;
+        const name_local = (try self.declareLocal(loop.name, first_type, false, .alias, loop.span)) orelse return;
+        const value_local: ?LocalId = if (two_names)
+            (try self.declareLocal(loop.value_name.?, payload_type, false, .alias, loop.span)) orelse return
+        else
+            null;
+        _ = try self.emit(.{ .local_set = .{ .local = object_local, .value = iterable.register } }, .none);
+        const zero = try self.emit(.{ .const_int = 0 }, .int);
+        _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = zero } }, .none);
+
+        const header = try self.reserveBlock();
+        const body = try self.reserveBlock();
+        const step = try self.reserveBlock();
+        const exit = try self.reserveBlock();
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(header);
+        const object_value = try self.emit(.{ .local_get = object_local }, iterable.value_type);
+        const length_arguments = try self.arena().alloc(Register, 1);
+        length_arguments[0] = object_value;
+        const length = try self.emit(.{ .intrinsic = .{ .kind = .len, .arguments = length_arguments } }, .int);
+        const index_value = try self.emit(.{ .local_get = index_local }, .int);
+        const keep_going = try self.emit(.{ .binary = .{
+            .op = .less,
+            .operand_type = .int,
+            .left = index_value,
+            .right = length,
+        } }, .boolean);
+        _ = try self.emit(.{ .branch = .{
+            .condition = keep_going,
+            .then_block = body,
+            .else_block = exit,
+        } }, .none);
+
+        self.switchTo(body);
+        const body_object = try self.emit(.{ .local_get = object_local }, iterable.value_type);
+        const body_index = try self.emit(.{ .local_get = index_local }, .int);
+        // Bind the first name: a getter intrinsic (key_at / index_get)
+        // or the raw index when it is the List/Array position.
+        const first_value = if (first_kind) |kind| blk: {
+            const args = try self.arena().alloc(Register, 2);
+            args[0] = body_object;
+            args[1] = body_index;
+            break :blk try self.emit(.{ .intrinsic = .{ .kind = kind, .arguments = args } }, first_type);
+        } else body_index;
+        _ = try self.emit(.{ .local_set = .{ .local = name_local, .value = first_value } }, .none);
+        // Bind the payload as a second name when present.
+        if (value_local) |local| {
+            const payload_object = try self.emit(.{ .local_get = object_local }, iterable.value_type);
+            const payload_index = try self.emit(.{ .local_get = index_local }, .int);
+            const args = try self.arena().alloc(Register, 2);
+            args[0] = payload_object;
+            args[1] = payload_index;
+            const payload = try self.emit(.{ .intrinsic = .{ .kind = payload_kind, .arguments = args } }, payload_type);
+            _ = try self.emit(.{ .local_set = .{ .local = local, .value = payload } }, .none);
+        }
+        try self.loops.append(self.temporary(), .{
+            .continue_block = step,
+            .exit_block = exit,
+            .scope_depth = self.scopes.items.len,
+            .temps_depth = self.temps.items.len,
+        });
+        // A named iterable is locked against reassignment for the
+        // duration of the loop (restored below for outer loops).
+        var iterated: ?[]const u8 = null;
+        var was_iterating = false;
+        if (loop.iterable.* == .name) {
+            if (self.findLocal(loop.iterable.name.text)) |iterable_binding| {
+                iterated = loop.iterable.name.text;
+                was_iterating = iterable_binding.info.iterating;
+                iterable_binding.info.iterating = true;
+            }
+        }
+        try self.lowerBlock(loop.body);
+        if (iterated) |name| {
+            if (self.findLocal(name)) |iterable_binding| {
+                iterable_binding.info.iterating = was_iterating;
+            }
+        }
+        _ = self.loops.pop();
+        _ = try self.emit(.{ .jump = step }, .none);
+
+        self.switchTo(step);
+        const stepped = try self.emit(.{ .local_get = index_local }, .int);
+        const one = try self.emit(.{ .const_int = 1 }, .int);
+        const incremented = try self.emit(.{ .binary = .{
+            .op = .add,
+            .operand_type = .int,
+            .left = stepped,
+            .right = one,
+        } }, .int);
+        _ = try self.emit(.{ .local_set = .{ .local = index_local, .value = incremented } }, .none);
+        _ = try self.emit(.{ .jump = header }, .none);
+
+        self.switchTo(exit);
+    }
+
+    fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
+        if (returned.value) |expression| {
+            const value = (try self.lowerExpression(expression, false)) orelse return;
+            if (self.return_type == .none) {
+                try self.fail("luce.sema.return", returned.span, "this function returns nothing", .{});
+                return;
+            }
+            if (!value.value_type.eql(self.return_type)) {
+                try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}", .{
+                    try self.analyzer.typeName(value.value_type),
+                    try self.analyzer.typeName(self.return_type),
+                });
+                return;
+            }
+
+            // Whatever a function returns, the caller owns (S16, S17):
+            // an owned name moves out, fresh values flow out, borrows
+            // are compile errors.
+            var moved: ?LocalId = null;
+            if (self.analyzer.carriesObjects(value.value_type)) {
+                switch (expression.*) {
+                    .name => |name| {
+                        const found = self.findLocal(name.text).?;
+                        switch (found.info.class) {
+                            .owned => moved = found.info.local,
+                            .borrow_param => {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "{s} is a borrowed parameter; return copy {s}, or take the parameter as give [OWNERSHIP.md S17]",
+                                    .{ name.text, name.text },
+                                );
+                                return;
+                            },
+                            .alias => {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
+                                    .{ name.text, name.text },
+                                );
+                                return;
+                            },
+                        }
+                    },
+                    else => {
+                        if (!(try self.yieldsOwnership(expression))) {
+                            try self.fail(
+                                "luce.sema.own",
+                                returned.span,
+                                "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
+                                .{},
+                            );
+                            return;
+                        }
+                        // The fresh return value was parked as a
+                        // statement temporary; un-park it so the
+                        // unwinding below leaves it alone.
+                        var index = self.temps.items.len;
+                        while (index > 0) {
+                            index -= 1;
+                            if (self.temps.items[index].register == value.register) {
+                                _ = self.temps.orderedRemove(index);
+                                break;
+                            }
+                        }
+                    },
+                }
+            }
+            try self.emitTempReleases(0);
+            try self.emitScopeReleases(0, moved);
+            _ = try self.emit(.{ .ret = value.register }, .none);
+            return;
+        }
+        if (self.return_type != .none) {
+            try self.fail("luce.sema.return", returned.span, "return needs a {s} value", .{
+                try self.analyzer.typeName(self.return_type),
+            });
+            return;
+        }
+        try self.emitTempReleases(0);
+        try self.emitScopeReleases(0, null);
+        _ = try self.emit(.{ .ret = null }, .none);
+    }
+
+    // Expressions ----------------------------------------------------------
+
+    fn lowerExpression(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
+        const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
+        // Every ownership-yielding object is parked as a statement
+        // temporary (S3).  Whatever adopts it — a binding, a
+        // container, a give parameter, a return — re-owns it at run
+        // time, which turns the parked release into a no-op.
+        if (value.value_type != .none and
+            self.analyzer.carriesObjects(value.value_type) and
+            try self.yieldsOwnership(expression))
+        {
+            try self.registerTemp(value);
+        }
+        return value;
+    }
+
+    fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
+        switch (expression.*) {
+            .int_literal => |literal| {
+                const parsed = std.fmt.parseInt(i64, literal.text, 10) catch {
+                    try self.fail("luce.sema.literal", literal.span, "integer literal out of range", .{});
+                    return null;
+                };
+                return .{ .register = try self.emit(.{ .const_int = parsed }, .int), .value_type = .int };
+            },
+            .float_literal => |literal| {
+                const parsed = std.fmt.parseFloat(f64, literal.text) catch {
+                    try self.fail("luce.sema.literal", literal.span, "malformed float literal", .{});
+                    return null;
+                };
+                return .{ .register = try self.emit(.{ .const_float = parsed }, .float), .value_type = .float };
+            },
+            .bool_literal => |literal| {
+                return .{ .register = try self.emit(.{ .const_boolean = literal.value }, .boolean), .value_type = .boolean };
+            },
+            .string_literal => |literal| {
+                const constant = try self.analyzer.internConstant(literal.decoded);
+                return .{
+                    .register = try self.emit(.{ .const_data = .{ .constant = constant, .data_type = .string } }, .string),
+                    .value_type = .string,
+                };
+            },
+            .name => |name| {
+                if (std.mem.eql(u8, name.text, "input") or std.mem.eql(u8, name.text, "output")) {
+                    if (self.has_frames) {
+                        try self.fail("luce.sema.port", name.span, "{s} is used as {s}.PORT", .{ name.text, name.text });
+                    } else {
+                        try self.fail("luce.sema.name", name.span, "{s} exists only in the evaluator entry", .{name.text});
+                    }
+                    return null;
+                }
+                const found = self.findLocal(name.text) orelse {
+                    // Not a local: perhaps a file-scope constant.
+                    const qualified = try self.analyzer.qualify(self.prefix, name.text);
+                    if (self.analyzer.constant_names.get(qualified)) |constant| {
+                        return self.emitConstant(constant);
+                    }
+                    try self.fail("luce.sema.name", name.span, "unknown name {s}", .{name.text});
+                    return null;
+                };
+                if (try self.checkPoisoned(found.info, name.text, name.span)) return null;
+                const local = found.info.local;
+                const local_type = self.locals.items[local].local_type;
+                return .{ .register = try self.emit(.{ .local_get = local }, local_type), .value_type = local_type };
+            },
+            .field => |field| return self.lowerField(field),
+            .call => |call| return self.lowerCall(call, as_statement),
+            .binary => |binary| return self.lowerBinary(binary),
+            .unary => |unary| return self.lowerUnary(unary),
+            .method => |method| return self.lowerMethod(method, as_statement),
+            .new_object => |new| return self.lowerNew(new),
+            .list_literal => |literal| return self.lowerListLiteral(literal),
+            .index => |index| return self.lowerIndex(index),
+            .slice_range => |slice| return self.lowerSliceRange(slice),
+            .give => |give| return self.lowerGive(give),
+            .copy => |copied| return self.lowerCopy(copied),
+        }
+    }
+
+    /// give NAME — the named object transfers to whatever receives it;
+    /// the name is poisoned to the end of its scope (S10, S13, S29).
+    fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Value {
+        if (give.operand.* != .name) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "give moves a named object; use copy for other expressions [OWNERSHIP.md S10, S31]",
+                .{},
+            );
+            return null;
+        }
+        const name = give.operand.name.text;
+        const found = self.findLocal(name) orelse {
+            try self.fail("luce.sema.name", give.operand.name.span, "unknown name {s}", .{name});
+            return null;
+        };
+        const info = found.info;
+        const local = info.local;
+        const local_type = self.locals.items[local].local_type;
+        if (!info.carries) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                .{},
+            );
+            return null;
+        }
+        if (try self.checkPoisoned(info, name, give.span)) return null;
+        if (info.class == .borrow_param) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "{s} is a borrowed parameter and cannot be given; take it as give in the signature, or copy it [OWNERSHIP.md S12]",
+                .{name},
+            );
+            return null;
+        }
+        if (self.loops.items.len > 0 and
+            found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
+        {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "{s} is declared outside this loop; the next iteration would use a given-away name — create it fresh inside the loop, or copy [OWNERSHIP.md S30]",
+                .{name},
+            );
+            return null;
+        }
+        info.poisoned = .given;
+        const owned = info.class == .owned;
+        const value = try self.emit(.{ .local_get = local }, local_type);
+        // An owned name passes its binding along so the runtime can
+        // verify the name still owns the object; an alias keeps only
+        // the container backstop (S23).
+        const arguments = try self.arena().alloc(Register, if (owned) 2 else 1);
+        arguments[0] = value;
+        if (owned) {
+            arguments[1] = try self.emit(.{ .const_int = local }, .int);
+        }
+        return .{
+            .register = try self.emit(
+                .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
+                local_type,
+            ),
+            .value_type = local_type,
+        };
+    }
+
+    /// Inline a folded file-scope constant at this use site.
+    fn emitConstant(self: *FunctionBuilder, index: u32) Error!?Value {
+        const info = self.analyzer.constant_infos.items[index];
+        if (info.state != .ready) return null; // already diagnosed
+        return .{
+            .register = try self.emitConstantValue(info.value, info.value_type),
+            .value_type = info.value_type,
+        };
+    }
+
+    fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Register {
+        return switch (value) {
+            .int => |folded| try self.emit(.{ .const_int = folded }, .int),
+            .float => |folded| try self.emit(.{ .const_float = folded }, .float),
+            .boolean => |folded| try self.emit(.{ .const_boolean = folded }, .boolean),
+            .string => |folded| blk: {
+                const constant = try self.analyzer.internConstant(folded);
+                break :blk try self.emit(
+                    .{ .const_data = .{ .constant = constant, .data_type = .string } },
+                    .string,
+                );
+            },
+            .strukt => |folded| blk: {
+                const layout = self.analyzer.structs.items[folded.layout];
+                const fields = try self.arena().alloc(Register, folded.fields.len);
+                for (folded.fields, layout.fields, fields) |field, field_layout, *slot| {
+                    slot.* = try self.emitConstantValue(field, field_layout.field_type);
+                }
+                break :blk try self.emit(
+                    .{ .struct_make = .{ .layout = folded.layout, .fields = fields } },
+                    value_type,
+                );
+            },
+        };
+    }
+
+    /// copy EXPR — a deep, independent duplicate; always legal on
+    /// readable objects (S31).
+    fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Value {
+        const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
+        if (!self.analyzer.carriesObjects(value.value_type)) {
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "copy applies to objects (List, Map, Array, Builder, object-carrying structs); values copy by themselves [OWNERSHIP.md S32]",
+                .{},
+            );
+            return null;
+        }
+        const arguments = try self.arena().alloc(Register, 1);
+        arguments[0] = value.register;
+        return .{
+            .register = try self.emit(
+                .{ .intrinsic = .{ .kind = .copy_object, .arguments = arguments } },
+                value.value_type,
+            ),
+            .value_type = value.value_type,
+        };
+    }
+
+    fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Value {
+        var object_type: Type = undefined;
+        var dims: []Register = &.{};
+        if (std.mem.eql(u8, new.type_name.name, "Array")) {
+            if (new.dims.len == 0 or new.dims.len > 4) {
+                try self.fail("luce.sema.new", new.span, "new Array takes 1 to 4 dimension sizes: new Array(Int, 5, 5)", .{});
+                return null;
+            }
+            const element = (try self.analyzer.resolveType(self.module, new.type_name.arguments[0])) orelse return null;
+            object_type = try self.analyzer.internHeapType(.{
+                .array = .{ .element = element, .rank = @intCast(new.dims.len) },
+            });
+            dims = try self.arena().alloc(Register, new.dims.len);
+            const dimensions = (try self.lowerOperands(new.dims)) orelse return null;
+            for (dimensions, new.dims, dims) |dimension, expression, *register| {
+                if (dimension.value_type != .int) {
+                    try self.fail("luce.sema.new", expression.span(), "array dimensions are Int", .{});
+                    return null;
+                }
+                register.* = dimension.register;
+            }
+        } else {
+            object_type = (try self.analyzer.resolveType(self.module, new.type_name)) orelse return null;
+            if (object_type != .heap) {
+                try self.fail("luce.sema.new", new.span, "new builds List, Map, Array, or Builder", .{});
+                return null;
+            }
+        }
+        return .{
+            .register = try self.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = dims } }, object_type),
+            .value_type = object_type,
+        };
+    }
+
+    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral) Error!?Value {
+        if (literal.elements.len == 0) {
+            try self.fail(
+                "luce.sema.type",
+                literal.span,
+                "an empty [] needs an annotated binding (var xs: List(Int) = []) or new List(T)",
+                .{},
+            );
+            return null;
+        }
+        const elements = (try self.lowerOperands(literal.elements)) orelse return null;
+        for (elements, literal.elements) |element, expression| {
+            if (!element.value_type.eql(elements[0].value_type)) {
+                try self.fail("luce.sema.type", expression.span(), "list elements are all {s}, got {s}", .{
+                    try self.analyzer.typeName(elements[0].value_type),
+                    try self.analyzer.typeName(element.value_type),
+                });
+                return null;
+            }
+            // A literal is a container door like any other (S20, S21):
+            // object elements must be fresh, given, or copied.
+            if (self.analyzer.carriesObjects(element.value_type) and
+                !(try self.yieldsOwnership(expression)))
+            {
+                try self.fail(
+                    "luce.sema.own",
+                    expression.span(),
+                    "a container keeps its object elements; store something fresh, give NAME, or copy NAME [OWNERSHIP.md S21]",
+                    .{},
+                );
+                return null;
+            }
+        }
+        const object_type = try self.analyzer.internHeapType(.{ .list = elements[0].value_type });
+        const list = try self.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = &.{} } }, object_type);
+        for (elements) |element| {
+            const arguments = try self.arena().alloc(Register, 2);
+            arguments[0] = list;
+            arguments[1] = element.register;
+            _ = try self.emit(.{ .intrinsic = .{ .kind = .append_value, .arguments = arguments } }, .none);
+        }
+        return .{ .register = list, .value_type = object_type };
+    }
+
+    fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Value {
+        const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
+        expressions[0] = index.target;
+        @memcpy(expressions[1..], index.indices);
+        const values = (try self.lowerOperands(expressions)) orelse return null;
+        const element_type = (try self.checkIndex(values[0], values[1..], index.span)) orelse return null;
+        const arguments = try self.arena().alloc(Register, values.len);
+        for (values, arguments) |value, *slot| slot.* = value.register;
+        return .{
+            .register = try self.emit(
+                .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
+                element_type,
+            ),
+            .value_type = element_type,
+        };
+    }
+
+    fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Value {
+        var whole_sequence: std.ArrayList(*ast.Expression) = .empty;
+        defer whole_sequence.deinit(self.temporary());
+        try whole_sequence.append(self.temporary(), slice.target);
+        if (slice.start) |expression| try whole_sequence.append(self.temporary(), expression);
+        if (slice.end) |expression| try whole_sequence.append(self.temporary(), expression);
+        const sequence = (try self.lowerOperands(whole_sequence.items)) orelse return null;
+        const target = sequence[0];
+        const is_string = target.value_type == .string;
+        const descriptor = self.analyzer.heapOf(target.value_type);
+        if (!is_string and (descriptor == null or descriptor.? != .list)) {
+            try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on List and String", .{
+                try self.analyzer.typeName(target.value_type),
+            });
+            return null;
+        }
+
+        const lowered_bounds = sequence[1..];
+        for (lowered_bounds) |value| {
+            if (value.value_type != .int) {
+                try self.fail("luce.sema.type", slice.span, "slice bounds are Int", .{});
+                return null;
+            }
+        }
+        var next_bound: usize = 0;
+        var start: Register = undefined;
+        if (slice.start != null) {
+            start = lowered_bounds[next_bound].register;
+            next_bound += 1;
+        } else {
+            start = try self.emit(.{ .const_int = 0 }, .int);
+        }
+        var end: Register = undefined;
+        if (slice.end != null) {
+            end = lowered_bounds[next_bound].register;
+        } else {
+            const whole = try self.arena().alloc(Register, 1);
+            whole[0] = target.register;
+            end = try self.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .int);
+        }
+
+        const arguments = try self.arena().alloc(Register, 3);
+        arguments[0] = target.register;
+        arguments[1] = start;
+        arguments[2] = end;
+        const kind: mir.Intrinsic = if (is_string) .string_slice else .list_slice;
+        return .{
+            .register = try self.emit(.{ .intrinsic = .{ .kind = kind, .arguments = arguments } }, target.value_type),
+            .value_type = target.value_type,
+        };
+    }
+
+    fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Value {
+        // input.NAME reads a port; anything else reads a struct field.
+        if (field.target.* == .name) {
+            const base = field.target.name.text;
+            if (std.mem.eql(u8, base, "input")) {
+                if (!self.has_frames) {
+                    try self.fail("luce.sema.name", field.span, "input exists only in the evaluator entry", .{});
+                    return null;
+                }
+                const port = self.analyzer.schema.findInput(field.name) orelse {
+                    try self.fail("luce.sema.port", field.span, "no input port named {s}", .{field.name});
+                    return null;
+                };
+                try self.analyzer.reads.put(self.analyzer.temporary, port, {});
+                const port_type = Type.fromPort(self.analyzer.schema.inputs[port].declared);
+                return .{ .register = try self.emit(.{ .input_load = port }, port_type), .value_type = port_type };
+            }
+            if (std.mem.eql(u8, base, "output")) {
+                if (self.has_frames) {
+                    try self.fail("luce.sema.output", field.span, "output ports are write-only", .{});
+                } else {
+                    try self.fail("luce.sema.name", field.span, "output exists only in the evaluator entry", .{});
+                }
+                return null;
+            }
+            // geo.pi — an imported module's file-scope constant.
+            if (self.findLocal(base) == null and self.analyzer.importsModule(self.module, base)) {
+                const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
+                if (self.analyzer.constant_names.get(joined)) |constant| {
+                    return self.emitConstant(constant);
+                }
+            }
+        }
+        const target = (try self.lowerExpression(field.target, false)) orelse return null;
+        if (target.value_type != .strukt) {
+            try self.fail("luce.sema.field", field.span, "{s} has no fields", .{
+                try self.analyzer.typeName(target.value_type),
+            });
+            return null;
+        }
+        const layout_index = target.value_type.strukt;
+        const layout = self.analyzer.structs.items[layout_index];
+        const field_index = layout.findField(field.name) orelse {
+            try self.fail("luce.sema.field", field.span, "{s} has no field {s}", .{ layout.name, field.name });
+            return null;
+        };
+        const field_type = layout.fields[field_index].field_type;
+        return .{
+            .register = try self.emit(.{ .struct_get = .{
+                .target = target.register,
+                .layout = layout_index,
+                .field = field_index,
+            } }, field_type),
+            .value_type = field_type,
+        };
+    }
+
+    fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+        switch (binary.op) {
+            .logic_and, .logic_or => return self.lowerShortCircuit(binary),
+            else => {},
+        }
+        // Operators borrow their operands (S11); a give here would
+        // hand the object to nobody.
+        if (binary.left.* == .give or binary.right.* == .give) {
+            try self.fail(
+                "luce.sema.own",
+                binary.span,
+                "operators only borrow their operands; give needs an owning destination [OWNERSHIP.md S13]",
+                .{},
+            );
+            return null;
+        }
+        const sides = (try self.lowerOperands(&.{ binary.left, binary.right })) orelse return null;
+        const left = sides[0];
+        const right = sides[1];
+        if (!left.value_type.eql(right.value_type)) {
+            try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit)", .{
+                try self.analyzer.typeName(left.value_type),
+                try self.analyzer.typeName(right.value_type),
+            });
+            return null;
+        }
+        const operand_type = left.value_type;
+
+        const operation: mir.BinaryOp = switch (binary.op) {
+            .add => .add,
+            .subtract => .subtract,
+            .multiply => .multiply,
+            .divide => .divide,
+            .remainder => .remainder,
+            .equal => .equal,
+            .not_equal => .not_equal,
+            .less => .less,
+            .less_equal => .less_equal,
+            .greater => .greater,
+            .greater_equal => .greater_equal,
+            .logic_and, .logic_or => unreachable,
+        };
+
+        const arithmetic = switch (operation) {
+            .add, .subtract, .multiply, .divide, .remainder => true,
+            else => false,
+        };
+        if (arithmetic) {
+            const string_concat = operation == .add and operand_type == .string;
+            if (!operand_type.isNumeric() and !string_concat) {
+                try self.fail("luce.sema.type", binary.span, "{s} does not support this operator", .{
+                    try self.analyzer.typeName(operand_type),
+                });
+                return null;
+            }
+            return .{
+                .register = try self.emit(.{ .binary = .{
+                    .op = operation,
+                    .operand_type = operand_type,
+                    .left = left.register,
+                    .right = right.register,
+                } }, operand_type),
+                .value_type = operand_type,
+            };
+        }
+
+        // Comparisons: equality everywhere; ordering for Int, Float,
+        // and String.
+        const ordering = operation != .equal and operation != .not_equal;
+        if (ordering and !(operand_type.isNumeric() or operand_type == .string)) {
+            try self.fail("luce.sema.type", binary.span, "{s} has no ordering", .{
+                try self.analyzer.typeName(operand_type),
+            });
+            return null;
+        }
+        if (operand_type == .none) {
+            try self.fail("luce.sema.type", binary.span, "value has no type", .{});
+            return null;
+        }
+        return .{
+            .register = try self.emit(.{ .binary = .{
+                .op = operation,
+                .operand_type = operand_type,
+                .left = left.register,
+                .right = right.register,
+            } }, .boolean),
+            .value_type = .boolean,
+        };
+    }
+
+    fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+        const left = (try self.lowerExpression(binary.left, false)) orelse return null;
+        if (left.value_type != .boolean) {
+            try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands", .{
+                if (binary.op == .logic_and) @as([]const u8, "and") else "or",
+            });
+            return null;
+        }
+        const result_local = try self.hiddenLocal(.boolean);
+        _ = try self.emit(.{ .local_set = .{ .local = result_local, .value = left.register } }, .none);
+
+        const evaluate_right = try self.reserveBlock();
+        const merge = try self.reserveBlock();
+        if (binary.op == .logic_and) {
+            _ = try self.emit(.{ .branch = .{
+                .condition = left.register,
+                .then_block = evaluate_right,
+                .else_block = merge,
+            } }, .none);
+        } else {
+            _ = try self.emit(.{ .branch = .{
+                .condition = left.register,
+                .then_block = merge,
+                .else_block = evaluate_right,
+            } }, .none);
+        }
+
+        self.switchTo(evaluate_right);
+        if (try self.lowerExpression(binary.right, false)) |right| {
+            if (right.value_type != .boolean) {
+                try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands", .{
+                    if (binary.op == .logic_and) @as([]const u8, "and") else "or",
+                });
+            } else {
+                _ = try self.emit(.{ .local_set = .{ .local = result_local, .value = right.register } }, .none);
+            }
+        }
+        _ = try self.emit(.{ .jump = merge }, .none);
+
+        self.switchTo(merge);
+        return .{
+            .register = try self.emit(.{ .local_get = result_local }, .boolean),
+            .value_type = .boolean,
+        };
+    }
+
+    fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary) Error!?Value {
+        const operand = (try self.lowerExpression(unary.operand, false)) orelse return null;
+        switch (unary.op) {
+            .negate => {
+                if (!operand.value_type.isNumeric()) {
+                    try self.fail("luce.sema.type", unary.span, "cannot negate {s}", .{
+                        try self.analyzer.typeName(operand.value_type),
+                    });
+                    return null;
+                }
+                return .{
+                    .register = try self.emit(.{ .unary = .{ .op = .negate, .operand = operand.register } }, operand.value_type),
+                    .value_type = operand.value_type,
+                };
+            },
+            .logic_not => {
+                if (operand.value_type != .boolean) {
+                    try self.fail("luce.sema.type", unary.span, "not needs a Bool", .{});
+                    return null;
+                }
+                return .{
+                    .register = try self.emit(.{ .unary = .{ .op = .logic_not, .operand = operand.register } }, .boolean),
+                    .value_type = .boolean,
+                };
+            },
+        }
+    }
+
+    // Calls and methods ----------------------------------------------------
+    //
+    // Struct construction, explicit conversion, namespaced calls, and
+    // builtin methods on values.
+    fn lowerCall(self: *FunctionBuilder, call: ast.Call, as_statement: bool) Error!?Value {
+        // Builtins and conversions are bare names and take priority;
+        // reserved names keep user declarations out of their way.
+        if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
+            if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+                return self.lowerConvert(call);
+            }
+            switch (try self.lowerIntrinsic(call, as_statement)) {
+                .not_builtin => {},
+                .failed => return null,
+                .value => |value| return value,
+            }
+        }
+
+        const resolved = (try self.resolveDeclared(call.callee, call.span)) orelse return null;
+        if (self.analyzer.struct_names.get(resolved)) |layout_index| {
+            return self.lowerConstruct(call.arguments, call.span, layout_index);
+        }
+        const function_index = self.analyzer.function_names.get(resolved) orelse {
+            try self.fail("luce.sema.call", call.span, "unknown function {s}", .{call.callee});
+            return null;
+        };
+        return self.lowerUserCall(function_index, call.callee, call.arguments, call.span, as_statement);
+    }
+
+    fn lowerUserCall(
+        self: *FunctionBuilder,
+        function_index: u32,
+        name: []const u8,
+        call_arguments: []const ast.Argument,
+        span: Span,
+        as_statement: bool,
+    ) Error!?Value {
+        const info = self.analyzer.functions.items[function_index];
+        if (info.is_entry) {
+            try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
+            return null;
+        }
+        if (call_arguments.len != info.parameter_types.len) {
+            try self.fail("luce.sema.call", span, "{s} takes {d} arguments, got {d}", .{
+                name,
+                info.parameter_types.len,
+                call_arguments.len,
+            });
+            return null;
+        }
+        const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
+        for (call_arguments, expressions) |argument, *slot| {
+            if (argument.name != null) {
+                try self.fail("luce.sema.call", argument.span, "function arguments are positional", .{});
+                return null;
+            }
+            slot.* = argument.value;
+        }
+        // Ownership handoffs are never invisible: a give parameter
+        // needs give NAME, copy NAME, or something fresh at the call
+        // site; a borrow parameter refuses a give (S13, S14).
+        for (expressions, 0..) |argument, index| {
+            if (index >= info.parameter_modes.len) break;
+            if (info.parameter_modes[index] == .give) {
+                if (!(try self.yieldsOwnership(argument))) {
+                    try self.fail(
+                        "luce.sema.own",
+                        call_arguments[index].span,
+                        "argument {d} of {s} takes ownership; write give NAME, copy NAME, or pass something fresh [OWNERSHIP.md S13, S14]",
+                        .{ index + 1, name },
+                    );
+                    return null;
+                }
+            } else if (argument.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    call_arguments[index].span,
+                    "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
+                    .{name},
+                );
+                return null;
+            }
+        }
+        const values = (try self.lowerOperands(expressions)) orelse return null;
+        const registers = try self.arena().alloc(Register, call_arguments.len);
+        for (values, 0..) |value, index| {
+            if (!value.value_type.eql(info.parameter_types[index])) {
+                try self.fail("luce.sema.type", call_arguments[index].span, "argument {d} of {s} is {s}, got {s}", .{
+                    index + 1,
+                    name,
+                    try self.analyzer.typeName(info.parameter_types[index]),
+                    try self.analyzer.typeName(value.value_type),
+                });
+                return null;
+            }
+            registers[index] = value.register;
+        }
+        if (info.return_type == .none and !as_statement) {
+            try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+            return null;
+        }
+        return .{
+            .register = try self.emit(.{ .call = .{ .function = function_index, .arguments = registers } }, info.return_type),
+            .value_type = info.return_type,
+        };
+    }
+
+    /// target.name(args): a namespaced call when the target chain is
+    /// bare declaration names (Struct.func, module.func,
+    /// module.Struct(...) construction), otherwise a builtin method on
+    /// the target value.  Locals shadow nothing, so a chain whose head
+    /// is a local is always a value method.
+    fn lowerMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
+        switch (try self.methodNamespace(method)) {
+            .resolved => |resolved| {
+                if (self.analyzer.struct_names.get(resolved)) |layout_index| {
+                    return self.lowerConstruct(method.arguments, method.span, layout_index);
+                }
+                const function_index = self.analyzer.function_names.get(resolved).?;
+                return self.lowerUserCall(function_index, resolved, method.arguments, method.span, as_statement);
+            },
+            .reported => return null,
+            .value => return self.lowerValueMethod(method, as_statement),
+        }
+    }
+
+    const NamespaceResolution = union(enum) {
+        /// Not a namespace: lower as a method on a value.
+        value,
+        /// A namespace whose member is missing; already diagnosed.
+        reported,
+        /// The fully-qualified declaration this call names.
+        resolved: []const u8,
+    };
+
+    /// A dotted chain of bare names in front of a call, collected
+    /// inner-to-outer: for geo.Text.width(...) the parts are
+    /// [width-side first] and the head is "geo".
+    /// Decide whether target.name(...) names a declaration.
+    fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceResolution {
+        const chain = helpers.dottedChain(method.target) orelse return .value;
+        const parts = chain.parts;
+        const count = chain.count;
+        const head = chain.head();
+        if (self.findLocal(head) != null) return .value;
+
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = count;
+        while (at > 0) {
+            at -= 1;
+            try written.appendSlice(self.temporary(), parts[at]);
+            try written.append(self.temporary(), '.');
+        }
+        try written.appendSlice(self.temporary(), method.name);
+
+        // Two namespace shapes exist: a struct of this module
+        // (Words.classify) and an imported module (geo.helper,
+        // geo.Point, geo.Text.width).  A head that names neither is a
+        // value; a head that names one but whose member is missing is
+        // a call error, not a method fallback.
+        const joined = written.items;
+        const head_qualified = try self.analyzer.qualify(self.prefix, head);
+        if (self.analyzer.struct_names.contains(head_qualified)) {
+            const local = try self.analyzer.qualify(self.prefix, joined);
+            if (self.analyzer.struct_names.contains(local) or self.analyzer.function_names.contains(local)) {
+                return .{ .resolved = try self.arena().dupe(u8, local) };
+            }
+            try self.fail("luce.sema.call", method.span, "unknown function {s}", .{joined});
+            return .reported;
+        }
+        if (self.analyzer.importsModule(self.module, head)) {
+            if (self.analyzer.struct_names.contains(joined) or self.analyzer.function_names.contains(joined)) {
+                return .{ .resolved = try self.arena().dupe(u8, joined) };
+            }
+            // geo.pi.method() — a value method on an imported constant.
+            if (count >= 2) {
+                const member = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ head, parts[count - 2] });
+                defer self.temporary().free(member);
+                if (self.analyzer.constant_names.contains(member)) return .value;
+            }
+            try self.fail("luce.sema.call", method.span, "unknown function {s}", .{joined});
+            return .reported;
+        }
+        // The head names a module elsewhere in this program: point at
+        // the missing import instead of "unknown name".
+        for (self.analyzer.modules) |module| {
+            if (module.prefix.len != 0 and std.mem.eql(u8, module.prefix, head)) {
+                try self.fail("luce.sema.import", method.span, "unknown namespace {s}; import {s} to use it", .{ head, head });
+                return .reported;
+            }
+        }
+        return .value;
+    }
+
+    /// Builtin methods on values: strings, lists, arrays, maps, and
+    /// builders.  `x.f(y)` is sugar for a plain typed operation with
+    /// the receiver first — there is no dispatch.
+    fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
+        const expressions = try self.arena().alloc(*ast.Expression, method.arguments.len + 1);
+        expressions[0] = method.target;
+        for (method.arguments, 0..) |argument, index| {
+            if (argument.name != null) {
+                try self.fail("luce.sema.method", argument.span, "method arguments are positional", .{});
+                return null;
+            }
+            expressions[index + 1] = argument.value;
+        }
+        const values = (try self.lowerOperands(expressions)) orelse
+            return null;
+        const receiver = values[0];
+        const arguments = values[1..];
+
+        const found: MethodFound = blk: {
+            if (receiver.value_type == .string) {
+                // byte_at is the language's primitive byte access;
+                // every other String method is library code —
+                // s.find(x) is strings.find(s, x) (docs/STD.md).
+                if (std.mem.eql(u8, method.name, "byte_at")) {
+                    if (arguments.len != 1 or arguments[0].value_type != .int) {
+                        try self.fail("luce.sema.method", method.span, "byte_at takes an Int offset", .{});
+                        return null;
+                    }
+                    break :blk .{ .kind = .string_byte, .result = .int };
+                }
+                // find_byte is the scanning primitive that byte_at is
+                // the access primitive: std strings builds substring
+                // search on it (docs/STD.md).
+                if (std.mem.eql(u8, method.name, "find_byte")) {
+                    if (arguments.len != 2 or arguments[0].value_type != .int or
+                        arguments[1].value_type != .int)
+                    {
+                        try self.fail("luce.sema.method", method.span, "find_byte takes (byte Int, start Int)", .{});
+                        return null;
+                    }
+                    break :blk .{ .kind = .string_find_byte, .result = .int };
+                }
+                return self.stringsCall(method, values, as_statement);
+            }
+            if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
+                // join belongs to the strings module too: it makes a
+                // String, from List(String).
+                if (descriptor == .list and descriptor.list == .string and
+                    std.mem.eql(u8, method.name, "join"))
+                {
+                    return self.stringsCall(method, values, as_statement);
+                }
+                // Built-in methods take at most two arguments; only
+                // routed strings calls go wider.
+                if (method.arguments.len > 2) {
+                    try self.fail("luce.sema.method", method.span, "no method takes more than 2 arguments", .{});
+                    return null;
+                }
+                if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
+                    break :blk found;
+                }
+                return null;
+            }
+            try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
+                try self.analyzer.typeName(receiver.value_type),
+            });
+            return null;
+        };
+
+        if (found.result == .none and !as_statement) {
+            try self.fail("luce.sema.method", method.span, "{s} returns nothing", .{method.name});
+            return null;
+        }
+        // Containers own their object elements: append/insert take a
+        // fresh value, a give, or a copy (S20, S21).
+        if (found.kind == .append_value or found.kind == .insert_value) {
+            if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
+                if (descriptor == .list and self.analyzer.carriesObjects(descriptor.list)) {
+                    const value_index: usize = if (found.kind == .append_value) 0 else 1;
+                    if (!(try self.yieldsOwnership(method.arguments[value_index].value))) {
+                        try self.fail(
+                            "luce.sema.own",
+                            method.arguments[value_index].span,
+                            "a container keeps its object elements; store something fresh, give NAME, or copy NAME [OWNERSHIP.md S21]",
+                            .{},
+                        );
+                        return null;
+                    }
+                }
+            }
+        }
+        // Every other method argument is a borrow (S11): a give there
+        // would hand the object to nobody.
+        for (method.arguments, 0..) |argument, position| {
+            if (argument.value.* != .give) continue;
+            const adopting = (found.kind == .append_value and position == 0) or
+                (found.kind == .insert_value and position == 1);
+            if (!adopting) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                    .{method.name},
+                );
+                return null;
+            }
+        }
+        const registers = try self.arena().alloc(Register, values.len);
+        for (values, registers) |value, *slot| slot.* = value.register;
+        return .{
+            .register = try self.emit(.{ .intrinsic = .{ .kind = found.kind, .arguments = registers } }, found.result),
+            .value_type = found.result,
+        };
+    }
+
+    const MethodFound = struct { kind: mir.Intrinsic, result: Type };
+
+    fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []const u8) Error!?MethodFound {
+        try self.fail("luce.sema.method", method.span, message, .{});
+        return null;
+    }
+
+    /// Route a value method to the std strings module: `s.find(x)` is
+    /// `strings.find(s, x)`, and `parts.join(sep)` is
+    /// `strings.join(parts, sep)`.  The language keeps the primitives
+    /// (literals, +, comparison, slices, len, byte_at); manipulation
+    /// is library code and needs the import.
+    fn stringsCall(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        values: []const Value,
+        as_statement: bool,
+    ) Error!?Value {
+        const local_module = std.mem.eql(u8, self.prefix, "strings");
+        if (!local_module and !self.analyzer.importsModule(self.module, "strings")) {
+            try self.fail(
+                "luce.sema.import",
+                method.span,
+                "String manipulation lives in the standard library: import strings to use {s} (docs/STD.md)",
+                .{method.name},
+            );
+            return null;
+        }
+        // strings takes borrows only; a give here has no owner (S11).
+        for (method.arguments) |argument| {
+            if (argument.value.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                    .{method.name},
+                );
+                return null;
+            }
+        }
+        const qualified = try std.fmt.allocPrint(self.arena(), "strings.{s}", .{method.name});
+        const function_index = self.analyzer.function_names.get(qualified) orelse {
+            try self.fail("luce.sema.method", method.span, "strings has no function {s}", .{method.name});
+            return null;
+        };
+        return self.callUser(function_index, qualified, values, method.span, as_statement);
+    }
+
+    /// The emitting half of a user call, for callers that already
+    /// lowered their operands (method routing): arity and type checks
+    /// against the signature, then the call instruction.
+    fn callUser(
+        self: *FunctionBuilder,
+        function_index: u32,
+        name: []const u8,
+        values: []const Value,
+        span: Span,
+        as_statement: bool,
+    ) Error!?Value {
+        const info = self.analyzer.functions.items[function_index];
+        if (values.len != info.parameter_types.len) {
+            try self.fail("luce.sema.call", span, "{s} takes {d} arguments, got {d}", .{
+                name,
+                info.parameter_types.len,
+                values.len,
+            });
+            return null;
+        }
+        const registers = try self.arena().alloc(Register, values.len);
+        for (values, 0..) |value, index| {
+            if (!value.value_type.eql(info.parameter_types[index])) {
+                try self.fail("luce.sema.type", span, "argument {d} of {s} is {s}, got {s}", .{
+                    index + 1,
+                    name,
+                    try self.analyzer.typeName(info.parameter_types[index]),
+                    try self.analyzer.typeName(value.value_type),
+                });
+                return null;
+            }
+            registers[index] = value.register;
+        }
+        if (info.return_type == .none and !as_statement) {
+            try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
+            return null;
+        }
+        return .{
+            .register = try self.emit(.{ .call = .{ .function = function_index, .arguments = registers } }, info.return_type),
+            .value_type = info.return_type,
+        };
+    }
+
+    fn objectMethod(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        receiver_type: Type,
+        descriptor: types.HeapType,
+        arguments: []const Value,
+    ) Error!?MethodFound {
+        _ = receiver_type;
+        const name = method.name;
+        switch (descriptor) {
+            .list => |element| return self.sequenceMethod(method, element, true, arguments),
+            .array => |shape| {
+                if (std.mem.eql(u8, name, "dim")) {
+                    if (arguments.len != 1 or arguments[0].value_type != .int)
+                        return self.methodFail(method, "dim takes an Int axis");
+                    return .{ .kind = .dim_size, .result = .int };
+                }
+                if (std.mem.eql(u8, name, "fill")) {
+                    if (arguments.len != 1 or !arguments[0].value_type.eql(shape.element))
+                        return self.methodFail(method, "fill takes one element value");
+                    // One value cannot own every slot (S21, S23):
+                    // arrays of objects store per slot instead.
+                    if (self.analyzer.carriesObjects(shape.element)) {
+                        try self.fail(
+                            "luce.sema.own",
+                            method.span,
+                            "fill copies one value into every slot; an array of objects stores each slot separately [OWNERSHIP.md S21, S23]",
+                            .{},
+                        );
+                        return null;
+                    }
+                    return .{ .kind = .array_fill, .result = .none };
+                }
+                if (shape.rank != 1) {
+                    try self.fail("luce.sema.method", method.span, "only rank-1 arrays have {s}; index higher ranks", .{name});
+                    return null;
+                }
+                return self.sequenceMethod(method, shape.element, false, arguments);
+            },
+            .map => |pair| {
+                if (std.mem.eql(u8, name, "has")) {
+                    if (arguments.len != 1 or !arguments[0].value_type.eql(pair.key))
+                        return self.methodFail(method, "has takes the map's key type");
+                    return .{ .kind = .has_key, .result = .boolean };
+                }
+                if (std.mem.eql(u8, name, "remove")) {
+                    if (arguments.len != 1 or !arguments[0].value_type.eql(pair.key))
+                        return self.methodFail(method, "remove takes the map's key type");
+                    return .{ .kind = .remove_entry, .result = .none };
+                }
+                if (std.mem.eql(u8, name, "keys")) {
+                    if (arguments.len != 0) return self.methodFail(method, "keys takes no arguments");
+                    return .{ .kind = .map_keys, .result = try self.analyzer.internHeapType(.{ .list = pair.key }) };
+                }
+                if (std.mem.eql(u8, name, "values")) {
+                    if (arguments.len != 0) return self.methodFail(method, "values takes no arguments");
+                    return .{ .kind = .map_values, .result = try self.analyzer.internHeapType(.{ .list = pair.value }) };
+                }
+                if (std.mem.eql(u8, name, "get")) {
+                    if (arguments.len != 2 or !arguments[0].value_type.eql(pair.key) or
+                        !arguments[1].value_type.eql(pair.value))
+                        return self.methodFail(method, "get takes (key, default) of the map's key and value types");
+                    return .{ .kind = .map_get, .result = pair.value };
+                }
+                if (std.mem.eql(u8, name, "clear")) {
+                    if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
+                    return .{ .kind = .clear_object, .result = .none };
+                }
+                try self.fail("luce.sema.method", method.span, "Map has no method {s}", .{name});
+                return null;
+            },
+            .builder => {
+                if (std.mem.eql(u8, name, "append")) {
+                    if (arguments.len != 1 or arguments[0].value_type != .string)
+                        return self.methodFail(method, "a Builder appends String");
+                    return .{ .kind = .append_value, .result = .none };
+                }
+                if (std.mem.eql(u8, name, "append_ascii")) {
+                    if (arguments.len != 1 or arguments[0].value_type != .int)
+                        return self.methodFail(method, "append_ascii takes an Int byte in 0..127");
+                    return .{ .kind = .append_ascii, .result = .none };
+                }
+                if (std.mem.eql(u8, name, "clear")) {
+                    if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
+                    return .{ .kind = .clear_object, .result = .none };
+                }
+                try self.fail("luce.sema.method", method.span, "Builder has no method {s}", .{name});
+                return null;
+            },
+        }
+    }
+
+    /// Methods shared by List and rank-1 Array; growth operations are
+    /// list-only.
+    fn sequenceMethod(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        element: Type,
+        growable: bool,
+        arguments: []const Value,
+    ) Error!?MethodFound {
+        const name = method.name;
+        if (growable) {
+            if (std.mem.eql(u8, name, "append")) {
+                if (arguments.len != 1 or !arguments[0].value_type.eql(element))
+                    return self.methodFail(method, "append takes one element value");
+                return .{ .kind = .append_value, .result = .none };
+            }
+            if (std.mem.eql(u8, name, "insert")) {
+                if (arguments.len != 2 or arguments[0].value_type != .int or
+                    !arguments[1].value_type.eql(element))
+                    return self.methodFail(method, "insert takes (index Int, value)");
+                return .{ .kind = .insert_value, .result = .none };
+            }
+            if (std.mem.eql(u8, name, "remove")) {
+                if (arguments.len != 1 or arguments[0].value_type != .int)
+                    return self.methodFail(method, "remove takes an Int index");
+                return .{ .kind = .remove_entry, .result = .none };
+            }
+            if (std.mem.eql(u8, name, "pop")) {
+                if (arguments.len != 0) return self.methodFail(method, "pop takes no arguments");
+                return .{ .kind = .pop_value, .result = element };
+            }
+            if (std.mem.eql(u8, name, "clear")) {
+                if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
+                return .{ .kind = .clear_object, .result = .none };
+            }
+        }
+        if (std.mem.eql(u8, name, "sort")) {
+            if (arguments.len != 0) return self.methodFail(method, "sort takes no arguments");
+            const ordered = element == .int or element == .float or element == .string;
+            if (!ordered) return self.methodFail(method, "sort orders Int, Float, or String elements");
+            return .{ .kind = .list_sort, .result = .none };
+        }
+        if (std.mem.eql(u8, name, "reverse")) {
+            if (arguments.len != 0) return self.methodFail(method, "reverse takes no arguments");
+            return .{ .kind = .list_reverse, .result = .none };
+        }
+        if (std.mem.eql(u8, name, "find")) {
+            if (arguments.len != 1 or !arguments[0].value_type.eql(element))
+                return self.methodFail(method, "find takes one element value");
+            return .{ .kind = .list_find, .result = .int };
+        }
+        if (std.mem.eql(u8, name, "contains")) {
+            if (arguments.len != 1 or !arguments[0].value_type.eql(element))
+                return self.methodFail(method, "contains takes one element value");
+            return .{ .kind = .list_contains, .result = .boolean };
+        }
+        try self.fail("luce.sema.method", method.span, "no method {s} here (append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
+        return null;
+    }
+
+    fn lowerConstruct(
+        self: *FunctionBuilder,
+        call_arguments: []const ast.Argument,
+        span: Span,
+        layout_index: u32,
+    ) Error!?Value {
+        const layout = self.analyzer.structs.items[layout_index];
+        if (layout.fields.len == 0) {
+            try self.fail(
+                "luce.sema.construct",
+                span,
+                "{s} is a function namespace and has no value fields",
+                .{layout.name},
+            );
+            return null;
+        }
+        const registers = try self.arena().alloc(Register, layout.fields.len);
+        var seen = try self.temporary().alloc(bool, layout.fields.len);
+        defer self.temporary().free(seen);
+        @memset(seen, false);
+
+        const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
+        for (call_arguments, expressions) |argument, *slot| slot.* = argument.value;
+        const values = (try self.lowerOperands(expressions)) orelse return null;
+        for (call_arguments, values) |argument, value| {
+            const name = argument.name orelse {
+                try self.fail("luce.sema.construct", argument.span, "{s} is built with named fields: {s}(field = ...)", .{ layout.name, layout.name });
+                return null;
+            };
+            const field_index = layout.findField(name) orelse {
+                try self.fail("luce.sema.construct", argument.span, "{s} has no field {s}", .{ layout.name, name });
+                return null;
+            };
+            if (seen[field_index]) {
+                try self.fail("luce.sema.construct", argument.span, "field {s} given twice", .{name});
+                return null;
+            }
+            const expected = layout.fields[field_index].field_type;
+            if (!value.value_type.eql(expected)) {
+                try self.fail("luce.sema.type", argument.span, "{s}.{s} is {s}, got {s}", .{
+                    layout.name,
+                    name,
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(value.value_type),
+                });
+                return null;
+            }
+            // Object fields follow the verb rule at construction
+            // (S24): the binding that receives the struct owns them.
+            if (self.analyzer.carriesObjects(expected) and
+                !(try self.yieldsOwnership(argument.value)))
+            {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s}.{s} keeps its object; construct with something fresh, give NAME, or copy NAME [OWNERSHIP.md S21, S24]",
+                    .{ layout.name, name },
+                );
+                return null;
+            }
+            seen[field_index] = true;
+            registers[field_index] = value.register;
+        }
+        for (seen, 0..) |given, index| {
+            if (!given) {
+                try self.fail("luce.sema.construct", span, "{s} is missing field {s}", .{
+                    layout.name,
+                    layout.fields[index].name,
+                });
+                return null;
+            }
+        }
+        const result_type: Type = .{ .strukt = layout_index };
+        return .{
+            .register = try self.emit(.{ .struct_make = .{ .layout = layout_index, .fields = registers } }, result_type),
+            .value_type = result_type,
+        };
+    }
+
+    fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Value {
+        if (call.arguments.len != 1 or call.arguments[0].name != null) {
+            try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
+            return null;
+        }
+        const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
+        const to_int = std.mem.eql(u8, call.callee, "Int");
+        if (to_int) {
+            if (value.value_type == .int) return value;
+            if (value.value_type != .float) {
+                try self.fail("luce.sema.convert", call.span, "Int() converts Float, not {s}", .{
+                    try self.analyzer.typeName(value.value_type),
+                });
+                return null;
+            }
+            return .{
+                .register = try self.emit(.{ .convert = .{ .kind = .float_to_int, .operand = value.register } }, .int),
+                .value_type = .int,
+            };
+        }
+        if (value.value_type == .float) return value;
+        if (value.value_type != .int) {
+            try self.fail("luce.sema.convert", call.span, "Float() converts Int, not {s}", .{
+                try self.analyzer.typeName(value.value_type),
+            });
+            return null;
+        }
+        return .{
+            .register = try self.emit(.{ .convert = .{ .kind = .int_to_float, .operand = value.register } }, .float),
+            .value_type = .float,
+        };
+    }
+
+    // Builtins ---------------------------------------------------------------
+
+    const IntrinsicResult = union(enum) {
+        not_builtin,
+        failed,
+        value: Value,
+    };
+
+    /// Lower a builtin call; .not_builtin when the callee is no
+    /// builtin, .failed after reporting bad arguments.
+    fn lowerIntrinsic(self: *FunctionBuilder, call: ast.Call, as_statement: bool) Error!IntrinsicResult {
+        const Builtin = struct {
+            name: []const u8,
+            kind: mir.Intrinsic,
+            arity: usize,
+            host: bool = false,
+        };
+        const builtins = [_]Builtin{
+            .{ .name = "abs", .kind = .abs, .arity = 1 },
+            .{ .name = "min", .kind = .min, .arity = 2 },
+            .{ .name = "max", .kind = .max, .arity = 2 },
+            .{ .name = "clamp", .kind = .clamp, .arity = 3 },
+            .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
+            .{ .name = "floor", .kind = .floor, .arity = 1 },
+            .{ .name = "ceil", .kind = .ceil, .arity = 1 },
+            .{ .name = "len", .kind = .len, .arity = 1 },
+            .{ .name = "assert", .kind = .assert_true, .arity = 1 },
+            .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+            .{ .name = "free", .kind = .free_object, .arity = 1 },
+            .{ .name = "str", .kind = .str_value, .arity = 1 },
+            .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
+            .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
+            .{ .name = "chr", .kind = .chr_code, .arity = 1 },
+            .{ .name = "ord", .kind = .ord_text, .arity = 1 },
+            .{ .name = "print", .kind = .print, .arity = 1, .host = true },
+            .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
+            .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
+            .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
+            .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
+            .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
+            .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
+            .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
+            .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
+            .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
+            .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
+            .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
+            .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
+            .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
+            .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
+        };
+        const matched = for (builtins) |builtin| {
+            if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
+        } else return .not_builtin;
+
+        if (matched.host and !self.analyzer.options.allow_host) {
+            try self.fail(
+                "luce.sema.host",
+                call.span,
+                "{s} is a host builtin; this host does not allow console, file, or terminal access here",
+                .{matched.name},
+            );
+            return .failed;
+        }
+        if (call.arguments.len != matched.arity) {
+            try self.fail("luce.sema.call", call.span, "{s} takes {d} arguments", .{ matched.name, matched.arity });
+            return .failed;
+        }
+        var argument_expressions: [3]*ast.Expression = undefined;
+        for (call.arguments, 0..) |argument, index| {
+            if (argument.name != null) {
+                try self.fail("luce.sema.call", argument.span, "builtin arguments are positional", .{});
+                return .failed;
+            }
+            // Builtins borrow (S11); a give with no owner to receive
+            // it would silently become an early free (free's operand
+            // is a name and gets its own diagnosis).
+            if (argument.value.* == .give and matched.kind != .free_object) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                    .{matched.name},
+                );
+                return .failed;
+            }
+            argument_expressions[index] = argument.value;
+        }
+        const arguments = (try self.lowerOperands(argument_expressions[0..call.arguments.len])) orelse
+            return .failed;
+
+        // Argument and result typing per builtin.
+        var result: Type = .none;
+        var extra_argument: ?Register = null;
+        switch (matched.kind) {
+            .abs => {
+                if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes Int or Float");
+                result = arguments[0].value_type;
+            },
+            .min, .max => {
+                if (!arguments[0].value_type.isNumeric() or
+                    !arguments[0].value_type.eql(arguments[1].value_type))
+                    return self.failIntrinsic(call, "min/max take two Ints or two Floats");
+                result = arguments[0].value_type;
+            },
+            .clamp => {
+                if (!arguments[0].value_type.isNumeric() or
+                    !arguments[0].value_type.eql(arguments[1].value_type) or
+                    !arguments[0].value_type.eql(arguments[2].value_type))
+                    return self.failIntrinsic(call, "clamp takes three Ints or three Floats");
+                result = arguments[0].value_type;
+            },
+            .sqrt, .floor, .ceil => {
+                if (arguments[0].value_type != .float)
+                    return self.failIntrinsic(call, "this builtin takes a Float");
+                result = .float;
+            },
+            .len => {
+                const measurable = arguments[0].value_type == .string or
+                    arguments[0].value_type == .bytes or
+                    arguments[0].value_type == .heap;
+                if (!measurable)
+                    return self.failIntrinsic(call, "len takes a String, Bytes, List, Map, Array, or Builder");
+                result = .int;
+            },
+            .free_object => {
+                if (arguments[0].value_type != .heap)
+                    return self.failIntrinsic(call, "free releases a List, Map, Array, or Builder");
+                // free is deliberate early release of an owned name,
+                // and poisons the name like give does (S6).
+                const operand = call.arguments[0].value;
+                if (operand.* != .name) {
+                    try self.fail(
+                        "luce.sema.own",
+                        call.span,
+                        "free releases an owned name; containers free their own elements [OWNERSHIP.md S6, S22]",
+                        .{},
+                    );
+                    return .failed;
+                }
+                const found = self.findLocal(operand.name.text).?;
+                switch (found.info.class) {
+                    .borrow_param => {
+                        try self.fail(
+                            "luce.sema.own",
+                            call.span,
+                            "{s} is a borrowed parameter and cannot be freed; only owners free [OWNERSHIP.md S12]",
+                            .{operand.name.text},
+                        );
+                        return .failed;
+                    },
+                    .alias => {
+                        try self.fail(
+                            "luce.sema.own",
+                            call.span,
+                            "{s} aliases an object it does not own; free the owning name [OWNERSHIP.md S6, S8]",
+                            .{operand.name.text},
+                        );
+                        return .failed;
+                    },
+                    .owned => {},
+                }
+                if (self.loops.items.len > 0 and
+                    found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
+                {
+                    try self.fail(
+                        "luce.sema.own",
+                        call.span,
+                        "{s} is declared outside this loop; the next iteration would use a freed name [OWNERSHIP.md S30]",
+                        .{operand.name.text},
+                    );
+                    return .failed;
+                }
+                found.info.poisoned = .freed;
+                // Free names its binding so the runtime can verify
+                // this name still owns the object (S6, S23).
+                extra_argument = try self.emit(.{ .const_int = found.info.local }, .int);
+                result = .none;
+            },
+            .str_value => {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type);
+                const stringable = switch (arguments[0].value_type) {
+                    .int, .float, .boolean, .string => true,
+                    .heap => descriptor.? == .builder,
+                    else => false,
+                };
+                if (!stringable)
+                    return self.failIntrinsic(call, "str takes Int, Float, Bool, String, or Builder");
+                result = .string;
+            },
+            .parse_int, .parse_float => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "this builtin parses a String");
+                result = if (matched.kind == .parse_int) .int else .float;
+            },
+            .chr_code => {
+                if (arguments[0].value_type != .int)
+                    return self.failIntrinsic(call, "chr takes an Int codepoint");
+                result = .string;
+            },
+            .ord_text => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "ord takes a String");
+                result = .int;
+            },
+            // Lowered from syntax or method calls, never from bare names.
+            .give_object,
+            .copy_object,
+            .null_object,
+            .index_get,
+            .index_set,
+            .list_slice,
+            .key_at,
+            .value_at,
+            .string_slice,
+            .string_byte,
+            .string_find_byte,
+            .append_value,
+            .append_ascii,
+            .pop_value,
+            .insert_value,
+            .remove_entry,
+            .has_key,
+            .dim_size,
+            .list_sort,
+            .list_reverse,
+            .list_find,
+            .list_contains,
+            .clear_object,
+            .map_keys,
+            .map_values,
+            .map_get,
+            .array_fill,
+            => unreachable,
+
+            .assert_true => {
+                if (arguments[0].value_type != .boolean)
+                    return self.failIntrinsic(call, "assert takes a Bool");
+                result = .none;
+            },
+            .trap_message => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "trap takes a String message");
+                result = .none;
+            },
+            .print, .term_write => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "this builtin takes a String");
+                result = .none;
+            },
+            .file_read => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "file_read takes a String path");
+                result = .string;
+            },
+            .file_write => {
+                if (arguments[0].value_type != .string or arguments[1].value_type != .string)
+                    return self.failIntrinsic(call, "file_write takes (path String, content String)");
+                result = .boolean;
+            },
+            .file_exists => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "file_exists takes a String path");
+                result = .boolean;
+            },
+            .arg_count, .term_rows, .term_cols => {
+                result = .int;
+            },
+            .arg_get => {
+                if (arguments[0].value_type != .int)
+                    return self.failIntrinsic(call, "arg takes an Int index");
+                result = .string;
+            },
+            .term_clear, .term_flush => {
+                result = .none;
+            },
+            .term_move => {
+                if (arguments[0].value_type != .int or arguments[1].value_type != .int)
+                    return self.failIntrinsic(call, "term_move takes (row Int, col Int)");
+                result = .none;
+            },
+            .term_style => {
+                if (arguments[0].value_type != .int or
+                    arguments[1].value_type != .int or
+                    arguments[2].value_type != .boolean)
+                    return self.failIntrinsic(call, "term_style takes (foreground Int, background Int, bold Bool)");
+                result = .none;
+            },
+            .key_read, .key_text => {
+                result = .string;
+            },
+        }
+        if (result == .none and !as_statement) {
+            try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{matched.name});
+            return .failed;
+        }
+
+        const register_count = arguments.len + @intFromBool(extra_argument != null);
+        const registers = try self.arena().alloc(Register, register_count);
+        for (arguments, registers[0..arguments.len]) |value, *register| register.* = value.register;
+        if (extra_argument) |extra| registers[register_count - 1] = extra;
+        return .{ .value = .{
+            .register = try self.emit(.{ .intrinsic = .{ .kind = matched.kind, .arguments = registers } }, result),
+            .value_type = result,
+        } };
+    }
+
+    fn failIntrinsic(self: *FunctionBuilder, call: ast.Call, message: []const u8) Error!IntrinsicResult {
+        try self.fail("luce.sema.type", call.span, "{s}", .{message});
+        return .failed;
+    }
+};

@@ -5,6 +5,10 @@
 //!   luce check FILE.luc                compile, report, write nothing
 //!   luce ir FILE.luc                   compile and dump readable IR
 //!
+//! `build --backend=llvm` runs the same program through the LLVM
+//! backend instead and writes a relocatable object (docs/CODEGEN.md);
+//! the default backend still writes the interpreter's `.lc`.
+//!
 //! Programs compile in script mode (`func main():`) with the host
 //! builtins allowed; loom is the trusted boundary that decides which
 //! host services actually exist at run time.
@@ -42,6 +46,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     if (std.mem.eql(u8, command, "build")) {
         var output_path: []const u8 = "";
         var release = false;
+        var backend: Backend = .interpreter;
         var index: usize = 3;
         while (index < arguments.len) : (index += 1) {
             if (std.mem.eql(u8, arguments[index], "-o") and index + 1 < arguments.len) {
@@ -49,20 +54,18 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
                 output_path = arguments[index];
             } else if (std.mem.eql(u8, arguments[index], "--release")) {
                 release = true;
+            } else if (std.mem.eql(u8, arguments[index], "--backend=llvm")) {
+                backend = .llvm;
+            } else if (std.mem.eql(u8, arguments[index], "--backend=interpreter")) {
+                backend = .interpreter;
             } else {
                 return usage(err);
             }
         }
-        return build(gpa, io, err, out, path, output_path, release);
-    }
-    if (std.mem.eql(u8, command, "wasm")) {
-        var output_path: []const u8 = "";
-        if (arguments.len == 5 and std.mem.eql(u8, arguments[3], "-o")) {
-            output_path = arguments[4];
-        } else if (arguments.len != 3) {
-            return usage(err);
-        }
-        return buildWasm(gpa, io, err, out, path, output_path);
+        return switch (backend) {
+            .interpreter => build(gpa, io, err, out, path, output_path, release),
+            .llvm => buildObject(gpa, io, err, out, path, output_path, release),
+        };
     }
     if (std.mem.eql(u8, command, "check")) {
         if (arguments.len != 3) return usage(err);
@@ -84,7 +87,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         }
         var program = (try compilePathPruned(gpa, io, err, path, !keep_unreachable)) orelse return 1;
         defer program.deinit();
-        const dump = try luce.ir.print(gpa, &program);
+        const dump = try luce.mir.print(gpa, &program);
         defer gpa.free(dump);
         try out.writeAll(dump);
         try out.flush();
@@ -93,18 +96,27 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     return usage(err);
 }
 
+/// Which code path `build` takes: the portable `.lc` the interpreter
+/// runs, or a native object from the LLVM backend.
+const Backend = enum { interpreter, llvm };
+
 fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
-            "  luce build FILE.luc [-o FILE.lc] [--release]\n" ++
+            "  luce build FILE.luc [-o FILE.lc] [--release] [--backend=llvm]\n" ++
             "  luce check FILE.luc\n" ++
             "  luce ir FILE.luc [--full]\n" ++
-            "  luce wasm FILE.luc [-o FILE.wasm]\n" ++
             "\n" ++
             "build is a debug build unless --release: the module\n" ++
             "carries source locations, so traps report file:line\n" ++
             "and a call trace.  --release strips them for smaller\n" ++
-            "modules; the program itself behaves identically.\n",
+            "modules; the program itself behaves identically.\n" ++
+            "\n" ++
+            "--backend=llvm compiles through LLVM and writes a\n" ++
+            "relocatable object (FILE.o by default) for the host\n" ++
+            "target, to be linked against the published host ABI.\n" ++
+            "--release means the same thing there: trap locations\n" ++
+            "go, function names stay.\n",
         .{},
     );
     return 1;
@@ -124,8 +136,8 @@ fn build(
 
     // Release strips debug info (trap locations); it never changes
     // what the program does — every check traps identically.
-    if (release) luce.ir.strip(&program);
-    const encoded = try luce.module.encode(gpa, &program);
+    if (release) luce.mir.strip(&program);
+    const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
 
     const target = if (output_path.len != 0)
@@ -143,51 +155,97 @@ fn build(
     return 0;
 }
 
-/// FILE.luc -> FILE.lc; anything else appends .lc.
-fn modulePath(gpa: std.mem.Allocator, source_path: []const u8) ![]u8 {
-    if (std.mem.endsWith(u8, source_path, ".luc")) {
-        return std.fmt.allocPrint(gpa, "{s}.lc", .{source_path[0 .. source_path.len - ".luc".len]});
-    }
-    return std.fmt.allocPrint(gpa, "{s}.lc", .{source_path});
-}
-
-/// Compile one script file; renders diagnostics to `err` and returns
-/// null on failure.  The caller owns the returned program.
-fn buildWasm(
+/// Compile through LLVM and write a relocatable object for the host.
+///
+/// The object exports one symbol, `luce_main`, and declares none: every
+/// effect reaches the outside world through the host table it is
+/// handed (`luce.llvm.abi`).  Linking it into a shared library or an
+/// executable is the caller's job for now.
+fn buildObject(
     gpa: std.mem.Allocator,
     io: std.Io,
     err: *std.Io.Writer,
     out: *std.Io.Writer,
     path: []const u8,
     output_path: []const u8,
+    release: bool,
 ) !u8 {
     var program = (try compilePath(gpa, io, err, path)) orelse return 1;
     defer program.deinit();
-    if (!luce.codegen_wasm.supported(&program)) {
-        try err.print("{s}: outside the wasm backend's core (scalars, strings, and functions; the heap, structs, host effects, and str(Float) are not lowered yet)\n", .{path});
+
+    // The same one thing release means everywhere: the object carries
+    // no origins, so a trap names its functions and not their lines.
+    if (release) luce.mir.strip(&program);
+
+    const triple = try luce.llvm.hostTriple(gpa);
+    defer gpa.free(triple);
+
+    const bitcode = switch (try luce.llvm.lower(gpa, &program, .{
+        .triple = triple,
+        .name = std.fs.path.basename(path),
+    })) {
+        .bitcode => |bytes| bytes,
+        .unsupported => |what| {
+            try err.print(
+                "{s}: the LLVM backend has no lowering for {s} yet\n",
+                .{ path, what },
+            );
+            return 1;
+        },
+    };
+    defer gpa.free(bitcode);
+
+    const object = switch (try luce.llvm.compile(gpa, bitcode, .{ .triple = triple })) {
+        .object => |bytes| bytes,
+        .failed => |why| {
+            defer gpa.free(why);
+            try err.print("{s}: LLVM failed: {s}\n", .{ path, why });
+            return 1;
+        },
+    };
+    defer gpa.free(object);
+
+    const target = if (output_path.len != 0)
+        try gpa.dupe(u8, output_path)
+    else
+        try replaceExtension(gpa, path, ".o");
+    defer gpa.free(target);
+
+    files.writeWhole(io, target, object) catch {
+        try err.print("luce: cannot write {s}\n", .{target});
         return 1;
-    }
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const bytes = try luce.codegen_wasm.compile(arena_state.allocator(), &program);
-    const target = if (output_path.len != 0) output_path else try defaultWasmPath(arena_state.allocator(), path);
-    try files.writeWhole(io, target, bytes);
-    try out.print("{s}\n", .{target});
+    };
+    try out.print("{s} -> {s} ({s})\n", .{ path, target, triple });
     try out.flush();
     return 0;
 }
 
-fn defaultWasmPath(arena: std.mem.Allocator, source: []const u8) ![]const u8 {
-    const stem = if (std.mem.endsWith(u8, source, ".luc")) source[0 .. source.len - 4] else source;
-    return std.fmt.allocPrint(arena, "{s}.wasm", .{stem});
+/// FILE.luc -> FILE.lc; anything else appends .lc.
+fn modulePath(gpa: std.mem.Allocator, source_path: []const u8) ![]u8 {
+    return replaceExtension(gpa, source_path, ".lc");
 }
 
+/// FILE.luc -> FILE + `extension`; anything else just appends.
+fn replaceExtension(
+    gpa: std.mem.Allocator,
+    source_path: []const u8,
+    extension: []const u8,
+) ![]u8 {
+    const stem = if (std.mem.endsWith(u8, source_path, ".luc"))
+        source_path[0 .. source_path.len - ".luc".len]
+    else
+        source_path;
+    return std.fmt.allocPrint(gpa, "{s}{s}", .{ stem, extension });
+}
+
+/// Compile one script file; renders diagnostics to `err` and returns
+/// null on failure.  The caller owns the returned program.
 fn compilePath(
     gpa: std.mem.Allocator,
     io: std.Io,
     err: *std.Io.Writer,
     path: []const u8,
-) !?luce.ir.Program {
+) !?luce.mir.Program {
     return compilePathPruned(gpa, io, err, path, true);
 }
 
@@ -197,7 +255,7 @@ fn compilePathPruned(
     err: *std.Io.Writer,
     path: []const u8,
     prune: bool,
-) !?luce.ir.Program {
+) !?luce.mir.Program {
     const source = files.readWhole(gpa, io, path) catch {
         try err.print("luce: cannot read {s}\n", .{path});
         return null;

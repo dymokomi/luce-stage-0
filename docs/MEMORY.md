@@ -2,8 +2,9 @@
 
 > **Decided and implemented.**  The situation-by-situation
 > specification distilled from this memo lives in `docs/OWNERSHIP.md`
-> (ratified S1–S43) and is live in the compiler and interpreter,
-> proven by `src/luce/ownership_spec.zig`.  This memo is kept as the
+> (ratified S1–S43) and is live in the compiler and in `libluce_rt`,
+> the one runtime both the interpreter and compiled code call
+> (`docs/CODEGEN.md`), proven by `src/luce/specs/ownership_spec.zig`.  This memo is kept as the
 > record of the options weighed and why scope ownership + `give` won.
 
 Luce *had* **manual explicit memory**: objects created with
@@ -11,7 +12,7 @@ Luce *had* **manual explicit memory**: objects created with
 double-free trapping deterministically, loom reporting leaks after
 every run.  That was safe and honest — but `free` at every exit path
 was the single biggest source of friction in real programs
-(docs/AUDIT.md), so the question was what the *permanent* model
+(docs/CODEGEN.md), so the question was what the *permanent* model
 should be.  This memo held the options and trade-offs so the decision
 was made once, with eyes open.  Option 3 won.
 
@@ -150,9 +151,8 @@ themselves.  The distinction (bare name vs fresh expression) is
 purely syntactic, so the rule is enforceable on the AST with a
 fix-it diagnostic: no lifetimes, no dataflow, nothing to fight.
 
-**Safety is a build mode, not a semantic:** the interpreter (and a
-future ReleaseSafe native build) checks every access through
-generation-tagged handles, so a borrow outliving its owner is a
+**Safety is a build mode, not a semantic:** the runtime checks every
+access through generation-tagged handles, so a borrow outliving its owner is a
 deterministic `use_after_free` trap at the faulting line.  A future
 ReleaseFast lowers handles to raw pointers and the checks cost zero —
 Zig's exact posture, applied to ownership.

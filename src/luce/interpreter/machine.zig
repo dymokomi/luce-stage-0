@@ -1,0 +1,775 @@
+//! The Luce IR interpreter machine — the reference engine behind the
+//! backend boundary.
+//!
+//! Deterministic and safe: checked integer arithmetic, explicit
+//! conversion range checks, a step budget standing in for a deadline,
+//! and a call-depth limit.  All temporary storage comes from the
+//! evaluation arena; the interpreter itself allocates nothing that
+//! outlives one evaluation.
+//!
+//! What is *not* here is the point of the file.  Every semantic below
+//! the instruction level — the object heap, scope ownership, the
+//! containers, string storage, the conversions, checked arithmetic —
+//! lives in `libluce_rt` (`../runtime.zig`), and this file only decodes
+//! instructions and calls it.  There is one implementation of each
+//! semantic and compiled code reaches the same one (docs/CODEGEN.md);
+//! a second copy here would be a second place for the same bug.
+
+const std = @import("std");
+const mir = @import("../06_mir.zig");
+const backend = @import("../backend.zig");
+const runtime = @import("../runtime.zig");
+const types = @import("../support/types.zig");
+
+const Allocator = std.mem.Allocator;
+const RuntimeValue = backend.RuntimeValue;
+const InputValue = backend.InputValue;
+const Result = backend.Result;
+const Budget = backend.Budget;
+
+const containers = runtime.containers;
+const operators = runtime.operators;
+const text = runtime.text;
+
+pub fn run(
+    memory: runtime.Memory,
+    program: *const mir.Program,
+    inputs: []const InputValue,
+    outputs: []?RuntimeValue,
+    budget: Budget,
+    host: ?backend.Host,
+) error{OutOfMemory}!Result {
+    // Gate on availability before executing anything: a program whose
+    // read inputs are not all available computes nothing.
+    for (program.reads) |port| {
+        if (port >= inputs.len or inputs[port] == .unavailable) return .unavailable;
+    }
+
+    var machine: Machine = .{
+        .arena = memory.arena,
+        .runtime = .init(memory),
+        .program = program,
+        .inputs = inputs,
+        .outputs = outputs,
+        .steps = budget.steps,
+        .max_depth = budget.call_depth,
+        .host = host,
+    };
+    // Object storage is a real allocator now, so the run has to hand
+    // it back: scope ownership frees what the program finished with,
+    // and this frees what a trap unwound past or a leak left behind
+    // (S34).  The result is built first — it carries the census and a
+    // trap's words, which live in the arena, not here.
+    defer machine.runtime.deinit();
+    switch (try machine.execute(program.entry_function)) {
+        .value => return .{ .success = .{
+            .leaked_objects = machine.runtime.live,
+        } },
+        .trap => |trap| {
+            var reported = trap;
+            // The frame stack survives a trap intact, so the trace
+            // costs nothing until a trap actually happens — the
+            // debug tables are never read on the execution path.
+            machine.traceback(&reported) catch |mistake| switch (mistake) {
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            return .{ .trap = reported };
+        },
+    }
+}
+
+/// Deep recursion reports the innermost frames and drops the rest;
+/// a call_depth_exceeded trace would otherwise be the whole budget.
+/// One number for both engines: compiled code caps its unwind trace at
+/// the same point (`runtime/trace.zig`), so the same trap reports the
+/// same frames whichever engine ran it.
+const max_trace_frames = runtime.trace.max_frames;
+
+pub const CallOutcome = union(enum) {
+    value: RuntimeValue,
+    trap: backend.Trap,
+};
+
+/// One live call.  Frames live on an explicit heap-allocated stack, so
+/// call depth is bounded by the budget and available memory — never by
+/// the native stack.
+pub const Frame = struct {
+    function: u32,
+    /// Where this frame's slots start in `frame_storage`: registers
+    /// first, then locals, one contiguous run released when the frame
+    /// returns.  Offsets, not slices — the storage array reallocates
+    /// as the stack deepens, and offsets survive that.
+    slots_at: usize,
+    register_count: u32,
+    local_count: u32,
+    block: mir.BlockId = 0,
+    position: usize = 0,
+    /// The caller register receiving this frame's return value.
+    destination: mir.Register = 0,
+    /// Unique per call; minted by the runtime so ownership bindings
+    /// from two frames of the same function never collide.
+    serial: u64 = 0,
+};
+
+const Register = mir.Register;
+
+pub const Machine = struct {
+    arena: Allocator,
+    /// Luce's semantics: the object heap, ownership, containers,
+    /// strings, conversions, and the trap channel.
+    runtime: runtime.Runtime,
+    program: *const mir.Program,
+    inputs: []const InputValue,
+    outputs: []?RuntimeValue,
+    steps: u64,
+    max_depth: u32,
+    host: ?backend.Host,
+    stack: std.ArrayList(Frame) = .empty,
+    /// Every live frame's registers and locals, as one stack that
+    /// pops on return.  Frames used to take a fresh arena slice each
+    /// call, which the arena never reclaimed: memory then grew with
+    /// the number of calls a program *made* rather than with what it
+    /// held, and a long-running loop over a function grew without
+    /// bound.  Reused storage makes it O(depth) instead.
+    frame_storage: std.ArrayList(RuntimeValue) = .empty,
+    /// Scratch for one call's arguments, reused across calls; live
+    /// only until pushFrame copies them into the callee's locals.
+    argument_scratch: std.ArrayList(RuntimeValue) = .empty,
+    /// Scratch for one indexing operation's subscripts, reused; an
+    /// array index carries one per axis.
+    index_scratch: std.ArrayList(RuntimeValue) = .empty,
+    /// Scratch for one `struct_make`'s fields, reused; live only until
+    /// the runtime copies them into arena storage.
+    field_scratch: std.ArrayList(RuntimeValue) = .empty,
+    /// Scratch for one `new Array`'s dimension sizes, reused; live
+    /// only until the runtime copies them into the array's own shape.
+    /// Reused rather than freshly allocated because the arena never
+    /// gives a slice back, and a loop that allocates arrays would
+    /// otherwise grow memory with the number of arrays it ever made.
+    dims_scratch: std.ArrayList(i64) = .empty,
+    /// One zero template per struct layout, shared by every zero-
+    /// initialized local and element (see zeroValue for why sharing
+    /// is safe).  Allocated lazily, sized by program.structs.
+    struct_zeros: []?RuntimeValue = &.{},
+
+    pub const EvalError = runtime.Error;
+
+    fn trap(self: *Machine, code: mir.TrapCode) CallOutcome {
+        _ = self;
+        return .{ .trap = .{ .code = code, .message = code.message() } };
+    }
+
+    /// Turn the runtime's pending trap into the boundary's, or pass an
+    /// allocation failure through.  Instruction handlers fail with
+    /// error.Trap after the runtime records the details; the dispatch
+    /// loop catches once, here.  This is the ceval-style pending-error
+    /// pattern — no per-operation outcome plumbing.
+    fn caught(self: *Machine, mistake: EvalError) error{OutOfMemory}!CallOutcome {
+        return switch (mistake) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.Trap => .{ .trap = .{
+                .code = self.runtime.pending.?.code,
+                .message = self.runtime.pending.?.message,
+            } },
+        };
+    }
+
+    /// Fill a trap's stack trace from the live frame stack, innermost
+    /// first.  Each frame's current instruction resolves through the
+    /// function's origins table when the module carries one (debug);
+    /// a stripped module still names the function, with line 0.
+    fn traceback(self: *Machine, reported: *backend.Trap) error{OutOfMemory}!void {
+        const depth = self.stack.items.len;
+        const kept = @min(depth, max_trace_frames);
+        const frames = try self.arena.alloc(backend.TraceFrame, kept);
+        for (frames, 0..) |*slot, out_index| {
+            const frame = self.stack.items[depth - 1 - out_index];
+            const function = &self.program.functions[frame.function];
+            const items = function.blocks[frame.block].items;
+            // position already advanced past the current instruction,
+            // so position - 1 is the instruction that trapped; at
+            // position 0 the block's first instruction is the one
+            // about to run.  A step-budget trap fires between
+            // instructions, so its innermost line points at the last
+            // completed statement, not the next one — "where the
+            // budget ran out", which is the honest answer.
+            const at = items[if (frame.position == 0) 0 else frame.position - 1];
+            slot.* = .{
+                .function = function.name,
+                .source = function.source,
+                .line = if (at < function.origins.len) function.origins[at].line else 0,
+                .column = if (at < function.origins.len) function.origins[at].column else 0,
+            };
+        }
+        reported.trace = frames;
+        reported.dropped = @intCast(depth - kept);
+    }
+
+    fn service(self: *Machine) EvalError!backend.Host {
+        return self.host orelse return self.runtime.fail(.host_unavailable);
+    }
+
+    fn terminal(self: *Machine) EvalError!backend.Terminal {
+        const host = try self.service();
+        return host.terminal orelse return self.runtime.fail(.host_unavailable);
+    }
+
+    fn pushFrame(
+        self: *Machine,
+        function_index: u32,
+        arguments: []const RuntimeValue,
+        destination: Register,
+    ) error{OutOfMemory}!?CallOutcome {
+        if (self.stack.items.len >= self.max_depth) return self.trap(.call_depth_exceeded);
+        const function = &self.program.functions[function_index];
+        const slots_at = self.frame_storage.items.len;
+        const register_count = function.instructions.len;
+        const local_count = function.locals.len;
+        try self.frame_storage.appendNTimes(self.arena, .none, register_count + local_count);
+        // Safe to hold across zeroValue: it allocates struct fields
+        // from the arena and never touches frame_storage.
+        const locals = self.frame_storage.items[slots_at + register_count ..][0..local_count];
+        @memcpy(locals[0..arguments.len], arguments);
+        // Every non-parameter local starts at its type's zero value,
+        // not a bare .none: a well-formed function sets locals before
+        // reading them, but a hand-forged or bit-flipped module may
+        // read one early, and a typed zero (0/false/""/null object)
+        // keeps that a clean value or a null_object trap instead of a
+        // crash on an untagged .none.  This is the same rule as S40's
+        // late declarations, applied defensively at the trust
+        // boundary.  Parameter slots are copied over whole, so zeroing
+        // them first would only buy per-call allocations for struct
+        // parameters.
+        for (locals[arguments.len..], function.locals[arguments.len..]) |*slot, local| {
+            slot.* = try self.zeroValue(local.local_type);
+        }
+        try self.stack.append(self.arena, .{
+            .function = function_index,
+            .slots_at = slots_at,
+            .register_count = @intCast(register_count),
+            .local_count = @intCast(local_count),
+            .destination = destination,
+            .serial = self.runtime.takeSerial(),
+        });
+        return null;
+    }
+
+    pub fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
+        if (try self.pushFrame(entry, &.{}, 0)) |failed| return failed;
+
+        dispatch: while (true) {
+            // Re-derived every time round the dispatch loop: pushing a
+            // frame may reallocate the storage, and every path that
+            // pushes one continues here rather than reusing these.
+            const frame = &self.stack.items[self.stack.items.len - 1];
+            const function = &self.program.functions[frame.function];
+            const slots = self.frame_storage.items[frame.slots_at..];
+            const registers = slots[0..frame.register_count];
+            const locals = slots[frame.register_count..][0..frame.local_count];
+            const items = function.blocks[frame.block].items;
+
+            while (frame.position < items.len) {
+                if (self.steps == 0) return self.trap(.step_budget_exhausted);
+                self.steps -= 1;
+
+                const item = items[frame.position];
+                frame.position += 1;
+                const instruction = function.instructions[item];
+                switch (instruction) {
+                    .const_boolean => |value| registers[item] = .ofBoolean(value),
+                    .const_int => |value| registers[item] = .ofInt(value),
+                    .const_float => |value| registers[item] = .ofFloat(value),
+                    .const_data => |data| {
+                        const stored = self.program.constants[data.constant];
+                        registers[item] = if (data.data_type == .string)
+                            .ofString(stored)
+                        else
+                            .ofBytes(stored);
+                    },
+                    .local_get => |local| registers[item] = locals[local],
+                    .local_set => |set| locals[set.local] = registers[set.value],
+                    .input_load => |port| registers[item] = self.inputs[port].value,
+                    .output_store => |store| self.outputs[store.port] = registers[store.value],
+                    .binary => |operation| {
+                        registers[item] = operators.binary(
+                            &self.runtime,
+                            operation.op,
+                            registers[operation.left],
+                            registers[operation.right],
+                        ) catch |mistake| return self.caught(mistake);
+                    },
+                    .unary => |operation| {
+                        const operand = registers[operation.operand];
+                        registers[item] = switch (operation.op) {
+                            .logic_not => operators.logicalNot(operand),
+                            .negate => operators.negate(&self.runtime, operand) catch |mistake|
+                                return self.caught(mistake),
+                        };
+                    },
+                    .convert => |operation| {
+                        const operand = registers[operation.operand];
+                        registers[item] = switch (operation.kind) {
+                            .int_to_float => operators.intToFloat(operand),
+                            .float_to_int => operators.floatToInt(&self.runtime, operand) catch |mistake|
+                                return self.caught(mistake),
+                        };
+                    },
+                    .struct_make => |make| {
+                        self.field_scratch.clearRetainingCapacity();
+                        try self.field_scratch.ensureTotalCapacity(self.arena, make.fields.len);
+                        for (make.fields) |field_register| {
+                            self.field_scratch.appendAssumeCapacity(registers[field_register]);
+                        }
+                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                            return self.caught(mistake);
+                    },
+                    .struct_get => |get| {
+                        registers[item] = registers[get.target].asStruct()[get.field];
+                    },
+                    .struct_set => |set| {
+                        registers[item] = self.runtime.setField(
+                            registers[set.target],
+                            set.field,
+                            registers[set.value],
+                        ) catch |mistake| return self.caught(mistake);
+                    },
+                    .heap_new => |new| {
+                        registers[item] = self.allocateObject(new, registers) catch |mistake|
+                            return self.caught(mistake);
+                    },
+                    .object_bind => |bind| {
+                        self.runtime.bind(registers[bind.value], frame.serial, bind.local);
+                    },
+                    .object_unbind => |unbind| {
+                        self.runtime.unbind(registers[unbind.value], frame.serial, unbind.local);
+                    },
+                    .call => |called| {
+                        // Reused scratch, not a fresh arena slice per
+                        // call: pushFrame copies it into the callee's
+                        // locals and nothing outlives that.
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(self.arena, called.arguments.len);
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
+                        }
+                        if (try self.pushFrame(called.function, self.argument_scratch.items, item)) |failed| {
+                            return failed;
+                        }
+                        continue :dispatch;
+                    },
+                    .intrinsic => |operation| {
+                        registers[item] = self.intrinsic(operation, registers, frame.serial) catch |mistake|
+                            return self.caught(mistake);
+                    },
+                    .jump => |target| {
+                        frame.block = target;
+                        frame.position = 0;
+                        continue :dispatch;
+                    },
+                    .branch => |branched| {
+                        frame.block = if (registers[branched.condition].asBoolean())
+                            branched.then_block
+                        else
+                            branched.else_block;
+                        frame.position = 0;
+                        continue :dispatch;
+                    },
+                    .ret => |value| {
+                        const returned: RuntimeValue = if (value) |register| registers[register] else .none;
+                        const finished = self.stack.pop().?;
+                        // Whatever the finished frame still owned in
+                        // the returned value moves to the caller
+                        // (S16): loose until something there binds it.
+                        self.runtime.loosenFromFrame(returned, finished.serial);
+                        // `returned` is a copy — its string bytes and
+                        // struct fields live in the arena, not here —
+                        // so the frame's slots go back now.
+                        self.frame_storage.shrinkRetainingCapacity(finished.slots_at);
+                        if (self.stack.items.len == 0) return .{ .value = returned };
+                        const parent = &self.stack.items[self.stack.items.len - 1];
+                        const parent_function = &self.program.functions[parent.function];
+                        if (parent_function.result_types[finished.destination] != .none) {
+                            self.frame_storage.items[parent.slots_at + finished.destination] = returned;
+                        }
+                        continue :dispatch;
+                    },
+                    .trap => |code| return self.trap(code),
+                }
+            }
+            unreachable; // the verifier guarantees a terminator
+        }
+    }
+
+    // -- allocation and zero values ------------------------------------
+    //
+    // The two places the interpreter still shapes values itself, both
+    // because they read the program's type tables — which the runtime
+    // library deliberately does not know.  Compiled code resolves both
+    // at compile time instead.
+
+    /// `new List(T)` / `new Map(K, V)` / `new Array(T, ...)` / `new
+    /// Builder`: read the shape from the program's heap-type table and
+    /// ask the runtime for the object.
+    pub fn allocateObject(
+        self: *Machine,
+        new: mir.Instruction.HeapNew,
+        registers: []const RuntimeValue,
+    ) EvalError!RuntimeValue {
+        switch (self.program.heap_types[new.heap]) {
+            .list => return self.runtime.newList(),
+            .map => return self.runtime.newMap(),
+            .builder => return self.runtime.newBuilder(),
+            .array => |shape| {
+                self.dims_scratch.clearRetainingCapacity();
+                try self.dims_scratch.ensureTotalCapacity(self.arena, new.dims.len);
+                for (new.dims) |register| {
+                    self.dims_scratch.appendAssumeCapacity(registers[register].asInt());
+                }
+                return self.runtime.newArray(
+                    self.dims_scratch.items,
+                    try self.zeroValue(shape.element),
+                );
+            },
+        }
+    }
+
+    /// The zero value a fresh local or array element carries, per type.
+    pub fn zeroValue(self: *Machine, of: types.Type) error{OutOfMemory}!RuntimeValue {
+        return switch (of) {
+            .none => .none,
+            .boolean => .ofBoolean(false),
+            .int => .ofInt(0),
+            .float => .ofFloat(0.0),
+            .string => .ofString(""),
+            .bytes => .ofBytes(""),
+            .heap => .null_object,
+            .strukt => |layout_index| blk: {
+                // One shared zero template per layout, built on first
+                // use.  Sharing the fields slice across every
+                // zero-initialized local and element is safe because
+                // struct field arrays are never mutated in place —
+                // struct_set always allocates a fresh array (value
+                // semantics).  If in-place struct mutation is ever
+                // added, this template must be copied out instead.
+                // Without the cache, a loop calling a function with a
+                // struct local allocated per call, growing evaluation
+                // memory with calls made rather than data held.
+                if (self.struct_zeros.len == 0) {
+                    self.struct_zeros = try self.arena.alloc(?RuntimeValue, self.program.structs.len);
+                    @memset(self.struct_zeros, null);
+                }
+                if (self.struct_zeros[layout_index]) |zero| break :blk zero;
+                const layout = self.program.structs[layout_index];
+                const fields = try self.arena.alloc(RuntimeValue, layout.fields.len);
+                for (layout.fields, fields) |field, *slot| {
+                    slot.* = try self.zeroValue(field.field_type);
+                }
+                const zero: RuntimeValue = .ofStruct(fields);
+                self.struct_zeros[layout_index] = zero;
+                break :blk zero;
+            },
+        };
+    }
+
+    // -- intrinsic dispatch -------------------------------------------
+    //
+    // Read the operands out of the registers and hand them to the
+    // runtime library.  The only arms with a body of their own are the
+    // host effects, which are not language semantics but services.
+
+    pub fn intrinsic(
+        self: *Machine,
+        operation: mir.Instruction.IntrinsicCall,
+        registers: []const RuntimeValue,
+        serial: u64,
+    ) EvalError!RuntimeValue {
+        const arguments = operation.arguments;
+        switch (operation.kind) {
+            .abs => return operators.absolute(&self.runtime, registers[arguments[0]]),
+            .min, .max => return operators.extremum(
+                operation.kind == .min,
+                registers[arguments[0]],
+                registers[arguments[1]],
+            ),
+            .clamp => return operators.clamp(
+                registers[arguments[0]],
+                registers[arguments[1]],
+                registers[arguments[2]],
+            ),
+            .sqrt => return operators.squareRoot(registers[arguments[0]]),
+            .floor => return operators.floor(registers[arguments[0]]),
+            .ceil => return operators.ceil(registers[arguments[0]]),
+            .len => return containers.length(&self.runtime, registers[arguments[0]]),
+            .null_object => return .null_object,
+            .index_get => return containers.indexGet(
+                &self.runtime,
+                registers[arguments[0]],
+                try self.subscripts(registers, arguments[1..]),
+            ),
+            .index_set => {
+                const held = registers[arguments[arguments.len - 1]];
+                const indices = try self.subscripts(registers, arguments[1 .. arguments.len - 1]);
+                try containers.indexSet(&self.runtime, registers[arguments[0]], indices, held);
+                return .none;
+            },
+            .list_slice => return containers.listSlice(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+                registers[arguments[2]].asInt(),
+            ),
+            .append_value => {
+                try containers.append(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
+                return .none;
+            },
+            .append_ascii => {
+                try containers.appendAscii(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]].asInt(),
+                );
+                return .none;
+            },
+            .pop_value => return containers.pop(&self.runtime, registers[arguments[0]]),
+            .insert_value => {
+                try containers.insert(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]].asInt(),
+                    registers[arguments[2]],
+                );
+                return .none;
+            },
+            .remove_entry => {
+                try containers.remove(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
+                return .none;
+            },
+            .has_key => return containers.hasKey(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]],
+            ),
+            .key_at => return containers.keyAt(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+            ),
+            .value_at => return containers.valueAt(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+            ),
+            .dim_size => return containers.dimSize(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+            ),
+            .free_object => {
+                try containers.freeVerb(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    namedBinding(registers, arguments, serial),
+                );
+                return .none;
+            },
+            .give_object => return containers.giveVerb(
+                &self.runtime,
+                registers[arguments[0]],
+                namedBinding(registers, arguments, serial),
+            ),
+            .copy_object => return containers.copyVerb(&self.runtime, registers[arguments[0]]),
+            .list_sort => {
+                try containers.sort(&self.runtime, registers[arguments[0]]);
+                return .none;
+            },
+            .list_reverse => {
+                try containers.reverse(&self.runtime, registers[arguments[0]]);
+                return .none;
+            },
+            .list_find => return .ofInt(try containers.find(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]],
+            )),
+            .list_contains => return .ofBoolean(try containers.find(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]],
+            ) != -1),
+            .clear_object => {
+                try containers.clear(&self.runtime, registers[arguments[0]]);
+                return .none;
+            },
+            .map_keys => return containers.mapKeys(&self.runtime, registers[arguments[0]]),
+            .map_values => return containers.mapValues(&self.runtime, registers[arguments[0]]),
+            .map_get => return containers.mapGet(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]],
+                registers[arguments[2]],
+            ),
+            .array_fill => {
+                try containers.arrayFill(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]],
+                );
+                return .none;
+            },
+            .str_value => return text.str(&self.runtime, registers[arguments[0]]),
+            .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
+            .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
+            .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asInt()),
+            .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),
+            .string_slice => return text.slice(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+                registers[arguments[2]].asInt(),
+            ),
+            .string_byte => return text.byteAt(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+            ),
+            .string_find_byte => return text.findByte(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]].asInt(),
+                registers[arguments[2]].asInt(),
+            ),
+            .assert_true => {
+                if (!registers[arguments[0]].asBoolean()) {
+                    return self.runtime.fail(.assertion_failed);
+                }
+                return .none;
+            },
+            .trap_message => return self.runtime.failMessage(
+                .explicit_trap,
+                registers[arguments[0]].asString(),
+            ),
+
+            // -- host effects, not semantics --------------------------
+
+            .print => {
+                const host = try self.service();
+                const callback = host.printFn orelse return self.runtime.fail(.host_unavailable);
+                try callback(host.context, registers[arguments[0]].asString());
+                return .none;
+            },
+            .file_read => {
+                const host = try self.service();
+                const callback = host.readFileFn orelse return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asString();
+                return switch (try callback(host.context, self.arena, path)) {
+                    .content => |content| .ofString(content),
+                    .failed => self.runtime.fail(.file_read_failed),
+                };
+            },
+            .file_write => {
+                const host = try self.service();
+                const callback = host.writeFileFn orelse return self.runtime.fail(.host_unavailable);
+                return .ofBoolean(callback(
+                    host.context,
+                    registers[arguments[0]].asString(),
+                    registers[arguments[1]].asString(),
+                ));
+            },
+            .file_exists => {
+                const host = try self.service();
+                const callback = host.fileExistsFn orelse return self.runtime.fail(.host_unavailable);
+                return .ofBoolean(callback(host.context, registers[arguments[0]].asString()));
+            },
+            .arg_count => {
+                const host = try self.service();
+                const callback = host.argCountFn orelse return self.runtime.fail(.host_unavailable);
+                return .ofInt(callback(host.context));
+            },
+            .arg_get => {
+                const host = try self.service();
+                const callback = host.argFn orelse return self.runtime.fail(.host_unavailable);
+                const index = registers[arguments[0]].asInt();
+                if (index < 0 or index > std.math.maxInt(u32)) {
+                    return self.runtime.fail(.argument_bounds);
+                }
+                const value = (try callback(host.context, self.arena, @intCast(index))) orelse
+                    return self.runtime.fail(.argument_bounds);
+                return .ofString(value);
+            },
+            .term_rows => {
+                const screen = try self.terminal();
+                return .ofInt(screen.rowsFn(screen.context));
+            },
+            .term_cols => {
+                const screen = try self.terminal();
+                return .ofInt(screen.colsFn(screen.context));
+            },
+            .term_clear => {
+                const screen = try self.terminal();
+                try screen.clearFn(screen.context);
+                return .none;
+            },
+            .term_move => {
+                const screen = try self.terminal();
+                try screen.moveFn(
+                    screen.context,
+                    registers[arguments[0]].asInt(),
+                    registers[arguments[1]].asInt(),
+                );
+                return .none;
+            },
+            .term_style => {
+                const screen = try self.terminal();
+                try screen.styleFn(
+                    screen.context,
+                    registers[arguments[0]].asInt(),
+                    registers[arguments[1]].asInt(),
+                    registers[arguments[2]].asBoolean(),
+                );
+                return .none;
+            },
+            .term_write => {
+                const screen = try self.terminal();
+                try screen.writeFn(screen.context, registers[arguments[0]].asString());
+                return .none;
+            },
+            .term_flush => {
+                const screen = try self.terminal();
+                try screen.flushFn(screen.context);
+                return .none;
+            },
+            .key_read => {
+                const screen = try self.terminal();
+                const event = try screen.keyFn(screen.context, self.arena);
+                self.runtime.last_key_text = event.text;
+                return .ofString(event.name);
+            },
+            .key_text => return .ofString(self.runtime.last_key_text),
+        }
+    }
+
+    /// The subscripts of one indexing operation, gathered out of the
+    /// registers into reused scratch.  An array carries one per axis;
+    /// a list or map carries exactly one.
+    fn subscripts(
+        self: *Machine,
+        registers: []const RuntimeValue,
+        of: []const Register,
+    ) error{OutOfMemory}![]const RuntimeValue {
+        self.index_scratch.clearRetainingCapacity();
+        try self.index_scratch.ensureTotalCapacity(self.arena, of.len);
+        for (of) |register| self.index_scratch.appendAssumeCapacity(registers[register]);
+        return self.index_scratch.items;
+    }
+};
+
+/// Only the named owner frees (S6, S23): a second argument carries the
+/// binding `free`/`give` must verify against.
+fn namedBinding(
+    registers: []const RuntimeValue,
+    arguments: []const Register,
+    serial: u64,
+) ?runtime.OwnedBy {
+    if (arguments.len != 2) return null;
+    return .{ .serial = serial, .local = @intCast(registers[arguments[1]].asInt()) };
+}

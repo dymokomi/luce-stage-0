@@ -17,7 +17,7 @@ files) with method sugar for strings, file-scope constants,
 recursion to any depth, a ratified and adversarially audited
 ownership model with zero-leak guarantee, stable diagnostics with
 spans, a verified binary module format, a terminal host, and a
-self-hosted editor.  ~170 Zig-side tests, all green.
+self-hosted editor.  493 Zig-side tests, all green.
 
 What that adds up to: **Luce today is a complete small scripting
 systems language for single-file-plus-imports programs against
@@ -138,21 +138,16 @@ is breadth, added module by module:
   ~~float formatting control~~ (shipped:
   `strings.format_float(x, decimals)`).
 
-## Performance — the native engine is live
+## Performance — LLVM, partway
 
-The compiled backend shipped (docs/NATIVE.md): loom lowers the
-verified IR through the vendored MIR JIT to machine code at load.
-Since milestone 2 the native core takes the whole language —
-collections, ownership, structs, strings, host builtins — through
-two service tiers into the interpreter's own machinery, and every
-benchmark runs native: **1.5–3× C** scalar, **5–19× C**
-collection-bound (docs/BENCHMARKS.md), with milestone 3's unboxed
-access (string descriptors, array views, inline rank-1 indexing)
-shipped on top.  The interpreter stays as the reference
-implementation, the oracle, and the platform fallback.  What
-remains: the self-written Zig backend racing MIR behind the same
-seam, and — if ever judged worth its weight — an LLVM engine for
-the last 2× and SIMD.
+Every hand-written code generator has been removed and replaced by
+one LLVM backend.  It compiles the integer and String core to a
+native object today; floats, structs, Bytes, the math intrinsics and
+every host service but `print` are not lowered yet, so the IR
+interpreter is still the only thing that runs a `.lc`.
+`docs/CODEGEN.md` is the current state, `docs/CODEGEN.md` the
+decision, `docs/CODEGEN.md` the record of what the removed engines
+achieved.
 
 ## Tier 4 — deliberately out of scope for now (keep it that way)
 
@@ -174,23 +169,20 @@ Recorded so the absence reads as a choice, not an oversight:
 
 ## Tier 5 — runtime and tooling distance
 
-- **Native codegen.**  Everything runs on the IR interpreter.  The
-  IR was shaped for a native backend (block-local registers, locals
-  as stack slots) — this is the big performance step and the reason
-  the verifier ethos exists.  Sequenced after the language surface
-  settles (V2.md).
+- **Native codegen, finished.**  The LLVM backend exists and the IR
+  was shaped for it (block-local registers, locals as stack slots),
+  but everything a user runs still goes through the interpreter until
+  the lowering gaps close and loom can load a compiled artifact
+  (`docs/CODEGEN.md`).
 - **Build modes.**  One mode today: all checks on.  OWNERSHIP.md
   S9 promises a ReleaseFast posture where safety backstops drop;
   needs the mode plumbing and a policy for which traps remain.
-- **Map is a linear scan** — honest and insertion-ordered; hash
-  index behind the same semantics when a program earns it.
 - **Interpreter perf generally** — arena churn per call, no
   instruction fusion; fine for the editor, unmeasured beyond it.
 - **Tooling:** no `luce fmt`, no LSP/completions, no debugger or
-  stepping, no stack trace on trap (see Tier 1.3), no doc
-  generator, no test runner for Luce programs themselves (`assert`
-  in main is the current story; a `luce test` discovering
-  `func test_*():` would be cheap and very Zig).
+  stepping, no doc generator, no test runner for Luce programs
+  themselves (`assert` in main is the current story; a `luce test`
+  discovering `func test_*():` would be cheap and very Zig).
 - **Module ecosystem:** imports resolve as sibling files only — no
   paths, no packages, no versioning, no std namespace (see Tier 3).
 
@@ -204,7 +196,7 @@ work above is what they will stand on.
 
 ## Suggested order (matches felt pain, defers parked designs)
 
-1. Trap source locations (Tier 1.3) — pure quality, no design risk.
+1. ~~Trap source locations~~ — shipped (Tier 1.3).
 2. `for key, value in m:` + `m.values()` (1.2, needs mini-design
    for multi-binding; pairs naturally with tuples decision 2.12).
 3. `read_line()`, character-literal folding, `format(...)`,

@@ -14,8 +14,8 @@ because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
 in `src/luce/compile.zig`; the suite proving them is
-`src/luce/std_spec.zig` (math, strings) plus a hosted test beside
-`TestHost` in `interpreter.zig` (files).
+`src/luce/specs/std_spec.zig` (math, strings) plus a hosted test beside
+`TestHost` in `src/luce/interpreter/test.zig` (files).
 
 Naming follows the language's own style: modules are short lower-case
 nouns, functions are short verbs read *with* the module prefix —
@@ -51,8 +51,7 @@ math.sin(x)  math.cos(x)  math.tan(x)  # radians, any magnitude
 
 Whole-array operations over `Array(Float, _)`, the numeric vector
 type — the numpy-shaped tranche.  Reductions accumulate left to
-right (bit-reproducible across engines and against the benchmark C
-twins); operations with no empty answer trap on empty arrays, and
+right (bit-reproducible, and against the benchmark C twins); operations with no empty answer trap on empty arrays, and
 shape mismatches trap.
 
 ```luce
@@ -97,10 +96,10 @@ positions of valid UTF-8 needles.
 
 Two primitives carry the weight.  `find_from` locates a needle's
 first byte with `find_byte` and only then compares the rest, so the
-scan itself is one call the engine may vectorize rather than a Luce
+scan itself is one call the runtime may vectorize rather than a Luce
 loop over `byte_at`; `fold_case` emits folded bytes with
 `append_ascii`, which needs no String per character.  Both are why
-the module is fast enough to stay written in Luce (docs/SPEED.md
+the module is fast enough to stay written in Luce (docs/CODEGEN.md
 §10).
 
 ```luce

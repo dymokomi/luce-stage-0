@@ -10,14 +10,25 @@
 //! the Luce backend boundary.  No disk images, no engine — programs
 //! carry the behavior.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const runner = @import("runner.zig");
 const shell_mod = @import("shell.zig");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
+    // One allocator for loom and for the objects the program it runs
+    // allocates (`backend.Memory.objects`), which puts it on the
+    // running program's hot path: scope ownership allocates and frees
+    // objects as the program's scopes open and close.  A debug build
+    // pays for the leak check and gets it; an optimized build takes
+    // libc's malloc, which is 13x faster on that traffic and is what
+    // a compiled artifact already uses (`runtime/exports.zig`).
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
-    const gpa = debug_allocator.allocator();
+    const gpa = switch (builtin.mode) {
+        .Debug => debug_allocator.allocator(),
+        .ReleaseSafe, .ReleaseFast, .ReleaseSmall => std.heap.c_allocator,
+    };
 
     var threaded: std.Io.Threaded = .init(gpa, .{
         .environ = init.environ,
@@ -35,40 +46,11 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     defer environ_map.deinit();
     const no_color = environ_map.get("NO_COLOR") != null;
     const editor_override = environ_map.get("LOOM_EDITOR");
-    var invalid_engine: ?[]const u8 = null;
-    var invalid_image: ?[]const u8 = null;
-    if (environ_map.get("LOOM_ENGINE")) |wanted| {
-        if (runner.Engine.parse(wanted)) |parsed| {
-            runner.engine = parsed;
-        } else {
-            invalid_engine = wanted;
-        }
-    }
-    if (environ_map.get("LOOM_IMAGE")) |wanted| {
-        if (runner.Image.parse(wanted)) |parsed| {
-            runner.image = parsed;
-        } else {
-            invalid_image = wanted;
-        }
-    }
-
     var err_writer = std.Io.File.stderr().writer(io, &.{});
     const err = &err_writer.interface;
     var out_buffer: [8192]u8 = undefined;
     var out_writer = std.Io.File.stdout().writer(io, &out_buffer);
     const out = &out_writer.interface;
-
-    if (invalid_engine) |wanted| {
-        try err.print(
-            "loom: unknown LOOM_ENGINE={s}; expected auto, zig, mir, or interpreter\n",
-            .{wanted},
-        );
-        return 2;
-    }
-    if (invalid_image) |wanted| {
-        try err.print("loom: unknown LOOM_IMAGE={s}; expected auto or off\n", .{wanted});
-        return 2;
-    }
 
     const colored = !no_color and (std.Io.File.stdout().isTty(io) catch false);
     var shell: shell_mod.Shell = .{

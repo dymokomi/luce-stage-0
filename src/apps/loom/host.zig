@@ -6,15 +6,42 @@
 //! buffered and presented on flush (or before blocking on a key), and
 //! program text is sanitized so a Luce program can never emit raw
 //! escape sequences — the host writes every control byte itself.
+//!
+//! The same services are offered twice, over one implementation: as
+//! `luce.backend.Host` for the interpreter, and as `luce.llvm.abi`'s
+//! C table for a compiled artifact.  Only the calling convention
+//! differs — what a program can reach is decided once, here.
 
 const std = @import("std");
 const luce = @import("luce");
 const key_mod = @import("key.zig");
 
 const Allocator = std.mem.Allocator;
+const abi = luce.llvm.abi;
 
-/// One program run's host services.  Must not move after `host()` is
-/// taken (the vtable captures a pointer): use the in-place setup
+/// How many nested Luce calls loom allows before a program traps
+/// `call_depth_exceeded`.  Depth is policy, not a native-stack
+/// accident, and the policy is the host's: this one number reaches the
+/// interpreter as `backend.Budget.call_depth` and a compiled artifact
+/// through the ABI's `call_depth` slot, so runaway recursion traps at
+/// the same call whichever engine ran it.  Conservative on purpose —
+/// deep enough for any reasonable program, shallow enough that a
+/// runaway one reports promptly and well inside the machine's own
+/// stack.
+pub const call_depth: u32 = 128;
+
+/// A reported trace keeps this many innermost frames; the rest are
+/// counted.  The runtime caps at the same number, so this only has to
+/// be able to hold what arrives.
+const max_trace_frames = 64;
+
+/// Room for the function and file names of a kept trace, copied
+/// because everything a trap report hands over is borrowed for the
+/// duration of the call.
+const trace_text_bytes = 4096;
+
+/// One program run's host services.  Must not move after `host()` or
+/// `table()` is taken (both capture a pointer): use the in-place setup
 /// pattern and call `deinit` (which restores the screen) when done.
 pub const Host = struct {
     gpa: Allocator,
@@ -22,6 +49,25 @@ pub const Host = struct {
     out: *std.Io.Writer,
     arguments: []const []const u8,
     screen: Screen,
+    /// Where `file_read` puts a file's bytes for the C table, which
+    /// hands out borrows rather than allocations.  Reused per call.
+    loaded_file: std.ArrayList(u8) = .empty,
+    /// What a compiled artifact reported through the C table.  The
+    /// interpreter answers with a `Result` instead, so these stay unset
+    /// on that path.
+    trap_code: ?luce.mir.TrapCode = null,
+    trap_storage: [512]u8 = undefined,
+    trap_length: usize = 0,
+    /// The call trace that came with that trap, innermost first, with
+    /// its names copied out of the borrowed report.
+    trace_frames: [max_trace_frames]Reported.Frame = undefined,
+    trace_count: usize = 0,
+    /// Frames the runtime's cap cut, plus any this host had no room
+    /// for — what "... N more frames" counts.
+    trace_dropped: u32 = 0,
+    trace_storage: [trace_text_bytes]u8 = undefined,
+    trace_used: usize = 0,
+    leaked: ?i64 = null,
 
     pub fn setup(
         self: *Host,
@@ -42,8 +88,39 @@ pub const Host = struct {
     pub fn deinit(self: *Host) void {
         self.restoreScreen();
         self.screen.buffer.deinit(self.gpa);
+        self.loaded_file.deinit(self.gpa);
         self.* = undefined;
     }
+
+    /// The trap a compiled artifact reported, if it did.  The words are
+    /// borrowed from this Host and last until the next run.
+    pub fn reportedTrap(self: *const Host) ?Reported {
+        return .{
+            .code = self.trap_code orelse return null,
+            .message = self.trap_storage[0..self.trap_length],
+            .trace = self.trace_frames[0..self.trace_count],
+            .dropped = self.trace_dropped,
+        };
+    }
+
+    pub const Reported = struct {
+        code: luce.mir.TrapCode,
+        message: []const u8,
+        /// Innermost first, the same order and shape the interpreter
+        /// reports (`backend.Trap.trace`).
+        trace: []const Frame,
+        dropped: u32,
+
+        /// One call, with its names copied into this Host.  A
+        /// `--release` artifact reports line zero and still names the
+        /// function.
+        pub const Frame = struct {
+            function: []const u8,
+            source: []const u8,
+            line: u32,
+            column: u32,
+        };
+    };
 
     pub fn host(self: *Host) luce.backend.Host {
         return .{
@@ -65,6 +142,33 @@ pub const Host = struct {
                 .flushFn = flush,
                 .keyFn = key,
             },
+        };
+    }
+
+    /// The same services as a C table, for a compiled artifact
+    /// (`luce.llvm.abi`).  Every slot is filled: loom withholds
+    /// nothing, and a host that withheld something would make the
+    /// program trap `host_unavailable` rather than proceed.
+    pub fn table(self: *Host) abi.Host {
+        return .{
+            .context = self,
+            .print = cPrint,
+            .trap = cTrap,
+            .finished = cFinished,
+            .file_read = cFileRead,
+            .file_write = cFileWrite,
+            .file_exists = cFileExists,
+            .arg_count = cArgCount,
+            .arg = cArg,
+            .term_rows = cTermRows,
+            .term_cols = cTermCols,
+            .term_clear = cTermClear,
+            .term_move = cTermMove,
+            .term_style = cTermStyle,
+            .term_write = cTermWrite,
+            .term_flush = cTermFlush,
+            .key_read = cKeyRead,
+            .call_depth = cCallDepth,
         };
     }
 
@@ -114,16 +218,27 @@ pub const Host = struct {
         return try arena.dupe(u8, self.arguments[index]);
     }
 
+    /// A whole file's bytes, or null when it could not be read.  The
+    /// bytes live in this Host and are borrowed until the next read —
+    /// which is what the C table hands out, and what the interpreter's
+    /// callback copies into the evaluation arena.
+    fn loadFile(self: *Host, path: []const u8) error{OutOfMemory}!?[]const u8 {
+        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
+        defer file.close(self.io);
+        const size: usize = @intCast(file.length(self.io) catch return null);
+        if (size > max_file_size) return null;
+        self.loaded_file.clearRetainingCapacity();
+        try self.loaded_file.resize(self.gpa, size);
+        const loaded = file.readPositionalAll(self.io, self.loaded_file.items, 0) catch
+            return null;
+        if (loaded != size) return null;
+        return self.loaded_file.items;
+    }
+
     fn readFile(context: *anyopaque, arena: Allocator, path: []const u8) error{OutOfMemory}!luce.backend.FileRead {
         const self: *Host = @ptrCast(@alignCast(context));
-        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return .failed;
-        defer file.close(self.io);
-        const size: usize = @intCast(file.length(self.io) catch return .failed);
-        if (size > max_file_size) return .failed;
-        const content = try arena.alloc(u8, size);
-        const loaded = file.readPositionalAll(self.io, content, 0) catch return .failed;
-        if (loaded != content.len) return .failed;
-        return .{ .content = content };
+        const found = (try self.loadFile(path)) orelse return .failed;
+        return .{ .content = try arena.dupe(u8, found) };
     }
 
     fn writeFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
@@ -217,8 +332,10 @@ pub const Host = struct {
         self.screen.buffer.clearRetainingCapacity();
     }
 
-    fn key(context: *anyopaque, arena: Allocator) error{OutOfMemory}!luce.backend.KeyEvent {
-        const self: *Host = @ptrCast(@alignCast(context));
+    /// Block until one key arrives.  Both slices are borrowed until the
+    /// next call: the name is static text or this Host's own storage,
+    /// and the text points into the pending input.
+    fn nextKey(self: *Host) error{OutOfMemory}!KeyView {
         try self.ensureScreen();
         // Present whatever the program drew before blocking: key_read
         // is the natural end of a frame.
@@ -237,7 +354,7 @@ pub const Host = struct {
             const decoded = key_mod.decode(self.screen.pending[0..self.screen.pending_len]);
             if (decoded.used != 0) {
                 self.screen.pending_used = decoded.used;
-                if (try keyEvent(arena, decoded.key)) |event| return event;
+                if (keyView(&self.screen.control_name, decoded.key)) |view| return view;
                 continue;
             }
             const count = std.posix.read(
@@ -248,6 +365,15 @@ pub const Host = struct {
         }
     }
 
+    fn key(context: *anyopaque, arena: Allocator) error{OutOfMemory}!luce.backend.KeyEvent {
+        const self: *Host = @ptrCast(@alignCast(context));
+        const view = try self.nextKey();
+        return .{
+            .name = try arena.dupe(u8, view.name),
+            .text = try arena.dupe(u8, view.text),
+        };
+    }
+
     const Screen = struct {
         active: bool = false,
         saved: std.posix.termios = undefined,
@@ -255,16 +381,211 @@ pub const Host = struct {
         pending: [64]u8 = undefined,
         pending_len: usize = 0,
         pending_used: usize = 0,
+        /// Where a control key's name ("ctrl_s") is written, so naming
+        /// one costs no allocation.
+        control_name: [6]u8 = undefined,
     };
+
+    // -- the same services, as the C table ------------------------------
+    //
+    // A thin layer over the callbacks above and nothing more: the two
+    // paths differ only in how a failure travels.  C cannot carry a Zig
+    // error, so running out of memory answers `.exhausted` and the run
+    // ends without a trap, because nothing about the program was wrong.
+
+    fn of(context: ?*anyopaque) *Host {
+        return @ptrCast(@alignCast(context.?));
+    }
+
+    fn cPrint(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
+        printLine(context.?, text[0..@intCast(length)]) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cTrap(
+        context: ?*anyopaque,
+        code: i32,
+        message: [*]const u8,
+        message_length: i64,
+        frames: [*]const abi.TraceFrame,
+        frame_count: i64,
+        dropped: i64,
+    ) callconv(.c) void {
+        const self = of(context);
+        const words = message[0..@intCast(message_length)];
+        const kept = @min(words.len, self.trap_storage.len);
+        self.trap_code = @enumFromInt(code);
+        @memcpy(self.trap_storage[0..kept], words[0..kept]);
+        self.trap_length = kept;
+
+        self.trace_count = 0;
+        self.trace_used = 0;
+        self.trace_dropped = @intCast(dropped);
+        for (frames[0..@intCast(frame_count)]) |frame| {
+            const named = self.keepText(frame.function[0..@intCast(frame.function_length)]);
+            const came_from = self.keepText(frame.source[0..@intCast(frame.source_length)]);
+            if (self.trace_count == self.trace_frames.len or named == null or came_from == null) {
+                self.trace_dropped +|= 1;
+                continue;
+            }
+            self.trace_frames[self.trace_count] = .{
+                .function = named.?,
+                .source = came_from.?,
+                .line = frame.line,
+                .column = frame.column,
+            };
+            self.trace_count += 1;
+        }
+    }
+
+    /// Copy borrowed trace text into this Host, or answer null when
+    /// the pool is full — a frame nobody can name is a frame dropped,
+    /// never a truncated name.
+    fn keepText(self: *Host, text: []const u8) ?[]const u8 {
+        if (self.trace_used + text.len > self.trace_storage.len) return null;
+        const kept = self.trace_storage[self.trace_used..][0..text.len];
+        @memcpy(kept, text);
+        self.trace_used += text.len;
+        return kept;
+    }
+
+    fn cFinished(context: ?*anyopaque, leaked: i64) callconv(.c) void {
+        of(context).leaked = leaked;
+    }
+
+    /// The same limit the interpreter runs under, so a program that
+    /// recurses away traps at the same call on either engine.
+    fn cCallDepth(context: ?*anyopaque) callconv(.c) i64 {
+        _ = context;
+        return call_depth;
+    }
+
+    fn cFileRead(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const found = (self.loadFile(path[0..@intCast(path_length)]) catch
+            return .exhausted) orelse return .no;
+        text.* = found.ptr;
+        length.* = @intCast(found.len);
+        return .yes;
+    }
+
+    fn cFileWrite(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        content: [*]const u8,
+        content_length: i64,
+    ) callconv(.c) abi.Answer {
+        const wrote = writeFile(
+            context.?,
+            path[0..@intCast(path_length)],
+            content[0..@intCast(content_length)],
+        );
+        return if (wrote) .yes else .no;
+    }
+
+    fn cFileExists(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (fileExists(context.?, path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn cArgCount(context: ?*anyopaque) callconv(.c) i64 {
+        return argCount(context.?);
+    }
+
+    fn cArg(
+        context: ?*anyopaque,
+        index: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        if (index < 0 or index >= self.arguments.len) return .no;
+        const found = self.arguments[@intCast(index)];
+        text.* = found.ptr;
+        length.* = @intCast(found.len);
+        return .yes;
+    }
+
+    fn cTermRows(context: ?*anyopaque) callconv(.c) i64 {
+        return rows(context.?);
+    }
+
+    fn cTermCols(context: ?*anyopaque) callconv(.c) i64 {
+        return cols(context.?);
+    }
+
+    fn cTermClear(context: ?*anyopaque) callconv(.c) abi.Answer {
+        clear(context.?) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cTermMove(context: ?*anyopaque, row: i64, col: i64) callconv(.c) abi.Answer {
+        move(context.?, row, col) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cTermStyle(
+        context: ?*anyopaque,
+        foreground: i64,
+        background: i64,
+        bold: i32,
+    ) callconv(.c) abi.Answer {
+        style(context.?, foreground, background, bold != 0) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cTermWrite(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
+        write(context.?, text[0..@intCast(length)]) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cTermFlush(context: ?*anyopaque) callconv(.c) abi.Answer {
+        flush(context.?) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cKeyRead(
+        context: ?*anyopaque,
+        name: *[*]const u8,
+        name_length: *i64,
+        text: *[*]const u8,
+        text_length: *i64,
+    ) callconv(.c) abi.Answer {
+        const view = of(context).nextKey() catch return .exhausted;
+        name.* = view.name.ptr;
+        name_length.* = @intCast(view.name.len);
+        text.* = view.text.ptr;
+        text_length.* = @intCast(view.text.len);
+        return .yes;
+    }
 };
 
 const max_file_size = 64 * 1024 * 1024;
 
+/// One decoded key as the host sees it, before either boundary copies
+/// it: `name` is static text or `control_name`, `text` points into the
+/// pending input buffer.
+const KeyView = struct {
+    name: []const u8,
+    text: []const u8 = "",
+};
+
 /// Map a decoded key to its stable Luce-visible event, or null for
-/// bytes that decode to nothing a program should see.
-fn keyEvent(arena: Allocator, decoded: key_mod.Key) error{OutOfMemory}!?luce.backend.KeyEvent {
+/// bytes that decode to nothing a program should see.  A control key's
+/// name is written into `control_name`, which the caller owns.
+fn keyView(control_name: *[6]u8, decoded: key_mod.Key) ?KeyView {
     return switch (decoded) {
-        .text => |text| .{ .name = "text", .text = try arena.dupe(u8, text) },
+        .text => |text| .{ .name = "text", .text = text },
         .enter => .{ .name = "enter" },
         .tab => .{ .name = "tab" },
         .backspace => .{ .name = "backspace" },
@@ -279,10 +600,9 @@ fn keyEvent(arena: Allocator, decoded: key_mod.Key) error{OutOfMemory}!?luce.bac
         .page_down => .{ .name = "page_down" },
         .escape => .{ .name = "escape" },
         .control => |letter| blk: {
-            const name = try arena.alloc(u8, 6);
-            @memcpy(name[0..5], "ctrl_");
-            name[5] = letter;
-            break :blk .{ .name = name };
+            @memcpy(control_name[0..5], "ctrl_");
+            control_name[5] = letter;
+            break :blk .{ .name = control_name };
         },
         .none => null,
     };
@@ -393,12 +713,112 @@ test "styles render 256-color SGR runs and clamp to defaults" {
 }
 
 test "decoded keys map to stable event names" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const text = (try keyEvent(arena.allocator(), .{ .text = "λ" })).?;
+    var control_name: [6]u8 = undefined;
+    const text = keyView(&control_name, .{ .text = "λ" }).?;
     try testing.expectEqualStrings("text", text.name);
     try testing.expectEqualStrings("λ", text.text);
-    const save = (try keyEvent(arena.allocator(), .{ .control = 's' })).?;
+    const save = keyView(&control_name, .{ .control = 's' }).?;
     try testing.expectEqualStrings("ctrl_s", save.name);
-    try testing.expectEqual(@as(?luce.backend.KeyEvent, null), try keyEvent(arena.allocator(), .none));
+    try testing.expectEqual(@as(?KeyView, null), keyView(&control_name, .none));
+}
+
+test "the C table offers every service, over the same implementation" {
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
+    const path = try std.fs.path.join(testing.allocator, &.{ directory, "notes.txt" });
+    defer testing.allocator.free(path);
+
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &written.writer, &.{ "alpha", "beta" });
+    defer host.deinit();
+
+    const table = host.table();
+    // Fail-closed is a property of the *host*, not of the table shape:
+    // loom withholds nothing, so no slot may be null.
+    inline for (@typeInfo(abi.Host).@"struct".fields) |field| {
+        if (@typeInfo(field.type) == .optional) {
+            try testing.expect(@field(table, field.name) != null);
+        }
+    }
+
+    try testing.expectEqual(@as(i64, 2), table.arg_count.?(table.context));
+    var text: [*]const u8 = undefined;
+    var length: i64 = undefined;
+    try testing.expectEqual(abi.Answer.yes, table.arg.?(table.context, 1, &text, &length));
+    try testing.expectEqualStrings("beta", text[0..@intCast(length)]);
+    try testing.expectEqual(abi.Answer.no, table.arg.?(table.context, 2, &text, &length));
+
+    try testing.expectEqual(
+        abi.Answer.no,
+        table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
+    );
+    try testing.expectEqual(abi.Answer.yes, table.file_write.?(
+        table.context,
+        path.ptr,
+        @intCast(path.len),
+        "kept",
+        4,
+    ));
+    try testing.expectEqual(
+        abi.Answer.yes,
+        table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
+    );
+    try testing.expectEqual(
+        abi.Answer.yes,
+        table.file_read.?(table.context, path.ptr, @intCast(path.len), &text, &length),
+    );
+    try testing.expectEqualStrings("kept", text[0..@intCast(length)]);
+
+    try testing.expectEqual(abi.Answer.yes, table.print.?(table.context, "hello", 5));
+    try testing.expectEqualStrings("hello\n", written.written());
+
+    try testing.expectEqual(@as(i64, call_depth), table.call_depth.?(table.context));
+
+    // What a compiled artifact reports comes back through the Host:
+    // the trap, and the call trace that came with it.
+    try testing.expect(host.reportedTrap() == null);
+    const frames = [_]abi.TraceFrame{
+        .{
+            .function = "divide",
+            .function_length = 6,
+            .source = "crash.luc",
+            .source_length = 9,
+            .line = 5,
+            .column = 5,
+        },
+        .{
+            .function = "main",
+            .function_length = 4,
+            .source = "crash.luc",
+            .source_length = 9,
+            .line = 12,
+            .column = 5,
+        },
+    };
+    table.trap(
+        table.context,
+        @intFromEnum(luce.mir.TrapCode.null_object),
+        "boom",
+        4,
+        &frames,
+        frames.len,
+        9,
+    );
+    table.finished.?(table.context, 3);
+    const reported = host.reportedTrap().?;
+    try testing.expectEqual(luce.mir.TrapCode.null_object, reported.code);
+    try testing.expectEqualStrings("boom", reported.message);
+    try testing.expectEqual(@as(usize, 2), reported.trace.len);
+    try testing.expectEqualStrings("divide", reported.trace[0].function);
+    try testing.expectEqualStrings("crash.luc", reported.trace[0].source);
+    try testing.expectEqual(@as(u32, 5), reported.trace[0].line);
+    try testing.expectEqualStrings("main", reported.trace[1].function);
+    try testing.expectEqual(@as(u32, 12), reported.trace[1].line);
+    try testing.expectEqual(@as(u32, 9), reported.dropped);
+    try testing.expectEqual(@as(?i64, 3), host.leaked);
 }

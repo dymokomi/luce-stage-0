@@ -3,9 +3,9 @@
 This is the specification of Luce's memory model — every situation
 that defines the rules, numbered, with the decision and example
 code.  **Ratified 2026-07-30: S1–S43 approved as written.
-Implemented the same day** — the compiler and interpreter enforce
+Implemented the same day** — the compiler and `libluce_rt` enforce
 every situation below, diagnostics quote the S-numbers, and
-`src/luce/ownership_spec.zig` is the executable form of this
+`src/luce/specs/ownership_spec.zig` is the executable form of this
 document.  Optionals (`T?`) are Phase 3, designed together with
 error handling; global scope is Phase 2 (see docs/V2.md).
 
@@ -601,12 +601,13 @@ part of ownership v1.
 **S33. Nothing can leak.**  Every object is owned by a binding, a
 container, or is a statement temporary; all three have defined death
 points.  loom's "leaked N objects" report becomes an internal
-assertion (it should never fire; if it does, the *interpreter* has a
-bug, not the program).
+assertion (it should never fire; if it does, the *runtime* has a bug,
+not the program).
 
 **S34. The step/depth budget and traps still abort cleanly.**  On any
-trap, the arena reclaims everything regardless of ownership state —
-publish-nothing-on-failure is unchanged.
+trap, teardown reclaims everything regardless of ownership state —
+whatever the unwind never released, the runtime releases when the run
+ends — and publish-nothing-on-failure is unchanged.
 
 **S35. The Fabric (later).**  Persistent Texel-owned objects will need
 an owner that is neither a binding nor a container.  The model
@@ -620,7 +621,7 @@ reserves that as a future owner kind; nothing in S1–S34 blocks it.
   program needs genuinely shared ownership that `give`/`copy` cannot
   express.
 - Weak references — only meaningful once `share` exists.
-- Arenas as a *language* feature — the interpreter may use them as an
+- Arenas as a *language* feature — the runtime may use them as an
   optimization invisibly.
 - `defer` — no longer needed for memory; may return later for host
   cleanup (files, terminal), as a separate decision.

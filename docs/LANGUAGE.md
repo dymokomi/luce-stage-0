@@ -24,7 +24,7 @@ Two kinds of data, with a deliberate line between them:
 
 The memory model, in one paragraph (the full ratified specification —
 43 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
-its numbers in diagnostics and `src/luce/ownership_spec.zig` executes
+its numbers in diagnostics and `src/luce/specs/ownership_spec.zig` executes
 it):
 
 - **The binding that received a fresh object owns it**, and the
@@ -72,8 +72,8 @@ it):
 Two dynamic backstops cover what static rules cannot see: `give`
 through an alias of a container-owned object traps `not_owned`
 (S23), and every verb demands a filled slot (`null_object`
-otherwise).  Nothing can leak — loom's leak report is now an
-interpreter self-check, not a program diagnostic.
+otherwise).  Nothing can leak — loom's leak report is now a runtime
+self-check, not a program diagnostic.
 
 ## Collections
 
@@ -107,7 +107,8 @@ belongs to one type is called on it — and like Zig, `xs.append(v)` is
 sugar for a plain function with the receiver first, not dispatch):
 
 - `List(T)`: `append(v)`, `insert(i, v)`, `remove(i)`, `pop()` (traps
-  when empty), `sort()` (in place; Int/Float/String elements),
+  when empty), `sort()` (in place, **stable**; Int/Float/String
+  elements),
   `reverse()`, `find(v) -> Int` (-1 when absent), `contains(v)`,
   `clear()`, plus `len`, index, slice.
 - rank-1 `Array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
@@ -117,7 +118,9 @@ sugar for a plain function with the receiver first, not dispatch):
   missing key), index set (insert or update), `has(k)`, `get(k,
   default) -> V` (the value or the default — no trap), `remove(k)`
   (no-op when absent), `keys() -> List(K)`, `values() -> List(V)`,
-  `clear()`, `len`.  Iteration order is insertion order.
+  `clear()`, `len`.  Iteration order is insertion order, and the
+  lookups (index, `has`, `get`, index-set) are O(1): the entries
+  stay a dense array in arrival order with a hash index over it.
 - `Builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
   `str(b)`.  `append_ascii` puts one ASCII byte in without the String
   a `chr()` would allocate; it traps `bad_codepoint` outside 0..127,
@@ -159,8 +162,8 @@ UTF-8-boundary-checked slices `s[a:b]`, `len(s)` in bytes,
 for raw byte *search* (the offset of the first `byte` at or after
 `start`, or -1; the byte must be 0..255 and `start` within the
 string, or it traps).  Search is a primitive for the same reason
-access is: the library builds substring matching on it, and an
-engine is free to vectorize it.  Everything built on top of them
+access is: the library builds substring matching on it, and the
+runtime is free to vectorize it.  Everything built on top of them
 lives in the standard library's `strings` module (docs/STD.md),
 written in ordinary Luce:
 
@@ -297,9 +300,12 @@ program without publishing anything.  New codes in this round:
 `null_object`, `not_owned`, `parse_failed`, `bad_codepoint`.
 Long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
-string bounds/boundary, step budget, call depth.  The interpreter runs
-on an explicit frame stack, so call depth is a *policy* limit, not a
-native-stack accident.
+string bounds/boundary, step budget, call depth.  Call depth is a
+*policy* limit, not a native-stack accident, on both engines: the
+interpreter runs on an explicit frame stack, and compiled code carries
+its remaining depth as a hidden argument and refuses the call that
+would exhaust it (docs/CODEGEN.md).  Runaway recursion is a trap with
+a message and a call stack, never a segfault.
 
 ## Modules
 
