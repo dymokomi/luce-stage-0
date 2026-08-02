@@ -219,8 +219,9 @@ fn intrinsicSupported(program: *const ir.Program, function: *const ir.Function, 
         .has_key, .key_at, .value_at, .map_get, .map_keys, .map_values => true,
         // give/copy/free on an object (struct values are a later phase).
         .give_object, .copy_object, .free_object => a0 == .heap,
-        // str(Float)/parse_float need Zig-exact float<->decimal; deferred.
-        .str_value => a0 != .float and (a0 != .heap or isBuilder(program, a0.heap)),
+        // parse_float still needs a correctly-rounded reader; str(Float)
+        // ships via the ryu runtime.
+        .str_value => a0 != .heap or isBuilder(program, a0.heap),
         .print => a0 == .string,
         else => false, // map/array ops, give/copy/free: later phases
     };
@@ -418,6 +419,254 @@ fn valType(of: types.Type) u8 {
 }
 
 // ---------------------------------------------------------------------------
+// Ryu tables — str(Float)'s shortest-round-trip digits need the 5^i /
+// 5^-i 128-bit fixed-point tables Zig's own formatter uses (private to
+// std, so generated here at comptime with exact big-int math and proven
+// against std.fmt by the replica test below).  Layout matches the
+// reference: each entry is (low u64, high u64) of a 125-bit value.
+// ---------------------------------------------------------------------------
+
+const pow5_table_len = 326; // 5^i, truncated to the top 125 bits
+const pow5_inv_table_len = 342; // floor(2^(len(5^i)-1+125) / 5^i) + 1
+
+const RyuTables = struct { pow5: [pow5_table_len][2]u64, inv: [pow5_inv_table_len][2]u64 };
+
+fn generatedPow5Tables() RyuTables {
+    @setEvalBranchQuota(2_000_000);
+    var result: RyuTables = undefined;
+    var pow: comptime_int = 1; // 5^i
+    var len: comptime_int = 1; // bit length of pow
+    var i: usize = 0;
+    while (i < pow5_inv_table_len) : (i += 1) {
+        if (i < pow5_table_len) {
+            const split: comptime_int = if (len <= 125) pow << (125 - len) else pow >> (len - 125);
+            result.pow5[i] = .{ @truncate(split), @truncate(split >> 64) };
+        }
+        const inv: comptime_int = ((1 << (len - 1 + 125)) / pow) + 1;
+        result.inv[i] = .{ @truncate(inv), @truncate(inv >> 64) };
+        pow *= 5;
+        len += 2;
+        if ((pow >> len) != 0) len += 1;
+    }
+    return result;
+}
+
+const ryu_tables = generatedPow5Tables();
+
+// Linear-memory addresses: the data image places the tables right after
+// the empty-string block at 0, 8-aligned; strings follow them.
+const pow5_table_addr: u32 = 8;
+const pow5_inv_table_addr: u32 = pow5_table_addr + pow5_table_len * 16;
+const tables_end_addr: u32 = pow5_inv_table_addr + pow5_inv_table_len * 16;
+
+// -- the reference algorithm in plain Zig -----------------------------------
+//
+// A faithful replica of std.fmt's binaryToDecimal (full-table 64-bit
+// backend) and positional rendering, over the generated tables.  It
+// exists to prove the tables and the exact algorithm the wasm runtime
+// transliterates — the test below holds it byte-identical to std.fmt
+// itself, so any generation slip or transcription slip fails in Zig,
+// before the wasm translation can inherit it.
+
+const RefDecimal = struct { mantissa: u64, exponent: i32, sign: bool };
+const ref_special_exponent = std.math.maxInt(i32);
+
+fn refLog10Pow2(e: u32) u32 {
+    return @intCast((@as(u64, e) * 169464822037455) >> 49);
+}
+fn refLog10Pow5(e: u32) u32 {
+    return @intCast((@as(u64, e) * 196742565691928) >> 48);
+}
+fn refPow5Bits(e: u32) u32 {
+    return @intCast(((@as(u64, e) * 163391164108059) >> 46) + 1);
+}
+fn refPow5Factor(value_: u64) u32 {
+    var count: u32 = 0;
+    var value = value_;
+    while (value > 0) : ({
+        count += 1;
+        value /= 5;
+    }) {
+        if (value % 5 != 0) return count;
+    }
+    return 0;
+}
+fn refMulShift64(m: u64, mul: *const [2]u64, j: u32) u64 {
+    const b0 = @as(u128, m) * mul[0];
+    const b2 = @as(u128, m) * mul[1];
+    if (j < 128) {
+        const shift: u6 = @intCast(j - 64);
+        return @intCast(((b0 >> 64) + b2) >> shift);
+    }
+    return 0;
+}
+
+fn refBinaryToDecimal(bits: u64) RefDecimal {
+    const mantissa_bits = 52;
+    const bias = 1023;
+    const ieee_sign = (bits >> 63) & 1 != 0;
+    const ieee_mantissa = bits & ((@as(u64, 1) << mantissa_bits) - 1);
+    const ieee_exponent: u32 = @intCast((bits >> mantissa_bits) & 0x7FF);
+
+    if (ieee_exponent == 0 and ieee_mantissa == 0) {
+        return .{ .mantissa = 0, .exponent = 0, .sign = ieee_sign };
+    }
+    if (ieee_exponent == 0x7FF) {
+        return .{ .mantissa = ieee_mantissa, .exponent = ref_special_exponent, .sign = ieee_sign };
+    }
+
+    var e2: i32 = undefined;
+    var m2: u64 = undefined;
+    if (ieee_exponent == 0) {
+        e2 = 1 - bias - mantissa_bits - 2;
+        m2 = ieee_mantissa;
+    } else {
+        e2 = @as(i32, @intCast(ieee_exponent)) - bias - mantissa_bits - 2;
+        m2 = (@as(u64, 1) << mantissa_bits) | ieee_mantissa;
+    }
+    const accept_bounds = (m2 & 1) == 0;
+    const mv = 4 * m2;
+    const mm_shift: u1 = @intFromBool(ieee_mantissa != 0 or ieee_exponent == 0);
+
+    var vr: u64 = undefined;
+    var vp: u64 = undefined;
+    var vm: u64 = undefined;
+    var e10: i32 = undefined;
+    var vm_is_trailing_zeros = false;
+    var vr_is_trailing_zeros = false;
+    if (e2 >= 0) {
+        const q: u32 = refLog10Pow2(@intCast(e2)) - @intFromBool(e2 > 3);
+        e10 = @intCast(q);
+        const k: i32 = @intCast(125 + refPow5Bits(q) - 1);
+        const i: u32 = @intCast(-e2 + @as(i32, @intCast(q)) + k);
+        const mul = &ryu_tables.inv[q];
+        vr = refMulShift64(mv, mul, i);
+        vp = refMulShift64(mv + 2, mul, i);
+        vm = refMulShift64(mv - 1 - mm_shift, mul, i);
+        if (q <= 21) {
+            if (mv % 5 == 0) {
+                vr_is_trailing_zeros = refPow5Factor(mv) >= q;
+            } else if (accept_bounds) {
+                vm_is_trailing_zeros = refPow5Factor(mv - 1 - mm_shift) >= q;
+            } else {
+                vp -= @intFromBool(refPow5Factor(mv + 2) >= q);
+            }
+        }
+    } else {
+        const q: u32 = refLog10Pow5(@intCast(-e2)) - @intFromBool(-e2 > 1);
+        e10 = @as(i32, @intCast(q)) + e2;
+        const pow_index: i32 = -e2 - @as(i32, @intCast(q));
+        const k: i32 = @as(i32, @intCast(refPow5Bits(@intCast(pow_index)))) - 125;
+        const j: u32 = @intCast(@as(i32, @intCast(q)) - k);
+        const mul = &ryu_tables.pow5[@intCast(pow_index)];
+        vr = refMulShift64(mv, mul, j);
+        vp = refMulShift64(mv + 2, mul, j);
+        vm = refMulShift64(mv - 1 - mm_shift, mul, j);
+        if (q <= 1) {
+            vr_is_trailing_zeros = true;
+            if (accept_bounds) {
+                vm_is_trailing_zeros = mm_shift == 1;
+            } else {
+                vp -= 1;
+            }
+        } else if (q < 63) {
+            vr_is_trailing_zeros = (mv & ((@as(u64, 1) << @intCast(q)) - 1)) == 0;
+        }
+    }
+
+    var removed: u32 = 0;
+    var last_removed_digit: u8 = 0;
+    while (vp / 10 > vm / 10) {
+        vm_is_trailing_zeros = vm_is_trailing_zeros and vm % 10 == 0;
+        vr_is_trailing_zeros = vr_is_trailing_zeros and last_removed_digit == 0;
+        last_removed_digit = @intCast(vr % 10);
+        vr /= 10;
+        vp /= 10;
+        vm /= 10;
+        removed += 1;
+    }
+    if (vm_is_trailing_zeros) {
+        while (vm % 10 == 0) {
+            vr_is_trailing_zeros = vr_is_trailing_zeros and last_removed_digit == 0;
+            last_removed_digit = @intCast(vr % 10);
+            vr /= 10;
+            vp /= 10;
+            vm /= 10;
+            removed += 1;
+        }
+    }
+    if (vr_is_trailing_zeros and last_removed_digit == 5 and vr % 2 == 0) {
+        last_removed_digit = 4;
+    }
+    return .{
+        .mantissa = vr + @intFromBool((vr == vm and (!accept_bounds or !vm_is_trailing_zeros)) or last_removed_digit >= 5),
+        .exponent = e10 + @as(i32, @intCast(removed)),
+        .sign = ieee_sign,
+    };
+}
+
+fn refDecimalLength(v: u64) u32 {
+    var length: u32 = 1;
+    var value = v;
+    while (value >= 10) : (value /= 10) length += 1;
+    return length;
+}
+
+/// Positional rendering with no precision — std.fmt's decimal mode.
+fn refFormatDecimal(buf: []u8, d: RefDecimal) []const u8 {
+    if (d.exponent == ref_special_exponent) {
+        var index: usize = 0;
+        if (d.sign) {
+            buf[0] = '-';
+            index = 1;
+        }
+        const word = if (d.mantissa != 0) "nan" else "inf";
+        @memcpy(buf[index..][0..3], word);
+        return buf[0 .. index + 3];
+    }
+    var output = d.mantissa;
+    const olength = refDecimalLength(output);
+    var index: usize = 0;
+    if (d.sign) {
+        buf[index] = '-';
+        index += 1;
+    }
+    const dp_offset = d.exponent + @as(i32, @intCast(olength));
+    if (dp_offset <= 0) {
+        buf[index] = '0';
+        buf[index + 1] = '.';
+        index += 2;
+        const zeros: u32 = @intCast(-dp_offset);
+        @memset(buf[index..][0..zeros], '0');
+        index += zeros;
+        refWriteDecimal(buf[index..], &output, olength);
+        index += olength;
+    } else {
+        const dp: usize = @intCast(dp_offset);
+        if (dp >= olength) {
+            refWriteDecimal(buf[index..], &output, olength);
+            index += olength;
+            @memset(buf[index..][0 .. dp - olength], '0');
+            index += dp - olength;
+        } else {
+            refWriteDecimal(buf[index + dp + 1 ..], &output, olength - @as(u32, @intCast(dp)));
+            buf[index + dp] = '.';
+            refWriteDecimal(buf[index..], &output, @intCast(dp));
+            index += olength + 1;
+        }
+    }
+    return buf[0..index];
+}
+
+fn refWriteDecimal(buf: []u8, value: *u64, count: u32) void {
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        buf[count - i - 1] = '0' + @as(u8, @intCast(value.* % 10));
+        value.* /= 10;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Asm — the low-level wasm byte emitter shared by the runtime prelude and
 // the per-function lowering.
 // ---------------------------------------------------------------------------
@@ -511,6 +760,11 @@ const Asm = struct {
         try self.op(0x00);
         try self.op(0x00);
     }
+    fn memoryFill(self: *Asm) !void { // dest, byte value, len on stack
+        try self.op(wasm.misc);
+        try self.u32v(wasm.memory_fill_sub);
+        try self.op(0x00);
+    }
 
     /// Trap with a Luce code, then `unreachable` (stack-polymorphic, so
     /// this is valid mid-expression in a value-returning function).
@@ -588,6 +842,12 @@ const Rt = enum(u32) {
     fmin, // (f64 a, f64 b) -> f64
     fmax, // (f64 a, f64 b) -> f64
     frem, // (f64 x, f64 y) -> f64   (fmod: @rem's float semantics, bit-exact)
+    // str(Float): ryu shortest round-trip + positional rendering.
+    umulhi, // (i64 a, i64 b) -> i64   (high 64 bits of the unsigned product)
+    mul_shift, // (i64 m, i32 entry_addr, i64 j) -> i64   (ryu mulShift64)
+    p5fac, // (i64 v) -> i64   (largest k with 5^k dividing v)
+    wdig, // (i32 addr, i64 value, i64 count) -> i64   (write digits; return rest)
+    fstr, // (f64) -> i32   (a fresh string block)
 
     const count: u32 = @typeInfo(Rt).@"enum".fields.len;
 
@@ -645,6 +905,11 @@ const rt_signatures = [_]RtSig{
     .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // fmin
     .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // fmax
     .{ .params = &.{ wasm.f64t, wasm.f64t }, .result = wasm.f64t }, // frem
+    .{ .params = &.{ wasm.i64t, wasm.i64t }, .result = wasm.i64t }, // umulhi
+    .{ .params = &.{ wasm.i64t, wasm.i32t, wasm.i64t }, .result = wasm.i64t }, // mul_shift
+    .{ .params = &.{wasm.i64t}, .result = wasm.i64t }, // p5fac
+    .{ .params = &.{ wasm.i32t, wasm.i64t, wasm.i64t }, .result = wasm.i64t }, // wdig
+    .{ .params = &.{wasm.f64t}, .result = wasm.i32t }, // fstr
 };
 
 /// Emit one runtime function's body (locals + code).  Written in the
@@ -1262,6 +1527,35 @@ fn emitRuntime(arena: Allocator, which: Rt) ![]const u8 {
             // locals: uxi(2), uyi(3), ex(4), ey(5), sx(6), i(7) — all i64.
             try locals.appendSlice(arena, &.{ wasm.i64t, wasm.i64t, wasm.i64t, wasm.i64t, wasm.i64t, wasm.i64t });
             try emitFrem(&a);
+        },
+        .umulhi => {
+            // params: a(0), b(1).  locals: mid(2), mid2(3) — i64.
+            try locals.appendSlice(arena, &.{ wasm.i64t, wasm.i64t });
+            try emitUmulhi(&a);
+        },
+        .mul_shift => {
+            // params: m(0,i64), addr(1,i32), j(2,i64).
+            // locals: sumlo(3,i64), sumhi(4,i64), sh(5,i64).
+            try locals.appendSlice(arena, &.{ wasm.i64t, wasm.i64t, wasm.i64t });
+            try emitMulShift(&a);
+        },
+        .p5fac => {
+            // params: v(0,i64).  locals: n(1,i64).
+            try locals.append(arena, wasm.i64t);
+            try emitP5Fac(&a);
+        },
+        .wdig => {
+            // params: addr(0,i32), value(1,i64), count(2,i64).  locals: k(3,i64).
+            try locals.append(arena, wasm.i64t);
+            try emitWdig(&a);
+        },
+        .fstr => {
+            // params: x(0,f64).  locals: 19 i64 then 7 i32 (see emitFstr).
+            var n: usize = 0;
+            while (n < 19) : (n += 1) try locals.append(arena, wasm.i64t);
+            n = 0;
+            while (n < 7) : (n += 1) try locals.append(arena, wasm.i32t);
+            try emitFstr(&a);
         },
     }
     try a.op(wasm.end); // end function body
@@ -3246,6 +3540,909 @@ fn emitFremStep(a: *Asm, ux_local: u32, uy_local: u32, i_local: u32, x_local: u3
     try a.op(wasm.end);
 }
 
+/// umulhi: the high 64 bits of a*b, via four 32-bit partial products.
+/// params a=0, b=1; locals mid=2, mid2=3.
+fn emitUmulhi(a: *Asm) !void {
+    const mid = 2;
+    const mid2 = 3;
+    const mask32: i64 = 0xFFFFFFFF;
+    // mid = (a>>32)*(b&M) + ((a&M)*(b&M) >> 32)
+    try a.localGet(0);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.localGet(1);
+    try a.constI64(mask32);
+    try a.op(wasm.i64_and);
+    try a.op(wasm.i64_mul);
+    try a.localGet(0);
+    try a.constI64(mask32);
+    try a.op(wasm.i64_and);
+    try a.localGet(1);
+    try a.constI64(mask32);
+    try a.op(wasm.i64_and);
+    try a.op(wasm.i64_mul);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.op(wasm.i64_add);
+    try a.localSet(mid);
+    // mid2 = (a&M)*(b>>32) + (mid & M)
+    try a.localGet(0);
+    try a.constI64(mask32);
+    try a.op(wasm.i64_and);
+    try a.localGet(1);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.op(wasm.i64_mul);
+    try a.localGet(mid);
+    try a.constI64(mask32);
+    try a.op(wasm.i64_and);
+    try a.op(wasm.i64_add);
+    try a.localSet(mid2);
+    // result = (a>>32)*(b>>32) + (mid>>32) + (mid2>>32)
+    try a.localGet(0);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.localGet(1);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.op(wasm.i64_mul);
+    try a.localGet(mid);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.op(wasm.i64_add);
+    try a.localGet(mid2);
+    try a.constI64(32);
+    try a.op(wasm.i64_shr_u);
+    try a.op(wasm.i64_add);
+}
+
+/// ryu mulShift64: ((m*mul.lo >> 64) + m*mul.hi) >> (j-64), the 128-bit
+/// sum carried by hand.  params m=0, addr=1(i32), j=2; locals sumlo=3,
+/// sumhi=4, sh=5.
+fn emitMulShift(a: *Asm) !void {
+    const m = 0;
+    const addr = 1;
+    const j = 2;
+    const sumlo = 3;
+    const sumhi = 4;
+    const sh = 5;
+    // sumlo = m*hi (low half); add b0hi = umulhi(m, lo) with carry.
+    try a.localGet(m);
+    try a.localGet(addr);
+    try a.load(wasm.i64_load, 8); // mul.hi
+    try a.op(wasm.i64_mul);
+    try a.localSet(sumlo);
+    // sumhi = umulhi(m, hi)
+    try a.localGet(m);
+    try a.localGet(addr);
+    try a.load(wasm.i64_load, 8);
+    try a.callFunc(Rt.umulhi.index());
+    try a.localSet(sumhi);
+    // tmp := umulhi(m, lo); sumlo += tmp; carry into sumhi.
+    try a.localGet(sumlo);
+    try a.localGet(m);
+    try a.localGet(addr);
+    try a.load(wasm.i64_load, 0); // mul.lo
+    try a.callFunc(Rt.umulhi.index());
+    try a.op(wasm.i64_add);
+    try a.localTee(sh); // reuse sh briefly as the new low word
+    try a.localGet(sumlo);
+    try a.op(wasm.i64_lt_u); // wrapped -> carry
+    try a.op(wasm.i64_extend_i32_u);
+    try a.localGet(sumhi);
+    try a.op(wasm.i64_add);
+    try a.localSet(sumhi);
+    try a.localGet(sh);
+    try a.localSet(sumlo);
+    // sh = j - 64 (always 1..63 for f64); result = sumlo>>sh | sumhi<<(64-sh)
+    try a.localGet(j);
+    try a.constI64(64);
+    try a.op(wasm.i64_sub);
+    try a.localSet(sh);
+    try a.localGet(sumlo);
+    try a.localGet(sh);
+    try a.op(wasm.i64_shr_u);
+    try a.localGet(sumhi);
+    try a.constI64(64);
+    try a.localGet(sh);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i64_shl);
+    try a.op(wasm.i64_or);
+}
+
+/// p5fac: how many times 5 divides v.  params v=0; locals n=1.
+fn emitP5Fac(a: *Asm) !void {
+    const v = 0;
+    const n = 1;
+    try a.constI64(0);
+    try a.localSet(n);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(v);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(v);
+    try a.constI64(5);
+    try a.op(wasm.i64_rem_u);
+    try a.constI64(0);
+    try a.op(wasm.i64_ne);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(n);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+    try a.localGet(n);
+    try a.constI64(1);
+    try a.op(wasm.i64_add);
+    try a.localSet(n);
+    try a.localGet(v);
+    try a.constI64(5);
+    try a.op(wasm.i64_div_u);
+    try a.localSet(v);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.constI64(0);
+}
+
+/// wdig: write `count` decimal digits of `value` ending at addr+count-1
+/// (backward, like the reference's writeDecimal), returning the undivided
+/// remainder so a split render can continue with the leading digits.
+/// params addr=0(i32), value=1, count=2; locals k=3.
+fn emitWdig(a: *Asm) !void {
+    const addr = 0;
+    const value = 1;
+    const count = 2;
+    const k = 3;
+    try a.constI64(0);
+    try a.localSet(k);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(k);
+    try a.localGet(count);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    // buf[count-1-k] = '0' + value % 10
+    try a.localGet(addr);
+    try a.localGet(count);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localGet(k);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i32_wrap_i64);
+    try a.op(wasm.i32_add);
+    try a.localGet(value);
+    try a.constI64(10);
+    try a.op(wasm.i64_rem_u);
+    try a.op(wasm.i32_wrap_i64);
+    try a.constI32('0');
+    try a.op(wasm.i32_add);
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(value);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.localSet(value);
+    try a.localGet(k);
+    try a.constI64(1);
+    try a.op(wasm.i64_add);
+    try a.localSet(k);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.localGet(value);
+}
+
+/// fstr: str(Float) — the ryu core (binaryToDecimal, full-table 64-bit
+/// backend) then positional rendering, transliterated from the proven
+/// Zig replica above.  params x=0 (f64); locals: bits=1, mant=2, iexp=3,
+/// m2=4, e2=5, mv=6, mms=7, q=8, vr=9, vp=10, vm=11, e10=12, removed=13,
+/// lastrem=14, outv=15, olen=16, dp=17, tmp=18, jsh=19 (i64); sign=20,
+/// accept=21, vmtz=22, vrtz=23, addr=24, ptr=25, idx=26 (i32).
+fn emitFstr(a: *Asm) !void {
+    const x = 0;
+    const bits = 1;
+    const mant = 2;
+    const iexp = 3;
+    const m2 = 4;
+    const e2 = 5;
+    const mv = 6;
+    const mms = 7;
+    const q = 8;
+    const vr = 9;
+    const vp = 10;
+    const vm = 11;
+    const e10 = 12;
+    const removed = 13;
+    const lastrem = 14;
+    const outv = 15;
+    const olen = 16;
+    const dp = 17;
+    const tmp = 18;
+    const jsh = 19;
+    const sign = 20;
+    const accept = 21;
+    const vmtz = 22;
+    const vrtz = 23;
+    const addr = 24;
+    const ptr = 25;
+    const idx = 26;
+
+    try a.localGet(x);
+    try a.op(wasm.i64_reinterpret_f64);
+    try a.localSet(bits);
+    try a.localGet(bits);
+    try a.constI64(63);
+    try a.op(wasm.i64_shr_u);
+    try a.op(wasm.i32_wrap_i64);
+    try a.localSet(sign);
+    try a.localGet(bits);
+    try a.constI64(0xFFFFFFFFFFFFF);
+    try a.op(wasm.i64_and);
+    try a.localSet(mant);
+    try a.localGet(bits);
+    try a.constI64(52);
+    try a.op(wasm.i64_shr_u);
+    try a.constI64(0x7FF);
+    try a.op(wasm.i64_and);
+    try a.localSet(iexp);
+
+    // nan / inf: three letters, optionally signed.
+    try a.localGet(iexp);
+    try a.constI64(0x7FF);
+    try a.op(wasm.i64_eq);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constI32(3);
+    try a.localGet(sign);
+    try a.op(wasm.i32_add);
+    try a.callFunc(Rt.str_new.index());
+    try a.localSet(ptr);
+    try a.localGet(ptr);
+    try a.constI32(4);
+    try a.op(wasm.i32_add);
+    try a.localSet(idx);
+    try a.localGet(sign);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(idx);
+    try a.constI32('-');
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(idx);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localSet(idx);
+    try a.op(wasm.end);
+    // "nan" when the mantissa is set, else "inf".
+    try a.localGet(mant);
+    try a.constI64(0);
+    try a.op(wasm.i64_ne);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(idx);
+    try a.constI32('n');
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(idx);
+    try a.constI32('a');
+    try a.store(wasm.i32_store8, 1);
+    try a.localGet(idx);
+    try a.constI32('n');
+    try a.store(wasm.i32_store8, 2);
+    try a.op(wasm.else_);
+    try a.localGet(idx);
+    try a.constI32('i');
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(idx);
+    try a.constI32('n');
+    try a.store(wasm.i32_store8, 1);
+    try a.localGet(idx);
+    try a.constI32('f');
+    try a.store(wasm.i32_store8, 2);
+    try a.op(wasm.end);
+    try a.localGet(ptr);
+    try a.op(wasm.ret);
+    try a.op(wasm.end);
+
+    // Zero (either sign): mantissa 0, exponent 0 through the shared
+    // rendering (which prints "0"/"-0").
+    try a.localGet(iexp);
+    try a.op(wasm.i64_eqz);
+    try a.localGet(mant);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.i32_and);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constI64(0);
+    try a.localSet(outv);
+    try a.constI64(0);
+    try a.localSet(e10);
+    try a.op(wasm.else_);
+    try emitFstrCore(a, .{
+        .mant = mant,
+        .iexp = iexp,
+        .m2 = m2,
+        .e2 = e2,
+        .mv = mv,
+        .mms = mms,
+        .q = q,
+        .vr = vr,
+        .vp = vp,
+        .vm = vm,
+        .e10 = e10,
+        .removed = removed,
+        .lastrem = lastrem,
+        .outv = outv,
+        .tmp = tmp,
+        .jsh = jsh,
+        .accept = accept,
+        .vmtz = vmtz,
+        .vrtz = vrtz,
+        .addr = addr,
+    });
+    try a.op(wasm.end);
+
+    // -- render (positional, no precision) ---------------------------------
+    // olen = decimal length of outv.
+    try a.constI64(1);
+    try a.localSet(olen);
+    try a.localGet(outv);
+    try a.localSet(tmp);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(tmp);
+    try a.constI64(10);
+    try a.op(wasm.i64_lt_u);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try a.localGet(tmp);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.localSet(tmp);
+    try a.localGet(olen);
+    try a.constI64(1);
+    try a.op(wasm.i64_add);
+    try a.localSet(olen);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    // dp = e10 + olen.
+    try a.localGet(e10);
+    try a.localGet(olen);
+    try a.op(wasm.i64_add);
+    try a.localSet(dp);
+
+    // Total byte length by shape, then the block.
+    try a.localGet(dp);
+    try a.constI64(0);
+    try a.op(wasm.i64_le_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.i64t);
+    try a.constI64(2);
+    try a.localGet(dp);
+    try a.op(wasm.i64_sub);
+    try a.localGet(olen);
+    try a.op(wasm.i64_add);
+    try a.op(wasm.else_);
+    try a.localGet(dp);
+    try a.localGet(olen);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.i64t);
+    try a.localGet(dp);
+    try a.op(wasm.else_);
+    try a.localGet(olen);
+    try a.constI64(1);
+    try a.op(wasm.i64_add);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.op(wasm.i32_wrap_i64);
+    try a.localGet(sign);
+    try a.op(wasm.i32_add);
+    try a.callFunc(Rt.str_new.index());
+    try a.localSet(ptr);
+    try a.localGet(ptr);
+    try a.constI32(4);
+    try a.op(wasm.i32_add);
+    try a.localSet(idx);
+    try a.localGet(sign);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(idx);
+    try a.constI32('-');
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(idx);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localSet(idx);
+    try a.op(wasm.end);
+
+    try a.localGet(dp);
+    try a.constI64(0);
+    try a.op(wasm.i64_le_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    // 0.000ddd
+    try a.localGet(idx);
+    try a.constI32('0');
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(idx);
+    try a.constI32('.');
+    try a.store(wasm.i32_store8, 1);
+    try a.localGet(idx);
+    try a.constI32(2);
+    try a.op(wasm.i32_add);
+    try a.localSet(idx);
+    try a.localGet(idx);
+    try a.constI32('0');
+    try a.constI64(0);
+    try a.localGet(dp);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i32_wrap_i64);
+    try a.memoryFill();
+    try a.localGet(idx);
+    try a.constI64(0);
+    try a.localGet(dp);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i32_wrap_i64);
+    try a.op(wasm.i32_add);
+    try a.localSet(idx);
+    try a.localGet(idx);
+    try a.localGet(outv);
+    try a.localGet(olen);
+    try a.callFunc(Rt.wdig.index());
+    try a.op(wasm.drop);
+    try a.op(wasm.else_);
+    try a.localGet(dp);
+    try a.localGet(olen);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    // dddd000
+    try a.localGet(idx);
+    try a.localGet(outv);
+    try a.localGet(olen);
+    try a.callFunc(Rt.wdig.index());
+    try a.op(wasm.drop);
+    try a.localGet(idx);
+    try a.localGet(olen);
+    try a.op(wasm.i32_wrap_i64);
+    try a.op(wasm.i32_add);
+    try a.constI32('0');
+    try a.localGet(dp);
+    try a.localGet(olen);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i32_wrap_i64);
+    try a.memoryFill();
+    try a.op(wasm.else_);
+    // dd.dd — fractional digits first (they are the low ones), then
+    // the point, then the leading digits from the remaining value.
+    try a.localGet(idx);
+    try a.localGet(dp);
+    try a.op(wasm.i32_wrap_i64);
+    try a.op(wasm.i32_add);
+    try a.constI32(1);
+    try a.op(wasm.i32_add);
+    try a.localGet(outv);
+    try a.localGet(olen);
+    try a.localGet(dp);
+    try a.op(wasm.i64_sub);
+    try a.callFunc(Rt.wdig.index());
+    try a.localSet(outv);
+    try a.localGet(idx);
+    try a.localGet(dp);
+    try a.op(wasm.i32_wrap_i64);
+    try a.op(wasm.i32_add);
+    try a.constI32('.');
+    try a.store(wasm.i32_store8, 0);
+    try a.localGet(idx);
+    try a.localGet(outv);
+    try a.localGet(dp);
+    try a.callFunc(Rt.wdig.index());
+    try a.op(wasm.drop);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.localGet(ptr);
+}
+
+/// The binaryToDecimal core of fstr for a nonzero finite input: from
+/// (mant, iexp) to (outv, e10).  Faithful to the Zig replica; local
+/// indices arrive from the caller.
+const FstrLocals = struct {
+    mant: u32,
+    iexp: u32,
+    m2: u32,
+    e2: u32,
+    mv: u32,
+    mms: u32,
+    q: u32,
+    vr: u32,
+    vp: u32,
+    vm: u32,
+    e10: u32,
+    removed: u32,
+    lastrem: u32,
+    outv: u32,
+    tmp: u32,
+    jsh: u32,
+    accept: u32,
+    vmtz: u32,
+    vrtz: u32,
+    addr: u32,
+};
+
+fn emitFstrCore(a: *Asm, L: FstrLocals) !void {
+    // e2/m2 from the ieee fields (bias 1023, 52 mantissa bits, -2).
+    try a.localGet(L.iexp);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constI64(1 - 1023 - 52 - 2);
+    try a.localSet(L.e2);
+    try a.localGet(L.mant);
+    try a.localSet(L.m2);
+    try a.op(wasm.else_);
+    try a.localGet(L.iexp);
+    try a.constI64(1023 + 52 + 2);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.e2);
+    try a.constI64(1 << 52);
+    try a.localGet(L.mant);
+    try a.op(wasm.i64_or);
+    try a.localSet(L.m2);
+    try a.op(wasm.end);
+    // accept = even(m2); mv = 4*m2; mms = (mant != 0) or (iexp == 0).
+    try a.localGet(L.m2);
+    try a.constI64(1);
+    try a.op(wasm.i64_and);
+    try a.op(wasm.i64_eqz);
+    try a.localSet(L.accept);
+    try a.localGet(L.m2);
+    try a.constI64(2);
+    try a.op(wasm.i64_shl);
+    try a.localSet(L.mv);
+    try a.localGet(L.mant);
+    try a.constI64(0);
+    try a.op(wasm.i64_ne);
+    try a.localGet(L.iexp);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.i32_or);
+    try a.op(wasm.i64_extend_i32_u);
+    try a.localSet(L.mms);
+    try a.constI32(0);
+    try a.localSet(L.vmtz);
+    try a.constI32(0);
+    try a.localSet(L.vrtz);
+
+    try a.localGet(L.e2);
+    try a.constI64(0);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    // q = log10Pow2(e2) - (e2 > 3)
+    try a.localGet(L.e2);
+    try a.constI64(169464822037455);
+    try a.op(wasm.i64_mul);
+    try a.constI64(49);
+    try a.op(wasm.i64_shr_u);
+    try a.localGet(L.e2);
+    try a.constI64(3);
+    try a.op(wasm.i64_gt_s);
+    try a.op(wasm.i64_extend_i32_u);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.q);
+    try a.localGet(L.q);
+    try a.localSet(L.e10);
+    // jsh = -e2 + q + (125 + pow5Bits(q) - 1)
+    try a.localGet(L.q);
+    try a.constI64(163391164108059);
+    try a.op(wasm.i64_mul);
+    try a.constI64(46);
+    try a.op(wasm.i64_shr_u);
+    try a.constI64(1);
+    try a.op(wasm.i64_add); // pow5Bits(q)
+    try a.constI64(124);
+    try a.op(wasm.i64_add);
+    try a.localGet(L.q);
+    try a.op(wasm.i64_add);
+    try a.localGet(L.e2);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.jsh);
+    // addr = inv_table + q*16
+    try a.localGet(L.q);
+    try a.op(wasm.i32_wrap_i64);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.constI32(@intCast(pow5_inv_table_addr));
+    try a.op(wasm.i32_add);
+    try a.localSet(L.addr);
+    try emitFstrMulShifts(a, L);
+    // trailing-zero bookkeeping, q <= 21
+    try a.localGet(L.q);
+    try a.constI64(21);
+    try a.op(wasm.i64_le_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(L.mv);
+    try a.constI64(5);
+    try a.op(wasm.i64_rem_u);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(L.mv);
+    try a.callFunc(Rt.p5fac.index());
+    try a.localGet(L.q);
+    try a.op(wasm.i64_ge_s);
+    try a.localSet(L.vrtz);
+    try a.op(wasm.else_);
+    try a.localGet(L.accept);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(L.mv);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localGet(L.mms);
+    try a.op(wasm.i64_sub);
+    try a.callFunc(Rt.p5fac.index());
+    try a.localGet(L.q);
+    try a.op(wasm.i64_ge_s);
+    try a.localSet(L.vmtz);
+    try a.op(wasm.else_);
+    try a.localGet(L.vp);
+    try a.localGet(L.mv);
+    try a.constI64(2);
+    try a.op(wasm.i64_add);
+    try a.callFunc(Rt.p5fac.index());
+    try a.localGet(L.q);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.i64_extend_i32_u);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.vp);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.op(wasm.else_);
+    // e2 < 0: q = log10Pow5(-e2) - (-e2 > 1)
+    try a.constI64(0);
+    try a.localGet(L.e2);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.tmp); // tmp = -e2
+    try a.localGet(L.tmp);
+    try a.constI64(196742565691928);
+    try a.op(wasm.i64_mul);
+    try a.constI64(48);
+    try a.op(wasm.i64_shr_u);
+    try a.localGet(L.tmp);
+    try a.constI64(1);
+    try a.op(wasm.i64_gt_s);
+    try a.op(wasm.i64_extend_i32_u);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.q);
+    try a.localGet(L.q);
+    try a.localGet(L.e2);
+    try a.op(wasm.i64_add);
+    try a.localSet(L.e10);
+    // i5 = -e2 - q; jsh = q - (pow5Bits(i5) - 125)
+    try a.localGet(L.tmp);
+    try a.localGet(L.q);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.tmp); // tmp = i5
+    try a.localGet(L.q);
+    try a.localGet(L.tmp);
+    try a.constI64(163391164108059);
+    try a.op(wasm.i64_mul);
+    try a.constI64(46);
+    try a.op(wasm.i64_shr_u);
+    try a.constI64(1);
+    try a.op(wasm.i64_add); // pow5Bits(i5)
+    try a.constI64(125);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.jsh);
+    // addr = pow5_table + i5*16
+    try a.localGet(L.tmp);
+    try a.op(wasm.i32_wrap_i64);
+    try a.constI32(4);
+    try a.op(wasm.i32_shl);
+    try a.constI32(@intCast(pow5_table_addr));
+    try a.op(wasm.i32_add);
+    try a.localSet(L.addr);
+    try emitFstrMulShifts(a, L);
+    try a.localGet(L.q);
+    try a.constI64(1);
+    try a.op(wasm.i64_le_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constI32(1);
+    try a.localSet(L.vrtz);
+    try a.localGet(L.accept);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.localGet(L.mms);
+    try a.constI64(1);
+    try a.op(wasm.i64_eq);
+    try a.localSet(L.vmtz);
+    try a.op(wasm.else_);
+    try a.localGet(L.vp);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localSet(L.vp);
+    try a.op(wasm.end);
+    try a.op(wasm.else_);
+    try a.localGet(L.q);
+    try a.constI64(63);
+    try a.op(wasm.i64_lt_s);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    // vrtz = (mv & ((1<<q)-1)) == 0
+    try a.localGet(L.mv);
+    try a.constI64(1);
+    try a.localGet(L.q);
+    try a.op(wasm.i64_shl);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.op(wasm.i64_and);
+    try a.op(wasm.i64_eqz);
+    try a.localSet(L.vrtz);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+
+    // Digit removal: while vp/10 > vm/10.
+    try a.constI64(0);
+    try a.localSet(L.removed);
+    try a.constI64(0);
+    try a.localSet(L.lastrem);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(L.vp);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.localGet(L.vm);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.op(wasm.i64_le_u);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try emitFstrRemoveDigit(a, L);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    // If vm kept trailing zeros, keep stripping.
+    try a.localGet(L.vmtz);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.block);
+    try a.op(wasm.empty_type);
+    try a.op(wasm.loop);
+    try a.op(wasm.empty_type);
+    try a.localGet(L.vm);
+    try a.constI64(10);
+    try a.op(wasm.i64_rem_u);
+    try a.constI64(0);
+    try a.op(wasm.i64_ne);
+    try a.op(wasm.br_if);
+    try a.u32v(1);
+    try emitFstrRemoveDigit(a, L);
+    try a.op(wasm.br);
+    try a.u32v(0);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    try a.op(wasm.end);
+    // Banker's nudge: ...500 exactly, round to even.
+    try a.localGet(L.vrtz);
+    try a.localGet(L.lastrem);
+    try a.constI64(5);
+    try a.op(wasm.i64_eq);
+    try a.op(wasm.i32_and);
+    try a.localGet(L.vr);
+    try a.constI64(1);
+    try a.op(wasm.i64_and);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.i32_and);
+    try a.op(wasm.if_);
+    try a.op(wasm.empty_type);
+    try a.constI64(4);
+    try a.localSet(L.lastrem);
+    try a.op(wasm.end);
+    // outv = vr + roundUp; e10 += removed.
+    try a.localGet(L.vr);
+    // (vr == vm and (!accept or !vmtz)) or lastrem >= 5
+    try a.localGet(L.vr);
+    try a.localGet(L.vm);
+    try a.op(wasm.i64_eq);
+    try a.localGet(L.accept);
+    try a.op(wasm.i32_eqz);
+    try a.localGet(L.vmtz);
+    try a.op(wasm.i32_eqz);
+    try a.op(wasm.i32_or);
+    try a.op(wasm.i32_and);
+    try a.localGet(L.lastrem);
+    try a.constI64(5);
+    try a.op(wasm.i64_ge_s);
+    try a.op(wasm.i32_or);
+    try a.op(wasm.i64_extend_i32_u);
+    try a.op(wasm.i64_add);
+    try a.localSet(L.outv);
+    try a.localGet(L.e10);
+    try a.localGet(L.removed);
+    try a.op(wasm.i64_add);
+    try a.localSet(L.e10);
+}
+
+/// vr/vp/vm = mulShift(mv / mv+2 / mv-1-mms, table entry, jsh).
+fn emitFstrMulShifts(a: *Asm, L: FstrLocals) !void {
+    try a.localGet(L.mv);
+    try a.localGet(L.addr);
+    try a.localGet(L.jsh);
+    try a.callFunc(Rt.mul_shift.index());
+    try a.localSet(L.vr);
+    try a.localGet(L.mv);
+    try a.constI64(2);
+    try a.op(wasm.i64_add);
+    try a.localGet(L.addr);
+    try a.localGet(L.jsh);
+    try a.callFunc(Rt.mul_shift.index());
+    try a.localSet(L.vp);
+    try a.localGet(L.mv);
+    try a.constI64(1);
+    try a.op(wasm.i64_sub);
+    try a.localGet(L.mms);
+    try a.op(wasm.i64_sub);
+    try a.localGet(L.addr);
+    try a.localGet(L.jsh);
+    try a.callFunc(Rt.mul_shift.index());
+    try a.localSet(L.vm);
+}
+
+/// One removal step shared by both stripping loops.
+fn emitFstrRemoveDigit(a: *Asm, L: FstrLocals) !void {
+    try a.localGet(L.vmtz);
+    try a.localGet(L.vm);
+    try a.constI64(10);
+    try a.op(wasm.i64_rem_u);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.i32_and);
+    try a.localSet(L.vmtz);
+    try a.localGet(L.vrtz);
+    try a.localGet(L.lastrem);
+    try a.op(wasm.i64_eqz);
+    try a.op(wasm.i32_and);
+    try a.localSet(L.vrtz);
+    try a.localGet(L.vr);
+    try a.constI64(10);
+    try a.op(wasm.i64_rem_u);
+    try a.localSet(L.lastrem);
+    try a.localGet(L.vr);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.localSet(L.vr);
+    try a.localGet(L.vp);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.localSet(L.vp);
+    try a.localGet(L.vm);
+    try a.constI64(10);
+    try a.op(wasm.i64_div_u);
+    try a.localSet(L.vm);
+    try a.localGet(L.removed);
+    try a.constI64(1);
+    try a.op(wasm.i64_add);
+    try a.localSet(L.removed);
+}
+
 /// A clone of an Array: duplicate its dimensions and its element buffer.
 fn emitArrayClone(a: *Asm) !void {
     const new = 1;
@@ -4351,12 +5548,17 @@ const FunctionEmitter = struct {
                 try self.getReg(arg);
                 try self.setReg(item);
             },
+            .float => {
+                try self.getReg(arg);
+                try self.a.callFunc(Rt.fstr.index());
+                try self.setReg(item);
+            },
             .heap => { // a Builder's bytes become a String
                 try self.resolved(arg);
                 try self.a.callFunc(Rt.builder_to_str.index());
                 try self.setReg(item);
             },
-            else => unreachable, // float gated out
+            else => unreachable,
         }
     }
 
@@ -4471,6 +5673,18 @@ const Builder = struct {
         //    program's string constants; the heap starts after it.
         var data: std.ArrayList(u8) = .empty;
         try data.appendSlice(a, &.{ 0, 0, 0, 0 }); // address 0: empty string
+        try data.appendSlice(a, &.{ 0, 0, 0, 0 }); // pad to the tables' 8-alignment
+        std.debug.assert(data.items.len == pow5_table_addr);
+        for (ryu_tables.pow5) |entry| {
+            try appendU64Le(&data, a, entry[0]);
+            try appendU64Le(&data, a, entry[1]);
+        }
+        std.debug.assert(data.items.len == pow5_inv_table_addr);
+        for (ryu_tables.inv) |entry| {
+            try appendU64Le(&data, a, entry[0]);
+            try appendU64Le(&data, a, entry[1]);
+        }
+        std.debug.assert(data.items.len == tables_end_addr);
         const true_addr: u32 = @intCast(data.items.len);
         try appendStringBlock(&data, a, "true");
         const false_addr: u32 = @intCast(data.items.len);
@@ -4580,6 +5794,12 @@ const Builder = struct {
     }
 };
 
+fn appendU64Le(data: *std.ArrayList(u8), arena: Allocator, value: u64) !void {
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &bytes, value, .little);
+    try data.appendSlice(arena, &bytes);
+}
+
 /// A length-prefixed string block: [i32 len][bytes].
 fn appendStringBlock(data: *std.ArrayList(u8), arena: Allocator, text: []const u8) !void {
     var header: [4]u8 = undefined;
@@ -4672,6 +5892,38 @@ test "the baked call-depth budget matches what loom runs every engine with" {
     try testing.expectEqual(@as(i64, native.max_call_depth), call_depth_budget);
 }
 
+test "the ryu replica renders byte-identical to std.fmt" {
+    // The generated tables and the transcribed algorithm together must
+    // reproduce Zig's own {d} exactly — every edge shape plus a broad
+    // random sweep over raw bit patterns (finite and not).
+    var ref_buf: [400]u8 = undefined;
+    var std_buf: [400]u8 = undefined;
+
+    const edges = [_]f64{
+        0.0,                     -0.0,                1.0,      2.0,               1.5,                     0.1,
+        1.0 / 3.0,               -2.5,                1.0e300,  1.0e-5,            1.0e15,                  1.0e16,
+        1.5e-10,                 123456789.123456789, 5.0e-324, -5.0e-324,         2.2250738585072014e-308, 1.7976931348623157e308,
+        4.9406564584124654e-324, 9007199254740993.0,  0.3,      std.math.inf(f64), -std.math.inf(f64),      std.math.nan(f64),
+        123.456,                 -0.001,              1e22,     1e23,              12345678901234567890.0,
+    };
+    for (edges) |value| {
+        const expected = try std.fmt.bufPrint(&std_buf, "{d}", .{value});
+        const actual = refFormatDecimal(&ref_buf, refBinaryToDecimal(@bitCast(value)));
+        try testing.expectEqualStrings(expected, actual);
+    }
+
+    var prng = std.Random.DefaultPrng.init(0x8c5a3f92);
+    const random = prng.random();
+    var round: usize = 0;
+    while (round < 20000) : (round += 1) {
+        const bits = random.int(u64);
+        const value: f64 = @bitCast(bits);
+        const expected = try std.fmt.bufPrint(&std_buf, "{d}", .{value});
+        const actual = refFormatDecimal(&ref_buf, refBinaryToDecimal(bits));
+        try testing.expectEqualStrings(expected, actual);
+    }
+}
+
 fn compileOrNull(source: []const u8) !?ir.Program {
     var result = try compile_mod.compile(testing.allocator, source, .{}, script);
     switch (result) {
@@ -4730,13 +5982,22 @@ test "scalars and strings are supported; heap and str(Float) are not yet" {
     defer hosted.deinit();
     try testing.expect(!supported(&hosted));
 
+    // str(Float) is supported via the ryu runtime; parse_float still
+    // waits for a correctly-rounded reader.
     var floatstr = (try compileOrNull(
         \\func main():
         \\    var x = 1.5
         \\    print(str(x))
     )).?;
     defer floatstr.deinit();
-    try testing.expect(!supported(&floatstr));
+    try testing.expect(supported(&floatstr));
+
+    var pf = (try compileOrNull(
+        \\func main():
+        \\    print(str(parse_float("1.5") * 2.0))
+    )).?;
+    defer pf.deinit();
+    try testing.expect(!supported(&pf));
 }
 
 test "a supported program emits a well-formed wasm module" {

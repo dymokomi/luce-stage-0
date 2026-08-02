@@ -502,6 +502,20 @@ run_case copy_array "func main():
 
 # -- structs (heap phase B5) -------------------------------------------------
 
+run_case float_str "func main():
+    print(str(1.5))
+    print(str(2.0))
+    print(str(0.1))
+    print(str(1.0 / 3.0))
+    print(str(0.0 - 2.5))
+    print(str(0.0 * (0.0 - 1.0)))
+    print(str(1.0e300))
+    print(str(5.0e-324))
+    var z = 0.0
+    print(str(z / z))
+    print(str(1.0 / z))
+    print(str((0.0 - 1.0) / z))" output
+
 run_case struct_basic "struct Vec:
     x: Int
     y: Int
