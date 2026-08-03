@@ -747,17 +747,21 @@ test "checked integer arithmetic lowers to the overflow intrinsics" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "ssub.with.overflow") != null);
 }
 
-test "an optional names itself instead of lowering" {
+test "an optional lowers to its payload beside a presence bit" {
     const gpa = std.testing.allocator;
-    // Step 4 of docs/FAILURE.md.  Until then a program that says `T?`
-    // says so by name and runs on the interpreter, rather than
-    // lowering to something that only looks right.
-    try std.testing.expectEqualStrings("T? (optionals)", (try scriptGap(gpa,
+    const rendered = (try render(gpa,
         \\func main():
         \\    let n = parse_int(arg(0))
         \\    print(str(n else 0))
         \\
-    )));
+    )).?;
+    defer gpa.free(rendered);
+
+    // `{ i64, i1 }` is the whole representation, and nothing about it
+    // reaches memory or the runtime: absence is `extractvalue`, and
+    // the fallback is a branch on the bit.
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "{ i64, i1 }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "extractvalue") != null);
 }
 
 test "a construct with no lowering yet names itself" {
@@ -1910,6 +1914,306 @@ test "a struct carrying an object is owned and released through its fields" {
         \\    print(str(len(bag.items)) + bag.label)
         \\    bag.items.append(3)
         \\    print(str(len(bag.items)))
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Absence
+// ---------------------------------------------------------------------------
+//
+// A `T?` lowers to `{T, i1}` and absence on the interpreter is
+// `Value.Tag.none`, so these two are the least alike of anything the
+// oracle compares: neither engine's representation is the other's.
+// What has to match is every answer either can be asked for.
+
+test "a value-typed optional agrees on absence, narrowing, and else" {
+    try agree(std.testing.allocator,
+        \\func maybe(want: Bool) -> Int?:
+        \\    if want:
+        \\        return 7
+        \\    return none
+        \\
+        \\func main():
+        \\    let there = maybe(true)
+        \\    if there != none:
+        \\        print("there=" + str(there))
+        \\    let gone = maybe(false)
+        \\    if gone == none:
+        \\        print("gone")
+        \\    print(str(maybe(false) else -1) + " " + str(maybe(true) else -1))
+        \\    var slot: Int? = none
+        \\    print(str(slot else -2))
+        \\    slot = maybe(true)
+        \\    print(str(slot else -2))
+        \\
+    );
+}
+
+test "the else fallback runs only where there was no value, and chains" {
+    // The fallback is lazy: `loud` prints, so the printed bytes are
+    // what says which side ran.  A chain is the same shape nested, and
+    // its middle link must not run either once the first supplies one.
+    try agree(std.testing.allocator,
+        \\func maybe(want: Bool) -> Int?:
+        \\    if want:
+        \\        return 7
+        \\    return none
+        \\
+        \\func loud(answer: Int) -> Int:
+        \\    print("fallback ran")
+        \\    return answer
+        \\
+        \\func main():
+        \\    print(str(maybe(true) else loud(1)))
+        \\    print(str(maybe(false) else loud(2)))
+        \\    print(str(maybe(true) else maybe(false) else loud(3)))
+        \\    print(str(maybe(false) else maybe(true) else loud(4)))
+        \\    print(str(maybe(false) else maybe(false) else loud(5)))
+        \\
+    );
+}
+
+test "parse_int and parse_float agree when the text is a number and when it is not" {
+    // The `Int?`/`Float?` that made optionals load-bearing on day one.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    print(str(parse_int("41") else -1))
+        \\    print(str(parse_int("") else -1))
+        \\    print(str(parse_int("12x") else -1))
+        \\    print(str(parse_int("-9") else -1))
+        \\    print(str(parse_float("2.5") else -1.0))
+        \\    print(str(parse_float("nope") else -1.0))
+        \\    let n = parse_int("77")
+        \\    if n != none:
+        \\        print("narrowed=" + str(n + 1))
+        \\
+    );
+}
+
+test "x else trap is the assert-unwrap, and it traps where it is written" {
+    // The trap code, the message, and every frame of the trace have to
+    // match — which is the whole of `calc.luc`'s error path.
+    try agree(std.testing.allocator,
+        \\func want(text: String) -> Int:
+        \\    return parse_int(text) else trap("not a number: " + text)
+        \\
+        \\func middle(text: String) -> Int:
+        \\    return want(text) + 1
+        \\
+        \\func main():
+        \\    print(str(middle("41")))
+        \\    print(str(middle("oops")))
+        \\
+    );
+}
+
+test "an optional struct field agrees, absent and present" {
+    // A `T?` field is stored as a `runtime.Value` on both engines, so
+    // this is where the lowered pair meets the tagged slot: absence has
+    // to box as the `none` tag and read back as the absent pair.
+    try agree(std.testing.allocator,
+        \\struct Slot:
+        \\    label: String
+        \\    room: Int?
+        \\
+        \\func main():
+        \\    var empty = Slot(label = "a", room = none)
+        \\    if empty.room == none:
+        \\        print("a has no room")
+        \\    empty.room = 12
+        \\    print("a=" + str(empty.room else 0))
+        \\    let filled = Slot(label = "b", room = 3)
+        \\    let room = filled.room
+        \\    if room != none:
+        \\        print("b=" + str(room))
+        \\    var zeroed: Slot
+        \\    print(str(zeroed.room else -1))
+        \\
+    );
+}
+
+test "a struct recurses through an optional field, which is what ends it" {
+    // `Node` holds a `Node?`, and the optional is what makes a struct
+    // cycle finite: the field is one `Value` whether or not anything is
+    // in it.  Reading one back is the boxed `strukt` payload.
+    try agree(std.testing.allocator,
+        \\struct Node:
+        \\    value: Int
+        \\    next: Node?
+        \\
+        \\func total(from: Node) -> Int:
+        \\    var sum = from.value
+        \\    let step = from.next
+        \\    if step != none:
+        \\        sum = sum + total(step)
+        \\    return sum
+        \\
+        \\func main():
+        \\    let tail = Node(value = 2, next = none)
+        \\    let head = Node(value = 1, next = tail)
+        \\    print(str(total(head)))
+        \\    print(str(total(tail)))
+        \\    let step = head.next
+        \\    if step != none:
+        \\        print("next=" + str(step.value))
+        \\
+    );
+}
+
+test "a heap optional agrees, and holding none owns nothing (S43)" {
+    // The leak census is the proof: the object that came back inside a
+    // `T?` is released at the end of the scope that received it, and
+    // the absent one leaves nothing behind to release.  A `none` owns
+    // nothing, so neither engine may count it.
+    try agree(std.testing.allocator,
+        \\func pick(want: Bool) -> List(Int)?:
+        \\    if want:
+        \\        let made = new List(Int)
+        \\        made.append(3)
+        \\        made.append(4)
+        \\        return made
+        \\    return none
+        \\
+        \\func main():
+        \\    var held: List(Int)? = none
+        \\    if held == none:
+        \\        print("absent")
+        \\    let got = pick(true)
+        \\    if got != none:
+        \\        print("len=" + str(len(got)) + " first=" + str(got[0]))
+        \\        free(got)
+        \\    let missing = pick(false)
+        \\    if missing == none:
+        \\        print("nothing came back")
+        \\    let owned = pick(true)
+        \\    if owned != none:
+        \\        print("owned=" + str(len(owned)))
+        \\
+    );
+}
+
+test "optionals in a loop agree, boxed into container cells and back" {
+    // Three seams at once: a `T?` rebuilt every iteration through the
+    // one scratch box the call site owns, a `T?` local carrying loop
+    // state, and structs with an optional field stored in a `List` —
+    // where the field is a `runtime.Value` in a container cell rather
+    // than in a frame slot.
+    try agree(std.testing.allocator,
+        \\struct Cell:
+        \\    tag: String
+        \\    room: Int?
+        \\
+        \\func even(n: Int) -> Int?:
+        \\    if n % 2 == 0:
+        \\        return n
+        \\    return none
+        \\
+        \\func show(room: Int?) -> String:
+        \\    if room == none:
+        \\        return "-"
+        \\    return str(room)
+        \\
+        \\func main():
+        \\    var seen = 0
+        \\    var i = 0
+        \\    while i < 8:
+        \\        let maybe = even(i)
+        \\        if maybe != none:
+        \\            seen = seen + maybe
+        \\        i = i + 1
+        \\    print("sum of evens=" + str(seen))
+        \\    var last: Int? = none
+        \\    var j = 0
+        \\    while j < 5:
+        \\        last = even(j)
+        \\        j = j + 1
+        \\    print("last=" + str(last else -1))
+        \\    let cells = new List(Cell)
+        \\    var k = 0
+        \\    while k < 4:
+        \\        cells.append(Cell(tag = str(k), room = even(k)))
+        \\        k = k + 1
+        \\    var out = ""
+        \\    for cell in cells:
+        \\        out = out + cell.tag + ":" + show(cell.room) + " "
+        \\    print(out)
+        \\    free(cells)
+        \\    print(show(even(2)) + "/" + show(even(3)))
+        \\
+    );
+}
+
+test "every payload a T? can hold survives being returned" {
+    // A returned `T?` travels through `%out`, whose `dereferenceable`
+    // comes from `resultSize` — a hand-written table, and the one place
+    // a wrong number would be a fault rather than a wrong answer.
+    // `Bool?` is the corner: `{i1, i1}` really is two bytes, not the
+    // eight every other payload rounds up to.
+    try agree(std.testing.allocator,
+        \\struct Point:
+        \\    x: Int
+        \\    y: Int
+        \\
+        \\func flag(want: Bool) -> Bool?:
+        \\    if want:
+        \\        return false
+        \\    return none
+        \\
+        \\func text(want: Bool) -> String?:
+        \\    if want:
+        \\        return "hi"
+        \\    return none
+        \\
+        \\func ratio(want: Bool) -> Float?:
+        \\    if want:
+        \\        return 2.5
+        \\    return none
+        \\
+        \\func spot(want: Bool) -> Point?:
+        \\    if want:
+        \\        return Point(x = 1, y = 2)
+        \\    return none
+        \\
+        \\func main():
+        \\    print(str(flag(true) else true) + " " + str(flag(false) else true))
+        \\    print((text(true) else "-") + " " + (text(false) else "-"))
+        \\    print(str(ratio(true) else -1.0) + " " + str(ratio(false) else -1.0))
+        \\    let here = spot(true)
+        \\    if here != none:
+        \\        print("x=" + str(here.x) + " y=" + str(here.y))
+        \\    if spot(false) == none:
+        \\        print("no spot")
+        \\    let f = flag(true)
+        \\    if f != none:
+        \\        if f:
+        \\            print("true branch")
+        \\        else:
+        \\            print("false branch")
+        \\
+    );
+}
+
+test "the null object put in a T? is present, because absence is not a handle" {
+    // The case that decides the representation.  `raw` is the zero of
+    // an object-typed place — the null handle, a value that is *there*
+    // and traps on use (S40) — and borrowing it into a `List(Int)?`
+    // is accepted without a diagnostic.  The interpreter answers
+    // "present" because absence there is the tag.  Had the lowering
+    // spent the null index on `none`, as docs/FAILURE.md first
+    // proposed, this program would answer "absent" instead and the two
+    // engines would part company here and nowhere else.
+    try agree(std.testing.allocator,
+        \\func look(xs: List(Int)?) -> Bool:
+        \\    return xs == none
+        \\
+        \\func main():
+        \\    var raw: List(Int)
+        \\    print("absent=" + str(look(raw)))
+        \\    let real = new List(Int)
+        \\    real.append(1)
+        \\    print("absent=" + str(look(real)))
+        \\    free(real)
         \\
     );
 }

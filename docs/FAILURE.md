@@ -162,9 +162,31 @@ index, stored once at `error(...)`. Traps keep their full trace.
 
 Optionals need **no runtime change at all**: `Value.Tag.none` exists and
 every ownership path already no-ops on it. No new MIR instructions —
-four intrinsics. For heap types `T?` is the existing `i32` with the null
-index, which is literally free; for value types it is `{T, i1}`, which
-SROA keeps in registers.
+four intrinsics. In the compiled representation a `T?` is `{T, i1}`,
+which SROA keeps in registers.
+
+> **Corrected once built.** This memo originally said that a heap `T?`
+> could be "the existing `i32` with the null index, which is literally
+> free", and that one sentence was wrong twice. The width went first:
+> generational handles made a handle `{index, generation}` in an
+> `i64`. The idea went with it. The null index is not spare — it is
+> the zero of an object-typed place (S40), a value that is **present**
+> and traps on use — and a program can hand one to a `T?` without a
+> diagnostic (`look(raw)` against `func look(xs: List(Int)?)`). The
+> interpreter answers "present", because absence there is
+> `Value.Tag.none`, a tag *beside* the payload rather than a value
+> inside it. A sentinel would answer "absent" and the engines would
+> disagree. So `{T, i1}` serves all seven payloads, and the six that
+> have no spare value were always going to need it anyway.
+>
+> The deeper error was assuming one representation serves both
+> engines. It does not, and it did not need to: on the interpreter a
+> `Value` already carries its tag, so absence *is* `tag == .none` for
+> every payload and wrap and unwrap are the identity. Two engines, two
+> shapes, one set of answers — which is what the agree tests check.
+> The seam between them is the box: absence becomes `Value.none` byte
+> for byte, so the runtime's ownership walk finds nothing to own and
+> S43 costs no code on either side. docs/CODEGEN.md is the detail.
 
 Errors need no new type, no new register, and no new ABI shape. The
 outcome channel already has room: `1` is trapped, `2` becomes errored,
@@ -180,13 +202,16 @@ coupling is the rule at the top, which decides whether `parse_int`
 returns `Int?` or `Int!` — and that decision needs no error mechanism
 to exist.
 
-1. `T?`, `none`, narrowing and its diagnostics, `else`. Interpreter only;
-   `parse_int`/`parse_float` become `Int?`/`Float?` so it has real users
-   on day one.
+1. ~~`T?`, `none`, narrowing and its diagnostics, `else`. Interpreter
+   only; `parse_int`/`parse_float` become `Int?`/`Float?` so it has
+   real users on day one.~~ **Done.**
 2. `m.get(k) -> V?`, and rewrite `wordcount.luc`. The narrowing
    acceptance test in anger.
 3. `?.` — gated on whether step 2 made anyone want it.
-4. LLVM lowering for optionals.
+4. ~~LLVM lowering for optionals.~~ **Done**, as `{T, i1}` — see the
+   correction above. Steps 2 and 3 were overtaken: leaving `T?` on the
+   interpreter made every program calling `parse_int` fall back, so
+   this came before them.
 5. Errors on the interpreter.
 6. LLVM, ABI 5, loom reporting.
 7. `files.luc` real signatures; `calc.luc` as the worked example.
