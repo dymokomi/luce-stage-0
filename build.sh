@@ -2,11 +2,11 @@
 # Build LuciaOS v2: installs the luce compiler and the loom terminal at
 # build/, plus the compiled bundled programs at build/programs/.
 #
-# Installed binaries default to ReleaseSafe — the interpreter is a
-# trust boundary (.lc files run like executables), so Zig's own safety
-# checks stay on at ~15% cost over ReleaseFast (docs/BENCHMARKS.md
-# has both measured).  A Debug interpreter is ~4-5x slower: never
-# benchmark one.  Override with e.g. ./build.sh -Doptimize=ReleaseFast.
+# Installed binaries default to ReleaseSafe — the compiler and the
+# runtime are a trust boundary (a .lc runs like the executable it is,
+# and a .lcm is decoded from bytes), so Zig's own safety checks stay
+# on.  A Debug build is ~4-5x slower: never benchmark one.  Override
+# with e.g. ./build.sh -Doptimize=ReleaseFast.
 set -e
 cd "$(dirname "$0")"
 case "$*" in

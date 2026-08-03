@@ -110,7 +110,8 @@ statement copies them, so no owner ever holds a view of bytes it did
 not allocate.
 
 The same churn loop — one string built and discarded per iteration,
-retaining nothing — measured on the interpreter:
+retaining nothing — with the runtime's own arena read off the
+reference implementation the test suite compares against:
 
 | iterations | 0.5M | 1M | 2M | 4M |
 |---|---|---|---|---|
@@ -118,10 +119,10 @@ retaining nothing — measured on the interpreter:
 | after | **1.8 MB** | **1.8 MB** | **1.9 MB** | **1.8 MB** |
 
 Flat, and flat all the way out: 8M and 16M iterations sit at the same
-figure, so thirty-two times the work is the same footprint. On the
-compiled path the number is 20.4 MB and equally flat — that is the
-system allocator's working set for a hot allocate-and-free loop, not
-anything Luce is holding.
+figure, so thirty-two times the work is the same footprint. In the
+artifact you actually run the number is 20.4 MB and equally flat —
+that is the system allocator's working set for a hot allocate-and-free
+loop, not anything Luce is holding.
 
 The flagship program was the worked example and is now the proof.
 `programs/editor.luc` splices its lines as

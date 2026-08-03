@@ -69,14 +69,15 @@ pub const Host = struct {
     /// through `appendSanitized` and neither can emit a control
     /// sequence (the rule `term_write` follows).
     sanitized: std.ArrayList(u8) = .empty,
-    /// One directory listing, kept in both shapes the two engines
-    /// want: the names NUL-joined for the C table, and slices into
-    /// that same text for the interpreter.  One listing, read twice.
+    /// One directory listing, NUL-joined, which is the shape the ABI's
+    /// `dir_list` hands out (`luce_rt_names_list` splits it).
     listed_names: std.ArrayList(u8) = .empty,
+    /// **Dead, and it should go.**  It held slices into `listed_names`
+    /// for the interpreter's Zig-signature service; that service left
+    /// with the engine, and nothing reads this now.  It is still
+    /// built and fixed up on every listing, which is work for nobody.
     listed_index: std.ArrayList([]const u8) = .empty,
-    /// What a compiled artifact reported through the C table.  The
-    /// interpreter answers with a `Result` instead, so these stay unset
-    /// on that path.
+    /// What a compiled artifact reported through the C table.
     trap_code: ?luce.mir.TrapCode = null,
     trap_storage: [512]u8 = undefined,
     trap_length: usize = 0,
@@ -245,9 +246,9 @@ pub const Host = struct {
     }
 
     /// A whole file's bytes, or null when it could not be read.  The
-    /// bytes live in this Host and are borrowed until the next read —
-    /// which is what the C table hands out, and what the interpreter's
-    /// callback copies into the evaluation arena.
+    /// bytes live in this Host and are borrowed until the next read,
+    /// which is what the C table hands out; generated code copies them
+    /// into the run's own arena before the next call can move them.
     ///
     /// **The bytes must be valid UTF-8**, because they become a Luce
     /// `String` and the language promises that `s[a:b]` is checked
@@ -663,8 +664,9 @@ pub const Host = struct {
         of(context).leaked = leaked;
     }
 
-    /// The same limit the interpreter runs under, so a program that
-    /// recurses away traps at the same call on either engine.
+    /// One number, answered through the ABI's `call_depth` slot.  The
+    /// specification hands the oracle the same one, so a program that
+    /// recurses away traps at the same call on either arm.
     fn cCallDepth(context: ?*anyopaque) callconv(.c) i64 {
         _ = context;
         return call_depth;
@@ -884,14 +886,13 @@ pub const max_printed_frames = 12;
 /// Render a trap — one rendering, for every way a Luce program can be
 /// run.
 ///
-/// The interpreter, a compiled artifact under loom, and a standalone
-/// compiled binary all have to report the same failure the same way,
-/// or "the two engines agree" stops being checkable by reading the
-/// output.  `trace` is any slice of frames carrying `function`,
-/// `source`, `line` and `column`: the interpreter's frame and the
-/// ABI's are the same four facts in two structs, and copying one into
-/// the other to share this function would allocate on the failure
-/// path for nothing.
+/// A compiled artifact under loom and a standalone compiled binary
+/// have to report the same failure the same way; a program's behaviour
+/// must not depend on who started it, and that includes how it says it
+/// failed.  `trace` is any slice of frames carrying `function`,
+/// `source`, `line` and `column`, so this takes the ABI's shape and
+/// the oracle's alike without copying one into the other on the
+/// failure path.
 ///
 /// Writes are best-effort — a trap report must not fail to be a trap
 /// because the pipe closed.
@@ -920,14 +921,14 @@ pub fn printTrap(
     if (hidden != 0) err.print("    ... {d} more frames\n", .{hidden}) catch {};
 }
 
-/// Report an uncaught error, in the one shape both engines produce.
+/// Report an uncaught error, in one shape for every runner.
 ///
 /// **Not "trap", and it does not print a stack.**  A trap is a bug and
 /// the stack is its diagnosis; an error is news, and the news is what
 /// the world said and where the program asked it (docs/FAILURE.md).
-/// `origin` carries `function`, `source`, `line` and `column` — the
-/// interpreter's frame and the ABI's are the same four facts in two
-/// structs, so this takes either.
+/// `origin` carries `function`, `source`, `line` and `column`.  The
+/// ABI's origin and the oracle's frame are those same four facts in
+/// two structs, so this takes either.
 pub fn printError(
     err: *std.Io.Writer,
     reporter: []const u8,

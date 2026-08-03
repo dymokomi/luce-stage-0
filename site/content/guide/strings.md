@@ -32,12 +32,15 @@ it did not allocate, so every one of them has a death point, and the
 same machinery that frees a `List` frees a `String`'s bytes.
 
 The measurements, on a churn loop that builds and discards one string
-per iteration and retains nothing:
+per iteration and retains nothing.  These are the runtime's own arena,
+read off the reference implementation the test suite compares against;
+compiled code hands the same allocations to the system allocator,
+whose working set for this loop is 20.4 MB and equally flat:
 
 | iterations | 0.5M | 1M | 2M | 4M |
 |---|---|---|---|---|
-| before, interpreter | 15.5 MB | 29.4 MB | 59.9 MB | 121.0 MB |
-| after, interpreter | **1.8 MB** | **1.8 MB** | **1.9 MB** | **1.8 MB** |
+| before | 15.5 MB | 29.4 MB | 59.9 MB | 121.0 MB |
+| after | **1.8 MB** | **1.8 MB** | **1.9 MB** | **1.8 MB** |
 
 Flat, and flat out to sixteen million iterations. The editor
 simulation went from 1204 MB to **3.3 MB** peak, with the same output,

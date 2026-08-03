@@ -22,8 +22,8 @@ the language and cannot be disabled: there is no build mode in which
 
 A debug build reports `code`, message, `file:line:column` and the call
 trace. `--release` keeps the code, the message and the function names
-and drops the lines. Both engines report identically. A trace keeps
-the innermost 64 frames and counts the rest.
+and drops the lines. A trace keeps the innermost 64 frames and counts
+the rest.
 
 ### The codes
 
@@ -48,11 +48,10 @@ the innermost 64 frames and counts the rest.
 | `bad_codepoint` | invalid character code | `chr` outside Unicode, or `append_ascii` outside 0..127 |
 | `not_owned` | object is owned by a container | `give` through an alias of a container-owned object ([S23](../ownership/#s23)) |
 
-Call depth is a **policy** limit, not a native-stack accident, on both
-engines: the interpreter runs on an explicit frame stack, and compiled
-code carries its remaining depth as a hidden argument and refuses the
-call that would exhaust it. Runaway recursion is a trap with a message
-and a call stack, never a segmentation fault.
+Call depth is a **policy** limit, not a native-stack accident:
+compiled code carries its remaining depth as a hidden argument and
+refuses the call that would exhaust it. Runaway recursion is a trap
+with a message and a call stack, never a segmentation fault.
 
 ```luce trap
 func main():

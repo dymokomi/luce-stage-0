@@ -1,9 +1,8 @@
 # Traps
 
 A trap is a **bug**: deterministic, with a stable code, and it ends
-the program without publishing anything. Debug builds report
-`file:line:column` and the call trace, and they do it identically on
-the compiled path and on the interpreter.
+the program. Debug builds report `file:line:column` and the call
+trace, out of the machine code you ship.
 
 ```luce trap
 func depth_three(values: List(Int)) -> Int:
@@ -131,8 +130,7 @@ loom: trap: assertion failed [assertion_failed]
 
 ## Runaway recursion
 
-Call depth is a *policy* limit rather than a native stack accident, on
-both engines: the interpreter runs on an explicit frame stack, and
+Call depth is a *policy* limit rather than a native stack accident:
 compiled code carries its remaining depth as a hidden argument and
 refuses the call that would exhaust it. Runaway recursion is a trap
 with a message and a stack, never a segmentation fault. The trace

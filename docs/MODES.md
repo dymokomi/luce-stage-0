@@ -63,24 +63,25 @@ A Zig binary's panic handler parses its own DWARF lazily, at panic
 time (`std.debug.SelfInfo`); until a crash actually happens, the
 line tables are inert bytes.  Luce works the same way:
 
-- The interpreter's dispatch loop never reads origins.  Not a load,
-  not a branch — the hot path is byte-for-byte identical whether the
-  tables exist or not.  Neither does generated code: its origins are
-  constant data nothing on the execution path addresses.
-- On a trap, the frame stack is still intact (frames only pop on
-  return), so the interpreter walks it once, resolves each frame's
-  current instruction through its function's origins table, and
-  attaches the trace to the trap.  All cost sits on the far side of
-  "the program already failed."
-- Compiled code has no such stack to walk — its frames are native
-  frames, gone by the time anyone could read them — so it builds the
-  trace *as it unwinds*: each frame records which function and which
-  instruction it was at on the way out, and `luce_main` reports the
-  finished trace with the trap.  Same bargain, same far side of the
-  failure (`src/luce/runtime/trace.zig`).
+- Generated code never reads origins.  Not a load, not a branch — its
+  origins are constant data nothing on the execution path addresses,
+  so the hot path is byte-for-byte identical whether the tables exist
+  or not.
+- It has no frame stack to walk either — its frames are native frames,
+  gone by the time anyone could read them — so it builds the trace *as
+  it unwinds*: each frame records which function and which instruction
+  it was at on the way out, and `luce_main` reports the finished trace
+  with the trap.  All cost sits on the far side of "the program
+  already failed" (`src/luce/runtime/trace.zig`).
+- The oracle strikes the same bargain by the opposite route.  Its
+  dispatch loop never reads origins either, and on a trap its frame
+  stack is still intact (frames only pop on return), so it walks it
+  once and resolves each frame's current instruction through its
+  function's origins table.  Two mechanisms, one report — which is
+  exactly what `specs/agree.zig` compares, frame for frame.
 - Deep recursion is capped: a trace keeps the innermost 64 frames
   and counts the rest (`... 262132 more frames`), so a
-  `call_depth_exceeded` report is readable and cheap.  Both engines
+  `call_depth_exceeded` report is readable and cheap.  Both arms
   cap at the same number, so the same trap reports the same frames.
 
 So the honest statement is: **debug and release run at identical
@@ -129,15 +130,17 @@ byte spans and stable codes in both modes, and render as
   verifier's all-or-nothing length check, and `strip()`.
 - `src/luce/06_mir/module.zig` — origins ride in the function record;
   `--release` writes empty tables.
-- `src/luce/interpreter/machine.zig` — `traceback()`: where the
-  interpreter reads origins, after a trap, never during execution.
-- `src/luce/backend.zig` — `Trap.trace` (`TraceFrame` = function,
-  source, line, column) and `Trap.dropped`.
-- `src/luce/runtime/trace.zig` — the same trace for compiled code:
-  the C-layout tables, the unwind recorder, and the one report that
+- `src/luce/runtime/trace.zig` — the trace compiled code carries: the
+  C-layout tables, the unwind recorder, and the one report that
   carries the whole trap.
 - `src/luce/08_llvm/lower.zig` — emits those tables as constant data
   and calls `luce_rt_unwound` on every unwinding edge.
 - `src/apps/loom/runner.zig` — renders the trace, capped at 12
   printed frames.
-- `src/apps/luce/main.zig` — the `--release` flag, on both backends.
+- `src/apps/luce/main.zig` — the `--release` flag: it strips the
+  module, and everything downstream follows from that.
+- `src/luce/interpreter/machine.zig` — `traceback()`: where the oracle
+  reads origins, after a trap, never during execution; and
+  `src/luce/interpreter.zig` — `Trap.trace` (`TraceFrame` = function,
+  source, line, column) and `Trap.dropped`, the shape `specs/agree.zig`
+  compares against the compiled report.

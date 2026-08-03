@@ -28,9 +28,10 @@
 //! generator itself: it runs this binary over the module it already
 //! has (`apps/loom/runner.zig`).
 //!
-//! Programs compile in script mode (`func main():`) with the host
-//! builtins allowed; whoever runs the artifact is the trusted boundary
-//! that decides which host services actually exist.
+//! A program is exactly `func main():`, or `func main() -> !:` when
+//! the world can stop it, and compiles with the host builtins allowed;
+//! whoever runs the artifact is the trusted boundary that decides
+//! which host services actually exist.
 
 const std = @import("std");
 const luce = @import("luce");
@@ -226,10 +227,10 @@ fn buildNative(
     if (request.release) luce.mir.strip(&program);
 
     // What the artifact will claim it was built from.  The serialized
-    // module is the canonical form of a compiled program, so hashing
-    // it is what lets a loader match an artifact to a `.lc` it was
-    // handed — and lets `luce build --emit=library` warm a cache that
-    // `loom run` will then hit.
+    // module is the canonical form of a program, so hashing it is what
+    // lets a loader decide whether the `.lc` beside a source is still
+    // the one that source makes — and lets `luce build` warm a cache
+    // that `loom luce` will then hit.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
     const source_hash = luce.llvm.abi.sourceHash(encoded);

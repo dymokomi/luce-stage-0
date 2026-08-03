@@ -11,16 +11,17 @@ prediction was too optimistic, this page says so too.
 ## The short version
 
 **The language surface is done as designed.** Ten conceptual pipeline
-stages, four executable specifications, and a front end whose
+stages, eight executable specifications, and a front end whose
 diagnostics name the fix rather than the parser's predicament.
 Optionals closed the absence half of the last semantic hole and errors
 closed the failure half; nothing that was designed is now unbuilt.
 
 **The runtime is not done, but the wall is down.** The two items that
-blocked real programs are both closed: the C-parity backend is
-reachable from `loom run` and from `luce build --emit=exe`, and memory
-is genuinely given back — object identity first, then String bytes and
-struct field runs. A Luce program can run all day.
+blocked real programs are both closed: a `.lc` **is** machine code at
+C parity, whether `loom run` opens it or a shell runs an `--emit=exe`
+binary, and memory is genuinely given back — object identity first,
+then String bytes and struct field runs. A Luce program can run all
+day.
 
 **What is left is a short list of library and host builtins, one open
 language question, and one benchmark row.**
@@ -32,14 +33,14 @@ language question, and one benchmark row.**
 | Static typing with inference, no implicit conversions | shipped |
 | Checked arithmetic, bounds checks, UTF-8 boundary checks, in every mode | shipped |
 | Scope ownership: `give`, `copy`, `free`, 43 ratified situations | shipped |
-| `T?`, `none`, narrowing, `else` | shipped, both engines |
-| `T!`, `try`, `catch`, `error` | shipped, both engines |
+| `T?`, `none`, narrowing, `else` | shipped |
+| `T!`, `try`, `catch`, `error` | shipped |
 | f-strings, compound assignment, nested place assignment | shipped |
 | File-scope constants, folded and inlined | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
 | Three standard modules: `math`, `strings`, `files` | shipped |
 | LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
-| Trap locations and call traces, identical on both engines | shipped |
+| Trap locations and call traces in debug builds | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
 | Map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
@@ -51,9 +52,11 @@ on loops, math, arrays, matrix multiply and statistics**, and
 it is allocation-bound rather than code-generation-bound.
 [The table and its caveats](/guide/performance/).
 
-Memory, on a churn loop that retains nothing: **flat at 1.8 MB on the
-interpreter** where it used to grow linearly to 121 MB. The editor
-simulation: **1204 MB to 3.3 MB** peak.
+Memory, on a churn loop that retains nothing: **flat**, where it used
+to grow linearly to 121 MB. What is left on the compiled path is
+20.4 MB of allocator working set for a hot allocate-and-free loop,
+and it does not move with the iteration count. The editor simulation:
+**1204 MB to 3.3 MB** peak.
 [How, and what it cost](/guide/memory/).
 
 Small-string optimisation was predicted to remove "essentially all" of
@@ -135,9 +138,10 @@ workaround-dense and the proof that the language moved.
 5. **No sort with a comparator.** `wordcount.luc` produces a top-five
    listing by **destroying the map**. The one place the absence of
    first-class functions draws blood.
-6. **Host surface gaps:** clock, `sleep`, `exit`, environment access,
-   stderr, directory listing, delete/rename, append mode, path
-   manipulation. Each is one builtin plus one wrapper.
+6. **Host surface gaps.** Mostly closed: the clock, `sleep`,
+   environment access, stderr, reading a line, directory listing,
+   delete/rename and append mode all shipped with host ABI version 8.
+   What is still absent is `exit` and path manipulation.
 7. **No default or named arguments.** `term_style(fg, bg, bold)` is
    called 16 times and 13 of them end in the same noise word `false`.
 8. ~~**`Bytes` is unconstructible.**~~ Cut. Nothing produced one and
@@ -158,7 +162,7 @@ workaround-dense and the proof that the language moved.
 13. **`m.get(k) -> V?` does not exist**, so `has` then index is three
     hash lookups on the hit path.
 14. **`strings.find` returns `-1`** because `Int?` did not exist when
-    it was written. It does now, on both engines, so the sentinel is a
+    it was written. It does now, so the sentinel is a
     wart with nothing holding it up — and it also returns `-1` for an
     *argument* error, which is not the same fact as "absent".
 
@@ -175,8 +179,7 @@ stale — it still lists builtins from a removed era.
 ## The order the work goes in
 
 1. The cheap slice: character classes, a frozen container or a `Set`,
-   a clock, `sleep`, `exit`, environment access, stderr, directory
-   listing.
+   `exit`, and path manipulation.
 2. `m.get(k) -> V?`, and a corpus sweep.
 3. Decide receivers, multiple returns, and integer-division spelling —
    one memo each.

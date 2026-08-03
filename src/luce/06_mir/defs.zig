@@ -194,7 +194,7 @@ pub const ErrorCode = enum {
 /// delete x" are different news, and a program that catches one prints
 /// what it was told.
 ///
-/// Not part of the `.lc` wire surface — it names an argument the two
+/// Not part of the `.lcm` wire surface — it names an argument the two
 /// engines pass to one runtime call — but it is written here beside
 /// `ErrorCode` because both engines have to spell the same verb.
 pub const FileAct = enum(i32) {

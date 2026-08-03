@@ -562,8 +562,8 @@ pub const Runtime = struct {
     live: u32 = 0,
 
     /// Unique per call: object ownership names (serial, local) pairs,
-    /// so recursion never confuses two frames' bindings.  u64 — loom
-    /// runs with no instruction budget at all, so 2^32 calls is an
+    /// so recursion never confuses two frames' bindings.  u64 — a run
+    /// has no instruction limit of any kind, so 2^32 calls is an
     /// afternoon, and a wrapped serial would let ownership confuse
     /// two frames.
     next_serial: u64 = 1,

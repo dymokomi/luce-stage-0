@@ -3,7 +3,7 @@
 //! One rule decides what lives here: **anything that runs a Luce
 //! program is a specification, and a specification runs it on both
 //! engines.**  Anything that inspects a structure — a token stream, an
-//! AST, MIR, the LLVM IR text, the `.lc` bytes, the interpreter's own
+//! AST, MIR, the LLVM IR text, the `.lcm` bytes, the interpreter's own
 //! frame stack — is a test of that structure and lives beside the code
 //! it proves.
 //!
@@ -41,7 +41,7 @@ pub const host = @import("specs/host_spec.zig");
 pub const modules = @import("specs/modules_spec.zig");
 /// `07_optimize` may not change what a program does, on either engine.
 pub const optimizer = @import("specs/optimize_spec.zig");
-/// A `.lc` read back from bytes is the same program it came from.
+/// A serialized module read back from bytes is the same program.
 pub const module_format = @import("specs/format_spec.zig");
 
 test {

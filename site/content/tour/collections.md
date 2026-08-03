@@ -75,8 +75,8 @@ tail   40 50
 source 20
 ```
 
-Indexing is bounds-checked, always, on both engines and in both build
-modes. Reading past the end is a trap.
+Indexing is bounds-checked, always, in both build modes. Reading past
+the end is a trap.
 
 ## Map
 

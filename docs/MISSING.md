@@ -30,9 +30,8 @@ runs second.  A Luce program can run all day.
 `Memory.objects` now holds everything with a death point — container
 contents, the object table, **and every String's bytes and every
 struct value's field run** — while `Memory.arena` keeps only what a
-program cannot grow without bound (a trap's words, the interpreter's
-per-layout struct zero templates, host text on its way into owned
-storage).
+program cannot grow without bound (a trap's words, the per-layout
+struct zero templates, host text on its way into owned storage).
 
 - ~~Object table rows are never reused~~ — **closed.**  A handle is
   `{index, generation}` and a freed row goes on a free list, so the
@@ -48,9 +47,10 @@ storage).
   current statement copies them, so no owner ever holds a view of
   bytes it did not allocate (`docs/STRINGS.md`).  The same churn loop
   — one string built and discarded per iteration, retaining nothing —
-  measured on the interpreter: **15.5 / 29.4 / 59.9 / 121.0 MB → 1.8 /
-  1.8 / 1.9 / 1.8 MB at 0.5M / 1M / 2M / 4M iterations**, and flat out
-  to 16M.  Reference counting, ARC, COW and tracing GC stay
+  read off the runtime's own arena: **15.5 / 29.4 / 59.9 / 121.0 MB →
+  1.8 / 1.8 / 1.9 / 1.8 MB at 0.5M / 1M / 2M / 4M iterations**, and
+  flat out to 16M; in the artifact, 20.4 MB of allocator working set
+  and equally flat.  Reference counting, ARC, COW and tracing GC stay
   permanently refused (`docs/MEMORY.md`); what replaced them is the
   language's own claim made literal — *values copy*.
 
@@ -83,9 +83,9 @@ one `dlopen`, one symbol lookup and one call.  `--emit=exe` writes a
 standalone binary, `--emit=object` a relocatable object, and there is
 nothing left to fall back to or select between (docs/ENGINE.md).
 
-What that delivered, measured through `loom run` while there was still
-an interpreter to measure against: **loops 6995 ms → 92 ms, matmul
-5767 ms → 22 ms, strings 931 ms → 57 ms.**  Startup is 3–4 ms and
+What that delivered, measured through `loom run` against the engine
+it replaced, while there was still one to measure against: **loops
+6995 ms → 92 ms, matmul 5767 ms → 22 ms, strings 931 ms → 57 ms.**  Startup is 3–4 ms and
 compiles nothing; compiling is `luce build`'s job and happens when it
 is asked for.
 
@@ -109,8 +109,8 @@ linker willing to take it.
 
 ## Tier 1 — ~~the semantic hole~~ — **closed**
 
-**Optionals are done, on both engines.**  `T?`, `none`, narrowing and
-`else` run on the interpreter and lower to `{T, i1}` through LLVM, so a
+**Optionals are done.**  `T?`, `none`, narrowing and `else` lower to
+`{T, i1}` through LLVM, so a
 program that says `T?` is compiled like any other — `parse_int` and
 `parse_float` answer `Int?`/`Float?` and every bundled program that
 calls them runs as native code.  What the lowering cost that
@@ -118,8 +118,8 @@ calls them runs as native code.  What the lowering cost that
 docs/CODEGEN.md: the null handle cannot stand in for absence, because
 it already names a value that is *there*.
 
-**Errors are done too, on both engines.**  `T!`, `try`, `catch` and
-`error(...)` run on the interpreter and lower through LLVM as the
+**Errors are done too.**  `T!`, `try`, `catch` and `error(...)` lower
+through LLVM as the
 outcome word a Luce function already answered, so the success path of
 a `try` reads nothing at all.  `T!` really did leave `types.Type`
 untouched — fallibility is a bool on `mir.Function`, and not one
@@ -159,8 +159,8 @@ The corpus that argued for it, item by item:
   absence rather than failure, so they took `?` and not `!`.  The
   seven left are domains the caller was handed and could have
   checked, which is the rule's definition of a bug.
-- `strings.find` returns `-1` because `Int?` did not exist.  It does,
-  on both engines, so the sentinel is a wart with nothing holding it
+- `strings.find` returns `-1` because `Int?` did not exist.  It does
+  now, so the sentinel is a wart with nothing holding it
   up any more — `strings.luc:20` returns `-1` for an *argument error*,
   which is not the same fact as "absent", and `find_from`'s
   empty-needle case returns success where `count`'s returns failure.
@@ -215,7 +215,7 @@ the proof the language moved.
    listing by **destroying the map**.  The one place
    no-first-class-functions draws blood.
 6. ~~**Host surface gaps**~~ — **mostly closed.**  Nine services
-   shipped on both engines at ABI 8: `read_line` (with its prompt),
+   shipped at ABI 8: `read_line` (with its prompt),
    `print_error`, `clock_ms`, `sleep_ms`, `env`, `file_append`,
    `file_delete`, `file_rename`, `dir_list`, wrapped in `std.files`
    as `append_text`/`append_lines`/`delete`/`rename`/`list`.  The two
@@ -230,7 +230,7 @@ the proof the language moved.
 
    - **`exit`.**  Not one builtin.  It is a fourth way for a run to
      end, and every party would need an answer for it: `luce_main`'s
-     `Status`, the leak census, what the interpreter's frame stack
+     `Status`, the leak census, what the oracle's frame stack
      does on the way out, and what "scope ownership" means when a
      scope never closes.  `main() -> !` already ends a program early
      with a reason and a status a shell can read, which is what the
@@ -295,8 +295,8 @@ the proof the language moved.
   **bidi controls refused everywhere**.
 - **The `std.` namespace** — `import math` binds a sibling, `import
   std.math` binds the library, both together is a collision.
-- **Trap locations and call traces**; **runaway recursion traps** on
-  both engines.
+- **Trap locations and call traces**; **runaway recursion traps**
+  rather than overflowing the machine's stack.
 - **Map is O(1)**, open-addressed over insertion-ordered entries.
   **Sort is O(n log n) and stable by guarantee.**
 - **Build modes are settled, not pending.**  Luce is always
@@ -371,15 +371,15 @@ multi-user — all deferred by design in `docs/V2.md`.
    so is the **small-string optimisation** that paid for it; see Tier
    0 and step 5 of `docs/STRINGS.md`.  Twenty-two bytes of text live
    in the `Value` that already travels, which cost an `abi.version`
-   bump and a `.lc` `format_version` bump and removed every allocation
+   bump and a `format_version` bump and removed every allocation
    the benchmark's 400,000 `str(i)` results were making.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
-3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done on both engines**;
+3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**;
    `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`
    lowers to `{T, i1}`.
 4. **The cheap Tier-3 slice:** character classes, and a frozen
    container or `Set`.  ~~`read_line`, `clock`, `sleep`, `env`,
-   stderr, directory listing~~ — **done, on both engines**; see Tier 3
+   stderr, directory listing~~ — **done**; see Tier 3
    item 6 for what shipped and what was deliberately left out.
 5. ~~**Cut `Bytes`**~~ — done; stage 10 is total.
 6. **`m.get(k) -> V?`**, rewrite `wordcount.luc`, and sweep the corpus

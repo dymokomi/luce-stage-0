@@ -83,7 +83,7 @@ pub const sections = [_]Section{
             .{ .slug = "failure", .title = "Traps are bugs, errors are news", .blurb = "The one rule that decides whether a failure is a trap, an error, or an absence." },
             .{ .slug = "strings", .title = "Strings and copies", .blurb = "Immutable UTF-8 values with an owner, small-string optimisation, and the one benchmark still behind." },
             .{ .slug = "performance", .title = "Performance", .blurb = "The benchmark table against C twins, what it measures, and what it does not." },
-            .{ .slug = "toolchain", .title = "The compiler and the terminal", .blurb = "luce, loom, the four artifacts, the two engines, and the two build modes." },
+            .{ .slug = "toolchain", .title = "The compiler and the terminal", .blurb = "luce, loom, the three artifacts, the one engine, and the two build modes." },
         },
     },
     .{

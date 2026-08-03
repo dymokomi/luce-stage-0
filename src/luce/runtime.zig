@@ -6,14 +6,14 @@
 //! `str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 //! the trap channel they all report through.
 //!
-//! It exists as a library rather than a struct inside the interpreter
-//! because a compiled `.lc` is a shared library and a standalone
-//! executable has no interpreter process to call into: a compiled
-//! program still needs something to call when it appends to a list
-//! (docs/CODEGEN.md).  There is exactly one implementation of every
-//! semantic, and both the interpreter and generated code reach it —
-//! the interpreter through the Zig surface below, generated code
-//! through the C surface in `exports.zig`.
+//! It exists as a library rather than a struct inside an engine
+//! because a `.lc` is a shared library and a standalone executable has
+//! no compiler process to call into: a running program still needs
+//! something to call when it appends to a list (docs/CODEGEN.md).
+//! There is exactly one implementation of every semantic, and both
+//! generated code and the test suite's oracle reach it — generated
+//! code through the C surface in `exports.zig`, the oracle through the
+//! Zig surface below.
 //!
 //! Flat pieces beside this file:
 //!

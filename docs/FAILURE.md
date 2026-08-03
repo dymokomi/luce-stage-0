@@ -302,7 +302,9 @@ to exist.
 
 1. ~~`T?`, `none`, narrowing and its diagnostics, `else`. Interpreter
    only; `parse_int`/`parse_float` become `Int?`/`Float?` so it has
-   real users on day one.~~ **Done.**
+   real users on day one.~~ **Done.**  *(This list was written while
+   the interpreter was still an engine and the LLVM path was reached
+   by falling forward to it; it is neither now — docs/ENGINE.md.)*
 2. `m.get(k) -> V?`, and rewrite `wordcount.luc`. The narrowing
    acceptance test in anger.
 3. `?.` — gated on whether step 2 made anyone want it.

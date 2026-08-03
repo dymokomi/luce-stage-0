@@ -1,9 +1,8 @@
 # Luce by example
 
 Complete programs, one idea at a time. Each one was compiled and run
-when this page was built, and the output shown under it is what it
-printed — on the compiled path and on the interpreter, which have to
-agree.
+by the freshly built toolchain when this page was built, and the
+output shown under it is what it actually printed.
 
 Copy any of them into a file and run `loom luce thatfile.luc`.
 

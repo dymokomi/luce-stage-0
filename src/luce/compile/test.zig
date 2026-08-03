@@ -356,7 +356,7 @@ test "control flow, loops, and builtins compile and verify" {
 
 test "functions unreachable from the entry are pruned from the artifact" {
     // A std import brings its whole module; what is never called must
-    // not reach the .lc, the decoder, or an engine (docs/PIPELINE.md,
+    // not reach the .lcm, the decoder, or stage 10 (docs/PIPELINE.md,
     // stage 9).
     var unused = try expectCompilesOptions(
         \\import std.strings

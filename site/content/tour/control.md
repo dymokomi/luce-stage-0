@@ -110,9 +110,8 @@ own. There are no single-exit contortions in Luce and no `defer` —
 ## Recursion, and what happens when it runs away
 
 Functions may call themselves. Call depth is a *policy* limit rather
-than a native stack accident, on both of Luce's engines, so runaway
-recursion is a trap with a message and a call stack — never a
-segmentation fault.
+than a native stack accident, so runaway recursion is a trap with a
+message and a call stack — never a segmentation fault.
 
 ```luce run
 func factorial(n: Int) -> Int:

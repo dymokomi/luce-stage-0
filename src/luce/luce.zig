@@ -5,9 +5,11 @@
 //!
 //! `compile.zig` is the driver and the place to start reading: it
 //! walks a source file through the numbered stage folders below, in
-//! order, and produces verified MIR.  From there, either the
-//! interpreter runs the program or `08_llvm` compiles it; both call
-//! `runtime`, so there is one implementation of every semantic.
+//! order, and produces verified MIR.  From there `08_llvm` compiles
+//! it, which is the only way a Luce program is ever run.  The
+//! `interpreter` is the test suite's differential oracle and ships in
+//! nothing; it and generated code both call `runtime`, so there is one
+//! implementation of every semantic (docs/ENGINE.md).
 //!
 //! Exported names drop the numbers — the prefixes order the directory
 //! listing, they are not part of the vocabulary.

@@ -99,7 +99,7 @@ pub const text_outside: u8 = 0xff;
 /// A handle travels whole in `Value.bits` — the index in the low 32
 /// bits, the generation in the high 32 — so resolving one is still
 /// one load and one compare.  Nothing serializes a handle: an object
-/// exists only while a program runs, so the `.lc` format has never
+/// exists only while a program runs, so the `.lcm` format has never
 /// heard of this.
 pub const Handle = struct {
     index: u32,

@@ -37,7 +37,7 @@ fn printAll(diagnostics: *const Diagnostics) void {
     std.debug.print("got:\n{s}", .{rendered});
 }
 
-/// Compile `source` (script mode, no host) and assert it fails with a
+/// Compile `source` with no host and assert it fails with a
 /// diagnostic carrying `code` somewhere in the list.  The everyday
 /// rejection assertion.
 fn expectError(source: []const u8, code: []const u8) !void {

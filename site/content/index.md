@@ -24,8 +24,8 @@ fig appeared 2 time(s)
 pear appeared 1 time(s)
 ```
 
-That program was compiled and run to produce the output above it, on
-both of Luce's engines, when this page was built. So was every other
+That program was compiled and run to produce the output above it when
+this page was built. So was every other
 sample on this site — see [how that works](/guide/toolchain/#how-this-site-is-built).
 
 ## Three things that are unusual
@@ -48,8 +48,8 @@ allocation-bound rather than code-generation-bound.
 **Failure has three shapes, and they do not overlap.** A `T?` says
 something might not be there. A `T!` says a call might not succeed,
 handled with `try` or `catch`. Everything else is a trap, which is a
-bug: it reports a stable code, `file:line:column`, and a call trace, on
-the compiled path exactly as on the interpreter. The rule that decides
+bug: it reports a stable code, `file:line:column`, and a call trace,
+and it does that from the machine code you ship. The rule that decides
 between them is one sentence — *traps are bugs, errors are news*.
 [Absence and failure](/guide/failure/).
 

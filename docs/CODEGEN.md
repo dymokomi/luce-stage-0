@@ -1,8 +1,8 @@
 # Code generation — the LLVM path
 
 Luce has one code generator.  It lowers the typed Luce IR to LLVM IR,
-hands that to libLLVM, and gets back machine code.  `docs/CODEGEN.md`
-is the decision record for why; this is the description of what is
+hands that to libLLVM, and gets back machine code.  This file is both
+the decision record for that seam and the description of what is
 there.
 
 The path is **the only one**: `luce build` writes a loadable artifact
@@ -12,12 +12,10 @@ no longer an engine — it ships in nothing and survives as the
 differential oracle in the test suite (docs/ENGINE.md).  What follows
 says exactly how far this path reaches and how it reaches a person.
 
-> **Dated sections below.**  This file is the decision record as well
-> as the description, and the parts of it written while there were two
-> engines still say so — `.lcn`, the fallback, "the interpreter runs
-> the `.lc`".  They are kept as the record of how the decisions were
-> taken.  `docs/ENGINE.md` is what is true now, and where the two
-> disagree ENGINE.md wins.
+Where this file compares the compiled answer against "the
+interpreter", it means the oracle: the second implementation the specs
+run every program on and compare against, not something a user can
+select.  There is nothing to select.
 
 ## The pipeline
 
@@ -55,10 +53,10 @@ Three questions had to be answered, and the answers are all in
 `src/apps/native.zig` and `src/apps/start.zig`.
 
 **Who links, and with what.**  `cc`, at build time.  A link is a
-*build-time* act — it happens when `--emit=exe` is typed, or the first
-time loom meets a program with no current artifact — so this file's
-older promise that "nothing external is ever invoked" holds where it
-was always about: the **run** path.  Running an artifact that already
+*build-time* act — every `luce build` is one, and so is the compile
+loom does the first time it meets a source file with no current
+artifact — and nothing external is invoked on the **run** path at all.
+Running an artifact that already
 exists is one `dlopen`, one symbol lookup, one call.  Using LLD
 in-process would be nicer, and was checked: LLD is not part of what
 `llvm-config` describes (Homebrew ships it as a separate formula, and
@@ -94,7 +92,7 @@ built from, what generated the code, and whether it kept its origins.
 A loader reads that *before* it calls anything, and refuses by name —
 wrong machine, wrong ABI, wrong code generator, stale program —
 because a native artifact is not portable and a file name cannot be
-trusted to say so.  Without the tag, a `.lcn` copied between machines
+trusted to say so.  Without the tag, a `.lc` copied between machines
 is a file that loads cleanly and crashes with no explanation.
 
 The machine is `abi.machine` — `aarch64-macos-none`, architecture,
@@ -110,9 +108,11 @@ generates for a named CPU; the day that changes, the string grows and
 
 ### Where a compiled artifact lives, and when it is rebuilt
 
-Beside the program, as `NAME.lcn`: exactly the file `luce build
---emit=library NAME.luc` writes, so `loom run NAME.lc` finds a warm
-one if a build shipped it and makes one if not.  It is deletable with
+A `.lc` **is** the artifact: `luce build NAME.luc` writes one and
+`loom run NAME.lc` opens it.  What is cached is the compile that loom
+does on a person's behalf — `loom luce NAME.luc` puts the result
+beside the source, as `NAME.lc`, exactly the file `luce build` would
+have written, so a second run finds a warm one.  It is deletable with
 the program and visible in a listing, which a hidden cache is not.
 When there is nowhere to write beside the program — a read-only
 directory, or a program with no path at all, like the editor embedded
@@ -124,23 +124,23 @@ world-writable directory is not where that should be decided.)
 `abi.sourceHash` of the serialized module, so a rebuild that produced
 identical bytes hits, a program whose bytes changed misses, and a file
 restored from a backup with an old mtime does not quietly win.  That
-is PEP 552's answer rather than PEP 3147's, and it is the same
-decision the `.lci` image cache reached before it.
+is PEP 552's answer rather than PEP 3147's.
 
 **And the content is the compiler's as well as the program's.**  A
-`.lcn` holds machine code, and which machine code depends on two
+`.lc` holds machine code, and which machine code depends on two
 independent things: the program, and whatever turned it into
 instructions.  `source_hash` answers the first.  `abi.generator`
 answers the second, and the tag carries both, so upgrading `luce`
 rebuilds every artifact instead of leaving the previous compiler's
-output running under a program whose `.lc` re-encodes to the same
+output running under a program whose module re-encodes to the same
 bytes.  A loader tells the two apart — "the program it was built from
 has changed" and "it was built by a different code generator" are
 different sentences, because they are different facts and only one of
 them is something a person did to the program.
 
 **The generator identity is computed, not declared.**  A hand-bumped
-number is the shape `abi.version` and `.lc`'s `format_version` have,
+number is the shape `abi.version` and the serialized module's
+`format_version` have,
 and it is the wrong shape here: an ABI changes a few times a year, a
 code generator changes every day, and forgetting to bump is exactly
 how an artifact goes stale unnoticed.  So `build.zig` hashes what
@@ -180,44 +180,37 @@ that links the artifact**, which combines objects rather than
 generating them.  Both are named here rather than assumed away.
 
 Because the tag is honest, nothing has to sweep artifacts before
-measuring one: `bench/run.sh` and `bench/compare.sh` leave the `.lcn`
+measuring one: `bench/run.sh` and `bench/compare.sh` leave the `.lc`
 files where they are and let the loader refuse the stale ones, which
 also keeps them a live test that it does.
 
-### Which engine runs a `.lc`
+### What running a program costs
 
-`loom run` prefers native and falls back to the interpreter, silently,
-because the two agree by construction and which one ran is a
-performance fact rather than a behavioural one.  The fallback exists
-because the compiled path needs three things the interpreter does not:
-the `luce` compiler, a C toolchain, and somewhere to put the result.
-A lowering is no longer one of them — the lowering is total.
-
-- `LOOM_ENGINE=native` turns the fallback into an error naming what
-  was missing — "the `luce` compiler is not beside /usr/local/bin and
-  not on PATH", "no C toolchain".
-- `LOOM_ENGINE=interpreter` takes the reference engine on purpose,
-  which is what an `agree` comparison and any report of a
-  disagreement need to be able to ask for.
-- `loom run NAME.lcn` runs a named artifact directly, checking its tag
-  and nothing else.
+`loom run FILE.lc` is one `dlopen`, one symbol lookup, one call.
+There is no engine to choose and nothing to fall back to: the file is
+machine code, so running it needs no compiler, no C toolchain, no
+LLVM, and nowhere to write.  A **source** file needs all four, exactly
+as a `.c` does, and when one is missing loom says which — "the `luce`
+compiler is not beside /usr/local/bin and not on PATH" — rather than
+running the program some other way.
 
 Measured on the bundled programs and the benchmark set (M4 Max, best
-of several, `.lc` in every case):
+of several):
 
-| program | interpreter | native, warm | native, cold |
-|---------|-------------|--------------|--------------|
-| hello   | 3.8 ms      | 4.0 ms       | 137 ms       |
-| editor  | 3.0 ms      | 4.0 ms       | 291 ms       |
-| loops   | 7020 ms     | 84 ms        | 233 ms       |
-| matmul  | 5845 ms     | 12 ms        | 159 ms       |
-| strings | 955 ms      | 52 ms        | 230 ms       |
+| program | warm | cold (compile + link + first load) |
+|---------|------|------------------------------------|
+| hello   | 4.0 ms | 137 ms |
+| editor  | 4.0 ms | 291 ms |
+| loops   | 84 ms  | 233 ms |
+| matmul  | 12 ms  | 159 ms |
+| strings | 52 ms  | 230 ms |
 
-Warm startup is the interpreter's, within noise: both are dominated by
-process start and reading the module.  A cold run pays one `luce`
-process, LLVM at `-O3`, and one link — and on anything that computes,
-still finishes far ahead of the interpreter that needed no build at
-all.
+Warm startup is process start and `dlopen`, and nothing else.  A cold
+run — a source file loom has not compiled before — pays one `luce`
+process, LLVM at `-O3`, one link, and the first `dlopen` of a binary
+the OS has never seen, which on macOS is the largest single term of
+the four (89 ms of `sort.luc`'s 155; docs/ENGINE.md Hat 3).  It is
+paid once per change to the program.
 
 ### loom does not carry a code generator
 
@@ -251,13 +244,15 @@ the `luce` executable imports.  `otool -L build/loom` is the check.
   an older install left earlier on `PATH`.
 - What it hands over is **the module, not the source**: the artifact
   is then keyed to the exact program about to run, rather than to
-  whatever a second compile of the same file would have produced.  A
-  `.lc` on disk is named where it stands; a script loom compiled in
-  memory, or the embedded editor, gets its bytes written beside the
-  artifact and removed again.  Re-encoding a decoded module is
-  byte-identical (`06_mir/module.zig`), so the hash matches by
-  construction.  `luce build` accepts a `.lc` for the same reason, and
-  that is a capability in its own right.
+  whatever a second compile of the same file would have produced.  The
+  module reaches the compiler as a `.lcm` — loom writes
+  `NAME.lc.<pid>.lcm` beside the artifact it is about to build and
+  removes it again.  Re-encoding a decoded module is byte-identical
+  (`06_mir/module.zig`), so the hash matches by construction.  `luce
+  build`, `luce check` and `luce ir` all accept a `.lcm` for the same
+  reason, and that front-end/back-end split is a capability in its own
+  right.  Nothing writes one as a deliverable: there is no
+  `--emit=module`.
 - The compiler inherits loom's environment, so `LUCE_LIB` and
   `LUCE_CC` reach it without loom parsing or forwarding either.
 - **A machine that only runs Luce programs needs no LLVM installed.**
@@ -332,12 +327,12 @@ in the entry block, so nothing accumulates inside a loop.
 
 Luce promises that runaway recursion **traps** — a stable code, a
 message, a call stack — rather than overflowing the machine's own
-stack.  The interpreter keeps that promise by counting frames on the
+stack.  The oracle keeps that promise by counting frames on the
 explicit stack it runs on.  Generated code runs on the native stack,
 so it counts differently: `%depth` is how many Luce frames are still
 allowed *including this one*, a callee is handed one less, and a call
 that would take it to zero traps `call_depth_exceeded` at exactly the
-call where the interpreter's frame stack would have refused to grow.
+call where the oracle's frame stack would have refused to grow.
 
 That is a register subtract and a compare against a constant, and the
 limit is the same whether or not LLVM inlined the callee, because the
@@ -351,9 +346,9 @@ hundred-million-call loop — noise in every case.
 
 How deep is too deep is the host's to say, through the ABI's
 `call_depth` slot; a null slot means `abi.default_call_depth`, which
-is `backend.Budget`'s default, so both engines refuse the same call.
-loom answers `host.call_depth` for the interpreter and the ABI alike.
-A host is free to name an enormous number, but the machine's stack is
+is `interpreter.Budget`'s default too, so the oracle and the compiled
+artifact refuse the same call.  A host is free to name an enormous
+number, but the machine's stack is
 still finite: a limit above what it can hold is a limit that never
 fires.
 
@@ -695,11 +690,11 @@ ownership and serials (docs/OWNERSHIP.md), `List`/`Map`/`Array`/
 `str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 the trap channel they all report through.
 
-It builds as a real `libluce_rt.a` and installs beside the binaries.
-**The interpreter calls it too** — `interpreter/machine.zig` keeps only
-the dispatch loop, the frame stack, the traceback, and host effects.
-There is exactly one implementation of every semantic, and the
-interpreter's suites are what prove it.
+It builds as a real `libluce_rt.a`, installs beside the binaries, and
+`cc` links it into every artifact.  **The oracle calls it too** —
+`interpreter/machine.zig` keeps only the dispatch loop, the frame
+stack, the traceback, and host effects.  There is exactly one
+implementation of every semantic, and the specs are what prove it.
 
 The C surface (`runtime/exports.zig`, some 58 `luce_rt_*` entry
 points) holds to three conventions:
@@ -749,7 +744,7 @@ drift.
 Effects reach the outside world through this table rather than through
 undefined symbols, because an undefined symbol does not link into a
 two-level-namespace macOS dylib — and a vtable is the shape
-`backend.Host` already has for the interpreter.  *Semantics* do not
+`interpreter.Host` already has for the oracle.  *Semantics* do not
 come through it: lists, maps, strings, ownership, and the conversions
 are `libluce_rt` calls, because they are the language rather than a
 capability a host may withhold.
@@ -853,7 +848,8 @@ itself instead of being `unreachable`.
 Trap reporting is **not** on that list any more: a compiled trap
 reports its code, its message, and its call stack with
 `file:line:column`, and `--release` strips the lines and keeps the
-names, the same as the `.lc` path (docs/MODES.md).
+names, exactly as docs/MODES.md describes and exactly as the oracle
+does.
 
 ## The benchmark snapshot
 
@@ -898,23 +894,48 @@ zig build -Dllvm-config=/path/to/llvm-config
 confined to the `emit` module (above), and `otool -L build/loom` is
 how that stays true.
 
+**`cc` is a dependency of building at all**, not only of testing.
+`build.zig` compiles the nine bundled programs and the six benchmarks
+with the freshly built `luce`, and under a native `.lc` that compile
+is a link.  Each one is pointed at the *installed* `libluce_rt.a`
+through `LUCE_LIB` — a configure-time path, because a `Run` step's
+environment cannot take a lazy one — and the library is a declared
+file input, so a change to the runtime rebuilds every program that
+carries a copy of it.  `zig build test` therefore installs
+`libluce_rt.a` as a side effect, which is the price of testing the
+link.
+
 ## Where this goes next
 
-What remains: close the gaps above, then wasm32 — `emit.zig` already
-registers the target, and the trapped-flag calling convention was
-chosen to work there unchanged.  The interpreter's dispatch loop goes
-last and not soon: it is the reference arm of the `agree` tests, the
-only engine on a machine with no C toolchain, and what `loom run`
-falls back to.  The runtime library both call stays either way.
+**Cross-compilation** is the largest thing missing, and the missing
+piece is not the code generator.  `emit.zig` already registers
+AArch64, X86 and WebAssembly and takes a triple as a parameter;
+`src/apps/luce/object.zig` hard-codes `emit.hostTriple()` and the CLI
+has no `--target`.  What is genuinely absent is **the link**: `cc`
+links for the host and `libluce_rt.a` is built for the host, so
+shipping to another machine means one `libluce_rt` per target and a
+linker willing to take it.  `zig cc` is the obvious answer, and Zig is
+already a build dependency.  Until then a `.lc` is refused by name on
+a machine it was not built for, which is the right failure.
 
-Two smaller things this path left open on purpose:
+**A shared `libluce_rt`** is the other one, and it is a size decision
+taken knowingly rather than an oversight.  Every artifact statically
+links the runtime, so one is ~683 KB whatever the program says and the
+nine bundled programs total 6.1 MB.  A dylib beside the binaries would
+collapse that, and would trade a self-contained file that runs
+anywhere the machine matches for an rpath and a version-matched
+install.  That is a change to what an artifact *is*, and it is not
+made here.
 
-- **Nothing sweeps `.lcn` files.**  They sit beside their programs and
+The interpreter's dispatch loop does not go anywhere.  It is the
+differential oracle the specs run every program against, it ships in
+nothing, and its cost is the ~0.3 s of interpreted arms inside a
+four-minute suite (docs/ENGINE.md Hat 1).
+
+One smaller thing this path leaves open on purpose:
+
+- **Nothing sweeps `.lc` files.**  They sit beside their programs and
   are deleted with them; the `TMPDIR` copies are the session's to
   clear.  A cache that grows without bound would need a policy, and a
   content-addressed file next to the thing it was addressed from does
   not.
-- **`zig build` does not pre-warm the bundled programs.**  It could —
-  `--emit=library` beside each `.lc` — but that would make `cc` a
-  dependency of *installing*, not only of testing, and loom warms them
-  on first run in a fifth of a second.

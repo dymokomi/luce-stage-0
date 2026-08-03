@@ -197,7 +197,7 @@ pub const Lowering = struct {
 
     // Locals ---------------------------------------------------------------
 
-    /// A named slot.  The name reaches the `.lc` and a traceback, so it
+    /// A named slot.  The name reaches the `.lcm` and a traceback, so it
     /// is duped into the program arena.
     pub fn addLocal(
         self: *Lowering,

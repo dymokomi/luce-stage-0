@@ -13,9 +13,9 @@
 //! pay.  MIR registers *are* indices into the instruction pool, so
 //! unlinking an instruction from its block leaves it in the pool, and
 //! the pool is what everything downstream is sized by: it is written
-//! into the `.lc` and read back at load, LLVM allocates one slot per
-//! entry, and — the expensive one — the interpreter gives every frame
-//! one `RuntimeValue` per pool entry, whether it can run or not
+//! into the `.lcm` and read back by the back end, LLVM allocates one
+//! slot per entry, and the oracle gives every frame one
+//! `runtime.Value` per pool entry, whether it can run or not
 //! (`interpreter/machine.zig`'s `register_count`).  So the pool is
 //! rebuilt with only the instructions some block still holds, in their
 //! original order, and every register renumbered.

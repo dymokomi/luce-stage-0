@@ -150,7 +150,7 @@ enters.
 ## The one sentinel
 
 `find` and `find_from` answer `-1` for "not found". `Int?` exists now,
-on both engines, so the sentinel is a wart with nothing holding it up
+so the sentinel is a wart with nothing holding it up
 — and `find` also returns `-1` for an *argument* error, which is not
 the same fact as "absent". The
 [status page](/status/) keeps it on the list.

@@ -17,9 +17,9 @@ Everything below was measured on this tree at `df5d48f`, Apple M4 Max,
 `./build.sh` (ReleaseSafe) unless a number says otherwise. `zig build
 test` is green: **849/849 in 71.1 s**.
 
-> **All eight steps are done.** The interpreter ships in nothing:
-> `luce` and `loom` do not reach it, and it is the second arm of every
-> spec. `luce build` writes machine code and calls it `.lc`;
+> **All nine steps are done, 2026-08-03.** The interpreter ships in
+> nothing: `luce` and `loom` do not reach it, and it is the second arm
+> of every spec. `luce build` writes machine code and calls it `.lc`;
 > serialized MIR keeps the format, loses the deliverable, and answers
 > to `.lcm` when it has to reach a disk. There is no fallback, no
 > `LOOM_ENGINE`, no `backend.zig`, and stage 7 is three passes. The
@@ -30,6 +30,17 @@ test` is green: **849/849 in 71.1 s**.
 > compared. Each step below carries a note on what it cost in contact
 > with the code, and every one of those notes exists because the memo
 > was wrong about something.
+
+> **Read the seven "Hat" sections below as the world the audit
+> measured, not as the world.** They were written at `df5d48f`, before
+> any of the nine steps landed, and they are in the present tense
+> because that is what they were describing. Everything they say
+> *would* happen has happened: there is no fallback, no `LOOM_ENGINE`,
+> no `.lcn`, no step budget, no `backend.zig`, no `Bytes`, no
+> evaluator, and 282 specs that proved only the oracle now prove both
+> arms. This file is the decision record, so the measurements stay as
+> taken; `docs/CODEGEN.md` and `docs/PIPELINE.md` describe what is
+> there now, and where they disagree with a Hat, they win.
 
 ---
 
@@ -916,10 +927,42 @@ recovering exactly the coverage Hat 5 says dies with the site's second
 arm. It is also the single line to cut if the suite ever hurts: run
 only the optimized program compiled and the bill halves.
 
-**9. The prose.** *(after 5)*
+**9. The prose. — DONE.** *(after 5)*
 232 sites, 44 files. Four sections rewritten rather than edited. Fold
 this memo's conclusions into `docs/CODEGEN.md` and `docs/PIPELINE.md`
 and leave this file as the record.
+
+*What it took, in contact with the code:*
+
+**The sweep found more than the engine story, because the engine story
+was what stopped anyone reading the sentence around it.** Six factual
+defects had nothing to do with the retirement and had been true-adjacent
+long enough to survive every earlier pass: `docs/CODEGEN.md` opened by
+citing *itself* as its own decision record; `build.sh` pointed at a
+`docs/BENCHMARKS.md` that does not exist; `site/src/site.zig`'s
+toolchain blurb promised "the four artifacts" against a page whose own
+heading says three; the status page and `docs/MISSING.md` both listed
+the clock, `sleep`, `env`, stderr and directory listing as host gaps
+after ABI 8 shipped all nine; the status page counted four executable
+specifications where `specs/` holds eight; and `abi.Status`'s own doc
+comment called its four answers three. A prose sweep is the only pass
+that reads every sentence, which is what makes it the pass that finds
+these.
+
+**Two files kept their past tense and got a dateline instead of a
+rewrite.** `docs/MEMORY.md`'s candidate analysis prices every memory
+model against a dispatch loop, and `docs/STRINGS.md`'s tables carry
+`interpreter` rows beside compiled ones. Both are records of
+experiments actually run; rewriting them would be forging the
+measurement. Each now opens by saying which world it was measured in,
+which is the honest form and cost two paragraphs.
+
+**The Hats above are the same case, and the same answer.** They were
+the audit, they are in the present tense, and every present-tense claim
+in them is now false by design. They are marked as dated rather than
+corrected, because a decision record that is edited to agree with its
+own outcome stops being evidence that the decision was taken on the
+facts available.
 
 ### Not on this list, on purpose
 

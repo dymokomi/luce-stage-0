@@ -202,10 +202,10 @@ pub const Machine = struct {
             // position already advanced past the current instruction,
             // so position - 1 is the instruction that trapped; at
             // position 0 the block's first instruction is the one
-            // about to run.  A step-budget trap fires between
-            // instructions, so its innermost line points at the last
-            // completed statement, not the next one — "where the
-            // budget ran out", which is the honest answer.
+            // about to run.  Compiled code names the trapping
+            // instruction directly on its unwinding edge, so this is
+            // the arithmetic that makes the two traces agree frame for
+            // frame — which `specs/agree.zig` checks on every program.
             const at = items[if (frame.position == 0) 0 else frame.position - 1];
             slot.* = .{
                 .function = function.name,

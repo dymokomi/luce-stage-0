@@ -1,11 +1,11 @@
-//! A `.lc` is the program, not a description of it.
+//! A serialized module survives a round trip as the same program.
 //!
 //! `06_mir/module.zig` proves the *format*: what encodes, what decodes,
 //! what the verifier refuses, and that a damaged module can never
 //! crash a decoder.  Those are all facts about bytes and live beside
 //! the encoder.
 //!
-//! This is the one fact about a `.lc` that is a fact about the
+//! This is the one fact about a `.lcm` that is a fact about the
 //! language: a module written out and read back is the same program —
 //! it computes the same answers, on both engines, and the artifact is
 //! keyed on those bytes (`abi.sourceHash`), so a round trip that

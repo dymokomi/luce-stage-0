@@ -253,7 +253,7 @@ pub fn checkArtifact(tag: ?*const Artifact, expect_hash: ?u64) ?Mismatch {
     return null;
 }
 
-/// What `luce_main` returns.  The same three answers `libluce_rt`'s
+/// What `luce_main` returns.  The same four answers `libluce_rt`'s
 /// `luce_rt_status` gives, because that is where they come from.
 pub const Status = enum(i32) {
     /// The program ran to completion.

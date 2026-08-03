@@ -17,7 +17,7 @@ test "a struct graph is checked for cycles in one pass, not one per path" {
     // Forty layouts, each holding the next one twice: no cycle, but
     // 2^39 distinct paths from the first to the last.  A per-path walk
     // never returns; a per-node one is instant.  Stage 4 refuses
-    // cycles before a `.lc` exists, so this is the decoder's problem
+    // cycles before a `.lcm` exists, so this is the decoder's problem
     // and only the decoder's — which is the point.
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();

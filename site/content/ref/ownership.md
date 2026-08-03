@@ -366,10 +366,10 @@ temporary, and all three have defined death points. The runtime's
 leak census is an internal assertion: if it fires, the *runtime* has a
 bug, not the program.
 
-### S34 — traps and budgets abort cleanly {#s34}
+### S34 — traps and the depth budget abort cleanly {#s34}
 
 On any trap, teardown reclaims everything regardless of ownership
-state, and nothing is published.
+state. Ownership never leaks because a program failed.
 
 An **error** is the other case and gets no such safety net, because it
 does not end the run: a `catch` resumes with the program still going.

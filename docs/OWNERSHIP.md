@@ -655,10 +655,10 @@ points.  loom's "leaked N objects" report becomes an internal
 assertion (it should never fire; if it does, the *runtime* has a bug,
 not the program).
 
-**S34. The step/depth budget and traps still abort cleanly.**  On any
-trap, teardown reclaims everything regardless of ownership state —
+**S34. The call-depth budget and traps still abort cleanly.**  On any
+trap, teardown reclaims everything regardless of ownership state:
 whatever the unwind never released, the runtime releases when the run
-ends — and publish-nothing-on-failure is unchanged.
+ends.  Ownership never leaks because a program failed.
 
 An **error** is the other case and gets no such safety net, because it
 does not end the run: a `catch` resumes with the program still going.

@@ -156,11 +156,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(native_tests).step);
 
     // The real host — console, cwd-relative files, arguments, the
-    // terminal — offered twice over one implementation: as
-    // `backend.Host` for the interpreter and as the ABI's C table for
-    // compiled code.  Shared by loom and by the standalone `main`
-    // below, so a compiled program sees the same world whichever
-    // runner started it.
+    // terminal — as the ABI's C table, which is the one shape a
+    // compiled program asks for anything through.  Shared by loom and
+    // by the standalone `main` below, so a compiled program sees the
+    // same world whichever runner started it.
     const app_host = b.createModule(.{
         .root_source_file = b.path("src/apps/host.zig"),
         .target = target,

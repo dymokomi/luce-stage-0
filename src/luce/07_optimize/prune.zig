@@ -14,7 +14,7 @@ const Register = defs.Register;
 ///
 /// Std modules arrive whole: `import strings` brings eighteen
 /// functions where a program may call three, and each one is
-/// otherwise encoded into the `.lc`, decoded at load, and compiled to
+/// otherwise encoded into the `.lcm`, decoded by `luce`, and compiled to
 /// machine code — the largest single cost in a short program's run
 /// (docs/PIPELINE.md, stage 9).  This is the dead-code elimination a compiled
 /// language is expected to do, and it belongs here, in the compiler,

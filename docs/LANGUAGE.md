@@ -618,8 +618,7 @@ New codes in this round:
 Long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
 string bounds/boundary, call depth.  Call depth is a
-*policy* limit, not a native-stack accident, on both engines: the
-interpreter runs on an explicit frame stack, and compiled code carries
+*policy* limit, not a native-stack accident: compiled code carries
 its remaining depth as a hidden argument and refuses the call that
 would exhaust it (docs/CODEGEN.md).  Runaway recursion is a trap with
 a message and a call stack, never a segfault.

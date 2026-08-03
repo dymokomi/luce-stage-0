@@ -3,9 +3,17 @@
 > **Decided and implemented.**  The situation-by-situation
 > specification distilled from this memo lives in `docs/OWNERSHIP.md`
 > (ratified S1–S43) and is live in the compiler and in `libluce_rt`,
-> the one runtime both the interpreter and compiled code call
-> (`docs/CODEGEN.md`), proven by `src/luce/specs/ownership_spec.zig`.  This memo is kept as the
-> record of the options weighed and why scope ownership + `give` won.
+> the one runtime compiled code and the test suite's oracle both call
+> (`docs/CODEGEN.md`), proven by `src/luce/specs/ownership_spec.zig`.
+> This memo is kept as the record of the options weighed and why scope
+> ownership + `give` won.
+>
+> **The candidate analysis below is dated.**  It was written when the
+> interpreter was the only engine, so it prices each option against a
+> dispatch loop.  Every judgement it reaches survived the move to
+> compiled code — the enforcement is dynamic either way — but read the
+> costings as the reasoning of the time, not as a description of what
+> runs (`docs/ENGINE.md`).
 
 Luce *had* **manual explicit memory**: objects created with
 `new`/literals, released with `free(x)`, use-after-free and

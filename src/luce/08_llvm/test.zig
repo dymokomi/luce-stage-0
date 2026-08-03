@@ -1,4 +1,4 @@
-//! End-to-end proof for the LLVM interpreter.
+//! End-to-end proof for the LLVM backend.
 //!
 //! Two kinds of test, both of them about the one code generator that
 //! ships.  The first kind renders the LLVM IR the lowering produced

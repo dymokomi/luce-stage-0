@@ -14,6 +14,22 @@ refuses, permanently, every automatic manager for values. This is the
 memo for what replaces them. It was `docs/MISSING.md` Tier 0 item 1,
 second bullet.
 
+**A note on the measurement tables.** Rows labelled *interpreter* are
+the reference implementation the test suite compares against — the
+differential oracle, which ships in nothing (`docs/ENGINE.md`). They
+are here because a second implementation of the same semantics is a
+second reading of the same experiment, and because several of these
+steps were taken while it was still an engine. The row that describes
+what anybody runs is always the compiled one.
+
+Two findings below name `07_optimize/values.zig`, which no longer
+exists: it was block-local value numbering written for the dispatch
+loop, and it went with the retirement (`docs/ENGINE.md` step 7). Both
+findings survive it — `struct_make`, `str`, `chr` and String `+` are
+still `impure` in `07_optimize/effects.zig`, and the store-to-load
+forwarding that had to stop at owning slots is now a private fact
+`07_optimize/ownership.zig` computes for itself.
+
 > **Steps 2, 3, 5 and 6 shipped.** Owned String bytes, copy-on-store
 > across every store site, owned struct field runs, the
 > mutation-during-statement read rule, small-string optimisation — a
@@ -736,7 +752,7 @@ inline in compiled code — `08_llvm`'s `ownsNothing` is scalars only
 now, because a String element owns its bytes; reads stay inline, since
 reading an element is a borrow. And `Memory.arena` survives, holding
 what a program cannot grow without bound: a trap's words, the
-interpreter's per-layout struct zero templates, and host text on its
+per-layout struct zero templates, and host text on its
 way into owned storage.
 
 ### What is still open

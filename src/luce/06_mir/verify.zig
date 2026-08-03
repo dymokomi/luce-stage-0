@@ -82,7 +82,7 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
 /// per layout by walking down from it re-walks every *path* through
 /// the graph, so a struct with two struct fields doubles the work per
 /// level: twenty levels is a million walks, and forty never finishes.
-/// Stage 4 refuses cycles before they can reach a `.lc`, so from
+/// Stage 4 refuses cycles before they can reach a `.lcm`, so from
 /// source this was already unreachable; a hand-written or fuzzed
 /// module reaches it through `decode`, which is exactly the input that
 /// must not be able to hang the decoder.  (`04_semantics/

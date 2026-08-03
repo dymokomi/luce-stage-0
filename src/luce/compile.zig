@@ -21,9 +21,10 @@
 //! the status table.
 //!
 //! Stage 8 is not on this path: `compileProject` stops at verified,
-//! optimized MIR, which is what `luce build` writes as a `.lc` and
-//! what the interpreter runs.  `luce build --emit=object|library|exe`
-//! takes that same program on to `08_llvm`.
+//! optimized MIR, which is the front end's whole product and what
+//! serializes as a `.lcm`.  `luce build --emit=object|library|exe`
+//! takes that same program on to `08_llvm`, which is where it becomes
+//! machine code.
 //!
 //! The compiler accepts the root's bytes plus a `Loader`, never a
 //! path: opening files is the host's, and which name resolves to what
@@ -139,7 +140,7 @@ pub fn compileProject(
     // leaves forwarding blocks and re-read locals behind, and the
     // ownership temporaries it parks around every fresh object are
     // mostly dead by the time the statement ends.  What a program
-    // never does should not reach the .lc, the decoder, or an engine.
+    // never does should not reach the .lcm, the decoder, or stage 10.
     // `luce ir --full` turns the stage off to show the raw lowering.
     if (options.prune) {
         try optimize.run(arena, &program, .all);

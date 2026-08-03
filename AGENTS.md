@@ -20,7 +20,7 @@ Let `zig fmt` determine Zig layout. Luce uses four-space indentation and forbids
 
 ## Testing Guidelines
 
-Tests are descriptive Zig `test "..."` blocks beside the code; larger contracts use `*_spec.zig`. Use `std.testing` and its allocator for leak detection. Cover success, bounds/failure, and round-trip or rejection paths where relevant; no numeric coverage target exists. Add new language modules to the exports and root test block in `src/luce/luce.zig`, or their tests will not run.
+Tests are descriptive Zig `test "..."` blocks beside the code; larger contracts use `*_spec.zig`. Use `std.testing` and its allocator for leak detection. Cover success, bounds/failure, and round-trip or rejection paths where relevant; no numeric coverage target exists. Add new language modules to the exports and root test block in `src/luce/luce.zig`, and new spec files to `src/luce/specs.zig`'s, or their tests will not run. The rule that decides where a test goes: **anything that runs a Luce program is a specification and lives in `specs/`, where it runs on both the compiled path and the differential oracle and the two are compared; anything that inspects a structure lives beside the code it proves** (docs/ENGINE.md).
 
 ## Commit & Pull Request Guidelines
 

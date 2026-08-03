@@ -166,14 +166,12 @@ testing story. In Zig's terms Luce is always `ReleaseSafe`, and
 `--release` is closer to `-fstrip`.
 
 **Debug and release run at identical speed.** The lesson taken from
-Zig is *where* the cost of debug information lives. The interpreter's
-dispatch loop never reads origins — not a load, not a branch — and
-neither does generated code, whose origins are constant data nothing
-on the execution path addresses. On a trap the interpreter walks its
-still-intact frame stack; compiled code has no such stack, so it
-builds the trace *as it unwinds*, each frame recording where it was on
-the way out. All the cost is on the far side of "the program already
-failed."
+Zig is *where* the cost of debug information lives. Generated code
+never reads origins — not a load, not a branch — because they are
+constant data nothing on the execution path addresses. It has no frame
+stack to walk either, so it builds the trace *as it unwinds*, each
+frame recording where it was on the way out. All the cost is on the
+far side of "the program already failed."
 
 So: `--release` gives up trap locations and buys very little back. An
 artifact is mostly the runtime library it carries, so stripping the
@@ -182,8 +180,7 @@ small program. Ship it when source lines would mean nothing to the
 recipient; ship debug everywhere else.
 
 Deep recursion is capped: a trace keeps the innermost 64 frames and
-counts the rest, and both engines cap at the same number, so the same
-trap reports the same frames.
+counts the rest, so a `call_depth_exceeded` report stays readable.
 
 ## Diagnostics
 

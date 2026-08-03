@@ -176,7 +176,7 @@ pub fn plan(
 
 /// Whether the preheader is lowered before every block that reads
 /// what it emits.  Stage 8 numbers blocks as it walks the source, so
-/// this holds for every loop a `for` or a `while` makes; a `.lc`
+/// this holds for every loop a `for` or a `while` makes; a `.lcm`
 /// arriving through `decode` need not be so tidy, and one that is not
 /// simply does not lift.
 fn emittedFirst(preheader: mir.BlockId, loop: Loop) bool {
@@ -608,7 +608,7 @@ test "the reassignment guard has no way to fire from source, and is kept anyway"
     // MIR `local_set` of a live Array local cannot appear inside a loop
     // that also reads it.  `collect` checks for one all the same:
     // nothing in this file should depend on a rule enforced four stages
-    // away, and a `.lc` reaches stage 10 through `decode` without ever
+    // away, and a `.lcm` reaches stage 10 through `decode` without ever
     // passing the analyzer.
     const gpa = testing.allocator;
     var built = try planned(gpa,

@@ -6,9 +6,9 @@
 //! `Lowering` per function.
 //! Produces: `Program` — an instruction pool plus basic blocks per
 //! function.  Registers never cross a block boundary; state that must
-//! survive a loop lives in a mutable local.  This is the form the `.lc`
-//! serializes, the verifier checks, the interpreter runs, and stage 8
-//! lowers to LLVM.
+//! survive a loop lives in a mutable local.  This is the form a `.lcm`
+//! serializes, the verifier checks, stage 8 lowers to LLVM, and the
+//! test suite's oracle interprets.
 //!
 //! **The emitter is here; the walk that drives it is stage 4's.**  A
 //! `Lowering` is a tape of already-decided operations: `build.zig`
@@ -22,9 +22,9 @@
 //!
 //! The verifier is a compiler invariant rather than a user diagnostic:
 //! every successful compile passes it, `module.decode` re-runs it so a
-//! damaged `.lc` is rejected, and a failure is reported as an internal
+//! damaged `.lcm` is rejected, and a failure is reported as an internal
 //! compiler error.  Instruction *types* beyond what the verifier
-//! checks are trusted — treat a `.lc` like an executable.
+//! checks are trusted — treat a `.lcm` like the executable it becomes.
 //!
 //! Flat pieces beside this file:
 //!
@@ -34,7 +34,7 @@
 //!                (`Lowered`), and `build`, which closes and assembles.
 //!   verify.zig — the shape and type checks every program must pass.
 //!   print.zig  — the deterministic textual dump behind `luce ir`.
-//!   module.zig — the `.lc` format: a direct binary serialization of
+//!   module.zig — the `.lcm` format: a direct binary serialization of
 //!                everything above, and the decoder that re-verifies.
 //!   test.zig   — the representation and verifier proved on their own.
 
@@ -64,7 +64,7 @@ pub const verify = @import("06_mir/verify.zig").verify;
 pub const VerifyError = @import("06_mir/verify.zig").VerifyError;
 pub const print = @import("06_mir/print.zig").print;
 
-/// The `.lc` module format.  It lives with the representation it
+/// The `.lcm` module format.  It lives with the representation it
 /// serializes, so a change to the instruction set and the bump of
 /// `format_version` it forces are one edit in one folder.
 pub const module = @import("06_mir/module.zig");
