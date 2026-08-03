@@ -443,6 +443,8 @@ pub const Machine = struct {
             .string => .ofString(""),
             .bytes => .ofBytes(""),
             .heap => .null_object,
+            // The zero of a `T?` is absence, which owns nothing (S43).
+            .optional => .none,
             .strukt => |layout_index| blk: {
                 // One shared zero template per layout, built on first
                 // use.  Sharing the fields slice across every
@@ -501,6 +503,15 @@ pub const Machine = struct {
             .ceil => return operators.ceil(registers[arguments[0]]),
             .len => return containers.length(&self.runtime, registers[arguments[0]]),
             .null_object => return .null_object,
+
+            // Optionals.  A `RuntimeValue` already carries its own tag,
+            // so absence is the tag and presence is the payload as it
+            // stands: widening and unwrapping move no bits.  Unwrap is
+            // what narrowing licensed and never checks — the analyzer
+            // proved the value is there (docs/FAILURE.md).
+            .none_value => return .none,
+            .is_none => return .ofBoolean(registers[arguments[0]].isNone()),
+            .optional_wrap, .optional_unwrap => return registers[arguments[0]],
             .index_get => return containers.indexGet(
                 &self.runtime,
                 registers[arguments[0]],

@@ -306,6 +306,9 @@ const Module = struct {
             // crosses into the runtime without being rebuilt.
             .strukt => .ptr,
             .bytes => self.fail("Bytes"),
+            // Step 4 of docs/FAILURE.md: a heap `T?` is the existing
+            // i32 with the null index, a value `T?` is `{T, i1}`.
+            .optional => self.fail("T? (optionals)"),
         };
     }
 
@@ -382,6 +385,7 @@ const Module = struct {
             .string,
             .bytes,
             .strukt,
+            .optional,
             => Builder.Alignment.fromByteUnits(8),
         };
     }
@@ -572,6 +576,7 @@ const Module = struct {
                 .i64,
             ) },
             .bytes => return self.fail("Bytes"),
+            .optional => return self.fail("T? (optionals)"),
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
@@ -756,9 +761,10 @@ const Module = struct {
             .int, .float, .strukt => 8,
             // `{ ptr, i64 }` — how a String travels.
             .string => 16,
-            // Neither reaches here: a function returning nothing has no
-            // slot, and `valueType` has already refused Bytes.
-            .none, .bytes => 0,
+            // None of these reaches here: a function returning
+            // nothing has no slot, and `valueType` has already refused
+            // Bytes and optionals.
+            .none, .bytes, .optional => 0,
         };
     }
 
@@ -1376,6 +1382,7 @@ const Body = struct {
             .strukt => |layout| (try self.module.structZero(layout)).toValue(),
             .none => self.fail("a local of type None"),
             .bytes => self.fail("Bytes"),
+            .optional => self.fail("T? (optionals)"),
         };
     }
 
@@ -1470,6 +1477,7 @@ const Body = struct {
             .float => .float,
             .strukt => .strukt,
             .bytes => return self.fail("Bytes"),
+            .optional => return self.fail("T? (optionals)"),
         };
         // A String's length travels with its bytes, so it is the one
         // length that is not a compile-time fact.
@@ -1477,7 +1485,7 @@ const Body = struct {
             .none, .boolean, .int, .heap, .float => 0,
             .strukt => |layout| self.module.program.structs[layout].fields.len,
             .string => null,
-            .bytes => unreachable, // answered above
+            .bytes, .optional => unreachable, // answered above
         };
 
         try self.storeBoxField(slot, 0, try builder.intValue(.i64, @intFromEnum(tag)));
@@ -1521,6 +1529,7 @@ const Body = struct {
                 );
             },
             .bytes => return self.fail("Bytes"),
+            .optional => return self.fail("T? (optionals)"),
         }
     }
 
@@ -1558,6 +1567,7 @@ const Body = struct {
             .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none => unreachable, // answered above
             .bytes => self.fail("Bytes"),
+            .optional => self.fail("T? (optionals)"),
         };
     }
 
@@ -1718,7 +1728,7 @@ const Body = struct {
     fn ownsNothing(of: types.Type) bool {
         return switch (of) {
             .boolean, .int, .float, .string => true,
-            .none, .bytes, .strukt, .heap => false,
+            .none, .bytes, .strukt, .heap, .optional => false,
         };
     }
 
@@ -1841,7 +1851,7 @@ const Body = struct {
             .boolean => .i8,
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
-            .none, .string, .bytes, .strukt, .heap => self.module.value_type,
+            .none, .string, .bytes, .strukt, .heap, .optional => self.module.value_type,
         };
     }
 
@@ -1855,6 +1865,7 @@ const Body = struct {
             .bytes,
             .strukt,
             .heap,
+            .optional,
             => Builder.Alignment.fromByteUnits(8),
         };
     }
@@ -2122,7 +2133,7 @@ const Body = struct {
             ),
             // A boxed cell: the tag and the length are already the
             // element type's, so only the payload words are read.
-            .none, .string, .bytes, .strukt, .heap => try self.unboxed(
+            .none, .string, .bytes, .strukt, .heap, .optional => try self.unboxed(
                 element,
                 address,
                 "element",
@@ -2152,7 +2163,7 @@ const Body = struct {
                 address,
                 cellAlignment(element),
             ),
-            .none, .string, .bytes, .strukt, .heap => try self.fillBoxValue(
+            .none, .string, .bytes, .strukt, .heap, .optional => try self.fillBoxValue(
                 address,
                 element,
                 held,
@@ -2545,6 +2556,7 @@ const Body = struct {
                 .bytes,
                 .strukt,
                 .heap,
+                .optional,
                 => return self.fail("const_data of a type other than String"),
             },
             .local_get => |local| {
@@ -2744,6 +2756,7 @@ const Body = struct {
             .bytes,
             .strukt,
             .heap,
+            .optional,
             => return self.fail("arithmetic on a type that has none"),
         }
     }
@@ -2931,6 +2944,7 @@ const Body = struct {
             .float, .string, .strukt => unreachable, // answered above
             .bytes => return self.fail("Bytes comparison"),
             .none => return self.fail("a comparison of None"),
+            .optional => return self.fail("T? (optionals)"),
         };
         return self.wip.icmp(condition, left, right, "compare");
     }
@@ -2961,6 +2975,7 @@ const Body = struct {
                 .bytes,
                 .strukt,
                 .heap,
+                .optional,
                 => return self.fail("negation of a type that has none"),
             },
         }
@@ -3133,6 +3148,16 @@ const Body = struct {
             .null_object => {
                 self.values[register] = try self.module.builder.intValue(.i32, runtime.null_index);
             },
+
+            // Step 4 of docs/FAILURE.md: a heap `T?` is the existing
+            // i32 with the null index, a value `T?` is `{T, i1}` that
+            // SROA keeps in registers.  Until then a program that says
+            // `T?` is named here and runs on the interpreter.
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
+            => return self.fail("T? (optionals)"),
             .len => {
                 // A String is `{ ptr, i64 }` in a register already, so
                 // its length is the second word and nothing else.
@@ -3475,6 +3500,7 @@ const Body = struct {
             .bytes,
             .strukt,
             .heap,
+            .optional,
             => self.fail("a math builtin on a type that has none"),
         };
     }

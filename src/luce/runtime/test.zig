@@ -537,10 +537,15 @@ test "the conversions round trip and refuse what they cannot represent" {
         (try text.str(runtime, Value.ofFloat(1e21))).asString(),
     );
 
+    // The parsers answer absence rather than trapping: "not a number"
+    // is the same reason every time and the name says it already.
     try testing.expectEqual(@as(i64, 42), (try text.parseInt(runtime, Value.ofString("42"))).asInt());
-    try expectTrap(.parse_failed, runtime, text.parseInt(runtime, Value.ofString("4 2")));
+    try testing.expect((try text.parseInt(runtime, Value.ofString("4 2"))).isNone());
+    try testing.expect((try text.parseInt(runtime, Value.ofString(""))).isNone());
     try testing.expectEqual(@as(f64, 1.5), (try text.parseFloat(runtime, Value.ofString("1.5"))).asFloat());
-    try expectTrap(.parse_failed, runtime, text.parseFloat(runtime, Value.ofString("inf")));
+    try testing.expect((try text.parseFloat(runtime, Value.ofString("inf"))).isNone());
+    try testing.expect((try text.parseFloat(runtime, Value.ofString("nan"))).isNone());
+    try testing.expect((try text.parseFloat(runtime, Value.ofString("zero"))).isNone());
 
     try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.chr(runtime, 0x1F642)).asString());
     try expectTrap(.bad_codepoint, runtime, text.chr(runtime, 0x110000));

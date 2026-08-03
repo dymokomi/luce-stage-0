@@ -77,6 +77,17 @@ pub const FunctionBuilder = struct {
     /// error type; this stage has no type to spare, so it remembers
     /// the names instead.
     undeclared: std.StringHashMapUnmanaged(void) = .empty,
+    /// Which optional locals are known, right here, to hold a value.
+    ///
+    /// **Narrowing is the feature; `?.` is the convenience**
+    /// (docs/FAILURE.md).  Luce deletes most of what makes flow
+    /// analysis expensive elsewhere — no closures to capture and
+    /// invalidate, no subtyping beyond `T <: T?`, no shadowing, no
+    /// aliasing of locals, no concurrency — so Dart's promotion chain
+    /// collapses to this: a set of locals, saved and joined around
+    /// each branch, and cleared for anything a loop body assigns.
+    /// Short enough that a linear scan is the whole lookup.
+    narrowed: std.ArrayList(LocalId) = .empty,
 
     const TempSlot = struct { local: LocalId, register: Register };
 
@@ -97,6 +108,119 @@ pub const FunctionBuilder = struct {
         self.loops.deinit(self.temporary());
         self.temps.deinit(self.temporary());
         self.undeclared.deinit(self.temporary());
+        self.narrowed.deinit(self.temporary());
+    }
+
+    // Narrowing ------------------------------------------------------------
+    //
+    // The whole of the flow analysis: a set of locals proved present,
+    // what a condition adds to it, what an assignment or a loop takes
+    // out, and the join two branches meet at.
+
+    fn isNarrowed(self: *const FunctionBuilder, local: LocalId) bool {
+        return std.mem.indexOfScalar(LocalId, self.narrowed.items, local) != null;
+    }
+
+    /// `local` is known to hold a value from here on.
+    fn narrow(self: *FunctionBuilder, local: LocalId) Error!void {
+        if (self.isNarrowed(local)) return;
+        try self.narrowed.append(self.temporary(), local);
+    }
+
+    /// `local` might be absent again: it was assigned, or a loop body
+    /// assigns it and the back edge re-enters with whatever that left.
+    fn widen(self: *FunctionBuilder, local: LocalId) void {
+        const at = std.mem.indexOfScalar(LocalId, self.narrowed.items, local) orelse return;
+        _ = self.narrowed.swapRemove(at);
+    }
+
+    /// A copy of the current set, for a branch to rejoin against.  The
+    /// caller frees it.
+    fn narrowSave(self: *FunctionBuilder) Error![]LocalId {
+        return self.temporary().dupe(LocalId, self.narrowed.items);
+    }
+
+    fn narrowRestore(self: *FunctionBuilder, saved: []const LocalId) Error!void {
+        self.narrowed.clearRetainingCapacity();
+        try self.narrowed.appendSlice(self.temporary(), saved);
+    }
+
+    /// Keep only what both arms of a conditional agree on.  A local
+    /// narrowed on one path and assigned away on the other is absent
+    /// again after the join, which is the whole reason this is a join
+    /// and not a union.
+    fn narrowIntersect(self: *FunctionBuilder, other: []const LocalId) void {
+        var index = self.narrowed.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (std.mem.indexOfScalar(LocalId, other, self.narrowed.items[index]) == null) {
+                _ = self.narrowed.swapRemove(index);
+            }
+        }
+    }
+
+    /// What `condition` proves about absence when it evaluates to
+    /// `want`: `x != none` proves `x` present when true, `x == none`
+    /// proves it present when false, `and` passes both facts through on
+    /// the true side, `or` on the false side, and `not` swaps.
+    /// Anything else proves nothing, which is always safe.
+    fn applyFacts(self: *FunctionBuilder, condition: *const ast.Expression, want: bool, budget: u32) Error!void {
+        if (budget == 0) return;
+        switch (condition.*) {
+            .unary => |unary| if (unary.op == .logic_not) {
+                try self.applyFacts(unary.operand, !want, budget - 1);
+            },
+            .binary => |binary| switch (binary.op) {
+                .equal, .not_equal => {
+                    // `x != none` when true, `x == none` when false.
+                    if (want != (binary.op == .not_equal)) return;
+                    const tested = if (binary.right.* == .none_literal)
+                        binary.left
+                    else if (binary.left.* == .none_literal)
+                        binary.right
+                    else
+                        return;
+                    if (tested.* != .name) return;
+                    const found = self.findLocal(tested.name.text) orelse return;
+                    if (self.code.localType(found.info.local) != .optional) return;
+                    try self.narrow(found.info.local);
+                },
+                .logic_and => if (want) {
+                    try self.applyFacts(binary.left, true, budget - 1);
+                    try self.applyFacts(binary.right, true, budget - 1);
+                },
+                .logic_or => if (!want) {
+                    try self.applyFacts(binary.left, false, budget - 1);
+                    try self.applyFacts(binary.right, false, budget - 1);
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    /// Forget what a loop body could undo.  The body runs before the
+    /// back edge re-enters it, so a narrowing established outside the
+    /// loop is only good inside it if nothing in the loop assigns the
+    /// name — and a narrowing established *by* the body has to survive
+    /// its own last statement to be worth anything, which it does not.
+    fn widenAssignedIn(self: *FunctionBuilder, block: ast.Block) void {
+        for (block.statements) |statement| {
+            switch (statement) {
+                .assign => |assign| switch (assign.target) {
+                    .name => |name| if (self.findLocal(name.text)) |found| self.widen(found.info.local),
+                    .field, .index, .chain => {},
+                },
+                .conditional => |conditional| {
+                    self.widenAssignedIn(conditional.then_block);
+                    if (conditional.else_block) |arm| self.widenAssignedIn(arm);
+                },
+                .while_loop => |loop| self.widenAssignedIn(loop.body),
+                .for_range => |loop| self.widenAssignedIn(loop.body),
+                .for_each => |loop| self.widenAssignedIn(loop.body),
+                else => {},
+            }
+        }
     }
 
     fn fail(self: *FunctionBuilder, code: []const u8, span: Span, comptime format: []const u8, arguments: anytype) Error!void {
@@ -352,6 +476,7 @@ pub const FunctionBuilder = struct {
         const left = budget - 1;
         return switch (expression.*) {
             .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
+                binary.op == .coalesce or
                 splitsBlocks(binary.left, left) or splitsBlocks(binary.right, left),
             .unary => |unary| splitsBlocks(unary.operand, left),
             .field => |field| splitsBlocks(field.target, left),
@@ -404,6 +529,11 @@ pub const FunctionBuilder = struct {
     fn yieldsOwnership(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
         return switch (expression.*) {
             .new_object, .list_literal, .slice_range, .call, .give, .copy => true,
+            // `a else b` hands over an object exactly when both sides
+            // do; `lowerCoalesce` refuses the case where they differ.
+            .binary => |binary| binary.op == .coalesce and
+                try self.yieldsOwnership(binary.left) and
+                try self.yieldsOwnership(binary.right),
             .method => |method| blk: {
                 if (try self.methodIsNamespaced(method)) break :blk true;
                 for (fresh_object_methods) |name| {
@@ -492,6 +622,146 @@ pub const FunctionBuilder = struct {
         );
     }
 
+    // Absence ---------------------------------------------------------------
+
+    /// The advice a `T?` earns when it turns up where a `T` belongs —
+    /// the message the whole feature is judged by, so it names the two
+    /// ways out and the name to apply them to.  Empty when the type is
+    /// not optional, so every caller can end with one `{s}` and say
+    /// nothing extra when there is nothing extra to say.
+    ///
+    /// Only a *local* narrows (Dart's rule, and for Dart's reason: a
+    /// field or an element can change between the test and the use),
+    /// so anything else is told to bind a name first.
+    fn absenceAdvice(self: *FunctionBuilder, of: Type, from: ?*const ast.Expression) Error![]const u8 {
+        if (of != .optional) return "";
+        const named: ?[]const u8 = named: {
+            const expression = from orelse break :named null;
+            if (expression.* != .name) break :named null;
+            if (self.findLocal(expression.name.text) == null) break :named null;
+            break :named expression.name.text;
+        };
+        if (named) |name| {
+            return std.fmt.allocPrint(
+                self.arena(),
+                "; test it first (if {s} != none:) or supply a fallback ({s} else …)",
+                .{ name, name },
+            );
+        }
+        return std.fmt.allocPrint(
+            self.arena(),
+            "; bind it to a name and test that (let x = …, then if x != none:), or supply a fallback (… else …)",
+            .{},
+        );
+    }
+
+    /// The name behind an expression that is a `T?` the flow analysis
+    /// has already proved present — so a second test, or a fallback,
+    /// is dead code the reader should be told about rather than left
+    /// to wonder at "Int is always there".
+    fn narrowedName(self: *FunctionBuilder, expression: *const ast.Expression) ?[]const u8 {
+        if (expression.* != .name) return null;
+        const found = self.findLocal(expression.name.text) orelse return null;
+        if (self.code.localType(found.info.local) != .optional) return null;
+        if (!self.isNarrowed(found.info.local)) return null;
+        return expression.name.text;
+    }
+
+    /// Report a `T?` standing where a `T` is required.  `situation`
+    /// says what wanted the value, in the reader's words.
+    fn failAbsence(
+        self: *FunctionBuilder,
+        span: Span,
+        situation: []const u8,
+        of: Type,
+        from: ?*const ast.Expression,
+    ) Error!void {
+        try self.fail("luce.sema.absent", span, "{s} needs {s}, but this is {s}{s}", .{
+            situation,
+            try self.analyzer.typeName(of.held().?),
+            try self.analyzer.typeName(of),
+            try self.absenceAdvice(of, from),
+        });
+    }
+
+    /// True after reporting, when `value` is optional and the place it
+    /// stands in is not.  The one call every operation that needs a
+    /// real value makes before it looks at the type any further.
+    fn refusesAbsence(
+        self: *FunctionBuilder,
+        value: Value,
+        situation: []const u8,
+        span: Span,
+        from: ?*const ast.Expression,
+    ) Error!bool {
+        if (value.value_type != .optional) return false;
+        try self.failAbsence(span, situation, value.value_type, from);
+        return true;
+    }
+
+    /// Make an already-lowered value fit `expected`, applying the one
+    /// widening the language has: `T` into `T?` (S43 — the widened
+    /// value owns exactly what it owned before).  Null means it does
+    /// not fit and the caller reports.
+    fn fit(self: *FunctionBuilder, value: Value, expected: Type) Error!?Value {
+        if (value.value_type.eql(expected)) return value;
+        const payload = expected.held() orelse return null;
+        if (!payload.eql(value.value_type)) return null;
+        const arguments = try self.arena().alloc(Register, 1);
+        arguments[0] = value.register;
+        return .{
+            .register = try self.code.emit(
+                .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
+                expected,
+            ),
+            .value_type = expected,
+        };
+    }
+
+    /// A value that reached its place, and whether it got there by the
+    /// `T <: T?` widening — which is how an assignment knows the slot
+    /// definitely holds something now.
+    const Fitted = struct { value: Value, present: bool };
+
+    /// Lower an expression into a place whose type is already known —
+    /// which is what gives `none` a type, since it has none of its
+    /// own.  Reports and returns null on a mismatch; `subject` names
+    /// the place for the message.
+    fn lowerTyped(
+        self: *FunctionBuilder,
+        expression: *ast.Expression,
+        expected: Type,
+        span: Span,
+        subject: []const u8,
+    ) Error!?Fitted {
+        if (expression.* == .none_literal) {
+            if (expected != .optional) {
+                try self.fail("luce.sema.absent", expression.span(), "{s} is {s}, and a {s} is always there; only a {s}? is ever none", .{
+                    subject,
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(expected),
+                });
+                return null;
+            }
+            return .{
+                .value = .{ .register = try self.code.zeroOf(expected), .value_type = expected },
+                .present = false,
+            };
+        }
+        const value = (try self.lowerExpression(expression, false)) orelse return null;
+        const fitted = (try self.fit(value, expected)) orelse {
+            try self.fail("luce.sema.type", span, "{s} is {s} but the value is {s}{s}", .{
+                subject,
+                try self.analyzer.typeName(expected),
+                try self.analyzer.typeName(value.value_type),
+                try self.absenceAdvice(value.value_type, expression),
+            });
+            return null;
+        };
+        return .{ .value = fitted, .present = !value.value_type.eql(expected) };
+    }
+
     /// Report a use of a poisoned name (S10, S29); true when poisoned.
     fn checkPoisoned(self: *FunctionBuilder, info: *const LocalInfo, name: []const u8, span: Span) Error!bool {
         const why = info.poisoned orelse return false;
@@ -521,6 +791,17 @@ pub const FunctionBuilder = struct {
     const inline_operands = 8;
 
     fn lowerOperands(self: *FunctionBuilder, expressions: []const *ast.Expression) Error!?[]Value {
+        return self.lowerOperandsInto(expressions, null);
+    }
+
+    /// As `lowerOperands`, with the type each operand lands in already
+    /// known — which is what lets a bare `none` be written among them,
+    /// since it has no type of its own.
+    fn lowerOperandsInto(
+        self: *FunctionBuilder,
+        expressions: []const *ast.Expression,
+        expected: ?[]const Type,
+    ) Error!?[]Value {
         var spill_storage: [inline_operands]?LocalId = undefined;
         var split_storage: [inline_operands]bool = undefined;
         const wide = expressions.len > inline_operands;
@@ -546,7 +827,11 @@ pub const FunctionBuilder = struct {
         }
 
         for (expressions, 0..) |expression, index| {
-            const value = (try self.lowerExpression(expression, false)) orelse return null;
+            const value = if (expression.* == .none_literal and expected != null)
+                ((try self.lowerTyped(expression, expected.?[index], expression.span(), "this place")) orelse
+                    return null).value
+            else
+                (try self.lowerExpression(expression, false)) orelse return null;
             values[index] = value;
             spills[index] = null;
             if (later_splits[index] and value.value_type != .none) {
@@ -664,26 +949,48 @@ pub const FunctionBuilder = struct {
         // A binding whose initializer failed still declares a name the
         // reader meant; remembering it keeps one mistake from
         // producing an "unknown name" per later use.
-        const value = (try self.lowerExpression(value_expression, false)) orelse
-            return self.forgetName(name);
+        var value: Value = undefined;
+        // The annotation said `T?` and the initializer handed over a
+        // plain `T`, so the binding starts out present.
+        var widened = false;
         if (annotation) |written| {
             const expected = (try self.analyzer.resolveType(self.module, written)) orelse
                 return self.forgetName(name);
-            if (!value.value_type.eql(expected)) {
-                try self.fail(
-                    "luce.sema.type",
-                    span,
-                    "{s} declared {s} but initialized with {s} (conversions are explicit: {s}(...))",
-                    .{ name, try self.analyzer.typeName(expected), try self.analyzer.typeName(value.value_type), try self.analyzer.typeName(expected) },
-                );
-                return self.forgetName(name);
+            if (value_expression.* == .none_literal) {
+                value = ((try self.lowerTyped(value_expression, expected, span, name)) orelse
+                    return self.forgetName(name)).value;
+            } else {
+                const initializer = (try self.lowerExpression(value_expression, false)) orelse
+                    return self.forgetName(name);
+                value = (try self.fit(initializer, expected)) orelse {
+                    try self.fail(
+                        "luce.sema.type",
+                        span,
+                        "{s} declared {s} but initialized with {s} (conversions are explicit: {s}(...)){s}",
+                        .{
+                            name,
+                            try self.analyzer.typeName(expected),
+                            try self.analyzer.typeName(initializer.value_type),
+                            try self.analyzer.typeName(expected),
+                            try self.absenceAdvice(initializer.value_type, value_expression),
+                        },
+                    );
+                    return self.forgetName(name);
+                };
+                widened = !initializer.value_type.eql(expected);
             }
+        } else {
+            value = (try self.lowerExpression(value_expression, false)) orelse
+                return self.forgetName(name);
         }
         // A binding that received something fresh (or a give, or a
         // copy) owns the object; receiving another name is an alias
-        // (S1, S8).
+        // (S1, S8).  `var xs: List(T)? = none` owns too, for S40's
+        // reason: the binding is established here and whatever a later
+        // assignment fills in belongs to its scope — `none` itself
+        // owns nothing (S43).
         const owns = self.analyzer.carriesObjects(value.value_type) and
-            try self.yieldsOwnership(value_expression);
+            (value_expression.* == .none_literal or try self.yieldsOwnership(value_expression));
         const local = (try self.declareLocal(
             name,
             value.value_type,
@@ -695,6 +1002,10 @@ pub const FunctionBuilder = struct {
         if (owns) {
             try self.code.bind(local, value.register);
         }
+        // `let x: Int? = 5` is optional in its type and present in
+        // fact, and the reader should not have to test what they just
+        // wrote.
+        if (widened) try self.narrow(local);
     }
 
     /// var name: Type — a late declaration (OWNERSHIP.md S40): the
@@ -892,8 +1203,9 @@ pub const FunctionBuilder = struct {
         }
         const string_concat = op == .add and place_type == .string;
         if (!place_type.isNumeric() and !string_concat) {
-            try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String)", .{
+            try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String){s}", .{
                 try self.analyzer.typeName(place_type),
+                try self.absenceAdvice(place_type, null),
             });
             return null;
         }
@@ -959,7 +1271,11 @@ pub const FunctionBuilder = struct {
             return;
         }
         if (info.carries) {
-            const yields = try self.yieldsOwnership(assign.value);
+            // Assigning `none` is a legitimate way for an owner to let
+            // go: the release below frees what was there and the slot
+            // then owns nothing (S5, S43).
+            const yields = assign.value.* == .none_literal or
+                try self.yieldsOwnership(assign.value);
             if (class == .owned and !yields) {
                 try self.fail(
                     "luce.sema.own",
@@ -979,19 +1295,35 @@ pub const FunctionBuilder = struct {
                 return;
             }
         }
-        const value = (try self.lowerExpression(assign.value, false)) orelse return;
-        if (!value.value_type.eql(local_type)) {
-            try self.fail("luce.sema.type", assign.span, "{s} is {s} but the value is {s}", .{
-                base,
-                try self.analyzer.typeName(local_type),
-                try self.analyzer.typeName(value.value_type),
-            });
-            return;
+        // A compound assignment works on the value the place holds, so
+        // a narrowed `T?` combines at `T` and widens the result back.
+        const narrowed_place = local_type == .optional and self.isNarrowed(local);
+        const combine_type = if (narrowed_place) local_type.held().? else local_type;
+        const wanted = if (assign.compound != null) combine_type else local_type;
+
+        const fitted = (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
+        const value = fitted.value;
+        // What the slot now holds decides whether the name reads as
+        // its payload from here on: a plain `T` is present, a `T?` or
+        // a `none` is back to being a question.  A compound assignment
+        // reads the place, so it can only leave what was already there.
+        if (local_type == .optional and assign.compound == null) {
+            if (fitted.present) try self.narrow(local) else self.widen(local);
         }
         var store = value.register;
         if (assign.compound) |op| {
-            const current = try self.code.load(local);
-            store = (try self.compoundCombine(op, current, local_type, value, assign.span)) orelse return;
+            var current = try self.code.load(local);
+            if (narrowed_place) {
+                const unwrap = try self.arena().alloc(Register, 1);
+                unwrap[0] = current;
+                current = try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = unwrap } },
+                    combine_type,
+                );
+            }
+            const combined = (try self.compoundCombine(op, current, combine_type, value, assign.span)) orelse return;
+            store = ((try self.fit(.{ .register = combined, .value_type = combine_type }, local_type)) orelse
+                return).register;
         }
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
@@ -1080,7 +1412,9 @@ pub const FunctionBuilder = struct {
                 );
                 return;
             }
-            if (!(try self.yieldsOwnership(assign.value))) {
+            // `none` owns nothing, so emptying an optional object field
+            // is always legal — the release below frees what was there.
+            if (assign.value.* != .none_literal and !(try self.yieldsOwnership(assign.value))) {
                 try self.failNeedsOwnership(
                     assign.span,
                     "this field keeps its object",
@@ -1090,16 +1424,8 @@ pub const FunctionBuilder = struct {
                 return;
             }
         }
-        const value = (try self.lowerExpression(assign.value, false)) orelse return;
-        if (!value.value_type.eql(expected)) {
-            try self.fail("luce.sema.type", assign.span, "{s}.{s} is {s} but the value is {s}", .{
-                target.base,
-                target.field,
-                try self.analyzer.typeName(expected),
-                try self.analyzer.typeName(value.value_type),
-            });
-            return;
-        }
+        const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
+        const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
         const current = try self.code.load(local);
         var store = value.register;
         if (assign.compound) |op| {
@@ -1198,8 +1524,9 @@ pub const FunctionBuilder = struct {
             if (object.value_type == .string) {
                 try self.fail("luce.sema.index", span, "strings are sliced (s[a:b] or slice), not indexed; byte_at reads bytes", .{});
             } else {
-                try self.fail("luce.sema.index", span, "{s} cannot be indexed", .{
+                try self.fail("luce.sema.index", span, "{s} cannot be indexed{s}", .{
                     try self.analyzer.typeName(object.value_type),
+                    try self.absenceAdvice(object.value_type, null),
                 });
             }
             return null;
@@ -1252,8 +1579,9 @@ pub const FunctionBuilder = struct {
     fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Value {
         const condition = (try self.lowerExpression(expression, false)) orelse return null;
         if (condition.value_type != .boolean) {
-            try self.fail("luce.sema.type", expression.span(), "condition must be Bool, not {s}", .{
+            try self.fail("luce.sema.type", expression.span(), "condition must be Bool, not {s}{s}", .{
                 try self.analyzer.typeName(condition.value_type),
+                try self.absenceAdvice(condition.value_type, expression),
             });
             return null;
         }
@@ -1266,16 +1594,49 @@ pub const FunctionBuilder = struct {
         // Condition temporaries die before the branch: the condition
         // value is a Bool, so nothing still needs them.
         try self.flushTemps(temps_floor);
+
+        // The arms run under what the condition decided, and what
+        // survives the join is what both of them still agree on.  An
+        // arm that always leaves — `if x == none: return` — contributes
+        // nothing to the join, which is what makes an early-return
+        // guard narrow the rest of the block below it.
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
+
         const arms = try self.code.openIf(condition.register, conditional.else_block != null);
+        try self.applyFacts(conditional.condition, true, split_search_depth);
         try self.lowerBlock(conditional.then_block);
+        const after_then = try self.narrowSave();
+        defer self.temporary().free(after_then);
+
+        try self.narrowRestore(entry);
+        try self.applyFacts(conditional.condition, false, split_search_depth);
         if (conditional.else_block) |else_block| {
             try self.code.elseArm(arms);
             try self.lowerBlock(else_block);
         }
         try self.code.closeIf(arms);
+
+        const then_leaves = helpers.alwaysExits(conditional.then_block);
+        const else_leaves = if (conditional.else_block) |else_block|
+            helpers.alwaysExits(else_block)
+        else
+            false;
+        if (then_leaves and else_leaves) return; // nothing reaches here
+        if (then_leaves) return; // the else arm's state is already current
+        if (else_leaves) {
+            try self.narrowRestore(after_then);
+            return;
+        }
+        self.narrowIntersect(after_then);
     }
 
     fn lowerWhile(self: *FunctionBuilder, loop: ast.While) Error!void {
+        // The body runs before the back edge re-enters the header, so
+        // anything it assigns may be absent again on the next pass.
+        self.widenAssignedIn(loop.body);
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
         const shape = try self.code.openWhile();
         // The frame is pushed before the condition lowers: the header
         // re-runs every iteration, so the S30 give/free guard must see
@@ -1296,12 +1657,19 @@ pub const FunctionBuilder = struct {
         try self.flushTemps(temps_floor);
         try self.code.enterWhileBody(shape, condition.register);
 
+        try self.applyFacts(loop.condition, true, split_search_depth);
         try self.lowerBlock(loop.body);
         _ = self.loops.pop();
         try self.code.closeWhile(shape);
+        // After the loop nothing the body proved still holds: it may
+        // have run zero times, and `break` leaves from anywhere.
+        try self.narrowRestore(entry);
     }
 
     fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
+        self.widenAssignedIn(loop.body);
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
         const temps_floor = self.temps.items.len;
         const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
         const start = bounds[0];
@@ -1327,6 +1695,7 @@ pub const FunctionBuilder = struct {
         try self.lowerBlock(loop.body);
         _ = self.loops.pop();
         try self.code.closeCountedLoop(shape);
+        try self.narrowRestore(entry);
     }
 
     /// for x in xs: — the element (or map key) binds immutably each
@@ -1334,10 +1703,14 @@ pub const FunctionBuilder = struct {
     /// while the loop runs.  What that costs in blocks and hidden
     /// locals is `Lowering.openIteration`'s.
     fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
+        self.widenAssignedIn(loop.body);
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
         const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
         const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
-            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map, not {s}", .{
+            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map, not {s}{s}", .{
                 try self.analyzer.typeName(iterable.value_type),
+                try self.absenceAdvice(iterable.value_type, loop.iterable),
             });
             return;
         };
@@ -1422,22 +1795,39 @@ pub const FunctionBuilder = struct {
         }
         _ = self.loops.pop();
         try self.code.closeIteration(shape);
+        try self.narrowRestore(entry);
     }
 
     fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
         if (returned.value) |expression| {
-            const value = (try self.lowerExpression(expression, false)) orelse return;
             if (self.code.return_type == .none) {
+                // Still lower it: an expression with a mistake in it
+                // deserves its own message before this one.
+                _ = try self.lowerExpression(expression, false);
                 try self.fail("luce.sema.return", returned.span, "this function returns nothing", .{});
                 return;
             }
-            if (!value.value_type.eql(self.code.return_type)) {
-                try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}", .{
-                    try self.analyzer.typeName(value.value_type),
-                    try self.analyzer.typeName(self.code.return_type),
-                });
+            if (expression.* == .none_literal) {
+                const absent = (try self.lowerTyped(
+                    expression,
+                    self.code.return_type,
+                    returned.span,
+                    "this function's result",
+                )) orelse return;
+                try self.emitTempReleases(0);
+                try self.emitScopeReleases(0, null);
+                try self.code.ret(absent.value.register);
                 return;
             }
+            const lowered = (try self.lowerExpression(expression, false)) orelse return;
+            const value = (try self.fit(lowered, self.code.return_type)) orelse {
+                try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}{s}", .{
+                    try self.analyzer.typeName(lowered.value_type),
+                    try self.analyzer.typeName(self.code.return_type),
+                    try self.absenceAdvice(lowered.value_type, expression),
+                });
+                return;
+            };
 
             // Whatever a function returns, the caller owns (S16, S17):
             // an owned name moves out, fresh values flow out, borrows
@@ -1491,7 +1881,10 @@ pub const FunctionBuilder = struct {
                         var index = self.temps.items.len;
                         while (index > 0) {
                             index -= 1;
-                            if (self.temps.items[index].register == value.register) {
+                            // The park recorded the register before
+                            // any `T <: T?` widening, which moves no
+                            // bits and keeps the same object.
+                            if (self.temps.items[index].register == lowered.register) {
                                 _ = self.temps.orderedRemove(index);
                                 break;
                             }
@@ -1596,7 +1989,35 @@ pub const FunctionBuilder = struct {
                 if (try self.checkPoisoned(found.info, name.text, name.span)) return null;
                 const local = found.info.local;
                 const local_type = self.code.localType(local);
-                return .{ .register = try self.code.load(local), .value_type = local_type };
+                const loaded = try self.code.load(local);
+                // A narrowed local reads as its payload: the value is
+                // the same bits, and the flow analysis has already
+                // proved it is there.
+                if (local_type == .optional and self.isNarrowed(local)) {
+                    const payload = local_type.held().?;
+                    const arguments = try self.arena().alloc(Register, 1);
+                    arguments[0] = loaded;
+                    return .{
+                        .register = try self.code.emit(
+                            .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = arguments } },
+                            payload,
+                        ),
+                        .value_type = payload,
+                    };
+                }
+                return .{ .register = loaded, .value_type = local_type };
+            },
+            // `none` has no type of its own; every place that can
+            // accept it supplies one through `lowerTyped`, so reaching
+            // here means nothing did.
+            .none_literal => |literal| {
+                try self.fail(
+                    "luce.sema.absent",
+                    literal.span,
+                    "none needs a type here; write it into something declared T? (var x: Int? = none), or compare with a T? (x == none)",
+                    .{},
+                );
+                return null;
             },
             .field => |field| return self.lowerField(field),
             .call => |call| return self.lowerCall(call, as_statement),
@@ -1662,9 +2083,26 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        // An object that might not be there cannot be handed over: the
+        // receiver would own a question, not a thing.  Narrowing is
+        // what turns it back into a thing.
+        if (local_type == .optional and !self.isNarrowed(local)) {
+            try self.failAbsence(give.span, "give", local_type, give.operand);
+            return null;
+        }
         info.poisoned = .given;
         const owned = info.class == .owned;
-        const value = try self.code.load(local);
+        var value = try self.code.load(local);
+        // A narrowed `T?` hands over the `T` it was proved to hold.
+        const given_type = local_type.held() orelse local_type;
+        if (local_type == .optional) {
+            const unwrap = try self.arena().alloc(Register, 1);
+            unwrap[0] = value;
+            value = try self.code.emit(
+                .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = unwrap } },
+                given_type,
+            );
+        }
         // An owned name passes its binding along so the runtime can
         // verify the name still owns the object; an alias keeps only
         // the container backstop (S23).
@@ -1676,9 +2114,9 @@ pub const FunctionBuilder = struct {
         return .{
             .register = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
-                local_type,
+                given_type,
             ),
-            .value_type = local_type,
+            .value_type = given_type,
         };
     }
 
@@ -1722,6 +2160,9 @@ pub const FunctionBuilder = struct {
     /// readable objects (S31).
     fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Value {
         const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
+        // Copying a question makes no sense: there may be nothing to
+        // duplicate.  Test it first.
+        if (try self.refusesAbsence(value, "copy", copied.span, copied.operand)) return null;
         if (!self.analyzer.carriesObjects(value.value_type)) {
             try self.fail(
                 "luce.sema.own",
@@ -1751,6 +2192,12 @@ pub const FunctionBuilder = struct {
                 return null;
             }
             const element = (try self.analyzer.resolveType(self.module, new.type_name.arguments[0])) orelse return null;
+            // `new Array(T, n)` spells its shape with expressions, so
+            // it interns the heap type here rather than through the
+            // written-type path — and needs the same refusal.
+            if (try self.analyzer.refuseOptionalPart(element, new.type_name.arguments[0], "array element")) {
+                return null;
+            }
             object_type = try self.analyzer.internHeapType(.{
                 .array = .{ .element = element, .rank = @intCast(new.dims.len) },
             });
@@ -1924,8 +2371,9 @@ pub const FunctionBuilder = struct {
         }
         const target = (try self.lowerExpression(field.target, false)) orelse return null;
         if (target.value_type != .strukt) {
-            try self.fail("luce.sema.field", field.span, "{s} has no fields", .{
+            try self.fail("luce.sema.field", field.span, "{s} has no fields{s}", .{
                 try self.analyzer.typeName(target.value_type),
+                try self.absenceAdvice(target.value_type, field.target),
             });
             return null;
         }
@@ -1949,7 +2397,11 @@ pub const FunctionBuilder = struct {
     fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
         switch (binary.op) {
             .logic_and, .logic_or => return self.lowerShortCircuit(binary),
+            .coalesce => return self.lowerCoalesce(binary),
             else => {},
+        }
+        if (binary.left.* == .none_literal or binary.right.* == .none_literal) {
+            return self.lowerAbsenceTest(binary);
         }
         // Operators borrow their operands (S11); a give here would
         // hand the object to nobody.
@@ -1966,9 +2418,12 @@ pub const FunctionBuilder = struct {
         const left = sides[0];
         const right = sides[1];
         if (!left.value_type.eql(right.value_type)) {
-            try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit)", .{
+            const absent = if (left.value_type == .optional) left else right;
+            const written = if (left.value_type == .optional) binary.left else binary.right;
+            try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit){s}", .{
                 try self.analyzer.typeName(left.value_type),
                 try self.analyzer.typeName(right.value_type),
+                try self.absenceAdvice(absent.value_type, written),
             });
             return null;
         }
@@ -1986,8 +2441,14 @@ pub const FunctionBuilder = struct {
             .less_equal => .less_equal,
             .greater => .greater,
             .greater_equal => .greater_equal,
-            .logic_and, .logic_or => unreachable,
+            .logic_and, .logic_or, .coalesce => unreachable, // answered above
         };
+
+        // An operator wants a value, and a `T?` may not be one.  Said
+        // here rather than left to "does not support this operator",
+        // because the fix is narrowing and the reader needs told.
+        if (try self.refusesAbsence(left, "this operator", binary.span, binary.left)) return null;
+        if (try self.refusesAbsence(right, "this operator", binary.span, binary.right)) return null;
 
         const arithmetic = switch (operation) {
             .add, .subtract, .multiply, .divide, .remainder => true,
@@ -2036,17 +2497,132 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// `x == none` / `x != none` — the test that narrows.  It is the
+    /// one comparison `none` takes part in: absence has no ordering
+    /// and nothing else to be equal to.
+    fn lowerAbsenceTest(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+        if (binary.op != .equal and binary.op != .not_equal) {
+            try self.fail("luce.sema.absent", binary.span, "none only compares with == and !=", .{});
+            return null;
+        }
+        if (binary.left.* == .none_literal and binary.right.* == .none_literal) {
+            try self.fail("luce.sema.absent", binary.span, "none == none says nothing; test a T? against none", .{});
+            return null;
+        }
+        const written = if (binary.right.* == .none_literal) binary.left else binary.right;
+        const already = self.narrowedName(written);
+        const tested = (try self.lowerExpression(written, false)) orelse return null;
+        if (tested.value_type != .optional) {
+            if (already) |name| {
+                try self.fail("luce.sema.absent", binary.span, "{s} already holds a value here, so this test has one answer; drop it", .{name});
+                return null;
+            }
+            try self.fail("luce.sema.absent", binary.span, "{s} is always there; only a T? is ever none", .{
+                try self.analyzer.typeName(tested.value_type),
+            });
+            return null;
+        }
+        const arguments = try self.arena().alloc(Register, 1);
+        arguments[0] = tested.register;
+        const absent = try self.code.emit(
+            .{ .intrinsic = .{ .kind = .is_none, .arguments = arguments } },
+            .boolean,
+        );
+        if (binary.op == .equal) return .{ .register = absent, .value_type = .boolean };
+        return .{
+            .register = try self.code.emit(.{ .unary = .{ .op = .logic_not, .operand = absent } }, .boolean),
+            .value_type = .boolean,
+        };
+    }
+
+    /// `trap("…")` written where a value belongs.  It is the one
+    /// expression that never yields one and is still legal there,
+    /// because it never comes back; `trap` is a reserved name, so
+    /// nothing else can wear it.
+    fn isTrapCall(expression: *const ast.Expression) bool {
+        return expression.* == .call and std.mem.eql(u8, expression.call.callee, "trap");
+    }
+
+    /// `a else b` — `a` when it is there, `b` when it is not.  The
+    /// fallback runs only on the absent side, which is what makes
+    /// `x else trap("…")` the assert-unwrap (docs/FAILURE.md).
+    fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+        const already = self.narrowedName(binary.left);
+        const left = (try self.lowerExpression(binary.left, false)) orelse return null;
+        const payload = left.value_type.held() orelse {
+            // A name already proved present is the likely case, and
+            // "Int always has a value" would only puzzle a reader who
+            // wrote `Int?`.
+            if (already) |name| {
+                try self.fail("luce.sema.absent", binary.span, "{s} already holds a value here, so the else can never run; drop it", .{name});
+                return null;
+            }
+            try self.fail("luce.sema.absent", binary.span, "else supplies the value a T? does not have, and {s} always has one", .{
+                try self.analyzer.typeName(left.value_type),
+            });
+            return null;
+        };
+        // Both arms must agree on ownership: the binding that receives
+        // the result either owns an object or does not, and that is
+        // one static fact, not one per branch (S1, S8, S16).
+        if (self.analyzer.carriesObjects(payload) and
+            (try self.yieldsOwnership(binary.left)) != (try self.yieldsOwnership(binary.right)))
+        {
+            try self.fail(
+                "luce.sema.own",
+                binary.span,
+                "the two sides of else must agree on ownership: either both hand over a fresh object, or neither does [OWNERSHIP.md S1, S8]",
+                .{},
+            );
+            return null;
+        }
+        const arguments = try self.arena().alloc(Register, 1);
+        arguments[0] = left.register;
+        const absent = try self.code.emit(
+            .{ .intrinsic = .{ .kind = .is_none, .arguments = arguments } },
+            .boolean,
+        );
+        const unwrap = try self.arena().alloc(Register, 1);
+        unwrap[0] = left.register;
+        const present = try self.code.emit(
+            .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = unwrap } },
+            payload,
+        );
+        const either = try self.code.openCoalesce(absent, present, payload);
+        if (isTrapCall(binary.right)) {
+            // `x else trap("…")` is the assert-unwrap, and it is
+            // greppable — which is why Luce has no force-unwrap sigil
+            // (docs/FAILURE.md).  The fallback leaves nothing behind
+            // because it never comes back.
+            _ = try self.lowerExpression(binary.right, true);
+        } else if (try self.lowerTyped(binary.right, payload, binary.span, "the else fallback")) |fallback| {
+            try self.code.store(either.result, fallback.value.register);
+        }
+        return .{
+            .register = try self.code.closeShortCircuit(either),
+            .value_type = payload,
+        };
+    }
+
     fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
         const left = (try self.lowerExpression(binary.left, false)) orelse return null;
         if (left.value_type != .boolean) {
-            try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands", .{
+            try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands{s}", .{
                 if (binary.op == .logic_and) @as([]const u8, "and") else "or",
+                try self.absenceAdvice(left.value_type, binary.left),
             });
             return null;
         }
         // `and` evaluates its right side when the left is true, `or`
         // when it is false.
         const either = try self.code.openShortCircuit(left.register, binary.op == .logic_and);
+        // Inside the right operand, the left one has already decided:
+        // `x != none and x > 3` narrows `x` for the comparison, which
+        // is the shape this feature exists for.  Nothing inside an
+        // expression can widen, so the facts unwind by truncation.
+        const facts_floor = self.narrowed.items.len;
+        try self.applyFacts(binary.left, binary.op == .logic_and, split_search_depth);
+        defer self.narrowed.shrinkRetainingCapacity(facts_floor);
         if (try self.lowerExpression(binary.right, false)) |right| {
             if (right.value_type != .boolean) {
                 try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands", .{
@@ -2185,19 +2761,20 @@ pub const FunctionBuilder = struct {
                 return null;
             }
         }
-        const values = (try self.lowerOperands(expressions)) orelse return null;
+        const values = (try self.lowerOperandsInto(expressions, info.parameter_types)) orelse return null;
         const registers = try self.arena().alloc(Register, call_arguments.len);
         for (values, 0..) |value, index| {
-            if (!value.value_type.eql(info.parameter_types[index])) {
-                try self.fail("luce.sema.type", call_arguments[index].span, "argument {d} of {s} is {s}, got {s}", .{
+            const fitted = (try self.fit(value, info.parameter_types[index])) orelse {
+                try self.fail("luce.sema.type", call_arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
                     index + 1,
                     name,
                     try self.analyzer.typeName(info.parameter_types[index]),
                     try self.analyzer.typeName(value.value_type),
+                    try self.absenceAdvice(value.value_type, expressions[index]),
                 });
                 return null;
-            }
-            registers[index] = value.register;
+            };
+            registers[index] = fitted.register;
         }
         if (info.return_type == .none and !as_statement) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
@@ -2314,6 +2891,9 @@ pub const FunctionBuilder = struct {
             return null;
         const receiver = values[0];
         const arguments = values[1..];
+        if (try self.refusesAbsence(receiver, "a method's receiver", method.span, method.target)) {
+            return null;
+        }
 
         const found: MethodFound = blk: {
             if (receiver.value_type == .string) {
@@ -2491,16 +3071,17 @@ pub const FunctionBuilder = struct {
         }
         const registers = try self.arena().alloc(Register, values.len);
         for (values, 0..) |value, index| {
-            if (!value.value_type.eql(info.parameter_types[index])) {
-                try self.fail("luce.sema.type", span, "argument {d} of {s} is {s}, got {s}", .{
+            const fitted = (try self.fit(value, info.parameter_types[index])) orelse {
+                try self.fail("luce.sema.type", span, "argument {d} of {s} is {s}, got {s}{s}", .{
                     index + 1,
                     name,
                     try self.analyzer.typeName(info.parameter_types[index]),
                     try self.analyzer.typeName(value.value_type),
+                    try self.absenceAdvice(value.value_type, null),
                 });
                 return null;
-            }
-            registers[index] = value.register;
+            };
+            registers[index] = fitted.register;
         }
         if (info.return_type == .none and !as_statement) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
@@ -2715,10 +3296,13 @@ pub const FunctionBuilder = struct {
         defer self.temporary().free(seen);
         @memset(seen, false);
 
+        // Which field each argument fills is settled before any of them
+        // is lowered: it is what says what type the argument lands in,
+        // and a bare `none` has no type until something says.
         const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
-        for (call_arguments, expressions) |argument, *slot| slot.* = argument.value;
-        const values = (try self.lowerOperands(expressions)) orelse return null;
-        for (call_arguments, values) |argument, value| {
+        const fields = try self.arena().alloc(u32, call_arguments.len);
+        const expected_types = try self.arena().alloc(Type, call_arguments.len);
+        for (call_arguments, expressions, fields, expected_types) |argument, *slot, *field, *wanted| {
             const name = argument.name orelse {
                 try self.fail("luce.sema.construct", argument.span, "{s} is built with named fields: {s}(field = ...)", .{ layout.name, layout.name });
                 return null;
@@ -2731,19 +3315,29 @@ pub const FunctionBuilder = struct {
                 try self.fail("luce.sema.construct", argument.span, "field {s} given twice", .{name});
                 return null;
             }
-            const expected = layout.fields[field_index].field_type;
-            if (!value.value_type.eql(expected)) {
-                try self.fail("luce.sema.type", argument.span, "{s}.{s} is {s}, got {s}", .{
+            seen[field_index] = true;
+            slot.* = argument.value;
+            field.* = field_index;
+            wanted.* = layout.fields[field_index].field_type;
+        }
+        const values = (try self.lowerOperandsInto(expressions, expected_types)) orelse return null;
+        for (call_arguments, values, fields, expected_types) |argument, value, field_index, expected| {
+            const name = argument.name.?;
+            const fitted = (try self.fit(value, expected)) orelse {
+                try self.fail("luce.sema.type", argument.span, "{s}.{s} is {s}, got {s}{s}", .{
                     layout.name,
                     name,
                     try self.analyzer.typeName(expected),
                     try self.analyzer.typeName(value.value_type),
+                    try self.absenceAdvice(value.value_type, argument.value),
                 });
                 return null;
-            }
+            };
             // Object fields follow the verb rule at construction
             // (S24): the binding that receives the struct owns them.
+            // `none` owns nothing, so it is always a legal filling.
             if (self.analyzer.carriesObjects(expected) and
+                argument.value.* != .none_literal and
                 !(try self.yieldsOwnership(argument.value)))
             {
                 try self.failNeedsOwnership(
@@ -2754,8 +3348,7 @@ pub const FunctionBuilder = struct {
                 );
                 return null;
             }
-            seen[field_index] = true;
-            registers[field_index] = value.register;
+            registers[field_index] = fitted.register;
         }
         for (seen, 0..) |given, index| {
             if (!given) {
@@ -2943,13 +3536,23 @@ pub const FunctionBuilder = struct {
                 const measurable = arguments[0].value_type == .string or
                     arguments[0].value_type == .bytes or
                     arguments[0].value_type == .heap;
-                if (!measurable)
+                if (!measurable) {
+                    if (arguments[0].value_type == .optional) {
+                        try self.failAbsence(call.span, "len", arguments[0].value_type, call.arguments[0].value);
+                        return .failed;
+                    }
                     return self.failIntrinsic(call, "len takes a String, Bytes, List, Map, Array, or Builder");
+                }
                 result = .int;
             },
             .free_object => {
-                if (arguments[0].value_type != .heap)
+                if (arguments[0].value_type != .heap) {
+                    if (arguments[0].value_type == .optional) {
+                        try self.failAbsence(call.span, "free", arguments[0].value_type, call.arguments[0].value);
+                        return .failed;
+                    }
                     return self.failIntrinsic(call, "free releases a List, Map, Array, or Builder");
+                }
                 // free is deliberate early release of an owned name,
                 // and poisons the name like give does (S6).
                 const operand = call.arguments[0].value;
@@ -3008,14 +3611,25 @@ pub const FunctionBuilder = struct {
                     .heap => descriptor.? == .builder,
                     else => false,
                 };
-                if (!stringable)
+                if (!stringable) {
+                    if (arguments[0].value_type == .optional) {
+                        try self.failAbsence(call.span, "str", arguments[0].value_type, call.arguments[0].value);
+                        return .failed;
+                    }
                     return self.failIntrinsic(call, "str takes Int, Float, Bool, String, or Builder");
+                }
                 result = .string;
             },
             .parse_int, .parse_float => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "this builtin parses a String");
-                result = if (matched.kind == .parse_int) .int else .float;
+                // "Not a number" is the same reason every time and the
+                // name already implies it, so the answer is absence
+                // rather than a trap (docs/FAILURE.md).
+                result = if (matched.kind == .parse_int)
+                    .{ .optional = .int }
+                else
+                    .{ .optional = .float };
             },
             .chr_code => {
                 if (arguments[0].value_type != .int)
@@ -3031,6 +3645,10 @@ pub const FunctionBuilder = struct {
             .give_object,
             .copy_object,
             .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
             .index_get,
             .index_set,
             .list_slice,

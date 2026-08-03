@@ -63,6 +63,9 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
     switch (of) {
         .strukt => |index| if (index >= program.structs.len) return error.BadStruct,
         .heap => |index| if (index >= program.heap_types.len) return error.BadStruct,
+        // A payload is a type in its own right and is bounded the same
+        // way; it can never be optional itself, so this is one step.
+        .optional => |payload| try verifyType(program, payload.asType()),
         else => {},
     }
 }
@@ -448,6 +451,25 @@ fn verifyIntrinsic(
             try exactly(arguments, 0);
             if (result != .heap) return error.BadIntrinsic;
         },
+        .none_value => {
+            try exactly(arguments, 0);
+            if (result != .optional) return error.BadIntrinsic;
+        },
+        .is_none => {
+            try exactly(arguments, 1);
+            if (arguments[0] != .optional) return error.BadIntrinsic;
+            try expectType(result, .boolean);
+        },
+        .optional_wrap => {
+            try exactly(arguments, 1);
+            const widened = Type.optionalOf(arguments[0]) orelse return error.BadIntrinsic;
+            try expectType(result, widened);
+        },
+        .optional_unwrap => {
+            try exactly(arguments, 1);
+            const payload = arguments[0].held() orelse return error.BadIntrinsic;
+            try expectType(result, payload);
+        },
         .index_get, .index_set => {
             const reads = call.kind == .index_get;
             const value_slots: usize = if (reads) 0 else 1;
@@ -659,7 +681,10 @@ fn verifyIntrinsic(
         .parse_int, .parse_float => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);
-            try expectType(result, if (call.kind == .parse_int) .int else .float);
+            try expectType(result, if (call.kind == .parse_int)
+                .{ .optional = .int }
+            else
+                .{ .optional = .float });
         },
         .chr_code => {
             try exactly(arguments, 1);

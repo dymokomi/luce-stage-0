@@ -473,8 +473,8 @@ test "conversions: str, parse, chr, ord" {
         \\    assert(str(0 - 7) == "-7")
         \\    assert(str(true) == "true")
         \\    assert(str(false) == "false")
-        \\    assert(parse_int("100") == 100)
-        \\    assert(parse_float("1.5") == 1.5)
+        \\    assert((parse_int("100") else 0) == 100)
+        \\    assert((parse_float("1.5") else 0.0) == 1.5)
         \\    assert(chr(65) == "A")
         \\    assert(ord("A") == 65)
         \\    assert(chr(955) == "λ")
@@ -1265,12 +1265,28 @@ test "str renders every scalar and a Builder" {
 test "parse_int and parse_float accept signs and round-trip str" {
     try expectOk(
         \\func main():
-        \\    assert(parse_int("0") == 0)
-        \\    assert(parse_int("-42") == 0 - 42)
-        \\    assert(parse_int("+7") == 7)
-        \\    assert(parse_float("3.25") == 3.25)
-        \\    assert(parse_float("-0.5") == 0.0 - 0.5)
-        \\    assert(parse_int(str(98765)) == 98765)
+        \\    assert((parse_int("0") else 1) == 0)
+        \\    assert((parse_int("-42") else 0) == 0 - 42)
+        \\    assert((parse_int("+7") else 0) == 7)
+        \\    assert((parse_float("3.25") else 0.0) == 3.25)
+        \\    assert((parse_float("-0.5") else 0.0) == 0.0 - 0.5)
+        \\    assert((parse_int(str(98765)) else 0) == 98765)
+        \\
+    );
+}
+
+test "parse_int and parse_float answer none rather than trapping" {
+    try expectOk(
+        \\func main():
+        \\    assert(parse_int("not a number") == none)
+        \\    assert(parse_int("4 2") == none)
+        \\    assert(parse_int("") == none)
+        \\    assert(parse_float("abc") == none)
+        \\    assert(parse_float("inf") == none)
+        \\    assert(parse_float("nan") == none)
+        \\    assert(parse_int("7") != none)
+        \\    assert((parse_int("nope") else 0 - 1) == 0 - 1)
+        \\    assert((parse_float("nope") else 2.5) == 2.5)
         \\
     );
 }
@@ -1802,6 +1818,289 @@ test "constants reference earlier constants" {
 }
 
 // ---------------------------------------------------------------------------
+// Absence: T?, none, narrowing, else (docs/FAILURE.md)
+// ---------------------------------------------------------------------------
+
+test "a T? holds either a value or none, and says which" {
+    try expectOk(
+        \\func passthrough(n: Int?) -> Int?:
+        \\    return n
+        \\
+        \\func text(t: String?) -> String?:
+        \\    return t
+        \\
+        \\func main():
+        \\    var n: Int? = none
+        \\    assert(n == none)
+        \\    assert(not (n != none))
+        \\    n = 7
+        \\    # Through a call the narrowing is gone and the question is
+        \\    # a real one again.
+        \\    assert(passthrough(n) != none)
+        \\    assert(not (passthrough(n) == none))
+        \\    var t: String? = "hi"
+        \\    assert(text(t) != none)
+        \\    t = none
+        \\    assert(t == none)
+        \\
+    );
+}
+
+test "narrowing: a tested name is its payload inside the branch, and both branches see it" {
+    try expectOk(
+        \\func main():
+        \\    let n = parse_int("41")
+        \\    var seen = 0
+        \\    if n != none:
+        \\        seen = n + 1
+        \\    else:
+        \\        seen = 0 - 1
+        \\    assert(seen == 42)
+        \\
+        \\    let bad = parse_int("x")
+        \\    var other = 0
+        \\    if bad == none:
+        \\        other = 5
+        \\    else:
+        \\        other = bad * 2
+        \\    assert(other == 5)
+        \\
+    );
+}
+
+test "narrowing: an early-return guard narrows the rest of the block" {
+    try expectOk(
+        \\func doubled(text: String) -> Int:
+        \\    let n = parse_int(text)
+        \\    if n == none:
+        \\        return 0 - 1
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    assert(doubled("21") == 42)
+        \\    assert(doubled("nope") == 0 - 1)
+        \\
+    );
+}
+
+test "narrowing: continue and break guards narrow what follows them" {
+    try expectOk(
+        \\func main():
+        \\    let inputs = ["1", "x", "3"]
+        \\    var total = 0
+        \\    for text in inputs:
+        \\        let n = parse_int(text)
+        \\        if n == none:
+        \\            continue
+        \\        total = total + n
+        \\    assert(total == 4)
+        \\
+        \\    var index = 0
+        \\    var first = 0
+        \\    while index < len(inputs):
+        \\        let n = parse_int(inputs[index])
+        \\        index = index + 1
+        \\        if n == none:
+        \\            break
+        \\        first = first + n
+        \\    assert(first == 1)
+        \\    free(inputs)
+        \\
+    );
+}
+
+test "narrowing: and carries the test into the rest of the condition" {
+    try expectOk(
+        \\func main():
+        \\    let n = parse_int("5")
+        \\    var hit = false
+        \\    if n != none and n > 3:
+        \\        hit = true
+        \\    assert(hit)
+        \\
+        \\    let bad = parse_int("x")
+        \\    var missed = false
+        \\    if bad != none and bad > 3:
+        \\        missed = true
+        \\    assert(not missed)
+        \\
+        \\    # `or` narrows on its false side, which is the dual.
+        \\    var reached = false
+        \\    if bad == none or bad > 3:
+        \\        reached = true
+        \\    assert(reached)
+        \\
+    );
+}
+
+test "narrowing: an assignment of a plain value proves the name present" {
+    try expectOk(
+        \\func main():
+        \\    var n: Int? = none
+        \\    n = 3
+        \\    assert(n * 2 == 6)
+        \\    var xs: List(Int)? = none
+        \\    xs = new List(Int)
+        \\    xs.append(4)
+        \\    assert(len(xs) == 1)
+        \\    free(xs)
+        \\
+    );
+}
+
+test "narrowing: a while condition narrows its body" {
+    try expectOk(
+        \\func main():
+        \\    var countdown: Int? = 3
+        \\    var steps = 0
+        \\    while countdown != none:
+        \\        steps = steps + 1
+        \\        if countdown == 1:
+        \\            countdown = none
+        \\        else:
+        \\            countdown = countdown - 1
+        \\    assert(steps == 3)
+        \\
+    );
+}
+
+test "else supplies the fallback, lazily, and chains to the right" {
+    try expectOk(
+        \\func main():
+        \\    assert((parse_int("8") else 0) == 8)
+        \\    assert((parse_int("x") else 0) == 0)
+        \\    # right-associative: the first that is there wins.
+        \\    assert((parse_int("x") else parse_int("9") else 0) == 9)
+        \\    assert((parse_int("x") else parse_int("y") else 3) == 3)
+        \\    # `else` binds tighter than comparison and looser than +.
+        \\    assert((parse_int("x") else 2 + 3) == 5)
+        \\    assert(((parse_int("x") else 1) == 1) == true)
+        \\
+    );
+}
+
+test "else runs its fallback only when the value is absent" {
+    try expectOk(
+        \\func note(log: Builder, mark: String) -> Int:
+        \\    log.append(mark)
+        \\    return 0
+        \\
+        \\func main():
+        \\    let log = new Builder
+        \\    assert((parse_int("1") else note(log, "a")) == 1)
+        \\    assert((parse_int("x") else note(log, "b")) == 0)
+        \\    assert(str(log) == "b")
+        \\    free(log)
+        \\
+    );
+}
+
+test "x else trap is the assert-unwrap" {
+    try expectOk(
+        \\func main():
+        \\    let n = parse_int("12") else trap("unreachable")
+        \\    assert(n == 12)
+        \\
+    );
+    try expectTrap(
+        \\func main():
+        \\    var text = "not a number"
+        \\    let n = parse_int(text) else trap("bad input")
+        \\    assert(n == 0)
+        \\
+    , .explicit_trap);
+}
+
+test "an optional crosses a call, a return, and a struct field" {
+    try expectOk(
+        \\struct Setting:
+        \\    name: String
+        \\    limit: Int?
+        \\
+        \\func describe(limit: Int?) -> String:
+        \\    if limit == none:
+        \\        return "unlimited"
+        \\    return str(limit)
+        \\
+        \\func lookup(found: Bool) -> Int?:
+        \\    if found:
+        \\        return 4
+        \\    return none
+        \\
+        \\func main():
+        \\    assert(describe(none) == "unlimited")
+        \\    assert(describe(9) == "9")
+        \\    assert(describe(lookup(true)) == "4")
+        \\    assert(describe(lookup(false)) == "unlimited")
+        \\    let open = Setting(name = "open", limit = none)
+        \\    let capped = Setting(name = "capped", limit = 10)
+        \\    assert(open.limit == none)
+        \\    assert(describe(capped.limit) == "10")
+        \\
+    );
+}
+
+test "a value struct may hold an optional of itself, and walking it terminates" {
+    // `Node?` gives a struct a finite shape where `Node` could not:
+    // the recursion stops at absence rather than at a layout, so a
+    // linked list of value structs falls out with no new machinery
+    // and no reference counting anywhere.
+    try expectOk(
+        \\struct Node:
+        \\    value: Int
+        \\    next: Node?
+        \\
+        \\func total(head: Node?) -> Int:
+        \\    var sum = 0
+        \\    var walk = head
+        \\    while walk != none:
+        \\        sum = sum + walk.value
+        \\        walk = walk.next
+        \\    return sum
+        \\
+        \\func main():
+        \\    let three = Node(value = 3, next = none)
+        \\    let two = Node(value = 2, next = three)
+        \\    let one = Node(value = 1, next = two)
+        \\    assert(total(one) == 6)
+        \\    assert(total(none) == 0)
+        \\
+    );
+}
+
+test "a compound assignment combines at the payload and stays present" {
+    try expectOk(
+        \\func main():
+        \\    var n: Int? = none
+        \\    n = 10
+        \\    n += 5
+        \\    n *= 2
+        \\    assert(n == 30)
+        \\    var s: String? = "a"
+        \\    s += "b"
+        \\    assert(s == "ab")
+        \\
+    );
+}
+
+test "absence survives a round trip through a struct field and a var" {
+    try expectOk(
+        \\struct Slot:
+        \\    held: String?
+        \\
+        \\func main():
+        \\    var slot = Slot(held = none)
+        \\    assert(slot.held == none)
+        \\    slot.held = "there"
+        \\    assert(slot.held != none)
+        \\    assert((slot.held else "") == "there")
+        \\    slot.held = none
+        \\    assert(slot.held == none)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Runtime traps: one program per stable TrapCode
 // ---------------------------------------------------------------------------
 
@@ -1971,24 +2270,6 @@ test "trap: unfilled object slot inside an array of objects" {
         \\    cells[0].append(1)
         \\
     , .null_object);
-}
-
-test "trap: parse_int on non-numeric text" {
-    try expectTrap(
-        \\func main():
-        \\    var text = "not a number"
-        \\    let bad = parse_int(text)
-        \\
-    , .parse_failed);
-}
-
-test "trap: parse_float on non-numeric text" {
-    try expectTrap(
-        \\func main():
-        \\    var text = "abc"
-        \\    let bad = parse_float(text)
-        \\
-    , .parse_failed);
 }
 
 test "trap: chr of a codepoint beyond Unicode's range" {

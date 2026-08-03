@@ -428,6 +428,7 @@ const Lexer = struct {
             },
             ',' => try self.single(.comma),
             ':' => try self.single(.colon),
+            '?' => try self.single(.question),
             '.' => {
                 // A `.` is followed by a name (member access) or by
                 // nothing in particular; a digit here is only ever the

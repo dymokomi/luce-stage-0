@@ -1145,6 +1145,230 @@ test "an ordinary deep expression still compiles" {
 }
 
 // ---------------------------------------------------------------------------
+// luce.sema.absent — a T? where a T belongs (docs/FAILURE.md)
+// ---------------------------------------------------------------------------
+//
+// Getting these right is most of the value of optionals: a reader who
+// meets one has to be told which of the two ways out to take, and on
+// which name.  Every message here names both.
+
+test "luce.sema.absent: a T? in an operator says how to make it a T" {
+    try expectError(
+        \\func main():
+        \\    let n = parse_int("1")
+        \\    let doubled = n * 2
+        \\
+    , "luce.sema.type");
+    try expectMessage(
+        \\func main():
+        \\    let n = parse_int("1")
+        \\    let doubled = n * 2
+        \\
+    , "test it first (if n != none:) or supply a fallback (n else …)");
+}
+
+test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
+    // As a condition.
+    try expectMessage(
+        \\func main():
+        \\    var flag: Bool? = none
+        \\    if flag:
+        \\        return
+        \\
+    , "test it first (if flag != none:)");
+    // As a method receiver.
+    try expectError(
+        \\func main():
+        \\    var xs: List(Int)? = none
+        \\    xs.append(1)
+        \\
+    , "luce.sema.absent");
+    // As something to index.
+    try expectError(
+        \\func main():
+        \\    var xs: List(Int)? = none
+        \\    let first = xs[0]
+        \\
+    , "luce.sema.index");
+    // As something to iterate.
+    try expectError(
+        \\func main():
+        \\    var xs: List(Int)? = none
+        \\    for x in xs:
+        \\        return
+        \\
+    , "luce.sema.loop");
+    // As something to hand over, or to free.
+    try expectError(
+        \\func consume(xs: give List(Int)):
+        \\    free(xs)
+        \\
+        \\func main():
+        \\    var xs: List(Int)? = none
+        \\    consume(give xs)
+        \\
+    , "luce.sema.absent");
+    try expectError(
+        \\func main():
+        \\    var xs: List(Int)? = none
+        \\    free(xs)
+        \\
+    , "luce.sema.absent");
+}
+
+test "luce.sema.absent: a field is not a local, so it is told to bind a name" {
+    try expectMessage(
+        \\struct Bag:
+        \\    items: List(Int)?
+        \\
+        \\func main():
+        \\    let bag = Bag(items = none)
+        \\    bag.items.append(1)
+        \\
+    , "bind it to a name and test that");
+}
+
+test "luce.sema.absent: none needs somewhere to be none of" {
+    try expectError(
+        \\func main():
+        \\    let x = none
+        \\
+    , "luce.sema.absent");
+    try expectMessage(
+        \\func main():
+        \\    assert(str(none) == "")
+        \\
+    , "none needs a type here");
+    // A place that is always there cannot be none.
+    try expectError(
+        \\func main():
+        \\    var n: Int = none
+        \\
+    , "luce.sema.absent");
+    try expectError(
+        \\func main():
+        \\    let n = 1
+        \\    assert(n == none)
+        \\
+    , "luce.sema.absent");
+    // Absence has no ordering, and nothing to be equal to but a T?.
+    try expectError(
+        \\func main():
+        \\    let n = parse_int("1")
+        \\    assert(n < none)
+        \\
+    , "luce.sema.absent");
+    try expectError(
+        \\func main():
+        \\    assert(none == none)
+        \\
+    , "luce.sema.absent");
+    // A constant is a value that is there.
+    try expectError(
+        \\let missing = none
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const");
+}
+
+test "luce.sema.absent: a test or a fallback that can never fire is refused" {
+    try expectMessage(
+        \\func main():
+        \\    var n: Int? = none
+        \\    n = 4
+        \\    assert(n != none)
+        \\
+    , "n already holds a value here");
+    try expectMessage(
+        \\func main():
+        \\    var n: Int? = none
+        \\    n = 4
+        \\    assert((n else 0) == 4)
+        \\
+    , "n already holds a value here, so the else can never run");
+    try expectMessage(
+        \\func main():
+        \\    assert((1 else 0) == 1)
+        \\
+    , "else supplies the value a T? does not have");
+}
+
+test "luce.sema.absent: narrowing does not survive what could undo it" {
+    // A loop body that reassigns the name re-enters with whatever it
+    // left, so the narrowing from outside does not hold inside.
+    try expectMessage(
+        \\func main():
+        \\    var n: Int? = 1
+        \\    var total = 0
+        \\    while total < 10:
+        \\        total = total + n
+        \\        n = none
+        \\
+    , "operands are Int and Int?");
+    // One arm narrowing is not both arms narrowing.  (Where *both*
+    // arms do — `if n == none: n = 1` — the join keeps it, and that is
+    // the point of a join.)
+    try expectMessage(
+        \\func maybe(flag: Bool) -> Int:
+        \\    var n: Int? = none
+        \\    if flag:
+        \\        n = 1
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    assert(maybe(true) == 2)
+        \\
+    , "operands are Int? and Int");
+    // A call cannot narrow: only the name itself.
+    try expectError(
+        \\func check(n: Int?) -> Bool:
+        \\    return n != none
+        \\
+        \\func main():
+        \\    let n = parse_int("1")
+        \\    if check(n):
+        \\        let doubled = n * 2
+        \\
+    , "luce.sema.type");
+}
+
+test "luce.parse.type: T?? is refused where it is written" {
+    try expectError(
+        \\func main():
+        \\    var n: Int?? = none
+        \\
+    , "luce.parse.type");
+}
+
+test "luce.sema.type: a container element may not be optional" {
+    try expectMessage(
+        \\func main():
+        \\    var xs = new List(Int?)
+        \\
+    , "a list element cannot be optional");
+    try expectError(
+        \\func main():
+        \\    var m = new Map(String, Int?)
+        \\
+    , "luce.sema.type");
+    try expectError(
+        \\func main():
+        \\    var grid = new Array(Int?, 2)
+        \\
+    , "luce.sema.type");
+}
+
+test "none is a keyword, so nothing can be named it" {
+    try expectError(
+        \\func main():
+        \\    let none = 1
+        \\
+    , "luce.parse.expected");
+}
+
+// ---------------------------------------------------------------------------
 // luce.sema.limit — the reporting cap
 // ---------------------------------------------------------------------------
 

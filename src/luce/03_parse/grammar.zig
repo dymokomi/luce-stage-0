@@ -605,7 +605,7 @@ pub const Parser = struct {
             });
             written.span = .{ .start = item.span.start, .end = member.span.end };
         }
-        if (self.peekKind() != .left_paren) return written;
+        if (self.peekKind() != .left_paren) return self.optionalSuffix(written);
         const opener = self.advance(); // (
 
         var arguments: std.ArrayList(ast.TypeName) = .empty;
@@ -642,6 +642,28 @@ pub const Parser = struct {
         written.arguments = try arguments.toOwnedSlice(self.arena);
         written.wildcards = wildcards;
         written.span = .{ .start = item.span.start, .end = closing.span.end };
+        return self.optionalSuffix(written);
+    }
+
+    /// A trailing `?` makes the type just parsed optional.  A second
+    /// one is refused here rather than resolved away: `T??` says the
+    /// absence itself might be absent, which is a distinction no
+    /// program has ever needed and every language that shipped it
+    /// regrets (docs/FAILURE.md).
+    fn optionalSuffix(self: *Parser, base: ast.TypeName) Error!?ast.TypeName {
+        const marker = self.accept(.question) orelse return base;
+        var written = base;
+        written.optional = true;
+        written.span = .{ .start = base.span.start, .end = marker.span.end };
+        if (self.peekKind() == .question) {
+            try self.report(
+                "luce.parse.type",
+                self.peek().span,
+                "one '?' is all there is: a value is absent or it is not",
+                .{},
+            );
+            return null;
+        }
         return written;
     }
 
@@ -1235,6 +1257,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_import => "the keyword 'import'",
         .keyword_give => "the keyword 'give'",
         .keyword_copy => "the keyword 'copy'",
+        .keyword_none => "'none'",
 
         .int_literal => "a number",
         .float_literal => "a number",
@@ -1248,6 +1271,7 @@ pub fn describe(kind: Kind) []const u8 {
         .comma => "','",
         .colon => "':'",
         .dot => "'.'",
+        .question => "'?'",
         .assign => "'='",
         .plus_assign => "'+='",
         .minus_assign => "'-='",

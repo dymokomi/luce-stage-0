@@ -356,7 +356,39 @@ pub const Analyzer = struct {
         return self.qualify(source_mod.standard_namespace, name);
     }
 
+    /// Resolve a written type, including a trailing `?`.
+    ///
+    /// `T?` is a type; `T??` has no representation to resolve into and
+    /// stage 3 refuses it before this ever sees it.
     pub fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
+        const base = (try self.resolveBase(module, written)) orelse return null;
+        if (!written.optional) return base;
+        return Type.optionalOf(base) orelse {
+            try self.fail("luce.sema.type", written.span, "None? is not a type: there is nothing there to be absent", .{});
+            return null;
+        };
+    }
+
+    /// The `?` that a container element may not carry.  Refused in v1
+    /// (docs/FAILURE.md): `[1, none, none, 2]` would need a
+    /// representation for an absent element that the containers do not
+    /// have, and PEP 505's objection to that gap is the one that
+    /// transfers.
+    pub fn refuseOptionalPart(
+        self: *Analyzer,
+        part: Type,
+        written: ast.TypeName,
+        role: []const u8,
+    ) Error!bool {
+        if (part != .optional) return false;
+        try self.fail("luce.sema.type", written.span, "a {s} cannot be optional: write {s} and keep the absence in a name of its own", .{
+            role,
+            try self.typeName(part.held().?),
+        });
+        return true;
+    }
+
+    fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
         const table = [_]struct { name: []const u8, resolved: Type }{
             .{ .name = "Bool", .resolved = .boolean },
             .{ .name = "Int", .resolved = .int },
@@ -379,6 +411,7 @@ pub const Analyzer = struct {
                 return null;
             }
             const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
+            if (try self.refuseOptionalPart(element, written.arguments[0], "list element")) return null;
             return try self.internHeapType(.{ .list = element });
         }
         if (std.mem.eql(u8, written.name, "Map")) {
@@ -392,6 +425,7 @@ pub const Analyzer = struct {
                 return null;
             }
             const value = (try self.resolveType(module, written.arguments[1])) orelse return null;
+            if (try self.refuseOptionalPart(value, written.arguments[1], "map value")) return null;
             return try self.internHeapType(.{ .map = .{ .key = key, .value = value } });
         }
         if (std.mem.eql(u8, written.name, "Array")) {
@@ -405,6 +439,7 @@ pub const Analyzer = struct {
                 return null;
             }
             const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
+            if (try self.refuseOptionalPart(element, written.arguments[0], "array element")) return null;
             return try self.internHeapType(.{ .array = .{ .element = element, .rank = written.wildcards } });
         }
         if (std.mem.eql(u8, written.name, "Builder")) {
@@ -488,6 +523,10 @@ pub const Analyzer = struct {
         return switch (of) {
             .heap => true,
             .strukt => |layout_index| self.struct_shapes.items[layout_index].carries,
+            // A `List(T)?` holding an object owns it exactly as the
+            // unwrapped type would; holding `none` owns nothing (S43),
+            // and every ownership walk already no-ops on absence.
+            .optional => |payload| self.carriesObjects(payload.asType()),
             else => false,
         };
     }
@@ -853,6 +892,12 @@ pub const Analyzer = struct {
             .string_literal => |literal| {
                 return .{ .value = .{ .string = literal.decoded }, .value_type = .string };
             },
+            // `none` has no type of its own — the place it is written
+            // into supplies one — and a file-scope constant is folded
+            // before anything can supply it.
+            .none_literal => |literal| {
+                return self.constantError(literal.span, "none is not a constant; a constant is a value that is there", .{});
+            },
             .name => |name| {
                 const qualified = try self.qualify(self.modules[module].prefix, name.text);
                 if (self.constant_names.get(qualified)) |index| {
@@ -1046,6 +1091,11 @@ pub const Analyzer = struct {
     }
 
     pub fn foldBinary(self: *Analyzer, module: usize, binary: ast.Binary) Error!?TypedConstant {
+        // A constant is a value that is there, so there is nothing for
+        // a fallback to be a fallback *for*.
+        if (binary.op == .coalesce) {
+            return self.constantError(binary.span, "else has nothing to do in a constant: a constant is always there", .{});
+        }
         const left = (try self.foldConstant(module, binary.left)) orelse return null;
         // Short-circuit folds without evaluating the other side's
         // side effects — there are none, so plain evaluation is fine.
@@ -1151,6 +1201,7 @@ pub const Analyzer = struct {
                 };
                 return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
             },
+            .coalesce => unreachable, // answered above
         }
     }
 

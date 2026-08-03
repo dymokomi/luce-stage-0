@@ -29,8 +29,12 @@ pub const Precedence = enum(u8) {
     logic_or = 1,
     logic_and = 2,
     comparison = 3,
-    additive = 4,
-    multiplicative = 5,
+    /// `a else b`, between comparison and arithmetic: `x else 0 > 5`
+    /// compares the fallback and `x else n + 1` falls back to the sum,
+    /// which is where Swift puts `??` and for the same reasons.
+    coalesce = 4,
+    additive = 5,
+    multiplicative = 6,
 };
 
 fn binaryPrecedence(kind: Kind) Precedence {
@@ -38,6 +42,7 @@ fn binaryPrecedence(kind: Kind) Precedence {
         .keyword_or => .logic_or,
         .keyword_and => .logic_and,
         .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => .comparison,
+        .keyword_else => .coalesce,
         .plus, .minus => .additive,
         .star, .slash, .percent => .multiplicative,
         else => .none,
@@ -57,6 +62,7 @@ pub fn startsExpression(kind: Kind) bool {
         .identifier,
         .keyword_true,
         .keyword_false,
+        .keyword_none,
         .keyword_new,
         .keyword_not,
         .keyword_give,
@@ -73,6 +79,7 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
     return switch (kind) {
         .keyword_or => .logic_or,
         .keyword_and => .logic_and,
+        .keyword_else => .coalesce,
         .equal => .equal,
         .not_equal => .not_equal,
         .less => .less,
@@ -110,7 +117,11 @@ fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
         const precedence = binaryPrecedence(self.peekKind());
         if (@intFromEnum(precedence) < minimum or precedence == .none) return left;
         const operator = self.advance();
-        const right = (try binaryExpression(self, @intFromEnum(precedence) + 1)) orelse
+        // Everything associates left except `else`, which associates
+        // right so `a else b else c` is a real chain: `b else c` is the
+        // fallback `a` reaches for, and each link may be optional.
+        const next_minimum = @intFromEnum(precedence) + @intFromBool(precedence != .coalesce);
+        const right = (try binaryExpression(self, next_minimum)) orelse
             return null;
         if (precedence == .comparison) {
             if (first_comparison) |earlier| {
@@ -333,6 +344,10 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
         .keyword_false => {
             const item = self.advance();
             return make(self, .{ .bool_literal = .{ .value = false, .span = item.span } });
+        },
+        .keyword_none => {
+            const item = self.advance();
+            return make(self, .{ .none_literal = .{ .span = item.span } });
         },
         .string_literal => {
             const item = self.advance();

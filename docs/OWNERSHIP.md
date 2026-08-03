@@ -522,8 +522,8 @@ elements already start in), 0 / 0.0 / false / "" / zeroed struct for
 values.  One rule everywhere: an unfilled slot holds its type's
 zero.  The first assignment has no old object to drop; `let` still
 requires an initializer (a never-reassignable empty name is a
-contradiction).  Full optionals remain a separate future decision —
-this is zero-initialization, not `nil` semantics.
+contradiction).  This is zero-initialization, not `nil` semantics:
+a slot that may genuinely hold nothing is a `T?` and says so (S43).
 
 **S39. `let` vs `var` freezes the binding, not the object.**
 ```luce
@@ -580,22 +580,28 @@ borrows trap at use, not at handoff.  (The alternative — eager trap
 at the call site — is stricter but inconsistent with array
 elements; flagged for review.)
 
-**S43. Null owns nothing: nullable memory management needs no rules.**
+**S43. Absence owns nothing: nullable memory management needs no
+rules.**
 - Scope exit or reassignment of an unfilled slot frees nothing.
 - Freeing a container skips null elements (already true for fresh
   object-typed Arrays).
-- Future optionals inherit S1–S40 unchanged: a `Builder?` holding an
-  object owns it like any binding; holding null owns nothing.
+- Optionals inherit S1–S42 unchanged: a `Builder?` holding an object
+  owns it like any binding; holding `none` owns nothing.  Nothing in
+  this document changed when `T?` arrived, which is the strongest
+  thing that can be said about it.
 
-**Optionals (future, deliberately separate).**  When absence is part
-of a *contract* — `m.get(k)` that may find nothing — the answer is a
-distinct type, not implicit nullability: `Builder?` is not
-`Builder`; a `null` literal is legal only where a `T?` is expected;
-optionals are checked (`x == null`) or assert-unwrapped (`x!`,
-trapping) before use.  Plain types can never hold null, so the
-billion-dollar mistake stays impossible.  To be designed together
-with error handling (`?T` and `!T` belong in one conversation); not
-part of ownership v1.
+**Optionals, as they shipped** (docs/FAILURE.md, docs/LANGUAGE.md).
+When absence is part of a *contract* — `parse_int(s)` on text that is
+not a number — the answer is a distinct type, not implicit
+nullability: `Builder?` is not `Builder`, and `none` is legal only
+where a `T?` is expected, so a plain type can never hold it and the
+billion-dollar mistake stays impossible.  A `T?` is tested
+(`x == none`) and **narrowed** — inside `if x != none:` the name *is*
+its payload — or read with a fallback (`x else 0`).  There is no
+force-unwrap sigil; `x else trap("…")` is the assert-unwrap, and it
+is greppable.  What that costs ownership is nothing: `give`, `copy`
+and `free` demand a value that is there and so demand narrowing
+first, and every runtime walk already no-ops on absence.
 
 ---
 

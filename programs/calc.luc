@@ -20,7 +20,8 @@ struct Scan:
             stop = stop + 1
         if stop == at:
             trap("expected a number at position " + str(at))
-        return Step(value = parse_int(text[at:stop]), at = stop)
+        let digits = text[at:stop]
+        return Step(value = parse_int(digits) else trap("not a number: " + digits), at = stop)
 
 struct Parse:
     # expression = term (("+" | "-") term)*

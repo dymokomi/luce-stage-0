@@ -386,8 +386,8 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
         \\    let words = strings.split("  the   quick brown  ", "")
         \\    assert(len(words) == 3)
         \\    assert(words[0] == "the" and words[1] == "quick" and words[2] == "brown")
-        \\    let none = strings.split("   ", "")
-        \\    assert(len(none) == 0)
+        \\    let blanks = strings.split("   ", "")
+        \\    assert(len(blanks) == 0)
         \\    let empty: List(String) = []
         \\    assert(strings.join(empty, ", ") == "")
         \\    assert(strings.join(["only"], ", ") == "only")

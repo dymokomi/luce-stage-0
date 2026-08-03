@@ -1363,6 +1363,153 @@ test "S43: an unfilled slot frees nothing; a filled one frees normally" {
 }
 
 // ---------------------------------------------------------------------------
+// G4. Optionals change nothing (S1, S5, S16, S43; docs/FAILURE.md)
+// ---------------------------------------------------------------------------
+//
+// `T?` is a type, not a second memory model.  Holding `none` owns
+// nothing, holding an object owns exactly what the unwrapped type
+// would, and every rule from S1 up reads the same on both.
+
+test "optionals: a T? holding none owns nothing and releases nothing" {
+    try expectClean(
+        \\func main():
+        \\    var never: List(Int)? = none
+        \\    var also: Builder? = none
+        \\    also = none
+        \\    var again: Map(String, Int)? = none
+        \\    assert(never == none and also == none and again == none)
+        \\
+    );
+}
+
+test "optionals: a T? holding an object obeys scope ownership exactly as T does" {
+    try expectClean(
+        \\func main():
+        \\    var xs: List(Int)? = new List(Int)
+        \\    xs.append(1)
+        \\    assert(len(xs) == 1)
+        \\
+    );
+    // Reassigning an owning slot frees the old object first (S5), and
+    // `none` is a legal thing to reassign it to.
+    try expectClean(
+        \\func main():
+        \\    var xs: List(Int)? = new List(Int)
+        \\    xs.append(1)
+        \\    xs = new List(Int)
+        \\    xs.append(2)
+        \\    xs = none
+        \\    assert(xs == none)
+        \\
+    );
+    // And an explicit free still works through the narrowed name.
+    try expectClean(
+        \\func main():
+        \\    var xs: List(Int)? = none
+        \\    xs = new List(Int)
+        \\    free(xs)
+        \\
+    );
+}
+
+test "optionals: an object still moves out on return and into a give parameter" {
+    try expectClean(
+        \\func make(wanted: Bool) -> List(Int)?:
+        \\    if not wanted:
+        \\        return none
+        \\    var fresh = new List(Int)
+        \\    fresh.append(3)
+        \\    return fresh
+        \\
+        \\func consume(xs: give List(Int)):
+        \\    free(xs)
+        \\
+        \\func main():
+        \\    let nothing = make(false)
+        \\    assert(nothing == none)
+        \\    var something = make(true)
+        \\    if something == none:
+        \\        return
+        \\    assert(len(something) == 1)
+        \\    consume(give something)
+        \\
+    );
+}
+
+test "optionals: an object-carrying struct field may be absent and still frees" {
+    try expectClean(
+        \\struct Bag:
+        \\    label: String
+        \\    items: List(Int)?
+        \\
+        \\func main():
+        \\    var empty = Bag(label = "empty", items = none)
+        \\    assert(empty.items == none)
+        \\    var full = Bag(label = "full", items = new List(Int))
+        \\    # A field is not a local, so it does not narrow (Dart's
+        \\    # rule): bind it to a name and test that.
+        \\    let held = full.items
+        \\    if held != none:
+        \\        held.append(1)
+        \\        assert(len(held) == 1)
+        \\    full.items = none
+        \\    assert(full.items == none)
+        \\
+    );
+}
+
+test "optionals: the ownership rules still refuse what they refused" {
+    // A binding that owns its object cannot be handed a borrow, `T?`
+    // or not (S5, S21).
+    try expectOwnError(
+        \\func main():
+        \\    let source = new List(Int)
+        \\    var kept: List(Int)? = none
+        \\    kept = source
+        \\
+    );
+    // A borrowed parameter cannot be given away (S12).
+    try expectOwnError(
+        \\func steal(xs: List(Int)?) -> List(Int)?:
+        \\    return xs
+        \\
+        \\func main():
+        \\    let xs = new List(Int)
+        \\    let taken = steal(xs)
+        \\    free(xs)
+        \\
+    );
+    // Poisoning survives the wrapper: a given name is untouchable.
+    try expectOwnError(
+        \\func consume(xs: give List(Int)):
+        \\    free(xs)
+        \\
+        \\func main():
+        \\    var xs: List(Int)? = new List(Int)
+        \\    consume(give xs)
+        \\    assert(xs == none)
+        \\
+    );
+}
+
+test "optionals: use after free still traps through a T?" {
+    try expectTrap(
+        \\func maybe() -> List(Int)?:
+        \\    var fresh = new List(Int)
+        \\    return fresh
+        \\
+        \\func main():
+        \\    var xs = maybe()
+        \\    let alias = xs
+        \\    if xs != none:
+        \\        free(xs)
+        \\    if alias != none:
+        \\        alias.append(1)
+        \\
+    , .use_after_free);
+}
+
+// ---------------------------------------------------------------------------
 // Audit regressions: container doors the first release missed
 // ---------------------------------------------------------------------------
 

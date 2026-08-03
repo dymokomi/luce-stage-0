@@ -11,7 +11,12 @@ func main():
         return
     var values: List(Float) = []
     for index in range(0, arg_count()):
-        values.append(parse_float(arg(index)))
+        let written = arg(index)
+        let number = parse_float(written)
+        if number == none:
+            print("stats: not a number: " + written)
+            return
+        values.append(number)
 
     var ordered = mathx.sorted(values)
     print("count   " + str(len(values)))

@@ -581,6 +581,23 @@ fn render(gpa: Allocator, source: []const u8) !?[]const u8 {
     };
 }
 
+/// Lower a script and hand back the tag it could not lower.
+fn scriptGap(gpa: Allocator, source: []const u8) ![]const u8 {
+    var compiled = try program(gpa, source);
+    defer compiled.deinit();
+
+    const triple = try emit.hostTriple(gpa);
+    defer gpa.free(triple);
+
+    switch (try lower.lower(gpa, &compiled, .{ .triple = triple })) {
+        .bitcode => |bytes| {
+            gpa.free(bytes);
+            return error.ShouldNotHaveLowered;
+        },
+        .unsupported => |what| return what,
+    }
+}
+
 /// Lower an evaluator against `schema` and hand back the tag it could
 /// not lower.  Evaluator ports are what the backend still has no
 /// lowering for, and they are only reachable in evaluator mode.
@@ -724,6 +741,19 @@ test "checked integer arithmetic lowers to the overflow intrinsics" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "smul.with.overflow") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "sadd.with.overflow") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "ssub.with.overflow") != null);
+}
+
+test "an optional names itself instead of lowering" {
+    const gpa = std.testing.allocator;
+    // Step 4 of docs/FAILURE.md.  Until then a program that says `T?`
+    // says so by name and runs on the interpreter, rather than
+    // lowering to something that only looks right.
+    try std.testing.expectEqualStrings("T? (optionals)", (try scriptGap(gpa,
+        \\func main():
+        \\    let n = parse_int(arg(0))
+        \\    print(str(n else 0))
+        \\
+    )));
 }
 
 test "a construct with no lowering yet names itself" {
@@ -1297,7 +1327,7 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\    let word = str(text)
         \\    print(word + " " + str(len(word)) + " " + str(word.byte_at(0)))
         \\    print(word[1:3] + " " + str(word.find_byte(99, 0)))
-        \\    print(str(parse_int("41") + 1) + chr(33) + str(ord("A")))
+        \\    print(str(41 + 1) + chr(33) + str(ord("A")))
         \\    print(str("abc" < "abd") + str("abc" == "abc"))
         \\
         \\    let kept = copy xs

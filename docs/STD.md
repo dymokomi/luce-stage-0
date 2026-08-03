@@ -174,6 +174,7 @@ files.write_lines(path, lines)   # joined with newlines, ends with one;
 
 Deliberate constraints, until the language grows the features:
 no module state (top-level `let` is constant — the RNG's List-state
-pattern is the idiom for mutable state), and error handling is traps
-plus guard functions until Phase 3 (optionals + errors) lands — std
-signatures will be revisited then.
+pattern is the idiom for mutable state), and a function that may find
+nothing answers a `T?` (docs/LANGUAGE.md) while one that may *fail*
+still traps — recoverable errors are designed in docs/FAILURE.md and
+not built, so those signatures will be revisited then.

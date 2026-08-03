@@ -10,8 +10,9 @@ wins and it is said so.
 The **language surface is close to done.**  Ten conceptual stages,
 eight folders, four executable specs, stages 1 and 2 marked *Locked*,
 and a front end whose diagnostics name the fix rather than the parser's
-predicament.  The one designed-but-unbuilt semantic hole is optionals
-and errors, and `docs/FAILURE.md` answers it in full.
+predicament, and `T?` closed the absence half of the last semantic
+hole.  What is designed but unbuilt is errors, and `docs/FAILURE.md`
+answers it in full.
 
 The **runtime is not done**, and that is where the wall now is.  Tier
 0 held two items, both properties of what existed rather than missing
@@ -215,11 +216,12 @@ the proof the language moved.
 ## Tier 4 — deliberately out of scope, and still right
 
 - **Generics for user code.**  The argument against has strengthened:
-  `types.Type` is a closed eight-variant union with twenty exhaustive
-  switches depending on it, `List(T)` is a monomorphic heap object
-  rather than a generic, and `T?` is *not* being special-cased into
-  `Type` at all.  Nothing about optionals opens this door.  What would
-  pay is monomorphized generic *functions*, and that needs first-class
+  `types.Type` is a closed union with twenty exhaustive switches
+  depending on it, and `List(T)` is a monomorphic heap object rather
+  than a generic.  `T?` did become a variant of `Type` — one, whose
+  payload is a union of its own so `T??` is unrepresentable — and it
+  opened no door at all: nothing about it generalizes.  What would pay
+  is monomorphized generic *functions*, and that needs first-class
   functions first.
 - **Closures — absent, and the cheap answer is not closures.**  The one
   place it draws blood is comparators.  A `sort_by` taking a top-level
@@ -268,8 +270,8 @@ multi-user — all deferred by design in `docs/V2.md`.
    hour — and it matters more now, not less: the compiled path runs
    the same loop 76x faster, so it reaches the same wall 76x sooner.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
-3. **`T?`, `none`, narrowing, `else`** — step 1 of FAILURE.md's order,
-   with `parse_int`/`parse_float` as day-one users.
+3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**; `parse_int` and
+   `parse_float` answer `Int?`/`Float?`.
 4. **The cheap Tier-3 slice:** character classes, a frozen container or
    `Set`, `read_line`, `clock`, `sleep`, `exit`, `env`, stderr,
    directory listing.

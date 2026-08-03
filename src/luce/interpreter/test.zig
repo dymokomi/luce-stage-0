@@ -773,9 +773,10 @@ test "conversions: str, parse_int, parse_float, chr, ord" {
         \\    assert(str(-7) == "-7")
         \\    assert(str(true) == "true")
         \\    assert(str(2.5) == "2.5")
-        \\    assert(parse_int("123") == 123)
-        \\    assert(parse_int("-9") == -9)
-        \\    assert(parse_float("2.5") == 2.5)
+        \\    assert((parse_int("123") else 0) == 123)
+        \\    assert((parse_int("-9") else 0) == 0 - 9)
+        \\    assert((parse_float("2.5") else 0.0) == 2.5)
+        \\    assert(parse_int("twelve") == none)
         \\    assert(chr(65) == "A")
         \\    assert(chr(955) == "λ")
         \\    assert(ord("λ") == 955)
@@ -852,11 +853,6 @@ test "collection misuse traps with stable codes" {
         \\    cells[0].append(1)
         \\
         , .code = .null_object },
-        .{ .source =
-        \\func main():
-        \\    let bad = parse_int("not a number")
-        \\
-        , .code = .parse_failed },
         .{ .source =
         \\func main():
         \\    let bad = chr(11141111)

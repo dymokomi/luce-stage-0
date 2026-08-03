@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const ast = @import("../03_parse.zig").ast;
+const Span = @import("../01_source.zig").Span;
 
 /// How deep an expression tree this stage will walk before refusing
 /// it.  Stage 3 bounds *recursive descent*, which a left-leaning
@@ -76,7 +77,7 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
     if (budget == 0) return true;
     const left = budget - 1;
     return switch (expression.*) {
-        .int_literal, .float_literal, .bool_literal, .string_literal, .name => false,
+        .int_literal, .float_literal, .bool_literal, .string_literal, .none_literal, .name => false,
         .field => |field| deeperThan(field.target, left),
         .unary => |unary| deeperThan(unary.operand, left),
         .give => |give| deeperThan(give.operand, left),
@@ -252,6 +253,29 @@ pub fn returnsOnAllPaths(block: ast.Block) bool {
     return false;
 }
 
+/// Conservative all-paths-leave: does control certainly not fall out
+/// of the bottom of this block?  Return, break and continue all leave;
+/// an if leaves only when both arms do.  What makes an early-return
+/// guard narrow the rest of the enclosing block — after
+/// `if x == none: return`, the code below runs only where `x` is
+/// there.  A wrong "no" costs a diagnostic the reader can work around;
+/// a wrong "yes" would be unsound, so loops never count.
+pub fn alwaysExits(block: ast.Block) bool {
+    for (block.statements) |statement| {
+        switch (statement) {
+            .return_statement, .break_statement, .continue_statement => return true,
+            .conditional => |conditional| {
+                if (conditional.else_block) |else_block| {
+                    if (alwaysExits(conditional.then_block) and
+                        alwaysExits(else_block)) return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -291,6 +315,49 @@ test "edit distance stops counting once it is past the limit" {
     // Past the limit the answer is only "further than that".
     try testing.expect(editDistance("alpha", "omega", 1) > 1);
     try testing.expect(editDistance("a", "abcdefgh", 2) > 2);
+}
+
+test "a block leaves only when every path does" {
+    const marker: Span = .{ .start = 0, .end = 0 };
+    const returned: ast.Statement = .{ .return_statement = .{ .value = null, .span = marker } };
+    const broke: ast.Statement = .{ .break_statement = .{ .span = marker } };
+    const continued: ast.Statement = .{ .continue_statement = .{ .span = marker } };
+    var condition: ast.Expression = .{ .bool_literal = .{ .value = true, .span = marker } };
+
+    var one = [_]ast.Statement{returned};
+    try testing.expect(alwaysExits(.{ .statements = &one, .span = marker }));
+    var two = [_]ast.Statement{broke};
+    try testing.expect(alwaysExits(.{ .statements = &two, .span = marker }));
+    var three = [_]ast.Statement{continued};
+    try testing.expect(alwaysExits(.{ .statements = &three, .span = marker }));
+    try testing.expect(!alwaysExits(.{ .statements = &.{}, .span = marker }));
+
+    // Both arms leave, so the conditional does.
+    var then_arm = [_]ast.Statement{returned};
+    var else_arm = [_]ast.Statement{broke};
+    var both = [_]ast.Statement{.{ .conditional = .{
+        .condition = &condition,
+        .then_block = .{ .statements = &then_arm, .span = marker },
+        .else_block = .{ .statements = &else_arm, .span = marker },
+        .span = marker,
+    } }};
+    try testing.expect(alwaysExits(.{ .statements = &both, .span = marker }));
+
+    // One arm is not both, and a loop guarantees nothing.
+    var only_then = [_]ast.Statement{.{ .conditional = .{
+        .condition = &condition,
+        .then_block = .{ .statements = &then_arm, .span = marker },
+        .else_block = null,
+        .span = marker,
+    } }};
+    try testing.expect(!alwaysExits(.{ .statements = &only_then, .span = marker }));
+    var body = [_]ast.Statement{returned};
+    var loop = [_]ast.Statement{.{ .while_loop = .{
+        .condition = &condition,
+        .body = .{ .statements = &body, .span = marker },
+        .span = marker,
+    } }};
+    try testing.expect(!alwaysExits(.{ .statements = &loop, .span = marker }));
 }
 
 test "a suggestion keeps the closest name, and stays quiet when nothing is close" {
