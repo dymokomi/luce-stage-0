@@ -612,18 +612,30 @@ trap, teardown reclaims everything regardless of ownership state —
 whatever the unwind never released, the runtime releases when the run
 ends — and publish-nothing-on-failure is unchanged.
 
-**S35. The Fabric (later).**  Persistent Texel-owned objects will need
-an owner that is neither a binding nor a container.  The model
-reserves that as a future owner kind; nothing in S1–S34 blocks it.
+**S35. File scope owns nothing, so a constant is a value.**  The three
+owner kinds in S33 are a binding, a container, and the statement
+temporary — every one of them lives inside a function.  A top-level
+`let` has no scope to die at, so it cannot own, and therefore cannot
+be or carry an object: `new`, list literals, slices and indexing are
+all refused there, as is a struct whose layout carries objects.  What
+remains — scalars, String, and object-free structs — folds at compile
+time and inlines at its use sites, which is why an unused constant
+costs nothing to ship.
+
+This is the rule the analyzer already cites when it refuses a
+file-scope object; the restriction is ownership, not an arbitrary
+limit on what constants may say.
 
 ---
 
 ## Deliberately excluded from v1
 
-- `share` (opt-in refcounted islands) — revisit only when a real
-  program needs genuinely shared ownership that `give`/`copy` cannot
-  express.
-- Weak references — only meaningful once `share` exists.
+- `share` (opt-in refcounted islands) — **refused permanently, not
+  deferred.**  Reference counting is off the table at every layer of
+  Luce, in the language and in the runtime alike (`docs/MEMORY.md`).
+  A program that needs genuinely shared ownership restructures, or
+  uses indices into a container it owns.
+- Weak references — only meaningful once `share` exists, so never.
 - Arenas as a *language* feature — the runtime may use them as an
   optimization invisibly.
 - `defer` — no longer needed for memory; may return later for host

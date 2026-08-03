@@ -7,3 +7,6 @@
 core
 # programs/dice.luc writes its roll log into the cwd
 dice_rolls.txt
+
+# Agent worktrees and local Claude Code state — never part of the tree.
+.claude/
