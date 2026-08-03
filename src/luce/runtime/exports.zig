@@ -660,36 +660,6 @@ export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callco
 // Operators
 // ---------------------------------------------------------------------------
 
-/// `min`/`max` and `clamp` on Float, which generated code calls rather
-/// than emitting `llvm.minnum`.
-///
-/// The intrinsic is not wrong; it is not *decidable*.  `minnum` leaves
-/// the answer for `(-0.0, +0.0)` unspecified, and the two ways of
-/// producing it disagree: LLVM's constant folder answers the first
-/// operand, while every target's min instruction answers `-0.0`.  Zig's
-/// own `@min` shows the same split between comptime and runtime.  There
-/// is one right answer here — whatever the interpreter gives — so
-/// compiled code asks for it rather than guessing.
-export fn luce_rt_float_extremum(
-    wants_minimum: i32,
-    left: f64,
-    right: f64,
-) callconv(.c) f64 {
-    return operators.extremum(
-        wants_minimum != 0,
-        Value.ofFloat(left),
-        Value.ofFloat(right),
-    ).asFloat();
-}
-
-export fn luce_rt_float_clamp(held: f64, low: f64, high: f64) callconv(.c) f64 {
-    return operators.clamp(
-        Value.ofFloat(held),
-        Value.ofFloat(low),
-        Value.ofFloat(high),
-    ).asFloat();
-}
-
 /// Comparison for the types generated code cannot compare inline —
 /// String, Bytes, structs.  The one export that answers its result
 /// directly rather than through an out-pointer, because comparison is

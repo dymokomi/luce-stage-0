@@ -169,8 +169,6 @@ pub const Service = enum {
     luce_rt_ord,
 
     // -- operators ----------------------------------------------------
-    luce_rt_float_extremum,
-    luce_rt_float_clamp,
     luce_rt_compare,
 
     /// The C symbol this service is declared under.
@@ -265,8 +263,6 @@ pub const Effect = struct {
 // and it must name the default location.  If it only moves bytes
 // through the arena or a String, it does not.
 
-/// Touches nothing at all.
-const pure: Memory = .{};
 /// Reads through its arguments and nothing else.
 const reads_run: Memory = .{ .argmem = .read };
 /// Writes only through its arguments.
@@ -526,17 +522,8 @@ pub fn describe(service: Service) Effect {
 
         // -- operators ------------------------------------------------
         //
-        // The two float helpers are arithmetic and nothing else.
         // `compare` reads both values, and the String and struct storage
         // behind them, and cannot fail — it takes no runtime at all.
-        .luce_rt_float_extremum => .{
-            .memory = pure,
-            .parameters = &.{ .plain, .plain, .plain },
-        },
-        .luce_rt_float_clamp => .{
-            .memory = pure,
-            .parameters = &.{ .plain, .plain, .plain },
-        },
         .luce_rt_compare => .{
             .memory = reads_private,
             .parameters = &.{ .plain, .value_in, .value_in },
