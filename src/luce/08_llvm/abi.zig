@@ -80,7 +80,16 @@ const trace = @import("../runtime/trace.zig");
 /// beside `trap` to say what it was.  Required, like `trap`: a host
 /// that can run a program has to be able to say why it stopped, and
 /// the two reasons are different sentences.
-pub const version: u32 = 7;
+///
+/// 8 — the host surface closed.  Nine services arrived at the end of
+/// the table, all optional and fail-closed like every one before them:
+/// a line of standard input with the prompt that precedes it, a line
+/// of standard error, a monotonic clock and a wait, one environment
+/// variable, and the four file operations `file_read` and `file_write`
+/// had left out.  No field moved; a run that never calls one pays
+/// nothing.  A program *can* now be written, which is what the version
+/// buys.
+pub const version: u32 = 8;
 
 /// The machine an artifact runs on, as a string both the compiler and
 /// the loader can produce.
@@ -453,6 +462,99 @@ pub const KeyReadFn = *const fn (
     text_length: *i64,
 ) callconv(.c) Answer;
 
+/// Read one line of standard input, having first written `prompt` and
+/// flushed it.
+///
+/// **The prompt is an argument and not a separate service**, for the
+/// reason `key_read` presents the pending frame before it blocks: a
+/// prompt that is not on the screen when the program stops for input
+/// is a program that looks hung.  Making the host write it puts the
+/// ordering where the buffering is.  The prompt is host-written text
+/// and is sanitized like any other.
+///
+/// `yes` fills `text`/`length` with the line, its newline already
+/// removed, borrowed for the duration of the call.  `no` is end of
+/// input, which the program sees as `none` — nothing there, and no
+/// reason worth carrying (docs/FAILURE.md).
+pub const ReadLineFn = *const fn (
+    context: ?*anyopaque,
+    prompt: [*]const u8,
+    prompt_length: i64,
+    text: *[*]const u8,
+    length: *i64,
+) callconv(.c) Answer;
+
+/// One environment variable.  `no` means unset, which is again `none`
+/// rather than a failure: "nobody set it" is the same fact every time.
+pub const EnvFn = *const fn (
+    context: ?*anyopaque,
+    name: [*]const u8,
+    name_length: i64,
+    text: *[*]const u8,
+    length: *i64,
+) callconv(.c) Answer;
+
+/// Milliseconds on a monotonic clock.  Cannot fail, so it answers the
+/// reading directly.  The origin is unspecified and only differences
+/// mean anything — a host free to answer "since this process started"
+/// is a host that needs no calendar.
+pub const ClockFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
+
+/// Wait at least `milliseconds`.  A duration that has already elapsed
+/// — zero, or a negative one out of `deadline - now` — is not an
+/// error and not a bug: there is no time left to wait, so the call
+/// returns.  Only `exhausted` is ever answered besides `yes`.
+pub const SleepFn = *const fn (
+    context: ?*anyopaque,
+    milliseconds: i64,
+) callconv(.c) Answer;
+
+/// Append to a file, creating it if it is not there.  `no` is the
+/// world saying no, which the program meets as `io_failed`.
+pub const FileAppendFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+    content: [*]const u8,
+    content_length: i64,
+) callconv(.c) Answer;
+
+/// Remove a file.  `no` on anything that left the file there,
+/// including "it was never there" — the host cannot tell those apart
+/// and neither can `Answer` (docs/FAILURE.md).
+pub const FileDeleteFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+) callconv(.c) Answer;
+
+/// Rename a file.  `no` if it did not happen, whatever the reason.
+pub const FileRenameFn = *const fn (
+    context: ?*anyopaque,
+    from: [*]const u8,
+    from_length: i64,
+    to: [*]const u8,
+    to_length: i64,
+) callconv(.c) Answer;
+
+/// The names in a directory, **NUL-separated** in one borrowed buffer,
+/// without `.` or `..`.
+///
+/// One buffer rather than a vector, because that is the only shape
+/// this table carries: every service that hands text back hands back
+/// bytes and a length, and inventing a second convention for one
+/// service would mean a second thing for a host author to get right.
+/// NUL is the separator because it is the one byte a file name may not
+/// contain on any system this runs on, so the joining loses nothing.
+/// An empty buffer is an empty directory.
+pub const DirListFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+    names: *[*]const u8,
+    names_length: *i64,
+) callconv(.c) Answer;
+
 /// The service table handed to `luce_main`.
 ///
 /// The struct is `extern` so its layout is the C layout the generated
@@ -489,6 +591,19 @@ pub const Host = extern struct {
     /// Appended rather than placed beside `trap`, because every field
     /// before it keeps the offset it had.
     raised: RaisedFn,
+    /// The nine that arrived at version 8, appended in one run for the
+    /// same reason as everything above them: a field that never moves
+    /// is a loader that never has to guess.  All optional, all
+    /// fail-closed.
+    read_line: ?ReadLineFn = null,
+    print_error: ?PrintFn = null,
+    clock_ms: ?ClockFn = null,
+    sleep_ms: ?SleepFn = null,
+    env: ?EnvFn = null,
+    file_append: ?FileAppendFn = null,
+    file_delete: ?FileDeleteFn = null,
+    file_rename: ?FileRenameFn = null,
+    dir_list: ?DirListFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -514,6 +629,15 @@ pub const Slot = enum(u32) {
     key_read = 16,
     call_depth = 17,
     raised = 18,
+    read_line = 19,
+    print_error = 20,
+    clock_ms = 21,
+    sleep_ms = 22,
+    env = 23,
+    file_append = 24,
+    file_delete = 25,
+    file_rename = 26,
+    dir_list = 27,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

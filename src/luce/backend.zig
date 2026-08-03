@@ -130,6 +130,49 @@ pub const Host = struct {
         content: []const u8,
     ) bool = null,
     fileExistsFn: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    /// The four file operations beside read, write and exists.  Each
+    /// answers whether it happened; a `false` becomes the `io_failed`
+    /// error the program meets, because the world decided and no
+    /// non-racy check stands in for the result (docs/FAILURE.md).
+    appendFileFn: ?*const fn (
+        context: *anyopaque,
+        path: []const u8,
+        content: []const u8,
+    ) bool = null,
+    deleteFileFn: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    renameFileFn: ?*const fn (
+        context: *anyopaque,
+        from: []const u8,
+        to: []const u8,
+    ) bool = null,
+    /// The names in a directory, without `.` and `..`, or null when it
+    /// could not be listed.  The slices may come from `arena`.
+    listDirectoryFn: ?*const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        path: []const u8,
+    ) error{OutOfMemory}!?[]const []const u8 = null,
+    /// One line of standard input, the prompt written and flushed
+    /// first.  Null means end of input, which the program meets as
+    /// `none` — nothing there, and no reason worth carrying.
+    readLineFn: ?*const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        prompt: []const u8,
+    ) error{OutOfMemory}!?[]const u8 = null,
+    /// A line of standard error, for what a program says to a person
+    /// while its output belongs to a pipe.
+    printErrorFn: ?*const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void = null,
+    /// Milliseconds on a monotonic clock of unspecified origin, and a
+    /// wait of at least that long.  Neither can fail.
+    clockFn: ?*const fn (context: *anyopaque) i64 = null,
+    sleepFn: ?*const fn (context: *anyopaque, milliseconds: i64) void = null,
+    /// One environment variable, or null when it is unset.
+    envFn: ?*const fn (
+        context: *anyopaque,
+        arena: Allocator,
+        name: []const u8,
+    ) error{OutOfMemory}!?[]const u8 = null,
     /// The interactive screen for the `term_*` and `key_*` builtins.
     terminal: ?Terminal = null,
 };

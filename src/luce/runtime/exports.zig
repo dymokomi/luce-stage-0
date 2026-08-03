@@ -224,14 +224,14 @@ export fn luce_rt_raise_error(
 /// are built in the library, so both engines report the same sentence.
 export fn luce_rt_raise_io(
     runtime: *Runtime,
-    reading: i32,
+    act: i32,
     path: [*]const u8,
     length: i64,
     function: u32,
     instruction: u32,
 ) callconv(.c) void {
     runtime.raiseIo(
-        reading != 0,
+        @enumFromInt(act),
         path[0..@intCast(length)],
         runtime.frameAt(function, instruction),
     );
@@ -286,6 +286,45 @@ export fn luce_rt_intern_text(
     out: *Value,
 ) callconv(.c) i32 {
     out.* = runtime.ownValue(Value.ofString(bytes[0..@intCast(length)])) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+/// The same, for a service that may have nothing to hand over:
+/// `read_line` at end of input, `env` for a variable nobody set.
+/// `present` zero answers `Value.none` — the very value the
+/// interpreter parks in the same slot, so a `T?` means one thing on
+/// both engines (docs/FAILURE.md).
+export fn luce_rt_maybe_text(
+    runtime: *Runtime,
+    present: i32,
+    bytes: [*]const u8,
+    length: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    if (present == 0) {
+        out.* = Value.none;
+        return survived;
+    }
+    out.* = runtime.ownValue(Value.ofString(bytes[0..@intCast(length)])) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+/// A directory listing, as the `List(String)` `dir_list` answers.
+///
+/// The names arrive NUL-separated in one borrowed buffer, which is the
+/// one shape the host ABI already carries — a service hands back bytes
+/// and a length, never a vector — and NUL is the one byte no file name
+/// on any supported system may contain, so the joining is lossless.
+/// An empty buffer is an empty directory and not one empty name.
+export fn luce_rt_names_list(
+    runtime: *Runtime,
+    bytes: [*]const u8,
+    length: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.namesList(runtime, bytes[0..@intCast(length)]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }

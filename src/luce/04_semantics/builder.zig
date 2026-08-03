@@ -597,6 +597,8 @@ pub const FunctionBuilder = struct {
                 .file_read,
                 .arg_get,
                 .key_read,
+                .read_line,
+                .env_get,
                 .pop_value,
                 .copy_object,
                 .own_storage,
@@ -783,13 +785,15 @@ pub const FunctionBuilder = struct {
     fn isPureBuiltin(callee: []const u8) bool {
         if (std.mem.eql(u8, callee, "free")) return false;
         const named = [_][]const u8{
-            "abs",        "min",        "max",         "clamp",       "sqrt",
-            "floor",      "ceil",       "len",         "assert",      "trap",
-            "str",        "parse_int",  "parse_float", "chr",         "ord",
-            "print",      "file_read",  "file_write",  "file_exists", "arg_count",
-            "arg",        "term_rows",  "term_cols",   "term_clear",  "term_move",
-            "term_style", "term_write", "term_flush",  "key_read",    "key_text",
-            "Int",        "Float",
+            "abs",         "min",         "max",         "clamp",       "sqrt",
+            "floor",       "ceil",        "len",         "assert",      "trap",
+            "str",         "parse_int",   "parse_float", "chr",         "ord",
+            "print",       "file_read",   "file_write",  "file_exists", "arg_count",
+            "arg",         "term_rows",   "term_cols",   "term_clear",  "term_move",
+            "term_style",  "term_write",  "term_flush",  "key_read",    "key_text",
+            "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
+            "file_append", "file_delete", "file_rename", "dir_list",    "Int",
+            "Float",
         };
         for (named) |name| {
             if (std.mem.eql(u8, callee, name)) return true;
@@ -4218,6 +4222,15 @@ pub const FunctionBuilder = struct {
             .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
             .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
             .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
+            .{ .name = "read_line", .kind = .read_line, .arity = 1, .host = true },
+            .{ .name = "print_error", .kind = .print_error, .arity = 1, .host = true },
+            .{ .name = "clock_ms", .kind = .clock_ms, .arity = 0, .host = true },
+            .{ .name = "sleep_ms", .kind = .sleep_ms, .arity = 1, .host = true },
+            .{ .name = "env", .kind = .env_get, .arity = 1, .host = true },
+            .{ .name = "file_append", .kind = .file_append, .arity = 2, .host = true },
+            .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
+            .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
+            .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
         };
         const matched = for (builtins) |builtin| {
             if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
@@ -4515,6 +4528,52 @@ pub const FunctionBuilder = struct {
             .key_read, .key_text => {
                 result = .string;
             },
+            .read_line => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "read_line takes a String prompt");
+                // End of input is absence, not failure: `String?`, and
+                // `read_line("> ") else ""` is the whole handling
+                // (docs/FAILURE.md).
+                result = .{ .optional = .string };
+            },
+            .print_error => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "print_error takes a String");
+                result = .none;
+            },
+            .clock_ms => {
+                result = .int;
+            },
+            .sleep_ms => {
+                if (arguments[0].value_type != .int)
+                    return self.failIntrinsic(call, "sleep_ms takes an Int of milliseconds");
+                result = .none;
+            },
+            .env_get => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "env takes a String name");
+                result = .{ .optional = .string };
+            },
+            .file_append => {
+                if (arguments[0].value_type != .string or arguments[1].value_type != .string)
+                    return self.failIntrinsic(call, "file_append takes (path String, content String)");
+                result = .none;
+            },
+            .file_delete => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "file_delete takes a String path");
+                result = .none;
+            },
+            .file_rename => {
+                if (arguments[0].value_type != .string or arguments[1].value_type != .string)
+                    return self.failIntrinsic(call, "file_rename takes (from String, to String)");
+                result = .none;
+            },
+            .dir_list => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "dir_list takes a String path");
+                result = try self.analyzer.internHeapType(.{ .list = .string });
+            },
         }
         // `error("…")` leaves the function, so it can stand where a
         // value belongs the way `trap("…")` can — but only inside a
@@ -4555,7 +4614,7 @@ pub const FunctionBuilder = struct {
             try self.code.unwind();
             return .{ .value = .{ .register = emitted, .value_type = .none } };
         }
-        if (matched.kind == .file_read or matched.kind == .file_write) {
+        if (isFallibleIntrinsic(matched.kind)) {
             if (!fallible_allowed) {
                 try self.fail(
                     "luce.sema.fallible",
@@ -4568,6 +4627,24 @@ pub const FunctionBuilder = struct {
             return .{ .value = try self.openFallible(emitted, result) };
         }
         return .{ .value = .{ .register = emitted, .value_type = result } };
+    }
+
+    /// The host services the world can say no to.  Each answers an
+    /// outcome its call site has to say which of `try` and `catch` it
+    /// means, and `06_mir/verify.zig` keeps the same list — a program
+    /// where the two disagree is one that could branch on a word
+    /// nobody wrote.
+    fn isFallibleIntrinsic(kind: mir.Intrinsic) bool {
+        return switch (kind) {
+            .file_read,
+            .file_write,
+            .file_append,
+            .file_delete,
+            .file_rename,
+            .dir_list,
+            => true,
+            else => false,
+        };
     }
 
     fn failIntrinsic(self: *FunctionBuilder, call: ast.Call, message: []const u8) Error!IntrinsicResult {

@@ -338,6 +338,45 @@ pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {
     return runtime.attachList(listed);
 }
 
+/// `dir_list(path)` — a fresh `List(String)` the caller owns, holding
+/// its own copy of every name.  Each engine reaches this with the
+/// shape its host handed over, and the list they build is the same.
+pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
+    var listed: std.ArrayList(Value) = .empty;
+    errdefer {
+        for (listed.items) |item| runtime.releaseStorage(item);
+        listed.deinit(runtime.objects);
+    }
+    try listed.ensureTotalCapacity(runtime.objects, names.len);
+    for (names) |name| {
+        try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(name)));
+    }
+    return runtime.attachList(listed);
+}
+
+/// The same list, from the one shape the host ABI can carry: the names
+/// NUL-separated in a single borrowed buffer.
+///
+/// A service answers bytes and a length, never a vector, so a compiled
+/// program's host joins and this splits.  NUL is the separator because
+/// it is the byte no file name may contain.  An empty buffer is an
+/// empty directory, which is why the walk is written out rather than
+/// handed to a general splitter that would answer one empty name.
+pub fn namesList(runtime: *Runtime, joined: []const u8) Error!Value {
+    var listed: std.ArrayList(Value) = .empty;
+    errdefer {
+        for (listed.items) |item| runtime.releaseStorage(item);
+        listed.deinit(runtime.objects);
+    }
+    var rest = joined;
+    while (rest.len != 0) {
+        const stop = std.mem.indexOfScalar(u8, rest, 0) orelse rest.len;
+        try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(rest[0..stop])));
+        rest = if (stop == rest.len) rest[stop..] else rest[stop + 1 ..];
+    }
+    return runtime.attachList(listed);
+}
+
 /// `m.values()` — the returned list independently owns its elements, so
 /// object values are deep-copied — two containers never own one object
 /// (S23, mirrors listSlice).

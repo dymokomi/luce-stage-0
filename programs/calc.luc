@@ -2,7 +2,8 @@
 # recursion, checked integer arithmetic — and the worked example for
 # errors (docs/FAILURE.md).
 #
-#   loom run calc.lc "2 + 3 * (10 - 4)"
+#   loom run calc.lc "2 + 3 * (10 - 4)"     one expression, then exit
+#   loom run calc.lc                        a REPL: type, blank line to quit
 #
 # Every way this parser can be defeated is a way the *user* defeated
 # it, not a way the program is wrong: a correct calculator given
@@ -81,13 +82,39 @@ struct Parse:
             return Step(value = inner.value, at = close + 1)
         return try Scan.number(text, here)
 
-func main() -> !:
-    if arg_count() == 0:
-        print("usage: calc \"EXPRESSION\"   (integers, + - * / % and parentheses)")
-        return
-    let text = arg(0)
+# Evaluate one line and print what it came to.  Fallible, so every
+# `error(...)` four frames down arrives here whole.
+func evaluate(text: String) -> !:
     let result = try Parse.expression(text, 0)
     let rest = Scan.skip_spaces(text, result.at)
     if rest != len(text):
         error("unexpected character at position " + str(rest))
     print(text + " = " + str(result.value))
+
+# The interactive loop.  `read_line` answers `String?`, so end of input
+# — a pipe running dry, Ctrl-D at a terminal — is `none` and ends the
+# session; an empty line ends it too, because a person pressing return
+# at a prompt has said "nothing more".
+#
+# A bad expression must not end the loop: `evaluate(...) catch:` says
+# so on stderr and asks again, which is the whole difference between a
+# calculator and a program that exits when you mistype.  What it
+# cannot yet do is repeat the reason — `catch` has no binding form, so
+# the words the parser raised are discarded here and only the one-shot
+# path below ever prints them.
+func repl():
+    print("calc — an expression a line, blank line to quit")
+    var running = true
+    while running:
+        let typed = read_line("calc> ")
+        if typed == none or typed == "":
+            running = false
+        else:
+            evaluate(typed) catch:
+                print_error("cannot compute: " + typed)
+
+func main() -> !:
+    if arg_count() == 0:
+        repl()
+        return
+    try evaluate(arg(0))

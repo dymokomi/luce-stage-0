@@ -444,6 +444,66 @@ conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,
 terminal, and key builtins (see docs/V2.md).  Everything that belongs
 to one type is a method on it.
 
+## The host
+
+Every effect is a host service, every service is optional, and one the
+host does not offer traps `host_unavailable` rather than touching
+anything.  The whole set, and what each answers:
+
+```luce
+print(text)                  # a line to standard output
+print_error(text)            # a line to standard error
+read_line(prompt)            # String?  — none at end of input
+env(name)                    # String?  — none when unset
+
+clock_ms()                   # Int, monotonic, unspecified origin
+sleep_ms(milliseconds)       # waits at least that long
+
+arg_count()   arg(index)     # the command line
+file_read(path)              # String!
+file_write(path, content)    # !
+file_append(path, content)   # !
+file_delete(path)            # !
+file_rename(from, to)        # !
+file_exists(path)            # Bool — a question, never a guard
+dir_list(path)               # List(String)! — plain names, unsorted
+
+term_rows()   term_cols()   term_clear()   term_move(row, col)
+term_style(fg, bg, bold)   term_write(text)   term_flush()
+key_read()   key_text()
+```
+
+Three shapes and one rule behind them (docs/FAILURE.md).  A file
+operation is `!` because the world decides and no non-racy check
+stands in for the result.  `read_line` and `env` are `?` because "there
+is nothing there" is the whole of what they have to say — end of
+input, and a variable nobody set, carry no reason worth a message.
+Everything else either cannot fail or is an effect.
+
+`sleep_ms` of a duration that has already elapsed — zero, or the
+negative one that `deadline - clock_ms()` produces on a slow frame —
+is **not** a trap.  There is no time left to wait, so the call
+returns.  That is a deliberate reading of the rule: a frame-pacing
+loop that traps only on a slow machine is a correct program made
+flaky by its host.
+
+`clock_ms` promises only that differences mean something.  It is a
+monotonic reading, not a calendar, and there is no wall clock: dates
+are a library that does not exist yet.
+
+`read_line` takes its prompt as an argument rather than leaving it to
+`print`, for the reason `key_read` presents the pending frame before
+blocking — a prompt that is not on the screen when the program stops
+for input is a program that looks hung, and only the host knows when
+its own buffer goes out.  Pass `""` for no prompt.
+
+Prompt text and `print_error` text are **sanitized**, exactly as
+`term_write` text is: a program describes what it wants shown and the
+host writes every control byte itself.  `print` is deliberately not —
+standard output is the program's own channel and may be a pipe or a
+file, where an escape sequence is simply bytes; standard error and the
+terminal are shared with whoever ran the program.
+
 ## Arithmetic and assignment
 
 Number literals are decimal: `12` is an Int, and a fraction or an

@@ -47,11 +47,31 @@ pub const Host = struct {
     gpa: Allocator,
     io: std.Io,
     out: *std.Io.Writer,
+    /// Where `print_error` goes.  Injected like `out` rather than
+    /// opened here, because the caller already has the one stderr the
+    /// three binaries agree on (`apps/streams.zig`) — and because a
+    /// test that wants to read what a program said needs somewhere to
+    /// read it from.
+    err: *std.Io.Writer,
     arguments: []const []const u8,
     screen: Screen,
     /// Where `file_read` puts a file's bytes for the C table, which
     /// hands out borrows rather than allocations.  Reused per call.
     loaded_file: std.ArrayList(u8) = .empty,
+    /// The line `read_line` last read, without its newline — borrowed
+    /// until the next call, like every other answer this host gives.
+    read_line_buffer: std.ArrayList(u8) = .empty,
+    /// Where program text is rewritten before it reaches a real
+    /// terminal: a `read_line` prompt and a `print_error` line.  Both
+    /// are the program's bytes on a channel the host owns, so both go
+    /// through `appendSanitized` and neither can emit a control
+    /// sequence (the rule `term_write` follows).
+    sanitized: std.ArrayList(u8) = .empty,
+    /// One directory listing, kept in both shapes the two engines
+    /// want: the names NUL-joined for the C table, and slices into
+    /// that same text for the interpreter.  One listing, read twice.
+    listed_names: std.ArrayList(u8) = .empty,
+    listed_index: std.ArrayList([]const u8) = .empty,
     /// What a compiled artifact reported through the C table.  The
     /// interpreter answers with a `Result` instead, so these stay unset
     /// on that path.
@@ -81,12 +101,14 @@ pub const Host = struct {
         gpa: Allocator,
         io: std.Io,
         out: *std.Io.Writer,
+        err: *std.Io.Writer,
         arguments: []const []const u8,
     ) void {
         self.* = .{
             .gpa = gpa,
             .io = io,
             .out = out,
+            .err = err,
             .arguments = arguments,
             .screen = .{},
         };
@@ -96,6 +118,10 @@ pub const Host = struct {
         self.restoreScreen();
         self.screen.buffer.deinit(self.gpa);
         self.loaded_file.deinit(self.gpa);
+        self.read_line_buffer.deinit(self.gpa);
+        self.sanitized.deinit(self.gpa);
+        self.listed_names.deinit(self.gpa);
+        self.listed_index.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -154,6 +180,15 @@ pub const Host = struct {
             .readFileFn = readFile,
             .writeFileFn = writeFile,
             .fileExistsFn = fileExists,
+            .appendFileFn = appendFile,
+            .deleteFileFn = deleteFile,
+            .renameFileFn = renameFile,
+            .listDirectoryFn = listDirectory,
+            .readLineFn = readLine,
+            .printErrorFn = printDiagnostic,
+            .clockFn = clockMilliseconds,
+            .sleepFn = sleepMilliseconds,
+            .envFn = environment,
             .terminal = .{
                 .context = self,
                 .rowsFn = rows,
@@ -193,6 +228,15 @@ pub const Host = struct {
             .key_read = cKeyRead,
             .call_depth = cCallDepth,
             .raised = cRaised,
+            .read_line = cReadLine,
+            .print_error = cPrintError,
+            .clock_ms = cClock,
+            .sleep_ms = cSleep,
+            .env = cEnv,
+            .file_append = cFileAppend,
+            .file_delete = cFileDelete,
+            .file_rename = cFileRename,
+            .dir_list = cDirList,
         };
     }
 
@@ -296,6 +340,210 @@ pub const Host = struct {
         const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return false;
         file.close(self.io);
         return true;
+    }
+
+    /// Add to the end of a file, creating it if it is not there.
+    ///
+    /// Read the length and write past it, because the `Io` file API
+    /// exposes no O_APPEND: one process appending to its own log is
+    /// what this is for, and two writers racing for the same tail is
+    /// not something a flag here would fix anyway.
+    fn appendFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
+        const self: *Host = @ptrCast(@alignCast(context));
+        const file = std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = false }) catch
+            return false;
+        defer file.close(self.io);
+        const end = file.length(self.io) catch return false;
+        file.writePositionalAll(self.io, content, end) catch return false;
+        file.sync(self.io) catch return false;
+        return true;
+    }
+
+    fn deleteFile(context: *anyopaque, path: []const u8) bool {
+        const self: *Host = @ptrCast(@alignCast(context));
+        std.Io.Dir.cwd().deleteFile(self.io, path) catch return false;
+        return true;
+    }
+
+    fn renameFile(context: *anyopaque, from: []const u8, to: []const u8) bool {
+        const self: *Host = @ptrCast(@alignCast(context));
+        const cwd = std.Io.Dir.cwd();
+        cwd.rename(from, cwd, to, self.io) catch return false;
+        return true;
+    }
+
+    /// The names in a directory, without `.` and `..` — the iterator
+    /// never yields them — kept in this Host in both shapes the two
+    /// engines read.  Borrowed until the next listing.
+    ///
+    /// Sub-directories are named like everything else: a listing says
+    /// what is there, and `file_read` on a directory answers no, which
+    /// is the honest sequence.
+    fn loadDirectory(self: *Host, path: []const u8) error{OutOfMemory}!bool {
+        var directory = std.Io.Dir.cwd().openDir(self.io, path, .{ .iterate = true }) catch
+            return false;
+        defer directory.close(self.io);
+        self.listed_names.clearRetainingCapacity();
+        self.listed_index.clearRetainingCapacity();
+        var walk = directory.iterate();
+        while (true) {
+            const entry = (walk.next(self.io) catch return false) orelse break;
+            // NUL is the separator, so a name is written once and the
+            // index remembers where it started.
+            const at = self.listed_names.items.len;
+            try self.listed_names.appendSlice(self.gpa, entry.name);
+            try self.listed_index.append(self.gpa, self.listed_names.items[at..]);
+            try self.listed_names.append(self.gpa, 0);
+        }
+        // The names moved while the list grew, so the index is rebuilt
+        // against where they finally sit.
+        var start: usize = 0;
+        for (self.listed_index.items) |*name| {
+            const length = name.len;
+            name.* = self.listed_names.items[start..][0..length];
+            start += length + 1;
+        }
+        return true;
+    }
+
+    fn listDirectory(
+        context: *anyopaque,
+        arena: Allocator,
+        path: []const u8,
+    ) error{OutOfMemory}!?[]const []const u8 {
+        _ = arena;
+        const self: *Host = @ptrCast(@alignCast(context));
+        if (!try self.loadDirectory(path)) return null;
+        return self.listed_index.items;
+    }
+
+    // -- standard input, standard error, the clock, the environment ----
+
+    /// One line of standard input, without its newline, or null at end
+    /// of input.  Borrowed until the next call.
+    ///
+    /// **The alternate screen goes first.**  A line read and a raw-mode
+    /// key loop are two ways to own one stdin, and only one of them can
+    /// be live: canonical mode is what gives the person editing, echo
+    /// and a newline to press.  So asking for a line hands the terminal
+    /// back its line discipline, and the next terminal builtin takes it
+    /// again — `ensureScreen` is lazy for exactly this reason.
+    fn nextLine(self: *Host, prompt: []const u8) error{OutOfMemory}!?[]const u8 {
+        self.restoreScreen();
+        if (prompt.len != 0) {
+            self.sanitized.clearRetainingCapacity();
+            // Program text on a real terminal: sanitized like every
+            // other byte a program hands this host to display.
+            try appendSanitized(&self.sanitized, self.gpa, prompt);
+            self.out.writeAll(self.sanitized.items) catch {};
+            // Flushed before the read, for the reason `key_read`
+            // presents the frame first: a prompt nobody can see is a
+            // program that looks hung.
+            self.out.flush() catch {};
+        }
+        self.read_line_buffer.clearRetainingCapacity();
+        while (true) {
+            if (self.screen.pending_used == self.screen.pending_len) {
+                self.screen.pending_used = 0;
+                self.screen.pending_len = std.posix.read(
+                    std.posix.STDIN_FILENO,
+                    &self.screen.pending,
+                ) catch 0;
+                if (self.screen.pending_len == 0) {
+                    // End of input.  A final line with no newline is
+                    // still a line; a truly empty tail is nothing.
+                    if (self.read_line_buffer.items.len == 0) return null;
+                    return self.read_line_buffer.items;
+                }
+            }
+            const waiting = self.screen.pending[self.screen.pending_used..self.screen.pending_len];
+            const stop = std.mem.indexOfScalar(u8, waiting, '\n') orelse {
+                try self.read_line_buffer.appendSlice(self.gpa, waiting);
+                self.screen.pending_used = self.screen.pending_len;
+                continue;
+            };
+            try self.read_line_buffer.appendSlice(self.gpa, waiting[0..stop]);
+            self.screen.pending_used += stop + 1;
+            // A CRLF line ends with a carriage return this side owns:
+            // the language's Strings are text, not wire bytes.
+            const line = self.read_line_buffer.items;
+            if (line.len != 0 and line[line.len - 1] == '\r') return line[0 .. line.len - 1];
+            return line;
+        }
+    }
+
+    fn readLine(
+        context: *anyopaque,
+        arena: Allocator,
+        prompt: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        _ = arena;
+        const self: *Host = @ptrCast(@alignCast(context));
+        return self.nextLine(prompt);
+    }
+
+    /// A line of standard error.
+    ///
+    /// **Always sanitized, unlike `print`.**  stdout is the program's
+    /// own channel and may be a pipe or a file, where an escape
+    /// sequence is just bytes.  stderr is shared with loom — it is
+    /// where a trap is reported and where a diagnostic lands while the
+    /// alternate screen is up — so a program that could write raw
+    /// control bytes there could scribble over a frame it does not own
+    /// or forge the terminal's state.  It is host-written text on a
+    /// host channel, and the same rule `term_write` follows applies.
+    fn printDiagnostic(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
+        const self: *Host = @ptrCast(@alignCast(context));
+        self.sanitized.clearRetainingCapacity();
+        try appendSanitized(&self.sanitized, self.gpa, text);
+        self.err.writeAll(self.sanitized.items) catch return;
+        self.err.writeAll(if (self.screen.active) "\r\n" else "\n") catch return;
+        self.err.flush() catch return;
+    }
+
+    /// Milliseconds on a monotonic clock.  `awake` and not `real`: the
+    /// language promises only that differences mean something, and a
+    /// clock the system administrator can move backwards would break
+    /// even that.
+    fn clockMilliseconds(context: *anyopaque) i64 {
+        const self: *Host = @ptrCast(@alignCast(context));
+        return std.Io.Timestamp.now(self.io, .awake).toMilliseconds();
+    }
+
+    /// Wait at least this long.  A duration that has already elapsed —
+    /// zero, or a negative one out of `deadline - clock_ms()` — is not
+    /// a bug and not a failure: there is no time left to wait.
+    fn sleepMilliseconds(context: *anyopaque, milliseconds: i64) void {
+        if (milliseconds <= 0) return;
+        const self: *Host = @ptrCast(@alignCast(context));
+        // The pending frame goes out first, for the reason `key_read`
+        // presents before blocking: a program that draws and then
+        // sleeps is animating, and a frame still in the buffer is a
+        // frame nobody sees.
+        if (self.screen.active and self.screen.buffer.items.len != 0) {
+            self.present() catch {};
+        }
+        self.io.sleep(.{ .nanoseconds = milliseconds * std.time.ns_per_ms }, .awake) catch {};
+    }
+
+    fn environment(
+        context: *anyopaque,
+        arena: Allocator,
+        name: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        _ = arena;
+        const self: *Host = @ptrCast(@alignCast(context));
+        return self.lookUpEnvironment(name);
+    }
+
+    /// One environment variable, or null when it is unset — which the
+    /// program meets as `none`.
+    ///
+    /// The bytes belong to the process's own environment block and
+    /// outlive every run, so nothing is copied and nothing is freed.
+    fn lookUpEnvironment(self: *Host, name: []const u8) error{OutOfMemory}!?[]const u8 {
+        _ = self;
+        return processEnvironment().getPosix(name);
     }
 
     // -- the screen ----------------------------------------------------
@@ -419,7 +667,13 @@ pub const Host = struct {
         active: bool = false,
         saved: std.posix.termios = undefined,
         buffer: std.ArrayList(u8) = .empty,
-        pending: [64]u8 = undefined,
+        /// Bytes read from standard input and not yet consumed — one
+        /// queue, because there is one file descriptor.  `key_read`
+        /// decodes escape sequences out of it and `read_line` takes
+        /// text up to the next newline; a byte read for one is not
+        /// lost to the other.  Big enough that a piped line costs one
+        /// syscall rather than one per character.
+        pending: [4096]u8 = undefined,
         pending_len: usize = 0,
         pending_used: usize = 0,
         /// Where a control key's name ("ctrl_s") is written, so naming
@@ -635,6 +889,104 @@ pub const Host = struct {
         text_length.* = @intCast(view.text.len);
         return .yes;
     }
+
+    fn cReadLine(
+        context: ?*anyopaque,
+        prompt: [*]const u8,
+        prompt_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const line = (self.nextLine(prompt[0..@intCast(prompt_length)]) catch
+            return .exhausted) orelse return .no;
+        text.* = line.ptr;
+        length.* = @intCast(line.len);
+        return .yes;
+    }
+
+    fn cPrintError(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
+        printDiagnostic(context.?, text[0..@intCast(length)]) catch return .exhausted;
+        return .yes;
+    }
+
+    fn cClock(context: ?*anyopaque) callconv(.c) i64 {
+        return clockMilliseconds(context.?);
+    }
+
+    fn cSleep(context: ?*anyopaque, milliseconds: i64) callconv(.c) abi.Answer {
+        sleepMilliseconds(context.?, milliseconds);
+        return .yes;
+    }
+
+    fn cEnv(
+        context: ?*anyopaque,
+        name: [*]const u8,
+        name_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const found = (self.lookUpEnvironment(name[0..@intCast(name_length)]) catch
+            return .exhausted) orelse return .no;
+        text.* = found.ptr;
+        length.* = @intCast(found.len);
+        return .yes;
+    }
+
+    fn cFileAppend(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        content: [*]const u8,
+        content_length: i64,
+    ) callconv(.c) abi.Answer {
+        const added = appendFile(
+            context.?,
+            path[0..@intCast(path_length)],
+            content[0..@intCast(content_length)],
+        );
+        return if (added) .yes else .no;
+    }
+
+    fn cFileDelete(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (deleteFile(context.?, path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn cFileRename(
+        context: ?*anyopaque,
+        from: [*]const u8,
+        from_length: i64,
+        to: [*]const u8,
+        to_length: i64,
+    ) callconv(.c) abi.Answer {
+        const moved = renameFile(
+            context.?,
+            from[0..@intCast(from_length)],
+            to[0..@intCast(to_length)],
+        );
+        return if (moved) .yes else .no;
+    }
+
+    fn cDirList(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        names: *[*]const u8,
+        names_length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const listed = self.loadDirectory(path[0..@intCast(path_length)]) catch
+            return .exhausted;
+        if (!listed) return .no;
+        names.* = self.listed_names.items.ptr;
+        names_length.* = @intCast(self.listed_names.items.len);
+        return .yes;
+    }
 };
 
 const max_file_size = 64 * 1024 * 1024;
@@ -818,6 +1170,18 @@ fn appendSanitized(
     }
 }
 
+/// The process's own environment block.
+///
+/// Taken here rather than handed in, exactly as `Dir.cwd()` is: this
+/// file *is* the trusted boundary, and ambient process state is what a
+/// host is for.  The language never sees any of it except through the
+/// one service above.
+fn processEnvironment() std.process.Environ {
+    var count: usize = 0;
+    while (std.c.environ[count] != null) : (count += 1) {}
+    return .{ .block = .{ .slice = std.c.environ[0..count :null] } };
+}
+
 const Size = struct {
     rows: i64,
     columns: i64,
@@ -868,8 +1232,11 @@ test "file_read refuses bytes that cannot be a String, and normalizes nothing" {
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
 
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+
     var host: Host = undefined;
-    host.setup(testing.allocator, testing.io, &written.writer, &.{});
+    host.setup(testing.allocator, testing.io, &written.writer, &reported.writer, &.{});
     defer host.deinit();
 
     const cases = [_]struct { name: []const u8, content: []const u8, readable: bool }{
@@ -904,6 +1271,37 @@ test "file_read refuses bytes that cannot be a String, and normalizes nothing" {
     }
 }
 
+test "a program cannot smuggle terminal controls onto stderr or into a prompt" {
+    // `term_write` has always been sanitized; standard error and a
+    // `read_line` prompt are the two new ways program text reaches a
+    // real terminal, and both go through the same rewriting.  stdout
+    // is deliberately *not* in this list: it is the program's own
+    // channel and may be a pipe or a file, where an escape sequence is
+    // simply bytes.  stderr is shared with loom — it is where a trap
+    // is reported, and where a diagnostic lands while the alternate
+    // screen is up — so a program that could write raw control bytes
+    // there could scribble over a frame it does not own.
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &written.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    const hostile = "clear\x1b[2Jbell\x07 done";
+    try Host.printDiagnostic(&host, hostile);
+    try testing.expectEqualStrings("clear?[2Jbell? done\n", reported.written());
+    try testing.expect(std.mem.indexOfScalar(u8, reported.written(), 0x1b) == null);
+
+    // The prompt takes the same path.  Nothing is read here — this is
+    // the writing half, and stdin is not a test's to script.
+    host.sanitized.clearRetainingCapacity();
+    try appendSanitized(&host.sanitized, host.gpa, hostile);
+    try testing.expectEqualStrings("clear?[2Jbell? done", host.sanitized.items);
+}
+
 test "decoded keys map to stable event names" {
     var control_name: [6]u8 = undefined;
     const text = keyView(&control_name, .{ .text = "λ" }).?;
@@ -925,8 +1323,17 @@ test "the C table offers every service, over the same implementation" {
     const path = try std.fs.path.join(testing.allocator, &.{ directory, "notes.txt" });
     defer testing.allocator.free(path);
 
+    var diagnostics: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer diagnostics.deinit();
+
     var host: Host = undefined;
-    host.setup(testing.allocator, testing.io, &written.writer, &.{ "alpha", "beta" });
+    host.setup(
+        testing.allocator,
+        testing.io,
+        &written.writer,
+        &diagnostics.writer,
+        &.{ "alpha", "beta" },
+    );
     defer host.deinit();
 
     const table = host.table();
@@ -968,6 +1375,83 @@ test "the C table offers every service, over the same implementation" {
 
     try testing.expectEqual(abi.Answer.yes, table.print.?(table.context, "hello", 5));
     try testing.expectEqualStrings("hello\n", written.written());
+
+    // The four file operations that arrived with the rest of the host
+    // surface, over the same real directory.
+    const moved = try std.fs.path.join(testing.allocator, &.{ directory, "kept.txt" });
+    defer testing.allocator.free(moved);
+    try testing.expectEqual(abi.Answer.yes, table.file_append.?(
+        table.context,
+        path.ptr,
+        @intCast(path.len),
+        " more",
+        5,
+    ));
+    try testing.expectEqual(
+        abi.Answer.yes,
+        table.file_read.?(table.context, path.ptr, @intCast(path.len), &text, &length),
+    );
+    try testing.expectEqualStrings("kept more", text[0..@intCast(length)]);
+    try testing.expectEqual(abi.Answer.yes, table.file_rename.?(
+        table.context,
+        path.ptr,
+        @intCast(path.len),
+        moved.ptr,
+        @intCast(moved.len),
+    ));
+    try testing.expectEqual(
+        abi.Answer.no,
+        table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
+    );
+    // The listing arrives NUL-joined, which is the one shape the table
+    // carries, and it holds the name the rename produced.
+    try testing.expectEqual(abi.Answer.yes, table.dir_list.?(
+        table.context,
+        directory.ptr,
+        @intCast(directory.len),
+        &text,
+        &length,
+    ));
+    const joined = text[0..@intCast(length)];
+    try testing.expect(std.mem.indexOf(u8, joined, "kept.txt\x00") != null);
+    try testing.expectEqual(abi.Answer.yes, table.file_delete.?(
+        table.context,
+        moved.ptr,
+        @intCast(moved.len),
+    ));
+    try testing.expectEqual(abi.Answer.no, table.file_delete.?(
+        table.context,
+        moved.ptr,
+        @intCast(moved.len),
+    ));
+    try testing.expectEqual(abi.Answer.no, table.dir_list.?(
+        table.context,
+        moved.ptr,
+        @intCast(moved.len),
+        &text,
+        &length,
+    ));
+
+    // The clock only promises that differences mean something, so
+    // that is all this checks.
+    const began = table.clock_ms.?(table.context);
+    try testing.expectEqual(abi.Answer.yes, table.sleep_ms.?(table.context, 2));
+    try testing.expect(table.clock_ms.?(table.context) >= began);
+    // A duration already elapsed is not a failure.
+    try testing.expectEqual(abi.Answer.yes, table.sleep_ms.?(table.context, -1));
+    try testing.expectEqual(abi.Answer.yes, table.sleep_ms.?(table.context, 0));
+
+    // Something every process has, and something nothing sets.
+    try testing.expectEqual(abi.Answer.yes, table.env.?(table.context, "PATH", 4, &text, &length));
+    try testing.expect(length > 0);
+    const absent = "LUCE_NOTHING_SETS_THIS";
+    try testing.expectEqual(abi.Answer.no, table.env.?(
+        table.context,
+        absent.ptr,
+        absent.len,
+        &text,
+        &length,
+    ));
 
     try testing.expectEqual(@as(i64, call_depth), table.call_depth.?(table.context));
 

@@ -120,6 +120,8 @@ pub const Service = enum {
 
     // -- host text ----------------------------------------------------
     luce_rt_intern_text,
+    luce_rt_maybe_text,
+    luce_rt_names_list,
     luce_rt_set_key_text,
     luce_rt_key_text,
 
@@ -410,6 +412,20 @@ pub fn describe(service: Service) Effect {
         // allocates; `key_text` only hands back the copy already made.
         .luce_rt_intern_text => .{
             .memory = touches_text,
+            .parameters = &.{ .run, .bytes_in, .plain, .value_out },
+        },
+        // The same copy, plus the flag that says whether there was
+        // anything to copy.  The bytes are a host's, so nothing is
+        // promised about the pointer beyond that it is not kept.
+        .luce_rt_maybe_text => .{
+            .memory = touches_text,
+            .parameters = &.{ .run, .plain, .bytes_in, .plain, .value_out },
+        },
+        // Splits the host's joined names and builds a List of them,
+        // which takes a table row: the object heap moves, so this one
+        // names the default location as well.
+        .luce_rt_names_list => .{
+            .memory = touches_heap,
             .parameters = &.{ .run, .bytes_in, .plain, .value_out },
         },
         .luce_rt_set_key_text => .{

@@ -211,10 +211,51 @@ the proof the language moved.
 5. **No sort with a comparator.**  `wordcount.luc:58` produces a top-5
    listing by **destroying the map**.  The one place
    no-first-class-functions draws blood.
-6. **Host surface gaps:** stdin/`read_line` (calc cannot be a REPL),
-   clock, `sleep` (`life.luc` renders ten generations instantly),
-   `exit`, `env`, stderr, directory listing, delete/rename, append mode,
-   path manipulation.  Each is one builtin plus one wrapper.
+6. ~~**Host surface gaps**~~ — **mostly closed.**  Nine services
+   shipped on both engines at ABI 8: `read_line` (with its prompt),
+   `print_error`, `clock_ms`, `sleep_ms`, `env`, `file_append`,
+   `file_delete`, `file_rename`, `dir_list`, wrapped in `std.files`
+   as `append_text`/`append_lines`/`delete`/`rename`/`list`.  The two
+   defects this item named are gone: **`calc.luc` is a REPL** (a line
+   at a time, a bad expression reported and the loop continuing, a
+   blank line or end of input to quit) and **`life.luc` animates**
+   (each frame measured with `clock_ms` and the remainder of its
+   80 ms waited out, so `sleep_ms` is called with a negative number
+   whenever a frame overruns — which is why it is not a trap).
+
+   What was left out, and why:
+
+   - **`exit`.**  Not one builtin.  It is a fourth way for a run to
+     end, and every party would need an answer for it: `luce_main`'s
+     `Status`, the leak census, what the interpreter's frame stack
+     does on the way out, and what "scope ownership" means when a
+     scope never closes.  `main() -> !` already ends a program early
+     with a reason and a status a shell can read, which is what the
+     corpus actually wanted.
+   - **Path manipulation.**  Not a host gap at all — joining and
+     splitting a path is pure text, so it is a std module (`paths`)
+     over `strings`, and it should be designed against a program that
+     needs it rather than guessed at.
+   - **A wall clock and a calendar.**  `clock_ms` is monotonic and
+     says only that differences mean something.  Dates are a library,
+     not a builtin, and the library does not exist.
+   - **Setting an environment variable, and reading the whole
+     environment.**  Process-global mutation with no reader in the
+     corpus.
+
+   Two things this work found, both recorded rather than papered
+   over:
+
+   - **`catch` cannot see the reason.**  `calc.luc`'s REPL loop
+     handles a bad expression with `evaluate(line) catch:` and can
+     only say *that* it failed, never *what* the parser raised — the
+     words exist and are unreachable.  `docs/FAILURE.md` predicted a
+     binding form "later"; the corpus now has a site that wants one.
+   - **`files.append` is unwritable.**  `append` is a reserved name
+     (it is `xs.append(v)`), and the reservation applies to a
+     module-qualified declaration too, so the module reads
+     `files.append_text`.  That is item 10's visibility question
+     wearing a different hat.
 7. **No default or named arguments.**  `term_style(fg, bg, bold)` is
    called 16 times; 13 end in the same noise word `false`.
 8. **`Bytes` is unconstructible.**  `var b: Bytes` compiles; nothing
@@ -326,9 +367,10 @@ multi-user — all deferred by design in `docs/V2.md`.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done on both engines**;
    `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`
    lowers to `{T, i1}`.
-4. **The cheap Tier-3 slice:** character classes, a frozen container or
-   `Set`, `read_line`, `clock`, `sleep`, `exit`, `env`, stderr,
-   directory listing.
+4. **The cheap Tier-3 slice:** character classes, and a frozen
+   container or `Set`.  ~~`read_line`, `clock`, `sleep`, `env`,
+   stderr, directory listing~~ — **done, on both engines**; see Tier 3
+   item 6 for what shipped and what was deliberately left out.
 5. **Cut `Bytes`** — stage 10 goes total the same day.
 6. **`m.get(k) -> V?`**, rewrite `wordcount.luc`, and sweep the corpus
    for `ord("x")` and f-strings.

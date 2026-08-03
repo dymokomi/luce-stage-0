@@ -520,7 +520,7 @@ fn runLoaded(
     arguments: []const []const u8,
 ) !u8 {
     var services: host_mod.Host = undefined;
-    services.setup(gpa, io, out, arguments);
+    services.setup(gpa, io, out, err, arguments);
     defer services.deinit();
 
     const table = services.table();
@@ -577,7 +577,7 @@ fn runInterpreted(
     arguments: []const []const u8,
 ) !u8 {
     var services: host_mod.Host = undefined;
-    services.setup(gpa, io, out, arguments);
+    services.setup(gpa, io, out, err, arguments);
     defer services.deinit();
 
     var arena = std.heap.ArenaAllocator.init(gpa);

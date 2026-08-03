@@ -122,6 +122,33 @@ pub const Intrinsic = enum {
     term_flush,
     key_read,
     key_text,
+    /// One line from standard input, with the prompt the host writes
+    /// and flushes before it blocks — the same discipline `key_read`
+    /// follows, and the reason a prompt is an argument rather than a
+    /// print of its own.  Answers `String?`: end of input is "there is
+    /// nothing there", with no reason worth carrying (docs/FAILURE.md).
+    read_line,
+    /// A line to standard error.  A second console, not a second
+    /// `print`: stdout is the program's data and stderr is where a
+    /// program says something to a person while its output is a pipe.
+    print_error,
+    /// Milliseconds on a monotonic clock whose origin is unspecified,
+    /// so only differences mean anything, and `sleep_ms`, which waits
+    /// at least that long.  Neither can fail; a host without them is
+    /// `host_unavailable` like every other withheld service.
+    clock_ms,
+    sleep_ms,
+    /// One environment variable, or absent when it is unset.  Absence
+    /// again, for the same reason `read_line`'s is: "not set" is the
+    /// same fact every time and carries no news.
+    env_get,
+    /// The four file services the world can say no to, beside
+    /// `file_read` and `file_write` and fallible on the same grounds:
+    /// no non-racy check stands in for the result (docs/FAILURE.md).
+    file_append,
+    file_delete,
+    file_rename,
+    dir_list,
     /// The two halves of value storage (docs/STRINGS.md).  A String's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
@@ -159,6 +186,34 @@ pub const ErrorCode = enum {
         return switch (self) {
             .io_failed => "the file operation failed",
             .user_error => "error",
+        };
+    }
+};
+
+/// What a file service was asked to do, so the `io_failed` it raises
+/// can say which thing the world refused.  "cannot read x" and "cannot
+/// delete x" are different news, and a program that catches one prints
+/// what it was told.
+///
+/// Not part of the `.lc` wire surface — it names an argument the two
+/// engines pass to one runtime call — but it is written here beside
+/// `ErrorCode` because both engines have to spell the same verb.
+pub const FileAct = enum(i32) {
+    read,
+    write,
+    append,
+    delete,
+    rename,
+    list,
+
+    pub fn verb(self: FileAct) []const u8 {
+        return switch (self) {
+            .read => "cannot read ",
+            .write => "cannot write ",
+            .append => "cannot append to ",
+            .delete => "cannot delete ",
+            .rename => "cannot rename ",
+            .list => "cannot list ",
         };
     }
 };

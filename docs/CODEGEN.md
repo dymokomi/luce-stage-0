@@ -795,11 +795,37 @@ to end: `raised` arrived beside `trap`, and `luce_main` answers `3` for
 a program that raised something nobody caught.  Three and not two —
 docs/FAILURE.md predicted `2`, which `exhausted` had held since
 version 3, and renumbering a published answer would have changed what
-every existing loader believes.
+every existing loader believes.  **8** closed the host surface: nine
+slots appended in one run — `read_line`, `print_error`, `clock_ms`,
+`sleep_ms`, `env`, `file_append`, `file_delete`, `file_rename`,
+`dir_list` — so a program can read a line, wait, and work with a
+directory.  No field moved, and a run that calls none of them pays
+nothing.
 
 `key_text` has no slot of its own: it answers what the last `key_read`
 carried, which the runtime remembers, so it fails closed on
 `key_read`'s slot.
+
+Two shapes the version-8 slots settled, both of which stayed inside
+the conventions already there rather than inventing new ones:
+
+- **A directory listing travels as bytes.**  Every service that hands
+  text back hands back a pointer and a length, and `dir_list` answers
+  the names **NUL-separated in one buffer**; `luce_rt_names_list`
+  splits it into the `List(String)` the program asked for.  A second
+  convention — a vector of pointers, a callback per name — would be a
+  second thing every host author has to get right, and NUL is the one
+  byte a file name may not contain, so the joining loses nothing.
+- **A service that may have nothing to say clears its out-parameters
+  first.**  `read_line` and `env` answer a `String?`, and their `no`
+  side leaves `text`/`length` untouched — so the lowering stores a
+  null and a zero before the call and hands the answer to
+  `luce_rt_maybe_text` as a `present` flag.  Two stores in front of a
+  blocking call, and what they buy is that the load after it is never
+  of whatever the stack happened to hold.  The runtime parks
+  `Value.none` for absence, which is byte for byte what the
+  interpreter parks, so a `T?` from the host means one thing on both
+  engines.
 
 ## What is not lowered yet
 
