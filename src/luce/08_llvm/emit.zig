@@ -69,6 +69,23 @@ pub const Options = struct {
     /// 10 ms for the C twin.  Everything else O3 adds (more
     /// aggressive inlining, unrolling) is noise here by comparison.
     passes: []const u8 = "default<O3>",
+    /// What the *target machine* optimizes at, which is a second knob
+    /// from `passes`: the pipeline above rewrites the IR, this decides
+    /// how hard instruction selection, scheduling and register
+    /// allocation work on what comes out.
+    ///
+    /// **The same level as the pipeline**, and the reason is that
+    /// there was no reason for them to differ.  This was `default`
+    /// (=O2) beside a `default<O3>` pipeline for as long as the
+    /// backend has existed — never argued, only unnoticed, and the
+    /// paragraph above spent ten lines on the pipeline while this line
+    /// said nothing.  A/B'd on every `bench/` row against the
+    /// mismatched pair (`bench/compare.sh`): every row inside the
+    /// round-to-round spread, so it buys nothing measurable — but two
+    /// knobs that mean "how hard to optimize" pointing at two numbers
+    /// is a question a reader has to answer twice, and the honest
+    /// answer to "why O2 here" was "nobody chose it".
+    codegen: OptLevel = .aggressive,
     /// Position-independent code, which a shared library needs.
     relocation: Relocation = .pic,
 };
@@ -139,7 +156,7 @@ pub fn compile(gpa: Allocator, bitcode: []const u8, options: Options) error{OutO
         triple.ptr,
         cpu.ptr,
         features.ptr,
-        @intFromEnum(OptLevel.default),
+        @intFromEnum(options.codegen),
         @intFromEnum(options.relocation),
         @intFromEnum(CodeModel.default),
     ) orelse {
@@ -235,7 +252,10 @@ const TargetMachineRef = *opaque {};
 const PassBuilderOptionsRef = *opaque {};
 const ErrorRef = *opaque {};
 
-const OptLevel = enum(c_uint) { none = 0, less = 1, default = 2, aggressive = 3 };
+/// `LLVMCodeGenOptLevel`.  `default` is LLVM's name for level 2, not
+/// for "whatever this file would otherwise pick"; `Options.codegen`
+/// names the one this compiler picks.
+pub const OptLevel = enum(c_uint) { none = 0, less = 1, default = 2, aggressive = 3 };
 const CodeModel = enum(c_uint) { default = 0 };
 const FileType = enum(c_uint) { assembly = 0, object = 1 };
 

@@ -293,6 +293,20 @@ has broken repeatedly across releases, stays in-tree.  Being one file
 is also what makes it one *module*, which is what keeps libLLVM out of
 loom.
 
+**Both optimizer knobs say O3**, and the interesting thing is that
+they used not to.  The pass pipeline is `default<O3>` for one argued
+reason — nontrivial loop unswitching, which O2 disables and which is
+what lifts a bounds check out of a loop so the vectorizer can have it
+(`Options.passes`) — while the target machine was left at
+`LLVMCodeGenOptLevel` 2, never argued and simply unnoticed, so
+instruction selection and register allocation worked less hard than
+the pipeline that fed them.  Raising it was A/B'd on every `bench/`
+row (`bench/compare.sh`, twice): every row inside the round-to-round
+spread, with the signs flipping between runs.  It is kept anyway, and
+not for the speed — two knobs that both mean "how hard to optimize"
+pointing at two numbers is a question a reader has to answer twice,
+and the honest answer to "why O2 here" was that nobody had chosen it.
+
 **The stage directory is `08_llvm/`, and the numeric prefix is what
 makes that name legal.**  Zig derives symbol names from the source
 path, and LLVM claims every symbol beginning `llvm.` as one of its own
