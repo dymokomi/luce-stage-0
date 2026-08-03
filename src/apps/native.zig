@@ -206,16 +206,45 @@ pub fn findCompiler(gpa: Allocator, io: std.Io, search_path: ?[]const u8) FindEr
     errdefer gpa.free(beside);
 
     if (beside.len != 0) {
-        const candidate = try fileIn(gpa, io, beside, compiler_name);
+        const candidate = try runnableIn(gpa, io, beside, compiler_name);
         if (candidate.len != 0) return .{ .path = candidate, .beside = beside };
     }
 
     var entries = std.mem.tokenizeScalar(u8, search_path orelse "", path_separator);
     while (entries.next()) |directory| {
-        const candidate = try fileIn(gpa, io, directory, compiler_name);
+        const candidate = try runnableIn(gpa, io, directory, compiler_name);
         if (candidate.len != 0) return .{ .path = candidate, .beside = beside };
     }
     return .{ .path = try gpa.dupe(u8, ""), .beside = beside };
+}
+
+/// The path of a *runnable* `name` inside `directory`, or an empty
+/// string.  The caller owns a non-empty answer.
+///
+/// A compiler is something to run, and a directory on `PATH` may
+/// perfectly well hold a `luce` that is not — a source tree with a
+/// `luce/` in it, a half-finished download, a note someone named after
+/// the tool.  Answering with one of those stops the search at a file
+/// that then fails to spawn, and the real compiler further down `PATH`
+/// is never looked at; a shell checks the execute bit before it stops,
+/// for exactly this reason.
+///
+/// Only the compiler search asks.  A static library (`fileIn`) is
+/// handed to a linker, not executed, and demanding the bit there would
+/// refuse perfectly good `.a` files.
+fn runnableIn(
+    gpa: Allocator,
+    io: std.Io,
+    directory: []const u8,
+    name: []const u8,
+) FindError![]const u8 {
+    const path = try fileIn(gpa, io, directory, name);
+    if (path.len == 0) return path;
+    std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch {
+        gpa.free(path);
+        return "";
+    };
+    return path;
 }
 
 const path_separator: u8 = if (@import("builtin").os.tag == .windows) ';' else ':';
@@ -494,14 +523,52 @@ test "the compiler is found beside the binary first, then on PATH, or not at all
     try testing.expect(!absent.found());
 
     // A `luce` on PATH is found, and a directory that only *mentions*
-    // the name is not: the file has to be there.
-    try scratch.dir.writeFile(testing.io, .{ .sub_path = compiler_name, .data = "#!/bin/sh\n" });
+    // the name is not: the file has to be there, and it has to be a
+    // thing that runs.
+    try scratch.dir.writeFile(testing.io, .{
+        .sub_path = compiler_name,
+        .data = "#!/bin/sh\n",
+        .flags = .{ .permissions = .executable_file },
+    });
     const search = try std.fmt.allocPrint(gpa, "/no/such/place{c}{s}", .{ path_separator, directory });
     defer gpa.free(search);
     var located = try findCompiler(gpa, testing.io, search);
     defer located.deinit(gpa);
     try testing.expect(located.found());
     try testing.expect(std.mem.endsWith(u8, located.path, compiler_name));
+
+    // A file named `luce` that cannot be run is *not* the compiler.
+    // That is the ordinary case and not a contrived one — a source
+    // directory, a stray note, an interrupted download — and stopping
+    // the search at one leaves the real compiler, further down `PATH`,
+    // unfound.  Windows has no execute bit and decides by extension,
+    // so there is nothing to check there.
+    if (std.Io.File.Permissions.has_executable_bit) {
+        var inert = testing.tmpDir(.{});
+        defer inert.cleanup();
+        var inert_storage: [std.fs.max_path_bytes]u8 = undefined;
+        const inert_directory =
+            inert_storage[0..try inert.dir.realPath(testing.io, &inert_storage)];
+        try inert.dir.writeFile(testing.io, .{
+            .sub_path = compiler_name,
+            .data = "notes about the compiler\n",
+        });
+        var unrunnable = try findCompiler(gpa, testing.io, inert_directory);
+        defer unrunnable.deinit(gpa);
+        try testing.expect(!unrunnable.found());
+
+        // And the search goes on past it to a real one.
+        const past = try std.fmt.allocPrint(
+            gpa,
+            "{s}{c}{s}",
+            .{ inert_directory, path_separator, directory },
+        );
+        defer gpa.free(past);
+        var beyond = try findCompiler(gpa, testing.io, past);
+        defer beyond.deinit(gpa);
+        try testing.expect(beyond.found());
+        try testing.expect(std.mem.startsWith(u8, beyond.path, directory));
+    }
 }
 
 test "every refusal has a sentence" {

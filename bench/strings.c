@@ -6,13 +6,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The Luce twin builds the same text; both sides must print the same
+ * numbers, so this bound is part of the benchmark and not a knob. */
+#define ITEM_COUNT 400000
+/* The longest one piece can be: "item-" + an int's ten digits + a
+ * ';' + the terminator snprintf writes.  Deriving the buffer from the
+ * loop bound rather than picking a round number means a changed bound
+ * cannot silently outgrow it. */
+#define PIECE_MAX (5 + 10 + 1 + 1)
+
 int main(void) {
     /* Build "item-0;item-1;...". */
-    size_t capacity = 1 << 24;
+    size_t capacity = (size_t)ITEM_COUNT * PIECE_MAX;
     char *text = malloc(capacity);
+    if (!text) return 1;
     size_t length = 0;
-    for (int i = 0; i < 400000; i++) {
-        length += (size_t)sprintf(text + length, "item-%d;", i);
+    for (int i = 0; i < ITEM_COUNT; i++) {
+        int wrote = snprintf(text + length, capacity - length, "item-%d;", i);
+        /* A benchmark that overran its buffer would still print a
+         * number, and the harness compares numbers.  Say so instead. */
+        if (wrote < 0 || (size_t)wrote >= capacity - length) {
+            fprintf(stderr, "strings: %d items do not fit in %zu bytes\n", ITEM_COUNT, capacity);
+            return 1;
+        }
+        length += (size_t)wrote;
     }
 
     /* Split on ';', keeping empty pieces: count them and sum their

@@ -16,14 +16,15 @@
 //! silently assumed harmless — the switches below are exhaustive, so
 //! adding one is a compile error here first.
 //!
-//! **Stage 8 is the other consumer.**  `08_llvm` declares one external
-//! `luce_rt_*` per intrinsic, and LLVM's `inferattrs` only infers
-//! attributes for known libc names, so an external of ours gets
-//! nothing it is not told.  `intrinsicEffect` is public for that: it
-//! answers per-intrinsic, without a function to look arguments up in,
-//! and the guarantees each level carries are spelled out on `Effect`
-//! below.  Read them before turning one into an LLVM attribute —
-//! `stable` in particular means "reads nothing another instruction can
+//! **Stage 8 is the other consumer**, through `viewStable`: the
+//! lowering keeps a container's storage pointer live across a run of
+//! instructions only while every one of them is an instruction that
+//! cannot move it (`08_llvm/lower.zig`, `08_llvm/loops.zig`).  That
+//! question is asked here rather than there so the two stages cannot
+//! come to different answers about the same instruction.
+//!
+//! Read `Effect` below before turning one of these levels into an LLVM
+//! attribute: `stable` means "reads nothing another instruction can
 //! change", *not* `memory(none)`.
 
 const defs = @import("../06_mir/defs.zig");
@@ -119,7 +120,13 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
 /// zero where the answer depends on it (`abs`, `str`); pass null for
 /// the conservative answer, which is what a caller with no function to
 /// look it up in should do.
-pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
+///
+/// Private: `classify` above is the whole interface this file offers
+/// for the instruction stream, and `viewStable` below the one it
+/// offers stage 8.  Nothing outside asks about an intrinsic in
+/// isolation, and a second entry point would be a second place for the
+/// table to be consulted incompletely.
+fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
         // for the same reason `negate` is: abs(Int.min) overflows.

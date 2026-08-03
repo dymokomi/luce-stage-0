@@ -134,8 +134,6 @@ pub const Value = extern struct {
     // -- construction ---------------------------------------------------
 
     pub const none: Value = .{ .tag = .none };
-    pub const false_value: Value = .{ .tag = .boolean, .bits = 0 };
-    pub const true_value: Value = .{ .tag = .boolean, .bits = 1 };
     /// The zero value of an object-typed place.
     pub const null_object: Value = ofObject(.none);
 
@@ -227,13 +225,6 @@ pub const Value = extern struct {
         return self.textOf();
     }
 
-    /// How long this value's text is, without looking at the bytes —
-    /// safe on a temporary, unlike `asString`.
-    pub fn textLength(self: Value) usize {
-        if (self.inline_length != text_outside) return self.inline_length;
-        return @intCast(self.length);
-    }
-
     /// True when the text is in the value rather than behind `bits`.
     pub fn textIsInline(self: Value) bool {
         return self.inline_length != text_outside;
@@ -261,10 +252,6 @@ pub const Value = extern struct {
             .index = @truncate(self.bits),
             .generation = @truncate(self.bits >> generation_shift),
         };
-    }
-
-    pub fn isNullObject(self: Value) bool {
-        return self.asObject().index == null_index;
     }
 
     /// True when this is the absent value of a `T?`.  One tag test for
@@ -358,7 +345,6 @@ test "every payload survives a round trip" {
     try std.testing.expectEqualStrings("hi", hi.asString());
     const empty = Value.ofString("");
     try std.testing.expectEqualStrings("", empty.asString());
-    try std.testing.expect(Value.null_object.isNullObject());
 
     var fields = [_]Value{ Value.ofInt(1), Value.ofString("two") };
     const held = Value.ofStruct(&fields);
@@ -377,13 +363,11 @@ test "text reads the same whichever form it is in" {
         const outside = Value.ofString(wanted);
         try std.testing.expect(!outside.textIsInline());
         try std.testing.expectEqualStrings(wanted, outside.asString());
-        try std.testing.expectEqual(length, outside.textLength());
 
         if (!Value.fitsInline(length)) continue;
         const held = Value.ofInlineText(.string, wanted);
         try std.testing.expect(held.textIsInline());
         try std.testing.expectEqualStrings(wanted, held.asString());
-        try std.testing.expectEqual(length, held.textLength());
         // The bytes are the value: copying it copies them, and the
         // copy is not looking at the original.
         var copied = held;
@@ -411,7 +395,7 @@ test "a handle keeps its row and its occupant apart" {
     const held = Value.ofObject(handle);
     try std.testing.expectEqual(@as(u32, 7), held.asObject().index);
     try std.testing.expectEqual(@as(u32, 3), held.asObject().generation);
-    try std.testing.expect(!held.isNullObject());
+    try std.testing.expect(held.asObject().index != null_index);
 
     // Every corner of both halves survives, and neither reaches into
     // the other.

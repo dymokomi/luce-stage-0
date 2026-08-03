@@ -41,17 +41,6 @@ extern fn luce_main(host: *const abi.Host) callconv(.c) abi.Status;
 /// then disagree about the shape of the table being handed over.
 extern const luce_artifact: abi.Artifact;
 
-/// A trap trace prints at most this many frames — loom's number, so
-/// the two runners render the same trap the same way.
-const max_printed_frames = 12;
-
-/// Exit statuses.  A trap is `1`, which is what loom returns and what
-/// a shell reads as "the program failed".  Running out of memory is
-/// not the program's fault and says so with a different number.
-const exit_trapped = 1;
-const exit_exhausted = 70;
-const exit_broken = 71;
-
 export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const gpa = std.heap.c_allocator;
 
@@ -71,7 +60,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const count: usize = if (argc > 1) @intCast(argc - 1) else 0;
     const arguments = gpa.alloc([]const u8, count) catch {
         err.print("luce: out of memory\n", .{}) catch {};
-        return exit_exhausted;
+        return host_mod.exit_exhausted;
     };
     defer gpa.free(arguments);
     for (arguments, 0..) |*argument, index| {
@@ -84,7 +73,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
             .{@tagName(mismatch)},
         ) catch {};
         err.flush() catch {};
-        return exit_broken;
+        return host_mod.exit_broken;
     }
 
     var services: host_mod.Host = undefined;
@@ -97,62 +86,58 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     // Land back on the ordinary screen before saying anything, the
     // same order loom's runner uses.
     services.restoreScreen();
-    out.flush() catch {};
+    // Output that could not be written did not happen: a full or
+    // closed pipe swallows the tail, and exiting 0 would claim it
+    // arrived.  loom's runner says the same thing the same way.
+    const delivered = if (out.flush()) |_| true else |_| undelivered: {
+        err.print("luce: output could not be written\n", .{}) catch {};
+        break :undelivered false;
+    };
     const code = report(&services, err, status);
     err.flush() catch {};
+    if (code == host_mod.exit_ok and !delivered) return host_mod.exit_broken;
     return code;
 }
 
+/// How the run ended, said and scored — every sentence and every
+/// number out of `apps/host.zig`, which is also where loom's runner
+/// gets them.  Nothing about a failure is rendered twice in this tree.
 fn report(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_int {
     switch (status) {
         .ok => {
-            // Scope ownership frees everything (OWNERSHIP.md S33); a
-            // nonzero count is an engine bug, not a program's.
-            const leaked = services.leaked orelse 0;
-            if (leaked != 0) {
-                err.print(
-                    "luce: internal error: {d} object{s} escaped ownership — please report this\n",
-                    .{ leaked, if (leaked == 1) "" else "s" },
-                ) catch {};
-            }
-            return 0;
+            host_mod.printLeaks(err, "luce", services.leaked orelse 0);
+            return host_mod.exit_ok;
         },
         .errored => {
             const raised = services.reportedError() orelse {
                 err.print("luce: the program failed and said nothing\n", .{}) catch {};
-                return exit_trapped;
+                return host_mod.exit_errored;
             };
             host_mod.printError(err, "luce", @tagName(raised.code), raised.message, raised.origin);
-            return exit_trapped;
+            return host_mod.exit_errored;
         },
         .trapped => {
             const trap = services.reportedTrap() orelse {
                 err.print("luce: the program trapped and said nothing\n", .{}) catch {};
-                return exit_trapped;
+                return host_mod.exit_trapped;
             };
-            err.print("luce: trap: {s} [{s}]\n", .{ trap.message, @tagName(trap.code) }) catch {};
-            for (trap.trace, 0..) |frame, index| {
-                if (index == max_printed_frames) break;
-                if (frame.line != 0) {
-                    err.print("    at {s} ({s}:{d}:{d})\n", .{
-                        frame.function, frame.source, frame.line, frame.column,
-                    }) catch {};
-                } else {
-                    err.print("    at {s}\n", .{frame.function}) catch {};
-                }
-            }
-            const hidden = trap.dropped +
-                @as(u32, @intCast(trap.trace.len -| max_printed_frames));
-            if (hidden != 0) err.print("    ... {d} more frames\n", .{hidden}) catch {};
-            return exit_trapped;
+            host_mod.printTrap(
+                err,
+                "luce",
+                @tagName(trap.code),
+                trap.message,
+                trap.trace,
+                trap.dropped,
+            );
+            return host_mod.exit_trapped;
         },
         .exhausted => {
             err.print("luce: out of memory\n", .{}) catch {};
-            return exit_exhausted;
+            return host_mod.exit_exhausted;
         },
         _ => {
             err.print("luce: the program returned an unknown status\n", .{}) catch {};
-            return exit_broken;
+            return host_mod.exit_broken;
         },
     }
 }

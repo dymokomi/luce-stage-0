@@ -29,7 +29,6 @@ const Built = struct {
     blurb: []const u8,
     html: []u8,
     headings: []markdown.Heading,
-    links: [][]const u8,
     /// Line the page's source began at, for messages: the file itself.
     source: []u8,
 };
@@ -81,9 +80,12 @@ fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
     const cwd = Io.Dir.cwd();
 
     // A build starts from nothing.  Anything left from a page that was
-    // deleted or renamed is a dead link waiting to be published.
-    cwd.deleteTree(io, options.out) catch {};
-    cwd.deleteTree(io, options.work) catch {};
+    // deleted or renamed is a dead link waiting to be published — and
+    // a *swallowed* failure to clear it is worse than the stale page,
+    // because the link check would then pass against the leftovers and
+    // the deploy would put them back up.  So it stops the build.
+    try clear(io, cwd, options.out);
+    try clear(io, cwd, options.work);
     try cwd.createDirPath(io, options.out);
     try cwd.createDirPath(io, options.work);
 
@@ -160,6 +162,20 @@ fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
     return 1;
 }
 
+/// Remove a directory and everything under it.  A tree that was never
+/// there is the ordinary first-build case, and `deleteTree` already
+/// counts that as done; anything it does report is a real failure and
+/// stops the build with the reason.
+fn clear(io: Io, cwd: Io.Dir, path: []const u8) !void {
+    cwd.deleteTree(io, path) catch |failure| {
+        std.debug.print(
+            "lucedoc: cannot clear {s}: {s} — a build must start from nothing\n",
+            .{ path, @errorName(failure) },
+        );
+        return failure;
+    };
+}
+
 fn release(gpa: Allocator, item: Built) void {
     gpa.free(item.path);
     gpa.free(item.url);
@@ -171,8 +187,6 @@ fn release(gpa: Allocator, item: Built) void {
         gpa.free(heading.title);
     }
     gpa.free(item.headings);
-    for (item.links) |link| gpa.free(link);
-    gpa.free(item.links);
 }
 
 const Target = struct {
@@ -273,7 +287,6 @@ fn build(
         .blurb = blurb,
         .html = try out.take(),
         .headings = document.headings,
-        .links = document.links,
         .source = try gpa.dupe(u8, source_path),
     });
 }
@@ -429,6 +442,12 @@ fn json(out: *Buffer, text: []const u8) !void {
 /// Every `href` on every generated page must resolve to a file in the
 /// output tree, and every fragment must name an id on the page it
 /// points at.  Returns how many did not.
+///
+/// It scans the **rendered HTML**, not the Markdown, and that is the
+/// point: most of a page's links are not in its source at all — the
+/// nav, the sidebar, the section cards, the previous/next pair and the
+/// assets are all written by `page.zig`, and a dead link in the shell
+/// is as dead as one in a paragraph.
 fn checkLinks(gpa: Allocator, io: Io, options: Options, pages: []const Built) !usize {
     var dead: usize = 0;
     for (pages) |item| {
@@ -535,6 +554,12 @@ test "links resolve against the page that carries them" {
 }
 
 test "the generator's own units" {
+    // `main` too, and not for the sake of running it: a test build
+    // analyzes only what a test reaches, so without this line
+    // everything from `main` down — the whole generator — would be
+    // *compiled by nobody* under `zig build test`, and only the units
+    // below would be checked at all.
+    _ = &main;
     _ = @import("buffer.zig");
     _ = @import("highlight.zig");
     _ = @import("markdown.zig");

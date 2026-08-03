@@ -8,7 +8,12 @@
 //! ```
 //!
 //! It returns `0` when the program ran to completion, `1` when it
-//! trapped, and `2` when the runtime ran out of memory.  Every *effect*
+//! trapped, `2` when the runtime ran out of memory, and `3` when an
+//! error reached the top uncaught — a trap and an error being two
+//! different sentences about a program (docs/FAILURE.md), which is why
+//! they are two numbers and not one.  `Status` below is authoritative;
+//! `apps/host.zig` maps them onto the exit statuses a runner returns.
+//! Every *effect*
 //! the program needs reaches the outside world through the `LuceHost`
 //! table passed in — the artifact declares no undefined symbols beyond
 //! `libluce_rt`, which it links statically.  That is deliberate: an

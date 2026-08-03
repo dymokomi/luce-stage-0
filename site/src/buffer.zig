@@ -58,10 +58,6 @@ pub fn take(self: *Buffer) ![]u8 {
     return self.bytes.toOwnedSlice(self.gpa);
 }
 
-pub fn clear(self: *Buffer) void {
-    self.bytes.clearRetainingCapacity();
-}
-
 test "escaping covers every metacharacter" {
     var buffer: Buffer = .init(std.testing.allocator);
     defer buffer.deinit();

@@ -122,22 +122,6 @@ pub const sections = [_]Section{
     },
 };
 
-/// The section a slug belongs to, or null.
-pub fn find(slug: []const u8) ?*const Section {
-    for (&sections) |*section| {
-        if (eql(section.slug, slug)) return section;
-    }
-    return null;
-}
-
-fn eql(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |left, right| {
-        if (left != right) return false;
-    }
-    return true;
-}
-
 test "every slug is unique within its section, and every section is unique" {
     const std = @import("std");
     for (sections, 0..) |section, index| {

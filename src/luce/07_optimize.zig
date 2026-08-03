@@ -135,9 +135,9 @@
 //!
 //!   effects.zig   — what an instruction may be assumed about: the one
 //!                   table every pass consults before it moves,
-//!                   duplicates, or deletes anything.  Also the shape
-//!                   stage 8 reads to attribute its `luce_rt_*`
-//!                   externals.
+//!                   duplicates, or deletes anything.  Stage 8 asks it
+//!                   too (`viewStable`), so the two stages cannot
+//!                   disagree about the same instruction.
 //!   registers.zig — where an instruction keeps its register operands,
 //!                   written once so no rewrite can miss one.
 //!   prune.zig, ownership.zig, dead.zig — the passes, each with its own

@@ -6,14 +6,16 @@
 //! palette decides what a prompt or an error looks like, callers say
 //! what a thing *is*.
 
+/// The styles the shell actually asks for, and no others.  A palette
+/// entry nobody names is a colour decision nobody can see — failure
+/// text, in particular, is written by the runner onto standard error
+/// and is never coloured, because standard error may not be the same
+/// terminal standard output is.
 pub const Style = enum {
     reset,
     bold,
     dim,
     prompt,
-    err,
-    ok,
-    path,
 
     fn sequence(self: Style) []const u8 {
         return switch (self) {
@@ -21,9 +23,6 @@ pub const Style = enum {
             .bold => "\x1b[1m",
             .dim => "\x1b[2m",
             .prompt => "\x1b[36m",
-            .err => "\x1b[31m",
-            .ok => "\x1b[32m",
-            .path => "\x1b[1m",
         };
     }
 };
@@ -42,7 +41,13 @@ const std = @import("std");
 
 test "a disabled palette renders nothing" {
     const off: Palette = .{};
-    try std.testing.expectEqualStrings("", off.sgr(.err));
     const on: Palette = .{ .enabled = true };
-    try std.testing.expectEqualStrings("\x1b[31m", on.sgr(.err));
+    // Every style, both ways: a palette that is off must be off for
+    // all of them, since printing code never branches on colour.
+    inline for (@typeInfo(Style).@"enum".fields) |field| {
+        const style = @field(Style, field.name);
+        try std.testing.expectEqualStrings("", off.sgr(style));
+        try std.testing.expect(on.sgr(style).len != 0);
+    }
+    try std.testing.expectEqualStrings("\x1b[36m", on.sgr(.prompt));
 }

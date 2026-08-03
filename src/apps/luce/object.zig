@@ -22,8 +22,17 @@ const abi = luce.llvm.abi;
 pub const Result = union(enum) {
     /// The artifact was written to the path the caller named.
     written,
-    /// Something has no lowering yet; the payload names it and is
-    /// static storage.
+    /// The lowering refused the IR; the payload names what it refused
+    /// and is static storage.
+    ///
+    /// **Not "not implemented yet".**  The lowering is total —
+    /// everything a program can say lowers — so every `.unsupported`
+    /// left in `08_llvm/lower.zig` guards IR that could only arrive
+    /// damaged, and reaching one here is an invariant violated
+    /// upstream rather than a feature owed.  It is a distinct arm and
+    /// not a `.failed` because it is about the program's shape and no
+    /// second attempt anywhere else would change it (`native
+    /// .exit_unsupported`).
     unsupported: []const u8,
     /// The build failed; the payload is a sentence for a person and is
     /// owned by the caller.
@@ -177,6 +186,28 @@ fn installedTools(gpa: Allocator) !native.Tools {
     };
 }
 
+/// A build every one of these tests needs to have succeeded, and the
+/// one place that gives up on one.
+///
+/// `.failed` carries a sentence **the caller owns**, so an arm that
+/// simply returned an error would leak it — and these tests run under
+/// `std.testing.allocator`, so the leak, not the reason the build
+/// failed, is what the reader would be shown.
+fn expectWritten(gpa: Allocator, result: Result) !void {
+    switch (result) {
+        .written => {},
+        .unsupported => |what| {
+            std.debug.print("no lowering for {s}\n", .{what});
+            return error.Unsupported;
+        },
+        .failed => |why| {
+            defer gpa.free(why);
+            std.debug.print("{s}\n", .{why});
+            return error.BuildFailed;
+        },
+    }
+}
+
 fn compileScript(gpa: Allocator, source: []const u8) !luce.mir.Program {
     var result = try luce.compile.compile(gpa, source, .{
         .allow_host = true,
@@ -223,22 +254,11 @@ test "a program links, loads with its tag intact, and runs" {
     const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "product.lc" });
     defer gpa.free(artifact);
 
-    switch (try build(gpa, testing.io, &tools, &program, .{
+    try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .library,
         .output = artifact,
         .source_hash = hash,
-    })) {
-        .written => {},
-        .unsupported => |what| {
-            std.debug.print("no lowering for {s}\n", .{what});
-            return error.Unsupported;
-        },
-        .failed => |why| {
-            defer gpa.free(why);
-            std.debug.print("{s}\n", .{why});
-            return error.BuildFailed;
-        },
-    }
+    }));
 
     // The object the link consumed is gone, and nothing half-written
     // is left under the artifact's name.
@@ -297,14 +317,11 @@ test "an artifact built from another program is refused as stale" {
     const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "stale.lc" });
     defer gpa.free(artifact);
 
-    switch (try build(gpa, testing.io, &tools, &program, .{
+    try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .library,
         .output = artifact,
         .source_hash = 0x1111_2222_3333_4444,
-    })) {
-        .written => {},
-        else => return error.BuildFailed,
-    }
+    }));
 
     // Content decides, and nothing else: the file is there, it loads,
     // it has a `luce_main` — and it is still the wrong program.
@@ -344,18 +361,10 @@ test "a standalone executable prints, and a trapping one reports and exits nonze
 
     const binary = try std.fs.path.join(gpa, &.{ directory, "program" });
     defer gpa.free(binary);
-    switch (try build(gpa, testing.io, &tools, &program, .{
+    try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .executable,
         .output = binary,
-    })) {
-        .written => {},
-        .unsupported => return error.Unsupported,
-        .failed => |why| {
-            defer gpa.free(why);
-            std.debug.print("{s}\n", .{why});
-            return error.BuildFailed;
-        },
-    }
+    }));
 
     const ran = try std.process.run(gpa, testing.io, .{ .argv = &.{binary} });
     defer gpa.free(ran.stdout);
@@ -400,13 +409,10 @@ test "a release executable keeps the function names and drops the lines" {
 
     const binary = try std.fs.path.join(gpa, &.{ directory, "stripped" });
     defer gpa.free(binary);
-    switch (try build(gpa, testing.io, &tools, &program, .{
+    try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .executable,
         .output = binary,
-    })) {
-        .written => {},
-        else => return error.BuildFailed,
-    }
+    }));
 
     const ran = try std.process.run(gpa, testing.io, .{ .argv = &.{binary} });
     defer gpa.free(ran.stdout);

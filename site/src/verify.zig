@@ -7,8 +7,9 @@
 //! and the line.
 //!
 //!   ```luce run              a whole program; must compile and exit 0
-//!   ```luce trap             must compile and then trap
-//!   ```luce raise            must compile and then end on an uncaught error
+//!   ```luce trap             must compile and then trap (loom exits 1)
+//!   ```luce raise            must compile and then end on an uncaught
+//!                            error (loom exits 3)
 //!   ```luce fail             must be refused by `luce check`
 //!   ```luce module file=x.luc   a second file for the next program
 //!   ```console               a shell transcript; `$ ` lines are run
@@ -371,17 +372,43 @@ fn execute(
     const said = try combine(gpa, ran);
     errdefer gpa.free(said);
 
+    // A trap and an uncaught error are two different sentences about
+    // a program, and loom says which with its exit status.  Checking
+    // only "nonzero" let a sample captioned "traps" pass while it
+    // actually raised — the caption is a claim about the language and
+    // has to be checked like one.
     switch (mode) {
-        .run => if (ran.status != 0) {
+        .run => if (ran.status != loom_finished) {
             try self.note(line, "this sample is marked `run` but exited {d}", .{ran.status});
         },
-        .trap, .raise => if (ran.status == 0) {
-            try self.note(line, "this sample is marked `{s}` but exited cleanly", .{@tagName(mode)});
+        .trap => if (ran.status != loom_trapped) {
+            try self.note(
+                line,
+                "this sample is marked `trap` but exited {d}; a trap exits {d}" ++
+                    " and an uncaught error exits {d}",
+                .{ ran.status, loom_trapped, loom_errored },
+            );
+        },
+        .raise => if (ran.status != loom_errored) {
+            try self.note(
+                line,
+                "this sample is marked `raise` but exited {d}; an uncaught error exits {d}" ++
+                    " and a trap exits {d}",
+                .{ ran.status, loom_errored, loom_trapped },
+            );
         },
         else => {},
     }
     return said;
 }
+
+/// What loom exits with, from `src/apps/host.zig`.  Copied, because
+/// this generator links no part of the tree it documents; a sample
+/// whose exit status stops matching the number here is exactly the
+/// failure this check exists to produce.
+const loom_finished: u8 = 0;
+const loom_trapped: u8 = 1;
+const loom_errored: u8 = 3;
 
 /// A `console` fence: `$ ` lines are commands, everything else is what
 /// they are claimed to print.  The transcript on the page is rebuilt

@@ -48,6 +48,21 @@
 //!
 //! A warm run invokes nothing external.  A cold one runs `luce` once,
 //! which runs the linker once.
+//!
+//! ## What the shell reads afterwards
+//!
+//! The exit status is the program's, and it is the same number a
+//! standalone `--emit=exe` binary returns, because both take it from
+//! one table (`apps/host.zig`): `0` finished, `1` trapped, `3` ended
+//! on an uncaught error, `70` ran out of memory, `71` could not be run
+//! or could not deliver its output.  A trap and an error are two
+//! different sentences about a program and get two different numbers,
+//! so a script can tell them apart without parsing stderr.
+//!
+//! Loom's own refusals — no such file, not a program this machine can
+//! run, a compile that failed — are `1`: they are this command
+//! failing, and they say so on stderr before anything of the program
+//! has run.
 
 const std = @import("std");
 const luce = @import("luce");
@@ -454,36 +469,43 @@ fn runLoaded(
 
     // Land back on the ordinary screen before reporting anything.
     services.restoreScreen();
-    out.flush() catch {};
+    // Output that could not be written did not happen.  A full or
+    // closed pipe loses the tail of a program's transcript, and a
+    // runner that returned 0 would be claiming it arrived — so the
+    // failure is said once, here, and counted in the exit status.
+    // The standalone binary (`apps/start.zig`) does the same.
+    const delivered = if (out.flush()) |_| true else |_| undelivered: {
+        err.print("loom: output could not be written\n", .{}) catch {};
+        break :undelivered false;
+    };
     switch (status) {
         .ok => {
-            const leaked = services.leaked orelse 0;
-            host_mod.printLeaks(err, "loom", if (leaked > 0) @intCast(leaked) else 0);
-            return 0;
+            host_mod.printLeaks(err, "loom", services.leaked orelse 0);
+            return if (delivered) host_mod.exit_ok else host_mod.exit_broken;
         },
         .trapped => {
             const trap = services.reportedTrap() orelse {
                 try err.print("loom: the program trapped and said nothing\n", .{});
-                return 1;
+                return host_mod.exit_trapped;
             };
             host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
-            return 1;
+            return host_mod.exit_trapped;
         },
         .errored => {
             const raised = services.reportedError() orelse {
                 try err.print("loom: the program failed and said nothing\n", .{});
-                return 1;
+                return host_mod.exit_errored;
             };
             host_mod.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
-            return 1;
+            return host_mod.exit_errored;
         },
         .exhausted => {
             try err.print("loom: out of memory\n", .{});
-            return 1;
+            return host_mod.exit_exhausted;
         },
         _ => {
             try err.print("loom: the program returned an unknown status\n", .{});
-            return 1;
+            return host_mod.exit_broken;
         },
     }
 }

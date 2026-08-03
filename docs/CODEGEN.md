@@ -71,7 +71,13 @@ libraries.  `LUCE_CC` names another driver.
 and a trap report.  **Its services are loom's, not a second set** —
 the same `src/apps/host.zig`, so a standalone binary offers the same
 console, the same cwd-relative files, the same 256-color terminal and
-the same key names as `loom run`.  Terminal services in a non-loom
+the same key names as `loom run`.  So is its arithmetic on the way
+out: the exit statuses and the two failure renderings live in that one
+file, and both runners answer from it.  **`0` finished, `1` trapped,
+`3` ended on an uncaught error, `70` ran out of memory, `71` could not
+be run or could not deliver its output** — a trap and an error being
+two different sentences about a program (docs/FAILURE.md), which is
+why a script reading `$?` can tell them apart without parsing stderr.  Terminal services in a non-loom
 binary were the open question, and null slots (fail closed, trap
 `host_unavailable`) would have been defensible — but they would make
 "the compiled program behaves identically" true of one runner and not

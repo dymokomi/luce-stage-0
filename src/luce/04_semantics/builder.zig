@@ -3685,7 +3685,7 @@ pub const FunctionBuilder = struct {
                     try self.fail("luce.sema.method", method.span, "no method takes more than 2 arguments", .{});
                     return null;
                 }
-                if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
+                if (try self.objectMethod(method, descriptor, arguments)) |found| {
                     break :blk found;
                 }
                 return null;
@@ -3892,14 +3892,17 @@ pub const FunctionBuilder = struct {
     const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
     const builder_methods = [_][]const u8{ "append", "append_ascii", "clear" };
 
+    /// `descriptor` is the receiver's *shape*, which is everything the
+    /// dispatch below turns on: a `List(Int)` and a `List(String)`
+    /// answer to the same method names and differ only in what the
+    /// element type makes of the arguments, and the descriptor carries
+    /// that.  The receiver's `Type` adds nothing on top of it.
     fn objectMethod(
         self: *FunctionBuilder,
         method: ast.Method,
-        receiver_type: Type,
         descriptor: types.HeapType,
         arguments: []const Value,
     ) Error!?MethodFound {
-        _ = receiver_type;
         const name = method.name;
         switch (descriptor) {
             .list => |element| return self.sequenceMethod(method, element, true, arguments),

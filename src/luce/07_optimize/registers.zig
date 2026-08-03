@@ -142,17 +142,6 @@ pub fn localUse(instruction: Instruction) LocalUse {
     };
 }
 
-/// Rewrite the local an instruction names through `map`.
-pub fn mapLocal(instruction: *Instruction, map: []const defs.LocalId) void {
-    switch (instruction.*) {
-        .local_get => |*local| local.* = map[local.*],
-        .local_set => |*set| set.local = map[set.local],
-        .object_bind => |*bind| bind.local = map[bind.local],
-        .object_unbind => |*unbind| unbind.local = map[unbind.local],
-        else => {},
-    }
-}
-
 const testing = std.testing;
 
 test "every operand of every instruction shape is rewritten" {

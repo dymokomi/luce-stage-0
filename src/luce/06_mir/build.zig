@@ -7,8 +7,8 @@
 //! and every method on it is mechanical.
 //!
 //! What stage 4 hands over is `Lowered`, a plain value: struct
-//! layouts, heap-type shapes, the constant pool, the read ports, the
-//! entry index, and one open `Lowering` per function.  `build` closes
+//! layouts, heap-type shapes, the constant pool, the entry index, and
+//! one open `Lowering` per function.  `build` closes
 //! them — every block gets a terminator, block membership freezes into
 //! `Block` slices, each instruction's source *offset* becomes a
 //! line-and-column `Origin`, and the whole thing becomes a
@@ -474,17 +474,6 @@ pub const Lowering = struct {
         _ = try self.emit(.{ .ret = value }, .none);
     }
 
-    /// `error("…")` — put `user_error` and the program's words in the
-    /// channel.  The caller emits its releases and then `unwind`.
-    pub fn raiseError(self: *Lowering, message: Register) Error!void {
-        const arguments = try self.arena.alloc(Register, 1);
-        arguments[0] = message;
-        _ = try self.emit(
-            .{ .intrinsic = .{ .kind = .raise_error, .arguments = arguments } },
-            .none,
-        );
-    }
-
     /// `try` on a call that raised — leave this frame with whatever
     /// the callee already put in the channel.  The releases stand in
     /// the block in front of it.
@@ -650,7 +639,6 @@ pub const Lowering = struct {
         object: LocalId,
         /// The position within it.
         position: LocalId,
-        object_type: Type,
         header: BlockId = 0,
         body: BlockId = 0,
         step: BlockId = 0,
@@ -664,7 +652,6 @@ pub const Lowering = struct {
         return .{
             .object = try self.hiddenLocal(object_type, false),
             .position = try self.hiddenLocal(.int, false),
-            .object_type = object_type,
         };
     }
 

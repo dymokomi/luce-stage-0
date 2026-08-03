@@ -116,6 +116,24 @@ pub fn build(b: *std.Build) void {
     specs.addOptions("build_options", runtime_path);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
 
+    // The documentation site's generator (`site/src/`).  Its tests are
+    // what keep the word tables it highlights with, its link resolver
+    // and its Markdown honest, and they belong in `zig build test`
+    // rather than only in `site/build.sh`: a change to the language
+    // that the site has to follow should fail here, on the commit that
+    // made it, not on whoever next builds the site.
+    //
+    // It imports nothing — not `luce`, and so not libLLVM.  The
+    // generator drives the built binaries as subprocesses instead of
+    // linking the language in, which is what lets it verify what the
+    // toolchain actually does rather than what a linked copy would.
+    const site_generator = b.createModule(.{
+        .root_source_file = b.path("site/src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = site_generator })).step);
+
     // stdout and stderr, opened the same way by all three binaries —
     // `luce`, `loom`, and the `main` a compiled program links — so a
     // program's output does not depend on who started it.

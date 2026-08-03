@@ -32,7 +32,15 @@ const Span = source_mod.Span;
 const FileId = source_mod.FileId;
 const Sources = source_mod.Sources;
 
-pub const Severity = enum { err, warning };
+/// **The compiler has one severity, and that is the design.**  A Luce
+/// diagnostic is a refusal: nothing is reported that does not stop the
+/// compile, because a warning is a rule the language did not commit to
+/// and a stream of them is how a codebase learns to ignore its
+/// compiler.  The enum stays a named type — a reader of `Rendered`
+/// should see what the field means, and an editor client reads a name
+/// rather than inferring one — but it has exactly one member until
+/// there is a second thing to say.
+pub const Severity = enum { err };
 
 /// One diagnostic, resolved against the sources that produced it.
 ///
@@ -183,11 +191,12 @@ pub const Diagnostics = struct {
         return &self.list.items[index];
     }
 
+    /// Whether the compile is refused.  Every diagnostic is an error
+    /// (`Severity`), so this is "did anything get reported" — said
+    /// plainly, rather than as a walk looking for a severity there is
+    /// only one of.
     pub fn hasErrors(self: *const Diagnostics) bool {
-        for (self.list.items) |item| {
-            if (item.severity == .err) return true;
-        }
-        return false;
+        return self.list.items.len != 0;
     }
 
     /// Diagnostic `index`, resolved against the registry: the value to

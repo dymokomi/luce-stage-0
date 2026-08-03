@@ -23,6 +23,15 @@
 //! the unwinder cannot walk back through the compiled program's frame
 //! and faults inside the panic handler.  Every buffer in `Capture` is
 //! therefore fixed, deliberately.
+//!
+//! **A fixed buffer that fills up says so, in the buffer** (`keepText`
+//! below).  The oracle arm allocates and so always holds the whole
+//! message; if this arm silently kept a prefix, `settle` would compare
+//! a fragment against the whole and print a diff that looks exactly
+//! like the two engines disagreeing about the program.  Naming the
+//! harness's own limit instead costs one branch and never lies — and a
+//! panic, the other thing that used to happen here, would take the
+//! whole suite down over a message that was merely long.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -305,6 +314,34 @@ fn droppedLine(buffer: []u8, dropped: u32) []const u8 {
     return std.fmt.bufPrint(buffer, "... {d} more\n", .{dropped}) catch unreachable;
 }
 
+/// Put a host message into one of `Capture`'s fixed buffers, and
+/// answer how much of the buffer it filled.
+///
+/// **One policy for both failure channels.**  A message that does not
+/// fit is replaced — not truncated — by a sentence naming this
+/// harness's own limit.  The oracle arm allocates and always holds the
+/// whole message, so a silent prefix would be compared against the
+/// whole one and `settle` would print a diff that reads as the two
+/// engines disagreeing about the program; a panic, which is what the
+/// trap channel used to do, takes the suite down over a message that
+/// was only long.  `raiseIo` builds `verb ++ path` (`runtime/heap.zig`),
+/// so a long enough path reaches this for real.
+///
+/// The sentence itself always fits: `buffer` is 256 bytes and the
+/// longest form of it is under 80.
+fn keepText(buffer: []u8, words: []const u8) usize {
+    if (words.len <= buffer.len) {
+        @memcpy(buffer[0..words.len], words);
+        return words.len;
+    }
+    const said = std.fmt.bufPrint(
+        buffer,
+        "<agree.zig: a {d}-byte message does not fit its {d}-byte capture buffer>",
+        .{ words.len, buffer.len },
+    ) catch unreachable;
+    return said.len;
+}
+
 // ---------------------------------------------------------------------------
 // A host, in Zig
 // ---------------------------------------------------------------------------
@@ -422,8 +459,7 @@ pub const Capture = struct {
         const self = of(context);
         const words = message[0..@intCast(message_length)];
         self.error_code = @enumFromInt(code);
-        self.error_length = @min(words.len, self.error_storage.len);
-        @memcpy(self.error_storage[0..self.error_length], words[0..self.error_length]);
+        self.error_length = keepText(&self.error_storage, words);
         const rendered = traceLine(
             &self.origin_storage,
             origin.function[0..@intCast(origin.function_length)],
@@ -449,10 +485,8 @@ pub const Capture = struct {
     ) callconv(.c) void {
         const self = of(context);
         const words = message[0..@intCast(message_length)];
-        if (words.len > self.trap_storage.len) @panic("trap message too long");
         self.trap_code = @enumFromInt(code);
-        @memcpy(self.trap_storage[0..words.len], words);
-        self.trap_length = words.len;
+        self.trap_length = keepText(&self.trap_storage, words);
 
         var encoded: [512]u8 = undefined;
         self.trace_length = 0;
@@ -1376,4 +1410,35 @@ pub fn printsGiven(source: []const u8, provided: Provided, expected: []const u8)
     var session = try compare(source, provided);
     defer session.deinit();
     try testing.expectEqualStrings(expected, session.printed());
+}
+
+// ---------------------------------------------------------------------------
+// The harness's own tests
+// ---------------------------------------------------------------------------
+
+test "a message too long for a capture buffer names the harness, not a diff" {
+    // The two failure channels used to answer this differently — the
+    // error channel kept a silent 256-byte prefix, the trap channel
+    // panicked — and the truncating one was reachable: `raiseIo`
+    // builds `verb ++ path` and a path can be longer than that.  One
+    // policy now, and one that reads as what it is in a failure.
+    var buffer: [256]u8 = undefined;
+
+    const short = "cannot read notes.txt";
+    try testing.expectEqual(short.len, keepText(&buffer, short));
+    try testing.expectEqualStrings(short, buffer[0..short.len]);
+
+    // Exactly full still fits, whole.
+    const exact = "x" ** 256;
+    try testing.expectEqual(@as(usize, 256), keepText(&buffer, exact));
+    try testing.expectEqualStrings(exact, buffer[0..256]);
+
+    // One byte over, and the buffer holds a sentence about the buffer.
+    const over = "x" ** 257;
+    const length = keepText(&buffer, over);
+    try testing.expect(length < buffer.len);
+    try testing.expectEqualStrings(
+        "<agree.zig: a 257-byte message does not fit its 256-byte capture buffer>",
+        buffer[0..length],
+    );
 }

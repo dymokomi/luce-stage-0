@@ -52,8 +52,6 @@ pub const Document = struct {
     /// The text of the leading `# ` heading.
     title: []u8,
     headings: []Heading,
-    /// Every `href` the body mentions, for the link check.
-    links: [][]const u8,
 
     pub fn deinit(self: *Document, gpa: Allocator) void {
         gpa.free(self.html);
@@ -63,8 +61,6 @@ pub const Document = struct {
             gpa.free(heading.title);
         }
         gpa.free(self.headings);
-        for (self.links) |link| gpa.free(link);
-        gpa.free(self.links);
     }
 };
 
@@ -76,7 +72,6 @@ const Renderer = struct {
     cursor: usize = 0,
     out: Buffer,
     headings: std.ArrayList(Heading) = .empty,
-    links: std.ArrayList([]const u8) = .empty,
     sink: ?Sink,
 
     fn peek(self: *const Renderer) ?[]const u8 {
@@ -107,8 +102,6 @@ pub fn render(gpa: Allocator, source: []const u8, sink: ?Sink) Error!Document {
             gpa.free(heading.title);
         }
         renderer.headings.deinit(gpa);
-        for (renderer.links.items) |link| gpa.free(link);
-        renderer.links.deinit(gpa);
     }
 
     // The document must open with its own title.
@@ -128,7 +121,6 @@ pub fn render(gpa: Allocator, source: []const u8, sink: ?Sink) Error!Document {
         .html = try renderer.out.take(),
         .title = title,
         .headings = try renderer.headings.toOwnedSlice(gpa),
-        .links = try renderer.links.toOwnedSlice(gpa),
     };
 }
 
@@ -433,9 +425,6 @@ fn inline_(self: *Renderer, text: []const u8) !void {
 
         if (byte == '[') {
             if (linkAt(text, index)) |found| {
-                const kept = try self.gpa.dupe(u8, found.target);
-                errdefer self.gpa.free(kept);
-                try self.links.append(self.gpa, kept);
                 const external = std.mem.startsWith(u8, found.target, "http");
                 try self.out.add("<a href=\"");
                 try self.out.addEscaped(found.target);
@@ -541,8 +530,6 @@ test "a document reports its title and renders paragraphs and inline marks" {
     try std.testing.expect(std.mem.indexOf(u8, document.html, "<em>slanted</em>") != null);
     try std.testing.expect(std.mem.indexOf(u8, document.html, "<code>code</code>") != null);
     try std.testing.expect(std.mem.indexOf(u8, document.html, "href=\"/start/\"") != null);
-    try std.testing.expectEqual(@as(usize, 1), document.links.len);
-    try std.testing.expectEqualStrings("/start/", document.links[0]);
 }
 
 test "headings carry stable, unique anchors" {

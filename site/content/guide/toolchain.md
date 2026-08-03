@@ -87,6 +87,27 @@ alternate screen, frame buffering and every escape byte, and it
 sanitizes `term_write` text so a Luce program can never emit a control
 sequence.
 
+**The exit status says how the program stopped**, and a standalone
+`--emit=exe` binary answers with the same numbers, because both take
+them from the same place:
+
+| status | what happened |
+| --- | --- |
+| `0` | the program finished |
+| `1` | the program trapped |
+| `3` | an error reached the top uncaught |
+| `70` | the runtime ran out of memory |
+| `71` | it could not be run, or its output could not be written |
+
+A trap and an uncaught error are two different sentences about a
+program, so they are two different numbers: a script can tell them
+apart without reading stderr. loom's own refusals — no such file, a
+compile that failed — are `1`, and say so before anything of the
+program has run. A `.luc` or `.lc` path piped into `loom` on standard
+input returns the worst status any line produced; the interactive
+shell always leaves with `0`, because you watched every failure go
+past.
+
 **loom carries no code generator.** Building is `luce`'s job, so loom
 runs that binary — found beside its own executable first, then on
 `PATH` — and links nothing itself. libLLVM is 164 MB and the dynamic
