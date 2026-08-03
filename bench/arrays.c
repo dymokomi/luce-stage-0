@@ -1,6 +1,7 @@
 /* Array number-crunching: the twin of bench/arrays.luc.  Compiled
- * -O3 -march=native this dot product vectorizes; the comparison
- * quantifies the interpreter's scalar gap. */
+ * -O3 -march=native the fill loops vectorize and the dot product's
+ * accumulation does not, since reassociating a float reduction would
+ * change the answer — and compiled Luce lands in the same place. */
 #include <stdio.h>
 #include <stdlib.h>
 

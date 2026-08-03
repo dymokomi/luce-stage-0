@@ -1,9 +1,12 @@
 # Array number-crunching: fill two Float arrays, then a repeated dot
-# product.  This is the workload a C compiler auto-vectorizes (SIMD);
-# the interpreter runs it scalar, so the ratio here is the honest
-# measure of that gap.  The C twin is bench/arrays.c.  Every product
-# is an exact multiple of 1/8, so the sum is exact and both sides
-# truncate to the same integer.
+# product.  This is the workload a C compiler auto-vectorizes, and the
+# compiled Luce vectorizes it too — the fill loops on both sides, while
+# the dot product's accumulation stays scalar on both, because a
+# left-to-right float reduction cannot be reassociated.  What the ratio
+# measures is therefore element access and loop overhead, not a SIMD
+# gap.  The C twin is bench/arrays.c.  Every product is an exact
+# multiple of 1/8, so the sum is exact and both sides truncate to the
+# same integer.
 
 func main():
     let n = 200000
