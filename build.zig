@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // LuciaOS v2 builds two executables from one language module:
 //
@@ -51,6 +52,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    // What produced an artifact's machine code, as one number both
+    // binaries carry (`generatorIdentity` below).  `08_llvm/lower.zig`
+    // stamps it into every artifact's tag and every loader checks it,
+    // so a `luce` and a `loom` from one build agree, and a `.lcn` some
+    // earlier build left beside a program is rebuilt rather than run.
+    // It belongs to the language module because both halves of that
+    // deal live there: the tag is written in `08_llvm` and read in
+    // `08_llvm/abi.zig`, which is all loom needs to link.
+    const generator = b.addOptions();
+    generator.addOption(u64, "generator", generatorIdentity(b, target, optimize, llvm));
+    luce.addOptions("build_options", generator);
+
     const luce_tests = b.addTest(.{ .root_module = luce });
     const run_luce_tests = b.addRunArtifact(luce_tests);
     const test_step = b.step("test", "Run the Luce and loom test suites");
@@ -292,6 +305,13 @@ const Llvm = struct {
     objects: []const []const u8,
     /// The C++ runtime LLVM was built against ("c++" or "stdc++").
     cxx_runtime: []const u8,
+    /// `--version` and `--host-target`.  Nothing links against these:
+    /// they name the optimizer that turns the lowering's bitcode into
+    /// instructions, and the host triple `emit.hostTriple` will ask the
+    /// same library for, so they belong to the code generator's
+    /// identity below.
+    version: []const u8,
+    host_target: []const u8,
 };
 
 fn discoverLlvm(b: *std.Build) Llvm {
@@ -345,6 +365,8 @@ fn discoverLlvm(b: *std.Build) Llvm {
             "c++"
         else
             "stdc++",
+        .version = ask(b, program, "--version"),
+        .host_target = ask(b, program, "--host-target"),
     };
 }
 
@@ -387,4 +409,133 @@ fn linkLlvm(module: *std.Build.Module, llvm: Llvm) void {
     for (llvm.objects) |path| module.addObjectFile(.{ .cwd_relative = path });
     module.linkSystemLibrary(llvm.cxx_runtime, .{});
     module.link_libc = true;
+}
+
+// ---------------------------------------------------------------------------
+// The code generator's identity
+// ---------------------------------------------------------------------------
+
+/// The barrels and directories whose contents decide what machine code
+/// an artifact ends up holding: the lowering and the emitter, and the
+/// runtime library the link puts inside it.  Everything else about a
+/// compiled program — every stage from the lexer to the IR verifier —
+/// reaches the artifact only as the serialized module, which the tag
+/// already hashes as `source_hash`.
+const generator_barrels = [_][]const u8{
+    "src/luce/08_llvm.zig",
+    "src/luce/runtime.zig",
+};
+const generator_trees = [_][]const u8{
+    "src/luce/08_llvm",
+    "src/luce/runtime",
+};
+
+/// What produced an artifact's machine code, as one number.
+///
+/// A `.lcn` is a cache entry, and `source_hash` keys it on the program
+/// alone: change the code generator and every artifact already sitting
+/// beside a program keeps running the instructions the *previous* one
+/// wrote, silently, because the `.lc` still re-encodes to the same
+/// bytes.  This is the other half of the key.
+///
+/// **It is computed rather than declared.**  A hand-bumped number is
+/// the same shape as `abi.version`, but an ABI changes a few times a
+/// year and a code generator changes every day — and forgetting to
+/// bump it is precisely how an artifact goes stale unnoticed.  So the
+/// identity is a content hash of everything that decides the answer,
+/// taken here because `build.zig` is the one place that sees all of
+/// it: the sources below, the Zig and the settings that compile them,
+/// and the LLVM that optimizes what they emit.
+///
+/// **Content, never a clock.**  Nothing here reads an mtime or a path,
+/// so a rebuilt-but-identical toolchain produces the identical number
+/// and every artifact on disk stays valid — which is the property that
+/// makes the cache a cache.  `docs/CODEGEN.md` records what it
+/// therefore covers and what it does not.
+fn generatorIdentity(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    llvm: Llvm,
+) u64 {
+    var identity = std.hash.Wyhash.init(0x4c554347); // "LUCG"
+
+    // How the sources below are turned into code.  libluce_rt is
+    // linked into every artifact, so the Zig that built it, the
+    // optimize mode it was built at, and the machine it was built for
+    // are all part of what the artifact holds.
+    identity.update(builtin.zig_version_string);
+    identity.update(@tagName(optimize));
+    identity.update(target.result.zigTriple(b.allocator) catch @panic("OOM"));
+    identity.update(target.result.cpu.model.name);
+    identity.update(std.mem.asBytes(&target.result.cpu.features.ints));
+
+    // The optimizer that turns the lowering's bitcode into
+    // instructions, and the host triple `emit.hostTriple` asks the same
+    // library for.  A version string rather than the library's bytes:
+    // it is hundreds of megabytes and this runs on every configure.
+    identity.update(llvm.version);
+    identity.update(llvm.host_target);
+
+    for (generator_barrels) |path| hashSource(b, &identity, path);
+    for (generator_trees) |root| hashTree(b, &identity, root);
+    return identity.final();
+}
+
+/// One file's name and bytes, folded in.  The name counts: a renamed
+/// file is a different generator even when nothing inside it moved.
+fn hashSource(b: *std.Build, identity: *std.hash.Wyhash, path: []const u8) void {
+    const bytes = b.build_root.handle.readFileAlloc(
+        b.graph.io,
+        path,
+        b.allocator,
+        .unlimited,
+    ) catch |failure| std.process.fatal(
+        "cannot read {s}, which the code generator's identity is taken from: {s}",
+        .{ path, @errorName(failure) },
+    );
+    identity.update(path);
+    identity.update(std.mem.asBytes(&@as(u64, bytes.len)));
+    identity.update(bytes);
+}
+
+/// Every `.zig` file under a directory, in name order.
+///
+/// The whole directory, and not a list of the interesting files in it:
+/// a list is a thing to forget, and forgetting is the failure this
+/// identity exists to end.  A test file cannot change what a compiled
+/// artifact holds, so counting one costs a rebuild that was not
+/// needed; leaving out a file that can costs a wrong answer.
+fn hashTree(b: *std.Build, identity: *std.hash.Wyhash, root: []const u8) void {
+    var directory = b.build_root.handle.openDir(
+        b.graph.io,
+        root,
+        .{ .iterate = true },
+    ) catch |failure| std.process.fatal(
+        "cannot open {s}, which the code generator's identity is taken from: {s}",
+        .{ root, @errorName(failure) },
+    );
+    defer directory.close(b.graph.io);
+
+    var found: std.ArrayList([]const u8) = .empty;
+    var walk = directory.walk(b.allocator) catch @panic("OOM");
+    defer walk.deinit();
+    while (walk.next(b.graph.io) catch |failure| std.process.fatal(
+        "cannot read {s}, which the code generator's identity is taken from: {s}",
+        .{ root, @errorName(failure) },
+    )) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+        found.append(b.allocator, b.pathJoin(&.{ root, entry.path })) catch @panic("OOM");
+    }
+
+    // A walk's order is the file system's and is undefined; the
+    // identity's has to be the same on every machine that reads the
+    // same tree.
+    std.mem.sort([]const u8, found.items, {}, beforeByName);
+    for (found.items) |path| hashSource(b, identity, path);
+}
+
+fn beforeByName(_: void, left: []const u8, right: []const u8) bool {
+    return std.mem.lessThan(u8, left, right);
 }

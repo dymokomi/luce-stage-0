@@ -83,12 +83,12 @@ second copy of the runtime to collide with the real one at link time.
 **How an artifact says what it is.**  It exports `luce_artifact`, a
 constant `abi.Artifact`: a magic, the tag's own layout version, the
 host ABI version, the machine, a hash of the serialized module it was
-built from, and whether it kept its origins.  A loader reads that
-*before* it calls anything, and refuses by name — wrong machine, wrong
-ABI, stale program — because a native artifact is not portable and a
-file name cannot be trusted to say so.  Without the tag, a `.lcn`
-copied between machines is a file that loads cleanly and crashes with
-no explanation.
+built from, what generated the code, and whether it kept its origins.
+A loader reads that *before* it calls anything, and refuses by name —
+wrong machine, wrong ABI, wrong code generator, stale program —
+because a native artifact is not portable and a file name cannot be
+trusted to say so.  Without the tag, a `.lcn` copied between machines
+is a file that loads cleanly and crashes with no explanation.
 
 The machine is `abi.machine` — `aarch64-macos-none`, architecture,
 system and C ABI from `builtin` — and **not the LLVM triple**, which
@@ -120,16 +120,62 @@ restored from a backup with an old mtime does not quietly win.  That
 is PEP 552's answer rather than PEP 3147's, and it is the same
 decision the `.lci` image cache reached before it.
 
-**The content it keys on is the program's, and only the program's.**
-Nothing in the tag names the code generator, so an artifact survives a
-change to the *compiler* as long as the `.lc` re-encodes to the same
-bytes: upgrade `luce`, and every `.lcn` already sitting beside a
-program keeps running the code the previous one wrote.  `abi.version`
-catches a change to the host ABI and `artifact_format` a change to the
-tag, but a change to `08_llvm/lower.zig` alone is invisible.  Until the
-tag names its generator, anything that must measure or inspect
-generated code deletes the artifact first — `bench/run.sh` and
-`bench/compare.sh` both do.
+**And the content is the compiler's as well as the program's.**  A
+`.lcn` holds machine code, and which machine code depends on two
+independent things: the program, and whatever turned it into
+instructions.  `source_hash` answers the first.  `abi.generator`
+answers the second, and the tag carries both, so upgrading `luce`
+rebuilds every artifact instead of leaving the previous compiler's
+output running under a program whose `.lc` re-encodes to the same
+bytes.  A loader tells the two apart — "the program it was built from
+has changed" and "it was built by a different code generator" are
+different sentences, because they are different facts and only one of
+them is something a person did to the program.
+
+**The generator identity is computed, not declared.**  A hand-bumped
+number is the shape `abi.version` and `.lc`'s `format_version` have,
+and it is the wrong shape here: an ABI changes a few times a year, a
+code generator changes every day, and forgetting to bump is exactly
+how an artifact goes stale unnoticed.  So `build.zig` hashes what
+actually decides the answer and hands the one number to both binaries
+through `addOptions` — `luce` stamps it, `loom` compares its own
+compiled-in constant, and a `luce` and a `loom` from different builds
+correctly disagree.  It costs a warm run nothing: no file is read, no
+binary is hashed, and loom still looks for the compiler only on a
+miss.  Hashing the `luce` binary itself would have covered more, and
+was rejected for that — 55 MB rehashed on every warm run against a
+1.9 ms startup, to answer a question a build-time constant answers for
+free.
+
+What the number covers, all by content and never a clock:
+
+- **The lowering and the emitter** — every `.zig` under
+  `src/luce/08_llvm/`, plus the barrel.
+- **`libluce_rt`** — every `.zig` under `src/luce/runtime/`, plus the
+  barrel, since `cc` links it into the artifact.
+- **How those are compiled** — the Zig version, the optimize mode, the
+  target triple, and the CPU model and feature set, because the same
+  runtime source built three ways is three different libraries.
+- **libLLVM** — `llvm-config --version` and `--host-target`, the
+  second because `emit.hostTriple` will ask that same library what to
+  generate for.
+
+Whole directories rather than a list of the interesting files in them:
+a list is a thing to forget, and forgetting is the failure this exists
+to end.  Counting a test file costs one rebuild that was not needed;
+missing a file that matters costs a wrong answer.
+
+What it misses, and knowingly: **two different builds of the same
+LLVM version** — a distribution patch, different CMake flags — because
+the library is hundreds of megabytes and this runs on every configure,
+and `./vendor-llvm.sh` pins a single revision anyway.  And **the `cc`
+that links the artifact**, which combines objects rather than
+generating them.  Both are named here rather than assumed away.
+
+Because the tag is honest, nothing has to sweep artifacts before
+measuring one: `bench/run.sh` and `bench/compare.sh` leave the `.lcn`
+files where they are and let the loader refuse the stale ones, which
+also keeps them a live test that it does.
 
 ### Which engine runs a `.lc`
 
