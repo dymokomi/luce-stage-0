@@ -27,6 +27,7 @@
 const std = @import("std");
 const luce = @import("luce");
 const host_mod = @import("host");
+const streams = @import("streams");
 
 const abi = luce.llvm.abi;
 
@@ -58,10 +59,10 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     defer threaded.deinit();
     const io = threaded.io();
 
-    var err_writer = std.Io.File.stderr().writer(io, &.{});
+    var err_writer = streams.diagnostics(io);
     const err = &err_writer.interface;
     var out_buffer: [8192]u8 = undefined;
-    var out_writer = std.Io.File.stdout().writer(io, &out_buffer);
+    var out_writer = streams.output(io, &out_buffer);
     const out = &out_writer.interface;
 
     // argv[0] is the program's own path; `arg(0)` is the first thing

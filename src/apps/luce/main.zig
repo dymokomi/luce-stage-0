@@ -34,6 +34,7 @@ const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
 const object = @import("object.zig");
+const streams = @import("streams");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -51,10 +52,10 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     defer arena_state.deinit();
     const arguments = try init.args.toSlice(arena_state.allocator());
 
-    var err_writer = std.Io.File.stderr().writer(io, &.{});
+    var err_writer = streams.diagnostics(io);
     const err = &err_writer.interface;
     var out_buffer: [4096]u8 = undefined;
-    var out_writer = std.Io.File.stdout().writer(io, &out_buffer);
+    var out_writer = streams.output(io, &out_buffer);
     const out = &out_writer.interface;
 
     if (arguments.len < 3) return usage(err);

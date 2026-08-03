@@ -18,6 +18,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const runner = @import("runner.zig");
 const shell_mod = @import("shell.zig");
+const streams = @import("streams");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
     // One allocator for loom and for the objects the program it runs
@@ -53,10 +54,10 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     // Which engine runs a program, read once: it is process policy,
     // not something a program or a command can change (runner.zig).
     const policy = runner.Policy.read(&environ_map);
-    var err_writer = std.Io.File.stderr().writer(io, &.{});
+    var err_writer = streams.diagnostics(io);
     const err = &err_writer.interface;
     var out_buffer: [8192]u8 = undefined;
-    var out_writer = std.Io.File.stdout().writer(io, &out_buffer);
+    var out_writer = streams.output(io, &out_buffer);
     const out = &out_writer.interface;
 
     const colored = !no_color and (std.Io.File.stdout().isTty(io) catch false);

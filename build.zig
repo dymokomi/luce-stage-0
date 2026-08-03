@@ -78,6 +78,16 @@ pub fn build(b: *std.Build) void {
     emit.addOptions("build_options", runtime_path);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = emit })).step);
 
+    // stdout and stderr, opened the same way by all three binaries —
+    // `luce`, `loom`, and the `main` a compiled program links — so a
+    // program's output does not depend on who started it.
+    const app_streams = b.createModule(.{
+        .root_source_file = b.path("src/apps/streams.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_streams })).step);
+
     // File access shared by both executables (import loader, whole-
     // file read/write) — one copy, no drift.
     const app_files = b.createModule(.{
@@ -138,6 +148,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "luce", .module = luce },
                 .{ .name = "host", .module = app_host },
+                .{ .name = "streams", .module = app_streams },
             },
         }),
     });
@@ -154,6 +165,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "files", .module = app_files },
             .{ .name = "native", .module = app_native },
             .{ .name = "emit", .module = emit },
+            .{ .name = "streams", .module = app_streams },
         },
     });
 
@@ -184,6 +196,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "files", .module = app_files },
             .{ .name = "host", .module = app_host },
             .{ .name = "native", .module = app_native },
+            .{ .name = "streams", .module = app_streams },
         },
     });
     terminal_module.addAnonymousImport("editor.luc", .{
