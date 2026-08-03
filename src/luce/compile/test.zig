@@ -836,41 +836,6 @@ const util_module: TestModule = .{ .name = "util", .source =
     \\
 };
 
-test "a file is a module: imports, qualified names, and shared types" {
-    var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
-    var result = try compile_mod.compileProject(testing.allocator,
-        \\import geo
-        \\
-        \\func main():
-        \\    let made = geo.make(3.0, 4.0)
-        \\    assert(geo.length(made) == 5.0)
-        \\    let direct = geo.Point(x = 1.0, y = 2.0)
-        \\    let copied: geo.Point = direct
-        \\    assert(copied.y == 2.0)
-        \\    assert(geo.Text.double(21) == 42)
-        \\
-    , files.loader(), .{});
-    switch (result) {
-        .success => {},
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
-            result.deinit();
-            return error.TestUnexpectedResult;
-        },
-    }
-    var program = result.success;
-    defer program.deinit();
-
-    // The whole project runs as one program.
-    const backend = @import("../backend.zig");
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &program, .{});
-    try testing.expect(ran == .success);
-}
-
 test "imports are explicit, checked, and reported per file" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
@@ -1142,78 +1107,13 @@ test "a project's diagnostics name every file they come from" {
     try testing.expect(std.mem.indexOf(u8, rendered, "program.luc:") != null);
 }
 
-test "an imported module compiles the same with CRLF line endings" {
-    // The layout rules run on the loaded text, so a module edited on
-    // Windows blocks and dedents exactly like any other file.
-    var files: TestLoader = .{ .modules = &.{
-        .{ .name = "geo", .source = "func area() -> Int:\r\n    var total = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" },
-    } };
-    var result = try compile_mod.compileProject(testing.allocator,
-        \\import geo
-        \\
-        \\func main():
-        \\    assert(geo.area() == 3)
-        \\
-    , files.loader(), .{});
-    defer result.deinit();
-    if (result == .failure) {
-        printDiagnostics(&result);
-        return error.TestUnexpectedResult;
-    }
-    const backend = @import("../backend.zig");
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const ran = try backend.evaluate(
-        .{ .arena = arena.allocator(), .objects = testing.allocator },
-        &result.success,
-        .{},
-    );
-    try testing.expect(ran == .success);
-}
-
-test "modules may import each other; mutual recursion crosses files" {
-    const even_module: TestModule = .{ .name = "even", .source =
-        \\import odd
-        \\
-        \\func check(value: Int) -> Bool:
-        \\    if value == 0:
-        \\        return true
-        \\    return odd.check(value - 1)
-        \\
-    };
-    const odd_module: TestModule = .{ .name = "odd", .source =
-        \\import even
-        \\
-        \\func check(value: Int) -> Bool:
-        \\    if value == 0:
-        \\        return false
-        \\    return even.check(value - 1)
-        \\
-    };
-    var files: TestLoader = .{ .modules = &.{ even_module, odd_module } };
-    var result = try compile_mod.compileProject(testing.allocator,
-        \\import even
-        \\
-        \\func main():
-        \\    assert(even.check(10))
-        \\    assert(not even.check(7))
-        \\
-    , files.loader(), .{});
-    defer result.deinit();
-    try testing.expect(result == .success);
-
-    const backend = @import("../backend.zig");
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, .{});
-    try testing.expect(ran == .success);
-}
-
-test "an import cycle is allowed; what may not be circular is checked finer" {
+test "an import cycle compiles; what may not be circular is checked finer" {
     // The policy, written down (compile/modules.zig): a Luce module
     // has no initialization phase, so there is nothing to catch half
     // done and no reason to inherit Python's partially initialized
-    // module.  A three-file ring loads, compiles, and runs.
+    // module.  A three-file ring loads and compiles; that it also
+    // *runs* is a two-engine fact and is proved in
+    // `specs/modules_spec.zig`.
     const script: types.CompileOptions = .{};
     var ring: TestLoader = .{ .modules = &.{
         .{ .name = "a", .source = "import b\n\nfunc step(v: Int) -> Int:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
@@ -1230,12 +1130,6 @@ test "an import cycle is allowed; what may not be circular is checked finer" {
     defer looped.deinit();
     printDiagnostics(&looped);
     try testing.expect(looped == .success);
-
-    const backend = @import("../backend.zig");
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &looped.success, .{});
-    try testing.expect(ran == .success);
 
     // The circularity that *does* mean something is caught where it
     // means it: a constant that depends on itself through two files
@@ -1256,184 +1150,19 @@ test "an import cycle is allowed; what may not be circular is checked finer" {
     try testing.expectEqualStrings("luce.sema.const", knotted.failure.at(0).?.code);
 }
 
-test "short-circuit operands survive block splits everywhere" {
-    // Every multi-operand construct with a splitting (and/or) operand
-    // once emitted registers across block boundaries; the verifier
-    // rejected the program as an internal compiler error.
-    const script: types.CompileOptions = .{};
-    var featured = try compile_mod.compile(testing.allocator,
-        \\struct Flags:
-        \\    left: Bool
-        \\    right: Bool
-        \\
-        \\func pick(first: Bool, second: Bool) -> Bool:
-        \\    return first or second
-        \\
-        \\func main():
-        \\    let a = true
-        \\    let b = false
-        \\    var cells = new Array(Bool, 2, 2)
-        \\    cells[0, 1] = a == b or a
-        \\    let chosen = pick(a and b, a or b)
-        \\    let pair = Flags(left = a or b, right = a and b)
-        \\    var flags = [a or b, pair.left, cells[0, 1] and chosen]
-        \\    flags.append(a or b)
-        \\    let compared = (a or b) == (a and b)
-        \\    let sliced = flags[0:len(flags)]
-        \\    for index in range(0, len(sliced)):
-        \\        let unused = sliced[index] or compared
-        \\    free(sliced)
-        \\    free(flags)
-        \\    free(cells)
-        \\
-    , script);
-    defer featured.deinit();
-    switch (featured) {
-        .success => {},
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
-            return error.TestUnexpectedResult;
-        },
-    }
-
-    const backend = @import("../backend.zig");
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &featured.success, .{});
-    try testing.expect(ran == .success);
-    try testing.expectEqual(@as(u32, 0), ran.success.leaked_objects);
-}
-
 // ---------------------------------------------------------------------------
 // File-scope constants (docs/V2.md Phase 2)
 // ---------------------------------------------------------------------------
 
-const script_options: types.CompileOptions = .{};
+// What a constant *is* — the folding, and what it may not name — is
+// here, beside the driver that folds it.  What a folded constant
+// evaluates to is a two-engine fact and lives in
+// `specs/behavior_spec.zig`.
 
-fn runsClean(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, script_options);
-    defer result.deinit();
-    switch (result) {
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
-            return error.TestUnexpectedResult;
-        },
-        .success => |*program| {
-            const backend = @import("../backend.zig");
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
-            defer arena.deinit();
-            const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{});
-            if (ran != .success) {
-                std.debug.print("unexpected trap: {s}\n", .{ran.trap.message});
-                return error.TestUnexpectedResult;
-            }
-            try testing.expectEqual(@as(u32, 0), ran.success.leaked_objects);
-        },
-    }
-}
+const script_options: types.CompileOptions = .{};
 
 fn failsWith(source: []const u8, code: []const u8) !void {
     return expectFailsOptions(source, script_options, code);
-}
-
-test "file-scope constants fold every value kind" {
-    try runsClean(
-        \\import std.strings
-        \\
-        \\let width = 80
-        \\let tau = 2.0 * pi
-        \\let pi = 3.14159
-        \\let debug = not (width > 100)
-        \\let greeting = "hello, " + "loom"
-        \\let shout = greeting
-        \\let half_width = width / 2 - 1
-        \\let truncated = Int(tau)
-        \\let widened = Float(width)
-        \\let roomy = width >= 80 and tau > 6.0
-        \\
-        \\func main():
-        \\    assert(width == 80)
-        \\    assert(half_width == 39)
-        \\    assert(tau > 6.28 and tau < 6.29)
-        \\    assert(debug)
-        \\    assert(greeting == "hello, loom")
-        \\    assert(shout.upper() == "HELLO, LOOM")
-        \\    assert(truncated == 6)
-        \\    assert(widened == 80.0)
-        \\    assert(roomy)
-        \\    var xs = [width, half_width]
-        \\    assert(xs[0] + xs[1] == 119)
-        \\
-    );
-}
-
-test "struct constants: the Theme case" {
-    try runsClean(
-        \\struct Theme:
-        \\    keyword: Int
-        \\    comment: Int
-        \\    bold: Bool
-        \\
-        \\let theme = Theme(keyword = 114, comment = 238, bold = true)
-        \\let accent = theme.keyword + 1
-        \\
-        \\func main():
-        \\    assert(theme.keyword == 114)
-        \\    assert(theme.comment == 238)
-        \\    assert(theme.bold)
-        \\    assert(accent == 115)
-        \\    let local_copy = theme
-        \\    assert(local_copy.keyword == 114)
-        \\
-    );
-}
-
-test "constants reach across modules through imports" {
-    var files: TestLoader = .{ .modules = &.{.{ .name = "config", .source =
-        \\struct Size:
-        \\    rows: Int
-        \\    cols: Int
-        \\
-        \\let version = "2.0"
-        \\let rows = 24
-        \\let screen = Size(rows = rows, cols = 80)
-        \\
-    }} };
-    var result = try compile_mod.compileProject(testing.allocator,
-        \\import config
-        \\import std.strings
-        \\
-        \\let banner = "loom " + config.version
-        \\
-        \\func main():
-        \\    assert(config.rows == 24)
-        \\    assert(config.screen.cols == 80)
-        \\    assert(banner == "loom 2.0")
-        \\    assert(banner.starts_with("loom"))
-        \\    assert(config.version.contains("."))
-        \\
-    , files.loader(), script_options);
-    switch (result) {
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
-            result.deinit();
-            return error.TestUnexpectedResult;
-        },
-        .success => {},
-    }
-    var program = result.success;
-    defer program.deinit();
-    const backend = @import("../backend.zig");
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &program, .{});
-    try testing.expect(ran == .success);
 }
 
 test "constants are compile-time: calls, objects, and verbs are refused" {

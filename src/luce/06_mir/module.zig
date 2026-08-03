@@ -676,26 +676,10 @@ test "an origins table that disagrees with the instruction count is rejected" {
     try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
 }
 
-test "a decoded module runs behind the backend boundary" {
-    var program = try compileScript(
-        \\func double(value: Int) -> Int:
-        \\    return value * 2
-        \\
-        \\func main():
-        \\    assert(double(21) == 42)
-        \\
-    );
-    defer program.deinit();
-    const encoded = try encode(testing.allocator, &program);
-    defer testing.allocator.free(encoded);
-    var loaded = try decode(testing.allocator, encoded);
-    defer loaded.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const result = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &loaded, .{});
-    try testing.expect(result == .success);
-}
+// A decoded module *running* is a fact about the language rather
+// than about the format, so it is proved on both engines in
+// `specs/format_spec.zig` — which also pins the round trip's bytes,
+// because those bytes are the artifact key.
 
 test "truncated, oversold, and damaged modules are rejected" {
     var program = try compileScript(
@@ -816,6 +800,17 @@ test "single-byte damage is rejected or runs to a clean outcome — never a cras
     // program must run to a clean success/trap.  This is the
     // corpus-mode stand-in for fuzzing the trust boundary; any panic
     // here is a verifier hole (a real one was found this way).
+    //
+    // **The interpreter is a sanitizer here, not a reference engine.**
+    // Every test that runs a *Luce program* runs it on both engines
+    // and compares them (docs/ENGINE.md, step 8); this one does not,
+    // and the reason is that a mutant is not a Luce program: no source
+    // produces it, nothing specifies what it should print, and the
+    // lowering refuses damaged IR by design, so there is no second
+    // arm to compare against and nothing for two engines to agree
+    // about.  What is under test is the decoder's trust boundary, and
+    // an engine that walks every instruction with bounds checks is
+    // the instrument that finds a hole in it.
     var ran: usize = 0;
     var looping: usize = 0;
     for (0..encoded.len) |index| {

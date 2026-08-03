@@ -30,8 +30,8 @@ because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
 in `src/luce/01_source/load.zig`; the suite proving them is
-`src/luce/specs/std_spec.zig` (math, strings) plus a hosted test beside
-`TestHost` in `src/luce/interpreter/test.zig` (files).
+`src/luce/specs/std_spec.zig` — math, strings and files alike, each
+program run on both engines and compared (docs/ENGINE.md).
 
 Naming follows the language's own style: modules are short lower-case
 nouns, functions are short verbs read *with* the module prefix —
@@ -201,8 +201,9 @@ would be inventing it.
    `#` comments in the header.
 2. Add one row to `standard_modules` in `src/luce/01_source/load.zig`
    — the one place that answers "what are the bytes of module X".
-3. Prove it in `std_spec.zig` (pure) or beside `TestHost` (hosted),
-   the way math and files are.
+3. Prove it in `std_spec.zig`, the way math, strings and files are —
+   a hosted module names the world it wants (`agree.World.withFile`,
+   a refusing host) and gets the same one on both engines.
 4. Document it here.
 
 Deliberate constraints, until the language grows the features:

@@ -11,19 +11,25 @@
 //! Organized by diagnostic code.  Behavioral correctness lives in
 //! behavior_spec.zig; ownership rejections (luce.sema.own) live in
 //! ownership_spec.zig, which already covers them per situation.
+//!
+//! This is the one spec that runs nothing: a program the compiler
+//! refuses never reaches an engine, so there is no second arm and
+//! nothing for two engines to disagree about.
 
 const std = @import("std");
-const compile_mod = @import("../compile.zig");
-const types = @import("../support/types.zig");
-const source_mod = @import("../01_source.zig");
-const semantics = @import("../04_semantics.zig");
+const luce = @import("luce");
+
+const compile_mod = luce.compile;
+const types = luce.types;
+const source_mod = luce.source;
+const semantics = luce.semantics;
 
 const testing = std.testing;
 
 const script: types.CompileOptions = .{};
 const hosted: types.CompileOptions = .{ .allow_host = true };
 
-const Diagnostics = @import("../support/diagnostics.zig").Diagnostics;
+const Diagnostics = luce.diagnostics.Diagnostics;
 
 fn printAll(diagnostics: *const Diagnostics) void {
     const rendered = diagnostics.render(testing.allocator) catch return;
@@ -862,6 +868,10 @@ test "luce.sema.method: Map has no such method" {
 // ---------------------------------------------------------------------------
 // luce.sema.index — distinct paths
 // ---------------------------------------------------------------------------
+
+test "luce.sema.index: only a String is sliced, so a number is refused" {
+    try expectError("func main():\n    let text = 1[0:1]\n", "luce.sema.index");
+}
 
 test "luce.sema.index: a String is sliced, not indexed" {
     try expectError("func main():\n    let s = \"abc\"\n    let c = s[0]\n", "luce.sema.index");

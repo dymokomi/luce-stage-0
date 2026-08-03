@@ -17,10 +17,12 @@ Everything below was measured on this tree at `df5d48f`, Apple M4 Max,
 `./build.sh` (ReleaseSafe) unless a number says otherwise. `zig build
 test` is green: **849/849 in 71.1 s**.
 
-> **Steps 1, 2 and 3 are done.** `.lc` `format_version` is 17,
+> **Steps 1, 2, 3 and 8 are done.** `.lc` `format_version` is 17,
 > `abi.version` is unchanged at 8 (nothing in the host ABI ever named a
 > port or a `Bytes`), the lowering is total, and `zig build test` is
-> **836/836**. The interpreter's own suite is 36 tests (39 before). Each step below
+> **838/838 in ~4 min** (3 m 59 s – 4 m 06 s over two runs). The executable specification is its own
+> module and every test in it runs on both engines; the interpreter's
+> own suite is **2** tests (36 before, 39 before that). Each step below
 > carries a note on what it cost in contact with the code.
 
 ---
@@ -53,7 +55,8 @@ The 282 are `specs/behavior_spec.zig` (127), `specs/ownership_spec.zig`
 (78), `specs/std_spec.zig` (19), `interpreter/test.zig` (37),
 `specs/errors_spec.zig` (12 — the rest are compile-time diagnostics),
 `compile/test.zig` (6), `06_mir/module.zig` (2), `07_optimize/test.zig`
-(1).
+(1). *(Correction from step 8: `errors_spec` executes **nothing** — it
+is compile-time diagnostics end to end, and always was.)*
 
 **Read that table again.** The executable specification of the
 language — behaviour, ownership S1–S43, the standard library — proves
@@ -631,7 +634,7 @@ the check. `registers.zig` stays — `dead.zig` still needs it.
 depends on it".
 
 **8. Move the executable specification onto the compiled path — as
-`agree`.** *(needs 1–2; independent of 4–7)*
+`agree`. — DONE.** *(needs 1–2; independent of 4–7)*
 *Changes:* `behavior_spec` (127), `ownership_spec` (78) and `std_spec`
 (19) run their programs through the `agree` harness instead of
 `backend.evaluate`.
@@ -644,6 +647,99 @@ it hurts.
 *This is the step that makes the oracle self-policing and the step that
 gives the shipped engine an executable specification. It is the most
 valuable one on the list.*
+
+*What it took, in contact with the code:*
+
+**The specification became a module.** The harness needs `emit`, and
+`emit` links libLLVM that `luce` deliberately does not, so the specs
+could not stay in the `luce` module and gain a compiled arm. They are
+now `src/luce/specs.zig` — the one module that imports both `luce` and
+`emit` — built by `build.zig` as its own test target. `luce.zig` no
+longer re-exports them. That module boundary produced the rule that
+decided every other move in this step, and it is worth stating as a
+rule rather than as an accident:
+
+> **Anything that runs a Luce program is a specification, and a
+> specification runs it on both engines. Anything that inspects a
+> structure is a test of that structure and lives beside the code it
+> proves.**
+
+`08_llvm/test.zig` stayed where it is — beside the backend it proves —
+and joined the specs module, because it runs programs. `emit.zig` lost
+its test block and the `emit` module lost its test target.
+
+**One harness, not five.** `specs/agree.zig` holds what was inside
+`08_llvm/test.zig`: `World`, `Provided`, `Capture`, `Reference`, and
+the compile → lower → libLLVM → `cc` → `dlopen` path. Two things grew
+in the move. The `World` became **seedable** (a file already there, an
+argument list, a scripted keyboard, a host that refuses writes) so the
+hosted tests could port without losing their exact assertions; and
+`settle` now also compares **the world each arm left behind** — file
+name and bytes, keys read, lines read, the clock — which the old
+`agree` never did. The transcript catches a wrong effect; that catches
+a wrong *result* of one. Above the harness sit four spec-facing
+assertions (`ok`, `trap`, `errors`, `prints`) plus a `Session` for the
+cases that want the exact trace, so call sites read `try agreeOk(src)`
+and `try agreeTrap(src, .use_after_free)` and the S1–S43 structure of
+`ownership_spec` survives untouched.
+
+**The count is zero, and here is the method.** Every interpreter
+entry point is `backend.evaluate`, `backend.evaluateHosted` or
+`Machine.execute`:
+
+```sh
+grep -rn --include='*.zig' -e 'backend\.evaluate' -e 'machine\.execute' src/
+```
+
+Outside `backend.zig` itself, `apps/`, and `specs/agree.zig`, that
+leaves **three** sites and none of them runs a Luce program as a
+specification:
+
+- `interpreter/test.zig` (2) — `frame_storage` staying O(depth) over
+  100 000 calls, and 50 000 frames on a heap stack. Both read
+  `Machine`'s internals; neither has a compiled counterpart, because
+  compiled code has no frame stack of its own. This is the oracle
+  testing itself, which the discipline requires.
+- `06_mir/module.zig` (1) — the single-byte damage fuzz. A mutant is
+  not a Luce program: no source produces it, nothing says what it
+  should print, and the lowering refuses damaged IR by design. The
+  interpreter is a **sanitizer** there, and the file now says so.
+
+**Where the other 282 went.** `behavior_spec` 128 → 152,
+`ownership_spec` 96, `std_spec` 20 → 24, `errors_spec` 163 → 164
+(compile-time only; it runs nothing and never did — the memo's "12 that
+execute" was wrong). Four new spec files carry what had to leave the
+files it was in: `host_spec.zig` (9, the host boundary),
+`modules_spec.zig` (5, several files as one program),
+`optimize_spec.zig` (3, the stage changes nothing observable),
+`format_spec.zig` (1, a `.lc` read back is the same program).
+`interpreter/test.zig` went 36 → 2, `compile/test.zig` 41 → 34,
+`07_optimize/test.zig` 12 → 9, `06_mir/module.zig` 10 → 9. Nothing was
+dropped: 836 → **838**, the two extra being std `files` coverage that
+had no home before.
+
+**No disagreement was found.** 282 programs moved onto the compiled
+path and every one agreed on the first run — prints, trap code, trap
+message, trace frame for frame, leak census, and the world left
+behind. That is the lowering being total rather than the harness being
+weak, and the proof is the negative control: swapping `.smin` for
+`.smax` in `lower.zig`'s `emitExtremum` is caught by
+`behavior_spec`'s "abs, min, max, clamp on Int", by "loops, recursion,
+strings, and builtins compute", and by a *generated* program in
+`optimize_spec`'s fuzz — not only by `08_llvm`'s own agree tests. The
+specs police the shipping engine now.
+
+**The cost was double the estimate, and the reason is a decision, not
+a surprise.** 71 s → **~4 min**. Roughly 60 s of that is the 282
+specs, at ~130 ms per compiled run rather than the 205 ms Hat 1
+measured. The other ~120 s is `optimize_spec`'s fuzz, which the memo
+never priced: 400 generated programs, each compiled twice (stage off,
+stage on) and each of those run on both engines. That is 800 compiled
+runs, and it is deliberate — it is four hundred programs nobody wrote,
+and it is the widest differential net over the lowering in the tree,
+recovering exactly the coverage Hat 5 says dies with the site's second
+arm. It is also the single line to cut if the suite ever hurts: run
+only the optimized program compiled and the bill halves.
 
 **9. The prose.** *(after 5)*
 232 sites, 44 files. Four sections rewritten rather than edited. Fold

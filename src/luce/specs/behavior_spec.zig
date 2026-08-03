@@ -7,98 +7,38 @@
 //! this is the regression net under every future compiler change.
 //! Organized by feature area, not by anecdote.  Compile errors live
 //! in errors_spec.zig; ownership lives in ownership_spec.zig.
+//!
+//! Every program here runs **twice**: interpreted and compiled, with
+//! the printed bytes, the trap code and message, the call trace and
+//! the leak census compared (`specs/agree.zig`).  A failure is either
+//! a wrong answer or a disagreement between the engines, and both are
+//! findings.
 
 const std = @import("std");
-const compile_mod = @import("../compile.zig");
-const types = @import("../support/types.zig");
-const backend = @import("../backend.zig");
-const mir = @import("../06_mir.zig");
+const agree = @import("agree.zig");
+const luce = @import("luce");
+const mir = luce.mir;
 
 const testing = std.testing;
 
-const script: types.CompileOptions = .{};
+/// The depth this suite has always run at.  A handful of the
+/// recursive cases go past the 256 both engines default to.
+const budget: agree.Provided = .{ .call_depth = 4096 };
 
-/// Compile `source` as a script and run it; every `assert` inside
-/// must hold, the run must not trap, and nothing may leak (scope
-/// ownership frees everything — a nonzero count is an interpreter
-/// bug).  The one harness behind every behavioral test.
-fn expectOk(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, script);
-    defer result.deinit();
-    switch (result) {
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected compile error:\n{s}", .{rendered});
-            return error.TestUnexpectedResult;
-        },
-        .success => |*program| {
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
-            defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
-                .call_depth = 4096,
-            });
-            switch (outcome) {
-                .success => |success| {
-                    if (success.leaked_objects != 0) {
-                        std.debug.print("{d} objects leaked\n", .{success.leaked_objects});
-                        return error.TestUnexpectedResult;
-                    }
-                },
-                .errored => |raised| {
-                    std.debug.print("unexpected error: {s} ({s})\n", .{ raised.message, @tagName(raised.code) });
-                    return error.TestUnexpectedResult;
-                },
-                .trap => |trap| {
-                    std.debug.print("unexpected trap: {s} ({s})\n", .{ trap.message, @tagName(trap.code) });
-                    return error.TestUnexpectedResult;
-                },
-            }
-        },
-    }
+/// The program runs on both engines, they agree, every `assert`
+/// inside holds, and nothing is left alive — scope ownership frees
+/// everything, so a nonzero census is a bug in whichever engine
+/// reported it.
+fn agreeOk(source: []const u8) !void {
+    return agree.okGiven(source, budget);
 }
 
-/// Compile `source` as a script, run it, and require the run to abort
-/// with exactly `code` — the mirror image of `expectOk` for the
-/// runtime failure modes.  A clean success, the wrong trap code, or a
-/// compile error all fail the test, so each entry pins one TrapCode to
-/// the shortest program that provokes it.  Operands are deliberately
-/// held in mutable locals: a compile-time-constant fault would be
-/// caught by the analyzer instead and never reach the interpreter.
-fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
-    var result = try compile_mod.compile(testing.allocator, source, script);
-    defer result.deinit();
-    switch (result) {
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected compile error (wanted trap {s}):\n{s}", .{ @tagName(code), rendered });
-            return error.TestUnexpectedResult;
-        },
-        .success => |*program| {
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
-            defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
-                .call_depth = 4096,
-            });
-            switch (outcome) {
-                .success => {
-                    std.debug.print("expected trap {s}, ran clean\n", .{@tagName(code)});
-                    return error.TestUnexpectedResult;
-                },
-                .errored => |raised| {
-                    std.debug.print("expected trap {s}, got error {s}\n", .{ @tagName(code), @tagName(raised.code) });
-                    return error.TestUnexpectedResult;
-                },
-                .trap => |trap| {
-                    if (trap.code != code) {
-                        std.debug.print("expected trap {s}, got {s}\n", .{ @tagName(code), @tagName(trap.code) });
-                        return error.TestUnexpectedResult;
-                    }
-                },
-            }
-        },
-    }
+/// The mirror image: both engines abort the run with exactly `code`,
+/// at the same place, with the same words.  Operands are deliberately
+/// held in mutable locals — a compile-time-constant fault would be
+/// caught by the analyzer instead and never reach an engine.
+fn agreeTrap(source: []const u8, code: mir.TrapCode) !void {
+    return agree.trapGiven(source, budget, code);
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +46,7 @@ fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
 // ---------------------------------------------------------------------------
 
 test "integers: the four operations and precedence" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(2 + 3 == 5)
         \\    assert(10 - 4 == 6)
@@ -121,7 +61,7 @@ test "integers: the four operations and precedence" {
 }
 
 test "integers: division truncates toward zero, remainder follows the dividend" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(7 / 2 == 3)
         \\    assert(-7 / 2 == -3)
@@ -136,7 +76,7 @@ test "integers: division truncates toward zero, remainder follows the dividend" 
 }
 
 test "integers: the i64 range is honored" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(9223372036854775807 > 0)
         \\    assert(9223372036854775807 - 1 == 9223372036854775806)
@@ -151,7 +91,7 @@ test "integers: Int's minimum is written the way it reads" {
     // is one past the largest positive Int.  Range-checking the
     // magnitude on its own makes the smallest Int the one number
     // nobody can spell, so the sign folds into the literal first.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let low = -9223372036854775808
         \\    assert(low < 0)
@@ -164,7 +104,7 @@ test "integers: Int's minimum is written the way it reads" {
 }
 
 test "integers: Int's minimum folds in a file-scope constant too" {
-    try expectOk(
+    try agreeOk(
         \\let low = -9223372036854775808
         \\let high = 9223372036854775807
         \\
@@ -180,7 +120,7 @@ test "integers: Int's minimum folds in a file-scope constant too" {
 // ---------------------------------------------------------------------------
 
 test "floats: arithmetic, IEEE division, and builtins" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(1.5 + 2.5 == 4.0)
         \\    assert(3.0 * 2.0 == 6.0)
@@ -195,7 +135,7 @@ test "floats: arithmetic, IEEE division, and builtins" {
 }
 
 test "floats and ints do not mix without explicit conversion" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let n = 7
         \\    let x = 2.0
@@ -211,7 +151,7 @@ test "floats and ints do not mix without explicit conversion" {
 // ---------------------------------------------------------------------------
 
 test "compound assignment on names: every operator, Int and Float" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var n = 10
         \\    n += 5
@@ -233,7 +173,7 @@ test "compound assignment on names: every operator, Int and Float" {
 }
 
 test "compound assignment concatenates strings with +=" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var s = "a"
         \\    s += "b"
@@ -244,7 +184,7 @@ test "compound assignment concatenates strings with +=" {
 }
 
 test "compound assignment on struct fields and container elements" {
-    try expectOk(
+    try agreeOk(
         \\struct Counter:
         \\    value: Int
         \\
@@ -271,7 +211,7 @@ test "compound assignment on struct fields and container elements" {
 test "a compound index target evaluates its index expression once" {
     // If `xs[next()]` were evaluated twice the counter would land on
     // 2 and the wrong slot would change; once, it lands on 1.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var calls = [0]
         \\    var xs = [100, 200, 300]
@@ -293,7 +233,7 @@ test "a compound index target evaluates its index expression once" {
 // ---------------------------------------------------------------------------
 
 test "booleans: logic, short-circuit, and comparison chains" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(true and true)
         \\    assert(not (true and false))
@@ -307,7 +247,7 @@ test "booleans: logic, short-circuit, and comparison chains" {
 }
 
 test "short-circuit does not evaluate the dead side" {
-    try expectOk(
+    try agreeOk(
         \\func boom(x: Int) -> Bool:
         \\    assert(x != 0)
         \\    return true
@@ -326,7 +266,7 @@ test "short-circuit does not evaluate the dead side" {
 // ---------------------------------------------------------------------------
 
 test "if / elif / else selects exactly one arm" {
-    try expectOk(
+    try agreeOk(
         \\func classify(n: Int) -> Int:
         \\    if n < 0:
         \\        return 0 - 1
@@ -344,7 +284,7 @@ test "if / elif / else selects exactly one arm" {
 }
 
 test "while loops, break, and continue" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var sum = 0
         \\    var i = 0
@@ -361,7 +301,7 @@ test "while loops, break, and continue" {
 }
 
 test "for-range iterates the half-open interval" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var total = 0
         \\    for i in range(0, 5):
@@ -376,7 +316,7 @@ test "for-range iterates the half-open interval" {
 }
 
 test "nested loops with labeled-free break only leave the inner loop" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var hits = 0
         \\    for i in range(0, 3):
@@ -394,7 +334,7 @@ test "nested loops with labeled-free break only leave the inner loop" {
 // ---------------------------------------------------------------------------
 
 test "functions: parameters, returns, and recursion" {
-    try expectOk(
+    try agreeOk(
         \\func factorial(n: Int) -> Int:
         \\    if n <= 1:
         \\        return 1
@@ -413,7 +353,7 @@ test "functions: parameters, returns, and recursion" {
 }
 
 test "mutual recursion resolves regardless of declaration order" {
-    try expectOk(
+    try agreeOk(
         \\func is_even(n: Int) -> Bool:
         \\    if n == 0:
         \\        return true
@@ -436,7 +376,7 @@ test "mutual recursion resolves regardless of declaration order" {
 // ---------------------------------------------------------------------------
 
 test "strings: concatenation, comparison, and slicing" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let a = "loom"
         \\    assert(a + "!" == "loom!")
@@ -454,7 +394,7 @@ test "strings: concatenation, comparison, and slicing" {
 test "strings: UTF-8 aware slicing and byte access" {
     // The 🙂 is four bytes (F0 9F 99 82); slices and byte_at see the
     // real UTF-8, and a slice that keeps it whole is exact.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let s = "a🙂b"
         \\    assert(len(s) == 6)
@@ -471,7 +411,7 @@ test "strings: UTF-8 aware slicing and byte access" {
 // ---------------------------------------------------------------------------
 
 test "conversions: str, parse, chr, ord" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(str(42) == "42")
         \\    assert(str(0 - 7) == "-7")
@@ -491,15 +431,14 @@ test "ord of a literal is a compile-time constant" {
     // Folding `ord` is what lets the language do without character
     // literal syntax at all: `byte_at(s, i) == ord("(")` should cost
     // exactly what `== 40` costs, or nobody will write it.
-    var result = try compile_mod.compile(testing.allocator,
+    var compiled = try agree.program(
         \\func main():
         \\    let text = "(x)"
         \\    assert(text.byte_at(0) == ord("("))
         \\
-    , script);
-    defer result.deinit();
-    try testing.expect(result == .success);
-    for (result.success.functions) |function| {
+    );
+    defer compiled.deinit();
+    for (compiled.functions) |function| {
         for (function.instructions) |instruction| {
             if (instruction == .intrinsic and instruction.intrinsic.kind == .ord_text) {
                 std.debug.print("ord survived to run time\n", .{});
@@ -510,7 +449,7 @@ test "ord of a literal is a compile-time constant" {
 }
 
 test "ord folds in a file-scope constant, and an empty one still traps at run time" {
-    try expectOk(
+    try agreeOk(
         \\let open_paren = ord("(")
         \\let lambda = ord("λ")
         \\
@@ -522,7 +461,7 @@ test "ord folds in a file-scope constant, and an empty one still traps at run ti
     );
     // A literal with no codepoint is left to the run time, so the
     // fold cannot quietly change what the program does.
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var empty = ""
         \\    assert(ord(empty) == 0)
@@ -535,7 +474,7 @@ test "ord folds in a file-scope constant, and an empty one still traps at run ti
 // ---------------------------------------------------------------------------
 
 test "f-strings interpolate names, expressions, and every str-able type" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let x = 7
         \\    let y = 3
@@ -553,7 +492,7 @@ test "f-strings interpolate names, expressions, and every str-able type" {
 }
 
 test "f-strings: empty, no holes, escapes, literal braces, nested strings" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(f"" == "")
         \\    assert(f"plain" == "plain")
@@ -568,7 +507,7 @@ test "f-strings: empty, no holes, escapes, literal braces, nested strings" {
 }
 
 test "f-strings compose with methods and calls in holes" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func twice(n: Int) -> Int:
@@ -589,7 +528,7 @@ test "f-strings compose with methods and calls in holes" {
 // ---------------------------------------------------------------------------
 
 test "structs: construction, field read, functional update, value copy" {
-    try expectOk(
+    try agreeOk(
         \\struct Point:
         \\    x: Int
         \\    y: Int
@@ -609,7 +548,7 @@ test "structs: construction, field read, functional update, value copy" {
 }
 
 test "structs: namespaced functions and nested structs" {
-    try expectOk(
+    try agreeOk(
         \\struct Vec:
         \\    x: Int
         \\    y: Int
@@ -635,7 +574,7 @@ test "structs: namespaced functions and nested structs" {
 // ---------------------------------------------------------------------------
 
 test "chained assignment through nested struct fields" {
-    try expectOk(
+    try agreeOk(
         \\struct Inner:
         \\    n: Int
         \\
@@ -658,7 +597,7 @@ test "chained assignment through nested struct fields" {
 }
 
 test "chained assignment into struct elements of lists and arrays" {
-    try expectOk(
+    try agreeOk(
         \\struct Cell:
         \\    value: Int
         \\
@@ -678,7 +617,7 @@ test "chained assignment into struct elements of lists and arrays" {
 }
 
 test "a chained index place evaluates its subscript once" {
-    try expectOk(
+    try agreeOk(
         \\struct Cell:
         \\    value: Int
         \\
@@ -702,7 +641,7 @@ test "a chained index place evaluates its subscript once" {
 // ---------------------------------------------------------------------------
 
 test "lists: literals, indexing, growth, and iteration" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var xs = [10, 20, 30]
         \\    assert(len(xs) == 3)
@@ -725,7 +664,7 @@ test "lists: literals, indexing, growth, and iteration" {
 }
 
 test "maps: upsert, lookup, membership, keys in insertion order" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    m["a"] = 1
@@ -746,7 +685,7 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
 }
 
 test "maps: for key, value iteration, values(), and get with default" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    m["a"] = 1
@@ -770,7 +709,7 @@ test "maps: for key, value iteration, values(), and get with default" {
 }
 
 test "sequences: for index, element enumerates lists and rank-1 arrays" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var xs = [10, 20, 30]
         \\    var sum_index = 0
@@ -792,7 +731,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
 }
 
 test "single-name for still binds keys for maps and elements for sequences" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(Int, Int)
         \\    m[7] = 70
@@ -811,7 +750,7 @@ test "single-name for still binds keys for maps and elements for sequences" {
 }
 
 test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var grid = new Array(Int, 3, 4)
         \\    assert(grid.dim(0) == 3 and grid.dim(1) == 4)
@@ -827,7 +766,7 @@ test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
 }
 
 test "builders accumulate text" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var b = new Builder()
         \\    b.append("he")
@@ -845,7 +784,7 @@ test "builders accumulate text" {
 // ---------------------------------------------------------------------------
 
 test "file-scope constants fold and inline" {
-    try expectOk(
+    try agreeOk(
         \\let width = 80
         \\let half = width / 2
         \\let name = "loom"
@@ -864,7 +803,7 @@ test "file-scope constants fold and inline" {
 // ---------------------------------------------------------------------------
 
 test "abs, min, max, clamp on Int" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(abs(0 - 7) == 7)
         \\    assert(abs(7) == 7)
@@ -880,7 +819,7 @@ test "abs, min, max, clamp on Int" {
 }
 
 test "abs, min, max, clamp on Float" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(abs(0.0 - 2.5) == 2.5)
         \\    assert(min(1.5, 2.5) == 1.5)
@@ -893,7 +832,7 @@ test "abs, min, max, clamp on Float" {
 }
 
 test "float builtins: sqrt, floor, ceil on exact and fractional inputs" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(sqrt(16.0) == 4.0)
         \\    assert(sqrt(0.0) == 0.0)
@@ -910,7 +849,7 @@ test "float builtins: sqrt, floor, ceil on exact and fractional inputs" {
 // ---------------------------------------------------------------------------
 
 test "all six comparisons on Int" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(1 < 2)
         \\    assert(not (2 < 2))
@@ -927,7 +866,7 @@ test "all six comparisons on Int" {
 }
 
 test "all six comparisons on Float" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(1.5 < 1.6)
         \\    assert(1.5 <= 1.5)
@@ -941,7 +880,7 @@ test "all six comparisons on Float" {
 }
 
 test "all six comparisons on String use lexicographic byte order" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert("a" < "b")
         \\    assert("abc" < "abd")
@@ -962,7 +901,7 @@ test "all six comparisons on String use lexicographic byte order" {
 // ---------------------------------------------------------------------------
 
 test "equality: Bool truth table" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(true == true)
         \\    assert(false == false)
@@ -976,7 +915,7 @@ test "equality: Bool truth table" {
 test "equality: lists compare by identity, not contents" {
     // Two independent lists with equal contents are not equal; a name
     // aliasing the same object is.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let a = [1, 2, 3]
         \\    let b = [1, 2, 3]
@@ -988,7 +927,7 @@ test "equality: lists compare by identity, not contents" {
 }
 
 test "equality: structs compare field by field (value semantics)" {
-    try expectOk(
+    try agreeOk(
         \\struct Pair:
         \\    a: Int
         \\    b: Int
@@ -1008,7 +947,7 @@ test "equality: structs compare field by field (value semantics)" {
 // ---------------------------------------------------------------------------
 
 test "and / or / not full truth tables" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert((true and true) == true)
         \\    assert((true and false) == false)
@@ -1029,7 +968,7 @@ test "and / or / not full truth tables" {
 // ---------------------------------------------------------------------------
 
 test "for-range over a reversed interval iterates zero times" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var count = 0
         \\    for i in range(5, 2):
@@ -1044,7 +983,7 @@ test "for-range over a reversed interval iterates zero times" {
 }
 
 test "for-each over a List sums its elements in order" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let xs = [4, 5, 6]
         \\    var out = new Builder()
@@ -1056,7 +995,7 @@ test "for-each over a List sums its elements in order" {
 }
 
 test "for-each over a rank-1 Array visits every slot" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var row = new Array(Int, 4)
         \\    row[0] = 1
@@ -1072,7 +1011,7 @@ test "for-each over a rank-1 Array visits every slot" {
 }
 
 test "for-each over Map keys walks insertion order" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    m["x"] = 1
@@ -1087,7 +1026,7 @@ test "for-each over Map keys walks insertion order" {
 }
 
 test "continue in a for-loop skips the rest of the body" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var total = 0
         \\    for i in range(0, 10):
@@ -1100,7 +1039,7 @@ test "continue in a for-loop skips the rest of the body" {
 }
 
 test "continue in a nested loop affects only the inner loop" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var hits = 0
         \\    for i in range(0, 3):
@@ -1114,7 +1053,7 @@ test "continue in a nested loop affects only the inner loop" {
 }
 
 test "the explicit frame stack survives a deep iterative-recursive sum" {
-    try expectOk(
+    try agreeOk(
         \\func sum_to(n: Int) -> Int:
         \\    if n == 0:
         \\        return 0
@@ -1131,7 +1070,7 @@ test "the explicit frame stack survives a deep iterative-recursive sum" {
 // ---------------------------------------------------------------------------
 
 test "strings: find, contains, starts_with, ends_with" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -1150,7 +1089,7 @@ test "strings: find, contains, starts_with, ends_with" {
 }
 
 test "strings: trim, lower, upper, repeat" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -1167,7 +1106,7 @@ test "strings: trim, lower, upper, repeat" {
 }
 
 test "strings: replace substitutes every occurrence" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -1180,7 +1119,7 @@ test "strings: replace substitutes every occurrence" {
 }
 
 test "strings: split on a separator and split on whitespace" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -1197,7 +1136,7 @@ test "strings: split on a separator and split on whitespace" {
 }
 
 test "strings: join round-trips split" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -1213,7 +1152,7 @@ test "strings: join round-trips split" {
 }
 
 test "strings: slicing corners — empty, full, and open ends" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let s = "abcde"
         \\    assert(s[0:0] == "")
@@ -1230,7 +1169,7 @@ test "strings: slicing corners — empty, full, and open ends" {
 test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
     // λ is two bytes (CE BB); byte_at exposes each byte and len counts
     // bytes, not codepoints.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let s = "λ"
         \\    assert(len(s) == 2)
@@ -1251,7 +1190,7 @@ test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
 // ---------------------------------------------------------------------------
 
 test "str renders every scalar and a Builder" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(str(0) == "0")
         \\    assert(str(1000000) == "1000000")
@@ -1267,7 +1206,7 @@ test "str renders every scalar and a Builder" {
 }
 
 test "parse_int and parse_float accept signs and round-trip str" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert((parse_int("0") else 1) == 0)
         \\    assert((parse_int("-42") else 0) == 0 - 42)
@@ -1280,7 +1219,7 @@ test "parse_int and parse_float accept signs and round-trip str" {
 }
 
 test "parse_int and parse_float answer none rather than trapping" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(parse_int("not a number") == none)
         \\    assert(parse_int("4 2") == none)
@@ -1296,7 +1235,7 @@ test "parse_int and parse_float answer none rather than trapping" {
 }
 
 test "chr and ord round-trip across ASCII and multibyte codepoints" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert(chr(97) == "a")
         \\    assert(ord("a") == 97)
@@ -1315,7 +1254,7 @@ test "chr and ord round-trip across ASCII and multibyte codepoints" {
 // ---------------------------------------------------------------------------
 
 test "lists: sort orders Int, Float, and String in place" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var ints = [3, 1, 2]
         \\    ints.sort()
@@ -1335,7 +1274,7 @@ test "lists: sort is stable — equal elements keep their order" {
     // a sort leaves them in is observable from a Luce program.  That
     // makes stability part of the language, not an implementation
     // detail: this test fails outright under an unstable sort.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var xs: List(Float) = []
         \\    var i = 0
@@ -1356,7 +1295,7 @@ test "lists: sort is stable — equal elements keep their order" {
 }
 
 test "lists: reverse, find, contains, clear" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var xs = [1, 2, 3, 4]
         \\    xs.reverse()
@@ -1372,7 +1311,7 @@ test "lists: reverse, find, contains, clear" {
 }
 
 test "lists: a slice is an independent copy" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var xs = [1, 2, 3, 4, 5]
         \\    var mid = xs[1:4]
@@ -1389,7 +1328,7 @@ test "lists: a slice is an independent copy" {
 }
 
 test "lists: nested lists are references shared until copied" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var outer = new List(List(Int))
         \\    var inner = [1, 2]
@@ -1410,7 +1349,7 @@ test "lists: value structs stored by copy are independent" {
     // replacing one slot leaves the other stored copies untouched.
     // (Assignment targets are a single field or a single index, so a
     // slot is replaced whole with cells[i] = ..., not cells[i].v = ...)
-    try expectOk(
+    try agreeOk(
         \\struct Cell:
         \\    v: Int
         \\
@@ -1433,7 +1372,7 @@ test "lists: value structs stored by copy are independent" {
 // ---------------------------------------------------------------------------
 
 test "maps: Int keys, lookup, has, and len" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(Int, String)
         \\    m[1] = "one"
@@ -1451,7 +1390,7 @@ test "maps: Int keys, lookup, has, and len" {
 }
 
 test "maps: removing an absent key is a no-op; clear empties" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    m["a"] = 1
@@ -1474,7 +1413,7 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
     // long, and removal renumbers every entry behind the one it took
     // out.  Insertion order is a promise of the language (iteration,
     // keys()), and it has to survive all of that.
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    var i = 0
@@ -1510,7 +1449,7 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
 }
 
 test "maps: Int keys survive growth, negatives, and the extremes" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var m = new Map(Int, Int)
         \\    var i = 0 - 200
@@ -1536,7 +1475,7 @@ test "maps: Int keys survive growth, negatives, and the extremes" {
 // ---------------------------------------------------------------------------
 
 test "arrays: ranks one through four report their dims and zero-init" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var a1 = new Array(Int, 5)
         \\    assert(a1.dim(0) == 5 and a1[4] == 0)
@@ -1556,7 +1495,7 @@ test "arrays: ranks one through four report their dims and zero-init" {
 }
 
 test "arrays: fill sets every slot; len is the first dimension" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var row = new Array(Float, 4)
         \\    row.fill(1.5)
@@ -1569,7 +1508,7 @@ test "arrays: fill sets every slot; len is the first dimension" {
 }
 
 test "arrays: rank-1 sort, reverse, find, contains" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var row = new Array(Int, 4)
         \\    row[0] = 3
@@ -1592,7 +1531,7 @@ test "arrays: rank-1 sort, reverse, find, contains" {
 // ---------------------------------------------------------------------------
 
 test "structs: assigning a copy leaves the source untouched for value fields" {
-    try expectOk(
+    try agreeOk(
         \\struct Point:
         \\    x: Int
         \\    y: Int
@@ -1613,7 +1552,7 @@ test "structs: nested value structs copy deeply" {
     // the inner field on the copy does not reach the original.  (A
     // nested field cannot be an assignment target — p.inner.n = ... is
     // rejected — so the whole inner field is replaced instead.)
-    try expectOk(
+    try agreeOk(
         \\struct Inner:
         \\    n: Int
         \\
@@ -1634,7 +1573,7 @@ test "structs: nested value structs copy deeply" {
 }
 
 test "structs: namespaced functions can recurse and call peers" {
-    try expectOk(
+    try agreeOk(
         \\struct Math:
         \\    dummy: Int
         \\
@@ -1656,7 +1595,7 @@ test "structs: namespaced functions can recurse and call peers" {
 // ---------------------------------------------------------------------------
 
 test "ownership: give transfers an object into a new owner" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var original = [1, 2, 3]
         \\    var moved = give original
@@ -1668,7 +1607,7 @@ test "ownership: give transfers an object into a new owner" {
 }
 
 test "ownership: copy is a deep, independent duplicate" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var source = [1, 2, 3]
         \\    var dup = copy source
@@ -1682,7 +1621,7 @@ test "ownership: copy is a deep, independent duplicate" {
 }
 
 test "ownership: reassigning an owning var frees the old object with no leak" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var b = new Builder()
         \\    b.append("first")
@@ -1694,7 +1633,7 @@ test "ownership: reassigning an owning var frees the old object with no leak" {
 }
 
 test "ownership: a late-declared object slot can be filled and used" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var xs: List(Int)
         \\    xs = [7, 8, 9]
@@ -1706,7 +1645,7 @@ test "ownership: a late-declared object slot can be filled and used" {
 }
 
 test "ownership: return moves an object out of a function" {
-    try expectOk(
+    try agreeOk(
         \\func make() -> List(Int):
         \\    var xs = new List(Int)
         \\    xs.append(1)
@@ -1722,7 +1661,7 @@ test "ownership: return moves an object out of a function" {
 }
 
 test "ownership: a borrowed parameter is read without transfer" {
-    try expectOk(
+    try agreeOk(
         \\func total(xs: List(Int)) -> Int:
         \\    var sum = 0
         \\    for x in xs:
@@ -1743,7 +1682,7 @@ test "ownership: a borrowed parameter is read without transfer" {
 // ---------------------------------------------------------------------------
 
 test "late var declarations hold the zero value of their type" {
-    try expectOk(
+    try agreeOk(
         \\struct Vec3:
         \\    x: Int
         \\    y: Int
@@ -1766,7 +1705,7 @@ test "late var declarations hold the zero value of their type" {
 }
 
 test "a late var can be assigned after a branch decides its value" {
-    try expectOk(
+    try agreeOk(
         \\func pick(flag: Bool) -> Int:
         \\    var out: Int
         \\    if flag:
@@ -1787,7 +1726,7 @@ test "a late var can be assigned after a branch decides its value" {
 // ---------------------------------------------------------------------------
 
 test "constants of every scalar type fold and inline" {
-    try expectOk(
+    try agreeOk(
         \\let limit = 3 * 4
         \\let ratio = 1.0 / 4.0
         \\let enabled = true and not false
@@ -1806,7 +1745,7 @@ test "constants of every scalar type fold and inline" {
 }
 
 test "constants reference earlier constants" {
-    try expectOk(
+    try agreeOk(
         \\let base = 10
         \\let doubled = base * 2
         \\let quadrupled = doubled * 2
@@ -1826,7 +1765,7 @@ test "constants reference earlier constants" {
 // ---------------------------------------------------------------------------
 
 test "a T? holds either a value or none, and says which" {
-    try expectOk(
+    try agreeOk(
         \\func passthrough(n: Int?) -> Int?:
         \\    return n
         \\
@@ -1851,7 +1790,7 @@ test "a T? holds either a value or none, and says which" {
 }
 
 test "narrowing: a tested name is its payload inside the branch, and both branches see it" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let n = parse_int("41")
         \\    var seen = 0
@@ -1873,7 +1812,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
 }
 
 test "narrowing: an early-return guard narrows the rest of the block" {
-    try expectOk(
+    try agreeOk(
         \\func doubled(text: String) -> Int:
         \\    let n = parse_int(text)
         \\    if n == none:
@@ -1888,7 +1827,7 @@ test "narrowing: an early-return guard narrows the rest of the block" {
 }
 
 test "narrowing: continue and break guards narrow what follows them" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let inputs = ["1", "x", "3"]
         \\    var total = 0
@@ -1914,7 +1853,7 @@ test "narrowing: continue and break guards narrow what follows them" {
 }
 
 test "narrowing: and carries the test into the rest of the condition" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let n = parse_int("5")
         \\    var hit = false
@@ -1938,7 +1877,7 @@ test "narrowing: and carries the test into the rest of the condition" {
 }
 
 test "narrowing: an assignment of a plain value proves the name present" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var n: Int? = none
         \\    n = 3
@@ -1953,7 +1892,7 @@ test "narrowing: an assignment of a plain value proves the name present" {
 }
 
 test "narrowing: a while condition narrows its body" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var countdown: Int? = 3
         \\    var steps = 0
@@ -1969,7 +1908,7 @@ test "narrowing: a while condition narrows its body" {
 }
 
 test "else supplies the fallback, lazily, and chains to the right" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    assert((parse_int("8") else 0) == 8)
         \\    assert((parse_int("x") else 0) == 0)
@@ -1984,7 +1923,7 @@ test "else supplies the fallback, lazily, and chains to the right" {
 }
 
 test "else runs its fallback only when the value is absent" {
-    try expectOk(
+    try agreeOk(
         \\func note(log: Builder, mark: String) -> Int:
         \\    log.append(mark)
         \\    return 0
@@ -2000,13 +1939,13 @@ test "else runs its fallback only when the value is absent" {
 }
 
 test "x else trap is the assert-unwrap" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    let n = parse_int("12") else trap("unreachable")
         \\    assert(n == 12)
         \\
     );
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var text = "not a number"
         \\    let n = parse_int(text) else trap("bad input")
@@ -2016,7 +1955,7 @@ test "x else trap is the assert-unwrap" {
 }
 
 test "an optional crosses a call, a return, and a struct field" {
-    try expectOk(
+    try agreeOk(
         \\struct Setting:
         \\    name: String
         \\    limit: Int?
@@ -2049,7 +1988,7 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
     // the recursion stops at absence rather than at a layout, so a
     // linked list of value structs falls out with no new machinery
     // and no reference counting anywhere.
-    try expectOk(
+    try agreeOk(
         \\struct Node:
         \\    value: Int
         \\    next: Node?
@@ -2073,7 +2012,7 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
 }
 
 test "a compound assignment combines at the payload and stays present" {
-    try expectOk(
+    try agreeOk(
         \\func main():
         \\    var n: Int? = none
         \\    n = 10
@@ -2088,7 +2027,7 @@ test "a compound assignment combines at the payload and stays present" {
 }
 
 test "absence survives a round trip through a struct field and a var" {
-    try expectOk(
+    try agreeOk(
         \\struct Slot:
         \\    held: String?
         \\
@@ -2109,7 +2048,7 @@ test "absence survives a round trip through a struct field and a var" {
 // ---------------------------------------------------------------------------
 
 test "trap: integer overflow on addition" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var x = 9223372036854775807
         \\    x = x + 1
@@ -2118,7 +2057,7 @@ test "trap: integer overflow on addition" {
 }
 
 test "trap: integer overflow negating the minimum" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var n = 0 - 9223372036854775807
         \\    n = n - 1
@@ -2128,7 +2067,7 @@ test "trap: integer overflow negating the minimum" {
 }
 
 test "trap: integer overflow taking abs of the minimum" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var n = 0 - 9223372036854775807
         \\    n = n - 1
@@ -2138,7 +2077,7 @@ test "trap: integer overflow taking abs of the minimum" {
 }
 
 test "trap: divide by zero" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var z = 0
         \\    let bad = 1 / z
@@ -2147,7 +2086,7 @@ test "trap: divide by zero" {
 }
 
 test "trap: remainder by zero" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var z = 0
         \\    let bad = 1 % z
@@ -2156,7 +2095,7 @@ test "trap: remainder by zero" {
 }
 
 test "trap: float-to-int conversion out of range" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var big = 1.0
         \\    while big < 1.0e30:
@@ -2167,7 +2106,7 @@ test "trap: float-to-int conversion out of range" {
 }
 
 test "trap: a failed assertion" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var ok = false
         \\    assert(ok)
@@ -2176,7 +2115,7 @@ test "trap: a failed assertion" {
 }
 
 test "trap: an explicit trap call" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    trap("stop here")
         \\
@@ -2184,7 +2123,7 @@ test "trap: an explicit trap call" {
 }
 
 test "trap: list index out of bounds" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1, 2, 3]
         \\    let bad = xs[3]
@@ -2193,7 +2132,7 @@ test "trap: list index out of bounds" {
 }
 
 test "trap: array index out of bounds" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var grid = new Array(Int, 2, 2)
         \\    grid[2, 0] = 1
@@ -2202,7 +2141,7 @@ test "trap: array index out of bounds" {
 }
 
 test "trap: missing map key" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    m["present"] = 1
@@ -2212,7 +2151,7 @@ test "trap: missing map key" {
 }
 
 test "trap: popping an empty list" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = new List(Int)
         \\    let bad = xs.pop()
@@ -2221,7 +2160,7 @@ test "trap: popping an empty list" {
 }
 
 test "trap: string index out of bounds" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var s = "ab"
         \\    let bad = s[0:9]
@@ -2230,7 +2169,7 @@ test "trap: string index out of bounds" {
 }
 
 test "trap: byte_at past the end of a string" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var s = "ab"
         \\    let bad = s.byte_at(5)
@@ -2239,7 +2178,7 @@ test "trap: byte_at past the end of a string" {
 }
 
 test "trap: slicing through the middle of a UTF-8 character" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var s = "🙂"
         \\    let bad = s[0:1]
@@ -2248,7 +2187,7 @@ test "trap: slicing through the middle of a UTF-8 character" {
 }
 
 test "trap: use after free" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1, 2]
         \\    let view = xs
@@ -2259,7 +2198,7 @@ test "trap: use after free" {
 }
 
 test "trap: using an unfilled late object slot" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs: List(Int)
         \\    let bad = len(xs)
@@ -2268,7 +2207,7 @@ test "trap: using an unfilled late object slot" {
 }
 
 test "trap: unfilled object slot inside an array of objects" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var cells = new Array(List(Int), 2)
         \\    cells[0].append(1)
@@ -2277,7 +2216,7 @@ test "trap: unfilled object slot inside an array of objects" {
 }
 
 test "trap: chr of a codepoint beyond Unicode's range" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var code = 11141111
         \\    let bad = chr(code)
@@ -2286,10 +2225,612 @@ test "trap: chr of a codepoint beyond Unicode's range" {
 }
 
 test "trap: ord of an empty string" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var s = ""
         \\    let bad = ord(s)
         \\
     , .bad_codepoint);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-feature slices
+// ---------------------------------------------------------------------------
+//
+// These were the interpreter's own suite until the interpreter stopped
+// being an engine (docs/ENGINE.md).  Every one of them was always a
+// statement about the language rather than about a dispatch loop, so
+// they live here and run on both engines like everything else.
+
+/// The four bytes of U+1F642, written where a Luce string literal has
+/// to carry them: the lexer's escape set is `\n \t \\ \"` and nothing
+/// else, so a codepoint above ASCII arrives as itself.
+const smiley = "\xF0\x9F\x99\x82";
+
+test "structs: a smooth pointer transform computes exactly" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\func smooth(current: Point, target: Point, amount: Float) -> Point:
+        \\    return Point(
+        \\        x = current.x + (target.x - current.x) * amount,
+        \\        y = current.y + (target.y - current.y) * amount,
+        \\    )
+        \\
+        \\func main():
+        \\    let previous = Point(x = 0.0, y = 0.0)
+        \\    let pointer = Point(x = 10.0, y = -4.0)
+        \\    let eased = smooth(previous, pointer, 0.25)
+        \\    assert(eased.x == 2.5)
+        \\    assert(eased.y == -1.0)
+        \\
+    );
+}
+
+test "structs: namespaced functions execute through qualified calls" {
+    try agreeOk(
+        \\struct Math:
+        \\    func twice(value: Int) -> Int:
+        \\        return value * 2
+        \\
+        \\    func plus(left: Int, right: Int) -> Int:
+        \\        return left + right
+        \\
+        \\func main():
+        \\    assert(Math.twice(Math.plus(3, 4)) == 14)
+        \\
+    );
+}
+
+test "loops, recursion, strings, and builtins compute" {
+    try agreeOk(
+        \\func factorial(value: Int) -> Int:
+        \\    if value <= 1:
+        \\        return 1
+        \\    return value * factorial(value - 1)
+        \\
+        \\func main():
+        \\    var total = 0
+        \\    for index in range(1, 11):
+        \\        total = total + index
+        \\    assert(total == 55)
+        \\    assert(factorial(10) == 3628800)
+        \\    assert("sum " + "of ten" == "sum of ten")
+        \\    assert(min(clamp(total, 0, 40), abs(-3)) == 3)
+        \\
+    );
+}
+
+test "checked string intrinsics slice and inspect UTF-8 bytes" {
+    try agreeOk("func main():\n" ++
+        "    let text = \"ab" ++ smiley ++ "cd\\nnext\"\n" ++
+        "    assert(text[0:2] == \"ab\")\n" ++
+        "    assert(text[2:6] == \"" ++ smiley ++ "\")\n" ++
+        "    assert(text.byte_at(2) == 240)\n");
+}
+
+test "string intrinsics implement multiline UTF-8-safe edits" {
+    try agreeOk("func continuation(byte: Int) -> Bool:\n" ++
+        "    return byte >= 128 and byte < 192\n" ++
+        "\n" ++
+        "func previous(value: String, cursor: Int) -> Int:\n" ++
+        "    var at = cursor - 1\n" ++
+        "    while at > 0 and continuation(value.byte_at(at)):\n" ++
+        "        at = at - 1\n" ++
+        "    return at\n" ++
+        "\n" ++
+        "func inserted(text: String, cursor: Int, added: String) -> String:\n" ++
+        "    return text[0:cursor] + added + text[cursor:len(text)]\n" ++
+        "\n" ++
+        "func erased(text: String, cursor: Int) -> String:\n" ++
+        "    let before = previous(text, cursor)\n" ++
+        "    return text[0:before] + text[cursor:len(text)]\n" ++
+        "\n" ++
+        "func main():\n" ++
+        "    let original = \"A" ++ smiley ++ "\\nB\"\n" ++
+        "    assert(inserted(original, 5, \"x\") == \"A" ++ smiley ++ "x\\nB\")\n" ++
+        "    assert(erased(original, 5) == \"A\\nB\")\n" ++
+        "    assert(previous(original, 5) == 1)\n");
+}
+
+test "checked string intrinsics trap on bounds and UTF-8 splits" {
+    const text = "\"a" ++ smiley ++ "b\"";
+    const cases = [_]struct { edit: []const u8, code: mir.TrapCode }{
+        .{ .edit = "assert(len(" ++ text ++ "[-1:0]) == 0)", .code = .string_bounds },
+        .{ .edit = "assert(len(" ++ text ++ "[0:7]) == 0)", .code = .string_bounds },
+        .{ .edit = "assert(len(" ++ text ++ "[0:2]) == 0)", .code = .string_boundary },
+        .{ .edit = "assert(" ++ text ++ ".byte_at(6) == 0)", .code = .string_bounds },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "func main():\n    {s}\n",
+            .{case.edit},
+        );
+        defer testing.allocator.free(source);
+        try agreeTrap(source, case.code);
+    }
+}
+
+test "checked arithmetic and conversions trap" {
+    const cases = [_]struct { line: []const u8, code: mir.TrapCode }{
+        .{ .line = "assert(9223372036854775807 + 1 == 0)", .code = .integer_overflow },
+        .{ .line = "assert(1 / (2 - 2) == 0)", .code = .divide_by_zero },
+        .{ .line = "assert(Int(1.0e300) == 0)", .code = .conversion_range },
+        .{ .line = "assert(1 == 0)", .code = .assertion_failed },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "func main():\n    {s}\n",
+            .{case.line},
+        );
+        defer testing.allocator.free(source);
+        try agreeTrap(source, case.code);
+    }
+
+    // `trap(...)` carries the program's own words, and both engines
+    // hand them back unchanged.
+    var explicit = try agree.compare(
+        \\func main():
+        \\    trap("torn seam")
+        \\
+    , budget);
+    defer explicit.deinit();
+    try testing.expectEqual(mir.TrapCode.explicit_trap, explicit.end.trapped);
+    try testing.expectEqualStrings("torn seam", explicit.message());
+}
+
+test "unbounded recursion hits the call depth limit" {
+    try agreeTrap(
+        \\func dive(depth: Int) -> Int:
+        \\    return dive(depth + 1)
+        \\
+        \\func main():
+        \\    assert(dive(0) == 0)
+        \\
+    , .call_depth_exceeded);
+}
+
+test "lists grow, index, slice, iterate, and free explicitly" {
+    try agreeOk(
+        \\func main():
+        \\    var xs = [3, 1, 2]
+        \\    assert(len(xs) == 3)
+        \\    xs.append(9)
+        \\    assert(xs[3] == 9)
+        \\    xs[0] = 30
+        \\    assert(xs[0] == 30)
+        \\    xs.insert(1, 7)
+        \\    assert(xs[1] == 7)
+        \\    xs.remove(0)
+        \\    assert(xs[0] == 7)
+        \\    assert(xs.pop() == 9)
+        \\    var total = 0
+        \\    for x in xs:
+        \\        total = total + x
+        \\    assert(total == 10)
+        \\    let mid = xs[1:]
+        \\    assert(len(mid) == 2)
+        \\    assert(mid[0] == 1)
+        \\    assert(mid != xs)
+        \\    assert(xs == xs)
+        \\    free(mid)
+        \\    free(xs)
+        \\
+    );
+}
+
+test "maps upsert, look up, and iterate keys in insertion order" {
+    try agreeOk(
+        \\func main():
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    ages["alan"] = 41
+        \\    ages["ada"] = 37
+        \\    assert(len(ages) == 2)
+        \\    assert(ages["ada"] == 37)
+        \\    assert(ages.has("alan"))
+        \\    var joined = new Builder()
+        \\    for key in ages:
+        \\        joined.append(key)
+        \\    assert(str(joined) == "adaalan")
+        \\    ages.remove("alan")
+        \\    assert(not ages.has("alan"))
+        \\    ages.remove("ghost")
+        \\    assert(len(ages) == 1)
+        \\    free(ages)
+        \\    free(joined)
+        \\
+    );
+}
+
+test "arrays are fixed, zeroed, multi-dimensional, and typed" {
+    try agreeOk(
+        \\func corner(grid: Array(Int, _, _)) -> Int:
+        \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
+        \\
+        \\func main():
+        \\    var grid = new Array(Int, 3, 4)
+        \\    assert(grid.dim(0) == 3)
+        \\    assert(grid.dim(1) == 4)
+        \\    assert(len(grid) == 3)
+        \\    assert(grid[2, 3] == 0)
+        \\    grid[2, 3] = 7
+        \\    assert(corner(grid) == 7)
+        \\    var row = new Array(Float, 4)
+        \\    row[0] = 2.5
+        \\    var total = 0.0
+        \\    for value in row:
+        \\        total = total + value
+        \\    assert(total == 2.5)
+        \\    free(grid)
+        \\    free(row)
+        \\
+    );
+}
+
+test "conversions: str, parse_int, parse_float, chr, ord over every kind" {
+    try agreeOk(
+        \\func main():
+        \\    assert(str(42) == "42")
+        \\    assert(str(-7) == "-7")
+        \\    assert(str(true) == "true")
+        \\    assert(str(2.5) == "2.5")
+        \\    assert((parse_int("123") else 0) == 123)
+        \\    assert((parse_int("-9") else 0) == 0 - 9)
+        \\    assert((parse_float("2.5") else 0.0) == 2.5)
+        \\    assert(parse_int("twelve") == none)
+        \\    assert(chr(65) == "A")
+        \\    assert(chr(955) == "λ")
+        \\    assert(ord("λ") == 955)
+        \\    assert(ord("A") == 65)
+        \\
+    );
+}
+
+test "structs and nested collections share objects by reference" {
+    try agreeOk(
+        \\struct Bag:
+        \\    label: String
+        \\    items: List(Int)
+        \\
+        \\func main():
+        \\    var inner = [1, 2]
+        \\    var bag = Bag(label = "first", items = give inner)
+        \\    let same_bag = bag
+        \\    same_bag.items.append(3)
+        \\    assert(len(bag.items) == 3)
+        \\    var nested = new List(List(Int))
+        \\    nested.append(copy bag.items)
+        \\    nested[0].append(4)
+        \\    assert(len(nested[0]) == 4)
+        \\    assert(len(bag.items) == 3)
+        \\
+    );
+}
+
+test "collection misuse traps with stable codes" {
+    const cases = [_]struct { source: []const u8, code: mir.TrapCode }{
+        .{ .source =
+        \\func main():
+        \\    let xs = [1]
+        \\    let bad = xs[5]
+        \\
+        , .code = .index_bounds },
+        .{ .source =
+        \\func main():
+        \\    var xs: List(Int) = []
+        \\    let bad = xs.pop()
+        \\
+        , .code = .empty_collection },
+        .{ .source =
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let bad = m["ghost"]
+        \\
+        , .code = .key_missing },
+        .{ .source =
+        \\func main():
+        \\    var xs = [1]
+        \\    let view = xs
+        \\    free(xs)
+        \\    view.append(2)
+        \\
+        , .code = .use_after_free },
+        .{ .source =
+        \\func main():
+        \\    var xs = [1]
+        \\    let view = xs
+        \\    free(xs)
+        \\    let bad = view[0]
+        \\
+        , .code = .use_after_free },
+        .{ .source =
+        \\func main():
+        \\    var cells = new Array(List(Int), 2)
+        \\    cells[0].append(1)
+        \\
+        , .code = .null_object },
+        .{ .source =
+        \\func main():
+        \\    let bad = chr(11141111)
+        \\
+        , .code = .bad_codepoint },
+        .{ .source =
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    grid[2, 0] = 1
+        \\
+        , .code = .index_bounds },
+    };
+    for (cases) |case| try agreeTrap(case.source, case.code);
+}
+
+test "S33: nothing leaks — scope ownership frees what free() used to" {
+    try agreeOk(
+        \\func main():
+        \\    let kept = [1, 2, 3]
+        \\    let copied = kept[0:2]
+        \\    var released = new Builder()
+        \\    free(released)
+        \\    assert(len(copied) == 2)
+        \\
+    );
+}
+
+test "string methods: search, case, trim, replace, repeat, split" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let text = "  Hello, Luce World  "
+        \\    let cleaned = text.trim()
+        \\    assert(cleaned == "Hello, Luce World")
+        \\    assert(cleaned.find("Luce") == 7)
+        \\    assert(cleaned.find("zig") == -1)
+        \\    assert(cleaned.contains("World"))
+        \\    assert(cleaned.starts_with("Hello"))
+        \\    assert(cleaned.ends_with("World"))
+        \\    assert(cleaned.lower() == "hello, luce world")
+        \\    assert(cleaned.upper() == "HELLO, LUCE WORLD")
+        \\    assert(cleaned.replace("Luce", "brave") == "Hello, brave World")
+        \\    assert("ab".repeat(3) == "ababab")
+        \\    assert("x".repeat(0) == "")
+        \\    assert("na".byte_at(0) == 110)
+        \\    var words = cleaned.replace(",", "").split("")
+        \\    assert(len(words) == 3)
+        \\    assert(words[0] == "Hello")
+        \\    var csv = "a;b;;c".split(";")
+        \\    assert(len(csv) == 4)
+        \\    assert(csv[2] == "")
+        \\    assert(csv.join("|") == "a|b||c")
+        \\    free(words)
+        \\    free(csv)
+        \\
+    );
+}
+
+test "list and array methods: sort, reverse, find, contains, fill, clear" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var xs = [3, 1, 4, 1, 5]
+        \\    xs.sort()
+        \\    assert(xs[0] == 1)
+        \\    assert(xs[4] == 5)
+        \\    xs.reverse()
+        \\    assert(xs[0] == 5)
+        \\    assert(xs.find(4) == 1)
+        \\    assert(xs.find(9) == -1)
+        \\    assert(xs.contains(3))
+        \\    assert(not xs.contains(9))
+        \\    xs.clear()
+        \\    assert(len(xs) == 0)
+        \\    var names = ["cyan", "amber"]
+        \\    names.sort()
+        \\    assert(names[0] == "amber")
+        \\    var row = new Array(Int, 4)
+        \\    row.fill(7)
+        \\    assert(row[3] == 7)
+        \\    assert(row.contains(7))
+        \\    row[1] = 2
+        \\    row.sort()
+        \\    assert(row[0] == 2)
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    ages["alan"] = 41
+        \\    var listed = ages.keys()
+        \\    assert(listed.join(",") == "ada,alan")
+        \\    ages.clear()
+        \\    assert(len(ages) == 0)
+        \\    free(xs)
+        \\    free(names)
+        \\    free(row)
+        \\    free(ages)
+        \\    free(listed)
+        \\
+    );
+}
+
+test "short-circuit operands survive block splits everywhere" {
+    // Every multi-operand construct with a splitting (and/or) operand
+    // once emitted registers across block boundaries; the verifier
+    // rejected the program as an internal compiler error.
+    try agreeOk(
+        \\struct Flags:
+        \\    left: Bool
+        \\    right: Bool
+        \\
+        \\func pick(first: Bool, second: Bool) -> Bool:
+        \\    return first or second
+        \\
+        \\func main():
+        \\    let a = true
+        \\    let b = false
+        \\    var cells = new Array(Bool, 2, 2)
+        \\    cells[0, 1] = a == b or a
+        \\    let chosen = pick(a and b, a or b)
+        \\    let pair = Flags(left = a or b, right = a and b)
+        \\    var flags = [a or b, pair.left, cells[0, 1] and chosen]
+        \\    flags.append(a or b)
+        \\    let compared = (a or b) == (a and b)
+        \\    let sliced = flags[0:len(flags)]
+        \\    for index in range(0, len(sliced)):
+        \\        let unused = sliced[index] or compared
+        \\    free(sliced)
+        \\    free(flags)
+        \\    free(cells)
+        \\
+    );
+}
+
+test "file-scope constants fold every value kind" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\let width = 80
+        \\let tau = 2.0 * pi
+        \\let pi = 3.14159
+        \\let debug = not (width > 100)
+        \\let greeting = "hello, " + "loom"
+        \\let shout = greeting
+        \\let half_width = width / 2 - 1
+        \\let truncated = Int(tau)
+        \\let widened = Float(width)
+        \\let roomy = width >= 80 and tau > 6.0
+        \\
+        \\func main():
+        \\    assert(width == 80)
+        \\    assert(half_width == 39)
+        \\    assert(tau > 6.28 and tau < 6.29)
+        \\    assert(debug)
+        \\    assert(greeting == "hello, loom")
+        \\    assert(shout.upper() == "HELLO, LOOM")
+        \\    assert(truncated == 6)
+        \\    assert(widened == 80.0)
+        \\    assert(roomy)
+        \\    var xs = [width, half_width]
+        \\    assert(xs[0] + xs[1] == 119)
+        \\
+    );
+}
+
+test "struct constants: the Theme case" {
+    try agreeOk(
+        \\struct Theme:
+        \\    keyword: Int
+        \\    comment: Int
+        \\    bold: Bool
+        \\
+        \\let theme = Theme(keyword = 114, comment = 238, bold = true)
+        \\let accent = theme.keyword + 1
+        \\
+        \\func main():
+        \\    assert(theme.keyword == 114)
+        \\    assert(theme.comment == 238)
+        \\    assert(theme.bold)
+        \\    assert(accent == 115)
+        \\    let local_copy = theme
+        \\    assert(local_copy.keyword == 114)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Where a trap says it happened
+// ---------------------------------------------------------------------------
+//
+// A debug build carries per-instruction origins on both paths: the
+// interpreter walks its intact frame stack, a compiled artifact
+// records the unwind path as each frame returns trapped
+// (docs/MODES.md).  Every trace below is compared frame for frame
+// between the two, so "the same trace" is a fact rather than a hope.
+
+test "a trap reports its statement's line and the full call trace" {
+    var session = try agree.compare(
+        \\func divide(a: Int, b: Int) -> Int:
+        \\    return a / b
+        \\
+        \\func ratio(n: Int) -> Int:
+        \\    return divide(100, n)
+        \\
+        \\func main():
+        \\    let x = ratio(0)
+        \\
+    , budget);
+    defer session.deinit();
+
+    try testing.expectEqual(mir.TrapCode.divide_by_zero, session.end.trapped);
+    try testing.expectEqualStrings(
+        \\divide test.luc:2:5
+        \\ratio test.luc:5:5
+        \\main test.luc:8:5
+        \\
+    , session.trace());
+}
+
+test "a stripped program still names its trap frames, without lines" {
+    var compiled = try agree.program(
+        \\func boom() -> Int:
+        \\    return 1 / 0
+        \\
+        \\func main():
+        \\    let x = boom()
+        \\
+    );
+    defer compiled.deinit();
+    mir.strip(&compiled);
+
+    var session = try agree.compareProgram(&compiled, budget);
+    defer session.deinit();
+    try testing.expectEqualStrings(
+        \\boom :0:0
+        \\main :0:0
+        \\
+    , session.trace());
+}
+
+test "a trap inside std code points into the std module" {
+    var session = try agree.compare(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var decimals = -1
+        \\    let bad = strings.format_float(1.0, decimals)
+        \\
+    , budget);
+    defer session.deinit();
+
+    try testing.expectEqual(mir.TrapCode.explicit_trap, session.end.trapped);
+    const reported = session.trace();
+    try testing.expect(std.mem.startsWith(
+        u8,
+        reported,
+        "strings.format_float std/strings.luc:",
+    ));
+    try testing.expect(std.mem.endsWith(u8, reported, "\nmain test.luc:5:5\n"));
+}
+
+test "a runaway recursion reports a capped trace and counts the rest" {
+    // Sixty-four frames kept, the rest counted — on both engines, from
+    // the same depth limit.
+    var session = try agree.compare(
+        \\func spiral(n: Int) -> Int:
+        \\    return spiral(n + 1)
+        \\
+        \\func main():
+        \\    let x = spiral(0)
+        \\
+    , .{ .call_depth = 100 });
+    defer session.deinit();
+
+    try testing.expectEqual(mir.TrapCode.call_depth_exceeded, session.end.trapped);
+    const reported = session.trace();
+    try testing.expect(std.mem.startsWith(u8, reported, "spiral test.luc:2:5\n"));
+    try testing.expect(std.mem.endsWith(u8, reported, "... 36 more\n"));
+    try testing.expectEqual(@as(usize, 65), std.mem.count(u8, reported, "\n"));
 }

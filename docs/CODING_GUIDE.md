@@ -93,7 +93,7 @@ src/luce/                     the language, one numbered folder per stage:
   interpreter                 the reference engine over that runtime
   backend.zig                 the execution boundary
   support/                    types and diagnostics, used by every stage
-  specs/                      the executable form of the ratified documents
+  specs/                      the executable specification — its own module
 src/apps/luce/                the compiler CLI (build, check, ir)
 src/apps/loom/                the terminal: shell, runner, host, keys, palette
 src/apps/files.zig            file access shared by both executables
@@ -163,13 +163,19 @@ IR internals.
   `specs/ownership_spec.zig` mirrors OWNERSHIP.md's numbering, and
   every situation is proven three ways — the behavior works, misuse
   is a compile error with a stable code, the dynamic backstop traps
+- **Anything that runs a Luce program is a specification and lives in
+  `specs/`, where it runs on both engines and the two are compared;
+  anything that inspects a structure lives beside the code it
+  proves.**  That is what makes the interpreter an oracle rather than
+  a second opinion nobody consults (docs/ENGINE.md)
 - Nothing is made `pub` for a test.  A test lives with the code it
   proves, inside the same privacy boundary
 - Cover success, bounds failure, and round-trip/rejection where
   relevant; everything runs leak-checked under
   `std.testing.allocator`
 - A new language file must be added to `src/luce/luce.zig`'s
-  re-exports and test block or its tests will not run
+  re-exports and test block, and a new spec file to
+  `src/luce/specs.zig`'s, or its tests will not run
 
 ## What not to add casually
 

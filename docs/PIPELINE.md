@@ -22,7 +22,7 @@ src/luce/
   interpreter/    the reference engine
   support/        diagnostics, types — cross-cutting, not a stage
   std/            the Luce standard library, in Luce
-  specs/          the executable specification
+  specs/          the executable specification — its own module
 ```
 
 Only stages are numbered.  Exported names in `luce.zig` drop the
@@ -53,10 +53,10 @@ Ten conceptual stages, eight folders.  Stages 4-6 collapse into
 |--------|------------|
 | `compile/` | the driver's implementation siblings: `modules.zig` (the import *graph* — breadth-first from the root, stages 1-3 per module, each loaded once; resolution itself is stage 1's, and so is refusing one binding for two modules; **cycles are allowed on purpose** — a Luce module has no initialization phase to catch half done, so there is no "partially initialized module" to inherit, and what may not be circular is refused finer down: a constant that depends on itself is `luce.sema.const`, a struct that contains itself is `luce.sema.struct`, and a module importing itself is `luce.import.self`) and `test.zig` (whole-compiler integration coverage). |
 | `runtime/` | `libluce_rt`: the object heap, ownership, containers, strings, conversions, checked arithmetic, the trap channel. One implementation of every semantic, called by the interpreter *and* by compiled code. |
-| `interpreter/` | the reference engine — the dispatch loop, the explicit frame stack, the traceback, host effects. Everything below the instruction level is a `runtime` call. |
+| `interpreter/` | the reference engine — the dispatch loop, the explicit frame stack, the traceback, host effects. Everything below the instruction level is a `runtime` call. Its own suite is two tests, both about the frame stack: what it *computes* is proved in `specs/`, on both engines. |
 | `support/` | `diagnostics.zig` and `types.zig`: cross-cutting, used by every stage, owned by none. |
 | `std/` | the standard library, written in Luce and embedded with `@embedFile`. |
-| `specs/` | the executable specification: ownership (S1-S43), behaviour, errors, std. |
+| `specs/` | the executable specification: ownership (S1-S43), behaviour, errors, std, the host boundary, projects, the optimizer, the `.lc` round trip. **Its own module**, not part of `luce`: every test that runs a program runs it on both engines and compares them (`specs/agree.zig`), which needs `emit` and the libLLVM `luce` does not link (docs/ENGINE.md). |
 
 ## Where the compiled path diverges
 

@@ -83,13 +83,33 @@ pub fn build(b: *std.Build) void {
     });
     linkLlvm(emit, llvm);
 
-    // Where that proof finds the library to link a compiled program
-    // against.  A path rather than a linked dependency: the test drives
-    // `cc` itself, because the link is part of what it proves.
+    // The executable specification (`src/luce/specs.zig`): every test
+    // that runs a Luce program, run on both engines and compared.
+    //
+    // It is a module of its own because it is the only one that needs
+    // both halves — `luce` for the interpreter that acts as the
+    // differential oracle, `emit` for the machine code that actually
+    // ships (docs/ENGINE.md).  Keeping it out of `luce` is what keeps
+    // libLLVM out of everything the specification does not need it
+    // for.
+    const specs = b.createModule(.{
+        .root_source_file = b.path("src/luce/specs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+            .{ .name = "emit", .module = emit },
+        },
+    });
+
+    // Where the specification finds the library to link a compiled
+    // program against.  A path rather than a linked dependency: the
+    // harness drives `cc` itself, because the link is part of what it
+    // proves.
     const runtime_path = b.addOptions();
     runtime_path.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
-    emit.addOptions("build_options", runtime_path);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = emit })).step);
+    specs.addOptions("build_options", runtime_path);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
 
     // stdout and stderr, opened the same way by all three binaries —
     // `luce`, `loom`, and the `main` a compiled program links — so a

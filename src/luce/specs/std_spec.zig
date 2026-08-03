@@ -3,63 +3,34 @@
 //! Std modules are ordinary Luce compiled into every program that
 //! imports them, so they are proven the way programs are: scripts
 //! whose asserts trap on any wrong answer, leak-checked like
-//! everything else.  math is pure and tests here; files needs a host
-//! and tests beside TestHost in interpreter.zig.
+//! everything else, and run on **both** engines with the two
+//! compared (`specs/agree.zig`).
+//!
+//! The pure modules (math, strings) need nothing from the world; the
+//! hosted ones (files) run against the harness's world, which both
+//! engines see the same copy of.
 
 const std = @import("std");
-const compile_mod = @import("../compile.zig");
-const types = @import("../support/types.zig");
-const backend = @import("../backend.zig");
+const agree = @import("agree.zig");
+const luce = @import("luce");
+const mir = luce.mir;
+const types = luce.types;
 
 const testing = std.testing;
 
 const script: types.CompileOptions = .{};
 
-fn expectOk(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, script);
-    defer result.deinit();
-    switch (result) {
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected compile error:\n{s}", .{rendered});
-            return error.TestUnexpectedResult;
-        },
-        .success => |*program| {
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
-            defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
-                .call_depth = 4096,
-            });
-            switch (outcome) {
-                .success => |success| try testing.expectEqual(@as(u32, 0), success.leaked_objects),
-                .trap => |trap| {
-                    std.debug.print("unexpected trap: {s} ({s})\n", .{ trap.message, @tagName(trap.code) });
-                    return error.TestUnexpectedResult;
-                },
-                .errored => |raised| {
-                    std.debug.print("unexpected error: {s} ({s})\n", .{ raised.message, @tagName(raised.code) });
-                    return error.TestUnexpectedResult;
-                },
-            }
-        },
-    }
+/// The depth this suite has always run at.
+const budget: agree.Provided = .{ .call_depth = 4096 };
+
+/// Both engines run it, agree, and leave nothing alive.
+fn agreeOk(source: []const u8) !void {
+    return agree.okGiven(source, budget);
 }
 
-fn expectTrap(source: []const u8, code: @import("../06_mir.zig").TrapCode) !void {
-    var result = try compile_mod.compile(testing.allocator, source, script);
-    defer result.deinit();
-    switch (result) {
-        .failure => return error.TestUnexpectedResult,
-        .success => |*program| {
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
-            defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
-                .call_depth = 4096,
-            });
-            if (outcome != .trap or outcome.trap.code != code) return error.TestUnexpectedResult;
-        },
-    }
+/// Both engines abort with exactly `code`.
+fn agreeTrap(source: []const u8, code: mir.TrapCode) !void {
+    return agree.trapGiven(source, budget, code);
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +38,7 @@ fn expectTrap(source: []const u8, code: @import("../06_mir.zig").TrapCode) !void
 // ---------------------------------------------------------------------------
 
 test "math: constants and round" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func main():
@@ -84,7 +55,7 @@ test "math: constants and round" {
 }
 
 test "math: exp and ln are accurate and inverse" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
@@ -106,7 +77,7 @@ test "math: exp and ln are accurate and inverse" {
 }
 
 test "math: ln of a non-positive number traps" {
-    try expectTrap(
+    try agreeTrap(
         \\import std.math
         \\
         \\func main():
@@ -117,7 +88,7 @@ test "math: ln of a non-positive number traps" {
 }
 
 test "math: pow covers the sign and zero cases" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
@@ -134,7 +105,7 @@ test "math: pow covers the sign and zero cases" {
         \\    assert(math.pow(7.0, 0.0) == 1.0)
         \\
     );
-    try expectTrap(
+    try agreeTrap(
         \\import std.math
         \\
         \\func main():
@@ -145,7 +116,7 @@ test "math: pow covers the sign and zero cases" {
 }
 
 test "math: ipow squares its way up and stays checked" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func main():
@@ -158,7 +129,7 @@ test "math: ipow squares its way up and stays checked" {
         \\
     );
     // Past i64 the checked arithmetic traps rather than wrapping.
-    try expectTrap(
+    try agreeTrap(
         \\import std.math
         \\
         \\func main():
@@ -169,7 +140,7 @@ test "math: ipow squares its way up and stays checked" {
 }
 
 test "math: trig against known values, across periods" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
@@ -192,7 +163,7 @@ test "math: trig against known values, across periods" {
 }
 
 test "math: log2 and log10" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
@@ -208,7 +179,7 @@ test "math: log2 and log10" {
 }
 
 test "math: vector operations compute exactly on exact inputs" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func main():
@@ -238,7 +209,7 @@ test "math: a reduction over an empty array is absent, not a trap" {
     // Nothing failed and nobody erred: an empty array simply has no
     // mean, and "there is nothing there" with the same reason every
     // time is what `T?` is for (docs/FAILURE.md).
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func main():
@@ -253,7 +224,7 @@ test "math: a reduction over an empty array is absent, not a trap" {
 }
 
 test "math: a shape mismatch is still a trap, because the caller could have checked" {
-    try expectTrap(
+    try agreeTrap(
         \\import std.math
         \\
         \\func main():
@@ -265,7 +236,7 @@ test "math: a shape mismatch is still a trap, because the caller could have chec
 }
 
 test "math: the generator is deterministic, in range, and covers its die" {
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func main():
@@ -288,7 +259,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\        assert(f > 0.0 and f < 1.0)
         \\
     );
-    try expectTrap(
+    try agreeTrap(
         \\import std.math
         \\
         \\func main():
@@ -303,7 +274,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
 // ---------------------------------------------------------------------------
 
 test "strings: find, find_from, contains, starts_with, ends_with, count" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -332,7 +303,7 @@ test "strings: find, find_from, contains, starts_with, ends_with, count" {
 }
 
 test "strings: the method sugar routes to the module" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -347,7 +318,7 @@ test "strings: the method sugar routes to the module" {
 }
 
 test "strings: trim, lower, upper keep multibyte characters whole" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -366,7 +337,7 @@ test "strings: trim, lower, upper keep multibyte characters whole" {
 }
 
 test "strings: replace and repeat" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -384,7 +355,7 @@ test "strings: replace and repeat" {
 }
 
 test "strings: split keeps empties, whitespace mode drops them, join round-trips" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -407,7 +378,7 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
 }
 
 test "strings: pad_left and pad_right" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -420,7 +391,7 @@ test "strings: pad_left and pad_right" {
 }
 
 test "strings: format_float rounds half away and carries" {
-    try expectOk(
+    try agreeOk(
         \\import std.strings
         \\
         \\func main():
@@ -436,7 +407,7 @@ test "strings: format_float rounds half away and carries" {
         \\    assert(strings.format_float(0.0625, 4) == "0.0625")
         \\
     );
-    try expectTrap(
+    try agreeTrap(
         \\import std.strings
         \\
         \\func main():
@@ -453,7 +424,7 @@ test "strings: format_float rounds half away and carries" {
 test "std resolves without any loader, and std names shadow sibling files" {
     // compile() has no loader at all; import math still works — the
     // std library lives in the compiler.
-    try expectOk(
+    try agreeOk(
         \\import std.math
         \\
         \\func main():
@@ -463,7 +434,7 @@ test "std resolves without any loader, and std names shadow sibling files" {
 }
 
 test "std modules obey the host gate: files needs a host" {
-    var result = try compile_mod.compile(testing.allocator,
+    var result = try luce.compile.compile(testing.allocator,
         \\import std.files
         \\
         \\func main():
@@ -482,4 +453,101 @@ test "std modules obey the host gate: files needs a host" {
         }
     }
     try testing.expect(saw_host);
+}
+
+// ---------------------------------------------------------------------------
+// files
+// ---------------------------------------------------------------------------
+//
+// std's one hosted module, proved against the harness's world: one
+// file, one directory, and a host that can be told to refuse.  Each
+// engine gets its own copy of that world, and the two are compared on
+// what they left in it as well as on what they printed
+// (`specs/agree.zig`).
+
+/// A world that already holds `notes.txt`, at this suite's depth.
+fn withNotes(content: []const u8) agree.Provided {
+    var provided = budget;
+    provided.world = .withFile("notes.txt", content);
+    return provided;
+}
+
+test "files: exists, read_lines, write_lines and write wrap the host builtins" {
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    assert(files.exists("notes.txt"))
+        \\    assert(not files.exists("ghost.txt"))
+        \\    var lines = try files.read_lines("notes.txt")
+        \\    assert(len(lines) == 2)
+        \\    assert(lines[0] == "alpha" and lines[1] == "beta")
+        \\    lines.append("gamma")
+        \\    try files.write_lines("out.txt", lines)
+        \\    print(try files.read("out.txt"))
+        \\
+    , withNotes("alpha\nbeta\n"),
+        \\alpha
+        \\beta
+        \\gamma
+        \\
+        \\
+    );
+}
+
+test "files: append, rename, delete and list reach the services beyond read and write" {
+    // Every claim is checked back through the language rather than
+    // through the host's bookkeeping, so the compiled arm proves the
+    // same thing the interpreted one does.
+    var session = try agree.compare(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    try files.append_text("log.txt", "one line\n")
+        \\    try files.append_lines("log.txt", ["two", "three"])
+        \\    try files.append_lines("log.txt", new List(String))
+        \\    print(try files.read("log.txt"))
+        \\    try files.rename("log.txt", "kept.txt")
+        \\    assert(files.exists("kept.txt") and not files.exists("log.txt"))
+        \\    let names = try files.list(".")
+        \\    print(names.join(","))
+        \\    free(names)
+        \\    try files.delete("kept.txt")
+        \\    assert(not files.exists("kept.txt"))
+        \\
+    , budget);
+    defer session.deinit();
+
+    // `files.list` sorts, so a listing does not depend on what the
+    // file system felt like.
+    try testing.expectEqualStrings(
+        "one line\ntwo\nthree\n\nalpha.txt,beta.txt,notes\n",
+        session.printed(),
+    );
+    // The delete really happened: the world holds nothing now.
+    try testing.expect(session.file() == null);
+}
+
+test "files: a listing the world refuses is an error naming the path" {
+    try agree.errors(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    let names = try files.list("nowhere")
+        \\    free(names)
+        \\
+    , budget, .io_failed, "cannot list nowhere");
+}
+
+test "files: a write the world will not take is an error, not a trap" {
+    var refusing = budget;
+    refusing.world = .{ .refuse_writes = true };
+    try agree.errors(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    try files.write("out.txt", "body")
+        \\
+    , refusing, .io_failed, "cannot write out.txt");
 }

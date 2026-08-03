@@ -309,10 +309,3 @@ extern fn LLVMRunPasses(
 ) ?ErrorRef;
 extern fn LLVMGetErrorMessage(handle: ErrorRef) [*:0]u8;
 extern fn LLVMDisposeErrorMessage(message: [*:0]u8) void;
-
-test {
-    // The end-to-end proof lives in this module because it is the one
-    // that can run: it takes Luce source all the way through here into
-    // a loaded shared library (`08_llvm/test.zig`).
-    _ = @import("test.zig");
-}

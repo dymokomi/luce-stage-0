@@ -1,978 +1,40 @@
 //! End-to-end proof for the LLVM backend.
 //!
-//! The interesting test here is `run`: Luce source is compiled to IR,
-//! lowered to LLVM IR, turned into an object by libLLVM in-process,
-//! linked into a shared library, `dlopen`ed, and run against a host
-//! table built in Zig.  Nothing about that path is mocked — if it
-//! passes, a Luce program really did execute as machine code.
+//! Two kinds of test, both of them about the one code generator that
+//! ships.  The first kind renders the LLVM IR the lowering produced
+//! and reads it: what a construct became, what the runtime library was
+//! asked for, what the compiler told LLVM about each call.  The second
+//! kind runs the program — through libLLVM, `cc` and `dlopen` — beside
+//! the interpreter, and demands they agree.
+//!
+//! Nothing about that path is mocked: if it passes, a Luce program
+//! really did execute as machine code.
+//!
+//! The harness is `specs/agree.zig` and is shared with the rest of the
+//! executable specification, which is why this file belongs to the
+//! `specs` module rather than to `emit` (`src/luce/specs.zig` says
+//! why).  It stays here, beside the backend, because the backend is
+//! what it proves.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const build_options = @import("build_options");
-const emit = @import("emit.zig");
 
-// The language comes in as a module rather than by path: this file
-// belongs to `emit`, which links libLLVM, and `luce` does not.
+// The language and the emitter come in as modules: this file belongs
+// to `specs`, which is the one module that names both.
 const luce = @import("luce");
+const spec = @import("../specs/agree.zig");
+
 const backend = luce.backend;
-const compile = luce.compile;
 const mir = luce.mir;
-const types = luce.types;
 const abi = luce.llvm.abi;
-const lower = luce.llvm;
 
-const Allocator = std.mem.Allocator;
-const io = std.testing.io;
-
-// ---------------------------------------------------------------------------
-// The world both hosts present
-// ---------------------------------------------------------------------------
-
-/// What the two hosts below offer a program: one in-memory file, a
-/// fixed argument list, a screen that records instead of drawing, and a
-/// scripted keyboard.
-///
-/// Written once and shared, so the interpreter's host and the compiled
-/// program's host cannot differ in *what* they offer — only in how they
-/// are called.  A disagreement in `agree` is then a lowering bug, which
-/// is the only thing these tests are trying to find.
-const World = struct {
-    file_name: [64]u8 = undefined,
-    file_name_length: usize = 0,
-    file_content: [1024]u8 = undefined,
-    file_content_length: usize = 0,
-    /// How many keys the program has read; the script repeats.
-    keys_read: usize = 0,
-    /// How many lines of standard input have been taken.  The script
-    /// does *not* repeat: running off the end is end of input, which
-    /// is the case a `String?` exists for.
-    lines_read: usize = 0,
-    /// A clock that ticks a fixed amount per reading rather than a
-    /// real one.  Two engines cannot agree on a wall clock, and what
-    /// is under test is the marshalling, not the calendar.
-    clock: i64 = 1_000,
-
-    const rows: i64 = 24;
-    const cols: i64 = 80;
-    const clock_step: i64 = 17;
-
-    const arguments = [_][]const u8{ "alpha", "beta" };
-
-    const lines = [_][]const u8{ "first line", "second line" };
-
-    /// One directory, in the two shapes the two hosts hand over: the
-    /// interpreter takes slices, a compiled program takes them
-    /// NUL-joined.  The joined text is built from the same list, so
-    /// the two can never say different things.
-    const directory = [_][]const u8{ "alpha.txt", "beta.txt", "notes" };
-    const joined_directory = blk: {
-        var text: []const u8 = "";
-        for (directory) |name| text = text ++ name ++ "\x00";
-        break :blk text;
-    };
-
-    const environment = [_]struct { name: []const u8, value: []const u8 }{
-        .{ .name = "LUCE_MODE", .value = "test" },
-        .{ .name = "EMPTY", .value = "" },
-    };
-
-    fn variable(name: []const u8) ?[]const u8 {
-        for (environment) |entry| {
-            if (std.mem.eql(u8, entry.name, name)) return entry.value;
-        }
-        return null;
-    }
-
-    fn nextLine(self: *World) ?[]const u8 {
-        if (self.lines_read >= lines.len) return null;
-        defer self.lines_read += 1;
-        return lines[self.lines_read];
-    }
-
-    fn tick(self: *World) i64 {
-        defer self.clock += clock_step;
-        return self.clock;
-    }
-
-    fn append(self: *World, path: []const u8, content: []const u8) bool {
-        if (!self.exists(path)) return self.write(path, content);
-        if (self.file_content_length + content.len > self.file_content.len) return false;
-        @memcpy(self.file_content[self.file_content_length..][0..content.len], content);
-        self.file_content_length += content.len;
-        return true;
-    }
-
-    fn delete(self: *World, path: []const u8) bool {
-        if (!self.exists(path)) return false;
-        self.file_name_length = 0;
-        self.file_content_length = 0;
-        return true;
-    }
-
-    fn rename(self: *World, from: []const u8, to: []const u8) bool {
-        if (!self.exists(from)) return false;
-        if (to.len == 0 or to.len > self.file_name.len) return false;
-        @memcpy(self.file_name[0..to.len], to);
-        self.file_name_length = to.len;
-        return true;
-    }
-
-    const Key = struct { name: []const u8, text: []const u8 = "" };
-    const keys = [_]Key{
-        .{ .name = "text", .text = "q" },
-        .{ .name = "enter" },
-        .{ .name = "ctrl_s" },
-    };
-
-    /// The file's bytes, or null when nothing of that name was written.
-    /// Borrowed until the next write.
-    fn read(self: *const World, path: []const u8) ?[]const u8 {
-        if (!self.exists(path)) return null;
-        return self.file_content[0..self.file_content_length];
-    }
-
-    fn write(self: *World, path: []const u8, content: []const u8) bool {
-        if (path.len == 0 or path.len > self.file_name.len) return false;
-        if (content.len > self.file_content.len) return false;
-        @memcpy(self.file_name[0..path.len], path);
-        self.file_name_length = path.len;
-        @memcpy(self.file_content[0..content.len], content);
-        self.file_content_length = content.len;
-        return true;
-    }
-
-    fn exists(self: *const World, path: []const u8) bool {
-        if (self.file_name_length == 0) return false;
-        return std.mem.eql(u8, self.file_name[0..self.file_name_length], path);
-    }
-
-    fn argument(index: i64) ?[]const u8 {
-        if (index < 0 or index >= arguments.len) return null;
-        return arguments[@intCast(index)];
-    }
-
-    fn nextKey(self: *World) Key {
-        const answered = keys[self.keys_read % keys.len];
-        self.keys_read += 1;
-        return answered;
-    }
-};
-
-/// The screen effects, as words: both hosts record the same ones, so
-/// `agree` compares drawing as well as printing.
-fn positionText(buffer: []u8, row: i64, col: i64) []const u8 {
-    return std.fmt.bufPrint(buffer, "{d},{d}", .{ row, col }) catch unreachable;
-}
-
-fn styleText(buffer: []u8, foreground: i64, background: i64, bold: bool) []const u8 {
-    return std.fmt.bufPrint(buffer, "{d},{d},{}", .{ foreground, background, bold }) catch unreachable;
-}
-
-/// What a host offers: which groups of services exist, and how deep it
-/// lets calls go.  Every service in the ABI is optional, and a program
-/// that reaches for one that is not there traps `host_unavailable`
-/// rather than touching anything — so a test can withhold a group and
-/// demand exactly that.
-const Provided = struct {
-    print: bool = true,
-    files: bool = true,
-    arguments: bool = true,
-    terminal: bool = true,
-    /// Standard input, standard error, the clock, and the environment
-    /// — four groups because a host may plausibly have any of them
-    /// without the others, and each has to fail closed on its own.
-    input: bool = true,
-    diagnostics: bool = true,
-    clock: bool = true,
-    environment: bool = true,
-    /// The depth limit both engines run under.  The ABI's default is
-    /// the interpreter's default, so a test only names this when it
-    /// wants a shallower one.
-    call_depth: u32 = @intCast(abi.default_call_depth),
-};
-
-/// One line of a call trace, in the one shape the two engines are
-/// compared in.  Written once and used by both hosts, so a difference
-/// in `agree` is a difference in the trace and never in the rendering.
-fn traceLine(
-    buffer: []u8,
-    function: []const u8,
-    source: []const u8,
-    line: u32,
-    column: u32,
-) []const u8 {
-    return std.fmt.bufPrint(buffer, "{s} {s}:{d}:{d}\n", .{
-        function, source, line, column,
-    }) catch unreachable;
-}
-
-fn droppedLine(buffer: []u8, dropped: u32) []const u8 {
-    return std.fmt.bufPrint(buffer, "... {d} more\n", .{dropped}) catch unreachable;
-}
-
-// ---------------------------------------------------------------------------
-// A host, in Zig
-// ---------------------------------------------------------------------------
-
-/// What a run of a compiled program did: the transcript it produced,
-/// how it ended, and what it left unfreed.
-///
-/// Every buffer here is fixed, and that is deliberate rather than
-/// lazy.  These callbacks are entered from a `dlopen`ed library, and
-/// `std.testing.allocator` captures a stack trace on every allocation:
-/// the unwinder cannot walk back through the compiled program's frame
-/// and faults inside the panic handler.  A host called from generated
-/// code must not walk the Zig stack, so this one never allocates.
-const Capture = struct {
-    world: World = .{},
-    printed_storage: [32768]u8 = undefined,
-    printed_length: usize = 0,
-    trap_code: ?mir.TrapCode = null,
-    trap_storage: [256]u8 = undefined,
-    trap_length: usize = 0,
-    /// The error nobody caught, and the one position it carries — the
-    /// other way a run can end (docs/FAILURE.md).
-    error_code: ?mir.ErrorCode = null,
-    error_storage: [256]u8 = undefined,
-    error_length: usize = 0,
-    origin_storage: [256]u8 = undefined,
-    origin_length: usize = 0,
-    /// The call trace that came with the trap, already rendered — the
-    /// host has nowhere to allocate, and the text is what is compared.
-    trace_storage: [8192]u8 = undefined,
-    trace_length: usize = 0,
-    /// Objects the run did not free, or null when it never finished.
-    leaked: ?i64 = null,
-    /// What this host answers when asked how deep calls may go.
-    call_depth: i64 = abi.default_call_depth,
-
-    fn printed(self: *const Capture) []const u8 {
-        return self.printed_storage[0..self.printed_length];
-    }
-
-    fn trapMessage(self: *const Capture) []const u8 {
-        return self.trap_storage[0..self.trap_length];
-    }
-
-    fn trapTrace(self: *const Capture) []const u8 {
-        return self.trace_storage[0..self.trace_length];
-    }
-
-    fn errorMessage(self: *const Capture) []const u8 {
-        return self.error_storage[0..self.error_length];
-    }
-
-    fn errorOrigin(self: *const Capture) []const u8 {
-        return self.origin_storage[0..self.origin_length];
-    }
-
-    /// The table the compiled program indexes.  A withheld group leaves
-    /// its slots null, which is what the fail-closed rule reads.
-    fn table(self: *Capture, provided: Provided) abi.Host {
-        self.call_depth = provided.call_depth;
-        return .{
-            .context = self,
-            .call_depth = callDepth,
-            .print = if (provided.print) print else null,
-            .trap = trap,
-            .finished = finished,
-            .file_read = if (provided.files) fileRead else null,
-            .file_write = if (provided.files) fileWrite else null,
-            .file_exists = if (provided.files) fileExists else null,
-            .arg_count = if (provided.arguments) argCount else null,
-            .arg = if (provided.arguments) argAt else null,
-            .term_rows = if (provided.terminal) termRows else null,
-            .term_cols = if (provided.terminal) termCols else null,
-            .term_clear = if (provided.terminal) termClear else null,
-            .term_move = if (provided.terminal) termMove else null,
-            .term_style = if (provided.terminal) termStyle else null,
-            .term_write = if (provided.terminal) termWrite else null,
-            .term_flush = if (provided.terminal) termFlush else null,
-            .key_read = if (provided.terminal) keyRead else null,
-            .raised = raised,
-            .file_append = if (provided.files) fileAppend else null,
-            .file_delete = if (provided.files) fileDelete else null,
-            .file_rename = if (provided.files) fileRename else null,
-            .dir_list = if (provided.files) dirList else null,
-            .read_line = if (provided.input) readLine else null,
-            .print_error = if (provided.diagnostics) printError else null,
-            .clock_ms = if (provided.clock) clockMilliseconds else null,
-            .sleep_ms = if (provided.clock) sleepMilliseconds else null,
-            .env = if (provided.environment) environmentValue else null,
-        };
-    }
-
-    fn of(context: ?*anyopaque) *Capture {
-        return @ptrCast(@alignCast(context.?));
-    }
-
-    /// One transcript line: a tag naming the effect, then its text.
-    fn record(self: *Capture, tag: []const u8, text: []const u8) void {
-        const total = tag.len + text.len + 1;
-        if (self.printed_length + total > self.printed_storage.len) @panic("printed too much");
-        @memcpy(self.printed_storage[self.printed_length..][0..tag.len], tag);
-        self.printed_length += tag.len;
-        @memcpy(self.printed_storage[self.printed_length..][0..text.len], text);
-        self.printed_length += text.len;
-        self.printed_storage[self.printed_length] = '\n';
-        self.printed_length += 1;
-    }
-
-    fn print(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        of(context).record("", text[0..@intCast(length)]);
-        return .yes;
-    }
-
-    fn raised(
-        context: ?*anyopaque,
-        code: i32,
-        message: [*]const u8,
-        message_length: i64,
-        origin: *const abi.TraceFrame,
-    ) callconv(.c) void {
-        const self = of(context);
-        const words = message[0..@intCast(message_length)];
-        self.error_code = @enumFromInt(code);
-        self.error_length = @min(words.len, self.error_storage.len);
-        @memcpy(self.error_storage[0..self.error_length], words[0..self.error_length]);
-        const rendered = traceLine(
-            &self.origin_storage,
-            origin.function[0..@intCast(origin.function_length)],
-            origin.source[0..@intCast(origin.source_length)],
-            origin.line,
-            origin.column,
-        );
-        self.origin_length = rendered.len;
-    }
-
-    fn callDepth(context: ?*anyopaque) callconv(.c) i64 {
-        return of(context).call_depth;
-    }
-
-    fn trap(
-        context: ?*anyopaque,
-        code: i32,
-        message: [*]const u8,
-        message_length: i64,
-        frames: [*]const abi.TraceFrame,
-        frame_count: i64,
-        dropped: i64,
-    ) callconv(.c) void {
-        const self = of(context);
-        const words = message[0..@intCast(message_length)];
-        if (words.len > self.trap_storage.len) @panic("trap message too long");
-        self.trap_code = @enumFromInt(code);
-        @memcpy(self.trap_storage[0..words.len], words);
-        self.trap_length = words.len;
-
-        var encoded: [512]u8 = undefined;
-        self.trace_length = 0;
-        for (frames[0..@intCast(frame_count)]) |frame| {
-            self.keepTrace(traceLine(
-                &encoded,
-                frame.function[0..@intCast(frame.function_length)],
-                frame.source[0..@intCast(frame.source_length)],
-                frame.line,
-                frame.column,
-            ));
-        }
-        if (dropped != 0) self.keepTrace(droppedLine(&encoded, @intCast(dropped)));
-    }
-
-    fn keepTrace(self: *Capture, line: []const u8) void {
-        if (self.trace_length + line.len > self.trace_storage.len) @panic("trace too long");
-        @memcpy(self.trace_storage[self.trace_length..][0..line.len], line);
-        self.trace_length += line.len;
-    }
-
-    fn finished(context: ?*anyopaque, leaked: i64) callconv(.c) void {
-        of(context).leaked = leaked;
-    }
-
-    fn fileRead(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        text: *[*]const u8,
-        length: *i64,
-    ) callconv(.c) abi.Answer {
-        const found = of(context).world.read(path[0..@intCast(path_length)]) orelse return .no;
-        text.* = found.ptr;
-        length.* = @intCast(found.len);
-        return .yes;
-    }
-
-    fn fileWrite(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        content: [*]const u8,
-        content_length: i64,
-    ) callconv(.c) abi.Answer {
-        const wrote = of(context).world.write(
-            path[0..@intCast(path_length)],
-            content[0..@intCast(content_length)],
-        );
-        return if (wrote) .yes else .no;
-    }
-
-    fn fileExists(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-    ) callconv(.c) abi.Answer {
-        return if (of(context).world.exists(path[0..@intCast(path_length)])) .yes else .no;
-    }
-
-    fn argCount(context: ?*anyopaque) callconv(.c) i64 {
-        _ = context;
-        return World.arguments.len;
-    }
-
-    fn argAt(
-        context: ?*anyopaque,
-        index: i64,
-        text: *[*]const u8,
-        length: *i64,
-    ) callconv(.c) abi.Answer {
-        _ = context;
-        const found = World.argument(index) orelse return .no;
-        text.* = found.ptr;
-        length.* = @intCast(found.len);
-        return .yes;
-    }
-
-    fn termRows(context: ?*anyopaque) callconv(.c) i64 {
-        _ = context;
-        return World.rows;
-    }
-
-    fn termCols(context: ?*anyopaque) callconv(.c) i64 {
-        _ = context;
-        return World.cols;
-    }
-
-    fn termClear(context: ?*anyopaque) callconv(.c) abi.Answer {
-        of(context).record("[clear]", "");
-        return .yes;
-    }
-
-    fn termMove(context: ?*anyopaque, row: i64, col: i64) callconv(.c) abi.Answer {
-        var encoded: [48]u8 = undefined;
-        of(context).record("[move]", positionText(&encoded, row, col));
-        return .yes;
-    }
-
-    fn termStyle(
-        context: ?*anyopaque,
-        foreground: i64,
-        background: i64,
-        bold: i32,
-    ) callconv(.c) abi.Answer {
-        var encoded: [64]u8 = undefined;
-        of(context).record("[style]", styleText(&encoded, foreground, background, bold != 0));
-        return .yes;
-    }
-
-    fn termWrite(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        of(context).record("[write]", text[0..@intCast(length)]);
-        return .yes;
-    }
-
-    fn termFlush(context: ?*anyopaque) callconv(.c) abi.Answer {
-        of(context).record("[flush]", "");
-        return .yes;
-    }
-
-    fn keyRead(
-        context: ?*anyopaque,
-        name: *[*]const u8,
-        name_length: *i64,
-        text: *[*]const u8,
-        text_length: *i64,
-    ) callconv(.c) abi.Answer {
-        const pressed = of(context).world.nextKey();
-        name.* = pressed.name.ptr;
-        name_length.* = @intCast(pressed.name.len);
-        text.* = pressed.text.ptr;
-        text_length.* = @intCast(pressed.text.len);
-        return .yes;
-    }
-
-    fn fileAppend(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        content: [*]const u8,
-        content_length: i64,
-    ) callconv(.c) abi.Answer {
-        const added = of(context).world.append(
-            path[0..@intCast(path_length)],
-            content[0..@intCast(content_length)],
-        );
-        return if (added) .yes else .no;
-    }
-
-    fn fileDelete(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-    ) callconv(.c) abi.Answer {
-        return if (of(context).world.delete(path[0..@intCast(path_length)])) .yes else .no;
-    }
-
-    fn fileRename(
-        context: ?*anyopaque,
-        from: [*]const u8,
-        from_length: i64,
-        to: [*]const u8,
-        to_length: i64,
-    ) callconv(.c) abi.Answer {
-        const moved = of(context).world.rename(
-            from[0..@intCast(from_length)],
-            to[0..@intCast(to_length)],
-        );
-        return if (moved) .yes else .no;
-    }
-
-    /// One directory exists, named "." ; anything else is a listing
-    /// the world refuses, which is the `io_failed` side under test.
-    fn dirList(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        names: *[*]const u8,
-        names_length: *i64,
-    ) callconv(.c) abi.Answer {
-        _ = context;
-        if (!std.mem.eql(u8, path[0..@intCast(path_length)], ".")) return .no;
-        names.* = World.joined_directory.ptr;
-        names_length.* = @intCast(World.joined_directory.len);
-        return .yes;
-    }
-
-    fn readLine(
-        context: ?*anyopaque,
-        prompt: [*]const u8,
-        prompt_length: i64,
-        text: *[*]const u8,
-        length: *i64,
-    ) callconv(.c) abi.Answer {
-        const self = of(context);
-        self.record("[prompt]", prompt[0..@intCast(prompt_length)]);
-        const line = self.world.nextLine() orelse return .no;
-        text.* = line.ptr;
-        length.* = @intCast(line.len);
-        return .yes;
-    }
-
-    fn printError(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        of(context).record("[stderr]", text[0..@intCast(length)]);
-        return .yes;
-    }
-
-    fn clockMilliseconds(context: ?*anyopaque) callconv(.c) i64 {
-        return of(context).world.tick();
-    }
-
-    fn sleepMilliseconds(context: ?*anyopaque, milliseconds: i64) callconv(.c) abi.Answer {
-        var encoded: [32]u8 = undefined;
-        of(context).record("[sleep]", std.fmt.bufPrint(
-            &encoded,
-            "{d}",
-            .{milliseconds},
-        ) catch unreachable);
-        return .yes;
-    }
-
-    fn environmentValue(
-        context: ?*anyopaque,
-        name: [*]const u8,
-        name_length: i64,
-        text: *[*]const u8,
-        length: *i64,
-    ) callconv(.c) abi.Answer {
-        _ = context;
-        const found = World.variable(name[0..@intCast(name_length)]) orelse return .no;
-        text.* = found.ptr;
-        length.* = @intCast(found.len);
-        return .yes;
-    }
-};
-
-/// The same program on the interpreter: the engine the specs proved,
-/// and the thing a compiled run has to agree with byte for byte.
-const Reference = struct {
-    gpa: Allocator,
-    provided: Provided = .{},
-    world: World = .{},
-    printed: std.ArrayList(u8) = .empty,
-    trap_code: ?mir.TrapCode = null,
-    trap_message: []const u8 = "",
-    /// The trap's call trace, rendered the same way the compiled host
-    /// renders its own.
-    trap_trace: std.ArrayList(u8) = .empty,
-    /// The error nobody caught, and the one line it carries.
-    error_code: ?mir.ErrorCode = null,
-    error_message: []const u8 = "",
-    error_origin: std.ArrayList(u8) = .empty,
-    leaked: ?u32 = null,
-
-    fn deinit(self: *Reference) void {
-        self.printed.deinit(self.gpa);
-        self.trap_trace.deinit(self.gpa);
-        self.error_origin.deinit(self.gpa);
-        self.gpa.free(self.trap_message);
-        self.gpa.free(self.error_message);
-    }
-
-    fn of(context: *anyopaque) *Reference {
-        return @ptrCast(@alignCast(context));
-    }
-
-    fn record(self: *Reference, tag: []const u8, text: []const u8) error{OutOfMemory}!void {
-        try self.printed.appendSlice(self.gpa, tag);
-        try self.printed.appendSlice(self.gpa, text);
-        try self.printed.append(self.gpa, '\n');
-    }
-
-    fn host(self: *Reference) backend.Host {
-        return .{
-            .context = self,
-            .printFn = if (self.provided.print) take else null,
-            .readFileFn = if (self.provided.files) readFile else null,
-            .writeFileFn = if (self.provided.files) writeFile else null,
-            .fileExistsFn = if (self.provided.files) fileExists else null,
-            .appendFileFn = if (self.provided.files) appendFile else null,
-            .deleteFileFn = if (self.provided.files) deleteFile else null,
-            .renameFileFn = if (self.provided.files) renameFile else null,
-            .listDirectoryFn = if (self.provided.files) listDirectory else null,
-            .readLineFn = if (self.provided.input) readLine else null,
-            .printErrorFn = if (self.provided.diagnostics) printError else null,
-            .clockFn = if (self.provided.clock) clockMilliseconds else null,
-            .sleepFn = if (self.provided.clock) sleepMilliseconds else null,
-            .envFn = if (self.provided.environment) environmentValue else null,
-            .argCountFn = if (self.provided.arguments) argCount else null,
-            .argFn = if (self.provided.arguments) argAt else null,
-            .terminal = if (self.provided.terminal) .{
-                .context = self,
-                .rowsFn = termRows,
-                .colsFn = termCols,
-                .clearFn = termClear,
-                .moveFn = termMove,
-                .styleFn = termStyle,
-                .writeFn = termWrite,
-                .flushFn = termFlush,
-                .keyFn = keyRead,
-            } else null,
-        };
-    }
-
-    fn take(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
-        try of(context).record("", text);
-    }
-
-    fn readFile(
-        context: *anyopaque,
-        arena: Allocator,
-        path: []const u8,
-    ) error{OutOfMemory}!backend.FileRead {
-        const found = of(context).world.read(path) orelse return .failed;
-        return .{ .content = try arena.dupe(u8, found) };
-    }
-
-    fn writeFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
-        return of(context).world.write(path, content);
-    }
-
-    fn fileExists(context: *anyopaque, path: []const u8) bool {
-        return of(context).world.exists(path);
-    }
-
-    fn appendFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
-        return of(context).world.append(path, content);
-    }
-
-    fn deleteFile(context: *anyopaque, path: []const u8) bool {
-        return of(context).world.delete(path);
-    }
-
-    fn renameFile(context: *anyopaque, from: []const u8, to: []const u8) bool {
-        return of(context).world.rename(from, to);
-    }
-
-    fn listDirectory(
-        context: *anyopaque,
-        arena: Allocator,
-        path: []const u8,
-    ) error{OutOfMemory}!?[]const []const u8 {
-        _ = context;
-        _ = arena;
-        if (!std.mem.eql(u8, path, ".")) return null;
-        return &World.directory;
-    }
-
-    fn readLine(
-        context: *anyopaque,
-        arena: Allocator,
-        prompt: []const u8,
-    ) error{OutOfMemory}!?[]const u8 {
-        _ = arena;
-        const self = of(context);
-        try self.record("[prompt]", prompt);
-        return self.world.nextLine();
-    }
-
-    fn printError(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
-        try of(context).record("[stderr]", text);
-    }
-
-    fn clockMilliseconds(context: *anyopaque) i64 {
-        return of(context).world.tick();
-    }
-
-    fn sleepMilliseconds(context: *anyopaque, milliseconds: i64) void {
-        var encoded: [32]u8 = undefined;
-        of(context).record("[sleep]", std.fmt.bufPrint(
-            &encoded,
-            "{d}",
-            .{milliseconds},
-        ) catch unreachable) catch {};
-    }
-
-    fn environmentValue(
-        context: *anyopaque,
-        arena: Allocator,
-        name: []const u8,
-    ) error{OutOfMemory}!?[]const u8 {
-        _ = context;
-        _ = arena;
-        return World.variable(name);
-    }
-
-    fn argCount(context: *anyopaque) u32 {
-        _ = context;
-        return World.arguments.len;
-    }
-
-    fn argAt(context: *anyopaque, arena: Allocator, index: u32) error{OutOfMemory}!?[]const u8 {
-        _ = context;
-        const found = World.argument(index) orelse return null;
-        return try arena.dupe(u8, found);
-    }
-
-    fn termRows(context: *anyopaque) i64 {
-        _ = context;
-        return World.rows;
-    }
-
-    fn termCols(context: *anyopaque) i64 {
-        _ = context;
-        return World.cols;
-    }
-
-    fn termClear(context: *anyopaque) error{OutOfMemory}!void {
-        try of(context).record("[clear]", "");
-    }
-
-    fn termMove(context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void {
-        var encoded: [48]u8 = undefined;
-        try of(context).record("[move]", positionText(&encoded, row, col));
-    }
-
-    fn termStyle(
-        context: *anyopaque,
-        foreground: i64,
-        background: i64,
-        bold: bool,
-    ) error{OutOfMemory}!void {
-        var encoded: [64]u8 = undefined;
-        try of(context).record("[style]", styleText(&encoded, foreground, background, bold));
-    }
-
-    fn termWrite(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
-        try of(context).record("[write]", text);
-    }
-
-    fn termFlush(context: *anyopaque) error{OutOfMemory}!void {
-        try of(context).record("[flush]", "");
-    }
-
-    fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!backend.KeyEvent {
-        _ = arena;
-        const pressed = of(context).world.nextKey();
-        return .{ .name = pressed.name, .text = pressed.text };
-    }
-
-    fn run(self: *Reference, compiled: *const mir.Program) !void {
-        var arena = std.heap.ArenaAllocator.init(self.gpa);
-        defer arena.deinit();
-        const result = try backend.evaluateHosted(
-            .{ .arena = arena.allocator(), .objects = self.gpa },
-            compiled,
-            .{ .call_depth = self.provided.call_depth },
-            self.host(),
-        );
-        switch (result) {
-            .success => |ended| self.leaked = ended.leaked_objects,
-            .trap => |raised| {
-                self.trap_code = raised.code;
-                // The arena goes at the end of this function, so keep
-                // the words rather than a borrow of them.
-                self.trap_message = try self.gpa.dupe(u8, raised.message);
-                var encoded: [512]u8 = undefined;
-                for (raised.trace) |frame| {
-                    try self.trap_trace.appendSlice(self.gpa, traceLine(
-                        &encoded,
-                        frame.function,
-                        frame.source,
-                        frame.line,
-                        frame.column,
-                    ));
-                }
-                if (raised.dropped != 0) {
-                    try self.trap_trace.appendSlice(
-                        self.gpa,
-                        droppedLine(&encoded, raised.dropped),
-                    );
-                }
-            },
-            .errored => |raised| {
-                self.error_code = raised.code;
-                self.error_message = try self.gpa.dupe(u8, raised.message);
-                var encoded: [512]u8 = undefined;
-                try self.error_origin.appendSlice(self.gpa, traceLine(
-                    &encoded,
-                    raised.origin.function,
-                    raised.origin.source,
-                    raised.origin.line,
-                    raised.origin.column,
-                ));
-            },
-        }
-    }
-};
-
-// ---------------------------------------------------------------------------
-// The pipeline, as a test harness
-// ---------------------------------------------------------------------------
-
-/// Compile one script; the caller owns the program.  A compile failure
-/// is a broken test, not an outcome under test, so it fails loudly.
-fn program(gpa: Allocator, source: []const u8) !mir.Program {
-    var result = try compile.compile(gpa, source, .{
-        .allow_host = true,
-        .source_name = "test.luc",
-    });
-    switch (result) {
-        .success => |compiled| return compiled,
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(gpa);
-            defer gpa.free(rendered);
-            std.debug.print("unexpected compile failure:\n{s}", .{rendered});
-            result.deinit();
-            return error.CompileFailed;
-        },
-    }
-}
-
-/// Lower `source` and hand back the textual LLVM IR; the caller owns
-/// it.  Null means the program uses something with no lowering yet.
-fn render(gpa: Allocator, source: []const u8) !?[]const u8 {
-    var compiled = try program(gpa, source);
-    defer compiled.deinit();
-
-    const triple = try emit.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    return switch (try lower.lowerToText(gpa, &compiled, .{ .triple = triple })) {
-        .text => |rendered| rendered,
-        .unsupported => null,
-    };
-}
-
-/// How the artifact under test was built (docs/MODES.md).  Release
-/// strips the origins, which is the only difference there is.
-const Mode = enum { debug, release };
-
-/// Compile, lower, emit, link, load, and run `source`.  Everything the
-/// run produced lands in `capture`.
-fn run(gpa: Allocator, source: []const u8, capture: *Capture, provided: Provided) !abi.Status {
-    return runBuilt(gpa, source, capture, provided, .debug);
-}
-
-fn runBuilt(
-    gpa: Allocator,
-    source: []const u8,
-    capture: *Capture,
-    provided: Provided,
-    mode: Mode,
-) !abi.Status {
-    var compiled = try program(gpa, source);
-    defer compiled.deinit();
-    if (mode == .release) mir.strip(&compiled);
-
-    const triple = try emit.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    const bitcode = switch (try lower.lower(gpa, &compiled, .{ .triple = triple })) {
-        .bitcode => |bytes| bytes,
-        .unsupported => |what| {
-            std.debug.print("no lowering for {s}\n", .{what});
-            return error.Unsupported;
-        },
-    };
-    defer gpa.free(bitcode);
-
-    const object = switch (try emit.compile(gpa, bitcode, .{ .triple = triple })) {
-        .object => |bytes| bytes,
-        .failed => |why| {
-            defer gpa.free(why);
-            std.debug.print("LLVM refused the module: {s}\n", .{why});
-            return error.EmitFailed;
-        },
-    };
-    defer gpa.free(object);
-
-    var scratch = std.testing.tmpDir(.{});
-    defer scratch.cleanup();
-    try scratch.dir.writeFile(io, .{ .sub_path = "program.o", .data = object });
-
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(io, &path_storage)];
-    const object_path = try std.fs.path.join(gpa, &.{ directory, "program.o" });
-    defer gpa.free(object_path);
-    const library_path = try std.fs.path.joinZ(gpa, &.{ directory, "program.so" });
-    defer gpa.free(library_path);
-
-    // The link is also the proof that the artifact declares no
-    // undefined symbols beyond `libluce_rt`, which it links in: every
-    // effect arrives through the host table, and every semantic
-    // through the runtime library.
-    const arguments: []const []const u8 = if (builtin.os.tag.isDarwin())
-        &.{ "cc", "-shared", "-o", library_path, object_path, build_options.luce_rt_library }
-    else
-        &.{
-            "cc",                          "-shared",
-            "-Wl,--no-undefined",          "-o",
-            library_path,                  object_path,
-            build_options.luce_rt_library,
-        };
-    const linked = try std.process.run(gpa, io, .{ .argv = arguments });
-    defer gpa.free(linked.stdout);
-    defer gpa.free(linked.stderr);
-    if (linked.term != .exited or linked.term.exited != 0) {
-        std.debug.print("link failed:\n{s}\n", .{linked.stderr});
-        return error.LinkFailed;
-    }
-
-    var library = try std.DynLib.open(library_path);
-    defer library.close();
-    const entry = library.lookup(abi.Entry, abi.entry_symbol) orelse return error.NoEntryPoint;
-
-    const table = capture.table(provided);
-    return entry(&table);
-}
+const Capture = spec.Capture;
+const Provided = spec.Provided;
+const World = spec.World;
+const render = spec.render;
+const run = spec.run;
+const runBuilt = spec.runBuilt;
+const agree = spec.agree;
+const agreeGiven = spec.agreeGiven;
 
 // ---------------------------------------------------------------------------
 // The shape of what is generated
@@ -980,7 +42,7 @@ fn runBuilt(
 
 test "the entry point is exported and every Luce function is internal" {
     const gpa = std.testing.allocator;
-    const rendered = (try render(gpa,
+    const rendered = (try render(
         \\func main():
         \\    print("hi")
         \\
@@ -995,7 +57,7 @@ test "the entry point is exported and every Luce function is internal" {
 
 test "checked integer arithmetic lowers to the overflow intrinsics" {
     const gpa = std.testing.allocator;
-    const rendered = (try render(gpa,
+    const rendered = (try render(
         \\func main():
         \\    let a = 2
         \\    let b = 3
@@ -1011,7 +73,7 @@ test "checked integer arithmetic lowers to the overflow intrinsics" {
 
 test "an optional lowers to its payload beside a presence bit" {
     const gpa = std.testing.allocator;
-    const rendered = (try render(gpa,
+    const rendered = (try render(
         \\func main():
         \\    let n = parse_int(arg(0))
         \\    print(str(n else 0))
@@ -1028,7 +90,7 @@ test "an optional lowers to its payload beside a presence bit" {
 
 test "floats, structs, and the host services all lower" {
     const gpa = std.testing.allocator;
-    const rendered = (try render(gpa,
+    const rendered = (try render(
         \\struct Point:
         \\    x: Float
         \\    y: Float
@@ -1060,7 +122,7 @@ test "floats, structs, and the host services all lower" {
 
 test "the runtime library is called, not reimplemented" {
     const gpa = std.testing.allocator;
-    const rendered = (try render(gpa,
+    const rendered = (try render(
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
@@ -1092,7 +154,7 @@ test "every runtime declaration carries what the compiler knows about it" {
     // reads and writes all memory, may unwind, may never come back.
     // `effects.zig` says otherwise for every entry point, and this is
     // what proves the saying reaches the module.
-    const rendered = (try render(gpa,
+    const rendered = (try render(
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
@@ -1171,10 +233,9 @@ test "every runtime declaration carries what the compiler knows about it" {
 // ---------------------------------------------------------------------------
 
 test "a compiled program prints through the host table" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    print("hello from a compiled .lc")
         \\
@@ -1186,10 +247,9 @@ test "a compiled program prints through the host table" {
 }
 
 test "arithmetic, comparison, control flow, locals, and str(Int) run" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    var total = 0
         \\    var index = 1
@@ -1211,10 +271,9 @@ test "arithmetic, comparison, control flow, locals, and str(Int) run" {
 }
 
 test "calls and recursion carry values back and traps forward" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func fib(n: Int) -> Int:
         \\    if n < 2:
         \\        return n
@@ -1236,12 +295,11 @@ test "calls and recursion carry values back and traps forward" {
 }
 
 test "a call inside a loop does not grow the frame" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
     // The scratch slot for the call result lives in the entry block, so
     // a million iterations cost one stack slot, not a million.
-    const status = try run(gpa,
+    const status = try run(
         \\func step(total: Int, index: Int) -> Int:
         \\    if index % 7 == 0:
         \\        return total + index
@@ -1262,10 +320,9 @@ test "a call inside a loop does not grow the frame" {
 }
 
 test "booleans and not run" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    let yes = true
         \\    let no = not yes
@@ -1283,10 +340,9 @@ test "booleans and not run" {
 }
 
 test "division by zero traps with the interpreter's code and message" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func divide(a: Int, b: Int) -> Int:
         \\    return a / b
         \\
@@ -1305,10 +361,9 @@ test "division by zero traps with the interpreter's code and message" {
 }
 
 test "integer overflow traps instead of wrapping" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    var value = 1
         \\    var step = 0
@@ -1325,10 +380,9 @@ test "integer overflow traps instead of wrapping" {
 }
 
 test "a failed assertion traps" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    assert(1 == 2)
         \\
@@ -1340,10 +394,9 @@ test "a failed assertion traps" {
 }
 
 test "trap(message) reports the program's own words" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    print("starting")
         \\    trap("nothing left to do")
@@ -1372,7 +425,7 @@ test "runaway recursion traps instead of overflowing the machine's stack" {
     // code counts frames rather than hoping, so this is a trap with a
     // message and a trace, the way docs/LANGUAGE.md says it is — on
     // both engines, at the same call.
-    try agree(std.testing.allocator,
+    try agree(
         \\func deep(n: Int) -> Int:
         \\    return 1 + deep(n - 1)
         \\
@@ -1384,8 +437,7 @@ test "runaway recursion traps instead of overflowing the machine's stack" {
 }
 
 test "mutual recursion and a shallow limit agree on where the depth ran out" {
-    const gpa = std.testing.allocator;
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func ping(n: Int) -> Int:
         \\    return pong(n + 1)
         \\
@@ -1397,13 +449,13 @@ test "mutual recursion and a shallow limit agree on where the depth ran out" {
         \\
     , .{ .call_depth = 7 });
     // A host that allows no frames at all refuses `main` itself.
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print("never runs")
         \\
     , .{ .call_depth = 0 });
     // One frame is exactly enough for a program that calls nothing.
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print("just main")
         \\
@@ -1411,10 +463,9 @@ test "mutual recursion and a shallow limit agree on where the depth ran out" {
 }
 
 test "a debug build reports file, line, column, and the whole call stack" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try runBuilt(gpa,
+    const status = try runBuilt(
         \\func divide(a: Int, b: Int) -> Int:
         \\    return a / b
         \\
@@ -1437,10 +488,9 @@ test "a debug build reports file, line, column, and the whole call stack" {
 }
 
 test "a release build strips the lines and still names the functions" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try runBuilt(gpa,
+    const status = try runBuilt(
         \\func divide(a: Int, b: Int) -> Int:
         \\    return a / b
         \\
@@ -1465,10 +515,9 @@ test "a release build strips the lines and still names the functions" {
 }
 
 test "a deep trace keeps its innermost frames and counts the rest" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    _ = try run(gpa,
+    _ = try run(
         \\func deep(n: Int) -> Int:
         \\    return 1 + deep(n - 1)
         \\
@@ -1486,10 +535,9 @@ test "a deep trace keeps its innermost frames and counts the rest" {
 }
 
 test "a missing host service fails closed" {
-    const gpa = std.testing.allocator;
     var capture: Capture = .{};
 
-    const status = try run(gpa,
+    const status = try run(
         \\func main():
         \\    print("this host has no console")
         \\
@@ -1511,51 +559,8 @@ test "a missing host service fails closed" {
 // prove that sharing is real.  A disagreement here means the lowering
 // marshalled something wrongly, not that a semantic was written twice.
 
-/// Run `source` both ways and demand the same bytes, the same trap
-/// code, the same words, the same call trace, and the same leak census.
-fn agree(gpa: Allocator, source: []const u8) !void {
-    return agreeGiven(gpa, source, .{});
-}
-
-/// The same, against a host that offers only `provided` — so a
-/// withheld service has to fail closed the same way on both engines.
-fn agreeGiven(gpa: Allocator, source: []const u8, provided: Provided) !void {
-    var compiled = try program(gpa, source);
-    defer compiled.deinit();
-
-    var reference: Reference = .{ .gpa = gpa, .provided = provided };
-    defer reference.deinit();
-    try reference.run(&compiled);
-
-    var capture: Capture = .{};
-    const status = try run(gpa, source, &capture, provided);
-
-    try std.testing.expectEqualStrings(reference.printed.items, capture.printed());
-    if (reference.trap_code) |code| {
-        try std.testing.expectEqual(abi.Status.trapped, status);
-        try std.testing.expectEqual(code, capture.trap_code.?);
-        try std.testing.expectEqualStrings(reference.trap_message, capture.trapMessage());
-        // Same frames, same lines, same "... N more" — a trap is not
-        // reported identically until its trace is.
-        try std.testing.expectEqualStrings(reference.trap_trace.items, capture.trapTrace());
-    } else if (reference.error_code) |code| {
-        // An error is news, so what has to match is the news: the
-        // code, the words, and the one place it was raised
-        // (docs/FAILURE.md).  Not the census — a run that ended
-        // errored publishes nothing, on either engine.
-        try std.testing.expectEqual(abi.Status.errored, status);
-        try std.testing.expectEqual(code, capture.error_code.?);
-        try std.testing.expectEqualStrings(reference.error_message, capture.errorMessage());
-        try std.testing.expectEqualStrings(reference.error_origin.items, capture.errorOrigin());
-    } else {
-        try std.testing.expectEqual(abi.Status.ok, status);
-        try std.testing.expectEqual(@as(?mir.TrapCode, null), capture.trap_code);
-        try std.testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);
-    }
-}
-
 test "lists, maps, strings, and ownership agree with the interpreter" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func total(xs: List(Int)) -> Int:
         \\    var sum = 0
         \\    for x in xs:
@@ -1608,7 +613,7 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
 // is a leak the census and the test allocator both report, and a move
 // that should not have happened is a double free.
 test "a fresh value moves into every kind of place, and a borrow still copies" {
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Note:
         \\    title: String
         \\    body: String
@@ -1652,7 +657,7 @@ test "a fresh value moves into every kind of place, and a borrow still copies" {
 }
 
 test "a value still live after a store is copied, and a returned borrow too" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func fresh(a: String, b: String) -> String:
         \\    return a + b
         \\
@@ -1687,7 +692,7 @@ test "a value still live after a store is copied, and a returned borrow too" {
 }
 
 test "a store that traps still owns what it was handed" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let head = "a string comfortably past the inline threshold"
         \\    var xs: List(String) = [head]
@@ -1701,7 +706,7 @@ test "a store that traps still owns what it was handed" {
 }
 
 test "a fallible call's result is carried, not taken, and still agrees" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    # A fallible call's result crosses the branch on its
         \\    # outcome in a slot that is *reloaded*, so that slot keeps
@@ -1722,7 +727,7 @@ test "a fallible call's result is carried, not taken, and still agrees" {
 }
 
 test "a nested container agrees, and the leak census counts the same" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let rows = new List(List(Int))
         \\    var r = 0
@@ -1742,7 +747,7 @@ test "a nested container agrees, and the leak census counts the same" {
 }
 
 test "an alias used after the owner freed agrees: use_after_free (S9)" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var xs = new List(Int)
         \\    xs.append(1)
@@ -1760,7 +765,7 @@ test "a stale alias whose row was reused agrees: still use_after_free (S9)" {
     // of what keeps `stale` from quietly becoming a second name for
     // `fresh` on either engine.  Compiled code makes this test itself,
     // inline, with the row's generation against the handle's.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var xs = new List(Int)
         \\    xs.append(1)
@@ -1783,7 +788,7 @@ test "a reused row is refused by every door, and the newcomer by none" {
     // The same reuse reached through indexing, iteration and the
     // ownership verbs rather than through `len`, because each takes a
     // different route to the row.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    var doomed = new List(Int)
@@ -1800,7 +805,7 @@ test "a reused row is refused by every door, and the newcomer by none" {
 }
 
 test "the alias dodge agrees: not_owned (S23)" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var a = new List(List(Int))
         \\    var b = new List(List(Int))
@@ -1815,7 +820,7 @@ test "the alias dodge agrees: not_owned (S23)" {
 }
 
 test "an index out of bounds agrees" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
@@ -1835,7 +840,7 @@ test "an index out of bounds agrees" {
 // agrees, not that the generated instructions do.
 
 test "float arithmetic, comparison, and formatting agree over the special values" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let values = new List(Float)
         \\    values.append(0.0)
@@ -1865,7 +870,7 @@ test "float arithmetic, comparison, and formatting agree over the special values
 }
 
 test "negating a float flips the sign bit, so -0.0 survives" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var zero = 0.0
         \\    let negative = -zero
@@ -1885,7 +890,7 @@ test "negating a float flips the sign bit, so -0.0 survives" {
 // values come out of a List and the length out of `len`, so the
 // reductions stay loops long enough to be vectorized.
 test "min and max reductions over an array agree, signed zeros and all" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func lowest(xs: Array(Float, _)) -> Float:
         \\    var smallest = xs[0]
         \\    for i in range(1, len(xs)):
@@ -1924,7 +929,7 @@ test "min and max reductions over an array agree, signed zeros and all" {
 }
 
 test "clamp agrees when the bounds cross and when they are not numbers" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let bounds = new List(Float)
         \\    bounds.append(-1.0)
@@ -1947,7 +952,7 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
 }
 
 test "the float builtins agree" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let xs = new List(Float)
         \\    xs.append(0.0)
@@ -1964,7 +969,7 @@ test "the float builtins agree" {
 }
 
 test "Int(Float) agrees at the range boundaries" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var scale = 1.0
         \\    var step = 0
@@ -1981,15 +986,14 @@ test "Int(Float) agrees at the range boundaries" {
 }
 
 test "Int(NaN) and Int(infinity) trap the same way" {
-    const gpa = std.testing.allocator;
-    try agree(gpa,
+    try agree(
         \\func main():
         \\    let nan = 0.0 / 0.0
         \\    print("before")
         \\    print(str(Int(nan)))
         \\
     );
-    try agree(gpa,
+    try agree(
         \\func main():
         \\    let far = -1.0 / 0.0
         \\    print("before")
@@ -1999,8 +1003,7 @@ test "Int(NaN) and Int(infinity) trap the same way" {
 }
 
 test "the Int math builtins agree, and abs of the smallest Int traps" {
-    const gpa = std.testing.allocator;
-    try agree(gpa,
+    try agree(
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(0)
@@ -2013,7 +1016,7 @@ test "the Int math builtins agree, and abs of the smallest Int traps" {
         \\    free(xs)
         \\
     );
-    try agree(gpa,
+    try agree(
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(0 - 9223372036854775807 - 1)
@@ -2028,7 +1031,7 @@ test "the Int math builtins agree, and abs of the smallest Int traps" {
 // ---------------------------------------------------------------------------
 
 test "nested struct equality recurses into fields, not the slots holding them" {
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Inner:
         \\    n: Int
         \\    tag: String
@@ -2049,7 +1052,7 @@ test "nested struct equality recurses into fields, not the slots holding them" {
 }
 
 test "a struct carrying a String copies by value and agrees" {
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Person:
         \\    name: String
         \\    age: Int
@@ -2072,7 +1075,7 @@ test "a struct carrying a String copies by value and agrees" {
 }
 
 test "zero-initialized structs agree, nested ones included" {
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Inner:
         \\    n: Int
         \\    tag: String
@@ -2100,7 +1103,7 @@ test "an inline array access agrees on every element kind and rank" {
     // object element keeps the 24-byte slot — and compiled code reads
     // each one inline rather than through the runtime.  Four kinds,
     // two ranks, both engines.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var grid = new Array(Int, 3, 4)
         \\    for r in range(0, 3):
@@ -2144,7 +1147,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
     // loop that never runs must not trap for an array that is already
     // freed, and one that does run must trap at the access, not at the
     // preheader.  Both engines, one source, twice.
-    try agree(std.testing.allocator,
+    try agree(
         \\func drop(xs: give Array(Float, _)):
         \\    free(xs)
         \\
@@ -2158,7 +1161,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
         \\    print("survived " + str(Int(total)))
         \\
     );
-    try agree(std.testing.allocator,
+    try agree(
         \\func drop(xs: give Array(Float, _)):
         \\    free(xs)
         \\
@@ -2174,7 +1177,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
     );
     // And an index past the end still traps at the access it was made
     // at, with the loop's resolution already lifted above it.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var a = new Array(Float, 4)
         \\    var total = 0.0
@@ -2191,7 +1194,7 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
     // stands between `alias` and `reborn`'s elements is the one
     // comparison the loop kept: the row's generation against the
     // handle's.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var a = new Array(Int, 4)
         \\    a.fill(5)
@@ -2208,7 +1211,7 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
     // And the null handle, whose lifted resolution reads the module's
     // retired row rather than the table: still `null_object`, still at
     // the access.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var rows = new Array(Array(Int, _), 2)
         \\    var inner = rows[0]
@@ -2221,7 +1224,7 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
 }
 
 test "inline String length, byte_at and slicing agree, boundaries included" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let text = "héllo wörld"
         \\    print(str(len(text)) + " " + str(text.byte_at(0)) + " " + str(text.byte_at(1)))
@@ -2236,13 +1239,13 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
     );
     // The end of a String is a legal bound and the byte there is not
     // ours to read; splitting a sequence is a trap, not a wrong answer.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let text = "héllo"
         \\    print(text[0:2])
         \\
     );
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let text = "abc"
         \\    print(str(text.byte_at(3)))
@@ -2251,7 +1254,7 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
 }
 
 test "structs inside containers agree" {
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Cell:
         \\    value: Int
         \\    name: String
@@ -2271,7 +1274,7 @@ test "a struct carrying an object is owned and released through its fields" {
     // The struct crosses a return, so the ownership walk has to reach
     // into its fields on both the loosen and the release side; the leak
     // census is what says it did.
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Bag:
         \\    items: List(Int)
         \\    label: String
@@ -2301,7 +1304,7 @@ test "a struct carrying an object is owned and released through its fields" {
 // What has to match is every answer either can be asked for.
 
 test "a value-typed optional agrees on absence, narrowing, and else" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func maybe(want: Bool) -> Int?:
         \\    if want:
         \\        return 7
@@ -2327,7 +1330,7 @@ test "the else fallback runs only where there was no value, and chains" {
     // The fallback is lazy: `loud` prints, so the printed bytes are
     // what says which side ran.  A chain is the same shape nested, and
     // its middle link must not run either once the first supplies one.
-    try agree(std.testing.allocator,
+    try agree(
         \\func maybe(want: Bool) -> Int?:
         \\    if want:
         \\        return 7
@@ -2349,7 +1352,7 @@ test "the else fallback runs only where there was no value, and chains" {
 
 test "parse_int and parse_float agree when the text is a number and when it is not" {
     // The `Int?`/`Float?` that made optionals load-bearing on day one.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    print(str(parse_int("41") else -1))
         \\    print(str(parse_int("") else -1))
@@ -2367,7 +1370,7 @@ test "parse_int and parse_float agree when the text is a number and when it is n
 test "x else trap is the assert-unwrap, and it traps where it is written" {
     // The trap code, the message, and every frame of the trace have to
     // match — which is the whole of `calc.luc`'s error path.
-    try agree(std.testing.allocator,
+    try agree(
         \\func want(text: String) -> Int:
         \\    return parse_int(text) else trap("not a number: " + text)
         \\
@@ -2385,7 +1388,7 @@ test "an optional struct field agrees, absent and present" {
     // A `T?` field is stored as a `runtime.Value` on both engines, so
     // this is where the lowered pair meets the tagged slot: absence has
     // to box as the `none` tag and read back as the absent pair.
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Slot:
         \\    label: String
         \\    room: Int?
@@ -2410,7 +1413,7 @@ test "a struct recurses through an optional field, which is what ends it" {
     // `Node` holds a `Node?`, and the optional is what makes a struct
     // cycle finite: the field is one `Value` whether or not anything is
     // in it.  Reading one back is the boxed `strukt` payload.
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Node:
         \\    value: Int
         \\    next: Node?
@@ -2439,7 +1442,7 @@ test "a heap optional agrees, and holding none owns nothing (S43)" {
     // `T?` is released at the end of the scope that received it, and
     // the absent one leaves nothing behind to release.  A `none` owns
     // nothing, so neither engine may count it.
-    try agree(std.testing.allocator,
+    try agree(
         \\func pick(want: Bool) -> List(Int)?:
         \\    if want:
         \\        let made = new List(Int)
@@ -2472,7 +1475,7 @@ test "optionals in a loop agree, boxed into container cells and back" {
     // state, and structs with an optional field stored in a `List` —
     // where the field is a `runtime.Value` in a container cell rather
     // than in a frame slot.
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Cell:
         \\    tag: String
         \\    room: Int?
@@ -2523,7 +1526,7 @@ test "every payload a T? can hold survives being returned" {
     // a wrong number would be a fault rather than a wrong answer.
     // `Bool?` is the corner: `{i1, i1}` really is two bytes, not the
     // eight every other payload rounds up to.
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Point:
         \\    x: Int
         \\    y: Int
@@ -2576,7 +1579,7 @@ test "the null object put in a T? is present, because absence is not a handle" {
     // spent the null index on `none`, as docs/FAILURE.md first
     // proposed, this program would answer "absent" instead and the two
     // engines would part company here and nowhere else.
-    try agree(std.testing.allocator,
+    try agree(
         \\func look(xs: List(Int)?) -> Bool:
         \\    return xs == none
         \\
@@ -2596,7 +1599,7 @@ test "the null object put in a T? is present, because absence is not a handle" {
 // ---------------------------------------------------------------------------
 
 test "files, arguments, the screen, and the keyboard agree" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main() -> !:
         \\    print(str(arg_count()) + " " + arg(0) + "," + arg(1))
         \\    print(str(file_exists("notes.txt")))
@@ -2620,7 +1623,7 @@ test "a file that was never written errors on both engines" {
     // The world said no, so this is news and not a bug: the two
     // engines have to agree on the code, the words, and the one line
     // the error records (docs/FAILURE.md).
-    try agree(std.testing.allocator,
+    try agree(
         \\func main() -> !:
         \\    print("before")
         \\    print(try file_read("nothing-here.txt"))
@@ -2633,7 +1636,7 @@ test "a file that was never written errors on both engines" {
 // ---------------------------------------------------------------------------
 
 test "standard input, standard error, the clock and the environment agree" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let first = read_line("> ") else "(nothing)"
         \\    let second = read_line("> ") else "(nothing)"
@@ -2654,7 +1657,7 @@ test "standard input, standard error, the clock and the environment agree" {
 }
 
 test "end of input is absence, and narrowing sees it on both engines" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var count = 0
         \\    var line = read_line("")
@@ -2668,7 +1671,7 @@ test "end of input is absence, and narrowing sees it on both engines" {
 }
 
 test "the file services beyond read and write agree, and so does what they refuse" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main() -> !:
         \\    try file_write("notes.txt", "one\n")
         \\    try file_append("notes.txt", "two\n")
@@ -2688,7 +1691,7 @@ test "the file services beyond read and write agree, and so does what they refus
 }
 
 test "a directory listing is a List(String) the program owns, on both engines" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main() -> !:
         \\    let names = try dir_list(".")
         \\    print(str(len(names)))
@@ -2702,7 +1705,7 @@ test "a directory listing is a List(String) the program owns, on both engines" {
 }
 
 test "a directory that will not list is an error on both engines" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main() -> !:
         \\    print("before")
         \\    let names = try dir_list("nowhere")
@@ -2714,7 +1717,7 @@ test "a directory that will not list is an error on both engines" {
 test "a caught listing failure leaks nothing on either engine" {
     // The failing side parks a value nobody reads, and the value it
     // parks must not be an object the census then counts.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var found = 0
         \\    let names = dir_list("nowhere") catch new List(String)
@@ -2726,48 +1729,47 @@ test "a caught listing failure leaks nothing on either engine" {
 }
 
 test "each new host service fails closed on its own" {
-    const gpa = std.testing.allocator;
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(read_line("> ") else "x")
         \\
     , .{ .input = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print_error("nobody is listening")
         \\
     , .{ .diagnostics = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(str(clock_ms()))
         \\
     , .{ .clock = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    sleep_ms(5)
         \\
     , .{ .clock = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(env("PATH") else "x")
         \\
     , .{ .environment = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main() -> !:
         \\    try file_append("x.txt", "y")
         \\
     , .{ .files = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main() -> !:
         \\    try file_delete("x.txt")
         \\
     , .{ .files = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main() -> !:
         \\    try file_rename("x.txt", "y.txt")
         \\
     , .{ .files = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main() -> !:
         \\    let names = try dir_list(".")
         \\    free(names)
@@ -2776,7 +1778,7 @@ test "each new host service fails closed on its own" {
 }
 
 test "a caught error is handled and the run finishes clean" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    let text = file_read("nothing-here.txt") catch "(none)"
         \\    print(text)
@@ -2788,7 +1790,7 @@ test "a caught error is handled and the run finishes clean" {
 }
 
 test "error() crosses several frames, and the origin is the raise site" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func inner(n: Int) -> Int!:
         \\    if n > 2:
         \\        error("too big: " + str(n))
@@ -2811,7 +1813,7 @@ test "an error path releases the objects and the String storage it owns" {
     // The leak census is the proof: every frame the error left
     // through released what it owned, so a caught error leaves the
     // heap exactly where a returning call would (S4, S34).
-    try agree(std.testing.allocator,
+    try agree(
         \\func gather(path: String) -> Int!:
         \\    let words = new List(String)
         \\    words.append("alpha")
@@ -2841,7 +1843,7 @@ test "text carried across a try keeps the form it was in" {
     // it in a borrowing slot instead marked inline text as *outside*,
     // and the release at the end of the statement freed a pointer into
     // the frame.
-    try agree(std.testing.allocator,
+    try agree(
         \\func main() -> !:
         \\    try file_write("notes.txt", "hello world")
         \\    let short = try file_read("notes.txt")
@@ -2860,7 +1862,7 @@ test "a caught error leaves the value it never produced releasable" {
     // that path too.  So the errored edge empties `%out` on the way
     // out, and what the caller carries is the empty String rather than
     // whatever the stack held — which the census then proves.
-    try agree(std.testing.allocator,
+    try agree(
         \\func load(path: String) -> String!:
         \\    return try file_read(path)
         \\
@@ -2875,7 +1877,7 @@ test "a caught error leaves the value it never produced releasable" {
 }
 
 test "a fallible call handing back an object gives it up on both paths" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func load(path: String) -> List(String)!:
         \\    let lines = new List(String)
         \\    lines.append(try file_read(path))
@@ -2890,7 +1892,7 @@ test "a fallible call handing back an object gives it up on both paths" {
 }
 
 test "an argument index out of range traps argument_bounds on both engines" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    print(arg(0))
         \\    print(arg(9))
@@ -2899,23 +1901,22 @@ test "an argument index out of range traps argument_bounds on both engines" {
 }
 
 test "a withheld service group fails closed on both engines" {
-    const gpa = std.testing.allocator;
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(str(file_exists("notes.txt")))
         \\
     , .{ .files = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(str(arg_count()))
         \\
     , .{ .arguments = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(str(term_rows()))
         \\
     , .{ .terminal = false });
-    try agreeGiven(gpa,
+    try agreeGiven(
         \\func main():
         \\    print(key_text())
         \\
@@ -2930,7 +1931,7 @@ test "owned String bytes agree, census included" {
     // container it came from.  `agree` compares the leak census as
     // well as the bytes, so a store that forgot to copy shows up here
     // even when it prints the same.
-    try agree(std.testing.allocator,
+    try agree(
         \\import std.strings
         \\
         \\struct Tag:
@@ -3010,7 +2011,7 @@ test "text agrees on both sides of the boundary between its two forms" {
     //
     // 22 is `runtime.inline_capacity`.  If that number ever moves,
     // these lengths must move with it.
-    try agree(std.testing.allocator,
+    try agree(
         \\import std.strings
         \\
         \\struct Held:
@@ -3040,7 +2041,7 @@ test "text agrees on both sides of the boundary between its two forms" {
     );
     // The transitions in both directions: short grown long by `+`,
     // long cut back to short by a slice, and both stored afterwards.
-    try agree(std.testing.allocator,
+    try agree(
         \\import std.strings
         \\
         \\func grow(s: String) -> String:
@@ -3066,7 +2067,7 @@ test "text agrees on both sides of the boundary between its two forms" {
     // A long String cut down to short, kept, and then the original
     // overwritten — the case where a borrow of the long bytes would
     // still be looking at them.
-    try agree(std.testing.allocator,
+    try agree(
         \\import std.strings
         \\
         \\func main():
@@ -3084,7 +2085,7 @@ test "text agrees on both sides of the boundary between its two forms" {
 }
 
 test "a loop name agrees whether it borrows its element or copies it" {
-    try agree(std.testing.allocator,
+    try agree(
         \\func main():
         \\    var words = new List(String)
         \\    words.append("aa")
@@ -3114,7 +2115,7 @@ test "a loop name agrees whether it borrows its element or copies it" {
 }
 
 test "a trap agrees while every frame is still holding String bytes" {
-    try agree(std.testing.allocator,
+    try agree(
         \\struct Tag:
         \\    label: String
         \\    count: Int

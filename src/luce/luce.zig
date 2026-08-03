@@ -32,11 +32,11 @@ pub const interpreter = @import("interpreter.zig");
 pub const diagnostics = @import("support/diagnostics.zig");
 pub const types = @import("support/types.zig");
 
-// The executable specification.
-pub const ownership_spec = @import("specs/ownership_spec.zig");
-pub const behavior_spec = @import("specs/behavior_spec.zig");
-pub const errors_spec = @import("specs/errors_spec.zig");
-pub const std_spec = @import("specs/std_spec.zig");
+// The executable specification is **not** here.  It runs every
+// program on both engines, so it needs the emitter, and the emitter
+// links libLLVM that this module deliberately does not
+// (`src/luce/specs.zig`, docs/ENGINE.md).  `build.zig` builds it as
+// its own test target.
 
 test {
     _ = source;
@@ -53,8 +53,4 @@ test {
     _ = interpreter;
     _ = diagnostics;
     _ = types;
-    _ = ownership_spec;
-    _ = behavior_spec;
-    _ = errors_spec;
-    _ = std_spec;
 }

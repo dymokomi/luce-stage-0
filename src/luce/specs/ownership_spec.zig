@@ -6,72 +6,43 @@
 //! error with the stable code `luce.sema.own`, and the dynamic
 //! backstops trap with stable codes.  Every successful run must end
 //! with zero live objects — S33 says nothing can leak.
+//!
+//! The runs happen on **both** engines and are compared: the same
+//! printed bytes, the same trap code and words, the same call trace,
+//! and the same census (`specs/agree.zig`).  Ownership is the one
+//! part of the language where the two implementations could most
+//! plausibly drift — a release the lowering skipped is a leak, one it
+//! did twice is a double free — so a disagreement here is exactly the
+//! bug this suite exists to catch.
 
 const std = @import("std");
-const compile_mod = @import("../compile.zig");
-const types = @import("../support/types.zig");
-const mir = @import("../06_mir.zig");
-const backend = @import("../backend.zig");
+const agree = @import("agree.zig");
+const luce = @import("luce");
+const mir = luce.mir;
+const types = luce.types;
 
 const testing = std.testing;
 
 const script: types.CompileOptions = .{};
 
-const Outcome = union(enum) {
-    /// Objects still alive after a successful run — always expected 0.
-    leaked: u32,
-    trap: mir.TrapCode,
-};
+/// The depth this suite has always run at.
+const budget: agree.Provided = .{ .call_depth = 256 };
 
-fn run(source: []const u8) !Outcome {
-    var result = try compile_mod.compile(testing.allocator, source, script);
-    defer result.deinit();
-    switch (result) {
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
-            return error.TestUnexpectedResult;
-        },
-        .success => |*program| {
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
-            defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
-                .call_depth = 256,
-            });
-            return switch (outcome) {
-                .success => |success| .{ .leaked = success.leaked_objects },
-                .trap => |trap| .{ .trap = trap.code },
-                // Ownership is proved with pure programs; nothing here
-                // can raise, so an error would mean the spec drifted.
-                .errored => error.TestUnexpectedResult,
-            };
-        },
-    }
+/// The program runs on both engines, they agree, and nothing is left
+/// alive (S33).
+fn agreeClean(source: []const u8) !void {
+    return agree.okGiven(source, budget);
 }
 
-/// The program runs, its assertions hold, and nothing leaks (S33).
-fn expectClean(source: []const u8) !void {
-    const outcome = try run(source);
-    if (outcome == .trap) {
-        std.debug.print("unexpected trap: {s}\n", .{@tagName(outcome.trap)});
-        return error.TestUnexpectedResult;
-    }
-    try testing.expectEqual(@as(u32, 0), outcome.leaked);
+/// Both engines abort the run with exactly `code`, at the same place.
+fn agreeTrap(source: []const u8, code: mir.TrapCode) !void {
+    return agree.trapGiven(source, budget, code);
 }
 
-fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
-    const outcome = try run(source);
-    if (outcome != .trap) {
-        std.debug.print("expected trap {s}, but the program finished\n", .{@tagName(code)});
-        return error.TestUnexpectedResult;
-    }
-    try testing.expectEqual(code, outcome.trap);
-}
-
-/// The program is rejected with the stable ownership code.
+/// The program is rejected with the stable ownership code — no engine
+/// involved, because nothing was produced to run.
 fn expectOwnError(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, script);
+    var result = try luce.compile.compile(testing.allocator, source, script);
     defer result.deinit();
     if (result == .success) {
         std.debug.print("expected an ownership error, but this compiled:\n{s}", .{source});
@@ -85,7 +56,7 @@ fn expectOwnError(source: []const u8) !void {
 // ---------------------------------------------------------------------------
 
 test "S1: a fresh object bound to a name frees at scope end, no memory words" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs = [1, 2, 3]
         \\    xs.append(4)
@@ -103,7 +74,7 @@ test "S1: a fresh object bound to a name frees at scope end, no memory words" {
 
 test "S2: an inner block's object dies at that block's end" {
     // The alias var re-pointed inside the block observes the death.
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var outer = [0]
         \\    var view = outer
@@ -117,7 +88,7 @@ test "S2: an inner block's object dies at that block's end" {
 }
 
 test "S2: an object given out of the block survives it" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var sink = new List(List(Int))
         \\    if true:
@@ -129,7 +100,7 @@ test "S2: an object given out of the block survives it" {
 }
 
 test "S3: unbound temporaries die at the end of their statement" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -144,7 +115,7 @@ test "S3: unbound temporaries die at the end of their statement" {
 }
 
 test "S4: return, break, and continue unwind what their scopes own" {
-    try expectClean(
+    try agreeClean(
         \\func early(flag: Bool) -> String:
         \\    var lines = ["a", "b"]
         \\    if flag:
@@ -170,7 +141,7 @@ test "S4: return, break, and continue unwind what their scopes own" {
 }
 
 test "S5: reassigning an owning var frees the old object immediately" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1]
         \\    let view = xs
@@ -181,7 +152,7 @@ test "S5: reassigning an owning var frees the old object immediately" {
 }
 
 test "S5: the life.luc pattern — reassign in a loop, no free dance" {
-    try expectClean(
+    try agreeClean(
         \\func step(grid: Array(Int, _)) -> Array(Int, _):
         \\    var next = new Array(Int, len(grid))
         \\    for i in range(0, len(grid)):
@@ -208,7 +179,7 @@ test "S5: assigning a bare name into an owning var is a compile error" {
 }
 
 test "S6: free is early release and poisons the name" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -246,7 +217,7 @@ test "S6: free applies to owned names only" {
 }
 
 test "S7: a fresh object inside a loop dies every iteration" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -263,7 +234,7 @@ test "S7: a fresh object inside a loop dies every iteration" {
 // ---------------------------------------------------------------------------
 
 test "S8: let x = y is two names for one object, freed once" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs = [1, 2, 3]
         \\    let view = xs
@@ -285,7 +256,7 @@ test "S8: an alias var cannot receive a fresh object" {
 }
 
 test "S9: an alias after the owner freed traps at use" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1, 2]
         \\    let view = xs
@@ -301,7 +272,7 @@ test "S9: reusing the freed object's row does not revive its handle" {
     // is a promise about the *object*, not about the row: the stale
     // alias traps here exactly as it does when nothing has moved in,
     // and never reads what `fresh` put there.
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1, 2]
         \\    let view = xs
@@ -315,7 +286,7 @@ test "S9: reusing the freed object's row does not revive its handle" {
 }
 
 test "S10: give transfers between names and poisons the giver" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var temp = [1, 2, 3]
         \\    let final_hits = give temp
@@ -346,7 +317,7 @@ test "S10: give takes a name, not an expression" {
 // ---------------------------------------------------------------------------
 
 test "S11: passing an object is a borrow — free, silent, still owned by the caller" {
-    try expectClean(
+    try agreeClean(
         \\func total(values: List(Int)) -> Int:
         \\    var sum = 0
         \\    for v in values:
@@ -410,7 +381,7 @@ test "S12: a callee cannot keep a borrowed parameter" {
 }
 
 test "S13: give appears in the signature and at the call site" {
-    try expectClean(
+    try agreeClean(
         \\func stash(index: Map(String, List(Int)), hits: give List(Int)):
         \\    index["latest"] = give hits
         \\
@@ -445,7 +416,7 @@ test "S13: give appears in the signature and at the call site" {
 }
 
 test "S14: fresh values and copies satisfy a give parameter with no verb" {
-    try expectClean(
+    try agreeClean(
         \\func consume(xs: give List(Int)):
         \\    assert(len(xs) == 2)
         \\
@@ -459,7 +430,7 @@ test "S14: fresh values and copies satisfy a give parameter with no verb" {
 }
 
 test "S15: a give parameter not passed on dies with the callee" {
-    try expectClean(
+    try agreeClean(
         \\func consume(xs: give List(Int)):
         \\    xs.append(9)
         \\    assert(len(xs) == 3)
@@ -476,7 +447,7 @@ test "S15: a give parameter not passed on dies with the callee" {
 // ---------------------------------------------------------------------------
 
 test "S16: returning something you own moves it to the caller" {
-    try expectClean(
+    try agreeClean(
         \\func build() -> List(String):
         \\    var lines = ["a", "b"]
         \\    return lines
@@ -524,7 +495,7 @@ test "S17: returning a borrowed parameter is a compile error" {
 }
 
 test "S17: return copy is the escape hatch for borrows" {
-    try expectClean(
+    try agreeClean(
         \\func first(rows: List(List(Int))) -> List(Int):
         \\    return copy rows[0]
         \\
@@ -540,7 +511,7 @@ test "S17: return copy is the escape hatch for borrows" {
 }
 
 test "S18: returning a give parameter is legal — owned in, owned out" {
-    try expectClean(
+    try agreeClean(
         \\func sorted(values: give List(Float)) -> List(Float):
         \\    values.sort()
         \\    return values
@@ -553,7 +524,7 @@ test "S18: returning a give parameter is legal — owned in, owned out" {
 }
 
 test "S19: an ignored returned object is a temporary and frees itself" {
-    try expectClean(
+    try agreeClean(
         \\func build() -> List(String):
         \\    var lines = ["a", "b"]
         \\    return lines
@@ -570,7 +541,7 @@ test "S19: an ignored returned object is a temporary and frees itself" {
 // ---------------------------------------------------------------------------
 
 test "S20: containers adopt fresh values silently and free them recursively" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -588,7 +559,7 @@ test "S20: containers adopt fresh values silently and free them recursively" {
 }
 
 test "S20: freeing a container frees the objects it owns" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([1, 2])
@@ -644,7 +615,7 @@ test "S21: storing a bare name is a compile error at every container door" {
 }
 
 test "S21: give and copy open the container door" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var index = new Map(String, List(Int))
         \\    var hits = [12, 40]
@@ -660,7 +631,7 @@ test "S21: give and copy open the container door" {
 
 test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
     // pop hands the element to the receiver.
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([1, 2])
@@ -673,7 +644,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
         \\
     );
     // An element overwrite frees the old element right there.
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([9, 9])
@@ -683,7 +654,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
         \\
     , .use_after_free);
     // remove frees the owned element.
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([9])
@@ -693,7 +664,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
         \\
     , .use_after_free);
     // clear frees all owned elements.
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([9])
@@ -705,7 +676,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
 }
 
 test "S22: map overwrite and remove free the old owned value" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var index = new Map(String, List(Int))
         \\    index["a"] = [1]
@@ -730,7 +701,7 @@ test "S23: one object cannot end up owned twice — static poisoning" {
 }
 
 test "S23: the alias dodge is caught dynamically" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var a = new List(List(Int))
         \\    var b = new List(List(Int))
@@ -747,7 +718,7 @@ test "S23: the alias dodge is caught dynamically" {
 // ---------------------------------------------------------------------------
 
 test "S24: object fields follow the verb rule at construction" {
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -778,7 +749,7 @@ test "S24: object fields follow the verb rule at construction" {
 
 test "S25: field assignment follows the verb rule and frees the old value" {
     // The old field object dies at the overwrite.
-    try expectTrap(
+    try agreeTrap(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -801,7 +772,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
         \\
     );
     // Success path, no leaks.
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -829,7 +800,7 @@ test "S25: only the owning name restocks an object field" {
 }
 
 test "S26: struct copies alias the same objects" {
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -855,7 +826,7 @@ test "S27: keeping an object-carrying struct needs a verb" {
         \\    bags.append(bag)
         \\
     );
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -872,7 +843,7 @@ test "S27: keeping an object-carrying struct needs a verb" {
 }
 
 test "S27: copy on a carrying struct deep-copies its owned objects" {
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -889,7 +860,7 @@ test "S27: copy on a carrying struct deep-copies its owned objects" {
 }
 
 test "S27: plain-value structs never need verbs" {
-    try expectClean(
+    try agreeClean(
         \\struct Point:
         \\    x: Int
         \\    y: Int
@@ -905,7 +876,7 @@ test "S27: plain-value structs never need verbs" {
 }
 
 test "S28: returning an object-carrying struct moves the whole tree" {
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -939,7 +910,7 @@ test "S29: poisoning is source-order and branch-insensitive" {
 }
 
 test "S29: a conditional give still releases correctly on both paths" {
-    try expectClean(
+    try agreeClean(
         \\func stash(flag: Bool) -> Int:
         \\    var xs = [1]
         \\    var sink = new List(List(Int))
@@ -973,7 +944,7 @@ test "S30: giving or freeing an outer name inside a loop is a compile error" {
 }
 
 test "S30: names created inside the loop give freely" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var sink = new List(List(Int))
         \\    for i in range(0, 3):
@@ -985,7 +956,7 @@ test "S30: names created inside the loop give freely" {
 }
 
 test "S31: copy is deep and always legal on readable objects" {
-    try expectClean(
+    try agreeClean(
         \\func dup(borrowed: List(List(Int))) -> List(List(Int)):
         \\    return copy borrowed
         \\
@@ -1004,7 +975,7 @@ test "S31: copy is deep and always legal on readable objects" {
 }
 
 test "S31: slices of object lists are deep copies too" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([1])
@@ -1045,7 +1016,7 @@ test "S32: values never take verbs" {
 // ---------------------------------------------------------------------------
 
 test "S36: ownership follows the binding, which lives where it was declared" {
-    try expectClean(
+    try agreeClean(
         \\func report(verbose: Bool) -> String:
         \\    var text = new Builder()
         \\    text.append("head")
@@ -1062,7 +1033,7 @@ test "S36: ownership follows the binding, which lives where it was declared" {
 }
 
 test "S37: values into containers need no ownership, ever" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -1080,7 +1051,7 @@ test "S37: values into containers need no ownership, ever" {
 }
 
 test "S38: a borrowed parameter may mutate contents" {
-    try expectClean(
+    try agreeClean(
         \\func fill_list(xs: List(Int)):
         \\    for i in range(0, 10):
         \\        xs.append(i)
@@ -1094,7 +1065,7 @@ test "S38: a borrowed parameter may mutate contents" {
 }
 
 test "S39: let freezes the binding, not the object" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    let xs = [1, 2]
         \\    xs.append(3)
@@ -1102,7 +1073,7 @@ test "S39: let freezes the binding, not the object" {
         \\
     );
     // Re-pointing a let is still refused (luce.sema.let, not own).
-    var result = try compile_mod.compile(testing.allocator,
+    var result = try luce.compile.compile(testing.allocator,
         \\func main():
         \\    let xs = [1, 2]
         \\    xs = [9]
@@ -1118,7 +1089,7 @@ test "S39: let freezes the binding, not the object" {
 // ---------------------------------------------------------------------------
 
 test "S33: a busy program ends with zero live objects" {
-    try expectClean(
+    try agreeClean(
         \\struct Entry:
         \\    word: String
         \\    hits: List(Int)
@@ -1140,7 +1111,7 @@ test "S33: a busy program ends with zero live objects" {
 }
 
 test "S34: a trap mid-run aborts cleanly with objects in flight" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1, 2]
         \\    var sink = new List(List(Int))
@@ -1151,7 +1122,7 @@ test "S34: a trap mid-run aborts cleanly with objects in flight" {
 }
 
 test "mechanics: a bare give with no receiver dies at the statement end" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs = [1]
         \\    give xs
@@ -1160,14 +1131,14 @@ test "mechanics: a bare give with no receiver dies at the statement end" {
 }
 
 test "mechanics: give checks the object exists — unfilled slots trap (S42)" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var inner: Builder
         \\    var sink = new List(Builder)
         \\    sink.append(give inner)
         \\
     , .null_object);
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var inner: List(Int)
         \\    let bad = copy inner
@@ -1176,7 +1147,7 @@ test "mechanics: give checks the object exists — unfilled slots trap (S42)" {
 }
 
 test "mechanics: deep recursion moves objects out without confusion" {
-    try expectClean(
+    try agreeClean(
         \\func chain(depth: Int) -> List(Int):
         \\    if depth == 0:
         \\        return [0]
@@ -1193,7 +1164,7 @@ test "mechanics: deep recursion moves objects out without confusion" {
 }
 
 test "mechanics: loop conditions that allocate flush every iteration" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -1206,7 +1177,7 @@ test "mechanics: loop conditions that allocate flush every iteration" {
 }
 
 test "mechanics: returning from inside a for over a fresh iterable frees it" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func hunt(text: String) -> String:
@@ -1225,7 +1196,7 @@ test "mechanics: returning from inside a for over a fresh iterable frees it" {
 }
 
 test "mechanics: assignment can receive a give" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var source = [1, 2]
         \\    var target: List(Int)
@@ -1249,7 +1220,7 @@ test "mechanics: giving the same name twice in one statement is caught" {
 }
 
 test "mechanics: short-circuit spills do not disturb ownership" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs = [1]
         \\    var rows = new List(List(Int))
@@ -1266,7 +1237,7 @@ test "mechanics: short-circuit spills do not disturb ownership" {
 // ---------------------------------------------------------------------------
 
 test "S40: late declarations start at the type's zero value" {
-    try expectClean(
+    try agreeClean(
         \\struct Point:
         \\    x: Float
         \\    tag: String
@@ -1298,7 +1269,7 @@ test "S40: late declarations start at the type's zero value" {
 }
 
 test "S40: the branch-set pattern works and the object outlives the if" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var report: Builder
         \\    let verbose = true
@@ -1341,12 +1312,12 @@ test "S41: using an unfilled object slot traps null_object" {
         \\
     };
     for (cases) |source| {
-        try expectTrap(source, .null_object);
+        try agreeTrap(source, .null_object);
     }
 }
 
 test "S42: verbs demand an object — free of an unfilled slot traps" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var report: Builder
         \\    free(report)
@@ -1355,7 +1326,7 @@ test "S42: verbs demand an object — free of an unfilled slot traps" {
 }
 
 test "S42: passing an unfilled slot traps at first use, not at the call" {
-    try expectTrap(
+    try agreeTrap(
         \\func peek(xs: List(Int)) -> Int:
         \\    return 41 + 1
         \\
@@ -1371,7 +1342,7 @@ test "S42: passing an unfilled slot traps at first use, not at the call" {
 }
 
 test "S43: an unfilled slot frees nothing; a filled one frees normally" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var never: Builder
         \\    var eventually: Builder
@@ -1391,7 +1362,7 @@ test "S43: an unfilled slot frees nothing; a filled one frees normally" {
 // would, and every rule from S1 up reads the same on both.
 
 test "optionals: a T? holding none owns nothing and releases nothing" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var never: List(Int)? = none
         \\    var also: Builder? = none
@@ -1403,7 +1374,7 @@ test "optionals: a T? holding none owns nothing and releases nothing" {
 }
 
 test "optionals: a T? holding an object obeys scope ownership exactly as T does" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs: List(Int)? = new List(Int)
         \\    xs.append(1)
@@ -1412,7 +1383,7 @@ test "optionals: a T? holding an object obeys scope ownership exactly as T does"
     );
     // Reassigning an owning slot frees the old object first (S5), and
     // `none` is a legal thing to reassign it to.
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs: List(Int)? = new List(Int)
         \\    xs.append(1)
@@ -1423,7 +1394,7 @@ test "optionals: a T? holding an object obeys scope ownership exactly as T does"
         \\
     );
     // And an explicit free still works through the narrowed name.
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs: List(Int)? = none
         \\    xs = new List(Int)
@@ -1433,7 +1404,7 @@ test "optionals: a T? holding an object obeys scope ownership exactly as T does"
 }
 
 test "optionals: an object still moves out on return and into a give parameter" {
-    try expectClean(
+    try agreeClean(
         \\func make(wanted: Bool) -> List(Int)?:
         \\    if not wanted:
         \\        return none
@@ -1457,7 +1428,7 @@ test "optionals: an object still moves out on return and into a give parameter" 
 }
 
 test "optionals: an object-carrying struct field may be absent and still frees" {
-    try expectClean(
+    try agreeClean(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)?
@@ -1513,7 +1484,7 @@ test "optionals: the ownership rules still refuse what they refused" {
 }
 
 test "optionals: use after free still traps through a T?" {
-    try expectTrap(
+    try agreeTrap(
         \\func maybe() -> List(Int)?:
         \\    var fresh = new List(Int)
         \\    return fresh
@@ -1550,7 +1521,7 @@ test "audit: fill on arrays of objects is refused — one value cannot own every
         \\
     );
     // Value elements fill exactly as before.
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var arr = new Array(Int, 4)
         \\    arr.fill(7)
@@ -1594,7 +1565,7 @@ test "audit: list literals are container doors too (S21)" {
         \\
     );
     // give, copy, and fresh values open the door.
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs = [1, 2]
         \\    var kept = [give xs]
@@ -1650,7 +1621,7 @@ test "audit: give in a borrow position has no owner to receive it" {
 }
 
 test "audit: a stale owner cannot free what an alias gave away" {
-    try expectTrap(
+    try agreeTrap(
         \\func main():
         \\    var xs = [1, 2]
         \\    let a = xs
@@ -1669,7 +1640,7 @@ test "audit: reassigning the iterated name mid-loop is a compile error" {
         \\
     );
     // The lock lifts when the loop ends.
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var xs = [1, 2, 3]
         \\    var total = 0
@@ -1688,7 +1659,7 @@ test "audit: a routed String method hands its object to the caller (S16, S22)" {
     // declaration's return type rather than a hand-kept list of method
     // names, so a new object-returning std function cannot arrive
     // without an owner: `expectClean` fails on a leak.
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -1699,7 +1670,7 @@ test "audit: a routed String method hands its object to the caller (S16, S22)" {
         \\
     );
     // Unnamed, it is a statement temporary (S3, S19) and still dies.
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -1707,7 +1678,7 @@ test "audit: a routed String method hands its object to the caller (S16, S22)" {
         \\
     );
     // Kept in a container it is a store like any other (S20).
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func main():
@@ -1754,7 +1725,7 @@ test "audit: give and free of an outer name are refused in every loop shape (S30
 // allocator's silence.
 
 test "storage: a returned view of a parameter comes out owned (S17 is an object rule)" {
-    try expectClean(
+    try agreeClean(
         \\import std.strings
         \\
         \\func widen(s: String) -> String:
@@ -1773,7 +1744,7 @@ test "storage: a returned view of a parameter comes out owned (S17 is an object 
 }
 
 test "storage: a container owns the bytes it is handed, and frees them with itself" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var names = new List(String)
         \\    var seed = "ada"
@@ -1793,7 +1764,7 @@ test "storage: a container owns the bytes it is handed, and frees them with itse
 }
 
 test "storage: copy of a List(String) survives freeing the original (S31)" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var first = new List(String)
         \\    first.append("alpha")
@@ -1811,7 +1782,7 @@ test "storage: copy of a List(String) survives freeing the original (S31)" {
 }
 
 test "storage: a map owns its keys as well as its values" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var table = new Map(String, String)
         \\    table["k" + str(1)] = "v1"
@@ -1834,7 +1805,7 @@ test "storage: a map owns its keys as well as its values" {
 }
 
 test "storage: a struct field assigned twice frees what it replaced (S25, S26)" {
-    try expectClean(
+    try agreeClean(
         \\struct Tag:
         \\    label: String
         \\    count: Int
@@ -1853,7 +1824,7 @@ test "storage: a struct field assigned twice frees what it replaced (S25, S26)" 
 }
 
 test "storage: reassignment reads the old bytes before releasing them (S5)" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var text = "abcdef"
         \\    text = text[1:5]
@@ -1871,7 +1842,7 @@ test "storage: an element read stays valid across a call that empties its contai
     // is a view of an element the second argument frees.  An object
     // would go stale and trap (S9); a String has no handle, so the read
     // is copied instead.
-    try expectClean(
+    try agreeClean(
         \\func drop_first(pieces: List(String)) -> Int:
         \\    pieces.remove(0)
         \\    return 1
@@ -1890,7 +1861,7 @@ test "storage: an element read stays valid across a call that empties its contai
 }
 
 test "storage: a loop name that outlives a mutation of its collection keeps its own copy" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var words = new List(String)
         \\    words.append("aa")
@@ -1911,7 +1882,7 @@ test "storage: a loop name that outlives a mutation of its collection keeps its 
 }
 
 test "storage: an Array of Strings and of structs owns every cell" {
-    try expectClean(
+    try agreeClean(
         \\struct Tag:
         \\    label: String
         \\    count: Int
@@ -1941,7 +1912,7 @@ test "storage: a trap unwinds past every release and the bytes still come back" 
     // way out; value storage is not in the census, so the engine sweeps
     // the frames it left standing (docs/STRINGS.md).  Under
     // `std.testing.allocator` a missed sweep is a reported leak.
-    try expectTrap(
+    try agreeTrap(
         \\struct Tag:
         \\    label: String
         \\    count: Int
@@ -1961,7 +1932,7 @@ test "storage: a trap unwinds past every release and the bytes still come back" 
 }
 
 test "storage: a loop that retains nothing allocates nothing that outlives it" {
-    try expectClean(
+    try agreeClean(
         \\func main():
         \\    var total = 0
         \\    for i in range(0, 2000):
