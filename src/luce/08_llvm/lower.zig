@@ -683,18 +683,22 @@ const Module = struct {
 
     /// Stamp the artifact with what it is: the magic, the tag's own
     /// layout version, the host ABI it was generated against, the
-    /// machine it was generated for, the program it came from, and
-    /// whether it kept its origins (`abi.Artifact`).
+    /// machine it was generated for, the program it came from, whether
+    /// it kept its origins, and what generated it (`abi.Artifact`).
     ///
     /// Exported, because the whole point is that a loader can read it
     /// *before* deciding to call anything.  A `.lcn` from another
     /// machine or another ABI is otherwise a file that loads cleanly
     /// and crashes on the first call, which is the failure mode this
     /// exists to replace with a sentence.
+    ///
+    /// `abi.generator` is stamped and never passed in: it is what
+    /// wrote these instructions, so it is this file's answer to give
+    /// and no caller's to choose.
     fn describeArtifact(self: *Module) Error!void {
         const tag_type = try self.builder.structType(
             .normal,
-            &.{ .i64, .i32, .i32, .ptr, .i64, .i64, .i32, .i32 },
+            &.{ .i64, .i32, .i32, .ptr, .i64, .i64, .i32, .i32, .i64 },
         );
         const debug_build = for (self.program.functions) |function| {
             if (function.origins.len != 0) break true;
@@ -708,6 +712,7 @@ const Module = struct {
             try self.builder.intConst(.i64, @as(i64, @bitCast(self.options.source_hash))),
             try self.builder.intConst(.i32, @intFromBool(debug_build)),
             try self.builder.intConst(.i32, 0),
+            try self.builder.intConst(.i64, @as(i64, @bitCast(abi.generator))),
         });
         const variable = try self.builder.addVariable(
             try self.builder.strtabString(abi.artifact_symbol),

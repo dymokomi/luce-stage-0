@@ -38,14 +38,12 @@ names="loops math strings arrays matmul stats"
 # otherwise the mandelbrot checksums genuinely differ.  Everything
 # else (-O3, vectorization) stays on.
 #
-# The `.lcn` beside each `.lc` goes first.  An artifact's tag names the
-# program it came from and not the compiler that wrote it, so a `.lc`
-# that re-encodes to the same bytes after a code-generation change
-# still matches an artifact the *previous* build produced — and this
-# script would then time the old code and report no difference.  Every
-# artifact here is ours to regenerate, so regenerate it.
+# Nothing sweeps the `.lcn` beside each `.lc`, and nothing needs to:
+# an artifact's tag names the code generator that wrote it, so one
+# left by a previous build is refused and rebuilt on the first run
+# below.  A script that deleted them anyway would be hiding whether
+# that works.
 for name in $names; do
-    rm -f "build/bench/$name.lcn"
     build/luce build "bench/$name.luc" -o "build/bench/$name.lc" --release >/dev/null
     zig cc -O3 -march=native -ffp-contract=off -o "build/bench/$name" "bench/$name.c"
 done

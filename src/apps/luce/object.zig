@@ -248,6 +248,10 @@ test "a program links, loads with its tag intact, and runs" {
     // The tag says what it is, and a debug build kept its origins.
     try testing.expectEqual(abi.version, loaded.tag.abi_version);
     try testing.expectEqual(hash, loaded.tag.source_hash);
+    // And what wrote it, which is the fact that decides whether a
+    // `.lcn` found beside a program may be run or has to be rebuilt.
+    try testing.expectEqual(abi.artifact_format, loaded.tag.format);
+    try testing.expectEqual(abi.generator, loaded.tag.generator);
     try testing.expect(loaded.debug());
     try testing.expectEqualStrings(
         abi.machine,

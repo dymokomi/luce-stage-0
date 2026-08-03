@@ -409,9 +409,10 @@ pub fn open(path: [:0]const u8, expect_hash: ?u64) OpenResult {
 pub fn explain(mismatch: abi.Mismatch) []const u8 {
     return switch (mismatch) {
         .not_an_artifact => "it is not a compiled Luce artifact",
-        .format => "it was built by a different luce",
+        .format => "its tag is a layout this loader cannot read",
         .abi_version => "it was built against a different host ABI",
         .machine => "it was built for a different machine",
+        .generator => "it was built by a different code generator",
         .source => "the program it was built from has changed",
     };
 }
