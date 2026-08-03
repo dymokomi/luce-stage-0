@@ -16,7 +16,7 @@ Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS. **LL
 
 ```sh
 ./build.sh         # zig build --prefix build -Doptimize=ReleaseSafe: installs build/luce, build/loom, build/lib/libluce_rt.a, build/programs/*.lc
-zig build test     # 795 tests: Luce language suite + compiler CLI suite + loom terminal suite, plus a compile of every bundled program and benchmark
+zig build test     # 809 tests: Luce language suite + compiler CLI suite + loom terminal suite, plus a compile of every bundled program and benchmark
 zig fmt src/ build.zig
 ```
 
@@ -38,7 +38,7 @@ apps (luce CLI, loom terminal) → luce module (language)
 tests → the package under test
 ```
 
-**Where the tree stands.** There is exactly one code generator and one implementation of every semantic: **`libluce_rt`**, Luce's semantics as a linkable library behind a C ABI, and **one LLVM backend** over it. There is no hand-written emitter, no JIT, no image cache, and no Fabric; `.lc` `format_version` is 10. `docs/CODEGEN.md` is the decision record for that seam — read it before touching the backend.
+**Where the tree stands.** There is exactly one code generator and one implementation of every semantic: **`libluce_rt`**, Luce's semantics as a linkable library behind a C ABI, and **one LLVM backend** over it. There is no hand-written emitter, no JIT, no image cache, and no Fabric; `.lc` `format_version` is 12. `docs/CODEGEN.md` is the decision record for that seam — read it before touching the backend.
 
 **The LLVM path is the one that runs.** `loom run FILE.lc` compiles to a tagged `NAME.lcn` artifact beside the program on first use and loads it thereafter; `luce build --emit=exe` writes a standalone binary and `--emit=library` writes the artifact directly. Measured against the interpreter on `bench/matmul`: 5.92 s → 0.19 s cold, 0.03 s warm; against the C twins, 0.78–1.04× on math, matmul, loops, arrays and stats, with `strings` the one row still behind at 2.5× (allocation-bound; `docs/STRINGS.md` is the fix). Everything a script can say lowers, `T?` included — only `Bytes` and the evaluator ports do not, and both are v1 machinery on the way out. Every artifact records the code generator that produced it as well as the program, so upgrading `luce` rebuilds rather than silently running the old compiler's code. Debug builds report `file:line:column` and a call trace on the compiled path exactly as on the interpreter; `--release` keeps function names. `LOOM_ENGINE=interpreter` forces the reference engine and `LOOM_ENGINE=native` turns the fallback into an error naming what was missing. The interpreter remains the reference arm of the `agree` tests and the fallback where compilation is unavailable; its dispatch loop goes only once nothing needs it.
 
