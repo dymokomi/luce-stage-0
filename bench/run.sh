@@ -5,8 +5,8 @@
 # algorithm and printing the same output; the harness refuses to time
 # anything whose outputs disagree, so this doubles as a correctness
 # check.  C compiles with `zig cc -O3 -march=native` (auto-vectorized,
-# full speed); Luce compiles --release and runs under loom, which runs
-# it as native code from a warm artifact.  Both timings include process
+# full speed); Luce compiles --release into a `.lc`, which is machine
+# code, and loom opens and calls it.  Both timings include process
 # startup.  Best of five runs.
 #
 #   ./build.sh && bench/run.sh
@@ -38,11 +38,10 @@ names="loops math strings arrays matmul stats"
 # otherwise the mandelbrot checksums genuinely differ.  Everything
 # else (-O3, vectorization) stays on.
 #
-# Nothing sweeps the `.lcn` beside each `.lc`, and nothing needs to:
-# an artifact's tag names the code generator that wrote it, so one
-# left by a previous build is refused and rebuilt on the first run
-# below.  A script that deleted them anyway would be hiding whether
-# that works.
+# Nothing sweeps the artifacts a previous run left, and nothing needs
+# to: each is overwritten by the `luce build` below, and if one were
+# not, its tag names the code generator that wrote it and loom would
+# refuse it by name rather than time the wrong instructions.
 for name in $names; do
     build/luce build "bench/$name.luc" -o "build/bench/$name.lc" --release >/dev/null
     zig cc -O3 -march=native -ffp-contract=off -o "build/bench/$name" "bench/$name.c"
@@ -107,8 +106,7 @@ done
 # startup for C, and for loom startup plus opening the program's
 # artifact.  It is both printed *and* subtracted, in two columns, so
 # neither half can mislead: the raw ratio is the wait, the floor-free
-# one is the computation.  The first loom run warms the artifact so the
-# floor is the warm path, which is the path every row above it took.
+# one is the computation.
 printf 'func main():\n    print("")\n' > "$tmp/floor.luc"
 printf 'int main(void){return 0;}\n' > "$tmp/floor.c"
 build/luce build "$tmp/floor.luc" -o "$tmp/floor.lc" --release >/dev/null

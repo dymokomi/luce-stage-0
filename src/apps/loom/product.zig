@@ -11,8 +11,8 @@
 //!
 //!   * a `.luc` with no artifact present compiles and runs, and leaves
 //!     the artifact beside itself for the next run to find;
-//!   * a `.lc` does the same, and the `.lcn` it produced runs when it
-//!     is named directly;
+//!   * the `.lc` `luce build` writes runs under a loom that has no
+//!     compiler at all, because a `.lc` is machine code;
 //!   * a loom that cannot find `luce` still runs the program, on the
 //!     interpreter, because that engine needs no compiler at all;
 //!   * and `LOOM_ENGINE=native`, which asked for compiled code, gets a
@@ -156,7 +156,7 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     const program = try install.at(gpa, "sums.luc");
     defer gpa.free(program);
 
-    try testing.expect(!install.exists("sums.lcn"));
+    try testing.expect(!install.exists("sums.lc"));
     const cold = try runLoom(gpa, &install, &.{program}, null);
     defer gpa.free(cold.stdout);
     defer gpa.free(cold.stderr);
@@ -165,7 +165,7 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     try testing.expectEqual(@as(u8, 0), cold.term.exited);
 
     // The compiler left the artifact where the next run will find it.
-    try testing.expect(install.exists("sums.lcn"));
+    try testing.expect(install.exists("sums.lc"));
 
     const warm = try runLoom(gpa, &install, &.{program}, null);
     defer gpa.free(warm.stdout);
@@ -174,14 +174,12 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     try testing.expectEqualStrings(expected, warm.stdout);
 }
 
-test "a .lc is compiled the same way, and the artifact runs when named" {
+test "the .lc luce writes runs on a loom with no compiler at all" {
     const gpa = testing.allocator;
     var install = try Install.make(gpa, true);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
 
-    // Build the portable module first, the way `luce build` does, then
-    // hand loom only that.
     const compiler = try install.at(gpa, "luce");
     defer gpa.free(compiler);
     const source = try install.at(gpa, "sums.luc");
@@ -192,23 +190,21 @@ test "a .lc is compiled the same way, and the artifact runs when named" {
     try testing.expectEqual(@as(u8, 0), built.term.exited);
     try testing.expect(install.exists("sums.lc"));
 
-    const module = try install.at(gpa, "sums.lc");
-    defer gpa.free(module);
-    const cold = try runLoom(gpa, &install, &.{ "run", module }, null);
-    defer gpa.free(cold.stdout);
-    defer gpa.free(cold.stderr);
-    try testing.expectEqualStrings("", cold.stderr);
-    try testing.expectEqualStrings(expected, cold.stdout);
-    try testing.expect(install.exists("sums.lcn"));
+    // The compiler is taken away, and so is anything a build could
+    // need: what is left is a `.lc`, a loom, and a `dlopen`.
+    try install.scratch.dir.deleteFile(io, "luce");
+    var bare: std.process.Environ.Map = .init(gpa);
+    defer bare.deinit();
+    try bare.put("PATH", install.root);
 
-    // Named directly, the artifact is taken on its own tag's word.
-    const artifact = try install.at(gpa, "sums.lcn");
+    const artifact = try install.at(gpa, "sums.lc");
     defer gpa.free(artifact);
-    const direct = try runLoom(gpa, &install, &.{ "run", artifact }, null);
-    defer gpa.free(direct.stdout);
-    defer gpa.free(direct.stderr);
-    try testing.expectEqualStrings("", direct.stderr);
-    try testing.expectEqualStrings(expected, direct.stdout);
+    const ran = try runLoom(gpa, &install, &.{ "run", artifact }, &bare);
+    defer gpa.free(ran.stdout);
+    defer gpa.free(ran.stderr);
+    try testing.expectEqualStrings("", ran.stderr);
+    try testing.expectEqualStrings(expected, ran.stdout);
+    try testing.expectEqual(@as(u8, 0), ran.term.exited);
 }
 
 test "with no luce to run, the program still runs — on the interpreter" {
@@ -233,7 +229,7 @@ test "with no luce to run, the program still runs — on the interpreter" {
     try testing.expectEqualStrings(expected, ran.stdout);
     try testing.expectEqual(@as(u8, 0), ran.term.exited);
     // Nothing was built, and nothing was left behind pretending to be.
-    try testing.expect(!install.exists("sums.lcn"));
+    try testing.expect(!install.exists("sums.lc"));
 }
 
 test "LOOM_ENGINE=native with no luce says which binary is missing and where it looked" {

@@ -24,12 +24,19 @@
 //! byte.  That is the whole point: the page cannot claim an output the
 //! program does not produce.
 //!
-//! **Both engines run every program.**  The native arm runs under
-//! `LOOM_ENGINE=native`, so a silent fall back to the interpreter is an
-//! error rather than a pass; the reference arm runs under
-//! `LOOM_ENGINE=interpreter`.  The two must agree, which is the same
-//! claim `docs/MODES.md` makes about the language and is worth
-//! re-proving on every page.
+//! **Every program is compiled and run by the freshly built
+//! toolchain**, and the page's claimed output is compared with what the
+//! program actually printed.  There is one engine to run it on: `luce
+//! build` writes machine code and `loom run` calls it (docs/ENGINE.md).
+//!
+//! This corpus used to be checked differentially as well — every sample
+//! run a second time on the interpreter, with a disagreement failing
+//! the build.  That went with the format change: a `.lc` is machine
+//! code now and there is nothing to interpret.  What replaced it is
+//! `src/luce/specs/`, where every program runs on both engines and is
+//! compared frame for frame; if this corpus is ever wanted back as a
+//! differential net, the way to have it is to let that harness read
+//! these samples rather than to give loom a second engine.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -325,18 +332,8 @@ fn execute(
     const directory = try makeSampleDirectory(self);
     defer gpa.free(directory);
 
-    // Remember what the sample was given, so each engine can be handed
-    // its own untouched copy: a program that writes a file must not see
-    // what the other engine's run left behind.
-    var inputs: std.ArrayList(File) = .empty;
-    defer inputs.deinit(gpa);
-
-    for (self.pending.items) |file| {
-        try write(self, directory, file.name, file.source);
-        try inputs.append(gpa, file);
-    }
+    for (self.pending.items) |file| try write(self, directory, file.name, file.source);
     try write(self, directory, name, source);
-    try inputs.append(gpa, .{ .name = name, .source = source });
 
     const compiler = try std.fs.path.join(gpa, &.{ self.toolchain, "luce" });
     defer gpa.free(compiler);
@@ -361,56 +358,29 @@ fn execute(
         return combine(gpa, built);
     }
 
-    const module_path = try pathIn(gpa, directory, "sample.lc");
-    defer gpa.free(module_path);
-    const module = try Io.Dir.cwd().readFileAlloc(self.io, module_path, gpa, .unlimited);
-    defer gpa.free(module);
-
-    const native_room = try stage(self, directory, "native", inputs.items, module);
-    defer gpa.free(native_room);
-    const reference_room = try stage(self, directory, "reference", inputs.items, module);
-    defer gpa.free(reference_room);
-
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, &.{ "/usr/bin/env", "LOOM_ENGINE=native", terminal, "run", "sample.lc" });
+    try argv.appendSlice(gpa, &.{ terminal, "run", "sample.lc" });
     var words = splitArguments(arguments);
     while (words.next()) |argument| try argv.append(gpa, argument);
 
-    const native = try run(self, native_room, argv.items);
-    defer gpa.free(native.stdout);
-    defer gpa.free(native.stderr);
+    const ran = try run(self, directory, argv.items);
+    defer gpa.free(ran.stdout);
+    defer gpa.free(ran.stderr);
 
-    // The reference engine, on the same module and its own untouched
-    // copy of the inputs, must say the same thing.
-    argv.items[1] = "LOOM_ENGINE=interpreter";
-    const reference = try run(self, reference_room, argv.items);
-    defer gpa.free(reference.stdout);
-    defer gpa.free(reference.stderr);
-
-    const native_text = try combine(gpa, native);
-    errdefer gpa.free(native_text);
-    const reference_text = try combine(gpa, reference);
-    defer gpa.free(reference_text);
-
-    if (!std.mem.eql(u8, native_text, reference_text) or native.status != reference.status) {
-        try self.note(
-            line,
-            "the two engines disagree:\n--- compiled ({d}) ---\n{s}--- interpreter ({d}) ---\n{s}",
-            .{ native.status, native_text, reference.status, reference_text },
-        );
-    }
+    const said = try combine(gpa, ran);
+    errdefer gpa.free(said);
 
     switch (mode) {
-        .run => if (native.status != 0) {
-            try self.note(line, "this sample is marked `run` but exited {d}", .{native.status});
+        .run => if (ran.status != 0) {
+            try self.note(line, "this sample is marked `run` but exited {d}", .{ran.status});
         },
-        .trap, .raise => if (native.status == 0) {
+        .trap, .raise => if (ran.status == 0) {
             try self.note(line, "this sample is marked `{s}` but exited cleanly", .{@tagName(mode)});
         },
         else => {},
     }
-    return native_text;
+    return said;
 }
 
 /// A `console` fence: `$ ` lines are commands, everything else is what
@@ -535,27 +505,6 @@ fn makeSampleDirectory(self: *Verifier) ![]u8 {
     errdefer self.gpa.free(name);
     try Io.Dir.cwd().createDirPath(self.io, name);
     return name;
-}
-
-/// One engine's run directory: the sample's own files and the module,
-/// and nothing either run left behind.
-fn stage(
-    self: *Verifier,
-    directory: []const u8,
-    name: []const u8,
-    inputs: []const File,
-    module: []const u8,
-) ![]u8 {
-    const room = try std.fs.path.join(self.gpa, &.{ directory, name });
-    errdefer self.gpa.free(room);
-    try Io.Dir.cwd().createDirPath(self.io, room);
-    for (inputs) |file| try write(self, room, file.name, file.source);
-    try write(self, room, "sample.lc", module);
-    return room;
-}
-
-fn pathIn(gpa: Allocator, directory: []const u8, name: []const u8) ![]u8 {
-    return std.fs.path.join(gpa, &.{ directory, name });
 }
 
 fn write(self: *Verifier, directory: []const u8, name: []const u8, source: []const u8) !void {

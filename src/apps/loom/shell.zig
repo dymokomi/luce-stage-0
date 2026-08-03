@@ -83,7 +83,7 @@ pub const Shell = struct {
         }
         if (std.mem.eql(u8, command, "run")) {
             if (rest.len == 0) return self.complain("run PROGRAM.lc [ARGS]");
-            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, self.policy, rest[0], rest[1..]);
+            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, rest[0], rest[1..]);
             return true;
         }
         if (std.mem.eql(u8, command, "luce")) {
@@ -98,8 +98,8 @@ pub const Shell = struct {
         }
 
         // A bare program path runs directly: hello.lc, tools/fmt.luc 2 3.
-        if (std.mem.endsWith(u8, command, ".lc") or std.mem.endsWith(u8, command, ".lcn")) {
-            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, self.policy, command, rest);
+        if (std.mem.endsWith(u8, command, ".lc")) {
+            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, command, rest);
             return true;
         }
         if (std.mem.endsWith(u8, command, ".luc")) {

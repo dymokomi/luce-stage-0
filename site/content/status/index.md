@@ -38,7 +38,7 @@ language question, and one benchmark row.**
 | File-scope constants, folded and inlined | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
 | Three standard modules: `math`, `strings`, `files` | shipped |
-| LLVM backend: `.lcn` artifacts, `--emit=exe` standalone binaries | shipped |
+| LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
 | Trap locations and call traces, identical on both engines | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
 | Map lookups O(1); sort O(n log n) and stable by guarantee | shipped |

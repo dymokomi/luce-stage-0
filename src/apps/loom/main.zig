@@ -6,13 +6,13 @@
 //!   loom edit FILE             open the Luce editor on a file
 //!   loom PROGRAM.lc [ARGS]     sugar for run (and .luc for luce)
 //!
-//! `run` takes a portable `.lc` — which it runs as native code where
-//! it can, and on the interpreter otherwise (runner.zig) — or a native
-//! `.lcn` artifact directly.
+//! `run` takes a `.lc`, which is machine code: one `dlopen`, one
+//! symbol lookup, one call (runner.zig).  `luce` compiles a `.luc`
+//! into one first.
 //!
 //! Loom is deliberately thin: ordinary files, the real terminal, and
-//! the Luce backend boundary.  No disk images, no engine — programs
-//! carry the behavior.
+//! the host boundary.  No disk images, no engine — programs carry the
+//! behavior.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -82,7 +82,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     const command = arguments[1];
     if (std.mem.eql(u8, command, "run")) {
         if (arguments.len < 3) return usage(err);
-        return runner.runModule(gpa, io, out, err, policy, arguments[2], arguments[3..]);
+        return runner.runModule(gpa, io, out, err, arguments[2], arguments[3..]);
     }
     if (std.mem.eql(u8, command, "luce")) {
         if (arguments.len < 3) return usage(err);
@@ -92,8 +92,8 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         if (arguments.len != 3) return usage(err);
         return shell.edit(arguments[2]);
     }
-    if (std.mem.endsWith(u8, command, ".lc") or std.mem.endsWith(u8, command, ".lcn")) {
-        return runner.runModule(gpa, io, out, err, policy, command, arguments[2..]);
+    if (std.mem.endsWith(u8, command, ".lc")) {
+        return runner.runModule(gpa, io, out, err, command, arguments[2..]);
     }
     if (std.mem.endsWith(u8, command, ".luc")) {
         return runner.runScript(gpa, io, out, err, policy, command, arguments[2..]);
@@ -106,7 +106,6 @@ fn usage(err: *std.Io.Writer) !u8 {
         "usage:\n" ++
             "  loom                        interactive shell\n" ++
             "  loom run PROGRAM.lc [ARGS]  run a compiled program\n" ++
-            "  loom run PROGRAM.lcn [..]   run a native artifact directly\n" ++
             "  loom luce PROGRAM.luc [..]  compile a source file and run it\n" ++
             "  loom edit FILE              open the Luce editor\n" ++
             "  loom PROGRAM.lc [ARGS]      shorthand for run\n",

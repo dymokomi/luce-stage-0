@@ -1,7 +1,7 @@
 # The compiler and the terminal
 
-Two binaries, four artifacts, two engines, two build modes. This page
-is how they fit together.
+Two binaries, three artifacts, two build modes. This page is how they
+fit together.
 
 ## luce, the compiler
 
@@ -11,56 +11,71 @@ luce check FILE
 luce ir FILE [--full]
 ```
 
-`FILE` may be a `.luc` source file **or** a `.lc` module — the same
-program either way, taken up from where it was left. That is how
-`loom` gets a program compiled without carrying a code generator: it
-runs this binary over the module it already has.
+`FILE` may be a `.luc` source file **or** a `.lcm` module — the same
+program either way, taken up from where it was left. A `.lcm` is the
+front end's hand-over to the back end, not something to ship; that is
+how `loom` gets a program compiled without carrying a code generator,
+by running this binary over the module it already has.
 
 `FILE` may also be `-`, to read the program from standard input.
 Imports then resolve beside the current directory, and `build` needs
 `-o` to say where to write.
 
-### The four artifacts
+### The three artifacts
 
-`--emit` says which artifact `build` writes, and it is the **only**
-thing that differs between them. The same program walks the same
-pipeline in every case.
+`--emit` says which shape `build` writes, and it is the **only** thing
+that differs between them. The same program walks the same pipeline in
+every case.
 
 | `--emit` | Writes | What it is |
 |---|---|---|
-| `module` (default) | `FILE.lc` | Portable serialized IR; the interpreter runs it |
+| `library` (default) | `FILE.lc` | A native artifact loom loads and calls |
 | `object` | `FILE.o` | A relocatable object; you link it |
-| `library` | `FILE.lcn` | A native artifact loom loads directly |
 | `exe` | `FILE` | A standalone native executable |
 
-The last three go through LLVM and are stamped with the machine and
-the host ABI they were built for, so a loader refuses the wrong one by
-name rather than crashing. Linking uses `cc`; `LUCE_CC` names another
-driver and `LUCE_LIB` the directory holding `libluce_rt.a`.
+All three go through LLVM and are stamped with the machine, the host
+ABI and the code generator they were built for, so a loader refuses
+the wrong one by name rather than crashing. Linking uses `cc`;
+`LUCE_CC` names another driver and `LUCE_LIB` the directory holding
+`libluce_rt.a`.
 
 ```sh
 build/luce build programs/hello.luc --emit=exe -o hello
 ./hello you        # needs neither loom nor a runtime beside it
 ```
 
-### The `.lc` format
+### The `.lc` artifact
 
-A direct binary serialization of the verified intermediate
-representation: a magic number and version, constants, structs,
-functions, ports, entry. Decoding re-runs the IR verifier, so damaged
-modules are rejected — but instruction *types* beyond the verifier are
-trusted. Treat a `.lc` like an executable, not like data.
+**A `.lc` is machine code.** It is a shared library the platform
+loader opens, holding the compiled program and a copy of the runtime
+library it calls, plus one exported tag saying what it is: a magic
+number, the tag's own layout version, the host ABI version, the
+machine, a content hash of the program, whether it kept its trap
+origins, and the identity of the code generator that wrote it.
 
-Any change to the instruction set, the intrinsics or the trap codes
-bumps the format version. There is no migration: modules recompile
-from source.
+`loom run FILE.lc` is one `dlopen`, one symbol lookup and one call —
+no compiler, no C toolchain and no LLVM have to be installed. The tag
+is read first, so a file built for another machine, against another
+host ABI, or by another code generator is refused with a sentence
+saying which:
+
+```
+loom: cannot run old.lc: it was built by a different code generator
+```
+
+There is no migration and no compatibility mode. An artifact that is
+refused is rebuilt from source, which is one `luce build` away.
+
+A `.lc` is therefore **not portable**, and the tag is what makes that
+safe: a file that cannot run here says so instead of crashing.
+Compiling for another machine — `--target`, one `libluce_rt` per
+target — is not built yet.
 
 ## loom, the terminal
 
 ```
 loom                        the interactive shell
 loom run PROGRAM.lc [ARGS]  run a compiled program
-loom run PROGRAM.lcn [..]   run a native artifact directly
 loom luce PROGRAM.luc [..]  compile a source file and run it
 loom edit FILE              open the Luce editor
 loom PROGRAM.lc [ARGS]      shorthand for run
@@ -108,7 +123,7 @@ luce build dice.luc              # debug, the default
 luce build dice.luc --release    # stripped
 ```
 
-A debug module carries origins — for every instruction, the line and
+A debug artifact carries origins — for every instruction, the line and
 column of the statement it came from, plus the source file name per
 function. A trap prints the location and the whole call stack:
 
@@ -119,7 +134,7 @@ loom: trap: division by zero [divide_by_zero]
     at main (crash.luc:12:5)
 ```
 
-A release module has the tables stripped. Traps still carry their
+A release artifact has the tables stripped. Traps still carry their
 stable code, message and function names — names are structure, not
 debug information — but no lines:
 
@@ -150,9 +165,11 @@ builds the trace *as it unwinds*, each frame recording where it was on
 the way out. All the cost is on the far side of "the program already
 failed."
 
-So: `--release` buys a smaller module — roughly a third off — and
-gives up trap locations. Ship it when size matters or when source
-lines would mean nothing to the recipient; ship debug everywhere else.
+So: `--release` gives up trap locations and buys very little back. An
+artifact is mostly the runtime library it carries, so stripping the
+origin tables takes 2% off `editor.lc` and nothing measurable off a
+small program. Ship it when source lines would mean nothing to the
+recipient; ship debug everywhere else.
 
 Deep recursion is capped: a trace keeps the innermost 64 frames and
 counts the rest, and both engines cap at the same number, so the same
@@ -194,13 +211,10 @@ say what is to become of it — `run`, `trap`, `raise`, `fail` or
 line. There is no unverified Luce here by construction.
 
 For each sample the generator writes the program to a scratch
-directory, compiles it with the freshly built `luce`, and runs it
-twice: once under `LOOM_ENGINE=native`, so a silent fall back to the
-interpreter is an error rather than a pass, and once under
-`LOOM_ENGINE=interpreter`. **The two must agree**, which re-proves on
-every page the claim this document makes about the engines. The output
-you see is then compared byte for byte against what the page claims,
-and a mismatch fails the build.
+directory, compiles it with the freshly built `luce`, and runs the
+`.lc` with the freshly built `loom`. The output you see is then
+compared byte for byte against what the page claims, and a mismatch
+fails the build.
 
 Some samples do not carry their own source at all: the
 [bundled programs](/examples/programs/) are included from

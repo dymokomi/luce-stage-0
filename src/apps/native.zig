@@ -43,8 +43,9 @@ const abi = luce.llvm.abi;
 pub const Kind = enum {
     /// A relocatable object; the caller links it (`docs/CODEGEN.md`).
     object,
-    /// A shared library a loader opens: what loom caches and runs, and
-    /// what an embedder loads.  Carries the artifact tag.
+    /// A shared library a loader opens: **the `.lc`** — what `luce
+    /// build` writes, what loom runs, and what an embedder loads.
+    /// Carries the artifact tag.
     library,
     /// A standalone executable: the same code plus `libluce_start`'s
     /// `main`.
@@ -56,10 +57,9 @@ pub const Kind = enum {
         return switch (self) {
             .object => ".o",
             // Not `.so`/`.dylib`: it *is* one, but it is also a Luce
-            // artifact with a tag, and the name should say which of the
-            // two files beside a program it is.  `.lcn` reads as "the
-            // native form of the .lc", which is what it is.
-            .library => ".lcn",
+            // program with a tag, and `.lc` is what a Luce program a
+            // person can run has been called since there was one.
+            .library => ".lc",
             .executable => "",
         };
     }
@@ -355,8 +355,8 @@ fn writeWhole(io: std.Io, path: []const u8, bytes: []const u8) !void {
 // Loading
 // ---------------------------------------------------------------------------
 
-/// A loaded artifact: the library it lives in, what to call, and what
-/// it said about itself.  `close` unloads it, which invalidates every
+/// A loaded artifact: the `.lc` it lives in, what to call, and what it
+/// said about itself.  `close` unloads it, which invalidates every
 /// pointer the run borrowed from it — including a trap's names.
 pub const Loaded = struct {
     library: std.DynLib,
@@ -453,7 +453,7 @@ test "a link with no runtime library says so instead of running the driver" {
     };
     defer tools.deinit(testing.allocator);
 
-    const result = try link(testing.allocator, testing.io, &tools, .library, "x.o", "x.lcn");
+    const result = try link(testing.allocator, testing.io, &tools, .library, "x.o", "x.lc");
     switch (result) {
         .failed => |why| {
             defer testing.allocator.free(why);
@@ -470,7 +470,7 @@ test "opening something that is not an artifact refuses it by name" {
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
 
-    const missing = try std.fs.path.joinZ(testing.allocator, &.{ directory, "absent.lcn" });
+    const missing = try std.fs.path.joinZ(testing.allocator, &.{ directory, "absent.lc" });
     defer testing.allocator.free(missing);
     try testing.expectEqual(OpenResult.unopenable, open(missing, null));
 }

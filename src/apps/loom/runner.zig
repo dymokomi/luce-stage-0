@@ -1,31 +1,19 @@
 //! Load, compile, and run Luce programs for the loom terminal.
 //!
-//! One boundary for three entry paths: `runModule` executes a compiled
-//! `.lc`, `runArtifact` executes a native `.lcn` artifact, and
-//! `runScript` compiles a `.luc` in memory and executes the result.
-//! Nothing bounds how long a program runs — interactive programs block
-//! on key_read for as long as they like — and the screen is restored
-//! before any trap is reported.
+//! Two entry paths: `runModule` opens a `.lc` and calls it, and
+//! `runScript` compiles a `.luc` into one first.  Nothing bounds how
+//! long a program runs — interactive programs block on key_read for as
+//! long as they like — and the screen is restored before any trap is
+//! reported.
 //!
-//! ## Two engines, one program
+//! ## A `.lc` is machine code
 //!
-//! A `.lc` is portable serialized IR and can be run two ways: by the
-//! interpreter, which is the reference implementation the specs prove,
-//! or as native code, which measures at 0.97-1.07x of C where the
-//! interpreter measures at 30-60x (docs/CODEGEN.md).  The two agree by
-//! construction — one runtime library, one host, one rendering of a
-//! trap — so which one ran is a performance fact and never a
-//! behavioural one.
-//!
-//! **loom prefers native and falls back to the interpreter.**  The
-//! native path needs the `luce` compiler, a lowering for everything the
-//! program says, a C toolchain to link with, and somewhere to put the
-//! result; when any of those is missing the program still runs, because
-//! slower is better than not at all.  `LOOM_ENGINE=native` turns the
-//! fallback into an error that says what was missing, and
-//! `LOOM_ENGINE=interpreter` takes the reference engine on purpose —
-//! which is what the `agree` tests, and any report of a disagreement,
-//! need to be able to ask for.
+//! `loom run FILE.lc` is one `dlopen`, one symbol lookup, one call.
+//! Nothing is compiled, nothing is decoded, and no compiler has to be
+//! installed: the artifact carries its own tag, and a file built for
+//! another machine, another host ABI or another code generator is
+//! refused by name before a single instruction of it runs
+//! (`luce.llvm.abi.Artifact`, `native.open`).
 //!
 //! ## loom does not carry a code generator
 //!
@@ -35,32 +23,31 @@
 //! nothing at all.  loom's whole job is starting programs, so it pays
 //! that on none of them: `luce` is the compiler and links LLVM, loom is
 //! the environment and does not.  A machine that only runs Luce
-//! programs then needs no LLVM installed at all.
+//! programs then needs no LLVM installed at all — and after the format
+//! change it needs no `luce` either, unless it is compiling something.
 //!
 //! The compiler is looked for beside loom's own executable first and on
 //! `PATH` after (`native.findCompiler`), which is how a toolchain finds
 //! its tools and what keeps an install tree self-consistent.  What it
-//! is handed is the serialized module loom is already holding, not the
-//! source — the artifact is then keyed to the exact program about to
-//! run rather than to whatever a second compile of the same file would
-//! have produced.  Re-encoding a decoded module is byte-identical
-//! (`06_mir/module.zig`), so the hash matches by construction.
+//! is handed is the **serialized module** loom's own front end just
+//! produced (`06_mir/module.zig`), not the source file — the artifact
+//! is then keyed to the exact program about to run rather than to
+//! whatever a second compile of the same text would have produced.
 //!
-//! ## Where the native artifact lives
+//! ## Where a compiled `.luc` puts its artifact
 //!
-//! Beside the program, as `NAME.lcn` — the same file `luce build
-//! --emit=library NAME.luc` writes, so a build can ship one warm and
-//! loom simply finds it.  It is keyed on **content**: the artifact
-//! carries a hash of the serialized module it was built from, and a
-//! program whose bytes changed gets a rebuild whatever the clock says
-//! about either file.  When there is nowhere to write beside the
-//! program — a read-only directory, or a program with no path at all,
-//! like the embedded editor — the artifact goes to the temp directory
-//! under its hash instead, which is the same cache with a different
-//! address.
+//! Beside the source, as `NAME.lc` — the same file `luce build
+//! NAME.luc` writes, so a build can ship one and loom simply finds it.
+//! It is keyed on **content**: the artifact carries a hash of the
+//! serialized module it was built from, and a program whose bytes
+//! changed gets a rebuild whatever the clock says about either file.
+//! When there is nowhere to write beside the program — a read-only
+//! directory, or a program with no path at all, like the embedded
+//! editor — the artifact goes to the temp directory under its hash
+//! instead, which is the same cache with a different address.
 //!
-//! A warm run invokes nothing external: one `dlopen`, one symbol
-//! lookup, one call.  A cold one runs the linker once.
+//! A warm run invokes nothing external.  A cold one runs `luce` once,
+//! which runs the linker once.
 
 const std = @import("std");
 const luce = @import("luce");
@@ -135,40 +122,49 @@ pub const Policy = struct {
     }
 };
 
-/// Run a compiled module from disk: a portable `.lc`, or a native
-/// `.lcn` artifact taken as it is.
+/// Run a compiled program named directly — `loom run program.lc`.
+///
+/// Nothing is compiled and nothing is matched against a source file:
+/// the artifact's own tag is the whole story, and it is read before a
+/// single instruction of the artifact runs.
 pub fn runModule(
     gpa: Allocator,
     io: std.Io,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
-    policy: Policy,
     path: []const u8,
     arguments: []const []const u8,
 ) !u8 {
-    if (std.mem.endsWith(u8, path, native.Kind.library.extension())) {
-        return runArtifact(gpa, io, out, err, path, arguments);
+    const path_z = try gpa.dupeZ(u8, path);
+    defer gpa.free(path_z);
+
+    switch (native.open(path_z, null)) {
+        .loaded => |opened| {
+            var loaded = opened;
+            defer loaded.close();
+            return runLoaded(gpa, io, out, err, &loaded, arguments);
+        },
+        // The platform loader says only "no", never why, so the one
+        // distinction worth making is made here: a file that is not
+        // there and a file that is not a program are different
+        // mistakes, and only the second is about the program.
+        .unopenable => {
+            if (std.Io.Dir.cwd().openFile(io, path, .{})) |file| {
+                file.close(io);
+                try err.print(
+                    "loom: cannot load {s}: it is not a compiled Luce program this machine can run\n",
+                    .{path},
+                );
+            } else |_| {
+                try err.print("loom: cannot read {s}: no such file\n", .{path});
+            }
+            return 1;
+        },
+        .mismatch => |why| {
+            try err.print("loom: cannot run {s}: {s}\n", .{ path, native.explain(why) });
+            return 1;
+        },
     }
-
-    const encoded = files.readWhole(gpa, io, path) catch {
-        try err.print("loom: cannot read {s}\n", .{path});
-        return 1;
-    };
-    defer gpa.free(encoded);
-
-    var program = luce.mir.module.decode(gpa, encoded) catch |mistake| switch (mistake) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.UnsupportedVersion => {
-            try err.print("loom: {s} was built by a different luce; rebuild it from source\n", .{path});
-            return 1;
-        },
-        error.InvalidModule => {
-            try err.print("loom: {s} is not a valid .lc module\n", .{path});
-            return 1;
-        },
-    };
-    defer program.deinit();
-    return run(gpa, io, out, err, policy, path, encoded, &program, arguments);
 }
 
 /// Compile a .luc source file (plus the modules it imports, resolved
@@ -232,10 +228,9 @@ pub fn runSource(
     var program = result.success;
     defer program.deinit();
 
-    // A script has no `.lc` on disk, so the canonical form of the
-    // program is made here: same bytes, same hash, same artifact `luce
-    // build` would produce from the same source — and the bytes the
-    // compiler is handed when one has to be built.
+    // The canonical form of the program: same bytes, same hash, same
+    // artifact `luce build` would produce from the same source — and
+    // the bytes the compiler is handed when one has to be built.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
     return run(gpa, io, out, err, policy, name, encoded, &program, arguments);
@@ -243,9 +238,8 @@ pub fn runSource(
 
 /// Run one program on whichever engine the policy allows.
 ///
-/// `encoded` is the program in its portable form — what a native
-/// artifact is keyed on, and what the compiler is handed when one has
-/// to be built.
+/// `encoded` is the serialized module — what an artifact is keyed on,
+/// and what the compiler is handed when one has to be built.
 pub fn run(
     gpa: Allocator,
     io: std.Io,
@@ -277,38 +271,6 @@ pub fn run(
         }
     }
     return runInterpreted(gpa, io, out, err, program, arguments);
-}
-
-/// Run a native artifact named directly — `loom run program.lcn`.
-/// Nothing is compiled and nothing is matched against a `.lc`: the
-/// artifact's own tag is the whole story, and it is read before a
-/// single instruction of the artifact runs.
-pub fn runArtifact(
-    gpa: Allocator,
-    io: std.Io,
-    out: *std.Io.Writer,
-    err: *std.Io.Writer,
-    path: []const u8,
-    arguments: []const []const u8,
-) !u8 {
-    const path_z = try gpa.dupeZ(u8, path);
-    defer gpa.free(path_z);
-
-    switch (native.open(path_z, null)) {
-        .loaded => |opened| {
-            var loaded = opened;
-            defer loaded.close();
-            return runLoaded(gpa, io, out, err, &loaded, arguments);
-        },
-        .unopenable => {
-            try err.print("loom: cannot load {s}\n", .{path});
-            return 1;
-        },
-        .mismatch => |why| {
-            try err.print("loom: cannot run {s}: {s}\n", .{ path, native.explain(why) });
-            return 1;
-        },
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -358,7 +320,7 @@ fn artifactFor(
     for (places.paths()) |candidate| {
         if (last) |why| gpa.free(why);
         last = null;
-        switch (try compileTo(gpa, io, compiler.path, name, encoded, candidate)) {
+        switch (try compileTo(gpa, io, compiler.path, encoded, candidate)) {
             .built => switch (native.open(candidate, source_hash)) {
                 .loaded => |opened| return opened,
                 .unopenable => last = try gpa.dupe(u8, "the artifact just built could not be loaded"),
@@ -391,36 +353,35 @@ const Attempt = union(enum) {
 
 /// Ask the `luce` binary for a native artifact at `output`.
 ///
-/// The input is the serialized module, because that is the program that
-/// is about to run.  A `.lc` on disk already *is* those bytes and is
-/// named where it stands; anything else — a `.luc` loom compiled in
-/// memory, the embedded editor — has them written beside the artifact
-/// and removed again, which is also the only way a program with no file
-/// of its own can be compiled at all.
+/// The input is the serialized module loom's own front end just made,
+/// because that is the program that is about to run — not the source
+/// file, which a second compile might read differently.  It is written
+/// beside the artifact and removed again, which is also the only way a
+/// program with no file of its own (the embedded editor) can be
+/// compiled at all.
 fn compileTo(
     gpa: Allocator,
     io: std.Io,
     compiler: []const u8,
-    name: []const u8,
     encoded: []const u8,
     output: []const u8,
 ) !Attempt {
-    const on_disk = std.mem.endsWith(u8, name, ".lc");
-    const module_path = if (on_disk)
-        try gpa.dupe(u8, name)
-    else
-        // A distinct name per process, so two looms warming the same
-        // cache cannot write each other's half-written module.
-        try std.fmt.allocPrint(gpa, "{s}.{d}.lc", .{ output, std.Thread.getCurrentId() });
+    // A distinct name per process, so two looms warming the same cache
+    // cannot write each other's half-written module.
+    const module_path = try std.fmt.allocPrint(gpa, "{s}.{d}{s}", .{
+        output,
+        std.Thread.getCurrentId(),
+        luce.mir.module.extension,
+    });
     defer gpa.free(module_path);
-    defer if (!on_disk) std.Io.Dir.cwd().deleteFile(io, module_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, module_path) catch {};
 
-    if (!on_disk) files.writeWhole(io, module_path, encoded) catch {
+    files.writeWhole(io, module_path, encoded) catch {
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{module_path}) };
     };
 
     const ran = std.process.run(gpa, io, .{
-        .argv = &.{ compiler, "build", module_path, "--emit=library", "-o", output },
+        .argv = &.{ compiler, "build", module_path, "-o", output },
     }) catch |mistake| switch (mistake) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .failed = try std.fmt.allocPrint(
@@ -447,12 +408,11 @@ fn compileTo(
 
 /// Where an artifact for this program may live, best first.
 ///
-/// Beside the program is the honest place: deletable with the program,
-/// visible in a listing, and exactly the name `luce build
-/// --emit=library` writes — so a warm artifact can be shipped rather
-/// than earned.  The temp directory is the fallback for a read-only
-/// directory or a program with no path at all, and keys on the hash
-/// because there is no name to key on.
+/// Beside the source is the honest place: deletable with it, visible in
+/// a listing, and exactly the name `luce build` writes — so a warm
+/// artifact can be shipped rather than earned.  The temp directory is
+/// the fallback for a read-only directory or a program with no path at
+/// all, and keys on the hash because there is no name to key on.
 const Places = struct {
     beside: ?[:0]u8 = null,
     temporary: [:0]u8,
@@ -463,12 +423,12 @@ const Places = struct {
     fn of(gpa: Allocator, temporary: []const u8, name: []const u8, source_hash: u64) !Places {
         var made: Places = .{ .temporary = undefined };
         if (stemOf(name)) |stem| {
-            made.beside = try std.fmt.allocPrintSentinel(gpa, "{s}.lcn", .{stem}, 0);
+            made.beside = try std.fmt.allocPrintSentinel(gpa, "{s}.lc", .{stem}, 0);
         }
         errdefer if (made.beside) |path| gpa.free(path);
         made.temporary = try std.fmt.allocPrintSentinel(
             gpa,
-            "{s}{c}luce-{x:0>16}.lcn",
+            "{s}{c}luce-{x:0>16}.lc",
             .{ temporary, std.fs.path.sep, source_hash },
             0,
         );
@@ -492,11 +452,10 @@ const Places = struct {
     }
 };
 
-/// `foo.lc` and `foo.luc` both name an artifact `foo.lcn` beside them.
-/// Anything else — the embedded editor, a program read from a stream —
-/// has no file to sit beside and answers null.
+/// `foo.luc` names an artifact `foo.lc` beside it.  Anything else — the
+/// embedded editor, a program read from a stream — has no file to sit
+/// beside and answers null.
 fn stemOf(name: []const u8) ?[]const u8 {
-    if (std.mem.endsWith(u8, name, ".lc")) return name[0 .. name.len - ".lc".len];
     if (std.mem.endsWith(u8, name, ".luc")) return name[0 .. name.len - ".luc".len];
     return null;
 }
@@ -652,21 +611,20 @@ test "the fallback artifact directory is the session's own, not a shared one" {
     );
 }
 
-test "an artifact is named beside the program it came from" {
-    try testing.expectEqualStrings("programs/editor", stemOf("programs/editor.lc").?);
+test "an artifact is named beside the source it came from" {
     try testing.expectEqualStrings("programs/editor", stemOf("programs/editor.luc").?);
     // Nothing to sit beside: the embedded editor, or a stream.
     try testing.expectEqual(@as(?[]const u8, null), stemOf("editor"));
 
-    var beside = try Places.of(testing.allocator, "/scratch", "programs/editor.lc", 0x1234);
+    var beside = try Places.of(testing.allocator, "/scratch", "programs/editor.luc", 0x1234);
     defer beside.deinit(testing.allocator);
-    try testing.expectEqualStrings("programs/editor.lcn", beside.beside.?);
+    try testing.expectEqualStrings("programs/editor.lc", beside.beside.?);
     try testing.expectEqual(@as(usize, 2), beside.paths().len);
-    try testing.expectEqualStrings("programs/editor.lcn", beside.paths()[0]);
+    try testing.expectEqualStrings("programs/editor.lc", beside.paths()[0]);
 
     var anonymous = try Places.of(testing.allocator, "/scratch", "editor", 0x1234);
     defer anonymous.deinit(testing.allocator);
     try testing.expect(anonymous.beside == null);
     try testing.expectEqual(@as(usize, 1), anonymous.paths().len);
-    try testing.expectEqualStrings("/scratch/luce-0000000000001234.lcn", anonymous.temporary);
+    try testing.expectEqualStrings("/scratch/luce-0000000000001234.lc", anonymous.temporary);
 }

@@ -589,7 +589,7 @@ the honest place for it.
 
 ### In order — each needs the one before it
 
-**4. Make `.lc` the native artifact.** *(needs 1–2)*
+**4. Make `.lc` the native artifact. — DONE.** *(needs 1–2)*
 *Changes:* `--emit=library` becomes the default and `.lc` its
 extension; serialized MIR keeps the format and loses the user-facing
 name; `build.zig` links the bundled programs at install time; the
@@ -602,6 +602,66 @@ programs are the corpus.
 *Forecloses:* a `.lc` that runs on another machine. The replacement is
 cross-compilation (`--target`, one `libluce_rt` per target, `zig cc`),
 which is a step of its own and not a prerequisite.
+
+*What it took, in contact with the code:*
+
+**Serialized MIR needed a name after all, and it is `.lcm`.** The
+memo left this open ("a small decision to take in step 4") and the
+code closed it immediately: loom hands the compiler the module it is
+holding rather than the source, that module has to reach a disk for
+another process to read, and `.lc` was taken. So
+`06_mir/module.zig` now owns `extension = ".lcm"`, `luce build`,
+`luce check` and `luce ir` all accept one, and **nothing writes one as
+a deliverable** — there is no `--emit=module`. It is a seam with a
+name, which is the honest shape: `loom` writes `NAME.lc.<pid>.lcm`
+beside the artifact it is about to build and deletes it again.
+
+**`--emit` is three, not four**, and the two `--backend=` spellings
+went with the fourth. `--emit=library` is the default and `.lc` its
+extension; `object` and `exe` are unchanged.
+
+**The fallback dissolved for `.lc` here rather than in step 5.** A
+native `.lc` has no IR to interpret, so `runModule` collapsed into
+what `runArtifact` was — open, check the tag, call — and `Places`
+lost its `.lc`-input case. The ladder survives this step only for
+`loom luce FILE.luc` and the embedded editor, which is exactly what
+step 5 deletes. The site's second arm went here for the same reason:
+`verify.zig` ran `LOOM_ENGINE=interpreter` over `sample.lc`, and
+there is nothing left to run.
+
+**`cc` became a dependency of `zig build test`, not only of
+installing.** The nine bundled programs and the six benchmarks are
+linked now. `build.zig` points each compile at the *installed*
+`libluce_rt.a` through `LUCE_LIB` (a configure-time path; `Run` env
+vars cannot take a lazy one) and adds the library as a file input, so
+a change to the runtime rebuilds every program that carries a copy of
+it. `zig build test` therefore installs `libluce_rt.a` as a side
+effect, which is the price of testing the link.
+
+**Two numbers the memo did not have.** A ReleaseSafe artifact is
+**666–716 KB** and the nine bundled programs total **6.1 MB** against
+116 KB of MIR — the 54× the memo predicted, confirmed. And
+`--release` no longer buys a third off: an artifact is mostly
+`libluce_rt`, so stripping the origin tables takes **2.3%** off
+`editor.lc` (716 KB → 699 KB) and nothing measurable off a small
+program. The size decision stands as the owner ruled it —
+inconsequential for now — and **the shared-`libluce_rt` option is
+named here as the future optimization and deliberately not built**: it
+would trade a self-contained file that runs anywhere the machine
+matches for a dylib, an rpath and a version-matched install, and that
+is a change to what an artifact *is*, not a size tweak.
+
+**Cross-compilation stays unbuilt, and the missing piece is the
+link.** `08_llvm/emit.zig` already registers AArch64, X86 and
+WebAssembly and takes a triple; `apps/luce/object.zig` hard-codes
+`emit.hostTriple()`. What is genuinely absent is one `libluce_rt` per
+target and a linker willing to take it — `zig cc` is the obvious
+answer, and Zig is already a build dependency.
+
+**Warm startup is unchanged to slightly better**: `loom run sort.lc`
+best-of-20 went 3.57 ms → 3.13–3.70 ms across runs. It is the same
+`dlopen` minus reading and verifying a `.lc`'s IR, and both are lost
+in process startup.
 
 **5. Delete the fallback.** *(needs 4)*
 *Deletes:* `runner.Engine`, `Policy.engine`, `LOOM_ENGINE`,

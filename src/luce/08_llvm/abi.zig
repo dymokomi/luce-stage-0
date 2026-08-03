@@ -153,7 +153,7 @@ pub const artifact_magic: u64 = 0x0054524145_43554c;
 /// What an artifact says about itself, as an exported constant.
 ///
 /// **A native artifact is not portable, and the file name cannot be
-/// trusted to say so.**  A `.lcn` copied between machines, kept across
+/// trusted to say so.**  A `.lc` copied between machines, kept across
 /// an ABI bump, or built from a since-edited program is a file that
 /// still loads and still has a `luce_main` to call — and calling it
 /// would be a crash with no explanation.  So every artifact carries
@@ -695,7 +695,7 @@ test "an artifact tag is refused by name, in the order a loader checks" {
     try std.testing.expectEqual(Mismatch.generator, checkArtifact(&wrong, 7).?);
     // A different generator is refused even when nobody asked about
     // the program, because it is a fact about the artifact and not
-    // about the question: `loom run NAME.lcn` names no `.lc` at all.
+    // about the question: `loom run NAME.lc` names no program to match.
     try std.testing.expectEqual(Mismatch.generator, checkArtifact(&wrong, null).?);
     // And it is the answer given first when the program changed too:
     // the toolchain moving under an artifact is the more fundamental

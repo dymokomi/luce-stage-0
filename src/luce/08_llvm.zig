@@ -35,10 +35,10 @@
 //! `lower.zig` is the authority; docs/CODEGEN.md keeps the prose.
 //!
 //! `src/apps/luce/object.zig` carries a lowered program the rest of the
-//! way — `emit` for the object, then `cc` for a loadable `.lcn`
-//! artifact or a standalone executable — and `loom run` prefers that
-//! artifact over the interpreter.  What makes a native artifact safe to
-//! hand to a loader is `abi.Artifact`: the tag this stage stamps every
+//! way — `emit` for the object, then `cc` for the loadable `.lc` or a
+//! standalone executable — and `loom run FILE.lc` opens exactly that.
+//! What makes an artifact safe to hand to a loader is
+//! `abi.Artifact`: the tag this stage stamps every
 //! module with, naming the machine, the host ABI, and the program it
 //! was built from, so the wrong one is refused by name.
 //!

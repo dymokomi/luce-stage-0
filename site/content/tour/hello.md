@@ -63,11 +63,10 @@ hello, world
 That transcript is real: this site's build ran those three commands in
 a scratch directory and captured what they printed.
 
-`luce build` writes `hello.lc`, a portable module. `loom run` executes
-it — and the first time it does, it compiles a native artifact
-`hello.lcn` beside it and uses that from then on. You never ask for
-that; it just happens, and the second run starts in a couple of
-milliseconds.
+`luce build` writes `hello.lc`, and a `.lc` is machine code — a small
+shared library holding the compiled program and the runtime it calls.
+`loom run` opens it and calls it: nothing is compiled, nothing is
+interpreted, and the whole startup is a couple of milliseconds.
 
 While you are writing something, one command is shorter:
 
@@ -87,11 +86,11 @@ a mistake reports the line it happened on.
 | `luce check FILE` | compile, report problems, write nothing |
 | `luce ir FILE [--full]` | compile and print the readable intermediate form |
 
-`--emit` chooses which artifact `build` writes — `module` (the default
-`.lc`), `object` (a relocatable `.o`), `library` (a native `.lcn`), or
-`exe` (a standalone binary that needs neither `loom` nor a runtime
-beside it). Nothing else differs between them; the same program walks
-the same pipeline either way.
+`--emit` chooses which shape `build` writes — `library` (the default
+`.lc` that `loom` runs), `object` (a relocatable `.o`), or `exe` (a
+standalone binary that needs neither `loom` nor a runtime beside it).
+Nothing else differs between them; the same program walks the same
+pipeline either way.
 
 Builds are debug by default, which means the artifact carries source
 locations so a runtime failure can say `file:line:column`.

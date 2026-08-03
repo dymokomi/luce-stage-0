@@ -10,7 +10,7 @@
 # working tree, and times both ON THIS HOST, interleaved round-robin
 # so slow drift lands on both sides equally.  Each side compiles the
 # bench programs with its own luce and runs them with its own loom,
-# so .lc format changes between refs don't matter.
+# so artifact format changes between refs don't matter.
 #
 # Expect the first run to spend a minute or two building the base
 # worktree (its own zig cache).
@@ -35,7 +35,7 @@ zig build --prefix build -Doptimize=ReleaseSafe >/dev/null 2>&1
 
 names="loops math strings arrays matmul stats"
 mkdir -p build/bench "$base/build/bench"
-# Each side keeps its own `.lcn` and each side's tag names its own code
+# Each side writes its own `.lc` and each side's tag names its own code
 # generator, so neither can run the other's artifact — or one its own
 # earlier build left — which is exactly the difference being measured.
 for name in $names; do

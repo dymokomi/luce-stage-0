@@ -1,29 +1,32 @@
-//! The luce compiler: .luc source in, a runnable artifact out.
+//! The luce compiler: .luc source in, machine code out.
 //!
 //! Three commands over one pipeline:
 //!   luce build FILE.luc [-o OUT]   compile and write an artifact
 //!   luce check FILE.luc            compile, report, write nothing
 //!   luce ir FILE.luc               compile and dump readable IR
 //!
-//! **FILE may be a `.lc` as well as a `.luc`.**  A serialized module is
-//! a compiled program in its portable form, and building a native
-//! artifact from one asks nothing of the front end — it is decoded and
-//! handed straight to stage 8.  That is how `loom` gets a program
-//! compiled without carrying a code generator itself: it runs this
-//! binary over the module it already has (`apps/loom/runner.zig`).
+//! **`build` writes a `.lc`, and a `.lc` is machine code** — a tagged
+//! shared library `loom` opens and calls (`docs/CODEGEN.md`).  There is
+//! no second, slower thing to write: the artifact is the deliverable
+//! and the tag is what makes it safe to hand around, because a loader
+//! refuses the wrong machine, the wrong host ABI, or another code
+//! generator's output by name (`luce.llvm.abi.Artifact`).
 //!
-//! `--emit` says which of four artifacts `build` writes, and it is the
-//! only thing that differs between them — the same program walks the
-//! same pipeline either way:
+//! `--emit` says which of three shapes it takes, and it is the only
+//! thing that differs between them — the same program walks the same
+//! pipeline either way:
 //!
-//!   module   FILE.lc    portable serialized IR; the interpreter runs it
-//!   object   FILE.o     a relocatable object; the caller links it
-//!   library  FILE.lcn   a loadable native artifact; loom runs it
-//!   exe      FILE       a standalone native executable
+//!   (default)  FILE.lc    a loadable artifact; loom runs it
+//!   object     FILE.o     a relocatable object; the caller links it
+//!   exe        FILE       a standalone native executable
 //!
-//! The last three go through stage 10 (docs/CODEGEN.md) and are
-//! tagged with the machine and the host ABI they were built for, so a
-//! loader refuses the wrong one by name (`luce.llvm.abi.Artifact`).
+//! **FILE may be a `.lcm` as well as a `.luc`.**  That is the serialized
+//! module (`06_mir/module.zig`) — the front end's hand-over to the back
+//! end, not a distribution format — and building from one asks nothing
+//! of the front end: it is decoded and handed straight to stage 10.
+//! That is how `loom` gets a program compiled without carrying a code
+//! generator itself: it runs this binary over the module it already
+//! has (`apps/loom/runner.zig`).
 //!
 //! Programs compile in script mode (`func main():`) with the host
 //! builtins allowed; whoever runs the artifact is the trusted boundary
@@ -65,7 +68,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     if (std.mem.eql(u8, command, "build")) {
         var output_path: []const u8 = "";
         var release = false;
-        var emit: Emit = .module;
+        var emit: Emit = .library;
         var index: usize = 3;
         while (index < arguments.len) : (index += 1) {
             const argument = arguments[index];
@@ -76,13 +79,6 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
                 release = true;
             } else if (std.mem.startsWith(u8, argument, "--emit=")) {
                 emit = Emit.parse(argument["--emit=".len..]) orelse return usage(err);
-            } else if (std.mem.eql(u8, argument, "--backend=llvm")) {
-                // The older spelling of `--emit=object`, kept because
-                // it is what docs/CODEGEN.md and every note about the
-                // backend so far have said.
-                emit = .object;
-            } else if (std.mem.eql(u8, argument, "--backend=interpreter")) {
-                emit = .module;
             } else {
                 return usage(err);
             }
@@ -93,7 +89,6 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             try err.print("luce: reading from {s} needs -o to say where to write\n", .{files.standard_input});
             return 1;
         }
-        if (emit == .module) return build(gpa, io, err, out, path, output_path, release);
 
         var environment = try init.environ.createMap(gpa);
         defer environment.deinit();
@@ -135,15 +130,13 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     return usage(err);
 }
 
-/// Which artifact `build` writes.  One program, four shapes.
+/// Which artifact `build` writes.  One program, three shapes.
 const Emit = enum {
-    /// The portable serialized IR the interpreter runs.
-    module,
+    /// A loadable `.lc` — what loom runs, what an embedder opens
+    /// through the published ABI, and the default.
+    library,
     /// A relocatable object; linking it is the caller's job.
     object,
-    /// A loadable native artifact — what loom runs, and what an
-    /// embedder opens through the published ABI.
-    library,
     /// A standalone native executable.
     exe,
 
@@ -154,9 +147,8 @@ const Emit = enum {
     /// What the shared link-and-load code calls the same thing.
     fn kind(self: Emit) native.Kind {
         return switch (self) {
-            .module => unreachable, // never reaches stage 10
-            .object => .object,
             .library => .library,
+            .object => .object,
             .exe => .executable,
         };
     }
@@ -169,23 +161,25 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce check FILE\n" ++
             "  luce ir FILE [--full]\n" ++
             "\n" ++
-            "FILE is a .luc source file, or a .lc module to take up\n" ++
+            "FILE is a .luc source file, or a .lcm module to take up\n" ++
             "from where it was left — the same program either way.\n" ++
+            "A .lcm is the front end's hand-over to the back end, not\n" ++
+            "something to ship; loom writes one when it needs a\n" ++
+            "program compiled.\n" ++
             "\n" ++
-            "--emit says which artifact to write, and nothing else\n" ++
+            "--emit says which shape to write, and nothing else\n" ++
             "differs between them — the same program walks the same\n" ++
             "pipeline either way:\n" ++
             "\n" ++
-            "  module   FILE.lc   portable IR; loom's interpreter runs it\n" ++
+            "  library  FILE.lc   a native artifact loom runs (default)\n" ++
             "  object   FILE.o    a relocatable object; you link it\n" ++
-            "  library  FILE.lcn  a native artifact; loom runs it directly\n" ++
             "  exe      FILE      a standalone native executable\n" ++
             "\n" ++
-            "module is the default.  The last three compile through\n" ++
-            "LLVM and are stamped with the machine and the host ABI\n" ++
-            "they were built for, so a loader refuses the wrong one\n" ++
-            "by name.  Linking uses cc; LUCE_CC names another driver\n" ++
-            "and LUCE_LIB the directory holding libluce_rt.a.\n" ++
+            "All three compile through LLVM and are stamped with the\n" ++
+            "machine, the host ABI and the code generator they were\n" ++
+            "built for, so a loader refuses the wrong one by name.\n" ++
+            "Linking uses cc; LUCE_CC names another driver and\n" ++
+            "LUCE_LIB the directory holding libluce_rt.a.\n" ++
             "\n" ++
             "FILE may be - to read the program from standard input;\n" ++
             "imports then resolve beside the current directory, and\n" ++
@@ -198,39 +192,6 @@ fn usage(err: *std.Io.Writer) !u8 {
         .{},
     );
     return 1;
-}
-
-fn build(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    err: *std.Io.Writer,
-    out: *std.Io.Writer,
-    path: []const u8,
-    output_path: []const u8,
-    release: bool,
-) !u8 {
-    var program = (try compilePath(gpa, io, err, path)) orelse return 1;
-    defer program.deinit();
-
-    // Release strips debug info (trap locations); it never changes
-    // what the program does — every check traps identically.
-    if (release) luce.mir.strip(&program);
-    const encoded = try luce.mir.module.encode(gpa, &program);
-    defer gpa.free(encoded);
-
-    const target = if (output_path.len != 0)
-        try gpa.dupe(u8, output_path)
-    else
-        try modulePath(gpa, path);
-    defer gpa.free(target);
-
-    files.writeWhole(io, target, encoded) catch {
-        try err.print("luce: cannot write {s}\n", .{target});
-        return 1;
-    };
-    try out.print("{s} -> {s}\n", .{ files.displayName(path), target });
-    try out.flush();
-    return 0;
 }
 
 /// Compile through LLVM and write an object, a loadable artifact, or a
@@ -310,12 +271,7 @@ fn buildNative(
     return 0;
 }
 
-/// FILE.luc -> FILE.lc; anything else appends .lc.
-fn modulePath(gpa: std.mem.Allocator, source_path: []const u8) ![]u8 {
-    return replaceExtension(gpa, source_path, ".lc");
-}
-
-/// FILE.luc and FILE.lc -> FILE + `extension`; anything else just
+/// FILE.luc and FILE.lcm -> FILE + `extension`; anything else just
 /// appends.  An empty extension is how an executable gets the program's
 /// bare name.
 fn replaceExtension(
@@ -328,7 +284,7 @@ fn replaceExtension(
 
 /// A program's name without whichever of its two forms it arrived in.
 fn stemOf(path: []const u8) []const u8 {
-    inline for (.{ ".luc", ".lc" }) |suffix| {
+    inline for (.{ ".luc", luce.mir.module.extension }) |suffix| {
         if (std.mem.endsWith(u8, path, suffix)) return path[0 .. path.len - suffix.len];
     }
     return path;
@@ -352,7 +308,7 @@ fn compilePathPruned(
     path: []const u8,
     prune: bool,
 ) !?luce.mir.Program {
-    if (std.mem.endsWith(u8, path, ".lc")) return decodePath(gpa, io, err, path);
+    if (std.mem.endsWith(u8, path, luce.mir.module.extension)) return decodePath(gpa, io, err, path);
 
     // The root file goes through the same door as every import, so a
     // directory, a permission, or an oversized file reads the same
@@ -394,7 +350,7 @@ fn compilePathPruned(
 
 /// Read a serialized module back into a program.
 ///
-/// A `.lc` has already been through the front end, so there is nothing
+/// A `.lcm` has already been through the front end, so there is nothing
 /// to check and nothing to prune — `decode` re-runs the IR verifier,
 /// which is the whole of what this path owes a caller.
 fn decodePath(
@@ -416,7 +372,7 @@ fn decodePath(
             return null;
         },
         error.InvalidModule => {
-            try err.print("luce: {s} is not a valid .lc module\n", .{path});
+            try err.print("luce: {s} is not a valid Luce module\n", .{path});
             return null;
         },
     };
@@ -429,10 +385,10 @@ test {
 
 test "an artifact's name comes from the program's, whichever form it arrived in" {
     const gpa = std.testing.allocator;
-    for ([_][]const u8{ "sub/game.luc", "sub/game.lc" }) |path| {
-        const artifact = try replaceExtension(gpa, path, ".lcn");
+    for ([_][]const u8{ "sub/game.luc", "sub/game.lcm" }) |path| {
+        const artifact = try replaceExtension(gpa, path, ".lc");
         defer gpa.free(artifact);
-        try std.testing.expectEqualStrings("sub/game.lcn", artifact);
+        try std.testing.expectEqualStrings("sub/game.lc", artifact);
 
         const binary = try replaceExtension(gpa, path, "");
         defer gpa.free(binary);

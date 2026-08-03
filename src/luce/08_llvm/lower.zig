@@ -762,7 +762,7 @@ const Module = struct {
     /// it kept its origins, and what generated it (`abi.Artifact`).
     ///
     /// Exported, because the whole point is that a loader can read it
-    /// *before* deciding to call anything.  A `.lcn` from another
+    /// *before* deciding to call anything.  A `.lc` from another
     /// machine or another ABI is otherwise a file that loads cleanly
     /// and crashes on the first call, which is the failure mode this
     /// exists to replace with a sentence.

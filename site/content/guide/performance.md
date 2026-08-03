@@ -80,25 +80,23 @@ constant data that nothing on the execution path addresses, so a debug
 build and a release build run at identical speed. All the cost of a
 trap's location sits on the far side of "the program already failed".
 
-## Compilation is on the run path exactly once
+## Compilation is not on the run path at all
 
-`loom run FILE.lc` looks for `FILE.lcn` beside the program, builds one
-if there is none or it was built from different bytes, and uses it
-from then on. Measured on `bench/matmul` against the interpreter:
-**5.92 s → 0.19 s cold, 0.03 s warm.** A cold run pays LLVM at `-O3`
-and one `cc` link — 80 to 320 ms — and still finishes far ahead of the
-interpreter on anything that computes.
+A `.lc` **is** machine code, so `loom run FILE.lc` compiles nothing:
+one `dlopen`, one symbol lookup, one call. Measured on `bench/matmul`,
+that whole startup is 3 ms, and the program itself then runs at C's
+speed.
 
-The cache keys on **content**, never on modification time, and every
-artifact records the code generator that produced it as well as the
-program. Upgrading `luce` rebuilds rather than silently running the
-old compiler's code, and a stale or foreign artifact is refused by
-name instead of crashing.
+Compiling is `luce build`'s job and happens once, when you ask for it.
+`loom luce FILE.luc` still compiles — that is what it is for — and
+caches the result as `FILE.lc` beside the source, keyed on **content**
+rather than on a modification time, so an unchanged program is warm
+and a changed one is rebuilt.
 
-Nothing sweeps `.lcn` files. They sit beside their programs and are
-deleted with them; a cache that grew without bound would need a
-policy, and a content-addressed file next to the thing it was
-addressed from does not.
+Every artifact also records the code generator that produced it.
+Upgrading `luce` rebuilds rather than silently running the old
+compiler's code, and a stale or foreign artifact is refused by name
+instead of crashing.
 
 ## Writing Luce that is fast
 

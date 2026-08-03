@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 // LuciaOS v2 builds two executables from one language module:
 //
-//   luce  — the compiler (.luc source in, .lc module out)
+//   luce  — the compiler (.luc source in, a native .lc out)
 //   loom  — the terminal that runs compiled Luce programs
 //
 // zig build installs both plus the compiled bundled programs
@@ -41,7 +41,12 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(runtime_library);
+    // Installed rather than only built, and named here, because the
+    // bundled programs below are linked against the *installed* copy:
+    // compiling one is a link, and a link needs a library on a path
+    // `luce` can find (`apps/native.zig`, `LUCE_LIB`).
+    const install_runtime = b.addInstallArtifact(runtime_library, .{});
+    b.getInstallStep().dependOn(&install_runtime.step);
 
     // Luce: the language — lexer through IR lowering, the interpreter,
     // the .lc format.  It links nothing: `08_llvm/lower.zig` builds
@@ -264,6 +269,14 @@ pub fn build(b: *std.Build) void {
     // Compile the bundled Luce programs with the freshly built luce.
     // `deps` lists imported sibling modules so edits to them re-run
     // the compile even though only the root file is an argument.
+    //
+    // **A `.lc` is machine code, so this is a link** (docs/ENGINE.md):
+    // installing needs a C toolchain and the runtime library, not only
+    // the compiler.  `LUCE_LIB` points at the install tree's `lib/`,
+    // which is where `luce` would look for it anyway, and the library
+    // is a file input so a change to the runtime rebuilds every
+    // program that carries a copy of it.
+    const runtime_directory = b.getInstallPath(.lib, "");
     const bundled = [_]struct { name: []const u8, deps: []const []const u8 = &.{} }{
         .{ .name = "hello" },
         .{ .name = "editor" },
@@ -280,15 +293,16 @@ pub fn build(b: *std.Build) void {
         compile_program.addArg("build");
         compile_program.addFileArg(b.path(b.fmt("programs/{s}.luc", .{program.name})));
         compile_program.addArg("-o");
-        const module_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{program.name}));
+        const artifact_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{program.name}));
         for (program.deps) |dependency| {
             compile_program.addFileInput(b.path(b.fmt("programs/{s}.luc", .{dependency})));
         }
-        const install_module = b.addInstallFile(
-            module_file,
+        linkAgainstRuntime(compile_program, install_runtime, runtime_directory, runtime_library);
+        const install_program = b.addInstallFile(
+            artifact_file,
             b.fmt("programs/{s}.lc", .{program.name}),
         );
-        b.getInstallStep().dependOn(&install_module.step);
+        b.getInstallStep().dependOn(&install_program.step);
         // `zig build test` compiles every bundled program too, so a
         // broken userland program fails the suite — not only a full
         // ./build.sh install.
@@ -304,8 +318,24 @@ pub fn build(b: *std.Build) void {
         compile_bench.addFileArg(b.path(b.fmt("bench/{s}.luc", .{name})));
         compile_bench.addArg("-o");
         _ = compile_bench.addOutputFileArg(b.fmt("{s}.lc", .{name}));
+        linkAgainstRuntime(compile_bench, install_runtime, runtime_directory, runtime_library);
         test_step.dependOn(&compile_bench.step);
     }
+}
+
+/// Give one `luce build` run what it needs to link: the installed
+/// runtime library on `LUCE_LIB`, the install ordered before the
+/// compile, and the library itself as an input so the cached result is
+/// thrown away when the runtime changes.
+fn linkAgainstRuntime(
+    run: *std.Build.Step.Run,
+    install_runtime: *std.Build.Step.InstallArtifact,
+    directory: []const u8,
+    runtime_library: *std.Build.Step.Compile,
+) void {
+    run.setEnvironmentVariable("LUCE_LIB", directory);
+    run.step.dependOn(&install_runtime.step);
+    run.addFileInput(runtime_library.getEmittedBin());
 }
 
 // ---------------------------------------------------------------------------

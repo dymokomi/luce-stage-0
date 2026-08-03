@@ -220,7 +220,7 @@ test "a program links, loads with its tag intact, and runs" {
     defer scratch.cleanup();
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "product.lcn" });
+    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "product.lc" });
     defer gpa.free(artifact);
 
     switch (try build(gpa, testing.io, &tools, &program, .{
@@ -251,7 +251,7 @@ test "a program links, loads with its tag intact, and runs" {
         try left.appendSlice(gpa, entry.name);
         try left.append(gpa, ' ');
     }
-    try testing.expectEqualStrings("product.lcn ", left.items);
+    try testing.expectEqualStrings("product.lc ", left.items);
 
     var loaded = switch (native.open(artifact, hash)) {
         .loaded => |opened| opened,
@@ -267,7 +267,7 @@ test "a program links, loads with its tag intact, and runs" {
     try testing.expectEqual(abi.version, loaded.tag.abi_version);
     try testing.expectEqual(hash, loaded.tag.source_hash);
     // And what wrote it, which is the fact that decides whether a
-    // `.lcn` found beside a program may be run or has to be rebuilt.
+    // `.lc` found beside a source file may be run or has to be rebuilt.
     try testing.expectEqual(abi.artifact_format, loaded.tag.format);
     try testing.expectEqual(abi.generator, loaded.tag.generator);
     try testing.expect(loaded.debug());
@@ -294,7 +294,7 @@ test "an artifact built from another program is refused as stale" {
     defer scratch.cleanup();
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "stale.lcn" });
+    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "stale.lc" });
     defer gpa.free(artifact);
 
     switch (try build(gpa, testing.io, &tools, &program, .{

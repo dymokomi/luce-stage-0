@@ -1,13 +1,22 @@
-//! The .lc module format — a verified Luce program on disk.
+//! The serialized module — a verified Luce program between the
+//! compiler's two halves.
 //!
-//! `luce build` encodes a compiled mir.Program into a compact binary
-//! module; `loom` decodes it back and runs it.  The format is a direct
-//! serialization of the IR: constants, struct layouts, heap-type
-//! shapes, functions with their instruction pools and blocks, and the
-//! entry function.  Decoding re-runs the IR verifier, so a damaged or
-//! hand-forged module is rejected instead of executed; instruction
-//! *types* beyond the verifier's checks are trusted, so treat .lc
-//! files like executables — run only what you built or trust.
+//! The format is a direct serialization of the IR: constants, struct
+//! layouts, heap-type shapes, functions with their instruction pools
+//! and blocks, and the entry function.  Decoding re-runs the IR
+//! verifier, so a damaged or hand-forged module is rejected instead of
+//! executed; instruction *types* beyond the verifier's checks are
+//! trusted, so treat a module like an executable — decode only what
+//! you built or trust.
+//!
+//! **It is a seam, not a deliverable.**  What `luce build` writes is
+//! machine code (`docs/CODEGEN.md`); these bytes are the front end's
+//! hand-over to the back end and the artifact's cache key.  Two things
+//! ride on them and nothing else does: `abi.sourceHash` names the
+//! program an artifact was built from, and `loom` hands the compiler a
+//! module rather than a source file, which is what lets loom carry no
+//! code generator (`apps/loom/runner.zig`).  When one has to reach a
+//! disk on the way it is written as `.lcm` (`extension` below).
 //!
 //! Any change to the instruction set, the intrinsic list, or the trap
 //! codes must bump `format_version`; there is no migration, a stale
@@ -21,6 +30,12 @@ const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
 pub const format_version: u32 = 17;
+
+/// What a serialized module is called when it has to sit on a disk.
+/// Named here because this file owns the format, and named at all
+/// because two processes have to agree on it: `loom` writes one and
+/// `luce build` reads it back (`docs/CODEGEN.md`).
+pub const extension = ".lcm";
 
 pub const DecodeError = error{
     OutOfMemory,
