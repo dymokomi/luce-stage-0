@@ -61,16 +61,10 @@ pub const Effect = enum {
 pub fn classify(function: *const Function, instruction: Instruction) Effect {
     return switch (instruction) {
         // Values out of thin air, and reads of things nothing can
-        // change: the immutable input frame, a local (invalidated by
-        // its own `local_set`, which the caller tracks), a field of an
-        // immutable struct value.
-        .const_boolean, .const_int, .const_float, .const_data => .pure,
+        // change: a local (invalidated by its own `local_set`, which
+        // the caller tracks), a field of an immutable struct value.
+        .const_boolean, .const_int, .const_float, .const_string => .pure,
         .local_get, .struct_get => .pure,
-
-        // Reading an input cannot trap, but `Program.reads` records
-        // which inputs a program touches, so deleting an unread load
-        // would make that record a lie.  Foldable, not deletable.
-        .input_load => .stable,
 
         .unary => |unary| switch (unary.op) {
             .logic_not => .pure,
@@ -109,7 +103,6 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
         .heap_new => .impure,
 
         .local_set,
-        .output_store,
         .call,
         .object_bind,
         .object_unbind,
@@ -273,11 +266,9 @@ pub fn viewStable(instruction: Instruction) bool {
         .const_boolean,
         .const_int,
         .const_float,
-        .const_data,
+        .const_string,
         .local_get,
         .local_set,
-        .input_load,
-        .output_store,
         .struct_get,
         .struct_make,
         .struct_set,
@@ -427,11 +418,9 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
         .const_boolean,
         .const_int,
         .const_float,
-        .const_data,
+        .const_string,
         .local_get,
         .local_set,
-        .input_load,
-        .output_store,
         .struct_get,
         .struct_make,
         .struct_set,

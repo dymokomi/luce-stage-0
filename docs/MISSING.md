@@ -258,9 +258,10 @@ the proof the language moved.
      wearing a different hat.
 7. **No default or named arguments.**  `term_style(fg, bg, bold)` is
    called 16 times; 13 end in the same noise word `false`.
-8. **`Bytes` is unconstructible.**  `var b: Bytes` compiles; nothing
-   produces one, nothing consumes one, and it is the only thing keeping
-   stage 10 from being total.  **Cut it or grow it.**
+8. ~~**`Bytes` is unconstructible.**~~  Cut (docs/ENGINE.md step 1):
+   `var b: Bytes` compiled, nothing produced one and nothing consumed
+   one, and it was one of the two things keeping stage 10 from being
+   total.  A real `Bytes` would be designed fresh.
 9. **Integer division spelling.**  `bf.luc:42` writes a decrement as
    `(tape[pointer] + 255) % 256`; `math.luc:91` writes
    `(Int(y) % 2 + 2) % 2`.  Neither `//` nor `rem_euclid` exists.
@@ -377,7 +378,7 @@ multi-user — all deferred by design in `docs/V2.md`.
    container or `Set`.  ~~`read_line`, `clock`, `sleep`, `env`,
    stderr, directory listing~~ — **done, on both engines**; see Tier 3
    item 6 for what shipped and what was deliberately left out.
-5. **Cut `Bytes`** — stage 10 goes total the same day.
+5. ~~**Cut `Bytes`**~~ — done; stage 10 is total.
 6. **`m.get(k) -> V?`**, rewrite `wordcount.luc`, and sweep the corpus
    for `ord("x")` and f-strings.
 7. ~~**Errors** — steps 5–7 of FAILURE.md.~~ **Done.**

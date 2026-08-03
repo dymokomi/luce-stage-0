@@ -1,67 +1,17 @@
-//! Luce types and the Texel Port schema the compiler binds against.
+//! The Luce type system's vocabulary: what a type is, what a heap
+//! object's shape is, what a struct's layout is, and how any of them
+//! is written down for a person.
 //!
-//! The Port schema, not the source, establishes which input and output
-//! members exist and what types they carry.  Loom hands the compiler a
-//! schema derived from the Texel's ports; the type checker knows Luce
-//! types only — no backend types appear here.
+//! Nothing about any backend appears here — this is the only type
+//! language the checker and the IR both speak.
 
 const std = @import("std");
 
-/// The value types a Port can carry into or out of a Luce evaluator.
-pub const PortType = enum {
-    boolean,
-    int,
-    float,
-    string,
-    bytes,
-
-    pub fn luceName(self: PortType) []const u8 {
-        return switch (self) {
-            .boolean => "Bool",
-            .int => "Int",
-            .float => "Float",
-            .string => "String",
-            .bytes => "Bytes",
-        };
-    }
-};
-
-pub const Port = struct {
-    name: []const u8,
-    declared: PortType,
-};
-
-/// Borrowed schema handed to compile(); the compiler copies what the
-/// program keeps.
-pub const PortSchema = struct {
-    inputs: []const Port = &.{},
-    outputs: []const Port = &.{},
-
-    pub fn findInput(self: PortSchema, name: []const u8) ?u32 {
-        for (self.inputs, 0..) |port, index| {
-            if (std.mem.eql(u8, port.name, name)) return @intCast(index);
-        }
-        return null;
-    }
-
-    pub fn findOutput(self: PortSchema, name: []const u8) ?u32 {
-        for (self.outputs, 0..) |port, index| {
-            if (std.mem.eql(u8, port.name, name)) return @intCast(index);
-        }
-        return null;
-    }
-};
-
-pub const EntryMode = enum {
-    evaluator,
-    script,
-};
-
-/// Host-controlled compile options. Entry mode selects the required
-/// source contract independently from authority: `allow_host` grants
-/// the host builtins (console, files, arguments, terminal).
+/// Host-controlled compile options.  A program is a script: exactly
+/// `func main():`, or `func main() -> !:` when it can be stopped.
+/// `allow_host` grants the host builtins (console, files, arguments,
+/// terminal) and is the only authority gate left.
 pub const CompileOptions = struct {
-    entry_mode: EntryMode = .evaluator,
     allow_host: bool = false,
     /// Display name for the root module in debug info ("dice.luc") —
     /// what a runtime trap location reports.  "" falls back to
@@ -89,7 +39,6 @@ pub const Type = union(enum) {
     int,
     float,
     string,
-    bytes,
     strukt: u32,
     heap: u32,
     /// `T?` — a `T` that may be absent (docs/FAILURE.md).  `?` means
@@ -105,7 +54,6 @@ pub const Type = union(enum) {
         int,
         float,
         string,
-        bytes,
         strukt: u32,
         heap: u32,
 
@@ -115,7 +63,6 @@ pub const Type = union(enum) {
                 .int => .int,
                 .float => .float,
                 .string => .string,
-                .bytes => .bytes,
                 .strukt => |index| .{ .strukt = index },
                 .heap => |index| .{ .heap = index },
             };
@@ -139,16 +86,6 @@ pub const Type = union(enum) {
         };
     }
 
-    pub fn fromPort(declared: PortType) Type {
-        return switch (declared) {
-            .boolean => .boolean,
-            .int => .int,
-            .float => .float,
-            .string => .string,
-            .bytes => .bytes,
-        };
-    }
-
     pub fn isNumeric(self: Type) bool {
         return self == .int or self == .float;
     }
@@ -162,7 +99,6 @@ pub const Type = union(enum) {
             .int => .{ .optional = .int },
             .float => .{ .optional = .float },
             .string => .{ .optional = .string },
-            .bytes => .{ .optional = .bytes },
             .strukt => |index| .{ .optional = .{ .strukt = index } },
             .heap => |index| .{ .optional = .{ .heap = index } },
         };
@@ -244,7 +180,6 @@ fn writeTypeName(
         .int => try written.appendSlice(allocator, "Int"),
         .float => try written.appendSlice(allocator, "Float"),
         .string => try written.appendSlice(allocator, "String"),
-        .bytes => try written.appendSlice(allocator, "Bytes"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .heap => |index| switch (heap_types[index]) {
             .list => |element| {

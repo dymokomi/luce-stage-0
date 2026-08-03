@@ -130,10 +130,10 @@ test "the plan's scale example parses" {
         \\        y = point.y * factor,
         \\    )
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    let position = input.position
-        \\    let factor = input.scale
-        \\    output.position = scale_point(position, factor)
+        \\func main():
+        \\    var scaled = Point(x = 0.0, y = 0.0)
+        \\    let factor = 3.0
+        \\    scaled.x = scale_point(scaled, factor).x
         \\
     );
     defer parsed.deinit();
@@ -145,12 +145,12 @@ test "the plan's scale example parses" {
     try testing.expectEqual(@as(usize, 2), parsed.program.functions[0].parameters.len);
     try testing.expect(parsed.program.functions[0].return_type != null);
 
-    // evaluate's third statement is an output.position assignment.
-    const evaluate = parsed.program.functions[1];
-    try testing.expectEqual(@as(usize, 3), evaluate.body.statements.len);
-    const assign = evaluate.body.statements[2].assign;
-    try testing.expectEqualStrings("output", assign.target.field.base);
-    try testing.expectEqualStrings("position", assign.target.field.field);
+    // main's third statement is a field assignment.
+    const entry = parsed.program.functions[1];
+    try testing.expectEqual(@as(usize, 3), entry.body.statements.len);
+    const assign = entry.body.statements[2].assign;
+    try testing.expectEqualStrings("scaled", assign.target.field.base);
+    try testing.expectEqualStrings("x", assign.target.field.field);
 }
 
 test "every declaration form at file scope parses into its own list" {
@@ -212,8 +212,8 @@ test "struct bodies parse fields and namespaced functions" {
         \\    func double(value: Int) -> Int:
         \\        return value * 2
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.value = Helpers.double(input.value)
+        \\func main():
+        \\    let value = Helpers.double(21)
         \\
     );
     defer parsed.deinit();
@@ -221,7 +221,7 @@ test "struct bodies parse fields and namespaced functions" {
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
     // Dotted calls parse as method nodes; the analyzer decides whether
     // the chain names a namespace or a value.
-    const dotted = parsed.program.functions[0].body.statements[0].assign.value.method;
+    const dotted = parsed.program.functions[0].body.statements[0].let.value.method;
     try testing.expectEqualStrings("double", dotted.name);
     try testing.expectEqualStrings("Helpers", dotted.target.name.text);
 }
@@ -375,7 +375,7 @@ test "every for form parses into the node its lowering needs" {
 
 test "control flow, precedence, and elif chains parse" {
     var parsed = try expectClean(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    var total = 0
         \\    for index in range(0, 10):
         \\        if index % 2 == 0 and index != 4:
@@ -736,12 +736,13 @@ test "calls parse positional, named, and trailing-comma argument lists" {
 
 test "strings decode escapes" {
     var parsed = try expectClean(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.text = "line\none\ttab \"quoted\""
+        \\func main():
+        \\    var text = ""
+        \\    text = "line\none\ttab \"quoted\""
         \\
     );
     defer parsed.deinit();
-    const value = parsed.program.functions[0].body.statements[0].assign.value;
+    const value = parsed.program.functions[0].body.statements[1].assign.value;
     try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
 }
 
@@ -857,10 +858,10 @@ test "a header that fails takes its orphaned body with it" {
 
 test "recovery resumes at the next declaration, not inside the last one" {
     var parsed = try parseText(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let = 3
         \\    let ok = 1
-        \\    output.value = ok +
+        \\    var value = ok +
         \\
         \\func helper() -> Int:
         \\    return 2

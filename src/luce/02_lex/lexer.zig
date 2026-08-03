@@ -1184,7 +1184,7 @@ fn lexWithDiagnostics(
 
 test "lexer produces layout tokens for indented blocks" {
     try lexKinds(testing.allocator,
-        \\func evaluate(input: Input, output: Output):
+        \\func blend(first: Point, second: Point):
         \\    let x = 1
         \\
     , &.{

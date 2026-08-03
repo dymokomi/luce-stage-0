@@ -3,7 +3,7 @@
 # A thin, honest layer over the host's file builtins, so programs
 # read `files.read(path)` instead of remembering builtin names.  The
 # host gate still applies: importing files in a host-less context
-# (an evaluator) is a compile error, which is the truth.
+# is a compile error, which is the truth.
 #
 # Paths resolve the way the host says — in loom, relative to the
 # current directory.

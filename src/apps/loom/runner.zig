@@ -3,9 +3,9 @@
 //! One boundary for three entry paths: `runModule` executes a compiled
 //! `.lc`, `runArtifact` executes a native `.lcn` artifact, and
 //! `runScript` compiles a `.luc` in memory and executes the result.
-//! Programs run with an effectively unlimited step budget —
-//! interactive programs block on key_read for as long as they like —
-//! and the screen is restored before any trap is reported.
+//! Nothing bounds how long a program runs — interactive programs block
+//! on key_read for as long as they like — and the screen is restored
+//! before any trap is reported.
 //!
 //! ## Two engines, one program
 //!
@@ -71,18 +71,15 @@ const host_mod = @import("host");
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
 
-/// Interactive programs run until they return; the step budget is
-/// intentionally open-ended.  Call depth is policy, not a native
-/// stack limit, and the policy is the host's — `host.call_depth` is
-/// the one number, so the interpreter and a compiled artifact refuse
-/// the same call.
+/// Interactive programs run until they return.  Call depth is policy,
+/// not a native stack limit, and the policy is the host's —
+/// `host.call_depth` is the one number, so the interpreter and a
+/// compiled artifact refuse the same call.
 const program_budget: luce.backend.Budget = .{
-    .steps = std.math.maxInt(u64),
     .call_depth = host_mod.call_depth,
 };
 
 pub const compile_options: luce.types.CompileOptions = .{
-    .entry_mode = .script,
     .allow_host = true,
 };
 
@@ -221,7 +218,7 @@ pub fn runSource(
     // The path as given, not its basename: a diagnostic or a trap that
     // says `bad.luc:3:1` names a file the reader still has to find.
     options.source_name = files.displayName(name);
-    var result = try luce.compile.compileProject(gpa, source, loader, .{}, options);
+    var result = try luce.compile.compileProject(gpa, source, loader, options);
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {
@@ -582,16 +579,10 @@ fn runInterpreted(
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const outputs = try arena.allocator().alloc(?luce.backend.RuntimeValue, program.outputs.len);
-    @memset(outputs, null);
-    const inputs = try arena.allocator().alloc(luce.backend.InputValue, program.inputs.len);
-    @memset(inputs, .unavailable);
 
     const result = try luce.backend.evaluateHosted(
         .{ .arena = arena.allocator(), .objects = gpa },
         program,
-        inputs,
-        outputs,
         program_budget,
         services.host(),
     );
@@ -609,10 +600,6 @@ fn runInterpreted(
         },
         .errored => |raised| {
             host_mod.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
-            return 1;
-        },
-        .unavailable => {
-            try err.print("loom: program inputs unavailable; is this a script module?\n", .{});
             return 1;
         },
     }

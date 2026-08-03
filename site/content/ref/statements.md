@@ -8,13 +8,11 @@ top-level executable code and no top-level `var`.
 
 ## Entry
 
-A program is a script and requires exactly one `func main():`. It may
-declare `-> !`, in which case an uncaught error ends the run and is
-reported by the host.
+A program requires exactly one `func main():`, and that is the whole
+of it — no parameters, no return type. It may declare `-> !`, in
+which case an uncaught error ends the run and is reported by the host.
 
-An evaluator mode also exists — `func evaluate(input: Input, output:
-Output):` against a port schema — which is machinery kept for a
-deferred part of the system and not something a script uses.
+There is no second entry mode.
 
 ## func
 

@@ -83,7 +83,7 @@ pub fn binary(runtime: *Runtime, op: mir.BinaryOp, left: Value, right: Value) Er
 }
 
 /// Comparison, for every type the analyzer admits one on.  Equality on
-/// Bytes, Bool, structs, and objects; full ordering on Int, Float, and
+/// Bool, structs, and objects; full ordering on Int, Float, and
 /// String.
 pub fn compare(op: mir.BinaryOp, left: Value, right: Value) bool {
     // Absence, before the payload dispatch below, because absence has
@@ -138,10 +138,6 @@ pub fn compare(op: mir.BinaryOp, left: Value, right: Value) bool {
                 .greater_equal => order != .lt,
                 else => unreachable,
             };
-        },
-        .bytes => |held| {
-            const same = std.mem.eql(u8, held, right.asBytes());
-            return if (op == .equal) same else !same;
         },
         .boolean => |held| {
             const same = held == right.asBoolean();

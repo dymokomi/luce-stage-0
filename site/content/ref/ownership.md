@@ -13,7 +13,7 @@ the rules.
 ## Vocabulary
 
 **object** — a heap value: `List`, `Map`, `Array`, `Builder`.
-Everything else (`Int`, `Float`, `Bool`, `String`, `Bytes`, structs)
+Everything else (`Int`, `Float`, `Bool`, `String`, structs)
 is a **value**: copied freely, never freed by the program, never
 verbed. The runtime reclaims a value's storage when the place holding
 it dies.
@@ -396,7 +396,7 @@ declared.
 
 ### S37 — values into containers need no ownership and no verbs, ever {#s37}
 
-`Int`, `Float`, `Bool`, `String`, `Bytes` and plain structs copy into
+`Int`, `Float`, `Bool`, `String` and plain structs copy into
 containers with zero ceremony. A loop variable "dying" each iteration
 is irrelevant: values are copied, never owned.
 

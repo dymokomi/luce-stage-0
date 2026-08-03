@@ -2,14 +2,13 @@
 //!
 //! Everything in front of this file — lexer, parser, analysis, Luce IR
 //! and its verifier — is backend-independent.  This boundary runs one
-//! verified program against an Input frame and a scratch Output frame
-//! under an explicit budget, per the v1 evaluation model (docs/v1/LUCE.md):
-//! immutable inputs, candidate outputs, publish-nothing on failure.
+//! verified program to completion under an explicit call-depth budget,
+//! against an optional set of host services, and reports how it ended.
 //!
-//! The first engine behind the boundary is the deterministic Luce IR
-//! interpreter.  A native code generator (the plan's LLVM lowering)
-//! slots in behind these same types without changing Luce programs or
-//! anything in front of the boundary.
+//! The engine behind the boundary is the deterministic Luce IR
+//! interpreter.  The compiled path does not come through here: it has
+//! its own published ABI (`08_llvm/abi.zig`) and `host.zig` builds both
+//! service tables from one set of implementations.
 
 const std = @import("std");
 const mir = @import("06_mir.zig");
@@ -19,27 +18,19 @@ const interpreter = @import("interpreter.zig");
 const Allocator = std.mem.Allocator;
 
 // ---------------------------------------------------------------------------
-// Frames
+// What a run answers with
 // ---------------------------------------------------------------------------
 
-/// A runtime value.  Strings, bytes, and struct storage are borrowed
-/// from the program, the caller's input frame, or the evaluation arena
-/// — nothing here owns memory, and nothing outlives the evaluation
-/// unless the caller copies it out.  Heap objects (lists, maps,
-/// arrays, builders) live in the runtime library's object table; a
-/// value only carries the handle.
+/// A runtime value.  String and struct storage is borrowed from the
+/// program or the evaluation arena — nothing here owns memory, and
+/// nothing outlives the evaluation unless the caller copies it out.
+/// Heap objects (lists, maps, arrays, builders) live in the runtime
+/// library's object table; a value only carries the handle.
 ///
 /// This is `libluce_rt`'s own value, not a second one: the boundary
 /// hands the engines exactly what the runtime library operates on, so
 /// nothing is converted on the way in or out (docs/CODEGEN.md).
 pub const RuntimeValue = runtime.Value;
-
-/// One input port slot: a value borrowed for the duration of the
-/// evaluation, or unavailable.
-pub const InputValue = union(enum) {
-    unavailable,
-    value: RuntimeValue,
-};
 
 /// One call in a trap's stack trace.  `function` and `source` borrow
 /// from the program; a stripped (--release) module reports line 0.
@@ -82,22 +73,18 @@ pub const Success = struct {
 };
 
 pub const Result = union(enum) {
-    /// The output frame holds every written output.
+    /// `main` returned.
     success: Success,
-    /// The evaluator failed; the output frame must not be published.
+    /// The program did something the language forbids and stopped.
     trap: Trap,
-    /// The program ended with an uncaught error.  The output frame
-    /// must not be published either: `main` did not finish.
+    /// The program ended with an uncaught error.
     errored: Raised,
-    /// An input the program reads was unavailable; nothing ran.
-    unavailable,
 };
 
-/// Deadline analog: evaluation is bounded by instruction steps and
-/// call depth, so an accidental infinite loop traps instead of
-/// freezing the caller.
+/// How deep a program may call.  Runaway recursion traps rather than
+/// overflowing the machine's stack — a language promise, kept from the
+/// same number on both engines (`08_llvm/abi.zig`'s `call_depth`).
 pub const Budget = struct {
-    steps: u64 = 10_000_000,
     call_depth: u32 = 256,
 };
 
@@ -223,20 +210,14 @@ pub const KeyEvent = struct {
 /// `Memory`, not a second one.
 pub const Memory = runtime.Memory;
 
-/// Run the program's evaluate entry.  `inputs` parallels
-/// program.inputs; `outputs` parallels program.outputs and starts
-/// empty — on success, written slots carry the candidate outputs
-/// (allocated from `memory.arena` where they need storage).  The caller
-/// owns both allocators and copies out what it publishes before
-/// freeing the arena.
+/// Run the program's entry.  The caller owns both allocators and
+/// reads what it wants out of the result before freeing the arena.
 pub fn evaluate(
     memory: Memory,
     program: *const mir.Program,
-    inputs: []const InputValue,
-    outputs: []?RuntimeValue,
     budget: Budget,
 ) error{OutOfMemory}!Result {
-    return evaluateHosted(memory, program, inputs, outputs, budget, null);
+    return evaluateHosted(memory, program, budget, null);
 }
 
 /// Hosted evaluation.  The default `evaluate` API remains pure and
@@ -244,12 +225,10 @@ pub fn evaluate(
 pub fn evaluateHosted(
     memory: Memory,
     program: *const mir.Program,
-    inputs: []const InputValue,
-    outputs: []?RuntimeValue,
     budget: Budget,
     host: ?Host,
 ) error{OutOfMemory}!Result {
-    return interpreter.run(memory, program, inputs, outputs, budget, host);
+    return interpreter.run(memory, program, budget, host);
 }
 
 test {

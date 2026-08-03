@@ -1,5 +1,5 @@
-//! The driver: source bytes plus a Port schema in, a verified program
-//! or structured diagnostics out.
+//! The driver: source bytes in, a verified program or structured
+//! diagnostics out.
 //!
 //! This is the file to read first.  `compileProject` below walks one
 //! source file through every stage in order, and each stage is a
@@ -42,7 +42,6 @@ const diagnostics_mod = @import("support/diagnostics.zig");
 const module_graph = @import("compile/modules.zig");
 
 const Allocator = std.mem.Allocator;
-const PortSchema = types.PortSchema;
 const Diagnostics = diagnostics_mod.Diagnostics;
 
 pub const Error = error{OutOfMemory};
@@ -73,10 +72,9 @@ pub const CompileResult = union(enum) {
 pub fn compile(
     gpa: Allocator,
     source: []const u8,
-    schema: PortSchema,
     options: types.CompileOptions,
 ) Error!CompileResult {
-    return compileProject(gpa, source, null, schema, options);
+    return compileProject(gpa, source, null, options);
 }
 
 /// Compile a root source plus everything it imports (a file is a
@@ -86,7 +84,6 @@ pub fn compileProject(
     gpa: Allocator,
     source: []const u8,
     loader: ?Loader,
-    schema: PortSchema,
     options: types.CompileOptions,
 ) Error!CompileResult {
     var diagnostics = Diagnostics.init(gpa);
@@ -116,7 +113,7 @@ pub fn compileProject(
     // is a validated program plus, per function, the operations its
     // walk decided on: a value, with nothing pointing back into the
     // checker.
-    const analyzed = (try semantics.analyze(arena, gpa, modules, schema, options, &diagnostics)) orelse {
+    const analyzed = (try semantics.analyze(arena, gpa, modules, options, &diagnostics)) orelse {
         program.deinit();
         return .{ .failure = diagnostics };
     };
@@ -128,7 +125,7 @@ pub fn compileProject(
     // open blocks, freeze the block lists, turn each instruction's
     // source offset into a line and a column, and assemble the
     // program.
-    try mir.build.build(arena, gpa, &diagnostics.sources, schema, analyzed, &program);
+    try mir.build.build(arena, gpa, &diagnostics.sources, analyzed, &program);
 
     // The verifier is a compiler invariant, not a user diagnostic: a
     // verification failure here is a compiler bug surfaced loudly.

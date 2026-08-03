@@ -25,7 +25,7 @@ namespace is not a module — no `std.luc` can be imported
 
 Being ordinary modules, std code obeys every language rule — the
 ownership model, the checked arithmetic, and the host gate:
-`import std.files` inside a host-less evaluator is a compile error,
+`import std.files` inside a host-less program is a compile error,
 because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is

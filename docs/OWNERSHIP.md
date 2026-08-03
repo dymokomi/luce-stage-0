@@ -11,7 +11,7 @@ error handling; global scope is Phase 2 (see docs/V2.md).
 
 Vocabulary used throughout:
 - **object** — a heap value: `List`, `Map`, `Array`, `Builder`.
-  Everything else (`Int`, `Float`, `Bool`, `String`, `Bytes`, structs)
+  Everything else (`Int`, `Float`, `Bool`, `String`, structs)
   is a *value*: copied freely, never freed by the program — the
   runtime reclaims a value's storage when the place holding it dies
   (docs/STRINGS.md) — never verbed.
@@ -509,7 +509,7 @@ func main():
 ```
 Decision: `give`/`copy`/ownership apply to objects (List, Map,
 Array, Builder, carrying structs) only.  Values — Int, Float, Bool,
-String, Bytes, plain structs — copy into containers with zero
+String, plain structs — copy into containers with zero
 ceremony.
 
 **S38. A borrowed parameter may mutate contents — borrows restrict

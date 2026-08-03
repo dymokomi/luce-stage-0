@@ -15,7 +15,7 @@ const backend = @import("../backend.zig");
 
 const testing = std.testing;
 
-const script: types.CompileOptions = .{ .entry_mode = .script };
+const script: types.CompileOptions = .{};
 
 const Outcome = union(enum) {
     /// Objects still alive after a successful run — always expected 0.
@@ -24,7 +24,7 @@ const Outcome = union(enum) {
 };
 
 fn run(source: []const u8) !Outcome {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
@@ -36,8 +36,7 @@ fn run(source: []const u8) !Outcome {
         .success => |*program| {
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, &.{}, &.{}, .{
-                .steps = 5_000_000,
+            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
                 .call_depth = 256,
             });
             return switch (outcome) {
@@ -45,7 +44,7 @@ fn run(source: []const u8) !Outcome {
                 .trap => |trap| .{ .trap = trap.code },
                 // Ownership is proved with pure programs; nothing here
                 // can raise, so an error would mean the spec drifted.
-                .errored, .unavailable => error.TestUnexpectedResult,
+                .errored => error.TestUnexpectedResult,
             };
         },
     }
@@ -72,7 +71,7 @@ fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
 
 /// The program is rejected with the stable ownership code.
 fn expectOwnError(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     if (result == .success) {
         std.debug.print("expected an ownership error, but this compiled:\n{s}", .{source});
@@ -1108,7 +1107,7 @@ test "S39: let freezes the binding, not the object" {
         \\    let xs = [1, 2]
         \\    xs = [9]
         \\
-    , .{}, script);
+    , script);
     defer result.deinit();
     try testing.expect(result == .failure);
     try testing.expectEqualStrings("luce.sema.let", result.failure.at(0).?.code);

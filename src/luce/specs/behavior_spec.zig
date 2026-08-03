@@ -16,14 +16,14 @@ const mir = @import("../06_mir.zig");
 
 const testing = std.testing;
 
-const script: types.CompileOptions = .{ .entry_mode = .script };
+const script: types.CompileOptions = .{};
 
 /// Compile `source` as a script and run it; every `assert` inside
 /// must hold, the run must not trap, and nothing may leak (scope
 /// ownership frees everything — a nonzero count is an interpreter
 /// bug).  The one harness behind every behavioral test.
 fn expectOk(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
@@ -35,8 +35,7 @@ fn expectOk(source: []const u8) !void {
         .success => |*program| {
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, &.{}, &.{}, .{
-                .steps = 50_000_000,
+            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
                 .call_depth = 4096,
             });
             switch (outcome) {
@@ -54,7 +53,6 @@ fn expectOk(source: []const u8) !void {
                     std.debug.print("unexpected trap: {s} ({s})\n", .{ trap.message, @tagName(trap.code) });
                     return error.TestUnexpectedResult;
                 },
-                .unavailable => return error.TestUnexpectedResult,
             }
         },
     }
@@ -68,7 +66,7 @@ fn expectOk(source: []const u8) !void {
 /// held in mutable locals: a compile-time-constant fault would be
 /// caught by the analyzer instead and never reach the interpreter.
 fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
@@ -80,8 +78,7 @@ fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
         .success => |*program| {
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, &.{}, &.{}, .{
-                .steps = 50_000_000,
+            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
                 .call_depth = 4096,
             });
             switch (outcome) {
@@ -99,7 +96,6 @@ fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
                         return error.TestUnexpectedResult;
                     }
                 },
-                .unavailable => return error.TestUnexpectedResult,
             }
         },
     }
@@ -500,7 +496,7 @@ test "ord of a literal is a compile-time constant" {
         \\    let text = "(x)"
         \\    assert(text.byte_at(0) == ord("("))
         \\
-    , .{}, script);
+    , script);
     defer result.deinit();
     try testing.expect(result == .success);
     for (result.success.functions) |function| {

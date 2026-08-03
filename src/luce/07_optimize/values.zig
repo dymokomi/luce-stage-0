@@ -179,9 +179,8 @@ fn encode(
         // and NaN is never equal to itself, so neither may be folded
         // together by an accident of numeric comparison.
         .const_float => |number| try word(key, arena, @as(u64, @bitCast(number))),
-        .const_data => |data| try word(key, arena, data.constant),
+        .const_string => |constant| try word(key, arena, constant),
         .local_get => |local| try word(key, arena, local),
-        .input_load => |port| try word(key, arena, port),
         .binary => |binary| {
             try key.append(arena, @intFromEnum(binary.op));
             try word(key, arena, binary.left);
@@ -218,7 +217,6 @@ fn encode(
         // an exhaustive switch means a new instruction cannot be
         // silently keyed by its tag alone.
         .local_set,
-        .output_store,
         .call,
         .heap_new,
         .object_bind,

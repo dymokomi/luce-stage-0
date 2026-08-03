@@ -165,7 +165,7 @@
       "patterns": [
         {
           "name": "support.type.builtin.luce",
-          "match": "\\b(?:Bool|Int|Float|String|Bytes|Input|Output)\\b"
+          "match": "\\b(?:Bool|Int|Float|String)\\b"
         },
         {
           "match": "(:|->)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b",
@@ -196,7 +196,7 @@
         },
         {
           "name": "support.function.entrypoint.luce",
-          "match": "\\b(?:main|evaluate)\\b"
+          "match": "\\b(?:main)\\b"
         }
       ]
     },

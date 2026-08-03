@@ -2,10 +2,9 @@
 //! backend boundary.
 //!
 //! Deterministic and safe: checked integer arithmetic, explicit
-//! conversion range checks, a step budget standing in for a deadline,
-//! and a call-depth limit.  All temporary storage comes from the
-//! evaluation arena; the interpreter itself allocates nothing that
-//! outlives one evaluation.
+//! conversion range checks, and a call-depth limit.  All temporary
+//! storage comes from the evaluation arena; the interpreter itself
+//! allocates nothing that outlives one evaluation.
 //!
 //! What is *not* here is the point of the file.  Every semantic below
 //! the instruction level — the object heap, scope ownership, the
@@ -23,7 +22,6 @@ const types = @import("../support/types.zig");
 
 const Allocator = std.mem.Allocator;
 const RuntimeValue = backend.RuntimeValue;
-const InputValue = backend.InputValue;
 const Result = backend.Result;
 const Budget = backend.Budget;
 
@@ -34,24 +32,13 @@ const text = runtime.text;
 pub fn run(
     memory: runtime.Memory,
     program: *const mir.Program,
-    inputs: []const InputValue,
-    outputs: []?RuntimeValue,
     budget: Budget,
     host: ?backend.Host,
 ) error{OutOfMemory}!Result {
-    // Gate on availability before executing anything: a program whose
-    // read inputs are not all available computes nothing.
-    for (program.reads) |port| {
-        if (port >= inputs.len or inputs[port] == .unavailable) return .unavailable;
-    }
-
     var machine: Machine = .{
         .arena = memory.arena,
         .runtime = .init(memory),
         .program = program,
-        .inputs = inputs,
-        .outputs = outputs,
-        .steps = budget.steps,
         .max_depth = budget.call_depth,
         .host = host,
     };
@@ -148,9 +135,6 @@ pub const Machine = struct {
     /// strings, conversions, and the trap channel.
     runtime: runtime.Runtime,
     program: *const mir.Program,
-    inputs: []const InputValue,
-    outputs: []?RuntimeValue,
-    steps: u64,
     max_depth: u32,
     host: ?backend.Host,
     stack: std.ArrayList(Frame) = .empty,
@@ -262,22 +246,6 @@ pub const Machine = struct {
         for (self.stack.items) |frame| self.releaseSlots(frame);
     }
 
-    /// A value an evaluator port publishes: copied into the arena the
-    /// caller reads it out of, because everything else this frame
-    /// holds dies with the run.
-    fn published(self: *Machine, held: RuntimeValue) error{OutOfMemory}!RuntimeValue {
-        return switch (held.view()) {
-            .string => |words| .ofString(try self.arena.dupe(u8, words)),
-            .bytes => |words| .ofBytes(try self.arena.dupe(u8, words)),
-            .strukt => |fields| blk: {
-                const copied = try self.arena.alloc(RuntimeValue, fields.len);
-                for (fields, copied) |field, *slot| slot.* = try self.published(field);
-                break :blk .ofStruct(copied);
-            },
-            else => held,
-        };
-    }
-
     fn service(self: *Machine) EvalError!backend.Host {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
@@ -349,9 +317,6 @@ pub const Machine = struct {
             const items = function.blocks[frame.block].items;
 
             while (frame.position < items.len) {
-                if (self.steps == 0) return self.trap(.step_budget_exhausted);
-                self.steps -= 1;
-
                 const item = items[frame.position];
                 frame.position += 1;
                 const instruction = function.instructions[item];
@@ -359,23 +324,11 @@ pub const Machine = struct {
                     .const_boolean => |value| registers[item] = .ofBoolean(value),
                     .const_int => |value| registers[item] = .ofInt(value),
                     .const_float => |value| registers[item] = .ofFloat(value),
-                    .const_data => |data| {
-                        const stored = self.program.constants[data.constant];
-                        registers[item] = if (data.data_type == .string)
-                            .ofString(stored)
-                        else
-                            .ofBytes(stored);
+                    .const_string => |constant| {
+                        registers[item] = .ofString(self.program.constants[constant]);
                     },
                     .local_get => |local| registers[item] = locals[local],
                     .local_set => |set| locals[set.local] = registers[set.value],
-                    .input_load => |port| registers[item] = self.inputs[port].value,
-                    .output_store => |store| {
-                        // A port's value is read by the caller after
-                        // the run, so it cannot be a view of storage
-                        // this frame is about to release: it is copied
-                        // into the arena the caller drops.
-                        self.outputs[store.port] = try self.published(registers[store.value]);
-                    },
                     .binary => |operation| {
                         registers[item] = operators.binary(
                             &self.runtime,
@@ -546,7 +499,6 @@ pub const Machine = struct {
             .int => .ofInt(0),
             .float => .ofFloat(0.0),
             .string => .ofString(""),
-            .bytes => .ofBytes(""),
             .heap => .null_object,
             // The zero of a `T?` is absence, which owns nothing (S43).
             .optional => .none,
@@ -1033,7 +985,6 @@ pub const Machine = struct {
 fn emptyValue(of: types.Type) RuntimeValue {
     return switch (of) {
         .string => .ofString(""),
-        .bytes => .ofBytes(""),
         .strukt => .{ .tag = .strukt },
         .optional => .none,
         else => .none,

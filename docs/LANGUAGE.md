@@ -12,7 +12,7 @@ are no implicit conversions (`Int(x)` / `Float(x)` are spelled).
 Two kinds of data, with a deliberate line between them:
 
 - **Values** — `Bool`, `Int` (checked i64), `Float` (IEEE f64),
-  `String` (immutable UTF-8), `Bytes`, and user `struct`s.  Values
+  `String` (immutable UTF-8), and user `struct`s.  Values
   copy on assignment and call; nobody frees a value.
 - **Heap objects** — `List(T)`, `Map(K, V)`, `Array(T, ...)`, and
   `Builder`.  Variables hold *references*.  Objects are created with
@@ -58,7 +58,7 @@ it):
 - **`return` moves.**  Whatever a function returns, the caller owns —
   returning a borrow or alias is a compile error (`return copy x` is
   the escape hatch).
-- **Values never take verbs.**  Ints, Floats, Bools, Strings, Bytes,
+- **Values never take verbs.**  Ints, Floats, Bools, Strings,
   and plain-value structs copy freely.  A struct with object fields
   ("object-carrying") follows the object rules when *kept*.
 - **`free(x)` survives as deliberate early release** on owned names,
@@ -617,7 +617,7 @@ New codes in this round:
 `null_object`, `not_owned`, `bad_codepoint`.
 Long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
-string bounds/boundary, step budget, call depth.  Call depth is a
+string bounds/boundary, call depth.  Call depth is a
 *policy* limit, not a native-stack accident, on both engines: the
 interpreter runs on an explicit frame stack, and compiled code carries
 its remaining depth as a hidden argument and refuses the call that

@@ -34,7 +34,7 @@ const verbs = [_][]const u8{ "give", "copy", "free", "new" };
 /// identifier is highlighted as a type too — that is the convention
 /// the language enforces for structs.
 const type_names = [_][]const u8{
-    "Bool", "Int", "Float", "String",  "Bytes",
+    "Bool", "Int", "Float", "String",
     "List", "Map", "Array", "Builder",
 };
 
