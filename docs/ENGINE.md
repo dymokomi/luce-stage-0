@@ -122,6 +122,18 @@ costs **205 ms** (17.0 s / 83), because it compiles, links and
 > **Keep the interpreter as a test-only differential oracle. Retire it
 > as an engine.**
 
+**Ratified 2026-08-03.** The owner's terms: keep it *exactly the way
+the other languages do* — Rust's Miri (an in-tree MIR interpreter that
+ships as a dev tool and never as an engine), Zig's one behavior suite
+run against every backend, Go's `toolstash -cmp`, Wasm's reference
+interpreter — and **bring the engines into full parity**, because the
+coverage between them is uneven in exactly the wrong direction: 282
+spec tests prove only the oracle, 61 prove both, 21 prove only the
+engine that runs. Every spec becomes a two-engine comparison; nothing
+proves the interpreter alone. Size and compile time are declared
+inconsequential for now — future optimization, never a reason to keep
+a test off the compiled path.
+
 The deciding argument is not sentiment, it is that **deleting it does
 not save the test time, and keeping it does not cost the test time.**
 
