@@ -1,0 +1,177 @@
+# std.math
+
+Pure Luce over the checked builtins. `sqrt`, `floor`, `ceil`, `abs`,
+`min`, `max` and `clamp` stay [builtins](/ref/builtins/); `math` adds
+what they lack.
+
+```
+import std.math
+```
+
+## Constants
+
+`math.pi`, `math.tau`, `math.e`. All three are compile-time constants
+and fold at their use sites.
+
+## Scalar functions
+
+| Signature | Notes |
+|---|---|
+| `math.round(x: Float) -> Float` | half **away from zero**: `round(-2.5)` is `-3.0` |
+| `math.exp(x: Float) -> Float` | overflow yields infinity, underflow yields `0.0` |
+| `math.ln(x: Float) -> Float` | traps for `x <= 0` |
+| `math.log2(x)`, `math.log10(x)` | |
+| `math.pow(x: Float, y: Float) -> Float` | negative `x` needs a whole `y` or it traps; `0^negative` traps; `0^0` is `1` |
+| `math.ipow(base: Int, n: Int) -> Int` | integer power by squaring; checked, so overflow traps; negative `n` traps |
+| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians, any magnitude |
+
+Series are range-reduced: `exp` and `ln` hold to about 1e-14 relative,
+the trigonometric functions to about 1e-12 absolute.
+
+```luce run
+import std.math
+import std.strings
+
+func main():
+    print(strings.format_float(math.pi, 6))
+    print(str(math.round(2.5)) + " " + str(math.round(-2.5)))
+    print(strings.format_float(math.exp(1.0), 6))
+    print(strings.format_float(math.ln(math.e), 6))
+    print(strings.format_float(math.log2(1024.0), 1))
+    print(str(math.ipow(2, 20)))
+    print(strings.format_float(math.pow(2.0, 0.5), 6))
+    print(strings.format_float(math.sin(math.pi / 2.0), 6))
+```
+
+```output
+3.141593
+3 -3
+2.718282
+1.000000
+10.0
+1048576
+1.414214
+1.000000
+```
+
+## Vectors and statistics
+
+Whole-array operations over `Array(Float, _)`, the numeric vector
+type — the numpy-shaped tranche. Reductions accumulate left to right,
+so they are bit-reproducible, including against the benchmark's C
+twins.
+
+| Signature | Notes |
+|---|---|
+| `math.sum(xs) -> Float` | |
+| `math.mean(xs) -> Float?` | `none` for an empty array |
+| `math.vmin(xs) -> Float?`, `math.vmax(xs) -> Float?` | extrema; `min`/`max` are the scalar builtins |
+| `math.dot(xs, ys) -> Float` | a shape mismatch traps |
+| `math.norm(xs) -> Float` | Euclidean |
+| `math.variance(xs) -> Float?`, `math.stddev(xs) -> Float?` | population |
+| `math.fill(xs, value)` | in place |
+| `math.scale(xs, factor)` | in place |
+| `math.axpy(xs, factor, ys)` | in place: `xs[i] += factor * ys[i]`; a shape mismatch traps |
+
+The five that answer `Float?` do so because an empty array has no
+mean, and "there is nothing there" is the same fact every time with no
+reason worth carrying.
+
+```luce run
+import std.math
+import std.strings
+
+func main():
+    var xs = new Array(Float, 5)
+    for i in range(0, 5):
+        xs[i] = Float(i) * 2.0 + 1.0
+
+    print(f"sum {math.sum(xs)}")
+    print(f"mean {math.mean(xs) else 0.0}")
+    print(f"min {math.vmin(xs) else 0.0} max {math.vmax(xs) else 0.0}")
+    print(strings.format_float(math.stddev(xs) else 0.0, 4))
+    print(strings.format_float(math.norm(xs), 4))
+
+    var ys = new Array(Float, 5)
+    math.fill(ys, 2.0)
+    print(f"dot {math.dot(xs, ys)}")
+    math.scale(ys, 0.5)
+    math.axpy(ys, 10.0, xs)
+    print(f"ys[0] {ys[0]}, ys[4] {ys[4]}")
+
+    var empty = new Array(Float, 0)
+    print(f"mean of nothing: {math.mean(empty) else -1.0}")
+```
+
+```output
+sum 25
+mean 5
+min 1 max 9
+2.8284
+12.8452
+dot 50
+ys[0] 11, ys[4] 91
+mean of nothing: -1
+```
+
+## Randomness
+
+A Lehmer/MINSTD generator whose state lives in a `List(Int)` the
+caller owns. Mutation through a borrow is ordinary Luce, so there are
+no hidden globals and every stream is deterministic from its seed.
+
+| Signature | Notes |
+|---|---|
+| `math.seed(value: Int) -> List(Int)` | the state; the caller owns it |
+| `math.random(state) -> Float` | in the open interval (0, 1) |
+| `math.random_int(state, low, high) -> Int` | in `[low, high)`; an empty range traps |
+
+Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
+
+```luce run
+import std.math
+
+func main():
+    var rng = math.seed(2026)
+    var rolls: List(Int) = []
+    for i in range(0, 8):
+        rolls.append(math.random_int(rng, 1, 7))
+
+    var text = new Builder()
+    for roll in rolls:
+        text.append(str(roll))
+        text.append(" ")
+    print(str(text))
+
+    # The same seed gives the same stream, always.
+    var again = math.seed(2026)
+    print(f"first roll again: {math.random_int(again, 1, 7)}")
+```
+
+```output
+6 3 1 5 6 2 3 6 
+first roll again: 6
+```
+
+## The traps that remain
+
+Seven, and each is a domain the caller was handed and could have
+checked: `ln` of a non-positive number, `pow` and `ipow` outside
+theirs, a shape mismatch in `dot` or `axpy`, and `random_int` with an
+empty range. Those are bugs, and
+[bugs trap](/guide/failure/).
+
+```luce trap
+import std.math
+
+func main():
+    print("about to take a logarithm")
+    print(str(math.ln(0.0)))
+```
+
+```output
+about to take a logarithm
+loom: trap: ln of a non-positive number [explicit_trap]
+    at math.ln (std/math.luc:49:9)
+    at main (main.luc:5:5)
+```

@@ -1,0 +1,217 @@
+//! The HTML shell every page is poured into.
+//!
+//! One template, written out longhand.  There is no layout engine and
+//! no partial system, because there is one layout: a header bar, the
+//! section's pages down the left, the content in the middle, and the
+//! page's own headings down the right where there is room for them.
+//!
+//! Everything the browser loads is served from this origin — one
+//! stylesheet, one small script, one SVG mark.  No fonts, no CDN, no
+//! analytics, nothing that phones anywhere.
+
+const std = @import("std");
+const Buffer = @import("buffer.zig");
+const markdown = @import("markdown.zig");
+const site = @import("site.zig");
+
+pub const Where = struct {
+    /// URL path, always beginning and ending with `/` except the root.
+    url: []const u8,
+    title: []const u8,
+    description: []const u8,
+    /// Null on the home page.
+    section: ?*const site.Section,
+    /// Null on a section index.
+    page: ?*const site.Page,
+    previous: ?Link = null,
+    next: ?Link = null,
+};
+
+pub const Link = struct { url: []const u8, title: []const u8 };
+
+/// Depth of `url` below the root, for the relative asset prefix.  The
+/// site is served from a domain root, but keeping the links relative
+/// means the `out/` tree also opens correctly from a file:// path,
+/// which is how anyone previews a change.
+fn upTo(url: []const u8) usize {
+    var depth: usize = 0;
+    for (url) |byte| {
+        if (byte == '/') depth += 1;
+    }
+    return if (depth >= 2) depth - 1 else 0;
+}
+
+fn prefix(out: *Buffer, url: []const u8) !void {
+    var remaining = upTo(url);
+    if (remaining == 0) {
+        try out.add("./");
+        return;
+    }
+    while (remaining > 0) : (remaining -= 1) try out.add("../");
+}
+
+pub fn open(out: *Buffer, where: Where) !void {
+    try out.add(
+        \\<!doctype html>
+        \\<html lang="en">
+        \\<head>
+        \\<meta charset="utf-8">
+        \\<meta name="viewport" content="width=device-width, initial-scale=1">
+        \\<title>
+    );
+    try out.addEscaped(where.title);
+    if (!std.mem.eql(u8, where.url, "/")) try out.add(" &middot; Luce");
+    try out.add("</title>\n<meta name=\"description\" content=\"");
+    try out.addEscaped(where.description);
+    try out.add("\">\n<link rel=\"stylesheet\" href=\"");
+    try prefix(out, where.url);
+    try out.add("assets/style.css\">\n<link rel=\"icon\" href=\"");
+    try prefix(out, where.url);
+    try out.add("assets/mark.svg\" type=\"image/svg+xml\">\n");
+    // Applied before first paint so a chosen theme never flashes.
+    try out.add(
+        \\<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+        \\</head>
+        \\<body>
+        \\<a class="skip" href="#content">Skip to content</a>
+        \\
+    );
+
+    try header(out, where);
+    // A page with no section list gets the space back rather than an
+    // empty column where the list would have been.
+    const bare = where.section == null or where.section.?.pages.len == 0;
+    try out.add(if (bare) "<div class=\"shell wide\">\n" else "<div class=\"shell\">\n");
+    try sidebar(out, where);
+    try out.add("<main id=\"content\">\n<article>\n<h1>");
+    try out.addEscaped(where.title);
+    try out.add("</h1>\n");
+}
+
+pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !void {
+    try out.add("</article>\n");
+
+    if (where.previous != null or where.next != null) {
+        try out.add("<nav class=\"seq\">\n");
+        if (where.previous) |link| {
+            try out.add("<a class=\"back\" href=\"");
+            try out.addEscaped(link.url);
+            try out.add("\"><span>Previous</span>");
+            try out.addEscaped(link.title);
+            try out.add("</a>\n");
+        } else try out.add("<span></span>\n");
+        if (where.next) |link| {
+            try out.add("<a class=\"on\" href=\"");
+            try out.addEscaped(link.url);
+            try out.add("\"><span>Next</span>");
+            try out.addEscaped(link.title);
+            try out.add("</a>\n");
+        }
+        try out.add("</nav>\n");
+    }
+
+    try out.add("</main>\n");
+    try onThisPage(out, headings);
+    try out.add("</div>\n");
+
+    try out.add(
+        \\<footer>
+        \\<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+        \\</footer>
+        \\<script src="
+    );
+    try prefix(out, where.url);
+    try out.add("assets/site.js\" defer></script>\n<script src=\"");
+    try prefix(out, where.url);
+    try out.add("search-index.js\" defer></script>\n</body>\n</html>\n");
+}
+
+fn header(out: *Buffer, where: Where) !void {
+    try out.add("<header class=\"top\">\n<a class=\"mark\" href=\"");
+    try prefix(out, where.url);
+    try out.add("\"><span class=\"glyph\">L</span>Luce</a>\n<nav class=\"tabs\">\n");
+    for (&site.sections) |*section| {
+        const current = where.section != null and where.section.? == section;
+        try out.add(if (current) "<a class=\"here\" href=\"" else "<a href=\"");
+        try prefix(out, where.url);
+        try out.print("{s}/\">{s}</a>\n", .{ section.slug, section.label });
+    }
+    try out.add(
+        \\</nav>
+        \\<div class="tools">
+        \\<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+        \\<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+        \\</div>
+        \\<div id="hits" hidden></div>
+        \\</header>
+        \\
+    );
+}
+
+fn sidebar(out: *Buffer, where: Where) !void {
+    const section = where.section orelse {
+        try out.add("<div class=\"side\"></div>\n");
+        return;
+    };
+    if (section.pages.len == 0) {
+        try out.add("<div class=\"side\"></div>\n");
+        return;
+    }
+
+    try out.add("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>");
+    try out.addEscaped(section.title);
+    try out.add("</summary>\n<ul>\n");
+
+    const on_index = where.page == null;
+    try out.add(if (on_index) "<li><a class=\"here\" href=\"" else "<li><a href=\"");
+    try prefix(out, where.url);
+    try out.print("{s}/\">Overview</a></li>\n", .{section.slug});
+
+    for (section.pages) |*page| {
+        const current = where.page != null and where.page.? == page;
+        try out.add(if (current) "<li><a class=\"here\" href=\"" else "<li><a href=\"");
+        try prefix(out, where.url);
+        try out.print("{s}/{s}/\">", .{ section.slug, page.slug });
+        try out.addEscaped(page.title);
+        try out.add("</a></li>\n");
+    }
+    try out.add("</ul>\n</details>\n</div>\n");
+}
+
+fn onThisPage(out: *Buffer, headings: []const markdown.Heading) !void {
+    var shown: usize = 0;
+    for (headings) |heading| {
+        if (heading.level == 2 or heading.level == 3) shown += 1;
+    }
+    if (shown < 2) {
+        try out.add("<div class=\"rail\"></div>\n");
+        return;
+    }
+    try out.add("<div class=\"rail\"><nav aria-label=\"On this page\">\n<h2>On this page</h2>\n<ul>\n");
+    for (headings) |heading| {
+        if (heading.level != 2 and heading.level != 3) continue;
+        try out.print("<li class=\"h{d}\"><a href=\"#{s}\">", .{ heading.level, heading.id });
+        try out.addEscaped(heading.title);
+        try out.add("</a></li>\n");
+    }
+    try out.add("</ul>\n</nav></div>\n");
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "the asset prefix climbs exactly as far as the page is deep" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { url: []const u8, want: []const u8 }{
+        .{ .url = "/", .want = "./" },
+        .{ .url = "/tour/", .want = "../" },
+        .{ .url = "/tour/hello/", .want = "../../" },
+    };
+    for (cases) |case| {
+        var out: Buffer = .init(gpa);
+        defer out.deinit();
+        try prefix(&out, case.url);
+        try std.testing.expectEqualStrings(case.want, out.text());
+    }
+}
