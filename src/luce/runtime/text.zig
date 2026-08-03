@@ -96,19 +96,22 @@ pub fn intText(runtime: *Runtime, number: i64) Error![]const u8 {
     return std.fmt.allocPrint(runtime.arena, "{d}", .{number});
 }
 
+/// `parse_int(s) -> Int?`.  "Not a number" is the same reason every
+/// time and the function's name already implies it, so the answer is
+/// absence rather than a trap or an error (docs/FAILURE.md).
 pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
-    const parsed = std.fmt.parseInt(i64, held.asString(), 10) catch
-        return runtime.fail(.parse_failed);
+    _ = runtime;
+    const parsed = std.fmt.parseInt(i64, held.asString(), 10) catch return Value.none;
     return Value.ofInt(parsed);
 }
 
-/// `parse_float` refuses what `str` would never produce as a number:
-/// NaN and the infinities parse, and are rejected here so a Float that
-/// came from text is always finite.
+/// `parse_float(s) -> Float?`.  Refuses what `str` would never produce
+/// as a number: NaN and the infinities parse, and are answered absent
+/// here so a Float that came from text is always finite.
 pub fn parseFloat(runtime: *Runtime, held: Value) Error!Value {
-    const parsed = std.fmt.parseFloat(f64, held.asString()) catch
-        return runtime.fail(.parse_failed);
-    if (std.math.isNan(parsed) or std.math.isInf(parsed)) return runtime.fail(.parse_failed);
+    _ = runtime;
+    const parsed = std.fmt.parseFloat(f64, held.asString()) catch return Value.none;
+    if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;
     return Value.ofFloat(parsed);
 }
 

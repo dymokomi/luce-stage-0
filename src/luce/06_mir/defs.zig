@@ -53,6 +53,15 @@ pub const Intrinsic = enum {
     assert_true,
     trap_message,
     null_object,
+    /// The four an optional needs, and no instruction (docs/FAILURE.md).
+    /// `none_value` materializes the absent value of its result type;
+    /// `is_none` asks; `optional_wrap` is the `T <: T?` widening;
+    /// `optional_unwrap` is what narrowing licensed — the analyzer has
+    /// already proved the value is there, so it never checks.
+    none_value,
+    is_none,
+    optional_wrap,
+    optional_unwrap,
     index_get,
     index_set,
     list_slice,
@@ -118,7 +127,6 @@ pub const TrapCode = enum {
     empty_collection,
     use_after_free,
     null_object,
-    parse_failed,
     bad_codepoint,
     not_owned,
 
@@ -142,7 +150,6 @@ pub const TrapCode = enum {
             .empty_collection => "pop from an empty list",
             .use_after_free => "object used after free",
             .null_object => "null object reference",
-            .parse_failed => "cannot parse number",
             .bad_codepoint => "invalid character code",
             .not_owned => "object is owned by a container",
         };

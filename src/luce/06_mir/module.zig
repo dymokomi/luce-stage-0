@@ -20,7 +20,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 10;
+pub const format_version: u32 = 11;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -92,6 +92,9 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         if (of == .strukt) try self.int(u32, of.strukt);
         if (of == .heap) try self.int(u32, of.heap);
+        // A `T?` writes its payload as a type of its own, which cannot
+        // be optional in turn: one tag byte, then the payload's.
+        if (of == .optional) try self.valueType(of.optional.asType());
     }
 
     fn heapType(self: *Writer, descriptor: types.HeapType) error{OutOfMemory}!void {
@@ -353,6 +356,10 @@ const Reader = struct {
             .bytes => .bytes,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
+            // `T??` has no representation, so a payload that decodes
+            // as optional is a damaged module, not a nested one.
+            .optional => types.Type.optionalOf(try self.valueType()) orelse
+                return error.InvalidModule,
         };
     }
 
@@ -594,6 +601,74 @@ test "a compiled program round-trips through the module format" {
     try testing.expectEqualSlices(u8, encoded, again);
 }
 
+test "an optional type round-trips with its payload, and T?? is rejected" {
+    var program = try compileScript(
+        \\struct Slot:
+        \\    held: String?
+        \\
+        \\func widen(n: Int) -> Int?:
+        \\    return n
+        \\
+        \\func main():
+        \\    var counted: Int? = none
+        \\    counted = widen(3)
+        \\    var slot = Slot(held = none)
+        \\    slot.held = "there"
+        \\    var listed: List(Int)? = none
+        \\    listed = new List(Int)
+        \\    listed.append(1)
+        \\    assert((counted else 0) == 3)
+        \\    assert(slot.held != none)
+        \\    assert(len(listed) == 1)
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "Int?") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "List(Int)?") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+
+    // A payload that decodes as optional is a damaged module: `T??`
+    // has no representation, so it must be refused rather than nested.
+    const nested = try testing.allocator.dupe(u8, encoded);
+    defer testing.allocator.free(nested);
+    const optional_tag: u8 = @intFromEnum(std.meta.activeTag(@as(types.Type, .{ .optional = .int })));
+    var damaged = false;
+    for (nested, 0..) |byte, at| {
+        if (byte != optional_tag or at + 1 >= nested.len) continue;
+        if (nested[at + 1] != optional_tag) {
+            nested[at + 1] = optional_tag;
+            damaged = true;
+            break;
+        }
+    }
+    try testing.expect(damaged);
+    if (decode(testing.allocator, nested)) |decoded| {
+        // Some byte positions are not a type tag at all, so the module
+        // may still be well formed — but it must never hold a `T??`.
+        var owned = decoded;
+        defer owned.deinit();
+        for (owned.functions) |function| {
+            for (function.result_types) |of| try testing.expect(of.held() == null or of.held().? != .optional);
+        }
+    } else |mistake| {
+        try testing.expect(mistake != error.OutOfMemory);
+    }
+}
+
 test "debug origins round-trip; strip removes them and shrinks the module" {
     var program = try compileScript(
         \\func double(value: Int) -> Int:
@@ -810,6 +885,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     inline for (comptime std.meta.fieldNames(mir.TrapCode)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap codes: bump format_version and update BOTH numbers.
-    try testing.expectEqual(@as(u32, 10), format_version);
-    try testing.expectEqual(@as(u64, 10323915760941928235), hasher.final());
+    try testing.expectEqual(@as(u32, 11), format_version);
+    try testing.expectEqual(@as(u64, 15786221607301651074), hasher.final());
 }

@@ -231,7 +231,7 @@ fn writesPlainElement(
     const shape = arrayShape(program, function.result_types[target]) orelse return false;
     return switch (shape.element) {
         .boolean, .int, .float, .string => true,
-        .none, .bytes, .strukt, .heap => false,
+        .none, .bytes, .strukt, .heap, .optional => false,
     };
 }
 

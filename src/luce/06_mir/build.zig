@@ -267,6 +267,13 @@ pub const Lowering = struct {
                 .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
                 of,
             ),
+            // The zero of a `T?` is absence, and holding it owns
+            // nothing (S43) — which is why `var x: T? = none` needs no
+            // trap to guard it the way a null object does.
+            .optional => try self.emit(
+                .{ .intrinsic = .{ .kind = .none_value, .arguments = &.{} } },
+                of,
+            ),
             .strukt => |layout_index| blk: {
                 const layout = self.structs[layout_index];
                 const fields = try self.arena.alloc(Register, layout.fields.len);
@@ -590,6 +597,25 @@ pub const Lowering = struct {
         }
         self.switchTo(right_block);
         return .{ .result = result, .right_block = right_block, .merge = merge };
+    }
+
+    /// `a else b` — the same shape as a short circuit, with the result
+    /// typed by the fallback rather than Bool: park the present value,
+    /// then run the fallback only where `absent` says there was none.
+    /// `closeShortCircuit` ends it.
+    pub fn openCoalesce(
+        self: *Lowering,
+        absent: Register,
+        present: Register,
+        result_type: Type,
+    ) Error!ShortCircuit {
+        const result = try self.hiddenLocal(result_type);
+        try self.store(result, present);
+        const fallback = try self.reserveBlock();
+        const merge = try self.reserveBlock();
+        try self.branch(absent, fallback, merge);
+        self.switchTo(fallback);
+        return .{ .result = result, .right_block = fallback, .merge = merge };
     }
 
     pub fn closeShortCircuit(self: *Lowering, either: ShortCircuit) Error!Register {

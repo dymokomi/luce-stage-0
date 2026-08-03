@@ -136,6 +136,20 @@ fn numberFunction(arena: Allocator, function: *Function) Allocator.Error!void {
     }
 }
 
+/// The whole of a type, in the key.  Every distinguishing part has to
+/// be here: two argument-free intrinsics of the same kind differ only
+/// by their result type, so a `List(Int)?` and a `Builder?` that both
+/// come from `none_value` are the same instruction and *not* the same
+/// value.
+fn encodeType(key: *std.ArrayList(u8), arena: Allocator, of: Type) Allocator.Error!void {
+    try word(key, arena, @intFromEnum(std.meta.activeTag(of)));
+    switch (of) {
+        .strukt, .heap => |index| try word(key, arena, index),
+        .optional => |payload| try encodeType(key, arena, payload.asType()),
+        else => {},
+    }
+}
+
 /// A structural key for one instruction: its tag, its immediates, and
 /// its (already canonical) operands.  Two instructions with equal keys
 /// compute equal values.
@@ -146,11 +160,7 @@ fn encode(
     result_type: Type,
 ) Allocator.Error!void {
     try key.append(arena, @intFromEnum(std.meta.activeTag(instruction)));
-    try word(key, arena, @intFromEnum(std.meta.activeTag(result_type)));
-    switch (result_type) {
-        .strukt, .heap => |index| try word(key, arena, index),
-        else => {},
-    }
+    try encodeType(key, arena, result_type);
     switch (instruction) {
         .const_boolean => |flag| try key.append(arena, @intFromBool(flag)),
         .const_int => |number| try word(key, arena, number),

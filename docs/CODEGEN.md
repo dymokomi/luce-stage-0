@@ -573,14 +573,21 @@ carried, which the runtime remembers, so it fails closed on
 Each of these fails by naming itself, so the compiler says what is
 missing rather than miscompiling:
 
+- **`T?`** — the type, and the four intrinsics that serve it
+  (`none_value`, `is_none`, `optional_wrap`, `optional_unwrap`).  Step
+  4 of docs/FAILURE.md, and lowering work rather than design work: a
+  heap `T?` is the existing `i32` with the null index, which is free,
+  and a value `T?` is `{T, i1}`, which SROA keeps in registers.  Until
+  it lands, a program that says `T?` — which now includes anything
+  calling `parse_int` or `parse_float` — runs on the interpreter, and
+  `LOOM_ENGINE=native` turns the fallback into a message naming it.
 - **Bytes** — every operation on it, and the type itself.
 - **Evaluator ports** — `input_load`, `output_store`, and an entry
   function with parameters.
 
-Both are v1 machinery on its way out, so this stage goes total the day
-that does.  Everything else a script can say lowers: Float, structs,
-all four container kinds, ownership, the math builtins, and every host
-service.  `grep 'self.fail("' src/luce/08_llvm/lower.zig` is the
+The last two are v1 machinery on its way out.  Everything else a
+script can say lowers: Float, structs, all four container kinds,
+ownership, the math builtins, and every host service.  `grep 'self.fail("' src/luce/08_llvm/lower.zig` is the
 authority — the rest of what that grep finds is refusals for IR that
 could only arrive damaged.
 

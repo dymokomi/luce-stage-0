@@ -16,10 +16,13 @@ const Span = source_mod.Span;
 /// Scalar and struct types are a bare name; composite types carry
 /// arguments (`List(Int)`, `Map(String, Int)`), and an Array's shape
 /// is spelled with `_` wildcards (`Array(Int, _, _)`), counted here.
+/// A trailing `?` makes it optional; there is no second level, so one
+/// flag says all there is to say.
 pub const TypeName = struct {
     name: []const u8, // borrowed from source
     arguments: []TypeName = &.{},
     wildcards: u8 = 0,
+    optional: bool = false,
     span: Span,
 };
 
@@ -41,6 +44,11 @@ pub const BinaryOp = enum {
     greater_equal,
     logic_and,
     logic_or,
+    /// `a else b` — the value of `a` when it is there, `b` when it is
+    /// not.  Luce has no truthiness and no ternary, so `else` can mean
+    /// "otherwise" without ambiguity and no new token is needed
+    /// (docs/FAILURE.md).
+    coalesce,
 };
 
 pub const UnaryOp = enum { negate, logic_not };
@@ -71,12 +79,16 @@ pub const SliceRange = struct { target: *Expression, start: ?*Expression, end: ?
 pub const Method = struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span };
 pub const Give = struct { operand: *Expression, span: Span };
 pub const Copy = struct { operand: *Expression, span: Span };
+pub const NoneLiteral = struct { span: Span };
 
 pub const Expression = union(enum) {
     int_literal: Literal,
     float_literal: Literal,
     bool_literal: BoolLiteral,
     string_literal: StringLiteral,
+    /// `none` — the absent value.  It has no type of its own; the
+    /// place it is written into supplies one.
+    none_literal: NoneLiteral,
     name: Name,
     field: FieldAccess,
     call: Call,

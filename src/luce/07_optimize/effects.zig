@@ -129,13 +129,18 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
             .stable,
         .null_object => .pure,
 
+        // Optionals move no bits and touch no heap: absence is a tag.
+        .none_value, .is_none, .optional_wrap, .optional_unwrap => .pure,
+
         // Text.  A String is a value, so these read nothing another
-        // instruction can change; each of them can trap.
+        // instruction can change.  The parsers answer absence rather
+        // than trapping, so they are pure; the rest can trap.
+        .parse_int,
+        .parse_float,
+        => .pure,
         .string_slice,
         .string_byte,
         .string_find_byte,
-        .parse_int,
-        .parse_float,
         .chr_code,
         .ord_text,
         => .stable,
@@ -283,6 +288,10 @@ pub fn viewStable(instruction: Instruction) bool {
             .chr_code,
             .ord_text,
             .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
             .str_value,
             .assert_true,
             .trap_message,
@@ -395,6 +404,10 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             .chr_code,
             .ord_text,
             .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
             => true,
             .str_value => function.result_types[call.arguments[0]] != .heap,
             else => false,

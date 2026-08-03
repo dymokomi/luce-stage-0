@@ -1510,6 +1510,83 @@ fn writeNearMiss(random: std.Random, text: *std.ArrayList(u8)) !void {
 // The token vocabulary these messages are written in
 // ---------------------------------------------------------------------------
 
+test "a trailing ? makes a type optional, and there is no second one" {
+    var parsed = try expectClean(
+        \\struct Slot:
+        \\    held: String?
+        \\
+        \\func find(key: Map(String, Int)?, fallback: Int) -> Int?:
+        \\    var seen: List(Int)? = none
+        \\    return fallback
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expect(parsed.program.structs[0].fields[0].type_name.optional);
+    const found = parsed.program.functions[0];
+    try testing.expect(found.parameters[0].type_name.optional);
+    try testing.expectEqualStrings("Map", found.parameters[0].type_name.name);
+    try testing.expect(!found.parameters[1].type_name.optional);
+    try testing.expect(found.return_type.?.optional);
+    try testing.expect(found.body.statements[0].variable.annotation.?.optional);
+    try testing.expect(found.body.statements[0].variable.value.?.* == .none_literal);
+
+    try expectDiagnostics(
+        \\func main():
+        \\    var n: Int?? = none
+        \\
+    , &.{.{
+        .code = "luce.parse.type",
+        .line = 2,
+        .column = 16,
+        .contains = "one '?' is all there is",
+    }});
+}
+
+test "else is an infix operator: right-associative, above comparison, below +" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    let a = x else y else z
+        \\    let b = x else y + 1
+        \\    let c = x else y == z
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body.statements;
+
+    // Right-associative: `x else (y else z)`.
+    const chained = body[0].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.coalesce, chained.op);
+    try testing.expect(chained.left.* == .name);
+    try testing.expectEqual(ast.BinaryOp.coalesce, chained.right.binary.op);
+
+    // Tighter than `+` binds it: `x else (y + 1)`.
+    const arithmetic = body[1].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.coalesce, arithmetic.op);
+    try testing.expectEqual(ast.BinaryOp.add, arithmetic.right.binary.op);
+
+    // Looser than comparison: `(x else y) == z`.
+    const compared = body[2].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.equal, compared.op);
+    try testing.expectEqual(ast.BinaryOp.coalesce, compared.left.binary.op);
+}
+
+test "an else block still reads as a block, not as a fallback" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    if a:
+        \\        b = 1
+        \\    else:
+        \\        b = 2
+        \\
+    );
+    defer parsed.deinit();
+    const conditional = parsed.program.functions[0].body.statements[0].conditional;
+    try testing.expect(conditional.else_block != null);
+    try testing.expectEqual(@as(usize, 1), conditional.then_block.statements.len);
+    try testing.expectEqual(@as(usize, 1), conditional.else_block.?.statements.len);
+}
+
 test "every token kind has a name a diagnostic can print" {
     // describe() is exhaustive by construction (no else arm), so this
     // guards the other half: that no name is empty, and that keyword

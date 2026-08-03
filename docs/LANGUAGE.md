@@ -65,15 +65,95 @@ it):
   and poisons the name like `give`.
 - **`var name: Type`** (no value) declares now, fills later: the slot
   holds the type's zero value — the null object for object types —
-  and using it before assignment traps `null_object`.  There is no
-  null literal and no nullable type; optionals are a future, separate
-  decision.
+  and using it before assignment traps `null_object`.  A `T?` says
+  "there may be nothing here" out loud instead (next section), and
+  holding `none` owns nothing (S43), so a `List(T)?` obeys every rule
+  above exactly as a `List(T)` does.
 
 Two dynamic backstops cover what static rules cannot see: `give`
 through an alias of a container-owned object traps `not_owned`
 (S23), and every verb demands a filled slot (`null_object`
 otherwise).  Nothing can leak — loom's leak report is now a runtime
 self-check, not a program diagnostic.
+
+## Absence: `T?` and `none`
+
+A trailing `?` makes a type nullable: `Int?` is an `Int` that may not
+be there, and `none` is the value that is not.  `?` means nullable and
+**only** nullable — it is never spent on errors (docs/FAILURE.md).
+
+```luce
+var user: User? = none
+var limit: Int? = 10
+let parsed = parse_int(text)      # Int?
+```
+
+`T?` may be a local, a parameter, a return type, or a struct field.
+It may not be a container element or a map value, and there is no
+`T??` — one `?` is all there is.
+
+A struct field typed `Struct?` is how a value struct holds one of
+itself: the recursion stops at absence rather than at a layout, so a
+linked list of value structs needs no new machinery and no reference
+counting.
+
+```luce
+struct Node:
+    value: Int
+    next: Node?
+```
+
+**Narrowing is the feature.**  After a test, the name *is* its
+payload: no unwrapping operator, no second spelling.
+
+```luce
+if user != none:
+    print(user.name)              # user is User here, not User?
+else:
+    print("nobody")               # and User? there
+```
+
+Five shapes narrow, and they are the ones real code writes:
+
+```luce
+if x != none: ...                 # the then arm
+if x == none: ...                 # the else arm
+if x == none:                     # an early-exit guard narrows
+    return                        #   everything below it
+print(str(x))                     #   (break and continue too)
+if x != none and x > 3: ...       # the rest of the condition
+while x != none: ...              # the loop body
+x = 3                             # an assignment of a plain value
+```
+
+Narrowing applies to **locals and parameters only** — not to fields or
+elements, which can change between the test and the use.  Bind one to
+a name and test that.  It also stops at anything that could undo it: a
+loop body that assigns the name re-enters with whatever it left, so
+the name widens for the whole loop, and an `if` keeps only what both
+arms agree on.
+
+**`a else b`** supplies a fallback, evaluating `b` only when `a` is
+absent.  It is the null-coalescing operator and costs no new token:
+Python needs `??` because `or` is broken there by truthiness, and Luce
+has no truthiness and no ternary.
+
+```luce
+let count = parse_int(arg(0)) else 10
+let first = parse_int(a) else parse_int(b) else 0   # right-associative
+let must = parse_int(text) else trap("not a number")
+```
+
+`else` binds looser than `+` and tighter than the comparisons, so
+`x else 0 > 5` compares the fallback and `x else n + 1` falls back to
+the sum.  `x else trap("…")` is the assert-unwrap, and it is
+greppable — which is why there is no force-unwrap sigil.
+
+Using a `T?` where a `T` belongs is `luce.sema.absent` (or a
+`luce.sema.type` mismatch), and the message names the two ways out on
+the name in front of you.  So is a test or a fallback that can never
+fire: once a name is known to hold a value, saying so again is dead
+code, not caution.
 
 ## Collections
 
@@ -218,10 +298,24 @@ pieces, so it is a String like any other.
 
 ```luce
 str(42)          # "42"        (Int, Float, Bool, Builder, String)
-parse_int("42")  # 42          traps parse_failed on garbage
-parse_float("2.5")
+parse_int("42")  # 42          Int?   — none when the text is not a number
+parse_float("2.5")               # Float?
 chr(955)         # "λ"         codepoint -> String; traps on invalid
 ord("λ")         # 955         first codepoint; traps on empty
+```
+
+`parse_int` and `parse_float` answer a `T?` rather than trapping:
+"not a number" is the same reason every time and the name already
+implies it, so absence carries all the information there is
+(docs/FAILURE.md).  Read the answer with `else`, or test it:
+
+```luce
+let count = parse_int(arg(0)) else 10
+let n = parse_int(text)
+if n == none:
+    print("not a number: " + text)
+    return
+print(str(n * 2))
 ```
 
 The free builtins are the generic, cross-type set — Python's own
@@ -248,10 +342,12 @@ Int and Float is a compile error; convert with `Int(x)`/`Float(x)`.
 
 ### Precedence, and the two places Luce refuses to guess
 
-Loosest to tightest: `or`, `and`, the comparisons, `+ -`, `* / %`,
-then the prefix operators `not` `-` `give` `copy`, then postfix
-`.field` `[index]` `(call)`.  Same-precedence binary operators
-associate to the left, and the prefix operators to the right.
+Loosest to tightest: `or`, `and`, the comparisons, `else`, `+ -`,
+`* / %`, then the prefix operators `not` `-` `give` `copy`, then
+postfix `.field` `[index]` `(call)`.  Same-precedence binary operators
+associate to the left — except `else`, which associates to the right
+so `a else b else c` is a real chain — and the prefix operators to the
+right.
 
 Two shapes are legal in a language Luce reads like and mean something
 different here, so rather than pick a winner the parser refuses them
@@ -337,7 +433,7 @@ arrives is a separate decision — docs/V2.md).
 Errors are traps: deterministic, with stable codes, and they abort the
 program without publishing anything.  New codes in this round:
 `index_bounds`, `key_missing`, `empty_collection`, `use_after_free`,
-`null_object`, `not_owned`, `parse_failed`, `bad_codepoint`.
+`null_object`, `not_owned`, `bad_codepoint`.
 Long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
 string bounds/boundary, step budget, call depth.  Call depth is a
@@ -417,8 +513,9 @@ First-class functions, closures, user-defined methods/receivers
 (`x.f()` is builtin sugar, not dispatch), exceptions (traps are
 final), implicit conversions, shadowing, mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate
-decision), optionals and nullable types (Phase 3, designed with
-error handling), garbage collection and reference counting (scope
+decision), recoverable errors (`T!`, `try`, `catch` — designed in
+docs/FAILURE.md, not built; traps and `T?` are what exist),
+garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
 and enums/unions.  (String interpolation shipped: see f-strings
 above.)

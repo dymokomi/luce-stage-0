@@ -46,6 +46,10 @@ pub const Kind = enum {
     keyword_import,
     keyword_give,
     keyword_copy,
+    /// The absent value of a `T?` (docs/FAILURE.md).  A keyword rather
+    /// than a name, so nothing can shadow it and `none` never reads as
+    /// a variable somebody forgot to declare.
+    keyword_none,
 
     // Literals
     /// A decimal digit run.  Its value is stage 4's business: the
@@ -69,6 +73,8 @@ pub const Kind = enum {
     comma,
     colon,
     dot,
+    /// `?`, and only ever after a type name: `Int?`, `User?`.
+    question,
     assign,
     plus_assign,
     minus_assign,
@@ -120,6 +126,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "import", .kind = .keyword_import },
     .{ .word = "give", .kind = .keyword_give },
     .{ .word = "copy", .kind = .keyword_copy },
+    .{ .word = "none", .kind = .keyword_none },
 };
 
 /// The same table, arranged for lookup.  `keywords` stays the

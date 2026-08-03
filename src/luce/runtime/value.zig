@@ -177,6 +177,15 @@ pub const Value = extern struct {
         return self.asObject().index == null_index;
     }
 
+    /// True when this is the absent value of a `T?`.  One tag test for
+    /// every payload type: a present `Int?` is tagged `int` and a
+    /// present `List(T)?` is tagged `object`, so absence needs no
+    /// per-type encoding and no second word (docs/FAILURE.md).  It is
+    /// *not* the null object, which is a present handle to nothing.
+    pub fn isNone(self: Value) bool {
+        return self.tag == .none;
+    }
+
     fn textOf(self: Value) []const u8 {
         if (self.length == 0) return "";
         const start: [*]const u8 = @ptrFromInt(@as(usize, @intCast(self.bits)));
