@@ -69,6 +69,69 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const app_files_tests = b.addTest(.{ .root_module = app_files });
+    test_step.dependOn(&b.addRunArtifact(app_files_tests).step);
+
+    // The link and the load: how a lowered program becomes an
+    // executable or a loadable artifact, and how a loader refuses the
+    // wrong one.  Shared by both executables — `luce` builds them and
+    // `loom` runs them, over one description of what they are.
+    const app_native = b.createModule(.{
+        .root_source_file = b.path("src/apps/native.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+    const native_tests = b.addTest(.{ .root_module = app_native });
+    test_step.dependOn(&b.addRunArtifact(native_tests).step);
+
+    // The real host — console, cwd-relative files, arguments, the
+    // terminal — offered twice over one implementation: as
+    // `backend.Host` for the interpreter and as the ABI's C table for
+    // compiled code.  Shared by loom and by the standalone `main`
+    // below, so a compiled program sees the same world whichever
+    // runner started it.
+    const app_host = b.createModule(.{
+        .root_source_file = b.path("src/apps/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_host })).step);
+
+    // libluce_start: `main` for a compiled program, so `luce build
+    // --emit=exe` is one `cc` invocation over three files (the
+    // program's object, this, and libluce_rt).  Installed beside the
+    // runtime library, and found the same way (`apps/native.zig`).
+    const start_library = b.addLibrary(.{
+        .name = "luce_start",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/apps/start.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "luce", .module = luce },
+                .{ .name = "host", .module = app_host },
+            },
+        }),
+    });
+    b.installArtifact(start_library);
+
+    // Where `apps/native.zig`'s own tests find the two libraries a
+    // real link needs.  They drive `cc` exactly as the shipped code
+    // does — the point of those tests is that the *product* path
+    // links, loads and runs, not that a private one does.
+    const installed_libraries = b.addOptions();
+    installed_libraries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
+    app_native.addOptions("build_options", installed_libraries);
+
     // The luce compiler executable.
     const compiler_module = b.createModule(.{
         .root_source_file = b.path("src/apps/luce/main.zig"),
@@ -77,11 +140,9 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
+            .{ .name = "native", .module = app_native },
         },
     });
-    const app_files_tests = b.addTest(.{ .root_module = app_files });
-    test_step.dependOn(&b.addRunArtifact(app_files_tests).step);
-
     const compiler = b.addExecutable(.{ .name = "luce", .root_module = compiler_module });
     const install_compiler = b.addInstallArtifact(compiler, .{
         .dest_dir = .{ .override = .prefix },
@@ -98,6 +159,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
+            .{ .name = "host", .module = app_host },
+            .{ .name = "native", .module = app_native },
         },
     });
     terminal_module.addAnonymousImport("editor.luc", .{

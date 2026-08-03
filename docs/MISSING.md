@@ -13,9 +13,11 @@ and a front end whose diagnostics name the fix rather than the parser's
 predicament.  The one designed-but-unbuilt semantic hole is optionals
 and errors, and `docs/FAILURE.md` answers it in full.
 
-The **runtime is not done**, and that is where the walls now are.  Both
-Tier 0 items are properties of what exists rather than missing
-features, and both outrank every feature below them.
+The **runtime is not done**, and that is where the wall now is.  Tier
+0 held two items, both properties of what existed rather than missing
+features.  **The second is closed**: the C-parity backend is reachable
+from `loom run` and from `luce build --emit=exe`.  The first — memory
+that is never given back — is untouched and now outranks everything.
 
 ---
 
@@ -53,23 +55,32 @@ of table rows with a generation counter in the handle — which keeps S9's
 clean trap while making rows reusable.  The last is small and should
 probably come first.
 
-### 2. The engine that reaches C parity cannot be run
+### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
 
-`docs/CODEGEN.md` measures the LLVM path at **0.97–1.06× of C** on
-matmul, arrays, stats, loops and math, and stage 10 lowers everything a
-script can say.
+It can now.  `luce build --emit=exe` writes a standalone binary,
+`--emit=library` writes a tagged `.lcn` artifact, and **`loom run`
+prefers compiled code for every `.lc` it is handed**, building the
+artifact beside the program on first use and falling back to the
+interpreter only when the compiled path is genuinely unavailable.
+`LOOM_ENGINE` forces either engine.
 
-But `luce build --backend=llvm` emits **only a relocatable object**.
-There is no executable emit, no shared-library emit, and loom cannot
-load one.  `luce` has three commands — `build`, `check`, `ir` — and no
-`run`.  Every `.lc` anyone executes goes through the interpreter, which
-measures against the C twins at **loops 30.5×, matmul 60.1×, strings
-7.3×**.
+What that delivers, measured through `loom run` rather than in a
+harness: **loops 6995 ms → 92 ms, matmul 5767 ms → 22 ms, strings
+931 ms → 57 ms.**  Warm startup is the interpreter's within noise; a
+cold run pays LLVM at `-O3` and one `cc` link (80–320 ms) and still
+finishes far ahead on anything that computes.
 
-So "parity with C" is achieved in a test harness and delivered to
-nobody.  `08_llvm/test.zig` already links with `cc -shared` and
-`dlopen`s the result — the missing piece is a supported emit mode plus a
-loader, not new codegen.
+The three decisions, all in `docs/CODEGEN.md`: `cc` links, at build
+time only, so the *run* path still invokes nothing; a standalone
+binary gets **loom's own host**, terminal included, because a
+program's behaviour must not depend on who started it; and every
+artifact carries an `abi.Artifact` tag — machine, ABI version, and a
+content hash of the program — so a stale or foreign one is refused by
+name instead of crashing.  The cache keys on content, never mtime.
+
+What is left of this item is small and named in CODEGEN.md's last
+section: no wasm32 emit, nothing sweeps `.lcn` files, and `zig build`
+does not pre-warm the bundled programs.
 
 ---
 
@@ -245,9 +256,9 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 1. **Reuse object-table rows and give String storage a reclaimable
    lifetime.**  Nothing else matters if a program cannot run for an
-   hour.
-2. **Make the compiled path reachable** — executable emit, or a loader
-   in loom.  C parity already exists; it is not delivered.
+   hour — and it matters more now, not less: the compiled path runs
+   the same loop 76x faster, so it reaches the same wall 76x sooner.
+2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. **`T?`, `none`, narrowing, `else`** — step 1 of FAILURE.md's order,
    with `parse_int`/`parse_float` as day-one users.
 4. **The cheap Tier-3 slice:** character classes, a frozen container or

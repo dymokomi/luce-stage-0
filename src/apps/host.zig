@@ -589,6 +589,60 @@ pub const Host = struct {
 
 const max_file_size = 64 * 1024 * 1024;
 
+/// A reported trace prints at most this many frames; a runaway
+/// recursion shows its innermost calls and a count of the rest.
+pub const max_printed_frames = 12;
+
+/// Render a trap — one rendering, for every way a Luce program can be
+/// run.
+///
+/// The interpreter, a compiled artifact under loom, and a standalone
+/// compiled binary all have to report the same failure the same way,
+/// or "the two engines agree" stops being checkable by reading the
+/// output.  `trace` is any slice of frames carrying `function`,
+/// `source`, `line` and `column`: the interpreter's frame and the
+/// ABI's are the same four facts in two structs, and copying one into
+/// the other to share this function would allocate on the failure
+/// path for nothing.
+///
+/// Writes are best-effort — a trap report must not fail to be a trap
+/// because the pipe closed.
+pub fn printTrap(
+    err: *std.Io.Writer,
+    reporter: []const u8,
+    code: []const u8,
+    message: []const u8,
+    trace: anytype,
+    dropped: u32,
+) void {
+    err.print("{s}: trap: {s} [{s}]\n", .{ reporter, message, code }) catch {};
+    // Innermost first, like Zig's own traces.  A --release artifact
+    // has no lines; the function names still print.
+    for (trace, 0..) |frame, index| {
+        if (index == max_printed_frames) break;
+        if (frame.line != 0) {
+            err.print("    at {s} ({s}:{d}:{d})\n", .{
+                frame.function, frame.source, frame.line, frame.column,
+            }) catch {};
+        } else {
+            err.print("    at {s}\n", .{frame.function}) catch {};
+        }
+    }
+    const hidden = dropped + @as(u32, @intCast(trace.len -| max_printed_frames));
+    if (hidden != 0) err.print("    ... {d} more frames\n", .{hidden}) catch {};
+}
+
+/// The one thing to say about a run that ended without trapping.
+/// Scope ownership frees everything (OWNERSHIP.md S33), so a nonzero
+/// count is an engine bug rather than a program's.
+pub fn printLeaks(err: *std.Io.Writer, reporter: []const u8, leaked: u64) void {
+    if (leaked == 0) return;
+    err.print(
+        "{s}: internal error: {d} object{s} escaped ownership — please report this\n",
+        .{ reporter, leaked, if (leaked == 1) "" else "s" },
+    ) catch {};
+}
+
 /// One decoded key as the host sees it, before either boundary copies
 /// it: `name` is static text or `control_name`, `text` points into the
 /// pending input buffer.

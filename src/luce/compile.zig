@@ -22,8 +22,8 @@
 //!
 //! Stage 8 is not on this path: `compileProject` stops at verified,
 //! optimized MIR, which is what `luce build` writes as a `.lc` and
-//! what the interpreter runs.  `luce build --backend=llvm` takes that
-//! same program on to `08_llvm`.
+//! what the interpreter runs.  `luce build --emit=object|library|exe`
+//! takes that same program on to `08_llvm`.
 //!
 //! The compiler accepts the root's bytes plus a `Loader`, never a
 //! path: opening files is the host's, and which name resolves to what
@@ -149,7 +149,7 @@ pub fn compileProject(
         if (try verifyStage(gpa, &program, &diagnostics, "optimized")) |failed| return failed;
     }
 
-    // Stage 8 is the caller's to ask for: `luce build --backend=llvm`
+    // Stage 8 is the caller's to ask for: `luce build --emit=exe`
     // takes this same program on to `08_llvm`.
     diagnostics.deinit();
     return .{ .success = program };

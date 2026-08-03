@@ -120,6 +120,11 @@ pub const Options = struct {
     target: *const std.Target = &builtin.target,
     /// Module name, for readability in dumps.
     name: []const u8 = "luce",
+    /// The cache key stamped into the artifact's tag: `abi.sourceHash`
+    /// of the serialized module this program came from.  Zero when the
+    /// caller is not building something a loader will cache — an
+    /// artifact tagged zero simply never matches a wanted hash.
+    source_hash: u64 = 0,
 };
 
 pub const Result = union(enum) {
@@ -141,7 +146,7 @@ pub fn lower(
 ) error{OutOfMemory}!Result {
     var builder = try start(gpa, options);
     defer builder.deinit();
-    if (try build(gpa, program, &builder)) |what| return .{ .unsupported = what };
+    if (try build(gpa, program, &builder, options)) |what| return .{ .unsupported = what };
 
     const words = try builder.toBitcode(gpa, .{
         .name = "luce",
@@ -167,7 +172,7 @@ pub fn lowerToText(
 ) error{OutOfMemory}!TextResult {
     var builder = try start(gpa, options);
     defer builder.deinit();
-    if (try build(gpa, program, &builder)) |what| return .{ .unsupported = what };
+    if (try build(gpa, program, &builder, options)) |what| return .{ .unsupported = what };
 
     var written: std.Io.Writer.Allocating = .init(gpa);
     defer written.deinit();
@@ -194,11 +199,13 @@ fn build(
     gpa: Allocator,
     program: *const mir.Program,
     builder: *Builder,
+    options: Options,
 ) error{OutOfMemory}!?[]const u8 {
     var module: Module = .{
         .gpa = gpa,
         .program = program,
         .builder = builder,
+        .options = options,
     };
     defer module.deinit();
 
@@ -221,6 +228,8 @@ const Module = struct {
     gpa: Allocator,
     program: *const mir.Program,
     builder: *Builder,
+    /// What the artifact will say about itself (`abi.Artifact`).
+    options: Options,
 
     /// Set alongside `error.Unsupported`; static storage.
     unsupported: []const u8 = "",
@@ -604,6 +613,45 @@ const Module = struct {
             try self.lowerFunction(function, @intCast(index));
         }
         try self.lowerEntry();
+        try self.describeArtifact();
+    }
+
+    /// Stamp the artifact with what it is: the magic, the tag's own
+    /// layout version, the host ABI it was generated against, the
+    /// machine it was generated for, the program it came from, and
+    /// whether it kept its origins (`abi.Artifact`).
+    ///
+    /// Exported, because the whole point is that a loader can read it
+    /// *before* deciding to call anything.  A `.lcn` from another
+    /// machine or another ABI is otherwise a file that loads cleanly
+    /// and crashes on the first call, which is the failure mode this
+    /// exists to replace with a sentence.
+    fn describeArtifact(self: *Module) Error!void {
+        const tag_type = try self.builder.structType(
+            .normal,
+            &.{ .i64, .i32, .i32, .ptr, .i64, .i64, .i32, .i32 },
+        );
+        const debug_build = for (self.program.functions) |function| {
+            if (function.origins.len != 0) break true;
+        } else false;
+        const initializer = try self.builder.structConst(tag_type, &.{
+            try self.builder.intConst(.i64, @as(i64, @bitCast(abi.artifact_magic))),
+            try self.builder.intConst(.i32, abi.artifact_format),
+            try self.builder.intConst(.i32, abi.version),
+            try self.textBytes(self.options.triple),
+            try self.builder.intConst(.i64, self.options.triple.len),
+            try self.builder.intConst(.i64, @as(i64, @bitCast(self.options.source_hash))),
+            try self.builder.intConst(.i32, @intFromBool(debug_build)),
+            try self.builder.intConst(.i32, 0),
+        });
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabString(abi.artifact_symbol),
+            tag_type,
+            .default,
+        );
+        try variable.setInitializer(initializer, self.builder);
+        variable.setMutability(.constant, self.builder);
+        variable.ptrConst(self.builder).global.setLinkage(.external, self.builder);
     }
 
     /// `i1 (ptr host, ptr rt, i64 depth, params..., ptr out?)` — see the

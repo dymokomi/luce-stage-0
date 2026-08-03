@@ -31,7 +31,14 @@
 //!     be refused by the loader, not tolerated.
 
 const std = @import("std");
-const runtime = @import("../runtime.zig");
+
+/// The trap channel's C shapes, taken from the one file that defines
+/// them.  Deliberately `runtime/trace.zig` and not the `runtime.zig`
+/// barrel: the barrel force-analyzes the whole `luce_rt_*` C surface,
+/// and a *host* — a loader, a standalone program's `main` — needs this
+/// contract without dragging a second copy of the runtime library in
+/// behind it.  `trace.zig` imports nothing but `std`.
+const trace = @import("../runtime/trace.zig");
 
 /// The ABI version a compiled artifact was built against.  Bumped
 /// whenever a field's meaning or signature changes.
@@ -52,8 +59,107 @@ const runtime = @import("../runtime.zig");
 /// trap on this path instead of a native stack overflow.
 pub const version: u32 = 4;
 
-/// The one symbol a compiled Luce artifact exports.
+/// The two symbols a compiled Luce artifact exports: what to call, and
+/// what the thing being called is.
 pub const entry_symbol = "luce_main";
+pub const artifact_symbol = "luce_artifact";
+
+/// The layout version of `Artifact` itself.  Separate from `version`
+/// because a loader has to read the tag *before* it can believe
+/// anything else in it: the tag says what the artifact is, and if the
+/// shape of the saying changes, an old loader must refuse rather than
+/// misread the fields after it.
+pub const artifact_format: u32 = 1;
+
+/// `LUCEART\0`, little-endian — the first eight bytes of the tag, so a
+/// symbol of the right name but the wrong provenance is caught too.
+pub const artifact_magic: u64 = 0x0054524145_43554c;
+
+/// What an artifact says about itself, as an exported constant.
+///
+/// **A native artifact is not portable, and the file name cannot be
+/// trusted to say so.**  A `.lcn` copied between machines, kept across
+/// an ABI bump, or built from a since-edited program is a file that
+/// still loads and still has a `luce_main` to call — and calling it
+/// would be a crash with no explanation.  So every artifact carries
+/// this, and a loader refuses by name: wrong machine, wrong ABI, stale
+/// program.  The check costs one symbol lookup and six comparisons,
+/// once, before the first Luce instruction runs.
+///
+/// The text fields are borrowed from the artifact's own constant data
+/// and last as long as it stays loaded.
+pub const Artifact = extern struct {
+    magic: u64 = artifact_magic,
+    /// `artifact_format` at the time it was written.
+    format: u32 = artifact_format,
+    /// The `version` of the host ABI the code was generated against.
+    /// A loader must refuse anything but its own.
+    abi_version: u32 = version,
+    /// The LLVM target triple the code was generated for, e.g.
+    /// `arm64-apple-macosx26.0.0`.  Not NUL-terminated.
+    triple: [*]const u8,
+    triple_length: i64,
+    /// A hash of the serialized module the artifact was compiled from
+    /// (`mir.module.encode`'s bytes).  This is the cache key, and it
+    /// keys on *content*: a rebuilt-but-identical program matches, and
+    /// a program whose bytes changed does not, whatever the clock or
+    /// the file system says about either.
+    source_hash: u64,
+    /// Nonzero when the artifact carries per-instruction origins, so a
+    /// trap can report `file:line:column` (docs/MODES.md).  Zero for a
+    /// `--release` artifact, which still names its functions.
+    debug: i32,
+    reserved: i32 = 0,
+};
+
+/// The cache key for a compiled artifact: a hash of the serialized
+/// module it was compiled from.
+///
+/// **Content, never a timestamp.**  A modification time answers "was
+/// this file touched", which is not the question — a rebuild that
+/// produced identical bytes should hit the cache, and a file restored
+/// from a backup with an old mtime must not.  The seed is fixed and
+/// written down here because the compiler and the loader have to agree
+/// on it across processes and across builds.
+pub fn sourceHash(module_bytes: []const u8) u64 {
+    return std.hash.Wyhash.hash(0x4c554345, module_bytes);
+}
+
+/// Why a loader refused an artifact, in the order a loader checks.
+pub const Mismatch = enum {
+    /// No `luce_artifact` symbol, or one that does not begin with the
+    /// magic: this file was not produced by any Luce compiler.
+    not_an_artifact,
+    /// A tag whose own layout this loader cannot read.
+    format,
+    /// Built against a different host ABI.
+    abi_version,
+    /// Built for a different machine.
+    triple,
+    /// Built from a different program.
+    source,
+};
+
+/// Read and check an artifact's tag.  `tag` is whatever was found at
+/// `artifact_symbol`; null means the symbol was missing.  `expect_hash`
+/// is null when the caller has no particular program in mind (an
+/// artifact being inspected rather than run from a cache).
+pub fn checkArtifact(
+    tag: ?*const Artifact,
+    triple: []const u8,
+    expect_hash: ?u64,
+) ?Mismatch {
+    const found = tag orelse return .not_an_artifact;
+    if (found.magic != artifact_magic) return .not_an_artifact;
+    if (found.format != artifact_format) return .format;
+    if (found.abi_version != version) return .abi_version;
+    const named = found.triple[0..@intCast(found.triple_length)];
+    if (!std.mem.eql(u8, named, triple)) return .triple;
+    if (expect_hash) |wanted| {
+        if (found.source_hash != wanted) return .source;
+    }
+    return null;
+}
 
 /// What `luce_main` returns.  The same three answers `libluce_rt`'s
 /// `luce_rt_status` gives, because that is where they come from.
@@ -121,11 +227,11 @@ pub const PrintFn = *const fn (
 /// contract, not a capability, and `luce_main` calls it without a null
 /// check.  A trap raised inside `libluce_rt` and one raised inline by
 /// generated code arrive here by the same door.
-pub const TrapFn = runtime.trace.ReportFn;
+pub const TrapFn = trace.ReportFn;
 
 /// One call in a trap's trace, innermost first.  A `--release`
 /// artifact reports line and column zero and still names the function.
-pub const TraceFrame = runtime.trace.Frame;
+pub const TraceFrame = trace.Frame;
 
 /// How many nested Luce calls the host allows before the program traps
 /// `call_depth_exceeded`.  Optional: a null slot means
@@ -310,7 +416,59 @@ test "the slot table matches the struct layout" {
     try std.testing.expectEqual(@as(usize, Slot.count) * @sizeOf(usize), @sizeOf(Host));
 }
 
+test "the artifact tag's layout is the one the code generator emits" {
+    // `lower.describeArtifact` writes `{ i64, i32, i32, ptr, i64, i64,
+    // i32, i32 }`; if this struct moves, that must move with it, and a
+    // loader reading a tag through the wrong offsets is the exact
+    // failure the tag exists to prevent.
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(Artifact, "magic"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(Artifact, "format"));
+    try std.testing.expectEqual(@as(usize, 12), @offsetOf(Artifact, "abi_version"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(Artifact, "triple"));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(Artifact, "triple_length"));
+    try std.testing.expectEqual(@as(usize, 32), @offsetOf(Artifact, "source_hash"));
+    try std.testing.expectEqual(@as(usize, 40), @offsetOf(Artifact, "debug"));
+    try std.testing.expectEqual(@as(usize, 44), @offsetOf(Artifact, "reserved"));
+    try std.testing.expectEqual(@as(usize, 48), @sizeOf(Artifact));
+}
+
+test "an artifact tag is refused by name, in the order a loader checks" {
+    const triple = "arm64-apple-macosx";
+    const other = "x86_64-unknown-linux-gnu";
+    var good: Artifact = .{
+        .triple = triple.ptr,
+        .triple_length = triple.len,
+        .source_hash = 7,
+        .debug = 1,
+    };
+    try std.testing.expectEqual(@as(?Mismatch, null), checkArtifact(&good, triple, 7));
+    try std.testing.expectEqual(@as(?Mismatch, null), checkArtifact(&good, triple, null));
+    try std.testing.expectEqual(Mismatch.source, checkArtifact(&good, triple, 8).?);
+    try std.testing.expectEqual(Mismatch.triple, checkArtifact(&good, other, 7).?);
+    try std.testing.expectEqual(Mismatch.not_an_artifact, checkArtifact(null, triple, 7).?);
+
+    var wrong = good;
+    wrong.abi_version = version + 1;
+    try std.testing.expectEqual(Mismatch.abi_version, checkArtifact(&wrong, triple, 7).?);
+    wrong = good;
+    wrong.format = artifact_format + 1;
+    try std.testing.expectEqual(Mismatch.format, checkArtifact(&wrong, triple, 7).?);
+    wrong = good;
+    wrong.magic = 0;
+    try std.testing.expectEqual(Mismatch.not_an_artifact, checkArtifact(&wrong, triple, 7).?);
+}
+
+test "the source hash keys on content and nothing else" {
+    try std.testing.expectEqual(sourceHash("LUCE\x01ab"), sourceHash("LUCE\x01ab"));
+    try std.testing.expect(sourceHash("LUCE\x01ab") != sourceHash("LUCE\x01ac"));
+    // Fixed seed: two processes and two builds must agree, so this
+    // number is part of the format rather than an implementation
+    // detail free to drift.
+    try std.testing.expectEqual(@as(u64, std.hash.Wyhash.hash(0x4c554345, "x")), sourceHash("x"));
+}
+
 test "the host's trap callback is the runtime's reporter, not a copy of it" {
+    const runtime = @import("../runtime.zig");
     try std.testing.expect(TrapFn == runtime.trace.ReportFn);
     try std.testing.expect(TraceFrame == runtime.trace.Frame);
 }

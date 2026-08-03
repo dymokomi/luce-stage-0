@@ -1,17 +1,56 @@
 //! Load, compile, and run Luce programs for the loom terminal.
 //!
-//! One boundary for both entry paths: `runModule` executes a compiled
-//! .lc file, `runScript` compiles a .luc file in memory and executes
-//! the result.  Programs run with an effectively unlimited step budget
-//! — interactive programs block on key_read for as long as they like —
+//! One boundary for three entry paths: `runModule` executes a compiled
+//! `.lc`, `runArtifact` executes a native `.lcn` artifact, and
+//! `runScript` compiles a `.luc` in memory and executes the result.
+//! Programs run with an effectively unlimited step budget —
+//! interactive programs block on key_read for as long as they like —
 //! and the screen is restored before any trap is reported.
+//!
+//! ## Two engines, one program
+//!
+//! A `.lc` is portable serialized IR and can be run two ways: by the
+//! interpreter, which is the reference implementation the specs prove,
+//! or as native code, which measures at 0.97-1.07x of C where the
+//! interpreter measures at 30-60x (docs/CODEGEN.md).  The two agree by
+//! construction — one runtime library, one host, one rendering of a
+//! trap — so which one ran is a performance fact and never a
+//! behavioural one.
+//!
+//! **loom prefers native and falls back to the interpreter.**  The
+//! native path needs a lowering for everything the program says, a C
+//! toolchain to link with, and somewhere to put the result; when any
+//! of those is missing the program still runs, because slower is
+//! better than not at all.  `LOOM_ENGINE=native` turns the fallback
+//! into an error that says what was missing, and
+//! `LOOM_ENGINE=interpreter` takes the reference engine on purpose —
+//! which is what the `agree` tests, and any report of a disagreement,
+//! need to be able to ask for.
+//!
+//! ## Where the native artifact lives
+//!
+//! Beside the program, as `NAME.lcn` — the same file `luce build
+//! --emit=library NAME.luc` writes, so a build can ship one warm and
+//! loom simply finds it.  It is keyed on **content**: the artifact
+//! carries a hash of the serialized module it was built from, and a
+//! program whose bytes changed gets a rebuild whatever the clock says
+//! about either file.  When there is nowhere to write beside the
+//! program — a read-only directory, or a program with no path at all,
+//! like the embedded editor — the artifact goes to the temp directory
+//! under its hash instead, which is the same cache with a different
+//! address.
+//!
+//! A warm run invokes nothing external: one `dlopen`, one symbol
+//! lookup, one call.  A cold one runs the linker once.
 
 const std = @import("std");
 const luce = @import("luce");
 const files = @import("files");
-const host_mod = @import("host.zig");
+const native = @import("native");
+const host_mod = @import("host");
 
 const Allocator = std.mem.Allocator;
+const abi = luce.llvm.abi;
 
 /// Interactive programs run until they return; the step budget is
 /// intentionally open-ended.  Call depth is policy, not a native
@@ -23,24 +62,79 @@ const program_budget: luce.backend.Budget = .{
     .call_depth = host_mod.call_depth,
 };
 
-/// A trap trace prints at most this many frames; a runaway recursion
-/// reports its innermost calls and a count of the rest.
-const max_printed_frames = 12;
-
 pub const compile_options: luce.types.CompileOptions = .{
     .entry_mode = .script,
     .allow_host = true,
 };
 
-/// Run a compiled module from disk.
+/// Which engine runs a program.
+pub const Engine = enum {
+    /// Native if it can be had, the interpreter otherwise.
+    auto,
+    /// Native, or say why not and refuse to run.
+    native,
+    /// The reference engine, always.
+    interpreter,
+};
+
+/// How this loom runs programs.  Read once from the environment and
+/// carried down, because it is process policy rather than anything a
+/// program can change.
+pub const Policy = struct {
+    engine: Engine = .auto,
+    /// `LUCE_LIB` — the directory holding `libluce_rt.a`, when the one
+    /// beside the binary is not the one wanted.
+    library_directory: ?[]const u8 = null,
+    /// `LUCE_CC` — the linker driver a cold compiled run links with.
+    driver: ?[]const u8 = null,
+    /// Where an artifact goes when it cannot go beside its program.
+    ///
+    /// `TMPDIR` rather than a hard-coded `/tmp`, and the difference is
+    /// not tidiness: a shared `/tmp` is a directory anyone can create
+    /// a file in, and this one gets `dlopen`ed.  macOS gives every
+    /// user a private `TMPDIR` and most Linux sessions do too; where
+    /// there is none the fallback is still `/tmp`, whose sticky bit is
+    /// what is left to rely on.
+    temporary_directory: []const u8 = default_temporary_directory,
+
+    pub fn read(environment: *const std.process.Environ.Map) Policy {
+        return .{
+            .engine = named(environment.get("LOOM_ENGINE")) orelse .auto,
+            .library_directory = environment.get("LUCE_LIB"),
+            .driver = environment.get("LUCE_CC"),
+            .temporary_directory = trimSeparator(
+                environment.get("TMPDIR") orelse default_temporary_directory,
+            ),
+        };
+    }
+
+    /// `TMPDIR` conventionally ends in a separator and a path built
+    /// from it must not end in two.
+    fn trimSeparator(directory: []const u8) []const u8 {
+        const trimmed = std.mem.trimEnd(u8, directory, std.fs.path.sep_str);
+        return if (trimmed.len == 0) default_temporary_directory else trimmed;
+    }
+
+    fn named(text: ?[]const u8) ?Engine {
+        return std.meta.stringToEnum(Engine, text orelse return null);
+    }
+};
+
+/// Run a compiled module from disk: a portable `.lc`, or a native
+/// `.lcn` artifact taken as it is.
 pub fn runModule(
     gpa: Allocator,
     io: std.Io,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
+    policy: Policy,
     path: []const u8,
     arguments: []const []const u8,
 ) !u8 {
+    if (std.mem.endsWith(u8, path, native.Kind.library.extension())) {
+        return runArtifact(gpa, io, out, err, path, arguments);
+    }
+
     const encoded = files.readWhole(gpa, io, path) catch {
         try err.print("loom: cannot read {s}\n", .{path});
         return 1;
@@ -59,7 +153,7 @@ pub fn runModule(
         },
     };
     defer program.deinit();
-    return run(gpa, io, out, err, &program, arguments);
+    return run(gpa, io, out, err, policy, path, abi.sourceHash(encoded), &program, arguments);
 }
 
 /// Compile a .luc source file (plus the modules it imports, resolved
@@ -69,6 +163,7 @@ pub fn runScript(
     io: std.Io,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
+    policy: Policy,
     path: []const u8,
     arguments: []const []const u8,
 ) !u8 {
@@ -86,15 +181,19 @@ pub fn runScript(
     };
     defer gpa.free(source);
     var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
-    return runSource(gpa, io, out, err, path, source, loader.loader(), arguments);
+    return runSource(gpa, io, out, err, policy, path, source, loader.loader(), arguments);
 }
 
-/// Compile source bytes (already in memory) and run them.
+/// Compile source bytes (already in memory) and run them.  `name` is
+/// the path they came from when there is one — it names diagnostics
+/// and decides where a native artifact is kept.  The embedded editor
+/// passes a bare name, which has no directory and so caches by hash.
 pub fn runSource(
     gpa: Allocator,
     io: std.Io,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
+    policy: Policy,
     name: []const u8,
     source: []const u8,
     loader: ?luce.compile.Loader,
@@ -117,12 +216,265 @@ pub fn runSource(
     }
     var program = result.success;
     defer program.deinit();
-    return run(gpa, io, out, err, &program, arguments);
+
+    // A script has no `.lc` on disk to hash, so the canonical form of
+    // the program is made here: same bytes, same hash, same artifact
+    // `luce build` would produce from the same source.
+    const encoded = try luce.mir.module.encode(gpa, &program);
+    defer gpa.free(encoded);
+    return run(gpa, io, out, err, policy, name, abi.sourceHash(encoded), &program, arguments);
 }
+
+/// Run one program on whichever engine the policy allows.
+pub fn run(
+    gpa: Allocator,
+    io: std.Io,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    policy: Policy,
+    name: []const u8,
+    source_hash: u64,
+    program: *const luce.mir.Program,
+    arguments: []const []const u8,
+) !u8 {
+    if (policy.engine != .interpreter) {
+        var refusal: ?[]const u8 = null;
+        defer if (refusal) |why| gpa.free(why);
+        if (try artifactFor(gpa, io, policy, name, source_hash, program, &refusal)) |opened| {
+            var loaded = opened;
+            defer loaded.close();
+            return runLoaded(gpa, io, out, err, &loaded, arguments);
+        }
+        // Forcing the native engine turns the fallback into a report:
+        // somebody asked for compiled code and is owed the reason they
+        // did not get it.
+        if (policy.engine == .native) {
+            try err.print("loom: cannot run {s} as native code: {s}\n", .{
+                name,
+                refusal orelse "the compiled path is unavailable",
+            });
+            return 1;
+        }
+    }
+    return runInterpreted(gpa, io, out, err, program, arguments);
+}
+
+/// Run a native artifact named directly — `loom run program.lcn`.
+/// Nothing is compiled and nothing is matched against a `.lc`: the
+/// artifact's own tag is the whole story, and it is read before a
+/// single instruction of the artifact runs.
+pub fn runArtifact(
+    gpa: Allocator,
+    io: std.Io,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    path: []const u8,
+    arguments: []const []const u8,
+) !u8 {
+    const triple = try luce.llvm.hostTriple(gpa);
+    defer gpa.free(triple);
+    const path_z = try gpa.dupeZ(u8, path);
+    defer gpa.free(path_z);
+
+    switch (native.open(path_z, triple, null)) {
+        .loaded => |opened| {
+            var loaded = opened;
+            defer loaded.close();
+            return runLoaded(gpa, io, out, err, &loaded, arguments);
+        },
+        .unopenable => {
+            try err.print("loom: cannot load {s}\n", .{path});
+            return 1;
+        },
+        .mismatch => |why| {
+            try err.print("loom: cannot run {s}: {s}\n", .{ path, native.explain(why) });
+            return 1;
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The compiled path
+// ---------------------------------------------------------------------------
+
+/// The native artifact for `program`, opened and checked — built first
+/// if there is not already a current one.  Null means the compiled
+/// path is not available here, and `refusal` says why in a sentence
+/// the caller owns.
+fn artifactFor(
+    gpa: Allocator,
+    io: std.Io,
+    policy: Policy,
+    name: []const u8,
+    source_hash: u64,
+    program: *const luce.mir.Program,
+    refusal: *?[]const u8,
+) !?native.Loaded {
+    const triple = try luce.llvm.hostTriple(gpa);
+    defer gpa.free(triple);
+
+    var places = try Places.of(gpa, policy.temporary_directory, name, source_hash);
+    defer places.deinit(gpa);
+
+    // A hit is the whole point: nothing compiled, nothing linked,
+    // nothing external invoked.
+    for (places.paths()) |candidate| {
+        switch (native.open(candidate, triple, source_hash)) {
+            .loaded => |opened| return opened,
+            .unopenable, .mismatch => {},
+        }
+    }
+
+    var tools = try native.discover(gpa, io, policy.library_directory, policy.driver);
+    defer tools.deinit(gpa);
+
+    var last: ?[]const u8 = null;
+    errdefer if (last) |why| gpa.free(why);
+    for (places.paths()) |candidate| {
+        if (last) |why| gpa.free(why);
+        last = null;
+        switch (try native.build(gpa, io, &tools, program, .{
+            .kind = .library,
+            .output = candidate,
+            .source_hash = source_hash,
+            .triple = triple,
+        })) {
+            .written => switch (native.open(candidate, triple, source_hash)) {
+                .loaded => |opened| return opened,
+                .unopenable => last = try gpa.dupe(u8, "the artifact just built could not be loaded"),
+                .mismatch => |why| last = try gpa.dupe(u8, native.explain(why)),
+            },
+            // Not a place-by-place failure: the program says something
+            // stage 10 has no lowering for, and the next directory
+            // would say the same.
+            .unsupported => |what| {
+                refusal.* = try std.fmt.allocPrint(
+                    gpa,
+                    "it uses {s}, which has no lowering yet",
+                    .{what},
+                );
+                return null;
+            },
+            .failed => |why| last = why,
+        }
+    }
+    refusal.* = last;
+    return null;
+}
+
+/// Where an artifact for this program may live, best first.
+///
+/// Beside the program is the honest place: deletable with the program,
+/// visible in a listing, and exactly the name `luce build
+/// --emit=library` writes — so a warm artifact can be shipped rather
+/// than earned.  The temp directory is the fallback for a read-only
+/// directory or a program with no path at all, and keys on the hash
+/// because there is no name to key on.
+const Places = struct {
+    beside: ?[:0]u8 = null,
+    temporary: [:0]u8,
+    /// Scratch for `paths`, which answers a borrowed slice rather than
+    /// allocating one per call.
+    storage: [2][:0]const u8 = undefined,
+
+    fn of(gpa: Allocator, temporary: []const u8, name: []const u8, source_hash: u64) !Places {
+        var made: Places = .{ .temporary = undefined };
+        if (stemOf(name)) |stem| {
+            made.beside = try std.fmt.allocPrintSentinel(gpa, "{s}.lcn", .{stem}, 0);
+        }
+        errdefer if (made.beside) |path| gpa.free(path);
+        made.temporary = try std.fmt.allocPrintSentinel(
+            gpa,
+            "{s}{c}luce-{x:0>16}.lcn",
+            .{ temporary, std.fs.path.sep, source_hash },
+            0,
+        );
+        return made;
+    }
+
+    fn deinit(self: *Places, gpa: Allocator) void {
+        if (self.beside) |path| gpa.free(path);
+        gpa.free(self.temporary);
+        self.* = undefined;
+    }
+
+    fn paths(self: *Places) []const [:0]const u8 {
+        if (self.beside) |path| {
+            self.storage[0] = path;
+            self.storage[1] = self.temporary;
+            return self.storage[0..2];
+        }
+        self.storage[0] = self.temporary;
+        return self.storage[0..1];
+    }
+};
+
+/// `foo.lc` and `foo.luc` both name an artifact `foo.lcn` beside them.
+/// Anything else — the embedded editor, a program read from a stream —
+/// has no file to sit beside and answers null.
+fn stemOf(name: []const u8) ?[]const u8 {
+    if (std.mem.endsWith(u8, name, ".lc")) return name[0 .. name.len - ".lc".len];
+    if (std.mem.endsWith(u8, name, ".luc")) return name[0 .. name.len - ".luc".len];
+    return null;
+}
+
+/// Where artifacts go when `TMPDIR` says nothing.
+const default_temporary_directory = switch (@import("builtin").os.tag) {
+    .windows => ".",
+    else => "/tmp",
+};
+
+/// Run an opened artifact against the real host.
+fn runLoaded(
+    gpa: Allocator,
+    io: std.Io,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    loaded: *native.Loaded,
+    arguments: []const []const u8,
+) !u8 {
+    var services: host_mod.Host = undefined;
+    services.setup(gpa, io, out, arguments);
+    defer services.deinit();
+
+    const table = services.table();
+    const status = loaded.entry(&table);
+
+    // Land back on the ordinary screen before reporting anything.
+    services.restoreScreen();
+    out.flush() catch {};
+    switch (status) {
+        .ok => {
+            const leaked = services.leaked orelse 0;
+            host_mod.printLeaks(err, "loom", if (leaked > 0) @intCast(leaked) else 0);
+            return 0;
+        },
+        .trapped => {
+            const trap = services.reportedTrap() orelse {
+                try err.print("loom: the program trapped and said nothing\n", .{});
+                return 1;
+            };
+            host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
+            return 1;
+        },
+        .exhausted => {
+            try err.print("loom: out of memory\n", .{});
+            return 1;
+        },
+        _ => {
+            try err.print("loom: the program returned an unknown status\n", .{});
+            return 1;
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The reference engine
+// ---------------------------------------------------------------------------
 
 /// The execution boundary: one hosted evaluation against the real
 /// terminal, filesystem, and arguments.
-pub fn run(
+fn runInterpreted(
     gpa: Allocator,
     io: std.Io,
     out: *std.Io.Writer,
@@ -154,33 +506,11 @@ pub fn run(
     services.restoreScreen();
     switch (result) {
         .success => |success| {
-            // Scope ownership frees everything (OWNERSHIP.md S33);
-            // a nonzero count is an interpreter bug, not a program's.
-            if (success.leaked_objects != 0) {
-                try err.print(
-                    "loom: internal error: {d} object{s} escaped ownership — please report this\n",
-                    .{ success.leaked_objects, if (success.leaked_objects == 1) "" else "s" },
-                );
-            }
+            host_mod.printLeaks(err, "loom", success.leaked_objects);
             return 0;
         },
         .trap => |trap| {
-            try err.print("loom: trap: {s} [{s}]\n", .{ trap.message, @tagName(trap.code) });
-            // Innermost first, like Zig's own traces.  A --release
-            // module has no lines; the function names still print.
-            for (trap.trace, 0..) |frame, index| {
-                if (index == max_printed_frames) break;
-                if (frame.line != 0) {
-                    try err.print("    at {s} ({s}:{d}:{d})\n", .{
-                        frame.function, frame.source, frame.line, frame.column,
-                    });
-                } else {
-                    try err.print("    at {s}\n", .{frame.function});
-                }
-            }
-            const hidden = trap.dropped +
-                @as(u32, @intCast(trap.trace.len -| max_printed_frames));
-            if (hidden != 0) try err.print("    ... {d} more frames\n", .{hidden});
+            host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
             return 1;
         },
         .unavailable => {
@@ -188,4 +518,61 @@ pub fn run(
             return 1;
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "the engine is named, and a name nobody recognises is not one of them" {
+    var environment: std.process.Environ.Map = .init(testing.allocator);
+    defer environment.deinit();
+    try testing.expectEqual(Engine.auto, Policy.read(&environment).engine);
+
+    try environment.put("LOOM_ENGINE", "interpreter");
+    try testing.expectEqual(Engine.interpreter, Policy.read(&environment).engine);
+    try environment.put("LOOM_ENGINE", "native");
+    try testing.expectEqual(Engine.native, Policy.read(&environment).engine);
+    try environment.put("LOOM_ENGINE", "quick");
+    try testing.expectEqual(Engine.auto, Policy.read(&environment).engine);
+}
+
+test "the fallback artifact directory is the session's own, not a shared one" {
+    var environment: std.process.Environ.Map = .init(testing.allocator);
+    defer environment.deinit();
+    try testing.expectEqualStrings(
+        default_temporary_directory,
+        Policy.read(&environment).temporary_directory,
+    );
+
+    // TMPDIR conventionally ends in a separator; a path built from it
+    // must not end in two.
+    try environment.put("TMPDIR", "/var/folders/ab/T/");
+    try testing.expectEqualStrings("/var/folders/ab/T", Policy.read(&environment).temporary_directory);
+    try environment.put("TMPDIR", "/");
+    try testing.expectEqualStrings(
+        default_temporary_directory,
+        Policy.read(&environment).temporary_directory,
+    );
+}
+
+test "an artifact is named beside the program it came from" {
+    try testing.expectEqualStrings("programs/editor", stemOf("programs/editor.lc").?);
+    try testing.expectEqualStrings("programs/editor", stemOf("programs/editor.luc").?);
+    // Nothing to sit beside: the embedded editor, or a stream.
+    try testing.expectEqual(@as(?[]const u8, null), stemOf("editor"));
+
+    var beside = try Places.of(testing.allocator, "/scratch", "programs/editor.lc", 0x1234);
+    defer beside.deinit(testing.allocator);
+    try testing.expectEqualStrings("programs/editor.lcn", beside.beside.?);
+    try testing.expectEqual(@as(usize, 2), beside.paths().len);
+    try testing.expectEqualStrings("programs/editor.lcn", beside.paths()[0]);
+
+    var anonymous = try Places.of(testing.allocator, "/scratch", "editor", 0x1234);
+    defer anonymous.deinit(testing.allocator);
+    try testing.expect(anonymous.beside == null);
+    try testing.expectEqual(@as(usize, 1), anonymous.paths().len);
+    try testing.expectEqualStrings("/scratch/luce-0000000000001234.lcn", anonymous.temporary);
 }

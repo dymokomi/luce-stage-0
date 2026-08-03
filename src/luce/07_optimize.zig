@@ -7,11 +7,11 @@
 //!
 //! ## What this stage is for, and what it is emphatically not for
 //!
-//! Not for scalar optimization.  `luce build --backend=llvm` hands the
-//! program to `default<O2>`, which folds constants, inlines, does GVN
+//! Not for scalar optimization.  `luce build --emit=exe` hands the
+//! program to `default<O3>`, which folds constants, inlines, does GVN
 //! and LICM and loop rotation and dead-store elimination, and — via
 //! `constraint-elimination` — bounds-check elimination, all better than
-//! anything written here would.  A pass that duplicates `default<O2>`
+//! anything written here would.  A pass that duplicates `default<O3>`
 //! costs compile time to be slower than what we already have.
 //!
 //! Nor is this where the container gap gets closed.  Luce's matmul is
@@ -82,7 +82,7 @@
 //! those programs are in the runtime, not the dispatch loop.  LLVM
 //! compile time over eight programs: **-2.5%**, which is small enough
 //! to be worth nothing on its own; the compiled path's *runtime* is
-//! unchanged, as it should be, because `default<O2>` had already found
+//! unchanged, as it should be, because `default<O3>` had already found
 //! everything `flow` and `values` find.
 //!
 //! So: `ownership` earns its place on an argument.  `flow` and `values`
@@ -109,7 +109,7 @@
 //! ## What deliberately does not run, and why
 //!
 //! *Constant folding, inlining, LICM, loop unrolling, strength
-//! reduction, bounds-check elimination.*  `default<O2>`'s job, and
+//! reduction, bounds-check elimination.*  `default<O3>`'s job, and
 //! `constraint-elimination` already does the last one.  Stage 4 folds
 //! the constants it needs to type-check, and what it leaves behind is a
 //! rounding error: two dead pure instructions in the whole corpus.

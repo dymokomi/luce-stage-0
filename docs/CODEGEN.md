@@ -5,9 +5,12 @@ hands that to libLLVM, and gets back machine code.  `docs/CODEGEN.md`
 is the decision record for why; this is the description of what is
 there.
 
-The path is **partial**.  The interpreter still runs every `.lc` and
-is still what `luce build` writes by default.  What follows says
-exactly how far the LLVM path reaches.
+The path is **delivered**: `luce build --emit=exe` writes a standalone
+binary, `--emit=library` writes a loadable artifact, and `loom run`
+prefers compiled code over the interpreter for every `.lc` it is
+handed.  The interpreter remains the reference engine and stays
+selectable.  What follows says exactly how far the LLVM path reaches
+and how it reaches a person.
 
 ## The pipeline
 
@@ -18,23 +21,127 @@ FILE.luc → 02_lex → 03_parse → 04_semantics → typed MIR → 07_optimize
                                              ↓
                                         LLVM bitcode
                                              ↓
-                     libLLVM: parse, default<O2>, emit  (08_llvm/emit.zig)
+                     libLLVM: parse, default<O3>, emit  (08_llvm/emit.zig)
                                              ↓
                                   FILE.o  (relocatable object)
+                                             ↓
+                            cc  (src/apps/native.zig)
+                                    ↓                ↓
+                            FILE.lcn            FILE (executable)
 ```
 
 ```sh
-luce build FILE.luc --backend=llvm [-o FILE.o]
+luce build FILE.luc --emit=object   # FILE.o    — you link it
+luce build FILE.luc --emit=library  # FILE.lcn  — loom loads it
+luce build FILE.luc --emit=exe      # FILE      — a shell runs it
 ```
 
 The object is built for the host triple, is position-independent,
-exports exactly `luce_main`, and declares no undefined symbols beyond
-`libluce_rt`.  Linking it is the caller's job today — there is no
-shared-library or executable emit mode, and loom cannot load an
-object.  `src/luce/08_llvm/test.zig` closes the loop instead: it links
-with `cc -shared`, `dlopen`s the result, and runs it against a host
-table built in Zig.  That link is itself the proof of the
-no-undefined-symbols claim.
+exports `luce_main` and its artifact tag, and declares no undefined
+symbols beyond `libluce_rt`.  That last claim is proved by the link
+itself, which is why linking is part of the shipped path rather than
+only of a test.
+
+## Getting it to a person
+
+Three questions had to be answered, and the answers are all in
+`src/apps/native.zig` and `src/apps/start.zig`.
+
+**Who links, and with what.**  `cc`, at build time.  A link is a
+*build-time* act — it happens when `--emit=exe` is typed, or the first
+time loom meets a program with no current artifact — so this file's
+older promise that "nothing external is ever invoked" holds where it
+was always about: the **run** path.  Running an artifact that already
+exists is one `dlopen`, one symbol lookup, one call.  Using LLD
+in-process would be nicer, and was checked: LLD is not part of what
+`llvm-config` describes (Homebrew ships it as a separate formula, and
+`--libs` never names it), so reaching it means discovering a second
+toolchain or vendoring one.  `cc` is present wherever a C toolchain
+is, and knows its own platform's SDK paths, crt objects and system
+libraries.  `LUCE_CC` names another driver.
+
+**What an executable's `main` is.**  `libluce_start.a`, built from
+`src/apps/start.zig` and installed beside `libluce_rt.a`: it builds a
+`LuceHost`, calls `luce_main`, and turns the status into an exit code
+and a trap report.  **Its services are loom's, not a second set** —
+the same `src/apps/host.zig`, so a standalone binary offers the same
+console, the same cwd-relative files, the same 256-color terminal and
+the same key names as `loom run`.  Terminal services in a non-loom
+binary were the open question, and null slots (fail closed, trap
+`host_unavailable`) would have been defensible — but they would make
+"the compiled program behaves identically" true of one runner and not
+the other, and two of the nine bundled programs draw on a screen.  A
+program's behaviour must not depend on who started it.
+
+For that to be a small library rather than a copy of the compiler,
+`abi.zig` takes the trap channel's C shapes from `runtime/trace.zig`
+rather than from the `runtime.zig` barrel, which force-analyzes the
+whole `luce_rt_*` surface.  `libluce_start.a` therefore has exactly
+two undefined Luce symbols — `luce_main` and `luce_artifact` — and no
+second copy of the runtime to collide with the real one at link time.
+
+**How an artifact says what it is.**  It exports `luce_artifact`, a
+constant `abi.Artifact`: a magic, the tag's own layout version, the
+host ABI version, the target triple, a hash of the serialized module
+it was built from, and whether it kept its origins.  A loader reads
+that *before* it calls anything, and refuses by name — wrong machine,
+wrong ABI, stale program — because a native artifact is not portable
+and a file name cannot be trusted to say so.  Without the tag, a
+`.lcn` copied between machines is a file that loads cleanly and
+crashes with no explanation.
+
+### Where a compiled artifact lives, and when it is rebuilt
+
+Beside the program, as `NAME.lcn`: exactly the file `luce build
+--emit=library NAME.luc` writes, so `loom run NAME.lc` finds a warm
+one if a build shipped it and makes one if not.  It is deletable with
+the program and visible in a listing, which a hidden cache is not.
+When there is nowhere to write beside the program — a read-only
+directory, or a program with no path at all, like the editor embedded
+in loom — the artifact goes to the session's own `TMPDIR` under its
+hash.  (`TMPDIR` rather than `/tmp`: the file gets `dlopen`ed, and a
+world-writable directory is not where that should be decided.)
+
+**The key is content, never a timestamp.**  The tag carries
+`abi.sourceHash` of the serialized module, so a rebuild that produced
+identical bytes hits, a program whose bytes changed misses, and a file
+restored from a backup with an old mtime does not quietly win.  That
+is PEP 552's answer rather than PEP 3147's, and it is the same
+decision the `.lci` image cache reached before it.
+
+### Which engine runs a `.lc`
+
+`loom run` prefers native and falls back to the interpreter, silently,
+because the two agree by construction and which one ran is a
+performance fact rather than a behavioural one.  The fallback exists
+because the compiled path needs three things the interpreter does not:
+a lowering for everything the program says, a C toolchain, and
+somewhere to put the result.
+
+- `LOOM_ENGINE=native` turns the fallback into an error naming what
+  was missing — "it uses Bytes, which has no lowering yet", "cannot
+  run the linker `cc`".
+- `LOOM_ENGINE=interpreter` takes the reference engine on purpose,
+  which is what an `agree` comparison and any report of a
+  disagreement need to be able to ask for.
+- `loom run NAME.lcn` runs a named artifact directly, checking its tag
+  and nothing else.
+
+Measured on the bundled programs and the benchmark set (M4 Max, best
+of several, `.lc` in both cases):
+
+| program | interpreter | native, warm | native, cold |
+|---------|-------------|--------------|--------------|
+| hello   | 8.8 ms      | 9.6 ms       | 81 ms        |
+| editor  | 11.7 ms     | 12.0 ms      | 321 ms       |
+| loops   | 6995 ms     | 92 ms        | 272 ms       |
+| matmul  | 5767 ms     | 22 ms        | 201 ms       |
+| strings | 931 ms      | 57 ms        | 258 ms       |
+
+Warm startup is the interpreter's, within noise: both are dominated by
+process start and reading the module.  A cold run pays LLVM at `-O3`
+plus one link — and on anything that computes, still finishes far
+ahead of the interpreter that needed no build at all.
 
 **Two rules govern `lower.zig`**, both inherited from what the deleted
 hand-written backends cost:
@@ -432,7 +539,21 @@ FILE.luc`, and bare `.luc` paths in the shell).
 
 ## Where this goes next
 
-`docs/CODEGEN.md` holds the sequencing.  What remains: close the gaps
-above, add the shared-library and executable emit modes (then wasm32),
-and delete the interpreter's dispatch loop last.  The runtime library
-it calls stays.
+What remains: close the gaps above, then wasm32 — `emit.zig` already
+registers the target, and the trapped-flag calling convention was
+chosen to work there unchanged.  The interpreter's dispatch loop goes
+last and not soon: it is the reference arm of the `agree` tests, the
+only engine on a machine with no C toolchain, and what `loom run`
+falls back to.  The runtime library both call stays either way.
+
+Two smaller things this path left open on purpose:
+
+- **Nothing sweeps `.lcn` files.**  They sit beside their programs and
+  are deleted with them; the `TMPDIR` copies are the session's to
+  clear.  A cache that grows without bound would need a policy, and a
+  content-addressed file next to the thing it was addressed from does
+  not.
+- **`zig build` does not pre-warm the bundled programs.**  It could —
+  `--emit=library` beside each `.lc` — but that would make `cc` a
+  dependency of *installing*, not only of testing, and loom warms them
+  on first run in a fifth of a second.

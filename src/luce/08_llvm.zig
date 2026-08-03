@@ -27,9 +27,13 @@
 //! broken invariant reports itself instead of being `unreachable`.
 //! `lower.zig` is the authority; docs/CODEGEN.md keeps the prose.
 //!
-//! Linking is still the caller's job: this stage stops at a
-//! relocatable object, with no shared-library, executable, or wasm
-//! emit mode, so `loom run` still uses the interpreter.
+//! This stage stops at a relocatable object, and `src/apps/native.zig`
+//! carries it the rest of the way: `cc` links it into a loadable
+//! `.lcn` artifact or a standalone executable, and `loom run` prefers
+//! that artifact over the interpreter.  What makes a native artifact
+//! safe to hand to a loader is `abi.Artifact` — the tag this stage
+//! stamps every module with, naming the machine, the host ABI, and the
+//! program it was built from, so the wrong one is refused by name.
 //!
 //! **The numeric prefix is load-bearing; do not drop it.**  Zig derives
 //! symbol names from the source path and LLVM claims every symbol

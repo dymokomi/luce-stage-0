@@ -8,11 +8,14 @@ luce build dice.luc              # debug (the default)
 luce build dice.luc --release    # stripped
 ```
 
-Both build paths mean the same thing by it.  The LLVM path (`luce
-build --backend=llvm`) emits the origins as constant data beside the
-code rather than as LLVM debug metadata, and `--release` leaves them
-out; everything below is true of a compiled artifact as well as of the
-`.lc` the interpreter runs.
+Every build path means the same thing by it.  The LLVM path (`luce
+build --emit=object|library|exe`) emits the origins as constant data
+beside the code rather than as LLVM debug metadata, and `--release`
+leaves them out; everything below is true of a compiled artifact — a
+`.lcn` under loom, or a standalone executable — as well as of the
+`.lc` the interpreter runs.  A compiled artifact's tag records which
+of the two it is, so a loader can say so without running it
+(`abi.Artifact.debug`).
 
 A debug module carries *origins* — for every IR instruction, the
 line and column of the statement it came from, plus the source file

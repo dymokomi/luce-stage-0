@@ -20,6 +20,8 @@ pub const Shell = struct {
     err: *std.Io.Writer,
     palette: palette_mod.Palette,
     editor_override: ?[]const u8,
+    /// Which engine programs launched from here run on (runner.zig).
+    policy: runner.Policy = .{},
 
     pub fn run(self: *Shell, reader: *std.Io.Reader, interactive: bool) !u8 {
         if (interactive) try self.banner();
@@ -81,12 +83,12 @@ pub const Shell = struct {
         }
         if (std.mem.eql(u8, command, "run")) {
             if (rest.len == 0) return self.complain("run PROGRAM.lc [ARGS]");
-            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, rest[0], rest[1..]);
+            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, self.policy, rest[0], rest[1..]);
             return true;
         }
         if (std.mem.eql(u8, command, "luce")) {
             if (rest.len == 0) return self.complain("luce PROGRAM.luc [ARGS]");
-            _ = try runner.runScript(self.gpa, self.io, self.out, self.err, rest[0], rest[1..]);
+            _ = try runner.runScript(self.gpa, self.io, self.out, self.err, self.policy, rest[0], rest[1..]);
             return true;
         }
         if (std.mem.eql(u8, command, "edit")) {
@@ -96,12 +98,12 @@ pub const Shell = struct {
         }
 
         // A bare program path runs directly: hello.lc, tools/fmt.luc 2 3.
-        if (std.mem.endsWith(u8, command, ".lc")) {
-            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, command, rest);
+        if (std.mem.endsWith(u8, command, ".lc") or std.mem.endsWith(u8, command, ".lcn")) {
+            _ = try runner.runModule(self.gpa, self.io, self.out, self.err, self.policy, command, rest);
             return true;
         }
         if (std.mem.endsWith(u8, command, ".luc")) {
-            _ = try runner.runScript(self.gpa, self.io, self.out, self.err, command, rest);
+            _ = try runner.runScript(self.gpa, self.io, self.out, self.err, self.policy, command, rest);
             return true;
         }
 
@@ -120,9 +122,19 @@ pub const Shell = struct {
     pub fn edit(self: *Shell, path: []const u8) !u8 {
         const arguments = [_][]const u8{path};
         if (self.editor_override) |editor_path| {
-            return runner.runScript(self.gpa, self.io, self.out, self.err, editor_path, &arguments);
+            return runner.runScript(self.gpa, self.io, self.out, self.err, self.policy, editor_path, &arguments);
         }
-        return runner.runSource(self.gpa, self.io, self.out, self.err, "editor", embedded_editor, null, &arguments);
+        return runner.runSource(
+            self.gpa,
+            self.io,
+            self.out,
+            self.err,
+            self.policy,
+            "editor",
+            embedded_editor,
+            null,
+            &arguments,
+        );
     }
 
     fn help(self: *Shell) !void {

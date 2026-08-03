@@ -36,34 +36,59 @@ build/loom edit programs/hello.luc    # the editor, written in Luce
 The compiler:
 
 ```text
-luce build FILE.luc [-o FILE.lc] [--release] [--backend=llvm]
-                                   compile and write a module
+luce build FILE.luc [-o OUT] [--release] [--emit=WHAT]
+                                   compile and write an artifact
 luce check FILE.luc                compile, report, write nothing
 luce ir FILE.luc [--full]          compile and dump readable IR
 ```
 
-Builds are debug by default: the module carries source locations,
+`--emit` says which artifact, and nothing else differs between them —
+the same program walks the same pipeline either way:
+
+```text
+module   FILE.lc    portable IR; loom's interpreter runs it (default)
+object   FILE.o     a relocatable object; you link it
+library  FILE.lcn   a native artifact; loom runs it directly
+exe      FILE       a standalone native executable
+```
+
+Builds are debug by default: the artifact carries source locations,
 so a runtime trap prints `file:line:column` and a call trace.
-`--release` strips them for a smaller module — the program itself
+`--release` strips them for a smaller artifact — the program itself
 behaves identically (docs/MODES.md).
 
-`--backend=llvm` compiles the same program through LLVM and writes a
-relocatable object exporting `luce_main`, to be linked against the
-published host ABI.  That path is real but partial — no floats,
-structs, or host services beyond `print` yet — so the interpreter is
-still what runs a `.lc`.  [docs/CODEGEN.md](docs/CODEGEN.md) is the
-current state and [docs/CODEGEN.md](docs/CODEGEN.md) the decision
-behind it.
+The last three shapes compile through LLVM, which measures at
+0.97-1.07x of C on the benchmark set where the interpreter measures at
+30-60x ([docs/CODEGEN.md](docs/CODEGEN.md)).  They are native code and
+are stamped with the machine and the host ABI they were built for, so
+a loader refuses the wrong one by name rather than crashing.  Linking
+uses `cc`; `LUCE_CC` names another driver and `LUCE_LIB` the directory
+holding `libluce_rt.a`.
+
+```sh
+build/luce build programs/hello.luc --emit=exe -o hello
+./hello you                           # hello, you — no loom, no runtime
+```
 
 The terminal:
 
 ```text
 loom                        interactive shell (help lists commands)
 loom run PROGRAM.lc [ARGS]  run a compiled program
+loom run PROGRAM.lcn [..]   run a native artifact directly
 loom luce PROGRAM.luc [..]  compile a source file and run it
 loom edit FILE              open the Luce editor
 loom PROGRAM.lc [ARGS]      shorthand for run
 ```
+
+**`loom run` prefers native code.**  Given a `.lc` it looks for
+`NAME.lcn` beside it — the file `luce build --emit=library` writes —
+builds one if there is none or it was built from different bytes, and
+falls back to the interpreter when the compiled path is unavailable.
+`LOOM_ENGINE=native` makes that fallback an error saying what was
+missing; `LOOM_ENGINE=interpreter` takes the reference engine on
+purpose.  The two agree by construction: one runtime library, one
+host, one rendering of a trap.
 
 A Luce program is a script with a `main` entry.  The language is
 statically typed with inference, has structs, `List`/`Map`/`Array`/
