@@ -67,16 +67,18 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
 
 /// `a[i] = v`, `m[key] = v`, `grid[r, c] = v`.
 ///
-/// The copy is taken **before** the old element is freed, because
-/// `m[k] = m[k]` is legal and the value being stored may be a view of
-/// the one being replaced (docs/STRINGS.md).
+/// **Consumes `held`**, which arrives already owned (docs/STRINGS.md):
+/// the caller's IR either copied it with `own_storage` or handed over a
+/// value of its own.  `m[k] = m[k]` is legal and stays legal, because
+/// the copy the first form takes stands in front of this call rather
+/// than inside it.
+///
+/// The **key** is the one value here that is still a borrow: a store
+/// looks its key up before it stores anything, and an entry that
+/// already exists must not pay for a copy of a key it will not keep.
 pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: Value) Error!void {
-    _ = try runtime.resolve(target);
-    const stored = try runtime.ownValue(held);
+    const stored = held;
     errdefer runtime.releaseStorage(stored);
-    // `ownValue` allocates, which never moves the object table, but
-    // re-resolving costs one load and keeps the rule "no `*Object`
-    // across an allocation" true on its face.
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => |*list| {
@@ -129,21 +131,20 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
 }
 
 /// `xs.append(v)` on a list, or `b.append(text)` on a Builder.
+///
+/// A list **consumes** `held`, like every other store site: it arrives
+/// already owned, so `xs.append(xs[0])` is safe because the copy stands
+/// in the IR in front of this call (docs/STRINGS.md).  A Builder does
+/// not — it copies bytes into a buffer of its own and the text stays
+/// the caller's, which is what it always did.
 pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => {
-            // The copy is taken before the append may reallocate: the
-            // value stored may be a view of an element of this very
-            // list (docs/STRINGS.md).
-            const stored = try runtime.ownValue(held);
-            errdefer runtime.releaseStorage(stored);
-            const list_again = &(try runtime.resolve(target)).data.list;
-            try list_again.append(runtime.objects, stored);
-            runtime.adopt(stored);
+        .list => |*list| {
+            errdefer runtime.releaseStorage(held);
+            try list.append(runtime.objects, held);
+            runtime.adopt(held);
         },
-        // A Builder always copied into its own buffer, so it was
-        // already the shape everything else has now taken.
         .builder => |*builder| try builder.appendSlice(runtime.objects, held.asString()),
         else => unreachable,
     }
@@ -168,14 +169,15 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
     return taken;
 }
 
+/// `xs.insert(i, v)`.  **Consumes `held`** (docs/STRINGS.md), including
+/// on the out-of-range trap: nothing the caller handed over is left
+/// without an owner.
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
+    errdefer runtime.releaseStorage(held);
     const object = try runtime.resolve(target);
     if (index < 0 or index > object.data.list.items.len) return runtime.fail(.index_bounds);
-    const stored = try runtime.ownValue(held);
-    errdefer runtime.releaseStorage(stored);
-    const list = &(try runtime.resolve(target)).data.list;
-    try list.insert(runtime.objects, @intCast(index), stored);
-    runtime.adopt(stored);
+    try object.data.list.insert(runtime.objects, @intCast(index), held);
+    runtime.adopt(held);
 }
 
 /// `xs.remove(i)` or `m.remove(key)`.  Removing an owned element frees

@@ -614,13 +614,14 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
         runtime.releaseStorage(emptied);
     }
 
-    // A container element and a map key take their own copy in
-    // whichever form fits, and the container gives both back.
+    // A store keeps what it is given, in whichever form fits, and the
+    // container gives it back — while a map's key is still a borrow it
+    // copies for itself (docs/STRINGS.md).
     const kept = try runtime.newList();
     const table = try runtime.newMap();
     for (lengths) |length| {
         const wanted = words[0..length];
-        try containers.append(runtime, kept, Value.ofString(wanted));
+        try containers.append(runtime, kept, try runtime.ownValue(Value.ofString(wanted)));
         try containers.indexSet(runtime, table, &.{Value.ofString(wanted)}, Value.ofInt(1));
     }
     for (lengths, 0..) |length, index| {

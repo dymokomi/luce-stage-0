@@ -1740,6 +1740,41 @@ const Body = struct {
         try self.fillBoxValue(address, of, held);
     }
 
+    /// Element `index` of a run, filled with a value the run is going
+    /// to **keep**.
+    ///
+    /// A store must not lose which form a String's text was in, so a
+    /// register that was read out of a box is copied across whole, the
+    /// way `emitLocalSet` fills a slot that owns its storage; a
+    /// register with no box behind it is outside text by construction
+    /// and boxes the ordinary way (docs/STRINGS.md).
+    fn storedAt(self: *Body, run: Builder.Value, index: usize, register: mir.Register) Error!void {
+        const of = self.function.result_types[register];
+        if (self.boxes[register] == .none) {
+            return self.boxAt(run, index, of, self.values[register]);
+        }
+        const address = address: {
+            const resume_at = self.enterEntry();
+            defer self.leaveEntry(resume_at);
+            break :address try self.wip.gep(
+                .inbounds,
+                self.module.value_type,
+                run,
+                &.{try self.module.builder.intValue(.i64, index)},
+                "box.element",
+            );
+        };
+        _ = try self.wip.callMemCpy(
+            address,
+            value_alignment,
+            self.boxes[register],
+            value_alignment,
+            try self.module.builder.intValue(.i64, @sizeOf(runtime.Value)),
+            .normal,
+            true,
+        );
+    }
+
     /// Which `runtime.Tag` a value of `of` boxes as.  A `T?` has none
     /// of its own: what it boxes as is decided by whether it is there,
     /// so it is the one type this cannot answer.
@@ -3212,7 +3247,7 @@ const Body = struct {
                 self.runtime,
                 try self.boxedRegister(set.target, "target"),
                 try self.module.builder.intValue(.i64, set.field),
-                try self.boxedRegister(set.value, "field"),
+                try self.storageOf(set.value),
             }),
             .call => |called| try self.emitCall(register, called),
             .intrinsic => |called| try self.emitIntrinsic(register, called),
@@ -3353,8 +3388,9 @@ const Body = struct {
     }
 
     /// `Point(x = 1, y = 2)`: gather the fields into a scratch run of
-    /// `Value`s and let the runtime copy it into storage that outlives
-    /// the frame.
+    /// `Value`s and let the runtime move them into storage that
+    /// outlives the frame.  Each field is a store, so it arrives in the
+    /// form its place has to keep (docs/STRINGS.md).
     fn emitStructMake(
         self: *Body,
         register: mir.Register,
@@ -3369,7 +3405,7 @@ const Body = struct {
             "fields",
         );
         for (fields, 0..) |field, index| {
-            try self.boxAt(run, index, self.function.result_types[field], self.values[field]);
+            try self.storedAt(run, index, field);
         }
         try self.callAnswering(register, .luce_rt_struct_make, &.{
             self.runtime,
@@ -3756,16 +3792,19 @@ const Body = struct {
         return self.storageOf(register);
     }
 
-    /// The same, for the two intrinsics that ask *which form* a value's
+    /// The same, for everything that asks *which form* a value's
     /// storage is in rather than merely reading its bytes.
     ///
-    /// Every other runtime call reads through the pointer a box hands
-    /// it, so an outside box over inline bytes tells it the truth. Only
-    /// `drop_storage`, which frees, and `export_storage`, which decides
-    /// between a transfer and a copy, would be misled — so both take the
-    /// place the register was read from.  A text register with no place
-    /// behind it is a constant or a callee's result, and `ret` already
-    /// made both of those frame-independent (docs/STRINGS.md).
+    /// Most runtime calls read through the pointer a box hands them, so
+    /// an outside box over inline bytes tells them the truth.  Three
+    /// kinds would be misled: `drop_storage`, which frees;
+    /// `export_storage`, which decides between a transfer and a copy;
+    /// and every **store**, which keeps the value it is given, so short
+    /// text has to arrive short or the place ends up holding a pointer
+    /// into this frame.  All of them take the place the register was
+    /// read from.  A text register with no place behind it is a
+    /// constant, a parameter or a slice, and a store only ever sees one
+    /// of those with an `own_storage` in between (docs/STRINGS.md).
     fn storageOf(self: *Body, register: mir.Register) Error!Builder.Value {
         if (self.boxes[register] != .none) return self.boxes[register];
         return self.boxedRegister(register, "held");
@@ -4028,7 +4067,7 @@ const Body = struct {
                         return;
                     }
                 }
-                const held = try self.boxedRegister(of[of.len - 1], "element");
+                const held = try self.storageOf(of[of.len - 1]);
                 const run, const rank = try self.subscripts(of[1 .. of.len - 1]);
                 try self.callChecked(.luce_rt_index_set, &.{
                     rt,
@@ -4047,7 +4086,7 @@ const Body = struct {
             .append_value => try self.callChecked(.luce_rt_append, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                try self.boxedRegister(of[1], "element"),
+                try self.storageOf(of[1]),
             }),
             .append_ascii => try self.callChecked(.luce_rt_append_ascii, &.{
                 rt,
@@ -4062,7 +4101,7 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
-                try self.boxedRegister(of[2], "element"),
+                try self.storageOf(of[2]),
             }),
             .remove_entry => try self.callChecked(.luce_rt_remove, &.{
                 rt,
