@@ -7,23 +7,24 @@
 //!
 //! ## What this stage is for, and what it is emphatically not for
 //!
-//! Not for scalar optimization.  `luce build --emit=exe` hands the
-//! program to `default<O3>`, which folds constants, inlines, does GVN
-//! and LICM and loop rotation and dead-store elimination, and — via
+//! Not for scalar optimization.  Every artifact goes through
+//! `default<O3>`, which folds constants, inlines, does GVN and LICM and
+//! loop rotation and dead-store elimination, and — via
 //! `constraint-elimination` — bounds-check elimination, all better than
 //! anything written here would.  A pass that duplicates `default<O3>`
-//! costs compile time to be slower than what we already have.
+//! costs compile time to be slower than what we already have, and this
+//! stage has just paid that debt off: `flow` and `values` were written
+//! for the interpreter, measured at **-2.5% LLVM compile time and 0%
+//! compiled runtime**, and went with the interpreter's retirement
+//! (docs/ENGINE.md step 7).  Do not write their successors.
 //!
-//! Nor is this where the container gap gets closed.  Luce's matmul is
-//! ~41x C, and the decomposition of that number is a *lowering*
-//! problem, not an optimization one: an opaque `luce_rt_index_get` call
-//! per element is 14.6x of it, object-table/element aliasing another
-//! 1.8x, boxed elements another 1.6x.  The fix is stage 8 emitting an
-//! inline specialized access instead of a call, and it is not
-//! expressible here at all — MIR has no load, no GEP, and no pointer.
-//! Rewriting `index_get` into a typed `array_get_float` would give the
-//! interpreter nothing (it would dispatch to the same runtime
-//! function) and cost a `format_version` bump.  Do not.
+//! Nor is this where a container gap gets closed.  Rewriting
+//! `index_get` into a typed `array_get_float` would give a code
+//! generator nothing it does not already know — the element kind is in
+//! MIR's type table — and cost a `format_version` bump.  The fix for
+//! that class of problem is stage 8 emitting an inline specialized
+//! access instead of a call, and it is not expressible here at all:
+//! MIR has no load, no GEP, and no pointer.
 //!
 //! What is left is narrow, and this stage should stay small:
 //!
@@ -32,79 +33,64 @@
 //!     world; MIR names them, knows the owner field is one field, and
 //!     can prove a store to it dead.  That is the one pass here with an
 //!     argument nothing downstream can replace.
-//!  2. **Making the artifact smaller.**  The `.lc` is the interpreter's
-//!     executable and LLVM never sees it.  Nothing downstream will ever
-//!     remove a block the entry cannot reach, or an instruction no
-//!     block holds — and the interpreter sizes *every frame* at one
-//!     slot per pool entry, reachable or not.
-//!  3. **Whatever measurably helps the interpreter**, which is the
-//!     reference engine and what `loom run` executes today.  This one
-//!     is a claim about numbers, not about principle, and the numbers
-//!     are below.  If the interpreter stops being a shipping engine,
-//!     `Passes.values` and `Passes.flow` should go off and then away.
+//!  2. **Not handing the back end work that will be thrown away.**
+//!     A std import brings its whole module in; `prune` drops what the
+//!     entry cannot reach before LLVM ever sees it, and `dead` sweeps
+//!     what `ownership` orphaned.  Both are about the *size of the
+//!     input*, which is the one thing a front end can hand a back end
+//!     cheaply.
 //!
-//! ## What runs, and what each one measured
+//! There used to be a third reason — "whatever measurably helps the
+//! interpreter" — and it is gone with the engine it named.
+//!
+//! ## What runs
 //!
 //! `run` applies them in this order, and `Passes` turns each one off by
 //! itself so a bisect can name the one that broke something.
 //!
 //!   prune.zig     — drop functions the entry cannot reach.  `import
 //!                   std.strings` then one call: 26 functions become 2.
-//!   flow.zig      — thread jumps through forwarding blocks, merge a
-//!                   block into its only predecessor, drop what nothing
-//!                   reaches.  Runs first because merging gives the
-//!                   next pass longer blocks to work in.
-//!   values.zig    — block-local value numbering: store-to-load
-//!                   forwarding for locals, then CSE of everything
-//!                   deterministic.
 //!   ownership.zig — delete `object_bind`s a later bind overwrites and
 //!                   `object_unbind`s that provably free nothing.
 //!   dead.zig      — sweep instructions nothing reads, then compact the
-//!                   instruction pool.  Must run last: every pass above
-//!                   leaves orphans on purpose rather than renumber.
+//!                   instruction pool.  Must run last: the passes above
+//!                   leave orphans on purpose rather than renumber.
 //!
-//! Over the fourteen bundled programs and benchmarks, cumulative,
-//! against `prune` alone (which is where this stage started):
+//! Over the nine bundled programs and six benchmarks, the raw lowering
+//! against what the stage leaves (`luce ir --full` against `luce ir`):
 //!
 //! ```text
-//!                     instructions   blocks   .lc bytes
-//!   prune only               5178       830      137755
-//!   + dead                   5174       830           .   sweeps almost
-//!   + flow                   5091       747           .   nothing; it is
-//!   + values                 4546       747           .   the compactor
-//!   + ownership              4498       747      121659
-//!                          -13.1%    -10.0%      -11.7%
+//!                  instructions   blocks
+//!   raw lowering          12783     1776
+//!   optimized              7047      912
+//!                        -44.9%   -48.6%
 //! ```
 //!
-//! Interpreter, same-host interleaved A/B, best of four (`loops`,
-//! `math`, `matmul` scaled to ~0.5 s): **-8.7%, -7.2%, -5.9%**.  On the
-//! allocation-bound benchmarks (`strings`, `sort`) it is within noise —
-//! those programs are in the runtime, not the dispatch loop.  LLVM
-//! compile time over eight programs: **-2.5%**, which is small enough
-//! to be worth nothing on its own; the compiled path's *runtime* is
-//! unchanged, as it should be, because `default<O3>` had already found
-//! everything `flow` and `values` find.
+//! Almost all of that is `prune`, which is the point: what a program
+//! never does should not reach the artifact, the linker, or LLVM.
+//! Deleting `flow` and `values` handed 635 instructions and 87 blocks
+//! back to the back end, and cost **+0.1%** of `luce build --release`
+//! wall time over that corpus (554.4 ms → 555.2 ms, best of five
+//! each) and nothing at all at run time (`bench/compare.sh`, every row
+//! inside ±0.8%) — which is the whole of what two passes and 498 lines
+//! were buying once nothing interpreted MIR.
 //!
-//! So: `ownership` earns its place on an argument.  `flow` and `values`
-//! earn theirs on a measurement, and only for the interpreter.  `dead`
-//! is not really an optimization at all — it is the compactor the other
-//! four rely on, and its own sweep finds four instructions in the whole
-//! corpus.
+//! `dead` is not really an optimization at all — it is the compactor
+//! the other two rely on, and its own sweep finds four instructions in
+//! the whole corpus.
 //!
 //! ## The line none of them may cross
 //!
 //! A program's behaviour is identical afterwards, down to the trap's
 //! *source location*.  Nothing that can trap is ever deleted (only
-//! `pure` instructions go), nothing is reordered, and CSE cannot move
-//! a trap either: it folds a duplicate onto an earlier instruction with
-//! the same operands, and if the duplicate would have trapped the
-//! earlier one already did, at its own line.  Origins travel with their
-//! instructions through compaction, so a debug build still reports
-//! `file:line:column` from the same place.  `test.zig` runs optimized
-//! against unoptimized output — printed bytes, trap code, trap message,
-//! and objects left alive — over hand-written ownership cases and 400
-//! generated programs, and every spec in `specs/` already compiles with
-//! this stage on.
+//! `pure` instructions go) and nothing is reordered.  Origins travel
+//! with their instructions through compaction, so a debug build still
+//! reports `file:line:column` from the same place.
+//! `specs/optimize_spec.zig` runs the stage off against the stage on —
+//! printed bytes, trap code, trap message, call trace, and objects left
+//! alive — over hand-written ownership cases and 400 generated
+//! programs, on **both** engines, and every spec in `specs/` already
+//! compiles with this stage on.
 //!
 //! ## What deliberately does not run, and why
 //!
@@ -114,8 +100,12 @@
 //! the constants it needs to type-check, and what it leaves behind is a
 //! rounding error: two dead pure instructions in the whole corpus.
 //!
-//! *Typed container instructions* (`array_get_float` and friends).  The
-//! 41x is real and this is not the lever; see above.
+//! *Block-local value numbering and control-flow threading.*  They were
+//! here, they worked, and they bought the shipping engine nothing —
+//! `default<O3>` had already found everything they found.  See above.
+//!
+//! *Typed container instructions* (`array_get_float` and friends).  Not
+//! the lever; see above.
 //!
 //! *CSE of container reads* — `len` of a list nothing has touched,
 //! `index_get` with the same index twice.  This one would be genuinely
@@ -150,18 +140,15 @@
 //!                   externals.
 //!   registers.zig — where an instruction keeps its register operands,
 //!                   written once so no rewrite can miss one.
-//!   prune.zig, flow.zig, values.zig, ownership.zig, dead.zig — the
-//!                   passes, each with its own header arguing for
-//!                   itself.
-//!   test.zig      — the stage's own proofs, including the fuzz that
-//!                   runs optimized against unoptimized output.
+//!   prune.zig, ownership.zig, dead.zig — the passes, each with its own
+//!                   header arguing for itself.
+//!   test.zig      — the stage's own proofs: each pass driven alone,
+//!                   and the rewrite it claims checked by name.
 
 const std = @import("std");
 const mir = @import("06_mir.zig");
 
 pub const prune = @import("07_optimize/prune.zig").prune;
-pub const flow = @import("07_optimize/flow.zig").flow;
-pub const values = @import("07_optimize/values.zig").values;
 pub const ownership = @import("07_optimize/ownership.zig").ownership;
 pub const dead = @import("07_optimize/dead.zig").dead;
 
@@ -176,8 +163,6 @@ pub const effects = @import("07_optimize/effects.zig");
 /// block holds — and it is what makes the switches independent.
 pub const Passes = struct {
     prune: bool = true,
-    flow: bool = true,
-    values: bool = true,
     ownership: bool = true,
     dead: bool = true,
 
@@ -187,8 +172,6 @@ pub const Passes = struct {
     /// prints.
     pub const none: Passes = .{
         .prune = false,
-        .flow = false,
-        .values = false,
         .ownership = false,
         .dead = false,
     };
@@ -202,8 +185,6 @@ pub const Passes = struct {
 /// driver does both (`compile.zig`).
 pub fn run(arena: std.mem.Allocator, program: *mir.Program, passes: Passes) std.mem.Allocator.Error!void {
     if (passes.prune) try prune(arena, program);
-    if (passes.flow) try flow(arena, program);
-    if (passes.values) try values(arena, program);
     if (passes.ownership) try ownership(arena, program);
     if (passes.dead) try dead(arena, program);
 }
@@ -211,10 +192,8 @@ pub fn run(arena: std.mem.Allocator, program: *mir.Program, passes: Passes) std.
 test {
     _ = @import("07_optimize/dead.zig");
     _ = @import("07_optimize/effects.zig");
-    _ = @import("07_optimize/flow.zig");
     _ = @import("07_optimize/ownership.zig");
     _ = @import("07_optimize/prune.zig");
     _ = @import("07_optimize/registers.zig");
     _ = @import("07_optimize/test.zig");
-    _ = @import("07_optimize/values.zig");
 }

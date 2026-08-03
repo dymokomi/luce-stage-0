@@ -1,9 +1,9 @@
 //! The stage's own proofs.
 //!
-//! *Shape* only: each pass is driven on its own over a real compiled
-//! program and the rewrite it claims is checked by name, so a pass
-//! that quietly stops firing is caught rather than merely staying
-//! green.  Every one of them re-verifies afterwards: `07_optimize`
+//! *Shape* only: each of the three passes is driven on its own over a
+//! real compiled program and the rewrite it claims is checked by name,
+//! so a pass that quietly stops firing is caught rather than merely
+//! staying green.  Every one of them re-verifies afterwards: `07_optimize`
 //! runs in place, and a pass that breaks a MIR invariant must be an
 //! internal compiler error, never a miscompile.
 //!
@@ -90,49 +90,6 @@ fn countTag(program: *const Program, tag: std.meta.Tag(mir.Instruction)) usize {
 // Shape: what each pass does, driven one at a time
 // ---------------------------------------------------------------------------
 
-test "value numbering folds a re-read local and a recomputed expression" {
-    var program = try compileRaw(
-        \\func main():
-        \\    var total = 0
-        \\    var index = 4
-        \\    total = index * index + index * index
-        \\    total = total + index
-        \\    print(str(total))
-        \\
-    );
-    defer program.deinit();
-
-    const before = liveInstructions(&program);
-    const reads_before = countTag(&program, .local_get);
-    try optimize.values(program.arena.allocator(), &program);
-    try mir.verify(testing.allocator, &program);
-
-    // Four reads of `index` become one, and the repeated product is
-    // computed once.
-    try testing.expect(countTag(&program, .local_get) < reads_before);
-    try testing.expect(liveInstructions(&program) < before);
-}
-
-test "value numbering keeps a local read that a store invalidates" {
-    var program = try compileRaw(
-        \\func main():
-        \\    var total = 1
-        \\    total = total + 1
-        \\    total = total + 1
-        \\    print(str(total))
-        \\
-    );
-    defer program.deinit();
-
-    const reads = countTag(&program, .local_get);
-    try optimize.values(program.arena.allocator(), &program);
-    try mir.verify(testing.allocator, &program);
-    // Each read follows a store to the same local, so each one is
-    // forwarded to the stored register rather than to another read —
-    // the count falls, but the program still adds twice.
-    try testing.expect(countTag(&program, .local_get) <= reads);
-}
-
 test "ownership drops the temporary's bind and its inert release" {
     var program = try compileRaw(
         \\func main():
@@ -149,7 +106,6 @@ test "ownership drops the temporary's bind and its inert release" {
     try testing.expectEqual(@as(usize, 2), countTag(&program, .object_unbind));
 
     const arena = program.arena.allocator();
-    try optimize.values(arena, &program);
     try optimize.ownership(arena, &program);
     try mir.verify(testing.allocator, &program);
 
@@ -179,31 +135,9 @@ test "ownership leaves a bind alone across a call" {
 
     const arena = program.arena.allocator();
     const binds = countTag(&program, .object_bind);
-    try optimize.values(arena, &program);
     try optimize.ownership(arena, &program);
     try mir.verify(testing.allocator, &program);
     try testing.expect(countTag(&program, .object_bind) >= binds - 1);
-}
-
-test "control flow merges the loop increment and drops the forwarder" {
-    var program = try compileRaw(
-        \\func main():
-        \\    var total = 0
-        \\    for i in range(0, 10):
-        \\        for j in range(0, 10):
-        \\            total = total + i * j
-        \\    print(str(total))
-        \\
-    );
-    defer program.deinit();
-
-    const before = blockCount(&program);
-    try optimize.flow(program.arena.allocator(), &program);
-    try mir.verify(testing.allocator, &program);
-    try testing.expect(blockCount(&program) < before);
-    // Every surviving block is reachable from the entry, so none of
-    // them is a block the artifact carries for nothing.
-    try testing.expect(blockCount(&program) >= 1);
 }
 
 test "dead code sweeps unread values and compacts the pool" {
@@ -219,7 +153,6 @@ test "dead code sweeps unread values and compacts the pool" {
     const arena = program.arena.allocator();
     const before = liveInstructions(&program);
     const locals = localCount(&program);
-    try optimize.values(arena, &program);
     try optimize.ownership(arena, &program);
     try optimize.dead(arena, &program);
     try mir.verify(testing.allocator, &program);
@@ -314,11 +247,9 @@ test "every pass on its own leaves verifiable MIR" {
         \\
     };
     const each = [_]optimize.Passes{
-        .{ .prune = true, .flow = false, .values = false, .ownership = false, .dead = false },
-        .{ .prune = false, .flow = true, .values = false, .ownership = false, .dead = false },
-        .{ .prune = false, .flow = false, .values = true, .ownership = false, .dead = false },
-        .{ .prune = false, .flow = false, .values = false, .ownership = true, .dead = false },
-        .{ .prune = false, .flow = false, .values = false, .ownership = false, .dead = true },
+        .{ .prune = true, .ownership = false, .dead = false },
+        .{ .prune = false, .ownership = true, .dead = false },
+        .{ .prune = false, .ownership = false, .dead = true },
     };
     for (sources) |source| {
         for (each) |passes| {

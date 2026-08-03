@@ -1,17 +1,20 @@
 //! `07_optimize` may not change what a program does.
 //!
-//! The stage rewrites verified MIR in place — value numbering,
-//! ownership elision, control-flow merging, dead-code sweeping — and
-//! the one thing it is not allowed to do is change one printed byte,
-//! one trap code, one trap message, or one live object.  That is a
-//! claim about *running*, so it is proved here rather than beside the
-//! passes: what the passes look like after each rewrite is checked in
-//! `07_optimize/test.zig`, and what the program still does is checked
-//! here.
+//! The stage rewrites verified MIR in place — reachability pruning,
+//! ownership elision, dead-code sweeping — and the one thing it is not
+//! allowed to do is change one printed byte, one trap code, one trap
+//! message, or one live object.  That is a claim about *running*, so it
+//! is proved here rather than beside the passes: what the passes look
+//! like after each rewrite is checked in `07_optimize/test.zig`, and
+//! what the program still does is checked here.
 //!
-//! Each case is therefore compiled twice — with the stage off and with
-//! it on — and each of those two programs is run on **both** engines
-//! and compared (`specs/agree.zig`).  Four runs; one answer.
+//! Each case is therefore compiled twice — with the whole stage off and
+//! with it on (`CompileOptions.prune`) — and each of those two programs
+//! is run on **both** engines and compared (`specs/agree.zig`).  Four
+//! runs; one answer.  The toggle stayed meaningful when `flow` and
+//! `values` were deleted, because it was never a per-pass switch: it
+//! turns stage 7 off, and what is behind it now is prune, ownership and
+//! dead.
 //!
 //! The dangerous corner is ownership: `object_unbind` is the
 //! deallocation, so an elision one step too clever leaks an object,
@@ -19,9 +22,14 @@
 //! leak census is what notices, and it is compared on both axes.
 //!
 //! The generated corpus at the end is the part that finds what nobody
-//! thought to write down — and, now that it runs compiled too, it is
-//! the widest differential net over the lowering that this tree has:
-//! four hundred programs nobody wrote.
+//! thought to write down — and it is the widest differential net over
+//! the lowering that this tree has: four hundred programs nobody wrote,
+//! each compiled twice and each of those run twice.  Some of its
+//! statement templates were shaped for passes that no longer exist
+//! (repeated reads of one local, branches that leave a block with one
+//! predecessor).  They are kept on purpose: what they exercise now is
+//! **stage 8**, which is where those shapes still get decided, and the
+//! net is only as wide as the shapes in it.
 
 const std = @import("std");
 const agree = @import("agree.zig");
@@ -205,8 +213,8 @@ test "traps keep their code, their message, and their place" {
 // ---------------------------------------------------------------------------
 
 /// Build a random but always-valid script out of statement templates.
-/// The point is not clever programs — it is the *shapes* the passes
-/// reason about: repeated reads of one local, nested scopes holding
+/// The point is not clever programs — it is the *shapes* a lowering has
+/// to get right: repeated reads of one local, nested scopes holding
 /// fresh objects, branches that leave blocks with one predecessor, and
 /// arithmetic that sometimes traps.
 fn generate(text: *std.ArrayList(u8), random: std.Random) Allocator.Error!void {

@@ -446,15 +446,16 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     // does, and it documents the IR for a reader.  Regenerate
     // deliberately when lowering changes on purpose.
     //
-    // This is the *optimized* program — what `luce build` writes and
-    // what an engine runs.  Stage 7 has already been over it: the
-    // hidden temporary's bind and its inert release are gone
-    // (07_optimize/ownership.zig), and the reads of `xs` inside the
-    // first block are the register the list was stored from
-    // (07_optimize/values.zig).  `luce ir --full` prints the raw
-    // lowering instead.  The temporary is still in the local table:
-    // `give`/`free` carry a local id as an integer value, so nothing
-    // may renumber locals yet (07_optimize/dead.zig).
+    // This is the *optimized* program — what `luce build` compiles.
+    // Stage 7 has already been over it: the hidden temporary's bind and
+    // its inert release are gone (07_optimize/ownership.zig).  The
+    // re-reads of `xs` are *not* folded, and deliberately: block-local
+    // value numbering was the interpreter's pass and went with it, and
+    // `default<O3>` folds them downstream (docs/ENGINE.md step 7).
+    // `luce ir --full` prints the raw lowering instead.  The temporary
+    // is still in the local table: `give`/`free` carry a local id as an
+    // integer value, so nothing may renumber locals yet
+    // (07_optimize/dead.zig).
     var program = try expectCompilesOptions(
         \\func main():
         \\    var xs = [1, 2]
@@ -478,30 +479,31 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\    intrinsic append_value, r2, r1
         \\    local_set %1, r2
         \\    object_bind %1, r2
-        \\    r7 = intrinsic len, r2
-        \\    r8 = const 0
-        \\    r9 = greater.Int r7, r8
-        \\    local_set %2, r9
-        \\    branch r9, b1, b2
+        \\    r7 = local_get %1
+        \\    r8 = intrinsic len, r7
+        \\    r9 = const 0
+        \\    r10 = greater.Int r8, r9
+        \\    local_set %2, r10
+        \\    branch r10, b1, b2
         \\  b1:
-        \\    r12 = local_get %1
-        \\    r13 = const 0
-        \\    r14 = intrinsic index_get, r12, r13
-        \\    r15 = const 1
-        \\    r16 = equal.Int r14, r15
-        \\    local_set %2, r16
+        \\    r13 = local_get %1
+        \\    r14 = const 0
+        \\    r15 = intrinsic index_get, r13, r14
+        \\    r16 = const 1
+        \\    r17 = equal.Int r15, r16
+        \\    local_set %2, r17
         \\    jump b2
         \\  b2:
-        \\    r19 = local_get %2
-        \\    branch r19, b3, b4
+        \\    r20 = local_get %2
+        \\    branch r20, b3, b4
         \\  b3:
-        \\    r21 = local_get %1
-        \\    r22 = const 3
-        \\    intrinsic append_value, r21, r22
+        \\    r22 = local_get %1
+        \\    r23 = const 3
+        \\    intrinsic append_value, r22, r23
         \\    jump b4
         \\  b4:
-        \\    r25 = local_get %1
-        \\    object_unbind %1, r25
+        \\    r26 = local_get %1
+        \\    object_unbind %1, r26
         \\    ret
         \\
     , dump);

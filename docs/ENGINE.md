@@ -745,13 +745,62 @@ loom's allocator is loom's alone.
 `zig build test` is **835**: 836 minus `backend.zig`'s own anonymous
 test block, which is the whole of what the file cost the suite.
 
-**7. Delete `07_optimize/values.zig` and `flow.zig`.** *(needs 5)*
+**7. Delete `07_optimize/values.zig` and `flow.zig`. — DONE.**
+*(needs 5)*
 *Deletes:* 498 lines, on their own headers' instruction.
 *Proves it safe:* measured at **-2.5% LLVM compile time, 0% compiled
 runtime**; `07_optimize/test.zig` and the instruction-count table are
 the check. `registers.zig` stays — `dead.zig` still needs it.
 *Forecloses:* nothing downstream; the barrel says "nothing else
 depends on it".
+
+*What it took, in contact with the code:*
+
+**"Nothing else depends on it" was wrong, and the test caught it.**
+`ownership.zig` did. Its knowledge is keyed by *register*, and the
+lowering does not hand the same register to both halves of the pattern
+its header documents: the release reads the temporary back
+(`r2 = local_get %0`) instead of reusing `r0`. `values`'s
+store-to-load forwarding was what made those one register. Deleting it
+left the bind elision working and the **unbind** elision dead — 62
+`object_unbind`s survived the corpus where 35 had, and
+`07_optimize/test.zig`'s "ownership drops the temporary's bind and its
+inert release" failed on the second half of its own name.
+
+**The fix was to make the pass compute its own fact, not to keep the
+other one.** `ownership.zig` now carries the store-to-load half — one
+`held: []?Register` table, one forward walk, the same
+`owns_storage` exclusion `values` had, and no CSE and no operand
+rewriting. Twenty lines inside the pass that needs them, against 246
+of general value numbering that nothing else wanted. The corpus is
+back to 35 `object_unbind`s, and the coupling is gone rather than
+hidden.
+
+**Measured after, not assumed.** Over the nine bundled programs and
+six benchmarks: raw lowering 12,783 instructions / 1,776 blocks →
+**7,047 / 912** (was 6,412 / 825 with all five passes). `luce build
+--release` wall time over six of them: 554.4 ms → **555.2 ms**
+(+0.1%), not the +2.5% the old measurement implied. `bench/compare.sh`
+against the step-6 commit: **every row inside ±0.8%**, which is noise —
+loops -0.7%, math -0.2%, strings -0.4%, arrays -0.7%, matmul +0.8%,
+stats +0.1%.
+
+**The oracle needed neither pass, as expected.** Every spec passes
+with them gone, and the negative control still bites: swapping
+`.smin` for `.smax` in `emitExtremum` fails five tests, including
+`optimize_spec`'s generated corpus.
+
+**`optimize_spec`'s off/on toggle stayed meaningful and needed no
+surgery.** It was never a per-pass switch — `CompileOptions.prune`
+turns *stage 7* off — and prune, ownership and dead are still behind
+it. The fuzz keeps its four runs per program; its statement templates
+that were shaped for value numbering and block merging now exercise
+stage 8, which is where those shapes get decided, and cutting them
+would only narrow the widest differential net in the tree.
+
+`zig build test` is **832**: 835 minus the two value-numbering shape
+tests and the one control-flow shape test, which were the only tests
+that named a deleted pass.
 
 **8. Move the executable specification onto the compiled path — as
 `agree`. — DONE.** *(needs 1–2; independent of 4–7)*

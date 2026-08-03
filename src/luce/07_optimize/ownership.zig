@@ -57,6 +57,21 @@
 //! forgets every other register, because two registers may name one
 //! object and rebinding through one of them would make a conclusion
 //! about the other wrong.
+//!
+//! **The one fact this pass computes for itself: store-to-load
+//! forwarding.**  The lowering does not hand the same register to both
+//! halves of the pattern above — the release reads the temporary back
+//! (`r2 = local_get %0`) rather than reusing `r0` — so keying by
+//! register only works if `local_get %L` is known to be the register
+//! last stored into `%L`.  That is one forward walk with one table,
+//! and it is here rather than in a pass of its own because it is the
+//! *only* place left that needs it: general value numbering existed
+//! for the interpreter, measured at nothing on the compiled path, and
+//! went with the interpreter (docs/ENGINE.md step 7).  Nothing else in
+//! MIR writes a local — there is no address-of, and a call gets copies
+//! of its arguments — so the invalidation rule is exactly "another
+//! store to the same local", and a slot that owns its storage is never
+//! forwarded at all (docs/STRINGS.md).
 
 const std = @import("std");
 const defs = @import("../06_mir/defs.zig");
@@ -87,16 +102,39 @@ fn walkFunction(arena: Allocator, function: *Function) Allocator.Error!void {
     var claims: std.AutoHashMapUnmanaged(Register, Claim) = .empty;
     var dead: std.ArrayList(bool) = .empty;
 
+    // Which register each register *is*, after store-to-load
+    // forwarding — see `forward` below.  Registers never cross a
+    // block, so one identity table serves the whole function.
+    const same = try arena.alloc(Register, function.instructions.len);
+    for (same, 0..) |*slot, index| slot.* = @intCast(index);
+    const held = try arena.alloc(?Register, function.locals.len);
+
     for (function.blocks) |*block| {
         claims.clearRetainingCapacity();
         dead.clearRetainingCapacity();
         try dead.appendNTimes(arena, false, block.items.len);
+        @memset(held, null);
         var found = false;
 
         for (block.items, 0..) |item, position| {
             switch (function.instructions[item]) {
+                .local_set => |set| {
+                    // A slot that owns its storage holds an owned copy
+                    // rather than the register stored into it — for
+                    // text the runtime picks the form (docs/STRINGS.md)
+                    // — so the store says nothing about what a later
+                    // load answers.
+                    held[set.local] = if (function.locals[set.local].owns_storage)
+                        null
+                    else
+                        same[set.value];
+                },
+                .local_get => |local| {
+                    if (held[local]) |value| same[item] = value else held[local] = item;
+                },
                 .object_bind => |bind| {
-                    if (claims.get(bind.value)) |earlier| {
+                    const value = same[bind.value];
+                    if (claims.get(value)) |earlier| {
                         // Overwritten before anybody could read it.
                         dead.items[earlier.position] = true;
                         found = true;
@@ -104,10 +142,10 @@ fn walkFunction(arena: Allocator, function: *Function) Allocator.Error!void {
                     // Any other register may alias this object, and
                     // this write just changed its owner too.
                     claims.clearRetainingCapacity();
-                    try claims.put(arena, bind.value, .{ .local = bind.local, .position = position });
+                    try claims.put(arena, value, .{ .local = bind.local, .position = position });
                 },
                 .object_unbind => |unbind| {
-                    const claim = claims.get(unbind.value) orelse continue;
+                    const claim = claims.get(same[unbind.value]) orelse continue;
                     if (claim.local != unbind.local) {
                         // Owned by somebody else, so this frees
                         // nothing.  Nothing about the heap changes,
