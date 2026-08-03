@@ -59,8 +59,8 @@ so a runtime trap prints `file:line:column` and a call trace.
 behaves identically (docs/MODES.md).
 
 The last three shapes compile through LLVM, which measures at
-0.97-1.07x of C on the benchmark set where the interpreter measures at
-30-60x ([docs/CODEGEN.md](docs/CODEGEN.md)).  They are native code and
+0.79-1.10x of C on five of the six benchmarks — `strings` is the one
+row still behind, at 2.7x ([docs/CODEGEN.md](docs/CODEGEN.md)).  They are native code and
 are stamped with the machine and the host ABI they were built for, so
 a loader refuses the wrong one by name rather than crashing.  Linking
 uses `cc`; `LUCE_CC` names another driver and `LUCE_LIB` the directory
@@ -102,8 +102,9 @@ none either.
 
 A Luce program is a script with a `main` entry.  The language is
 statically typed with inference, has structs, `List`/`Map`/`Array`/
-`Builder` heap objects with explicit `new`/`free` (loom reports what
-you leak), slices, and checked traps — `docs/LANGUAGE.md` is the
+`Builder` heap objects created with `new` and freed by scope
+ownership (`give`/`copy`/`free`, docs/OWNERSHIP.md), slices, and
+checked traps — `docs/LANGUAGE.md` is the
 reference.  Effects — console,
 files, arguments, the screen — only exist as host builtins that loom,
 the trusted boundary, implements; the language itself stays pure:

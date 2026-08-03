@@ -338,7 +338,13 @@ the proof the language moved.
   discovering `func test_*():` would be cheap and very Zig.  `fmt` and
   an LSP both want stage 5's faithful tree first — an argument for
   writing it.
-- **Docs to correct:** none outstanding.  The interpolation
+- **Docs to correct:** `tools/vscode-luce/syntaxes/luce.tmLanguage.json`
+  is stale — it highlights removed v1 Fabric builtins and knows none of
+  `give`, `copy`, `new`, `try`, `catch`, `none`, `import`, or the
+  conversion builtins, and its type list has `Input`/`Output` but not
+  the four heap types.  `site/src/highlight.zig` is generated from the
+  lexer's own keyword table and has a test asserting the two agree; the
+  editor grammar should be too, or dropped.  The interpolation
   contradiction in `LANGUAGE.md` and the "future ReleaseFast" in
   `OWNERSHIP.md` are both fixed.  `STD.md` documents sixteen of the
   eighteen functions in `strings.luc`, and the two it omits —
