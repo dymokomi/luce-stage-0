@@ -136,6 +136,15 @@ and `--release` only strips origin tables.  The check was also measured
 free once container access is inlined -- what costs is the control
 dependence it creates, not the branch.
 
+The promise is about the *object*, not about the storage it sat in.
+The runtime hands a freed object's table row to the next `new`
+(docs/MEMORY.md), and a handle names one occupant of a row rather than
+the row itself, so `view` above traps identically whether or not
+something else has since moved in -- and never reads the newcomer.
+Generations do not wrap: a row that runs out of them is retired rather
+than reused, because a one-in-four-billion aliasing hole is not a
+price S9 pays.
+
 **S10. `let x = give y` — transfer between names; the giver dies.**
 ```luce
 func main():

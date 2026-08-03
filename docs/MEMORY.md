@@ -306,25 +306,52 @@ what makes this an implementation decision rather than a model change.
 Projected: the churn loop goes flat, and the editor goes from 976 MB
 to **under ~1 MB of string storage, flat in keystrokes**.
 
-### Object identity: generational handles
+### Object identity: generational handles — **shipped**
 
-Separately and first, because it is small and self-contained: bits
-32–63 of `Value.bits` are unused, so an object handle becomes
-`{index, generation}` and rows go on a free list.  `alive` disappears
-— a row is dead iff its generation differs from the handle's.  The
-fast path is unchanged in shape: one load and one compare, as today.
+Separately and first, because it was small and self-contained: bits
+32–63 of `Value.bits` were unused, so an object handle is
+`{index, generation}` and rows go on a free list.  `alive` is gone —
+a row is dead iff its generation differs from the handle's — and the
+fast path is unchanged in shape: one load and one compare, as before.
+The free list is threaded through the rows themselves
+(`Object.next_free`), so a free costs two stores and cannot fail.
 
 **Generations do not wrap.**  slotmap accepts wraparound after 2³¹
 reuses and EnTT's 12-bit version wraps routinely; Luce retires the row
 instead.  S9 is a safety guarantee here, not an ECS convenience, and
 trading a leak for a one-in-four-billion aliasing hole is exactly the
-bargain this project does not take.  Cost: at most one 128-byte row
-leaked per four billion frees of that same row.
+bargain this project does not take.  A row that reaches
+`heap.retired` leaves the free list for good, so no handle is ever
+handed out at that generation and the row can never be named again.
+Cost: at most one row leaked per four billion frees of that same row.
 
-Nothing serialises an object handle, so there is no `.lc` format bump.
-`07_optimize/ownership.zig` already pessimises for row reuse — the
-optimizer was written for this — and can be *relaxed* afterwards,
-since a stale handle can no longer name someone else's object.
+Nothing serialises an object handle, so the `.lc` format did not move,
+and neither did the host ABI — an artifact links its own
+`libluce_rt`, so the only contract it shares with a loader is
+`LuceHost`, which this does not touch.  What did move is the object
+row, which generated code walks inline: `layout.alive` became
+`layout.generation`, a heap register in `08_llvm` widened from `i32`
+to `i64` to carry the whole handle, and the retired row a lifted
+resolution reads for a null handle now says `retired` rather than
+zero.
+
+Measured on a loop making, filling and freeing one list per
+iteration, retaining nothing (`loom run`, warm, both sides built on
+the same host): peak RSS **281 MB → 21.2 MB at 1M iterations and
+593 MB → 21.3 MB at 4M**, against a 21.0 MB floor for a program that
+prints one line.  What was dead linear — ~148 bytes per object ever
+created — is now flat in the iteration count and within a rounding
+error of the floor.  It is also faster, because the table stops
+growing: 0.26 s → 0.18 s at 4M.  The benchmarks did not move.
+
+`07_optimize/ownership.zig`'s window was said to close at `heap_new`
+because a fresh object could reuse a freed row and revive a stale
+handle.  That reason is gone — a fresh object is named at a
+generation no live handle carries — but the window still closes
+there, because no program puts a `heap_new` between the two binds the
+pass rewrites: the allocation is always in front of both.  There is
+nothing to win and no test that could tell the difference, so the
+classification stayed and only its justification changed.
 
 ### Tracing GC stays out, and the reason has changed
 

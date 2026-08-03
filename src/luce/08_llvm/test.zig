@@ -1347,6 +1347,51 @@ test "an alias used after the owner freed agrees: use_after_free (S9)" {
     );
 }
 
+test "a stale alias whose row was reused agrees: still use_after_free (S9)" {
+    // The row `xs` vacates is the row `fresh` moves into, so the two
+    // handles differ only in their generation — and that is the whole
+    // of what keeps `stale` from quietly becoming a second name for
+    // `fresh` on either engine.  Compiled code makes this test itself,
+    // inline, with the row's generation against the handle's.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.append(1)
+        \\    let stale = xs
+        \\    free(xs)
+        \\    let fresh = new List(Int)
+        \\    fresh.append(10)
+        \\    fresh.append(20)
+        \\    if stale == fresh:
+        \\        print("aliased")
+        \\    else:
+        \\        print("distinct")
+        \\    print(str(len(fresh)))
+        \\    print(str(len(stale)))
+        \\
+    );
+}
+
+test "a reused row is refused by every door, and the newcomer by none" {
+    // The same reuse reached through indexing, iteration and the
+    // ownership verbs rather than through `len`, because each takes a
+    // different route to the row.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var rows = new List(List(Int))
+        \\    var doomed = new List(Int)
+        \\    doomed.append(7)
+        \\    let stale = doomed
+        \\    free(doomed)
+        \\    let fresh = new List(Int)
+        \\    fresh.append(3)
+        \\    rows.append(give fresh)
+        \\    print(str(rows[0][0]))
+        \\    print(str(stale[0]))
+        \\
+    );
+}
+
 test "the alias dodge agrees: not_owned (S23)" {
     try agree(std.testing.allocator,
         \\func main():
@@ -1659,6 +1704,41 @@ test "a resolution lifted out of a loop still traps where the access is" {
         \\    for i in range(0, 6):
         \\        total += a[i]
         \\    print("unreachable " + str(Int(total)))
+        \\
+    );
+}
+
+test "a lifted resolution sees the generation, so a reoccupied row still traps" {
+    // The row `a` vacates is the row `reborn` moves into, and the
+    // lifted resolution reads that row in the preheader — so what
+    // stands between `alias` and `reborn`'s elements is the one
+    // comparison the loop kept: the row's generation against the
+    // handle's.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var a = new Array(Int, 4)
+        \\    a.fill(5)
+        \\    let alias = a
+        \\    free(a)
+        \\    var reborn = new Array(Int, 4)
+        \\    reborn.fill(1)
+        \\    var total = 0
+        \\    for i in range(0, 3):
+        \\        total += alias[i]
+        \\    print("unreachable " + str(total))
+        \\
+    );
+    // And the null handle, whose lifted resolution reads the module's
+    // retired row rather than the table: still `null_object`, still at
+    // the access.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var rows = new Array(Array(Int, _), 2)
+        \\    var inner = rows[0]
+        \\    var total = 0
+        \\    for i in range(0, 3):
+        \\        total += inner[i]
+        \\    print("unreachable " + str(total))
         \\
     );
 }

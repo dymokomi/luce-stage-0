@@ -3,7 +3,7 @@
 //!
 //! Stage 10 indexes an Array inline (`lower.zig`), and every access
 //! begins by *resolving* the handle: load the object table's base out
-//! of the runtime, step to the row, then load the row's `alive` byte,
+//! of the runtime, step to the row, then load the row's generation,
 //! its element count, and its element pointer.  Four loads before the
 //! element itself, and in a loop they are the same four loads every
 //! time.
@@ -26,7 +26,8 @@
 //! the row without deciding anything about it — `lower.zig` reads a
 //! dead all-zero row instead when the handle is null, so the loads are
 //! safe unconditionally — and every access still tests the handle for
-//! null and the row for `alive` before it touches an element.  A trap
+//! null and the row for the handle's own generation before it
+//! touches an element.  A trap
 //! therefore still fires at exactly the instruction that owes it, with
 //! exactly the trace it has today, which is the property a
 //! bounds-checked language cannot trade away for speed.  What the loop
@@ -39,9 +40,9 @@
 //! A resolution may be lifted out of a loop when **no instruction
 //! anywhere in that loop can disturb it**: nothing may attach an
 //! object (the table's rows are one allocation and move when it
-//! grows), free one (`alive` would turn over, and the check reading a
-//! stale byte would miss the trap it owes), or replace an Array's
-//! storage.  That is `optimize.effects.viewStable`, plus the one
+//! grows), free one (the row's generation would move on and the row
+//! could be re-occupied at once, so a check reading a stale generation
+//! would miss the trap it owes), or replace an Array's storage.  That is `optimize.effects.viewStable`, plus the one
 //! refinement this stage can make and that one cannot — an
 //! `index_set` whose element type owns nothing frees nothing.
 //!

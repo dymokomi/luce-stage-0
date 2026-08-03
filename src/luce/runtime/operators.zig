@@ -140,8 +140,10 @@ pub fn compare(op: mir.BinaryOp, left: Value, right: Value) bool {
         },
         .object => |held| {
             // Object equality is identity: same object, not same
-            // contents.
-            const same = held == right.asObject();
+            // contents — and the same *object*, not merely the same
+            // table row, so a stale handle never equals the handle of
+            // whoever moved in after it.
+            const same = held.same(right.asObject());
             return if (op == .equal) same else !same;
         },
         .none => unreachable,

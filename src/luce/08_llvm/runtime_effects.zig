@@ -53,7 +53,7 @@
 //!     rows, and the `dims` and `elements` of an Array.  Generated code
 //!     *does* reach those: since inline container access
 //!     (docs/CODEGEN.md) it loads the table base out of `%rt`, tests a
-//!     row's `alive` byte, and loads and stores array elements
+//!     row's generation, and loads and stores array elements
 //!     directly.  The moment it did, calling that storage inaccessible
 //!     became false, and a false `inaccessiblemem` is not a lost
 //!     optimization — it lets LLVM conclude that `luce_rt_append`

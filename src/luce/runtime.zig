@@ -44,6 +44,9 @@ pub const Memory = @import("runtime/heap.zig").Memory;
 pub const Owner = @import("runtime/heap.zig").Owner;
 pub const OwnedBy = @import("runtime/heap.zig").OwnedBy;
 pub const flattenIndex = @import("runtime/heap.zig").flattenIndex;
+/// The generation at which an object table row is retired instead of
+/// reused, so that generations never wrap (docs/MEMORY.md).
+pub const retired = @import("runtime/heap.zig").retired;
 /// Where an object row's fields sit, for the one reader that cannot
 /// call a function to ask: generated code walking an Array inline.
 pub const layout = @import("runtime/heap.zig").layout;
@@ -52,7 +55,11 @@ pub const max_array_elements = @import("runtime/heap.zig").max_array_elements;
 pub const Tag = @import("runtime/value.zig").Tag;
 pub const Value = @import("runtime/value.zig").Value;
 pub const View = @import("runtime/value.zig").View;
+pub const Handle = @import("runtime/value.zig").Handle;
 pub const null_index = @import("runtime/value.zig").null_index;
+/// Where a handle's generation sits in `Value.bits`, for the reader
+/// that takes the two halves apart itself: generated code.
+pub const generation_shift = @import("runtime/value.zig").generation_shift;
 pub const keyEquals = @import("runtime/value.zig").keyEquals;
 
 pub const containers = @import("runtime/containers.zig");

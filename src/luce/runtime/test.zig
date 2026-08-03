@@ -64,9 +64,107 @@ test "a fresh object is loose, and the census counts what was not freed" {
 
     runtime.freeObject(first.asObject());
     try testing.expectEqual(@as(u32, 1), runtime.live);
-    // The freed handle stays detectably dead; slots are never reused.
+    // The freed handle stays detectably dead.
     try expectTrap(.use_after_free, runtime, runtime.resolve(first));
     _ = second;
+}
+
+test "a freed row is reused, so the table follows live objects and not allocations" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // A hundred thousand objects, one at a time.  Retaining rows would
+    // make the table a hundred thousand long; reusing them keeps it at
+    // the high-water mark, which here is one.
+    var made: usize = 0;
+    while (made < 100_000) : (made += 1) {
+        const held = try runtime.newList();
+        try containers.append(runtime, held, Value.ofInt(@intCast(made)));
+        runtime.freeObject(held.asObject());
+    }
+    try testing.expectEqual(@as(usize, 1), runtime.table.items.len);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+
+    // And the peak is what it costs: four alive at once needs four
+    // rows, however many have come and gone before them.
+    var held: [4]Value = undefined;
+    for (&held) |*slot| slot.* = try runtime.newList();
+    try testing.expectEqual(@as(usize, 4), runtime.table.items.len);
+    for (held) |slot| runtime.freeObject(slot.asObject());
+}
+
+test "a stale handle to a reused row names nobody, not the newcomer" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const first = try runtime.newList();
+    try containers.append(runtime, first, Value.ofInt(11));
+    runtime.freeObject(first.asObject());
+
+    // The very next object takes the row the first one vacated — the
+    // whole point of the free list — and is a different object all the
+    // same.
+    const second = try runtime.newList();
+    try testing.expectEqual(first.asObject().index, second.asObject().index);
+    try testing.expect(!first.asObject().same(second.asObject()));
+
+    // Every door into the row refuses the stale handle, and the live
+    // one still opens.
+    try expectTrap(.use_after_free, runtime, runtime.resolve(first));
+    try expectTrap(.use_after_free, runtime, containers.length(runtime, first));
+    try expectTrap(.use_after_free, runtime, containers.indexGet(runtime, first, &.{Value.ofInt(0)}));
+    try expectTrap(.use_after_free, runtime, runtime.deepCopy(first));
+    try expectTrap(.use_after_free, runtime, runtime.checkGivable(first, null));
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asInt());
+
+    // Identity is the object, not the row: the two handles are not
+    // equal, and freeing through the stale one takes nothing.
+    try testing.expect(!operators.compare(.equal, first, second));
+    runtime.freeObject(first.asObject());
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+
+    runtime.freeObject(second.asObject());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "a row out of generations is retired rather than handed out again" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // Wind one row to its last usable generation rather than freeing
+    // it four billion times.
+    const doomed = try runtime.newList();
+    const last: value.Handle = .{
+        .index = doomed.asObject().index,
+        .generation = heap.retired - 1,
+    };
+    runtime.table.items[last.index].generation = last.generation;
+    _ = try runtime.resolve(Value.ofObject(last));
+
+    runtime.freeObject(last);
+    try testing.expectEqual(heap.retired, runtime.table.items[last.index].generation);
+    try expectTrap(.use_after_free, runtime, runtime.resolve(Value.ofObject(last)));
+
+    // The row is out of the game.  Nothing is ever handed out at the
+    // retired generation — the only handle that could name this row
+    // again does not exist and cannot be made — so the next object
+    // gets a row of its own, and so does the one after it.
+    const next = try runtime.newList();
+    try testing.expect(next.asObject().index != last.index);
+    runtime.freeObject(next.asObject());
+    const after = try runtime.newList();
+    try testing.expect(after.asObject().index != last.index);
+
+    // A row that still has generations left does keep coming back, so
+    // what was retired is the one row and not the free list.
+    try testing.expectEqual(next.asObject().index, after.asObject().index);
+    runtime.freeObject(after.asObject());
 }
 
 test "the null handle traps before it touches anything" {
@@ -161,7 +259,7 @@ test "copy duplicates what an object owns, recursively (S31)" {
 
     // The copy's element is a different object that holds equal data.
     const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofInt(0)});
-    try testing.expect(copied_inner.asObject() != inner.asObject());
+    try testing.expect(!copied_inner.asObject().same(inner.asObject()));
     const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofInt(0)});
     try testing.expectEqual(@as(i64, 7), element.asInt());
 
@@ -229,9 +327,10 @@ test "freeing an object gives its storage back, during the run" {
     }
     try testing.expectEqual(@as(u32, 0), runtime.live);
 
-    // Everything but the object table itself, which grows by design:
-    // slots are never reused, so a freed handle stays detectably dead
-    // (S9).  32 objects of table is the only thing allowed to remain.
+    // Everything but the object table itself, which is retained to be
+    // reused: this loop makes four objects at a time and frees them,
+    // so four rows serve all eight rounds and the table never reaches
+    // even its old high-water mark.
     const remaining = counted.allocated_bytes - counted.freed_bytes - settled;
     try testing.expect(remaining <= 32 * @sizeOf(heap.Object) * 2);
 }
@@ -412,8 +511,8 @@ test "compiled code's byte offsets find the fields they name" {
     try containers.indexSet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(2) }, Value.ofFloat(7.5));
 
     // Exactly the walk `08_llvm/lower.zig` emits: the table base out of
-    // the `Runtime`, the row by handle, then `alive`, `count`, `dims`,
-    // and `elements` out of the row — every step through
+    // the `Runtime`, the row by handle, then `generation`, `count`,
+    // `dims`, and `elements` out of the row — every step through
     // `heap.layout`'s numbers and nothing through a field name.
     const base: [*]const u8 = @ptrCast(runtime);
     const table: [*]const u8 = @as(*const [*]const u8, @ptrCast(@alignCast(
@@ -421,8 +520,9 @@ test "compiled code's byte offsets find the fields they name" {
     ))).*;
     try testing.expectEqual(@intFromPtr(runtime.table.items.ptr), @intFromPtr(table));
 
-    const row = table + heap.layout.row_size * grid.asObject();
-    try testing.expectEqual(@as(u8, 1), (row + heap.layout.alive)[0]);
+    const row = table + heap.layout.row_size * grid.asObject().index;
+    const generation: *const u32 = @ptrCast(@alignCast(row + heap.layout.generation));
+    try testing.expectEqual(grid.asObject().generation, generation.*);
     const dims: [*]const i64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
         row + heap.layout.array_dims,
     ))).*));
@@ -439,9 +539,10 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(@as(f64, 7.5), elements[1 * 3 + 2]);
 
     // A freed row reads dead through the same offset, which is what
-    // makes the inline `use_after_free` check a one-byte load.
+    // makes the inline `use_after_free` check one load and one
+    // compare: the generation has moved past the handle's.
     runtime.freeObject(grid.asObject());
-    try testing.expectEqual(@as(u8, 0), (row + heap.layout.alive)[0]);
+    try testing.expect(generation.* != grid.asObject().generation);
 
     // And the slice layout the three pointer reads assume.
     var measured: []const u8 = "ab";
@@ -498,7 +599,7 @@ test "a list slice copies its object elements rather than sharing them" {
 
     const original = try containers.indexGet(runtime, held, &.{Value.ofInt(0)});
     const copied = try containers.indexGet(runtime, taken, &.{Value.ofInt(0)});
-    try testing.expect(original.asObject() != copied.asObject());
+    try testing.expect(!original.asObject().same(copied.asObject()));
 }
 
 // ---------------------------------------------------------------------------
@@ -729,7 +830,7 @@ test "a trace keeps the innermost frames and counts the rest" {
     try testing.expectEqual(@as(i32, -1), reported.code);
 
     var read: Value = .none;
-    try testing.expectEqual(1, luce_rt_index_get(runtime, &Value.ofObject(9), &.{}, 0, &read));
+    try testing.expectEqual(1, luce_rt_index_get(runtime, &Value.ofObject(.{ .index = 9 }), &.{}, 0, &read));
     var recorded: usize = 1;
     while (recorded < trace.max_frames + 7) : (recorded += 1) luce_rt_unwound(runtime, 1, 0);
     luce_rt_report(runtime, &reported, Reported.take);
