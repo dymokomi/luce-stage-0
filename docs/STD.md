@@ -73,11 +73,11 @@ shape mismatches trap.
 ```luce
 import std.math
 
-math.sum(xs)            math.mean(xs)
-math.vmin(xs)           math.vmax(xs)      # extrema (min/max are
-                                           # the scalar builtins)
+math.sum(xs)            math.mean(xs)      -> Float?  (empty: none)
+math.vmin(xs)           math.vmax(xs)      -> Float?  extrema; min/max
+                                           # are the scalar builtins
 math.dot(xs, ys)        math.norm(xs)      # Euclidean
-math.variance(xs)       math.stddev(xs)    # population
+math.variance(xs)       math.stddev(xs)    -> Float?  population
 math.fill(xs, value)    math.scale(xs, factor)
 math.axpy(xs, factor, ys)                  # xs[i] += factor * ys[i]
 ```
@@ -182,8 +182,11 @@ Deliberate constraints, until the language grows the features:
 no module state (top-level `let` is constant — the RNG's List-state
 pattern is the idiom for mutable state), and a function that may find
 nothing answers a `T?` while one that may *fail* says `!`
-(docs/LANGUAGE.md) — `files` is written that way throughout. What has
-not been revisited is `math`: eleven of its functions still `trap` on
-a domain they were handed, and the ones a caller might reasonably meet
-(`mean`, `vmin`, `vmax`, `variance` of an empty array) are candidates
-for `!` in their own pass.
+(docs/LANGUAGE.md) — `files` is written that way throughout. `math` has been revisited too: the five
+reductions over an array — `mean`, `vmin`, `vmax`, `variance`,
+`stddev` — answer `Float?`, because an empty array has no mean and
+"there is nothing there" is the same fact every time with no reason
+worth carrying.  The seven traps left are domains a caller was handed
+and could have checked: `ln` of a non-positive number, `pow` and
+`ipow` outside theirs, a shape mismatch in `dot` or `axpy`, and
+`random_int` with an empty range.  Those are bugs, and bugs trap.

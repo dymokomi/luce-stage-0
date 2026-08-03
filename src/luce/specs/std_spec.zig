@@ -219,9 +219,9 @@ test "math: vector operations compute exactly on exact inputs" {
         \\    for i in range(0, 5):
         \\        xs[i] = Float(i) * 0.5
         \\    assert(math.sum(xs) == 5.0)
-        \\    assert(math.mean(xs) == 1.0)
-        \\    assert(math.vmin(xs) == 0.0)
-        \\    assert(math.vmax(xs) == 2.0)
+        \\    assert((math.mean(xs) else -1.0) == 1.0)
+        \\    assert((math.vmin(xs) else -1.0) == 0.0)
+        \\    assert((math.vmax(xs) else -1.0) == 2.0)
         \\    var ys = new Array(Float, 5)
         \\    math.fill(ys, 2.0)
         \\    assert(math.sum(ys) == 10.0)
@@ -231,21 +231,31 @@ test "math: vector operations compute exactly on exact inputs" {
         \\    assert(math.sum(ys) == 5.0)
         \\    math.axpy(ys, 2.0, xs)
         \\    assert(ys[4] == 5.0)
-        \\    assert(math.variance(ys) == 2.0)
-        \\    assert(math.stddev(ys) == sqrt(2.0))
+        \\    assert((math.variance(ys) else -1.0) == 2.0)
+        \\    assert((math.stddev(ys) else -1.0) == sqrt(2.0))
         \\
     );
 }
 
-test "math: vector operations trap on empty and mismatched shapes" {
-    try expectTrap(
+test "math: a reduction over an empty array is absent, not a trap" {
+    // Nothing failed and nobody erred: an empty array simply has no
+    // mean, and "there is nothing there" with the same reason every
+    // time is what `T?` is for (docs/FAILURE.md).
+    try expectOk(
         \\import std.math
         \\
         \\func main():
         \\    var empty = new Array(Float, 0)
-        \\    let m = math.mean(empty)
+        \\    assert(math.mean(empty) == none)
+        \\    assert(math.vmin(empty) == none)
+        \\    assert(math.vmax(empty) == none)
+        \\    assert(math.variance(empty) == none)
+        \\    assert(math.stddev(empty) == none)
         \\
-    , .explicit_trap);
+    );
+}
+
+test "math: a shape mismatch is still a trap, because the caller could have checked" {
     try expectTrap(
         \\import std.math
         \\

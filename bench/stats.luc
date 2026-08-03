@@ -29,8 +29,8 @@ func main():
     var checksum = 0.0
     for r in range(0, 6):
         checksum += math.dot(a, b)
-        checksum += math.variance(a)
+        checksum += math.variance(a) else 0.0
         checksum += math.norm(b)
-    let low = Int(math.vmin(b) * 4.0)
-    let high = Int(math.vmax(b) * 4.0)
+    let low = Int((math.vmin(b) else 0.0) * 4.0)
+    let high = Int((math.vmax(b) else 0.0) * 4.0)
     print(f"{Int(math.sum(a))} {low} {high} {Int(checksum)}")

@@ -142,22 +142,26 @@ func sum(xs: Array(Float, _)) -> Float:
         total += xs[i]
     return total
 
-func mean(xs: Array(Float, _)) -> Float:
+# The reductions over an array answer `Float?`: an empty array has no
+# mean, no smallest and no spread, and "there is nothing there" is the
+# same fact every time with no reason worth carrying (docs/FAILURE.md).
+# A caller that knows the array is non-empty writes `else` once.
+func mean(xs: Array(Float, _)) -> Float?:
     if len(xs) == 0:
-        trap("mean of an empty array")
+        return none
     return sum(xs) / Float(len(xs))
 
-func vmin(xs: Array(Float, _)) -> Float:
+func vmin(xs: Array(Float, _)) -> Float?:
     if len(xs) == 0:
-        trap("vmin of an empty array")
+        return none
     var smallest = xs[0]
     for i in range(1, len(xs)):
         smallest = min(smallest, xs[i])
     return smallest
 
-func vmax(xs: Array(Float, _)) -> Float:
+func vmax(xs: Array(Float, _)) -> Float?:
     if len(xs) == 0:
-        trap("vmax of an empty array")
+        return none
     var largest = xs[0]
     for i in range(1, len(xs)):
         largest = max(largest, xs[i])
@@ -177,18 +181,21 @@ func norm(xs: Array(Float, _)) -> Float:
     return sqrt(dot(xs, xs))
 
 # Population variance (mean of squared deviations) and its root.
-func variance(xs: Array(Float, _)) -> Float:
+func variance(xs: Array(Float, _)) -> Float?:
     if len(xs) == 0:
-        trap("variance of an empty array")
-    let center = mean(xs)
+        return none
+    let center = mean(xs) else 0.0
     var total = 0.0
     for i in range(0, len(xs)):
         let d = xs[i] - center
         total += d * d
     return total / Float(len(xs))
 
-func stddev(xs: Array(Float, _)) -> Float:
-    return sqrt(variance(xs))
+func stddev(xs: Array(Float, _)) -> Float?:
+    let spread = variance(xs)
+    if spread == none:
+        return none
+    return sqrt(spread)
 
 # xs[i] = value for every element — a typed fill.
 func fill(xs: Array(Float, _), value: Float):

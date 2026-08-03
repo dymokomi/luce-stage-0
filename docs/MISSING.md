@@ -151,11 +151,11 @@ The corpus that argued for it, item by item:
   built.
 - `wordcount.luc:33` — `var best = ""` as "no answer",
   indistinguishable from an empty key.
-- 11 `trap(...)` calls in `std/math.luc`.  Four of them —
-  `mean`, `vmin`, `vmax`, `variance` of an empty array — are the
-  ordinary shape of stats over filtered data, and are candidates for
-  `!` in a pass of their own.  The rest are genuine caller bugs and
-  stay traps.
+- ~~11 `trap(...)` calls in `std/math.luc`~~ — **settled.**  The five
+  reductions answer `Float?`: an empty array has no mean, and that is
+  absence rather than failure, so they took `?` and not `!`.  The
+  seven left are domains the caller was handed and could have
+  checked, which is the rule's definition of a bug.
 - `strings.find` returns `-1` because `Int?` did not exist.  It does,
   on both engines, so the sentinel is a wart with nothing holding it
   up any more — `strings.luc:20` returns `-1` for an *argument error*,
