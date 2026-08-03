@@ -454,6 +454,12 @@ export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callc
 // the run that backs it is never written to after it is built — so
 // generated code copies a struct by copying the pointer, and both
 // entry points below allocate a fresh run.
+//
+// Both **consume** the fields they are given: a store site never
+// copies, because the copy — where one is needed at all — stands in
+// the IR in front of the call as `own_storage` (docs/STRINGS.md).
+// `luce_rt_struct_set` copies only the fields it did not replace,
+// which belong to the value it read them out of.
 
 export fn luce_rt_struct_make(
     runtime: *Runtime,
@@ -500,6 +506,8 @@ export fn luce_rt_index_get(
     return survived;
 }
 
+/// Consumes `held` — see `containers.indexSet`.  The key stays a
+/// borrow the map copies for itself.
 export fn luce_rt_index_set(
     runtime: *Runtime,
     target: *const Value,
@@ -524,6 +532,8 @@ export fn luce_rt_list_slice(
     return survived;
 }
 
+/// A list consumes `held`; a Builder copies its bytes and borrows —
+/// see `containers.append`.
 export fn luce_rt_append(
     runtime: *Runtime,
     target: *const Value,
@@ -550,6 +560,7 @@ export fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: *Value) call
     return survived;
 }
 
+/// Consumes `held` — see `containers.insert`.
 export fn luce_rt_insert(
     runtime: *Runtime,
     target: *const Value,

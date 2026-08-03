@@ -183,6 +183,18 @@ pub const Lowering = struct {
         return self.locals.items[local].owns_storage;
     }
 
+    /// Retract a temporary's claim on its storage: something else took
+    /// it and will give it back instead (docs/STRINGS.md).
+    ///
+    /// Only ever called on a hidden slot that is written and never
+    /// loaded, so the store into it becomes dead and `07_optimize`
+    /// removes it — a slot that stopped owning storage would hand a
+    /// load the register shape, and a String's form does not survive
+    /// that round trip.
+    pub fn disownStorage(self: *Lowering, local: LocalId) void {
+        self.locals.items[local].owns_storage = false;
+    }
+
     // Locals ---------------------------------------------------------------
 
     /// A named slot.  The name reaches the `.lc` and a traceback, so it
@@ -367,19 +379,20 @@ pub const Lowering = struct {
                 const layout = self.structs[layout_index];
                 const fields = try self.arena.alloc(Register, layout.fields.len);
                 for (layout.fields, fields) |field, *slot| {
-                    slot.* = try self.zeroOf(field.field_type);
+                    const zero = try self.zeroOf(field.field_type);
+                    // `struct_make` keeps what it is given, so a zero
+                    // that is only a view of a constant is copied in
+                    // and a nested struct's own run moves in whole
+                    // (docs/STRINGS.md).
+                    slot.* = switch (field.field_type) {
+                        .string, .bytes => try self.ownStorage(zero),
+                        else => zero,
+                    };
                 }
-                const made = try self.emit(
+                break :blk try self.emit(
                     .{ .struct_make = .{ .layout = layout_index, .fields = fields } },
                     of,
                 );
-                // A nested struct's zero is a whole value of its own,
-                // and `struct_make` copied it into the run above; the
-                // one built here is spent (docs/STRINGS.md).
-                for (layout.fields, fields) |field, nested| {
-                    if (field.field_type == .strukt) _ = try self.dropStorage(nested);
-                }
-                break :blk made;
             },
         };
     }
@@ -400,6 +413,11 @@ pub const Lowering = struct {
     /// the root local is stored at the end; the first container index
     /// writes in place and stops, because an object is a reference and
     /// everything above it already points at the same thing.
+    ///
+    /// `value` arrives already owned — the caller is the one that knows
+    /// whether the leaf could move — and every step consumes what the
+    /// step below it built, so nothing along the chain is copied twice
+    /// (docs/STRINGS.md).
     pub fn rebuild(
         self: *Lowering,
         root: LocalId,
@@ -407,12 +425,6 @@ pub const Lowering = struct {
         value: Register,
     ) Error!void {
         var updated = value;
-        // Every `struct_set` on the way up builds a whole new struct
-        // value that owns its run, and the next step copies out of it
-        // — so each one is dead as soon as it has been consumed, and
-        // its storage goes back there (docs/STRINGS.md).  The value
-        // the caller handed in is not ours to release.
-        var intermediate: ?Register = null;
         var at = steps.len;
         while (at > 0) {
             at -= 1;
@@ -421,15 +433,12 @@ pub const Lowering = struct {
                     // struct_set copies the parent struct with one
                     // field replaced, so its result type is the parent
                     // register's type.
-                    const built = try self.emit(.{ .struct_set = .{
+                    updated = try self.emit(.{ .struct_set = .{
                         .target = field.parent,
                         .layout = field.layout,
                         .field = field.field_index,
                         .value = updated,
                     } }, self.resultType(field.parent));
-                    if (intermediate) |spent| _ = try self.dropStorage(spent);
-                    intermediate = built;
-                    updated = built;
                 },
                 .index => |step| {
                     const arguments = try self.arena.alloc(Register, step.subscripts.len + 2);
@@ -440,19 +449,13 @@ pub const Lowering = struct {
                         .{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } },
                         .none,
                     );
-                    // The element took its own copy, so ours is spent.
-                    if (intermediate) |spent| _ = try self.dropStorage(spent);
                     return; // the object mutated in place
                 },
             }
         }
         // The root's old value is what every parent register above was
         // read out of, so it can only go once the rebuild is complete.
-        const owns = self.locals.items[root].owns_storage;
-        // With no steps at all there is nothing fresh to store, so the
-        // root takes a copy like any other binding would.
-        if (owns and intermediate == null) updated = try self.ownStorage(updated);
-        try self.release(root, false, owns);
+        try self.release(root, false, self.locals.items[root].owns_storage);
         try self.store(root, updated);
     }
 

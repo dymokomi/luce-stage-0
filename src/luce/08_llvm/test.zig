@@ -1415,6 +1415,125 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
     );
 }
 
+// Move-instead-of-copy (docs/STRINGS.md step 6).  Every string below
+// is well past the twenty-two byte inline threshold, so each store is
+// a real allocation with a real owner: a move that skipped a release
+// is a leak the census and the test allocator both report, and a move
+// that should not have happened is a double free.
+test "a fresh value moves into every kind of place, and a borrow still copies" {
+    try agree(std.testing.allocator,
+        \\struct Note:
+        \\    title: String
+        \\    body: String
+        \\
+        \\func joined(a: String, b: String) -> String:
+        \\    return a + b
+        \\
+        \\func main():
+        \\    let head = "a string comfortably past the inline threshold"
+        \\    let tail = "-and a tail that is well past it on its own"
+        \\
+        \\    # A list element takes the temporary's allocation; a
+        \\    # borrow of an element still copies, because appending can
+        \\    # move the very cell it was read out of.
+        \\    var xs: List(String) = [head + tail]
+        \\    xs.append(joined(head, tail))
+        \\    xs.append(xs[0])
+        \\    xs.append(xs[0][0:30])
+        \\    xs.insert(0, head + tail)
+        \\    print(str(len(xs)) + " " + str(len(xs[2])) + " " + str(len(xs[4])))
+        \\
+        \\    # A map value moves; the key beside it is a borrow the map
+        \\    # copies for itself, and m[k] = m[k] stays legal.
+        \\    var m: Map(String, String) = new Map(String, String)
+        \\    m[head] = head + tail
+        \\    m[head] = m[head]
+        \\    m[tail] = joined(tail, head)
+        \\    print(str(len(m)) + " " + str(len(m[head])) + " " + str(len(m[tail])))
+        \\
+        \\    # A struct field moves at construction and at assignment;
+        \\    # a field read out of the same struct copies.
+        \\    var note = Note(title = head + tail, body = head)
+        \\    note.body = joined(tail, head)
+        \\    note.title = note.body
+        \\    print(str(len(note.title)) + " " + str(len(note.body)))
+        \\
+        \\    free(xs)
+        \\    free(m)
+        \\
+    );
+}
+
+test "a value still live after a store is copied, and a returned borrow too" {
+    try agree(std.testing.allocator,
+        \\func fresh(a: String, b: String) -> String:
+        \\    return a + b
+        \\
+        \\func borrowed(s: String) -> String:
+        \\    return s[4:40]
+        \\
+        \\func passed(s: String) -> String:
+        \\    return s
+        \\
+        \\func main():
+        \\    let head = "a string comfortably past the inline threshold"
+        \\    let tail = "-and a tail that is well past it on its own"
+        \\
+        \\    # `kept` is read after both stores, so neither can take
+        \\    # its bytes; a reassignment that reads its own place is
+        \\    # the same question one statement wide.
+        \\    var kept = head + tail
+        \\    var xs: List(String) = [kept]
+        \\    xs.append(kept)
+        \\    kept = kept[2:44]
+        \\    kept = kept + "!"
+        \\    print(str(len(kept)) + " " + str(len(xs[0])) + " " + str(len(xs[1])))
+        \\
+        \\    # A String return is a copy unless the frame made it.
+        \\    xs.append(fresh(head, tail))
+        \\    xs.append(borrowed(head))
+        \\    xs.append(passed(head))
+        \\    print(str(len(xs[2])) + " " + str(len(xs[3])) + " " + str(len(xs[4])))
+        \\    free(xs)
+        \\
+    );
+}
+
+test "a store that traps still owns what it was handed" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    let head = "a string comfortably past the inline threshold"
+        \\    var xs: List(String) = [head]
+        \\    print(str(len(xs)))
+        \\    # The value moved into this call, so the trap inside it is
+        \\    # the only thing left that can give the bytes back.
+        \\    xs.insert(9, head + "-tail well past the threshold as well")
+        \\    print("unreachable")
+        \\
+    );
+}
+
+test "a fallible call's result is carried, not taken, and still agrees" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    # A fallible call's result crosses the branch on its
+        \\    # outcome in a slot that is *reloaded*, so that slot keeps
+        \\    # owning its storage and the stores below copy out of it
+        \\    # (docs/STRINGS.md).
+        \\    file_write("notes.txt", "a string comfortably past the inline threshold") catch:
+        \\        print("no write")
+        \\        return
+        \\    var xs: List(String) = []
+        \\    let text = file_read("notes.txt") catch "(none)"
+        \\    xs.append(text)
+        \\    xs.append(file_read("notes.txt") catch "(none)")
+        \\    xs.append(text + "!")
+        \\    print(str(len(xs)) + " " + str(len(xs[0])) + " " + str(len(xs[2])))
+        \\    free(xs)
+        \\
+    );
+}
+
 test "a nested container agrees, and the leak census counts the same" {
     try agree(std.testing.allocator,
         \\func main():

@@ -4,21 +4,26 @@
 > container element, struct field, or map key that holds them, or the
 > statement that produced them — and any store into something that
 > outlives the current statement copies the bytes, so no owner ever
-> holds a view of bytes it did not allocate.
+> holds a view of bytes it did not allocate. The one store that does
+> not copy is the one where the statement hands its own fresh bytes
+> over and keeps nothing: ownership moves, and the count of owners is
+> still one (step 6).
 
 `docs/MEMORY.md` records why scope ownership won for objects and then
 refuses, permanently, every automatic manager for values. This is the
 memo for what replaces them. It was `docs/MISSING.md` Tier 0 item 1,
 second bullet.
 
-> **Steps 2, 3 and 5 shipped.** Owned String bytes, copy-on-store
+> **Steps 2, 3, 5 and 6 shipped.** Owned String bytes, copy-on-store
 > across every store site, owned struct field runs, the
-> mutation-during-statement read rule, and now small-string
-> optimisation: a String of twenty-two bytes or fewer lives inside the
-> `Value` holding it and costs no allocation at all. What actually
-> landed, what it measured, and where the design met the code are in
-> **What shipped** and **What SSO shipped** at the foot of this
-> document. Steps 4 and 6 are still queued.
+> mutation-during-statement read rule, small-string optimisation — a
+> String of twenty-two bytes or fewer lives inside the `Value` holding
+> it and costs no allocation at all — and now move-instead-of-copy: a
+> store that is handed this statement's own fresh value takes its
+> allocation instead of duplicating it. What actually landed, what it
+> measured, and where the design met the code are in **What shipped**,
+> **What SSO shipped** and **What move-instead-of-copy shipped** at the
+> foot of this document. Step 4 is still queued.
 
 Nothing in the language changes. No verb, no trap, no diagnostic, no
 change to the leak census. S1–S43 keep every decision; three lines of
@@ -506,6 +511,7 @@ Each piece is independently valuable and independently shippable.
    b)` and `next.content = Editing.splice(…)` hand over the temporary's
    allocation instead of duplicating it. Removes one 40 KB copy per
    keystroke and the `let text = str(b)` copy. Pure optimisation.
+   Shipped; see **What move-instead-of-copy shipped**.
 
 ## Refused, with reasons
 
@@ -904,3 +910,174 @@ digits and a sign is the longest an `i64` gets and a codepoint is four
 bytes, so both always fit. And `Value.asString` takes a pointer
 receiver, which is not decoration — it is the compiler refusing to let
 anyone read inline text out of a temporary.
+
+## What move-instead-of-copy shipped
+
+Step 6, whole. `.lc` `format_version` 14 → 15, because the store
+intrinsics mean something different; `abi.version` unchanged, because
+nothing about `LuceHost` moved. 834 tests green, `zig fmt --check`
+clean.
+
+**The change is where the copy is written.** Before this, one decision
+had two mechanisms. A binding and a `ret` took their copy through
+`own_storage`, an instruction the compiler could see and elide; a list
+element, a map value, a struct field and a struct's construction took
+theirs *inside* `libluce_rt`, where nothing could. Only the first half
+could ever move. Now there is one mechanism:
+
+> **A store site keeps what it is handed.** `luce_rt_append`,
+> `luce_rt_insert`, `luce_rt_index_set`, `luce_rt_struct_make` and
+> `luce_rt_struct_set` consume the value they store — including on the
+> trap, so nothing the caller handed over is ever left without an
+> owner — and `own_storage` stands in the IR in front of them wherever
+> the source is a borrow.
+
+A map's **key** is the one exception and stays a borrow the map copies
+for itself: a store looks its key up before it keeps one, and an entry
+that already exists must not pay for a copy it will throw away.
+`m[k] = v` in a loop allocates for the value and nothing for the key.
+
+A Builder's `append` is not a store. It copies bytes into a buffer of
+its own and the text stays the caller's, which is what it always did.
+
+### How freshness and deadness are proved
+
+Both were already in hand; step 6 is what joins them.
+
+**Fresh** is `producesFreshStorage`, which SSO left behind: it reads
+the *instruction* that made the register, not the expression, so the
+set of producers is closed — String `+`, `struct_make`, `struct_set`, a
+call, and the intrinsics that allocate (`str`, `chr`, `pop`, `copy`,
+the host services, and `own_storage` itself). Everything else that
+answers text answers a view.
+
+**Dead** is the park. Stage 4 already puts every fresh value in a
+hidden slot whose release ends the statement (`registerTemp` /
+`flushTemps`), so "will anything else give this back?" is answered by
+looking for that park — and taking the storage is *retracting* it.
+`takeStorage` clears the slot's `owns_storage`: the statement's release
+goes with it, the trap sweep skips it, and `07_optimize/dead.zig`
+deletes the store into it because nothing reads it any more. No
+liveness analysis was needed, and none would have been better: stage 4
+knows which slot a value was parked in, and by the time MIR exists that
+slot's release is indistinguishable from a binding's.
+
+Two parks are kept rather than retracted, and both are correctness:
+
+- **A slot that is read back cannot stop owning its storage.** A
+  borrowing slot hands a reload the register shape, and a String's form
+  does not survive that — the reload comes back saying "outside" over
+  bytes that are in the frame. That is exactly the slot a fallible
+  call's result crosses its branch in (rule 2 of the SSO section), so a
+  `try`'s or `catch`'s value is copied into a store, not moved.
+- **A temporary that also owns objects keeps its slot**, because that
+  ownership is settled at run time by `object_bind` and the release
+  still has to load the slot to ask. Mixing the two questions in one
+  slot buys a copy of a field run and risks the other.
+
+The backend needed one thing: a store now keeps the value it is given,
+so the value has to arrive in the form its place must hold. Every
+adopted argument goes through `storageOf` — the box the register was
+read out of — the same way `drop_storage` and `export_storage` already
+did, and `struct_make` fills its field run by copying whole boxes
+across rather than rebuilding them. That is sound because an adopted
+argument is always either an `own_storage` result or a fresh producer,
+and both answer into scratch that nothing else can move.
+
+### The measurements
+
+`bench/compare.sh 4ec770a`, interleaved A/B on this host (Apple M4
+Max):
+
+| benchmark | base | head | delta |
+|---|---|---|---|
+| loops | 92.8ms | 93.2ms | +0.4% |
+| math | 117.8ms | 120.0ms | +1.8% |
+| **strings** | 56.6ms | 54.5ms | **−3.8%** |
+| arrays | 50.7ms | 50.1ms | −1.1% |
+| matmul | 12.9ms | 12.7ms | −1.0% |
+| stats | 38.9ms | 38.5ms | −1.0% |
+
+`bench/strings` compute ratio **2.71× C → 2.68× C**. The parity
+benchmarks did not move; three earlier runs of the same A/B put
+`strings` at −3.3% to −3.8% and every other row inside ±1.8%.
+
+**The editor is where it pays.** `programs/editor.luc` verbatim with
+its interactive `main` replaced by 20,000 keystrokes played into a
+40 KB buffer through the same `Handle.adjust` / `Handle.key` path,
+same output both ways:
+
+| | base | head |
+|---|---|---|
+| compiled, 20,000 strokes | 536.7 ms | **399.8 ms** (−25.5%) |
+| per keystroke | 26.7 µs | **19.8 µs** |
+| peak RSS | 4.12 MB | **3.64 MB** |
+| interpreter | 22.81 s | 22.39 s |
+| interpreter peak RSS | 6.31 MB | 6.11 MB |
+
+The churn loop — one long string built per iteration and stored into a
+list and a map, nothing retained — is 21.0% faster at 2M iterations
+(851.3 ms → 672.7 ms) and still flat:
+
+| iterations | 0.5M | 1M | 2M | 4M | 8M |
+|---|---|---|---|---|---|
+| compiled | 1.7 MB | 1.8 MB | 1.8 MB | 1.8 MB | 1.9 MB |
+| interpreter | 2.0 MB | 2.0 MB | 2.0 MB | 2.1 MB | 2.2 MB |
+
+Counted across `programs/` and `bench/`, the corpus emits **185
+`own_storage` copies before and 101 after** — 45% of every copy site in
+userland is gone. `editor.luc` alone goes from 59 to 36.
+
+### Where the design met the code
+
+**The memo's localisation of the `bench/strings` gap was wrong, and
+this is the measurement that says so.** The SSO section concluded that
+what remained after small-string optimisation was "the *copying*
+copy-on-store introduced: `pieces.append(s[run:at])` … duplicates
+twelve bytes into the element cell, 400,001 times", and that "removing
+it would need step 6".
+
+Step 6 cannot remove it. `s[run:at]` is a **borrow of the text being
+split**, not a fresh value — there is no allocation to hand over, and a
+store that kept the view would put a pointer to somebody else's bytes
+in the list. It is the one copy the whole design exists to make. The
+prediction that step 6 would close that gap could not have been right
+for any implementation of step 6.
+
+And the copy is smaller than the memo made it. Neutralising it in the
+runtime (storing an empty inline value instead, purely to time it)
+moves the split-and-fold phase from **28.7 ms to 27.4 ms**: the 400,001
+element copies cost **1.3 ms**, not the ~3 ms the phase table attributed
+to them. The rest of that phase's regression is elsewhere and is still
+unaccounted for.
+
+So `strings` moved 3.3%, not the several points the memo implied, and
+what step 6 actually removed there is the four multi-megabyte copies
+`let text = str(b)`, `return str(out)` inside `upper` and `replace`,
+and the two bindings that receive them. **The editor's 25% is the real
+result**, and it is the one the memo predicted for the right reason.
+
+Three smaller things the design did not have quite right:
+
+1. **`rebuild` stopped needing `drop_storage` at all.** A nested place
+   assignment built a chain of `struct_set`s and released each
+   intermediate, because the next step copied out of it. Under adopt
+   each step *moves* what the step below built, so the releases were
+   not an optimisation to remove but a double free waiting to happen —
+   they had to go with the same change.
+
+2. **`zeroOf` has to say which of its fields are views.** `var x: Point`
+   builds each field's zero and hands them to `struct_make`. A nested
+   struct's zero is its own fresh run and moves in; a String's zero is
+   `const_data ""`, a view of a program constant, and needs the copy.
+   This is the one store site whose decision is made in `06_mir`, where
+   `producesFreshStorage` is not in reach — and it is decidable from
+   the field's type alone, which is why it can be.
+
+3. **Returning an owned local still copies.** `return kept`, where
+   `kept` is a `var` this frame owns, is a `local_get` and therefore not
+   fresh, so `ret` copies and the scope release then frees the original.
+   S16's `moved` already suppresses exactly this for objects; doing it
+   for storage means proving the local is not read again after the
+   `return`, which is a liveness question rather than a freshness one.
+   Left for step 4, which needs the same machinery.

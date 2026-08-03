@@ -912,11 +912,20 @@ pub const Runtime = struct {
     // A String's bytes and a struct value's field run are *storage*: a
     // heap allocation with exactly one owner — the binding, container
     // element, map key, struct field, or statement temporary that holds
-    // it (docs/STRINGS.md).  Every store into a place that outlives the
-    // current statement goes through `ownValue`, so no owner ever holds
-    // a view of bytes it did not allocate; `releaseStorage` is the
-    // matching death point, and it frees nothing else — objects belong
-    // to the ownership walks above.
+    // it (docs/STRINGS.md).
+    //
+    // **A store site never copies.**  Every value handed to one is
+    // already the store's to keep: stage 4 says `own_storage` in front
+    // of it wherever the source is a borrow, and says nothing where the
+    // source is this statement's own fresh value, which is how a
+    // temporary's allocation moves into the place instead of being
+    // duplicated.  So the copy is written once, in the IR, where the
+    // decision that elides it can be seen — and `ownValue` below is
+    // that one copy, reached from `own_storage` and from the runtime's
+    // own duplications (`deepCopy`, a map's key, an array's fill).
+    //
+    // `releaseStorage` is the matching death point, and it frees
+    // nothing else — objects belong to the ownership walks above.
 
     /// A copy of `held` whose storage nothing else owns.  Scalars and
     /// object handles pass through untouched: an object field of a
@@ -1035,34 +1044,44 @@ pub const Runtime = struct {
 
     /// A fresh struct value holding `fields`, owning its run and every
     /// value field in it.
+    ///
+    /// **Consumes every field**: each one is stored as it stands, and
+    /// on failure every one of them is released, so a caller that
+    /// handed over a fresh value never has to take it back.
     pub fn makeStruct(self: *Runtime, fields: []const Value) Error!Value {
         if (fields.len == 0) return Value.ofStruct(&.{});
-        const stored = try self.objects.alloc(Value, fields.len);
-        var filled: usize = 0;
-        errdefer {
-            for (stored[0..filled]) |field| self.releaseStorage(field);
-            self.objects.free(stored);
-        }
-        for (fields, stored) |field, *slot| {
-            slot.* = try self.ownValue(field);
-            filled += 1;
-        }
+        const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
+            for (fields) |field| self.releaseStorage(field);
+            return mistake;
+        };
+        @memcpy(stored, fields);
         return Value.ofStruct(stored);
     }
 
     /// `held` with field `index` replaced, as a fresh value that owns
     /// everything in it.  The source is left intact — its own owner
-    /// releases it — so this is a copy, not an update in place.
+    /// releases it — so its untouched fields are copied, not moved.
+    ///
+    /// **Consumes `to`**, like every other store site.
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
         const source = held.asStruct();
-        const stored = try self.objects.alloc(Value, source.len);
+        const stored = self.objects.alloc(Value, source.len) catch |mistake| {
+            self.releaseStorage(to);
+            return mistake;
+        };
+        // The unwind releases the copies it made and `to` once each:
+        // `to` is the one field it never reads out of the run, so
+        // whether the walk had reached it yet does not matter.
         var filled: usize = 0;
         errdefer {
-            for (stored[0..filled]) |field| self.releaseStorage(field);
+            for (stored[0..filled], 0..) |field, at| {
+                if (at != index) self.releaseStorage(field);
+            }
+            self.releaseStorage(to);
             self.objects.free(stored);
         }
         for (source, stored, 0..) |field, *slot, at| {
-            slot.* = try self.ownValue(if (at == index) to else field);
+            slot.* = if (at == index) to else try self.ownValue(field);
             filled += 1;
         }
         return Value.ofStruct(stored);

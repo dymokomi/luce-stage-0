@@ -124,6 +124,16 @@ pub const FunctionBuilder = struct {
         /// answers for a named binding.
         objects: bool,
         storage: bool,
+        /// Whether the park may be retracted so a store can take the
+        /// storage instead of copying it (`takeStorage`).  True of
+        /// every parked temporary, whose slot is written and never
+        /// read; false of the slot a fallible call's result crosses
+        /// its branch in, which is reloaded (docs/STRINGS.md).
+        disownable: bool = true,
+        /// Whether a store already took this storage.  One value has
+        /// one owner, so the second store of the same register — if a
+        /// shape that does that ever exists — copies.
+        taken: bool = false,
     };
 
     fn arena(self: *FunctionBuilder) Allocator {
@@ -623,17 +633,65 @@ pub const FunctionBuilder = struct {
         return register;
     }
 
-    /// Can `register`'s storage move into a place that outlives the
-    /// statement, or must the place take a copy?  It can move only
-    /// when this statement allocated it and nothing has claimed it —
-    /// a parked temporary has an owner already, and copying is what
-    /// keeps the two from both freeing it.
-    fn storageMoves(self: *const FunctionBuilder, register: Register) bool {
-        if (!self.producesFreshStorage(register)) return false;
+    /// Is this register's storage parked in a statement temporary?
+    fn parkedForStorage(self: *const FunctionBuilder, register: Register) bool {
         for (self.temps.items) |temp| {
-            if (temp.register == register and temp.storage) return false;
+            if (temp.register == register and temp.storage) return true;
+        }
+        return false;
+    }
+
+    /// Take `register`'s storage for a place that outlives the
+    /// statement, if it can be taken — otherwise say so and let the
+    /// place copy.
+    ///
+    /// It can be taken when this statement allocated it and nothing
+    /// else will give it back.  A parked temporary *is* something
+    /// else, so the park is retracted here: its slot stops owning
+    /// storage, the statement's release goes with it, and the place
+    /// becomes the one owner.  That is the whole of move-instead-of-
+    /// copy, and it is why this is not a question — asking it hands
+    /// the storage over (docs/STRINGS.md).
+    ///
+    /// Two parks are kept rather than retracted.  A slot that is read
+    /// back cannot stop owning storage, because a borrowing slot hands
+    /// a reload the register shape and a String's form does not
+    /// survive that — which is exactly the slot a fallible call's
+    /// result crosses its branch in.  And a temporary that also owns
+    /// *objects* keeps its slot, because that ownership is settled at
+    /// run time by `object_bind` and the release still has to load the
+    /// slot to ask.
+    fn takeStorage(self: *FunctionBuilder, register: Register) bool {
+        if (!self.producesFreshStorage(register)) return false;
+        for (self.temps.items) |*temp| {
+            if (temp.register != register) continue;
+            if (temp.taken) return false;
+            if (!temp.storage) continue;
+            if (!temp.disownable or temp.objects) return false;
+            self.code.disownStorage(temp.local);
+            // Emptied rather than forgotten: the record is what keeps
+            // one value from being parked twice, and every index into
+            // this list is a floor some other unwinding path recorded.
+            // A temporary that owns neither releases nothing.
+            temp.storage = false;
+            temp.taken = true;
+            return true;
         }
         return true;
+    }
+
+    /// The register a store site is handed: this one when its storage
+    /// can move into the place, a copy of it otherwise.
+    ///
+    /// **Every store goes through here** — a binding, a reassignment, a
+    /// list element, a map value, a struct field, a return — because
+    /// `libluce_rt` never copies at a store: the copy is written once,
+    /// here, where the decision that elides it can be seen
+    /// (docs/STRINGS.md).
+    fn ownedForStore(self: *FunctionBuilder, value: Value) Error!Register {
+        if (!self.analyzer.ownsStorage(value.value_type)) return value.register;
+        if (self.takeStorage(value.register)) return value.register;
+        return self.code.ownStorage(value.register);
     }
 
     /// Whether a value of this type can be text in its own right —
@@ -648,13 +706,13 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Store into a local, copying the value's storage in when the
-    /// local is the one that will have to give it back.
+    /// Store into a local, taking or copying the value's storage in
+    /// when the local is the one that will have to give it back.
     fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Value) Error!void {
-        var register = value.register;
-        if (self.code.localOwnsStorage(local) and !self.storageMoves(register)) {
-            register = try self.code.ownStorage(register);
-        }
+        const register = if (self.code.localOwnsStorage(local))
+            try self.ownedForStore(value)
+        else
+            value.register;
         try self.code.store(local, register);
     }
 
@@ -802,7 +860,8 @@ pub const FunctionBuilder = struct {
     /// concatenation, say — so the statement's end reclaims it.
     fn parkFreshStorage(self: *FunctionBuilder, value: Value) Error!void {
         if (!self.analyzer.ownsStorage(value.value_type)) return;
-        if (!self.storageMoves(value.register)) return;
+        if (!self.producesFreshStorage(value.register)) return;
+        if (self.parkedForStorage(value.register)) return;
         try self.registerTemp(value, false, true);
     }
 
@@ -1562,7 +1621,13 @@ pub const FunctionBuilder = struct {
             new_value = (try self.compoundCombine(op, current, current_type, value, assign.span)) orelse return;
         }
 
-        try self.code.rebuild(root_local, accessors, new_value);
+        // The leaf is a store into whatever the chain descended to, so
+        // it takes or copies its storage here; every step above it
+        // moves the value the step below just built (docs/STRINGS.md).
+        try self.code.rebuild(root_local, accessors, try self.ownedForStore(.{
+            .register = new_value,
+            .value_type = current_type,
+        }));
     }
 
     /// Combine the current value of a compound-assignment place with
@@ -1722,8 +1787,8 @@ pub const FunctionBuilder = struct {
         // a view of the storage the release is about to give back:
         // `s = s[1:]` is legal (docs/STRINGS.md).
         const owns_storage = self.code.localOwnsStorage(local);
-        if (owns_storage and !self.storageMoves(store)) {
-            store = try self.code.ownStorage(store);
+        if (owns_storage) {
+            store = try self.ownedForStore(.{ .register = store, .value_type = local_type });
         }
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
@@ -1845,11 +1910,13 @@ pub const FunctionBuilder = struct {
             } }, expected);
             try self.code.unbind(local, old_field);
         }
+        // The new field is a store into the run `struct_set` builds;
+        // the fields it copies out of `current` belong to `current`.
         const updated = try self.code.emit(.{ .struct_set = .{
             .target = current,
             .layout = layout_index,
             .field = field_index,
-            .value = store,
+            .value = try self.ownedForStore(.{ .register = store, .value_type = expected }),
         } }, local_type);
         // `struct_set` built a whole new value that owns everything in
         // it, copying out of the old one; the old run and its value
@@ -1911,7 +1978,12 @@ pub const FunctionBuilder = struct {
         }
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |lowered, *slot| slot.* = lowered.register;
-        arguments[arguments.len - 1] = store;
+        // The element is a store; the key beside it is not — a map
+        // looks a key up before it keeps one (docs/STRINGS.md).
+        arguments[arguments.len - 1] = try self.ownedForStore(.{
+            .register = store,
+            .value_type = element_type,
+        });
         _ = try self.code.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
     }
 
@@ -2357,12 +2429,7 @@ pub const FunctionBuilder = struct {
             // release, and Luce has no annotation that tells them
             // apart — so `ret` copies, except where the value is
             // provably this statement's own (docs/STRINGS.md).
-            var handed_out = value.register;
-            if (self.analyzer.ownsStorage(value.value_type) and
-                !self.storageMoves(handed_out))
-            {
-                handed_out = try self.code.ownStorage(handed_out);
-            }
+            var handed_out = try self.ownedForStore(value);
             // And whatever it is by then has to be able to leave: short
             // text lives in the value, a value lives in a slot, and
             // this frame's slots are about to go (docs/STRINGS.md).  A
@@ -2578,6 +2645,11 @@ pub const FunctionBuilder = struct {
                 .register = reload,
                 .objects = objects,
                 .storage = storage,
+                // This slot is reloaded above, so it must keep owning
+                // its storage: a borrowing slot would hand the reload
+                // the register shape, and short text does not survive
+                // that (docs/STRINGS.md).
+                .disownable = false,
             });
         }
         return .{ .register = reload, .value_type = result_type };
@@ -2850,7 +2922,11 @@ pub const FunctionBuilder = struct {
                 const layout = self.analyzer.structs.items[folded.layout];
                 const fields = try self.arena().alloc(Register, folded.fields.len);
                 for (folded.fields, layout.fields, fields) |field, field_layout, *slot| {
-                    slot.* = try self.emitConstantValue(field, field_layout.field_type);
+                    const made = try self.emitConstantValue(field, field_layout.field_type);
+                    slot.* = try self.ownedForStore(.{
+                        .register = made,
+                        .value_type = field_layout.field_type,
+                    });
                 }
                 break :blk try self.code.emit(
                     .{ .struct_make = .{ .layout = folded.layout, .fields = fields } },
@@ -2965,7 +3041,7 @@ pub const FunctionBuilder = struct {
         for (elements) |element| {
             const arguments = try self.arena().alloc(Register, 2);
             arguments[0] = list;
-            arguments[1] = element.register;
+            arguments[1] = try self.ownedForStore(element);
             _ = try self.code.emit(.{ .intrinsic = .{ .kind = .append_value, .arguments = arguments } }, .none);
         }
         return .{ .register = list, .value_type = object_type };
@@ -3731,9 +3807,27 @@ pub const FunctionBuilder = struct {
         }
         const registers = try self.arena().alloc(Register, values.len);
         for (values, registers) |value, *slot| slot.* = value.register;
+        // A list keeps what it is appended, so the element is a store
+        // and takes or copies its storage here; a Builder copies bytes
+        // into a buffer of its own and borrows (docs/STRINGS.md).
+        if (self.storedElement(found.kind, receiver.value_type)) |position| {
+            registers[position] = try self.ownedForStore(values[position]);
+        }
         return .{
             .register = try self.code.emit(.{ .intrinsic = .{ .kind = found.kind, .arguments = registers } }, found.result),
             .value_type = found.result,
+        };
+    }
+
+    /// Which argument of a method is a *store* into the receiver —
+    /// the one `libluce_rt` will keep rather than read.
+    fn storedElement(self: *const FunctionBuilder, kind: mir.Intrinsic, receiver: Type) ?usize {
+        const descriptor = self.analyzer.heapOf(receiver) orelse return null;
+        if (descriptor != .list) return null;
+        return switch (kind) {
+            .append_value => 1,
+            .insert_value => 2,
+            else => null,
         };
     }
 
@@ -4112,7 +4206,9 @@ pub const FunctionBuilder = struct {
                 );
                 return null;
             }
-            registers[field_index] = fitted.register;
+            // A struct owns its field run and every value in it, so
+            // construction is a store like any other (docs/STRINGS.md).
+            registers[field_index] = try self.ownedForStore(fitted);
         }
         for (seen, 0..) |given, index| {
             if (!given) {
