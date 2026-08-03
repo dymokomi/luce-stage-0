@@ -1,7 +1,13 @@
 /* Vector statistics — the same reductions as bench/stats.luc,
  * mirroring src/luce/std/math.luc's implementations operation for
  * operation (left-to-right accumulation, two-pass variance), so the
- * printed integers match exactly. */
+ * printed integers match exactly.
+ *
+ * The extrema are as close as C gets rather than the same operation:
+ * `a < b ? a : b` answers by operand order where Luce's `min` answers
+ * IEEE-754-2019 minimumNumber.  They agree on this data, which has no
+ * NaN and no negative zero, and they compile differently — see the
+ * header of bench/stats.luc. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

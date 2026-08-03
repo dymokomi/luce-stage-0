@@ -266,6 +266,10 @@ const Module = struct {
     /// one slot per `effects.Service`, filled on first use.
     services: std.EnumMap(Service, Builder.Function.Index) = .{},
 
+    /// `llvm.minimumnum.f64` and `llvm.maximumnum.f64`, in that order,
+    /// declared on first use (`floatExtremum`).
+    float_extrema: [2]?Builder.Function.Index = .{ null, null },
+
     /// One retired object row, read in place of a null handle's when a
     /// resolution is lifted out of a loop (`loops.zig`).  A lifted
     /// resolution loads the row without deciding anything about it, so
@@ -376,6 +380,37 @@ const Module = struct {
             self.builder,
         );
         self.services.put(which, declared);
+        return declared;
+    }
+
+    /// `llvm.minimumnum.f64` when `wants_minimum`, `llvm.maximumnum.f64`
+    /// otherwise, interned per module.
+    ///
+    /// These are IEEE 754-2019 `minimumNumber`/`maximumNumber`: the
+    /// operand that is a number when the other is NaN, and `-0.0` below
+    /// `+0.0` — the one shape of extremum that is fully specified, so
+    /// LLVM's constant folder and every target's instruction give the
+    /// same answer, which is the property `emitExtremum` needs.
+    ///
+    /// They are declared by name rather than through
+    /// `Builder.Intrinsic`, whose table in the pinned standard library
+    /// predates them.  A declaration whose name is an intrinsic's *is*
+    /// that intrinsic to LLVM — it recognizes the name on the way in and
+    /// attaches the intrinsic's own attributes — so nothing about the
+    /// module differs from one the enum could have built.
+    fn floatExtremum(self: *Module, wants_minimum: bool) Error!Builder.Function.Index {
+        const slot: usize = if (wants_minimum) 0 else 1;
+        if (self.float_extrema[slot]) |found| return found;
+        const signature_type = try self.builder.fnType(.double, &.{ .double, .double }, .normal);
+        const declared = try self.builder.addFunction(
+            signature_type,
+            try self.builder.strtabString(
+                if (wants_minimum) "llvm.minimumnum.f64" else "llvm.maximumnum.f64",
+            ),
+            .default,
+        );
+        declared.setLinkage(.external, self.builder);
+        self.float_extrema[slot] = declared;
         return declared;
     }
 
@@ -3161,30 +3196,25 @@ const Body = struct {
                 self.values[of[1]],
                 try self.numeric(of[0]),
             ),
-            .clamp => switch (try self.numeric(of[0])) {
-                // `@min(@max(middle, low), high)`, in that order: the
-                // interpreter's, and the order decides the answer when
-                // the bounds cross.
-                .int => {
-                    const lifted = try self.emitExtremum(
-                        false,
-                        self.values[of[0]],
-                        self.values[of[1]],
-                        .int,
-                    );
-                    self.values[register] = try self.emitExtremum(
-                        true,
-                        lifted,
-                        self.values[of[2]],
-                        .int,
-                    );
-                },
-                .float => self.values[register] = try self.callRuntime(
-                    .luce_rt_float_clamp,
-                    .double,
-                    &.{ self.values[of[0]], self.values[of[1]], self.values[of[2]] },
-                    "clamp",
-                ),
+            // `@min(@max(middle, low), high)`, in that order: the
+            // interpreter's, and the order decides the answer when the
+            // bounds cross.  Both numeric kinds compose the same two
+            // extrema, so a clamp inside a loop is two instructions on
+            // either type rather than a call on one of them.
+            .clamp => {
+                const kind = try self.numeric(of[0]);
+                const lifted = try self.emitExtremum(
+                    false,
+                    self.values[of[0]],
+                    self.values[of[1]],
+                    kind,
+                );
+                self.values[register] = try self.emitExtremum(
+                    true,
+                    lifted,
+                    self.values[of[2]],
+                    kind,
+                );
             },
             .sqrt => self.values[register] = try self.emitFloatCall(.sqrt, of[0]),
             .floor => self.values[register] = try self.emitFloatCall(.floor, of[0]),
@@ -3567,18 +3597,25 @@ const Body = struct {
     ///
     /// Int is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
     ///
-    /// Float is spelled out, because no single LLVM intrinsic means
-    /// what the interpreter's `@min` means.  `llvm.minnum` leaves
-    /// `(-0.0, +0.0)` unspecified, and LLVM's constant folder and the
-    /// target's instruction then pick differently — which is why this
-    /// used to be a runtime call.  `llvm.minimum` *is* specified there
-    /// (`-0.0 < +0.0`, folded and lowered alike) but propagates NaN,
-    /// where the interpreter answers the operand that is a number.  So
-    /// the two are composed: `minimum`, with the NaN cases selected
-    /// around it.  That is four instructions and no call — `vmin` over
-    /// a million-element array was a million calls — and
-    /// `specs/behavior_spec.zig` holds both engines to the same answer
-    /// for every signed zero and NaN pairing.
+    /// Float is `llvm.minimumnum`/`llvm.maximumnum`, which mean exactly
+    /// what the interpreter's `@min` means and are the only extremum
+    /// intrinsics that mean anything at all: `llvm.minnum` leaves
+    /// `(-0.0, +0.0)` unspecified, so LLVM's constant folder and the
+    /// target's instruction disagree — which is why this was once a
+    /// runtime call — and `llvm.minimum` is specified there but
+    /// propagates NaN, where Luce answers the operand that is a number.
+    /// The 754-2019 pair is both: `-0.0` below `+0.0`, and NaN as an
+    /// identity rather than an absorber.
+    ///
+    /// That last property is what makes an extremum *reduction* fast.
+    /// A `min` with no NaN case to steer around is associative and
+    /// commutative on the nose, so LLVM's vectorizer may reorder one
+    /// without reassociating anything — `vmin` over a million elements
+    /// becomes `fminnm.2d` four lanes at a time and beats the scalar
+    /// `a < b ? a : b` loop a C compiler is stuck with, while the answer
+    /// stays the same value it would have accumulated one at a time.
+    /// `08_llvm/test.zig` holds both engines to the same answer for
+    /// every signed zero and NaN pairing, scalar and reduced.
     fn emitExtremum(
         self: *Body,
         wants_minimum: bool,
@@ -3596,23 +3633,15 @@ const Body = struct {
                 "extremum",
             ),
             .float => {
-                const ordered = try self.wip.callIntrinsic(
+                const target = try self.module.floatExtremum(wants_minimum);
+                const builder = self.module.builder;
+                return self.wip.call(
                     .normal,
+                    Builder.CallConv.default,
                     .none,
-                    if (wants_minimum) .minimum else .maximum,
-                    &.{.double},
+                    target.typeOf(builder),
+                    target.toValue(builder),
                     &.{ left, right },
-                    "extremum",
-                );
-                // NaN compares unordered with itself, and an extremum
-                // against one is the other operand.
-                const right_is_nan = try self.wip.fcmp(.normal, .uno, right, right, "right.nan");
-                const left_is_nan = try self.wip.fcmp(.normal, .uno, left, left, "left.nan");
-                return self.wip.select(
-                    .normal,
-                    left_is_nan,
-                    right,
-                    try self.wip.select(.normal, right_is_nan, left, ordered, "numeric"),
                     "extremum",
                 );
             },

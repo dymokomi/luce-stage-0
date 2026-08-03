@@ -1,10 +1,21 @@
 # Vector statistics through std math — sum, extrema, dot, norm,
-# variance over two million-element Float arrays.  Every reduction
-# accumulates left to right, exactly as the C twin does, so results
-# are bit-identical; sqrt is IEEE-exact on both sides.  This is the
-# std-is-written-in-Luce bet measured on numeric code, and a second
-# SIMD datapoint: C vectorizes every one of these loops.  The C twin
-# is bench/stats.c.
+# variance over two million-element Float arrays.  The
+# std-is-written-in-Luce bet measured on numeric code; the C twin is
+# bench/stats.c.
+#
+# The sums accumulate strictly left to right on both sides, which is
+# what makes the printed integers bit-identical and what stops either
+# compiler vectorizing an accumulation: clang will not reorder a float
+# reduction without fast-math, and Luce never will.  Both do vectorize
+# the elementwise work underneath one — the multiply in dot, the
+# subtract in variance — and sqrt is IEEE-exact on both.
+#
+# The extrema are the exception, and the one place the two languages
+# differ in kind.  Luce's min is IEEE-754-2019 minimumNumber: exactly
+# associative and commutative, so vmin may reduce four lanes at a time
+# and still answer the value the one-at-a-time loop would have.  C's
+# `a < b ? a : b` decides a NaN by operand order and is neither, so
+# clang has to keep it a scalar compare-and-select chain.
 
 import std.math
 

@@ -35,7 +35,12 @@ zig build --prefix build -Doptimize=ReleaseSafe >/dev/null 2>&1
 
 names="loops math strings arrays matmul stats"
 mkdir -p build/bench "$base/build/bench"
+# The stale `.lcn` goes first, for the reason bench/run.sh gives: an
+# artifact's tag names the program and not the compiler, so the side
+# whose lowering changed would otherwise run the artifact the previous
+# build left behind — which is exactly the difference being measured.
 for name in $names; do
+    rm -f "build/bench/$name.lcn" "$base/build/bench/$name.lcn"
     build/luce build "bench/$name.luc" -o "build/bench/$name.lc" --release >/dev/null
     if [ -f "$base/bench/$name.luc" ]; then
         "$base/build/luce" build "$base/bench/$name.luc" \

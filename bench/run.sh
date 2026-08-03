@@ -37,7 +37,15 @@ names="loops math strings arrays matmul stats"
 # (no fused multiply-add), so C plays by the same float rules —
 # otherwise the mandelbrot checksums genuinely differ.  Everything
 # else (-O3, vectorization) stays on.
+#
+# The `.lcn` beside each `.lc` goes first.  An artifact's tag names the
+# program it came from and not the compiler that wrote it, so a `.lc`
+# that re-encodes to the same bytes after a code-generation change
+# still matches an artifact the *previous* build produced — and this
+# script would then time the old code and report no difference.  Every
+# artifact here is ours to regenerate, so regenerate it.
 for name in $names; do
+    rm -f "build/bench/$name.lcn"
     build/luce build "bench/$name.luc" -o "build/bench/$name.lc" --release >/dev/null
     zig cc -O3 -march=native -ffp-contract=off -o "build/bench/$name" "bench/$name.c"
 done

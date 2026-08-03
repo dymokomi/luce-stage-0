@@ -120,6 +120,17 @@ restored from a backup with an old mtime does not quietly win.  That
 is PEP 552's answer rather than PEP 3147's, and it is the same
 decision the `.lci` image cache reached before it.
 
+**The content it keys on is the program's, and only the program's.**
+Nothing in the tag names the code generator, so an artifact survives a
+change to the *compiler* as long as the `.lc` re-encodes to the same
+bytes: upgrade `luce`, and every `.lcn` already sitting beside a
+program keeps running the code the previous one wrote.  `abi.version`
+catches a change to the host ABI and `artifact_format` a change to the
+tag, but a change to `08_llvm/lower.zig` alone is invisible.  Until the
+tag names its generator, anything that must measure or inspect
+generated code deletes the artifact first — `bench/run.sh` and
+`bench/compare.sh` both do.
+
 ### Which engine runs a `.lc`
 
 `loom run` prefers native and falls back to the interpreter, silently,
@@ -389,6 +400,47 @@ call-worthy.  Neither is `List`, whose buffer moves under `append`, nor
 `find_byte`, which is a vectorized `memchr` in the runtime and would be
 slower unrolled here.
 
+## The extrema, and why a `min` reduction vectorizes
+
+`min`, `max` and `clamp` on Float are generated too, and *which*
+intrinsic they are generated as is a decision about meaning before it
+is one about speed.
+
+LLVM offers three, and only one of them says anything definite.
+`llvm.minnum` leaves `(-0.0, +0.0)` unspecified, so its constant
+folder answers the first operand while every target's instruction
+answers `-0.0` — one value computed two ways, differing by whether an
+optimizer reached it, which is not a semantics at all.  `llvm.minimum`
+is specified there but propagates NaN, where Luce answers the operand
+that is a number.  `llvm.minimumnum` — IEEE 754-2019 `minimumNumber` —
+is both at once: `-0.0` below `+0.0`, and a NaN as an identity rather
+than an absorber.  That is what Luce's `min` means and what the
+interpreter's `@min` does, so that is what is emitted, and `clamp` is
+the two composed in the interpreter's order.  It is declared by name
+rather than through `Builder.Intrinsic`, whose table in the pinned
+standard library predates the 2019 pair; LLVM recognizes an
+`llvm.`-prefixed name as the intrinsic it spells and attaches that
+intrinsic's own attributes, so the module is the one the enum would
+have built.
+
+The speed then follows from the meaning rather than the other way
+round.  NaN-as-identity makes `minimumNumber` associative and
+commutative exactly, so LLVM's vectorizer may reduce an extremum loop
+four lanes at a time — no fast-math, no reassociation of anything, and
+the same value the sequential loop would have accumulated, down to
+which zero it kept.  `math.vmin` over two million elements becomes
+`fminnm.2d`.  A C twin written the ordinary way, `a < b ? a : b`, gets
+no such licence: that expression decides a NaN by operand order, so
+clang is stuck with a scalar compare-and-select chain.  A min-and-max
+microbenchmark went from 2.96x the C twin to 0.54x, and `bench/stats`
+— where the extrema are two of eleven passes over the data — from
+1.23x to 1.08x.
+
+The composition this replaced was `llvm.minimum` with the two NaN
+cases selected around it.  It was correct, and it cost three dependent
+floating-point instructions per element where the reduction needs one,
+none of which the vectorizer would touch.
+
 ## What the module tells LLVM about the runtime
 
 Every one of those calls used to be declared bare —
@@ -608,13 +660,13 @@ two on the machine in front of you.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  78.9 ms |  82.4 ms |  1.04x |   1.03x |
-| math      | 134.6 ms | 105.8 ms |  0.79x |   0.77x |
-| strings   |  19.6 ms |  45.8 ms |  2.34x |   2.51x |
-| arrays    |  42.4 ms |  45.3 ms |  1.07x |   1.05x |
-| matmul    |  10.3 ms |  11.2 ms |  1.08x |   0.99x |
-| stats     |  31.4 ms |  38.4 ms |  1.22x |   1.21x |
-| floor     |   2.9 ms |   3.8 ms |      - |       - |
+| loops     |  80.8 ms |  84.8 ms |  1.05x |   1.04x |
+| math      | 138.6 ms | 109.2 ms |  0.79x |   0.78x |
+| strings   |  20.6 ms |  47.4 ms |  2.31x |   2.49x |
+| arrays    |  44.0 ms |  47.2 ms |  1.07x |   1.06x |
+| matmul    |  10.9 ms |  11.7 ms |  1.07x |   1.02x |
+| stats     |  32.3 ms |  35.3 ms |  1.09x |   1.08x |
+| floor     |   3.0 ms |   3.7 ms |      - |       - |
 
 `strings` is the one row that is genuinely behind, and it is
 allocation-bound rather than code-generation-bound.  Everything else

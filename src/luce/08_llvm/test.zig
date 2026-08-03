@@ -1499,6 +1499,76 @@ test "negating a float flips the sign bit, so -0.0 survives" {
     );
 }
 
+// A `min`/`max` reduction is the one float loop LLVM may reorder
+// without being told to reassociate anything, because
+// `llvm.minimumnum` is associative and commutative on the nose — so
+// `lower.emitExtremum` lets it, and the vectorized loop has to answer
+// what the interpreter's one-at-a-time loop answers, down to which
+// zero it kept.  Nothing below is a constant to the optimizer: the
+// values come out of a List and the length out of `len`, so the
+// reductions stay loops long enough to be vectorized.
+test "min and max reductions over an array agree, signed zeros and all" {
+    try agree(std.testing.allocator,
+        \\func lowest(xs: Array(Float, _)) -> Float:
+        \\    var smallest = xs[0]
+        \\    for i in range(1, len(xs)):
+        \\        smallest = min(smallest, xs[i])
+        \\    return smallest
+        \\
+        \\func highest(xs: Array(Float, _)) -> Float:
+        \\    var largest = xs[0]
+        \\    for i in range(1, len(xs)):
+        \\        largest = max(largest, xs[i])
+        \\    return largest
+        \\
+        \\func main():
+        \\    let control = new List(Float)
+        \\    control.append(0.0)
+        \\    control.append(-0.0)
+        \\    control.append(0.0 / 0.0)
+        \\    let n = len(control) * 5
+        \\    var xs = new Array(Float, n)
+        \\    for pattern in range(0, 32):
+        \\        for i in range(0, n):
+        \\            xs[i] = control[(pattern / (i % 5 + 1)) % 2]
+        \\        let low = lowest(xs)
+        \\        let high = highest(xs)
+        \\        print(str(low) + " " + str(1.0 / low) + " " +
+        \\            str(high) + " " + str(1.0 / high))
+        \\    for at in range(0, n):
+        \\        for i in range(0, n):
+        \\            xs[i] = Float(i + 1)
+        \\        xs[at] = control[2]
+        \\        print(str(lowest(xs)) + " " + str(highest(xs)))
+        \\    free(xs)
+        \\    free(control)
+        \\
+    );
+}
+
+test "clamp agrees when the bounds cross and when they are not numbers" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    let bounds = new List(Float)
+        \\    bounds.append(-1.0)
+        \\    bounds.append(1.0)
+        \\    bounds.append(0.0)
+        \\    bounds.append(-0.0)
+        \\    bounds.append(0.0 / 0.0)
+        \\    var low = 0
+        \\    while low < len(bounds):
+        \\        var high = 0
+        \\        while high < len(bounds):
+        \\            let held = Float(low) - Float(high) * 0.5
+        \\            print(str(clamp(held, bounds[low], bounds[high])))
+        \\            high = high + 1
+        \\        low = low + 1
+        \\    print(str(clamp(5, 9, 2)) + " " + str(clamp(0, 9, 2)))
+        \\    free(bounds)
+        \\
+    );
+}
+
 test "the float builtins agree" {
     try agree(std.testing.allocator,
         \\func main():
