@@ -15,9 +15,10 @@ comes first and the Fabric returns later on top of it.  The plan is
 ## Build and test
 
 Everything is Zig 0.16 and runs on any host OS.  LLVM is a build
-prerequisite — Luce's one code generator calls libLLVM in process
-(`brew install llvm`, `apt install llvm-dev`, or point the build at
-an installation with `-Dllvm-config=/path/to/llvm-config`):
+prerequisite — Luce's one code generator calls libLLVM in process, and
+the `luce` compiler links it (`brew install llvm`, `apt install
+llvm-dev`, or point the build at an installation with
+`-Dllvm-config=/path/to/llvm-config`).  `loom` does not link it:
 
 ```sh
 ./build.sh         # installs build/luce, build/loom, and build/programs/*.lc
@@ -89,6 +90,15 @@ falls back to the interpreter when the compiled path is unavailable.
 missing; `LOOM_ENGINE=interpreter` takes the reference engine on
 purpose.  The two agree by construction: one runtime library, one
 host, one rendering of a trap.
+
+**loom carries no code generator.**  Building is `luce`'s job, so loom
+runs that binary — found beside its own executable first and on `PATH`
+after — and links nothing itself.  libLLVM is 164 MB and dyld binds it
+before `main`, which cost every `loom` invocation 5.7 ms for nothing;
+loom now starts in 3 ms against a C do-nothing binary's 2.4.  It also
+means **a machine that only runs Luce programs needs no LLVM
+installed**: the interpreter needs none, and a shipped `.lcn` needs
+none either.
 
 A Luce program is a script with a `main` entry.  The language is
 statically typed with inference, has structs, `List`/`Map`/`Array`/

@@ -31,6 +31,7 @@
 //!     be refused by the loader, not tolerated.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// The trap channel's C shapes, taken from the one file that defines
 /// them.  Deliberately `runtime/trace.zig` and not the `runtime.zig`
@@ -57,7 +58,30 @@ const trace = @import("../runtime/trace.zig");
 /// `call_depth` service arrived with it: how many Luce frames the host
 /// allows, which is what makes runaway recursion a `call_depth_exceeded`
 /// trap on this path instead of a native stack overflow.
-pub const version: u32 = 4;
+///
+/// 5 — the artifact tag names its machine the way Zig names one rather
+/// than the way LLVM does.  Same field, same layout, different string:
+/// `machine` below is a compile-time constant, so a loader answers
+/// "is this artifact mine?" without libLLVM in the process.
+pub const version: u32 = 5;
+
+/// The machine an artifact runs on, as a string both the compiler and
+/// the loader can produce.
+///
+/// **Not the LLVM triple, deliberately.**  The triple is a *codegen*
+/// input — LLVM invents it, LLVM parses it, and asking for it means
+/// linking libLLVM.  A loader is asking a different question: may this
+/// shared library be opened and called here?  Architecture, operating
+/// system and C ABI answer that question exactly, they come from
+/// `builtin` at compile time, and they cost a `loom` that only ever
+/// *runs* programs no dependency at all (`docs/CODEGEN.md`).
+///
+/// CPU features are absent because nothing generates for a named CPU:
+/// `emit.Options.cpu` is empty, measured rather than assumed.  The day
+/// that changes, this string grows and `version` moves with it.
+pub const machine = @tagName(builtin.cpu.arch) ++
+    "-" ++ @tagName(builtin.os.tag) ++
+    "-" ++ @tagName(builtin.abi);
 
 /// The two symbols a compiled Luce artifact exports: what to call, and
 /// what the thing being called is.
@@ -95,10 +119,10 @@ pub const Artifact = extern struct {
     /// The `version` of the host ABI the code was generated against.
     /// A loader must refuse anything but its own.
     abi_version: u32 = version,
-    /// The LLVM target triple the code was generated for, e.g.
-    /// `arm64-apple-macosx26.0.0`.  Not NUL-terminated.
-    triple: [*]const u8,
-    triple_length: i64,
+    /// The machine the code was generated for — `machine` above, e.g.
+    /// `aarch64-macos-none`.  Not NUL-terminated.
+    machine: [*]const u8,
+    machine_length: i64,
     /// A hash of the serialized module the artifact was compiled from
     /// (`mir.module.encode`'s bytes).  This is the cache key, and it
     /// keys on *content*: a rebuilt-but-identical program matches, and
@@ -135,7 +159,7 @@ pub const Mismatch = enum {
     /// Built against a different host ABI.
     abi_version,
     /// Built for a different machine.
-    triple,
+    machine,
     /// Built from a different program.
     source,
 };
@@ -144,17 +168,16 @@ pub const Mismatch = enum {
 /// `artifact_symbol`; null means the symbol was missing.  `expect_hash`
 /// is null when the caller has no particular program in mind (an
 /// artifact being inspected rather than run from a cache).
-pub fn checkArtifact(
-    tag: ?*const Artifact,
-    triple: []const u8,
-    expect_hash: ?u64,
-) ?Mismatch {
+///
+/// The machine is checked against this loader's own, which is the only
+/// answer that can be right: whoever is calling is the machine.
+pub fn checkArtifact(tag: ?*const Artifact, expect_hash: ?u64) ?Mismatch {
     const found = tag orelse return .not_an_artifact;
     if (found.magic != artifact_magic) return .not_an_artifact;
     if (found.format != artifact_format) return .format;
     if (found.abi_version != version) return .abi_version;
-    const named = found.triple[0..@intCast(found.triple_length)];
-    if (!std.mem.eql(u8, named, triple)) return .triple;
+    const named = found.machine[0..@intCast(found.machine_length)];
+    if (!std.mem.eql(u8, named, machine)) return .machine;
     if (expect_hash) |wanted| {
         if (found.source_hash != wanted) return .source;
     }
@@ -424,8 +447,8 @@ test "the artifact tag's layout is the one the code generator emits" {
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(Artifact, "magic"));
     try std.testing.expectEqual(@as(usize, 8), @offsetOf(Artifact, "format"));
     try std.testing.expectEqual(@as(usize, 12), @offsetOf(Artifact, "abi_version"));
-    try std.testing.expectEqual(@as(usize, 16), @offsetOf(Artifact, "triple"));
-    try std.testing.expectEqual(@as(usize, 24), @offsetOf(Artifact, "triple_length"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(Artifact, "machine"));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(Artifact, "machine_length"));
     try std.testing.expectEqual(@as(usize, 32), @offsetOf(Artifact, "source_hash"));
     try std.testing.expectEqual(@as(usize, 40), @offsetOf(Artifact, "debug"));
     try std.testing.expectEqual(@as(usize, 44), @offsetOf(Artifact, "reserved"));
@@ -433,29 +456,44 @@ test "the artifact tag's layout is the one the code generator emits" {
 }
 
 test "an artifact tag is refused by name, in the order a loader checks" {
-    const triple = "arm64-apple-macosx";
-    const other = "x86_64-unknown-linux-gnu";
+    const elsewhere = "sparc64-solaris-none";
+    try std.testing.expect(!std.mem.eql(u8, machine, elsewhere));
+
     var good: Artifact = .{
-        .triple = triple.ptr,
-        .triple_length = triple.len,
+        .machine = machine.ptr,
+        .machine_length = machine.len,
         .source_hash = 7,
         .debug = 1,
     };
-    try std.testing.expectEqual(@as(?Mismatch, null), checkArtifact(&good, triple, 7));
-    try std.testing.expectEqual(@as(?Mismatch, null), checkArtifact(&good, triple, null));
-    try std.testing.expectEqual(Mismatch.source, checkArtifact(&good, triple, 8).?);
-    try std.testing.expectEqual(Mismatch.triple, checkArtifact(&good, other, 7).?);
-    try std.testing.expectEqual(Mismatch.not_an_artifact, checkArtifact(null, triple, 7).?);
+    try std.testing.expectEqual(@as(?Mismatch, null), checkArtifact(&good, 7));
+    try std.testing.expectEqual(@as(?Mismatch, null), checkArtifact(&good, null));
+    try std.testing.expectEqual(Mismatch.source, checkArtifact(&good, 8).?);
+    try std.testing.expectEqual(Mismatch.not_an_artifact, checkArtifact(null, 7).?);
 
     var wrong = good;
+    wrong.machine = elsewhere.ptr;
+    wrong.machine_length = elsewhere.len;
+    try std.testing.expectEqual(Mismatch.machine, checkArtifact(&wrong, 7).?);
+    wrong = good;
     wrong.abi_version = version + 1;
-    try std.testing.expectEqual(Mismatch.abi_version, checkArtifact(&wrong, triple, 7).?);
+    try std.testing.expectEqual(Mismatch.abi_version, checkArtifact(&wrong, 7).?);
     wrong = good;
     wrong.format = artifact_format + 1;
-    try std.testing.expectEqual(Mismatch.format, checkArtifact(&wrong, triple, 7).?);
+    try std.testing.expectEqual(Mismatch.format, checkArtifact(&wrong, 7).?);
     wrong = good;
     wrong.magic = 0;
-    try std.testing.expectEqual(Mismatch.not_an_artifact, checkArtifact(&wrong, triple, 7).?);
+    try std.testing.expectEqual(Mismatch.not_an_artifact, checkArtifact(&wrong, 7).?);
+}
+
+test "the machine names the architecture, the system, and the C ABI" {
+    // Three fields, two separators, nothing invented: the same string
+    // the compiler stamps is the one a loader compares against, because
+    // it is one constant and both of them read it.
+    var parts = std.mem.splitScalar(u8, machine, '-');
+    try std.testing.expectEqualStrings(@tagName(builtin.cpu.arch), parts.next().?);
+    try std.testing.expectEqualStrings(@tagName(builtin.os.tag), parts.next().?);
+    try std.testing.expectEqualStrings(@tagName(builtin.abi), parts.next().?);
+    try std.testing.expect(parts.next() == null);
 }
 
 test "the source hash keys on content and nothing else" {

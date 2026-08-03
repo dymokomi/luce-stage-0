@@ -77,7 +77,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         argument.* = std.mem.span(argv[index + 1]);
     }
 
-    if (abi.checkArtifact(&luce_artifact, tripleOf(&luce_artifact), null)) |mismatch| {
+    if (abi.checkArtifact(&luce_artifact, null)) |mismatch| {
         err.print(
             "luce: this executable was built from a mismatched artifact ({s}); rebuild it from source\n",
             .{@tagName(mismatch)},
@@ -100,16 +100,6 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const code = report(&services, err, status);
     err.flush() catch {};
     return code;
-}
-
-/// The artifact's own triple, which is trivially the triple it was
-/// built for: a wrong-architecture executable never reached `main` at
-/// all — the operating system's loader refused it first.  What is
-/// still worth checking is the magic, the tag's layout, and the ABI
-/// version, and passing the tag its own triple asks exactly that.
-fn tripleOf(tag: *const abi.Artifact) []const u8 {
-    if (tag.magic != abi.artifact_magic) return "";
-    return tag.triple[0..@intCast(tag.triple_length)];
 }
 
 fn report(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_int {

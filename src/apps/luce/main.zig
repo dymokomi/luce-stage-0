@@ -5,6 +5,13 @@
 //!   luce check FILE.luc            compile, report, write nothing
 //!   luce ir FILE.luc               compile and dump readable IR
 //!
+//! **FILE may be a `.lc` as well as a `.luc`.**  A serialized module is
+//! a compiled program in its portable form, and building a native
+//! artifact from one asks nothing of the front end — it is decoded and
+//! handed straight to stage 8.  That is how `loom` gets a program
+//! compiled without carrying a code generator itself: it runs this
+//! binary over the module it already has (`apps/loom/runner.zig`).
+//!
 //! `--emit` says which of four artifacts `build` writes, and it is the
 //! only thing that differs between them — the same program walks the
 //! same pipeline either way:
@@ -26,6 +33,7 @@ const std = @import("std");
 const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
+const object = @import("object.zig");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -156,9 +164,12 @@ const Emit = enum {
 fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
-            "  luce build FILE.luc [-o OUT] [--release] [--emit=WHAT]\n" ++
-            "  luce check FILE.luc\n" ++
-            "  luce ir FILE.luc [--full]\n" ++
+            "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
+            "  luce check FILE\n" ++
+            "  luce ir FILE [--full]\n" ++
+            "\n" ++
+            "FILE is a .luc source file, or a .lc module to take up\n" ++
+            "from where it was left — the same program either way.\n" ++
             "\n" ++
             "--emit says which artifact to write, and nothing else\n" ++
             "differs between them — the same program walks the same\n" ++
@@ -261,9 +272,6 @@ fn buildNative(
     defer gpa.free(encoded);
     const source_hash = luce.llvm.abi.sourceHash(encoded);
 
-    const triple = try luce.llvm.hostTriple(gpa);
-    defer gpa.free(triple);
-
     var tools = try native.discover(gpa, io, request.library_directory, request.driver);
     defer tools.deinit(gpa);
 
@@ -273,11 +281,10 @@ fn buildNative(
         try replaceExtension(gpa, request.path, request.kind.extension());
     defer gpa.free(target);
 
-    switch (try native.build(gpa, io, &tools, &program, .{
+    switch (try object.build(gpa, io, &tools, &program, .{
         .kind = request.kind,
         .output = target,
         .source_hash = source_hash,
-        .triple = triple,
     })) {
         .written => {},
         .unsupported => |what| {
@@ -285,7 +292,9 @@ fn buildNative(
                 "{s}: the LLVM backend has no lowering for {s} yet\n",
                 .{ request.path, what },
             );
-            return 1;
+            // Its own exit code: this is about the program, not about
+            // this attempt, so a caller retrying elsewhere should not.
+            return native.exit_unsupported;
         },
         .failed => |why| {
             defer gpa.free(why);
@@ -294,7 +303,8 @@ fn buildNative(
         },
     }
 
-    try out.print("{s} -> {s} ({s})\n", .{ request.path, target, triple });
+    // The machine the tag claims, which is the one a loader checks.
+    try out.print("{s} -> {s} ({s})\n", .{ request.path, target, luce.llvm.abi.machine });
     try out.flush();
     return 0;
 }
@@ -304,18 +314,23 @@ fn modulePath(gpa: std.mem.Allocator, source_path: []const u8) ![]u8 {
     return replaceExtension(gpa, source_path, ".lc");
 }
 
-/// FILE.luc -> FILE + `extension`; anything else just appends.  An
-/// empty extension is how an executable gets the program's bare name.
+/// FILE.luc and FILE.lc -> FILE + `extension`; anything else just
+/// appends.  An empty extension is how an executable gets the program's
+/// bare name.
 fn replaceExtension(
     gpa: std.mem.Allocator,
     source_path: []const u8,
     extension: []const u8,
 ) ![]u8 {
-    const stem = if (std.mem.endsWith(u8, source_path, ".luc"))
-        source_path[0 .. source_path.len - ".luc".len]
-    else
-        source_path;
-    return std.fmt.allocPrint(gpa, "{s}{s}", .{ stem, extension });
+    return std.fmt.allocPrint(gpa, "{s}{s}", .{ stemOf(source_path), extension });
+}
+
+/// A program's name without whichever of its two forms it arrived in.
+fn stemOf(path: []const u8) []const u8 {
+    inline for (.{ ".luc", ".lc" }) |suffix| {
+        if (std.mem.endsWith(u8, path, suffix)) return path[0 .. path.len - suffix.len];
+    }
+    return path;
 }
 
 /// Compile one script file; renders diagnostics to `err` and returns
@@ -336,6 +351,8 @@ fn compilePathPruned(
     path: []const u8,
     prune: bool,
 ) !?luce.mir.Program {
+    if (std.mem.endsWith(u8, path, ".lc")) return decodePath(gpa, io, err, path);
+
     // The root file goes through the same door as every import, so a
     // directory, a permission, or an oversized file reads the same
     // whether it is the program or something the program imports.
@@ -375,6 +392,50 @@ fn compilePathPruned(
     }
 }
 
+/// Read a serialized module back into a program.
+///
+/// A `.lc` has already been through the front end, so there is nothing
+/// to check and nothing to prune — `decode` re-runs the IR verifier,
+/// which is the whole of what this path owes a caller.
+fn decodePath(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    err: *std.Io.Writer,
+    path: []const u8,
+) !?luce.mir.Program {
+    const encoded = files.readWhole(gpa, io, path) catch {
+        try err.print("luce: cannot read {s}\n", .{path});
+        return null;
+    };
+    defer gpa.free(encoded);
+
+    return luce.mir.module.decode(gpa, encoded) catch |mistake| switch (mistake) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedVersion => {
+            try err.print("luce: {s} was built by a different luce; rebuild it from source\n", .{path});
+            return null;
+        },
+        error.InvalidModule => {
+            try err.print("luce: {s} is not a valid .lc module\n", .{path});
+            return null;
+        },
+    };
+}
+
 test {
     _ = luce;
+    _ = object;
+}
+
+test "an artifact's name comes from the program's, whichever form it arrived in" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ "sub/game.luc", "sub/game.lc" }) |path| {
+        const artifact = try replaceExtension(gpa, path, ".lcn");
+        defer gpa.free(artifact);
+        try std.testing.expectEqualStrings("sub/game.lcn", artifact);
+
+        const binary = try replaceExtension(gpa, path, "");
+        defer gpa.free(binary);
+        try std.testing.expectEqualStrings("sub/game", binary);
+    }
 }

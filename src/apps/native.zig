@@ -1,11 +1,17 @@
-//! Turning a lowered program into something that runs: the link, the
-//! artifact tag, and the load.
+//! Finding the tools, linking an object, and loading an artifact.
 //!
-//! Stage 10 stops at a relocatable object (`docs/CODEGEN.md`).  What
-//! stands between that and a program a person can run is a linker
-//! invocation and — for the loadable form — a loader that refuses the
-//! wrong artifact by name.  Both `luce` and `loom` need exactly that,
-//! so it is written once here, the way `files.zig` is written once.
+//! Stage 8 stops at LLVM bitcode and `emit` turns that into a
+//! relocatable object (`docs/CODEGEN.md`).  What stands between that
+//! and a program a person can run is a linker invocation and — for the
+//! loadable form — a loader that refuses the wrong artifact by name.
+//!
+//! **Nothing here links libLLVM, and that is the shape of the two
+//! binaries.**  `luce` is the compiler: it lowers, emits, and links.
+//! `loom` is the environment: it opens artifacts, runs them, and when
+//! one has to be built it runs the `luce` binary (`findCompiler`).  So
+//! this module holds exactly what both of them need — the tool search,
+//! the link, the tag, the load — and `src/apps/luce/object.zig` holds
+//! the half that needs a code generator in the process.
 //!
 //! **Linking runs `cc`, and only when something is being built.**  A
 //! link is a build-time act: it happens when `luce build --emit=exe`
@@ -146,72 +152,115 @@ fn fileIn(gpa: Allocator, io: std.Io, directory: []const u8, name: []const u8) F
 }
 
 // ---------------------------------------------------------------------------
-// Compiling and linking
+// Finding the compiler
 // ---------------------------------------------------------------------------
 
-pub const BuildResult = union(enum) {
+/// The name of the compiler binary, as it is installed.
+pub const compiler_name = "luce";
+
+/// `luce build` exits with this when the program says something the
+/// backend has no lowering for, rather than with the ordinary 1.
+///
+/// The distinction is not cosmetic: everything else a build can fail
+/// with is about *this attempt* — an unwritable directory, a missing
+/// library, a linker that is not there — and is worth retrying
+/// somewhere else.  This one is about the program, and no directory
+/// changes it, so a caller that would otherwise try a second place
+/// stops here instead.
+pub const exit_unsupported: u8 = 2;
+
+/// Where the `luce` compiler is, for whoever needs something built.
+pub const Compiler = struct {
+    /// The binary, or an empty string when it was not found.
+    path: []const u8,
+    /// The directory beside the running binary that was looked in, for
+    /// the error message.  Empty when even that could not be asked for.
+    beside: []const u8,
+
+    pub fn found(self: *const Compiler) bool {
+        return self.path.len != 0;
+    }
+
+    pub fn deinit(self: *Compiler, gpa: Allocator) void {
+        gpa.free(self.path);
+        gpa.free(self.beside);
+        self.* = undefined;
+    }
+};
+
+/// Find the `luce` binary: beside the running executable first, then on
+/// `PATH`.
+///
+/// Beside first is what a toolchain does, and it is what makes an
+/// install tree self-consistent — a `loom` from `build/` builds with
+/// the `luce` from `build/`, never with whatever an older install left
+/// earlier on `PATH`.  `PATH` is the fallback for a `loom` that was
+/// copied somewhere on its own.
+///
+/// `search_path` is the `PATH` variable's value; null skips that half.
+/// Never fails for a missing compiler — the caller reports that at the
+/// moment it matters, which is not every startup.
+pub fn findCompiler(gpa: Allocator, io: std.Io, search_path: ?[]const u8) FindError!Compiler {
+    const beside = std.process.executableDirPathAlloc(io, gpa) catch
+        try gpa.dupe(u8, "");
+    errdefer gpa.free(beside);
+
+    if (beside.len != 0) {
+        const candidate = try fileIn(gpa, io, beside, compiler_name);
+        if (candidate.len != 0) return .{ .path = candidate, .beside = beside };
+    }
+
+    var entries = std.mem.tokenizeScalar(u8, search_path orelse "", path_separator);
+    while (entries.next()) |directory| {
+        const candidate = try fileIn(gpa, io, directory, compiler_name);
+        if (candidate.len != 0) return .{ .path = candidate, .beside = beside };
+    }
+    return .{ .path = try gpa.dupe(u8, ""), .beside = beside };
+}
+
+const path_separator: u8 = if (@import("builtin").os.tag == .windows) ';' else ':';
+
+// ---------------------------------------------------------------------------
+// Linking
+// ---------------------------------------------------------------------------
+
+pub const LinkResult = union(enum) {
     /// The artifact was written to the path the caller named.
     written,
-    /// Something has no lowering yet; the payload names it and is
-    /// static storage.
-    unsupported: []const u8,
-    /// The build failed; the payload is a sentence for a person and is
-    /// owned by the caller.
+    /// It was not; the payload is a sentence for a person and is owned
+    /// by the caller.
     failed: []const u8,
 };
 
-pub const BuildError = error{OutOfMemory};
+pub const LinkError = error{OutOfMemory};
 
-/// Lower `program`, emit an object for the host, and — unless a bare
-/// object was asked for — link it into `output`.
-///
-/// `source_hash` is what the artifact's tag will claim it was built
-/// from (`abi.sourceHash` of the serialized module), so a loader can
-/// tell a stale cache entry from a current one.  Pass zero when
-/// nothing will cache this.
+/// Put an object where `kind` says it belongs: written as it is for a
+/// bare object, linked into a loadable artifact or an executable
+/// otherwise.
 ///
 /// Everything temporary is written beside `output` and removed, so a
 /// half-built artifact never appears under the name a loader reads.
-pub fn build(
+pub fn write(
     gpa: Allocator,
     io: std.Io,
     tools: *const Tools,
-    program: *const luce.mir.Program,
-    options: struct {
-        kind: Kind,
-        output: []const u8,
-        source_hash: u64 = 0,
-        triple: []const u8,
-    },
-) BuildError!BuildResult {
-    const bitcode = switch (try luce.llvm.lower(gpa, program, .{
-        .triple = options.triple,
-        .source_hash = options.source_hash,
-    })) {
-        .bitcode => |bytes| bytes,
-        .unsupported => |what| return .{ .unsupported = what },
-    };
-    defer gpa.free(bitcode);
-
-    const object = switch (try luce.llvm.compile(gpa, bitcode, .{ .triple = options.triple })) {
-        .object => |bytes| bytes,
-        .failed => |why| return .{ .failed = why },
-    };
-    defer gpa.free(object);
-
-    if (options.kind == .object) {
-        writeWhole(io, options.output, object) catch {
-            return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{options.output}) };
+    kind: Kind,
+    object: []const u8,
+    output: []const u8,
+) LinkError!LinkResult {
+    if (kind == .object) {
+        writeWhole(io, output, object) catch {
+            return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{output}) };
         };
         return .written;
     }
 
-    // A distinct name per process, so two loom runs warming the same
-    // cache cannot write each other's half-finished object.
+    // A distinct name per process, so two runs warming the same cache
+    // cannot write each other's half-finished object.
     const object_path = try std.fmt.allocPrint(
         gpa,
         "{s}.{d}.o",
-        .{ options.output, std.Thread.getCurrentId() },
+        .{ output, std.Thread.getCurrentId() },
     );
     defer gpa.free(object_path);
     defer std.Io.Dir.cwd().deleteFile(io, object_path) catch {};
@@ -219,7 +268,7 @@ pub fn build(
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{object_path}) };
     };
 
-    return link(gpa, io, tools, options.kind, object_path, options.output);
+    return link(gpa, io, tools, kind, object_path, output);
 }
 
 /// Run the linker over one object.  The result lands at `output`
@@ -232,7 +281,7 @@ pub fn link(
     kind: Kind,
     object_path: []const u8,
     output: []const u8,
-) BuildError!BuildResult {
+) LinkError!LinkResult {
     if (tools.runtime.len == 0) return .{ .failed = try std.fmt.allocPrint(
         gpa,
         "cannot find libluce_rt.a (looked in {s}); set LUCE_LIB to the directory holding it",
@@ -342,10 +391,10 @@ pub const OpenResult = union(enum) {
 /// to say so, so nothing is called until the tag agrees on the magic,
 /// its own layout, the ABI version, the machine, and — when the caller
 /// names one — the program it was built from.
-pub fn open(path: [:0]const u8, triple: []const u8, expect_hash: ?u64) OpenResult {
+pub fn open(path: [:0]const u8, expect_hash: ?u64) OpenResult {
     var library = std.DynLib.open(path) catch return .unopenable;
     const tag = library.lookup(*const abi.Artifact, abi.artifact_symbol);
-    if (abi.checkArtifact(tag, triple, expect_hash)) |mismatch| {
+    if (abi.checkArtifact(tag, expect_hash)) |mismatch| {
         library.close();
         return .{ .mismatch = mismatch };
     }
@@ -362,7 +411,7 @@ pub fn explain(mismatch: abi.Mismatch) []const u8 {
         .not_an_artifact => "it is not a compiled Luce artifact",
         .format => "it was built by a different luce",
         .abi_version => "it was built against a different host ABI",
-        .triple => "it was built for a different machine",
+        .machine => "it was built for a different machine",
         .source => "the program it was built from has changed",
     };
 }
@@ -422,346 +471,40 @@ test "opening something that is not an artifact refuses it by name" {
 
     const missing = try std.fs.path.joinZ(testing.allocator, &.{ directory, "absent.lcn" });
     defer testing.allocator.free(missing);
-    try testing.expectEqual(OpenResult.unopenable, open(missing, "any", null));
+    try testing.expectEqual(OpenResult.unopenable, open(missing, null));
+}
+
+test "the compiler is found beside the binary first, then on PATH, or not at all" {
+    const gpa = testing.allocator;
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
+
+    // Nothing beside the test binary and nothing on an empty PATH.
+    var nowhere = try findCompiler(gpa, testing.io, null);
+    defer nowhere.deinit(gpa);
+    try testing.expect(!nowhere.found());
+    // It still says where it looked, which is what the message needs.
+    try testing.expect(nowhere.beside.len != 0);
+
+    var absent = try findCompiler(gpa, testing.io, directory);
+    defer absent.deinit(gpa);
+    try testing.expect(!absent.found());
+
+    // A `luce` on PATH is found, and a directory that only *mentions*
+    // the name is not: the file has to be there.
+    try scratch.dir.writeFile(testing.io, .{ .sub_path = compiler_name, .data = "#!/bin/sh\n" });
+    const search = try std.fmt.allocPrint(gpa, "/no/such/place{c}{s}", .{ path_separator, directory });
+    defer gpa.free(search);
+    var located = try findCompiler(gpa, testing.io, search);
+    defer located.deinit(gpa);
+    try testing.expect(located.found());
+    try testing.expect(std.mem.endsWith(u8, located.path, compiler_name));
 }
 
 test "every refusal has a sentence" {
     inline for (@typeInfo(abi.Mismatch).@"enum".fields) |field| {
         try testing.expect(explain(@field(abi.Mismatch, field.name)).len != 0);
     }
-}
-
-// ---------------------------------------------------------------------------
-// The product path, end to end
-// ---------------------------------------------------------------------------
-//
-// `08_llvm/test.zig` proves the *lowering* by linking and loading a
-// program itself.  These prove the *product*: the same `build`, `open`
-// and link the shipped `luce` and `loom` call, over the installed
-// libraries, producing an artifact that a loader accepts and a shell
-// can execute.  A gap between the two is exactly how "parity exists in
-// a test harness and is delivered to nobody" happens again.
-
-const build_options = @import("build_options");
-
-/// A host for a compiled program, in fixed storage.  It is entered
-/// from a `dlopen`ed library, and `std.testing.allocator` captures a
-/// stack trace on every allocation: the unwinder cannot walk back
-/// through the compiled program's frame.  So this one never allocates.
-const Recorder = struct {
-    printed: [4096]u8 = undefined,
-    length: usize = 0,
-    trap_code: ?i32 = null,
-    trap_words: [256]u8 = undefined,
-    trap_length: usize = 0,
-    frames: usize = 0,
-
-    fn table(self: *Recorder) abi.Host {
-        return .{ .context = self, .print = print, .trap = trap };
-    }
-
-    fn text(self: *const Recorder) []const u8 {
-        return self.printed[0..self.length];
-    }
-
-    fn trapped(self: *const Recorder) []const u8 {
-        return self.trap_words[0..self.trap_length];
-    }
-
-    fn of(context: ?*anyopaque) *Recorder {
-        return @ptrCast(@alignCast(context.?));
-    }
-
-    fn print(context: ?*anyopaque, bytes: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        const self = of(context);
-        const said = bytes[0..@intCast(length)];
-        if (self.length + said.len + 1 > self.printed.len) return .exhausted;
-        @memcpy(self.printed[self.length..][0..said.len], said);
-        self.length += said.len;
-        self.printed[self.length] = '\n';
-        self.length += 1;
-        return .yes;
-    }
-
-    fn trap(
-        context: ?*anyopaque,
-        code: i32,
-        message: [*]const u8,
-        message_length: i64,
-        frames: [*]const abi.TraceFrame,
-        frame_count: i64,
-        dropped: i64,
-    ) callconv(.c) void {
-        _ = frames;
-        _ = dropped;
-        const self = of(context);
-        const words = message[0..@intCast(message_length)];
-        self.trap_code = code;
-        self.trap_length = @min(words.len, self.trap_words.len);
-        @memcpy(self.trap_words[0..self.trap_length], words[0..self.trap_length]);
-        self.frames = @intCast(frame_count);
-    }
-};
-
-/// The installed libraries, as the shipped code would have found them.
-fn installedTools(gpa: Allocator) !Tools {
-    return .{
-        .driver = try gpa.dupe(u8, "cc"),
-        .runtime = try gpa.dupe(u8, build_options.luce_rt_library),
-        .start = try gpa.dupe(u8, build_options.luce_start_library),
-        .searched = try gpa.dupe(u8, "the build tree"),
-    };
-}
-
-fn compileScript(gpa: Allocator, source: []const u8) !luce.mir.Program {
-    var result = try luce.compile.compile(gpa, source, .{}, .{
-        .entry_mode = .script,
-        .allow_host = true,
-        .source_name = "product.luc",
-    });
-    switch (result) {
-        .success => |compiled| return compiled,
-        .failure => {
-            result.deinit();
-            return error.CompileFailed;
-        },
-    }
-}
-
-const counter =
-    \\func total(limit: Int) -> Int:
-    \\    var sum = 0
-    \\    var index = 0
-    \\    while index < limit:
-    \\        sum = sum + index * index
-    \\        index = index + 1
-    \\    return sum
-    \\
-    \\func main():
-    \\    print(str(total(10)))
-    \\
-;
-
-test "a program links, loads with its tag intact, and runs" {
-    const gpa = testing.allocator;
-    var tools = try installedTools(gpa);
-    defer tools.deinit(gpa);
-
-    var program = try compileScript(gpa, counter);
-    defer program.deinit();
-    const encoded = try luce.mir.module.encode(gpa, &program);
-    defer gpa.free(encoded);
-    const hash = abi.sourceHash(encoded);
-
-    const triple = try luce.llvm.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    var scratch = testing.tmpDir(.{});
-    defer scratch.cleanup();
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "product.lcn" });
-    defer gpa.free(artifact);
-
-    switch (try build(gpa, testing.io, &tools, &program, .{
-        .kind = .library,
-        .output = artifact,
-        .source_hash = hash,
-        .triple = triple,
-    })) {
-        .written => {},
-        .unsupported => |what| {
-            std.debug.print("no lowering for {s}\n", .{what});
-            return error.Unsupported;
-        },
-        .failed => |why| {
-            defer gpa.free(why);
-            std.debug.print("{s}\n", .{why});
-            return error.BuildFailed;
-        },
-    }
-
-    // The object the link consumed is gone, and nothing half-written
-    // is left under the artifact's name.
-    var left: std.ArrayList(u8) = .empty;
-    defer left.deinit(gpa);
-    var listing = try scratch.dir.openDir(testing.io, ".", .{ .iterate = true });
-    defer listing.close(testing.io);
-    var walk = listing.iterate();
-    while (try walk.next(testing.io)) |entry| {
-        try left.appendSlice(gpa, entry.name);
-        try left.append(gpa, ' ');
-    }
-    try testing.expectEqualStrings("product.lcn ", left.items);
-
-    var loaded = switch (open(artifact, triple, hash)) {
-        .loaded => |opened| opened,
-        .unopenable => return error.CouldNotLoad,
-        .mismatch => |why| {
-            std.debug.print("refused: {s}\n", .{explain(why)});
-            return error.Refused;
-        },
-    };
-    defer loaded.close();
-
-    // The tag says what it is, and a debug build kept its origins.
-    try testing.expectEqual(abi.version, loaded.tag.abi_version);
-    try testing.expectEqual(hash, loaded.tag.source_hash);
-    try testing.expect(loaded.debug());
-
-    var recorder: Recorder = .{};
-    const table = recorder.table();
-    try testing.expectEqual(abi.Status.ok, loaded.entry(&table));
-    try testing.expectEqualStrings("285\n", recorder.text());
-}
-
-test "an artifact built from another program is refused as stale" {
-    const gpa = testing.allocator;
-    var tools = try installedTools(gpa);
-    defer tools.deinit(gpa);
-
-    var program = try compileScript(gpa, counter);
-    defer program.deinit();
-
-    const triple = try luce.llvm.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    var scratch = testing.tmpDir(.{});
-    defer scratch.cleanup();
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "stale.lcn" });
-    defer gpa.free(artifact);
-
-    switch (try build(gpa, testing.io, &tools, &program, .{
-        .kind = .library,
-        .output = artifact,
-        .source_hash = 0x1111_2222_3333_4444,
-        .triple = triple,
-    })) {
-        .written => {},
-        else => return error.BuildFailed,
-    }
-
-    // Content decides, and nothing else: the file is there, it loads,
-    // it has a `luce_main` — and it is still the wrong program.
-    try testing.expectEqual(abi.Mismatch.source, open(artifact, triple, 0xdead_beef).mismatch);
-    try testing.expectEqual(
-        abi.Mismatch.triple,
-        open(artifact, "sparc-sun-solaris", 0x1111_2222_3333_4444).mismatch,
-    );
-    switch (open(artifact, triple, 0x1111_2222_3333_4444)) {
-        .loaded => |opened| {
-            var loaded = opened;
-            loaded.close();
-        },
-        else => return error.ShouldHaveLoaded,
-    }
-}
-
-test "a standalone executable prints, and a trapping one reports and exits nonzero" {
-    const gpa = testing.allocator;
-    var tools = try installedTools(gpa);
-    defer tools.deinit(gpa);
-
-    const triple = try luce.llvm.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    var scratch = testing.tmpDir(.{});
-    defer scratch.cleanup();
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-
-    // A program that says something, then divides by zero two frames
-    // down — so the trace has something to say as well.
-    var program = try compileScript(gpa,
-        \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
-        \\
-        \\func main():
-        \\    print("alive")
-        \\    if arg_count() == 1:
-        \\        print(str(divide(1, 0)))
-        \\
-    );
-    defer program.deinit();
-
-    const binary = try std.fs.path.join(gpa, &.{ directory, "program" });
-    defer gpa.free(binary);
-    switch (try build(gpa, testing.io, &tools, &program, .{
-        .kind = .executable,
-        .output = binary,
-        .triple = triple,
-    })) {
-        .written => {},
-        .unsupported => return error.Unsupported,
-        .failed => |why| {
-            defer gpa.free(why);
-            std.debug.print("{s}\n", .{why});
-            return error.BuildFailed;
-        },
-    }
-
-    const ran = try std.process.run(gpa, testing.io, .{ .argv = &.{binary} });
-    defer gpa.free(ran.stdout);
-    defer gpa.free(ran.stderr);
-    try testing.expectEqual(@as(u8, 0), ran.term.exited);
-    try testing.expectEqualStrings("alive\n", ran.stdout);
-    try testing.expectEqualStrings("", ran.stderr);
-
-    const trapped = try std.process.run(gpa, testing.io, .{ .argv = &.{ binary, "boom" } });
-    defer gpa.free(trapped.stdout);
-    defer gpa.free(trapped.stderr);
-    // Nonzero, the program's own output up to the trap, and a trace
-    // with `file:line:column` — the promise docs/MODES.md makes about
-    // a debug build, kept by a binary nothing is watching.
-    try testing.expectEqual(@as(u8, 1), trapped.term.exited);
-    try testing.expectEqualStrings("alive\n", trapped.stdout);
-    try testing.expect(std.mem.indexOf(u8, trapped.stderr, "division by zero") != null);
-    try testing.expect(std.mem.indexOf(u8, trapped.stderr, "at divide (product.luc:2:5)") != null);
-    try testing.expect(std.mem.indexOf(u8, trapped.stderr, "at main (product.luc:7:9)") != null);
-}
-
-test "a release executable keeps the function names and drops the lines" {
-    const gpa = testing.allocator;
-    var tools = try installedTools(gpa);
-    defer tools.deinit(gpa);
-
-    const triple = try luce.llvm.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    var scratch = testing.tmpDir(.{});
-    defer scratch.cleanup();
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-
-    var program = try compileScript(gpa,
-        \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
-        \\
-        \\func main():
-        \\    print(str(divide(1, 0)))
-        \\
-    );
-    defer program.deinit();
-    luce.mir.strip(&program);
-
-    const binary = try std.fs.path.join(gpa, &.{ directory, "stripped" });
-    defer gpa.free(binary);
-    switch (try build(gpa, testing.io, &tools, &program, .{
-        .kind = .executable,
-        .output = binary,
-        .triple = triple,
-    })) {
-        .written => {},
-        else => return error.BuildFailed,
-    }
-
-    const ran = try std.process.run(gpa, testing.io, .{ .argv = &.{binary} });
-    defer gpa.free(ran.stdout);
-    defer gpa.free(ran.stderr);
-    try testing.expectEqual(@as(u8, 1), ran.term.exited);
-    try testing.expect(std.mem.indexOf(u8, ran.stderr, "    at divide\n") != null);
-    try testing.expect(std.mem.indexOf(u8, ran.stderr, "    at main\n") != null);
-    try testing.expect(std.mem.indexOf(u8, ran.stderr, "product.luc") == null);
 }

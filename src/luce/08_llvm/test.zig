@@ -9,13 +9,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const backend = @import("../backend.zig");
-const compile = @import("../compile.zig");
-const mir = @import("../06_mir.zig");
-const types = @import("../support/types.zig");
-const abi = @import("abi.zig");
-const lower = @import("lower.zig");
 const emit = @import("emit.zig");
+
+// The language comes in as a module rather than by path: this file
+// belongs to `emit`, which links libLLVM, and `luce` does not.
+const luce = @import("luce");
+const backend = luce.backend;
+const compile = luce.compile;
+const mir = luce.mir;
+const types = luce.types;
+const abi = luce.llvm.abi;
+const lower = luce.llvm;
 
 const Allocator = std.mem.Allocator;
 const io = std.testing.io;

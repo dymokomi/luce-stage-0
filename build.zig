@@ -9,14 +9,19 @@ const std = @import("std");
 // (programs/*.luc -> PREFIX/programs/*.lc); zig build test runs the
 // language suite and both app suites.  The editor rides inside the
 // loom binary as embedded Luce source, so `loom edit` needs no paths.
+//
+// **Only `luce` links libLLVM, and that is a decision about what the
+// two binaries are.**  libLLVM is 164 MB; dyld maps and binds it before
+// `main` on every invocation that names it, at a measured 5.7 ms even
+// when no LLVM function is ever called.  loom's job is starting
+// programs, so it must not pay that — when it needs one compiled it
+// runs the `luce` binary (`apps/loom/runner.zig`).  The dependency is
+// confined to the `emit` module below, and a machine that only runs
+// Luce programs needs no LLVM installed at all.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // libLLVM is a hard dependency of the language module: the one
-    // code generator calls it in-process (docs/CODEGEN.md).  Both
-    // executables carry it, because loom compiles too (`loom luce
-    // FILE.luc`, and the shell accepts bare .luc paths).
     const llvm = discoverLlvm(b);
 
     // libluce_rt: Luce's semantics as a linkable library — the object
@@ -37,26 +42,41 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(runtime_library);
 
-    // Luce: the language — lexer through IR, the interpreter, the
-    // LLVM backend, the .lc format.
+    // Luce: the language — lexer through IR lowering, the interpreter,
+    // the .lc format.  It links nothing: `08_llvm/lower.zig` builds
+    // LLVM IR with `std.zig.llvm.Builder`, which is pure Zig.
     const luce = b.addModule("luce", .{
         .root_source_file = b.path("src/luce/luce.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
-    linkLlvm(luce, llvm);
-
-    // Where the codegen tests find the library to link a compiled
-    // program against.  A path rather than a linked dependency: the
-    // test drives `cc` itself, because the link is part of what it
-    // proves.
-    const runtime_path = b.addOptions();
-    runtime_path.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
-    luce.addOptions("build_options", runtime_path);
     const luce_tests = b.addTest(.{ .root_module = luce });
     const run_luce_tests = b.addRunArtifact(luce_tests);
     const test_step = b.step("test", "Run the Luce and loom test suites");
     test_step.dependOn(&run_luce_tests.step);
+
+    // The one module that calls libLLVM: bitcode in, object code out
+    // (`src/luce/08_llvm/emit.zig`).  It carries the backend's
+    // end-to-end proof too, because that test is the one thing that
+    // takes Luce source all the way into a loaded shared library.
+    const emit = b.addModule("emit", .{
+        .root_source_file = b.path("src/luce/08_llvm/emit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+    linkLlvm(emit, llvm);
+
+    // Where that proof finds the library to link a compiled program
+    // against.  A path rather than a linked dependency: the test drives
+    // `cc` itself, because the link is part of what it proves.
+    const runtime_path = b.addOptions();
+    runtime_path.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    emit.addOptions("build_options", runtime_path);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = emit })).step);
 
     // File access shared by both executables (import loader, whole-
     // file read/write) — one copy, no drift.
@@ -72,10 +92,10 @@ pub fn build(b: *std.Build) void {
     const app_files_tests = b.addTest(.{ .root_module = app_files });
     test_step.dependOn(&b.addRunArtifact(app_files_tests).step);
 
-    // The link and the load: how a lowered program becomes an
-    // executable or a loadable artifact, and how a loader refuses the
-    // wrong one.  Shared by both executables — `luce` builds them and
-    // `loom` runs them, over one description of what they are.
+    // Finding the tools, linking an object, loading an artifact — and
+    // finding the `luce` binary, which is how loom gets something
+    // built.  Shared by both executables and linking nothing itself;
+    // the half that needs a code generator is `apps/luce/object.zig`.
     const app_native = b.createModule(.{
         .root_source_file = b.path("src/apps/native.zig"),
         .target = target,
@@ -123,16 +143,8 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(start_library);
 
-    // Where `apps/native.zig`'s own tests find the two libraries a
-    // real link needs.  They drive `cc` exactly as the shipped code
-    // does — the point of those tests is that the *product* path
-    // links, loads and runs, not that a private one does.
-    const installed_libraries = b.addOptions();
-    installed_libraries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
-    installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
-    app_native.addOptions("build_options", installed_libraries);
-
-    // The luce compiler executable.
+    // The luce compiler executable: the one binary with a code
+    // generator in it, and so the one that links libLLVM.
     const compiler_module = b.createModule(.{
         .root_source_file = b.path("src/apps/luce/main.zig"),
         .target = target,
@@ -141,8 +153,19 @@ pub fn build(b: *std.Build) void {
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
             .{ .name = "native", .module = app_native },
+            .{ .name = "emit", .module = emit },
         },
     });
+
+    // Where `apps/luce/object.zig`'s tests find the two libraries a
+    // real link needs.  They drive `cc` exactly as the shipped code
+    // does — the point of those tests is that the *product* path
+    // links, loads and runs, not that a private one does.
+    const installed_libraries = b.addOptions();
+    installed_libraries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
+    compiler_module.addOptions("build_options", installed_libraries);
+
     const compiler = b.addExecutable(.{ .name = "luce", .root_module = compiler_module });
     const install_compiler = b.addInstallArtifact(compiler, .{
         .dest_dir = .{ .override = .prefix },
@@ -173,6 +196,24 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_terminal.step);
     const terminal_tests = b.addTest(.{ .root_module = terminal_module });
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
+
+    // The shipped pair, proved together: loom compiling a program by
+    // running luce, and refusing to when there is no luce to run.
+    //
+    // Its own module, and it has to be: it names both binaries, and a
+    // module that named the binary built from it would be a cycle in
+    // the build graph.
+    const product_module = b.createModule(.{
+        .root_source_file = b.path("src/apps/loom/product.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const binaries = b.addOptions();
+    binaries.addOptionPath("loom_binary", terminal.getEmittedBin());
+    binaries.addOptionPath("luce_binary", compiler.getEmittedBin());
+    binaries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    product_module.addOptions("build_options", binaries);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = product_module })).step);
 
     // Compile the bundled Luce programs with the freshly built luce.
     // `deps` lists imported sibling modules so edits to them re-run
