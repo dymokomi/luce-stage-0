@@ -12,11 +12,11 @@ Single-developer project: commit directly to `main` (no PRs, no feature branches
 
 ## Build and test
 
-Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS. **LLVM is a hard build prerequisite** — the one code generator calls libLLVM in process, and `build.zig` locates it by asking `llvm-config` (on `PATH` or in the usual Homebrew/distribution prefixes; override with `-Dllvm-config=PATH`). Without it `zig build` fails with a message saying so.
+Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS. **LLVM is a build prerequisite of `luce`, and of nothing else** — the code generator calls libLLVM in process, and `build.zig` locates it by asking `llvm-config` (on `PATH` or in the usual Homebrew/distribution prefixes; override with `-Dllvm-config=PATH`). Without it `zig build` fails with a message saying so. `loom` links no LLVM at all and neither does anything it loads, so a machine that only *runs* Luce programs needs none installed.
 
 ```sh
 ./build.sh         # zig build --prefix build -Doptimize=ReleaseSafe: installs build/luce, build/loom, build/lib/libluce_rt.a, build/programs/*.lc
-zig build test     # 493 tests: Luce language suite + compiler CLI suite + loom terminal suite, plus a compile of every bundled program and benchmark
+zig build test     # 736 tests: Luce language suite + compiler CLI suite + loom terminal suite, plus a compile of every bundled program and benchmark
 zig fmt src/ build.zig
 ```
 
@@ -38,7 +38,7 @@ apps (luce CLI, loom terminal) → luce module (language)
 tests → the package under test
 ```
 
-**Where the tree stands.** Every hand-written code generator — the MIR JIT and `vendor/mir`, the self-written aarch64/x86-64 emitters, the hand-written WebAssembly backend, the `.lci` image cache, the hermetic address-table discipline, the engine-selection ladder (`LOOM_ENGINE`/`LOOM_IMAGE`), the `luce wasm` command, and the differential oracle `native_spec` — has been deleted, and so has Fabric (`fabric.zig`, the `fabric_*` intrinsics, `allow_fabric`; `.lc` `format_version` is 10). In their place: **`libluce_rt`**, Luce's semantics as a linkable library behind a C ABI, and **one LLVM backend** over it. `docs/CODEGEN.md` is the decision record; `docs/CODEGEN.md` is what actually exists. Read both before touching the backend seam.
+**Where the tree stands.** There is exactly one code generator and one implementation of every semantic: **`libluce_rt`**, Luce's semantics as a linkable library behind a C ABI, and **one LLVM backend** over it. There is no hand-written emitter, no JIT, no image cache, and no Fabric; `.lc` `format_version` is 10. `docs/CODEGEN.md` is the decision record for that seam — read it before touching the backend.
 
 **The LLVM path is the one that runs.** `loom run FILE.lc` compiles to a tagged `NAME.lcn` artifact beside the program on first use and loads it thereafter; `luce build --emit=exe` writes a standalone binary and `--emit=library` writes the artifact directly. Measured against the interpreter on `bench/matmul`: 5.92 s → 0.19 s cold, 0.03 s warm; against the C twins, 0.97–1.07× on matmul, arrays, stats, loops and math. Everything a script can say lowers — only `Bytes` and the evaluator ports do not, and both are v1 machinery on the way out. Debug builds report `file:line:column` and a call trace on the compiled path exactly as on the interpreter; `--release` keeps function names. `LOOM_ENGINE=interpreter` forces the reference engine and `LOOM_ENGINE=native` turns the fallback into an error naming what was missing. The interpreter remains the reference arm of the `agree` tests and the fallback where compilation is unavailable; its dispatch loop goes only once nothing needs it.
 
