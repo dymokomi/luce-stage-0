@@ -202,3 +202,116 @@ pure optimization later), Lobster/Perceus (compile-time RC elision if
    naming (`give`/`move`, `copy`/`clone`).
 7. Exact statement-scope definition for unbound temporaries, and
    whether `defer` still arrives separately for host cleanup.
+
+---
+
+## Addendum, 2026-08-02: values get counted storage
+
+The candidates above were weighed for **objects**, and scope ownership
+won for objects and still holds.  Values — Strings and struct field
+runs — were left on a run-lifetime arena, and that has now been
+measured against a real program: `programs/editor.luc` peaks at
+**976 MB after 20,000 keystrokes into a 40 KB file**, because
+`Editing.splice` copies the whole buffer twice per keystroke and
+nothing is ever reclaimed.  Any program with a main loop has the same
+shape.
+
+### There are two problems here, not one
+
+*Transient* garbage — a loop that builds and discards a string and
+retains nothing — leaks ~18 bytes per iteration.  *Retired* garbage —
+the editor's old `state.content`, replaced by a newer version — is
+dead but unprovably so.  They have different fixes, and conflating
+them is how you pick the wrong one.
+
+### Option 7 (regions) is refused as the answer
+
+A per-statement scratch arena, exploiting S3's "an unbound temporary
+dies at the end of its statement", reclaims exactly the intermediate
+in `a + b`.  For the editor that is `cursor` bytes out of
+`cursor + len` — **33% relief mid-file, 50% at end of file**, still
+dead linear.  It does not make the editor survivable.
+
+Three structural obstacles besides: the analyzer has no record of
+string temporaries (`carriesObjects` answers false for `.string`, so
+`registerTemp` never sees one); **MIR has no statement, scope or
+region concept** to reset against; and resetting would dangle every
+view already stored, because containers, struct fields, `s[a:b]` and
+`m[k]` all hold borrows of bytes they did not allocate.  Whether a
+string escapes cannot be decided at the producer, because the producer
+is usually a *borrow* of something whose region is not known there.
+
+Regions remain interesting as a later optimization *under* counting,
+which is where this document already filed them.
+
+### Option 5 (reference counting) is adopted, for values only
+
+The three objections recorded above were all reasoned about objects,
+and none survives the move to values:
+
+- *Cycles leak* — **impossible here.**  A String is immutable bytes
+  with no outgoing reference, and struct field runs are acyclic
+  because the analyzer rejects struct cycles.  Counting is *complete*
+  on this set, not partial.
+- *Frees stop being visible in source* — values have no visible frees
+  today either.  S32 forbids verbs on values by design.
+- *Traffic on every copy and scope* — real, and confined.  The parity
+  benchmarks that reach 0.97–1.07× C — matmul, arrays, stats, loops,
+  math — **contain no Strings and pay literally zero.**  This is the
+  decisive difference from Swift, which counts every class instance
+  including in hot loops; PACT '18 measures that at 32% of execution
+  time on average, and non-atomic still costs ~20% of a string-heavy
+  program.  Luce has no threads, so the counts are non-atomic, and
+  only byte buffers carry them.
+
+Nothing in the language changes.  No verb, no trap, no diagnostic, no
+change to the leak census.  S1–S43 are untouched.  A program cannot
+observe the difference except in RSS — that is the test, and it is
+what makes this an implementation decision rather than a model change.
+
+Projected: the churn loop goes flat, and the editor goes from 976 MB
+to **under ~1 MB of string storage, flat in keystrokes**.
+
+### Object identity: generational handles
+
+Separately and first, because it is small and self-contained: bits
+32–63 of `Value.bits` are unused, so an object handle becomes
+`{index, generation}` and rows go on a free list.  `alive` disappears
+— a row is dead iff its generation differs from the handle's.  The
+fast path is unchanged in shape: one load and one compare, as today.
+
+**Generations do not wrap.**  slotmap accepts wraparound after 2³¹
+reuses and EnTT's 12-bit version wraps routinely; Luce retires the row
+instead.  S9 is a safety guarantee here, not an ECS convenience, and
+trading a leak for a one-in-four-billion aliasing hole is exactly the
+bargain this project does not take.  Cost: at most one 128-byte row
+leaked per four billion frees of that same row.
+
+Nothing serialises an object handle, so there is no `.lc` format bump.
+`07_optimize/ownership.zig` already pessimises for row reuse — the
+optimizer was written for this — and can be *relaxed* afterwards,
+since a stale handle can no longer name someone else's object.
+
+### Tracing GC stays out, and the reason has changed
+
+The original argument was about brand — nondeterministic reclamation,
+pauses, hidden machinery.  There is now a measured engineering
+argument, which is stronger.
+
+**There is no root set, and acquiring one costs precisely what the
+backend just bought.**  Compiled code holds Strings as unboxed
+`{ptr, len}` SSA aggregates in whatever registers LLVM chose, and
+holds Array element pointers hoisted into loop preheaders.  Making
+those enumerable means stack maps or a shadow stack at every
+safepoint — store traffic in exactly the loops `08_llvm/loops.zig`
+exists to keep clean.  That file has the number: resolution inside the
+loop is 52 ms, lifted out it is 10 ms, against 10 ms for C.  A
+safepoint-bearing loop hands that back.  Conservative scanning avoids
+the maps and makes *retention* nondeterministic, which a language that
+reports a leak census cannot absorb.
+
+So `docs/LANGUAGE.md`'s "deliberately absent" line needs splitting
+rather than reaffirming: garbage collection is absent and stays
+absent; reference counting is absent **from the language** — objects
+are scope-owned and values take no verbs — while the storage behind
+values is runtime-managed and unobservable.
