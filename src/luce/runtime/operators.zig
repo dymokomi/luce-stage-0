@@ -86,6 +86,22 @@ pub fn binary(runtime: *Runtime, op: mir.BinaryOp, left: Value, right: Value) Er
 /// Bytes, Bool, structs, and objects; full ordering on Int, Float, and
 /// String.
 pub fn compare(op: mir.BinaryOp, left: Value, right: Value) bool {
+    // Absence, before the payload dispatch below, because absence has
+    // no payload to dispatch on.  Two absences are the same absence
+    // and an absent value equals nothing present — the answer every
+    // language with optionals gives, and the only one under which two
+    // structs holding `none` in the same field are equal.
+    //
+    // A struct reaches this by recursing into a `T?` field, which is
+    // the only way `op` can be anything but `.equal`/`.not_equal`
+    // here: the analyzer admits ordering on Int, Float and String
+    // alone, and `T?` is none of those.  Ordering a `T?` would be a
+    // front-end bug, and answering `false` for it is a wrong answer
+    // rather than a crash, so it is handled with the rest.
+    if (left.isNone() or right.isNone()) {
+        const same = left.isNone() and right.isNone();
+        return if (op == .equal) same else !same;
+    }
     switch (left.view()) {
         .int => |held| {
             const other = right.asInt();
@@ -146,8 +162,25 @@ pub fn compare(op: mir.BinaryOp, left: Value, right: Value) bool {
             const same = held.same(right.asObject());
             return if (op == .equal) same else !same;
         },
+        // Handled above, before the payload dispatch.
         .none => unreachable,
     }
+}
+
+test "a struct holding none compares, in either order, instead of crashing" {
+    // Reachable from ordinary source: `Slot(room=none) == Slot(room=none)`
+    // recurses into the field.  Absent on the *left* used to hit the
+    // `.none` arm below and panic the process; absent on the right read
+    // a zeroed payload and got the right answer by accident.
+    const absent = Value.none;
+    const present = Value.ofInt(5);
+
+    try std.testing.expect(compare(.equal, absent, absent));
+    try std.testing.expect(!compare(.not_equal, absent, absent));
+    try std.testing.expect(!compare(.equal, absent, present));
+    try std.testing.expect(!compare(.equal, present, absent));
+    try std.testing.expect(compare(.not_equal, absent, present));
+    try std.testing.expect(compare(.not_equal, present, absent));
 }
 
 /// Ordering for sort: elements are Int, Float, or String (the
