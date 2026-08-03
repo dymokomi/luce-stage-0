@@ -1,13 +1,22 @@
 //! libLLVM's stable C surface: bitcode in, object code out.
 //!
-//! This file is the only place in the tree that links against LLVM,
-//! and it deliberately uses the narrowest, most stable part of the C
-//! API — parse a bitcode module, make a target machine, run the pass
+//! This file is the only place in the tree that calls LLVM, and it
+//! deliberately uses the narrowest, most stable part of the C API —
+//! parse a bitcode module, make a target machine, run the pass
 //! pipeline, emit an object.  That is the tier LLVM's own developer
 //! policy describes as "take this IR file and compile it"; IR
 //! *construction*, the part that has broken repeatedly across
 //! releases, happens in `lower.zig` against `std.zig.llvm.Builder`
 //! instead (docs/CODEGEN.md).
+//!
+//! **It is therefore its own build module, and only `luce` links it.**
+//! libLLVM is 164 MB of shared library, and dyld binds all of it on
+//! every process that names it — 5.7 ms before `main` runs, whether or
+//! not a single LLVM function is ever called.  `loom` starts a program
+//! and must not pay that: it runs artifacts, and when one has to be
+//! built it asks the `luce` binary to build it.  Keeping the C surface
+//! behind a module boundary is what makes the dependency follow the
+//! architecture instead of the source tree.
 //!
 //! The declarations below are plain Zig `extern fn`s.  There is no C
 //! or C++ shim, because nothing here needs one.
@@ -300,3 +309,10 @@ extern fn LLVMRunPasses(
 ) ?ErrorRef;
 extern fn LLVMGetErrorMessage(handle: ErrorRef) [*:0]u8;
 extern fn LLVMDisposeErrorMessage(message: [*:0]u8) void;
+
+test {
+    // The end-to-end proof lives in this module because it is the one
+    // that can run: it takes Luce source all the way through here into
+    // a loaded shared library (`08_llvm/test.zig`).
+    _ = @import("test.zig");
+}

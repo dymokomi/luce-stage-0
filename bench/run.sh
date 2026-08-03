@@ -5,14 +5,21 @@
 # algorithm and printing the same output; the harness refuses to time
 # anything whose outputs disagree, so this doubles as a correctness
 # check.  C compiles with `zig cc -O3 -march=native` (auto-vectorized,
-# full speed); Luce compiles --release and runs under loom.  Both
-# timings include process startup.  Best of five runs.
+# full speed); Luce compiles --release and runs under loom, which runs
+# it as native code from a warm artifact.  Both timings include process
+# startup.  Best of five runs.
 #
 #   ./build.sh && bench/run.sh
 #
-# Ratios are the number to watch across interpreter changes; absolute
-# times move with the machine.  The current snapshot lives in
-# docs/CODEGEN.md.
+# Two ratios per row, and the difference between them is process
+# startup.  `luce/C` is the whole wall clock, which is what a person
+# actually waits for.  `compute` takes the do-nothing floor off both
+# sides first, which is what a change to code generation moves.  A row
+# where the two disagree is a row whose benchmark is short enough that
+# startup is a real fraction of it — read both, never one.
+#
+# Absolute times move with the machine; the current snapshot lives in
+# docs/CODEGEN.md, and bench/compare.sh is the same-host A/B.
 
 set -e
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -91,29 +98,43 @@ for round in 1 2 3 4 5; do
     done
 done
 # The floor: what a do-nothing program costs on each side — process
-# startup for C, and for loom startup plus decoding the program and
-# every std function it imports.  Printed rather than
-# subtracted, so the reader can see how much of a row is not
-# computation.  Keep the benchmarks large enough that this stays
-# small; see docs/CODEGEN.md.
+# startup for C, and for loom startup plus opening the program's
+# artifact.  It is both printed *and* subtracted, in two columns, so
+# neither half can mislead: the raw ratio is the wait, the floor-free
+# one is the computation.  The first loom run warms the artifact so the
+# floor is the warm path, which is the path every row above it took.
 printf 'func main():\n    print("")\n' > "$tmp/floor.luc"
 printf 'int main(void){return 0;}\n' > "$tmp/floor.c"
 build/luce build "$tmp/floor.luc" -o "$tmp/floor.lc" --release >/dev/null
 zig cc -O3 -o "$tmp/floor" "$tmp/floor.c"
-for round in 1 2 3; do
+build/loom run "$tmp/floor.lc" >/dev/null
+for round in 1 2 3 4 5; do
     elapsed=$(time_once "$tmp/floor")
     keep_min "$tmp/floor.c.ns" "$elapsed"
     elapsed=$(time_once build/loom run "$tmp/floor.lc")
     keep_min "$tmp/floor.luce.ns" "$elapsed"
 done
 
-printf '%-10s %12s %12s %10s\n' "benchmark" "C" "luce" "luce/C"
+floor_c=$(cat "$tmp/floor.c.ns")
+floor_luce=$(cat "$tmp/floor.luce.ns")
+
+printf '%-10s %12s %12s %10s %10s\n' "benchmark" "C" "luce" "luce/C" "compute"
 for name in $names; do
-    awk -v name="$name" -v c="$(cat "$tmp/$name.c")" -v luce="$(cat "$tmp/$name.luce")" 'BEGIN {
-        printf "%-10s %10.1fms %10.1fms %9.1fx\n", name, c / 1e6, luce / 1e6, luce / c
+    awk -v name="$name" \
+        -v c="$(cat "$tmp/$name.c")" -v luce="$(cat "$tmp/$name.luce")" \
+        -v floor_c="$floor_c" -v floor_luce="$floor_luce" 'BEGIN {
+        # A benchmark that is not clear of the floor cannot report a
+        # compute ratio honestly, so it reports none.
+        net_c = c - floor_c
+        net_luce = luce - floor_luce
+        if (net_c > 0 && net_luce > 0)
+            compute = sprintf("%.2fx", net_luce / net_c)
+        else
+            compute = "-"
+        printf "%-10s %10.1fms %10.1fms %9.2fx %10s\n", name, c / 1e6, luce / 1e6, luce / c, compute
     }'
 done
-awk -v c="$(cat "$tmp/floor.c.ns")" -v luce="$(cat "$tmp/floor.luce.ns")" 'BEGIN {
-    printf "%-10s %10.1fms %10.1fms %10s   (do-nothing program)\n",
-        "floor", c / 1e6, luce / 1e6, "-"
+awk -v c="$floor_c" -v luce="$floor_luce" 'BEGIN {
+    printf "%-10s %10.1fms %10.1fms %10s %10s   (do-nothing program)\n",
+        "floor", c / 1e6, luce / 1e6, "-", "-"
 }'

@@ -16,7 +16,7 @@ const Register = defs.Register;
 /// functions where a program may call three, and each one is
 /// otherwise encoded into the `.lc`, decoded at load, and compiled to
 /// machine code — the largest single cost in a short program's run
-/// (docs/SPEED.md §12).  This is the dead-code elimination a compiled
+/// (docs/PIPELINE.md, stage 9).  This is the dead-code elimination a compiled
 /// language is expected to do, and it belongs here, in the compiler,
 /// so the artifact itself is smaller and everything downstream of it
 /// gets faster.

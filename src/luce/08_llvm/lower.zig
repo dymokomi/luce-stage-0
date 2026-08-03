@@ -112,8 +112,10 @@ const BlockIndex = @typeInfo(
 // ---------------------------------------------------------------------------
 
 pub const Options = struct {
-    /// The LLVM target triple the module is tagged with, e.g.
-    /// "arm64-apple-macosx".  `emit.hostTriple` supplies the host one.
+    /// The LLVM target triple the generated module carries, e.g.
+    /// "arm64-apple-macosx".  A codegen input and nothing else — what
+    /// the artifact's *tag* claims is `abi.machine`, which a loader can
+    /// read without LLVM.  `emit.hostTriple` supplies the host one.
     triple: []const u8,
     /// The target whose pointer size and data layout the builder
     /// assumes.  Must describe the same machine as `triple`.
@@ -638,8 +640,8 @@ const Module = struct {
             try self.builder.intConst(.i64, @as(i64, @bitCast(abi.artifact_magic))),
             try self.builder.intConst(.i32, abi.artifact_format),
             try self.builder.intConst(.i32, abi.version),
-            try self.textBytes(self.options.triple),
-            try self.builder.intConst(.i64, self.options.triple.len),
+            try self.textBytes(abi.machine),
+            try self.builder.intConst(.i64, abi.machine.len),
             try self.builder.intConst(.i64, @as(i64, @bitCast(self.options.source_hash))),
             try self.builder.intConst(.i32, @intFromBool(debug_build)),
             try self.builder.intConst(.i32, 0),

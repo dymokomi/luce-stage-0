@@ -1,10 +1,18 @@
-//! Stage 8 — LLVM lowering.  MIR in, machine code out.
+//! Stage 8 — LLVM lowering.  MIR in, LLVM bitcode out.
 //!
 //! Consumes: an optimized, verified `mir.Program`.
-//! Produces: LLVM IR built with `std.zig.llvm.Builder`, then — through
-//! libLLVM's stable C surface — a relocatable object for the host
-//! triple, position-independent, exporting exactly `luce_main` and
-//! declaring no undefined symbols beyond `libluce_rt`.
+//! Produces: LLVM IR built with `std.zig.llvm.Builder` — pure Zig,
+//! linking nothing — for a module that is position-independent, exports
+//! exactly `luce_main`, and declares no undefined symbols beyond
+//! `libluce_rt`.
+//!
+//! **Turning that bitcode into an object is a separate module, and the
+//! separation is the point.**  `emit.zig` is the one file in the tree
+//! that calls libLLVM, so it is its own build module (`emit`), and only
+//! the `luce` compiler links it.  `loom` — which runs programs and asks
+//! `luce` to build one when it must — carries no libLLVM at all, and a
+//! machine that only ever *runs* Luce programs needs no LLVM installed.
+//! Everything left in this stage is reachable from both.
 //!
 //! **Partial, and it names its own gaps.**  Two rules make that true:
 //! the switches over `mir.Instruction` and `mir.Intrinsic` have no
@@ -27,13 +35,13 @@
 //! broken invariant reports itself instead of being `unreachable`.
 //! `lower.zig` is the authority; docs/CODEGEN.md keeps the prose.
 //!
-//! This stage stops at a relocatable object, and `src/apps/native.zig`
-//! carries it the rest of the way: `cc` links it into a loadable
-//! `.lcn` artifact or a standalone executable, and `loom run` prefers
-//! that artifact over the interpreter.  What makes a native artifact
-//! safe to hand to a loader is `abi.Artifact` — the tag this stage
-//! stamps every module with, naming the machine, the host ABI, and the
-//! program it was built from, so the wrong one is refused by name.
+//! `src/apps/luce/object.zig` carries a lowered program the rest of the
+//! way — `emit` for the object, then `cc` for a loadable `.lcn`
+//! artifact or a standalone executable — and `loom run` prefers that
+//! artifact over the interpreter.  What makes a native artifact safe to
+//! hand to a loader is `abi.Artifact`: the tag this stage stamps every
+//! module with, naming the machine, the host ABI, and the program it
+//! was built from, so the wrong one is refused by name.
 //!
 //! **The numeric prefix is load-bearing; do not drop it.**  Zig derives
 //! symbol names from the source path and LLVM claims every symbol
@@ -43,13 +51,14 @@
 //! `08_llvm.abi.…`, which does not begin `llvm.`, and the check never
 //! fires.  The prefix is what lets this folder carry the honest name.
 //!
-//! Flat pieces beside this file:
+//! Flat pieces beside this file, in this module:
 //!
 //!   abi.zig    — the published host ABI a compiled artifact links
-//!                against: the `luce_main` entry point and the
-//!                `LuceHost` service table.
+//!                against: the `luce_main` entry point, the `LuceHost`
+//!                service table, and the artifact tag a loader reads.
 //!   lower.zig  — typed MIR to LLVM IR, built with the pure-Zig
 //!                `std.zig.llvm.Builder`.  No libLLVM, no `else` arms.
+//!   loops.zig  — where a container resolution may be lifted to.
 //!   runtime_effects.zig
 //!             — what the artifact tells LLVM about `libluce_rt`:
 //!               one arm per entry point saying what it does to
@@ -57,6 +66,9 @@
 //!               and what each argument is.  A declaration without
 //!               that is the most pessimistic thing LLVM can be
 //!               handed.
+//!
+//! And in the `emit` module beside them, which links libLLVM:
+//!
 //!   emit.zig   — libLLVM's stable C surface: bitcode to object code.
 //!   test.zig   — the end-to-end proof: Luce source through LLVM into
 //!                a shared library, loaded and run against a host.
@@ -70,15 +82,8 @@ pub const TextResult = @import("08_llvm/lower.zig").TextResult;
 pub const lower = @import("08_llvm/lower.zig").lower;
 pub const lowerToText = @import("08_llvm/lower.zig").lowerToText;
 
-pub const EmitOptions = @import("08_llvm/emit.zig").Options;
-pub const EmitResult = @import("08_llvm/emit.zig").Result;
-pub const Relocation = @import("08_llvm/emit.zig").Relocation;
-pub const compile = @import("08_llvm/emit.zig").compile;
-pub const hostTriple = @import("08_llvm/emit.zig").hostTriple;
-
 test {
     _ = abi;
     _ = effects;
     _ = @import("08_llvm/loops.zig");
-    _ = @import("08_llvm/test.zig");
 }

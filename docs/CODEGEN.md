@@ -82,13 +82,24 @@ second copy of the runtime to collide with the real one at link time.
 
 **How an artifact says what it is.**  It exports `luce_artifact`, a
 constant `abi.Artifact`: a magic, the tag's own layout version, the
-host ABI version, the target triple, a hash of the serialized module
-it was built from, and whether it kept its origins.  A loader reads
-that *before* it calls anything, and refuses by name — wrong machine,
-wrong ABI, stale program — because a native artifact is not portable
-and a file name cannot be trusted to say so.  Without the tag, a
-`.lcn` copied between machines is a file that loads cleanly and
-crashes with no explanation.
+host ABI version, the machine, a hash of the serialized module it was
+built from, and whether it kept its origins.  A loader reads that
+*before* it calls anything, and refuses by name — wrong machine, wrong
+ABI, stale program — because a native artifact is not portable and a
+file name cannot be trusted to say so.  Without the tag, a `.lcn`
+copied between machines is a file that loads cleanly and crashes with
+no explanation.
+
+The machine is `abi.machine` — `aarch64-macos-none`, architecture,
+system and C ABI from `builtin` — and **not the LLVM triple**, which
+is what it used to be.  The triple is a codegen input: LLVM invents
+it, LLVM parses it, and asking for it means having libLLVM in the
+process.  A loader is asking a different question — may this library
+be opened and called here? — and those three fields answer it exactly.
+Making the tag readable without a code generator is what lets loom
+carry no LLVM at all (below).  CPU features are absent because nothing
+generates for a named CPU; the day that changes, the string grows and
+`abi.version` moves with it.
 
 ### Where a compiled artifact lives, and when it is rebuilt
 
@@ -114,13 +125,13 @@ decision the `.lci` image cache reached before it.
 `loom run` prefers native and falls back to the interpreter, silently,
 because the two agree by construction and which one ran is a
 performance fact rather than a behavioural one.  The fallback exists
-because the compiled path needs three things the interpreter does not:
-a lowering for everything the program says, a C toolchain, and
-somewhere to put the result.
+because the compiled path needs four things the interpreter does not:
+the `luce` compiler, a lowering for everything the program says, a C
+toolchain, and somewhere to put the result.
 
 - `LOOM_ENGINE=native` turns the fallback into an error naming what
-  was missing — "it uses Bytes, which has no lowering yet", "cannot
-  run the linker `cc`".
+  was missing — "it uses Bytes, which has no lowering yet", "the
+  `luce` compiler is not beside /usr/local/bin and not on PATH".
 - `LOOM_ENGINE=interpreter` takes the reference engine on purpose,
   which is what an `agree` comparison and any report of a
   disagreement need to be able to ask for.
@@ -128,20 +139,74 @@ somewhere to put the result.
   and nothing else.
 
 Measured on the bundled programs and the benchmark set (M4 Max, best
-of several, `.lc` in both cases):
+of several, `.lc` in every case):
 
 | program | interpreter | native, warm | native, cold |
 |---------|-------------|--------------|--------------|
-| hello   | 8.8 ms      | 9.6 ms       | 81 ms        |
-| editor  | 11.7 ms     | 12.0 ms      | 321 ms       |
-| loops   | 6995 ms     | 92 ms        | 272 ms       |
-| matmul  | 5767 ms     | 22 ms        | 201 ms       |
-| strings | 931 ms      | 57 ms        | 258 ms       |
+| hello   | 3.8 ms      | 4.0 ms       | 137 ms       |
+| editor  | 3.0 ms      | 4.0 ms       | 291 ms       |
+| loops   | 7020 ms     | 84 ms        | 233 ms       |
+| matmul  | 5845 ms     | 12 ms        | 159 ms       |
+| strings | 955 ms      | 52 ms        | 230 ms       |
 
 Warm startup is the interpreter's, within noise: both are dominated by
-process start and reading the module.  A cold run pays LLVM at `-O3`
-plus one link — and on anything that computes, still finishes far
-ahead of the interpreter that needed no build at all.
+process start and reading the module.  A cold run pays one `luce`
+process, LLVM at `-O3`, and one link — and on anything that computes,
+still finishes far ahead of the interpreter that needed no build at
+all.
+
+### loom does not carry a code generator
+
+**`luce` is the compiler and links libLLVM; `loom` is the environment
+and does not.**  When loom meets a program with no current artifact it
+runs the `luce` binary over the serialized module it is already
+holding.
+
+The reason is dyld.  Homebrew's `libLLVM.dylib` is 164 MB, and a
+process that names it maps and binds all of it before `main` — 5.7 ms
+on this host, measured against an otherwise identical binary, with
+zero LLVM functions ever called.  loom's whole job is starting
+programs, so it paid that on every single invocation: warm runs, cold
+runs, and `loom` with no arguments alike.  Against a C do-nothing
+binary at 2.4 ms, loom's floor was 8.8 ms; it is now 3.1 ms, and
+`bench/matmul` went from 1.7x of its C twin to 1.08x with no change to
+a single generated instruction.
+
+What makes the split possible is that almost nothing needs libLLVM.
+`lower.zig` builds LLVM IR with `std.zig.llvm.Builder`, which is pure
+Zig and links nothing; the artifact tag names its machine with
+`abi.machine` rather than an LLVM triple, so a loader can check it
+with no library at all.  Exactly one file calls the C API —
+`08_llvm/emit.zig` — and it is its own build module (`emit`) that only
+the `luce` executable imports.  `otool -L build/loom` is the check.
+
+- loom finds the compiler **beside its own executable first, then on
+  `PATH`** (`native.findCompiler`).  Beside first is what a toolchain
+  does and what keeps an install tree self-consistent: a `loom` from
+  `build/` builds with the `luce` from `build/`, never with whatever
+  an older install left earlier on `PATH`.
+- What it hands over is **the module, not the source**: the artifact
+  is then keyed to the exact program about to run, rather than to
+  whatever a second compile of the same file would have produced.  A
+  `.lc` on disk is named where it stands; a script loom compiled in
+  memory, or the embedded editor, gets its bytes written beside the
+  artifact and removed again.  Re-encoding a decoded module is
+  byte-identical (`06_mir/module.zig`), so the hash matches by
+  construction.  `luce build` accepts a `.lc` for the same reason, and
+  that is a capability in its own right.
+- The compiler inherits loom's environment, so `LUCE_LIB` and
+  `LUCE_CC` reach it without loom parsing or forwarding either.
+- **A machine that only runs Luce programs needs no LLVM installed.**
+  That is the distribution property the split buys, and it is worth
+  more than the milliseconds.
+
+`luce` still pays the 5.7 ms, and that is left alone: `luce build`
+genuinely uses LLVM, and paying dyld once per compile is not worth a
+second binary or turning `emit.zig`'s twenty `extern fn`s into
+`dlopen`ed function pointers.  `luce check` and `luce ir` are the two
+commands that pay it for nothing (8.4 ms against loom's 2.7 ms); if
+check-on-save latency ever matters, the fix is the one loom just got —
+another binary — and not lazy binding.
 
 **Two rules govern `lower.zig`**, both inherited from what the deleted
 hand-written backends cost:
@@ -159,7 +224,9 @@ only file in the tree that touches libLLVM, and it uses the narrowest
 tier of the C API: parse a bitcode buffer, make a target machine, run
 a textual pass pipeline, write an object.  That is the tier LLVM's own
 developer policy describes as stable; IR *construction*, the part that
-has broken repeatedly across releases, stays in-tree.
+has broken repeatedly across releases, stays in-tree.  Being one file
+is also what makes it one *module*, which is what keeps libLLVM out of
+loom.
 
 **The stage directory is `08_llvm/`, and the numeric prefix is what
 makes that name legal.**  Zig derives symbol names from the source
@@ -305,7 +372,8 @@ own unswitching lifts, and the bounds check, which it keeps and then
 versions the loop around — that is what lets the vectorizer in.
 
 Measured against the C twins on an Apple M4 Max, best of three, both
-sides through LLVM:
+sides through LLVM, process startup taken off both — `bench/run.sh`'s
+`compute` column, which is what a change to code generation moves:
 
 | benchmark | before | after |
 |-----------|--------|-------|
@@ -521,10 +589,36 @@ reports its code, its message, and its call stack with
 `file:line:column`, and `--release` strips the lines and keeps the
 names, the same as the `.lc` path (docs/MODES.md).
 
+## The benchmark snapshot
+
+`bench/run.sh`, Apple M4 Max, best of five, C at `-O3 -march=native`
+against Luce `--release` under `loom run` from a warm artifact.  Both
+sides include process startup; `compute` is the same numbers with the
+do-nothing floor taken off each, which is the ratio a code-generation
+change moves.  Absolute times mean nothing off this host — for a
+before/after, use `bench/compare.sh GIT-REF`, which interleaves the
+two on the machine in front of you.
+
+| benchmark | C        | luce     | luce/C | compute |
+|-----------|----------|----------|--------|---------|
+| loops     |  78.9 ms |  82.4 ms |  1.04x |   1.03x |
+| math      | 134.6 ms | 105.8 ms |  0.79x |   0.77x |
+| strings   |  19.6 ms |  45.8 ms |  2.34x |   2.51x |
+| arrays    |  42.4 ms |  45.3 ms |  1.07x |   1.05x |
+| matmul    |  10.3 ms |  11.2 ms |  1.08x |   0.99x |
+| stats     |  31.4 ms |  38.4 ms |  1.22x |   1.21x |
+| floor     |   2.9 ms |   3.8 ms |      - |       - |
+
+`strings` is the one row that is genuinely behind, and it is
+allocation-bound rather than code-generation-bound.  Everything else
+is at parity or ahead, and `math` is ahead because Luce's transcendental
+calls land in the same libm C's do while the surrounding loop
+vectorizes.
+
 ## Building
 
-libLLVM is a hard build dependency of the language module, because the
-one code generator calls it in process.  `build.zig` finds it by
+libLLVM is a hard build dependency of **the `luce` compiler**, because
+the one code generator calls it in process.  `build.zig` finds it by
 asking `llvm-config` — on `PATH` or in the usual Homebrew and
 distribution prefixes — for its include directory, library directory,
 libraries, system libraries, and C++ runtime.  Point the build
@@ -534,8 +628,9 @@ elsewhere with:
 zig build -Dllvm-config=/path/to/llvm-config
 ```
 
-Both executables link it, because loom compiles too (`loom luce
-FILE.luc`, and bare `.luc` paths in the shell).
+`loom` does not link it and must not start doing so; the dependency is
+confined to the `emit` module (above), and `otool -L build/loom` is
+how that stays true.
 
 ## Where this goes next
 
