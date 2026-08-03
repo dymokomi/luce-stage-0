@@ -35,7 +35,6 @@ const Error = declarations.Error;
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
 const Type = types.Type;
-const PortSchema = types.PortSchema;
 const StructLayout = types.StructLayout;
 const Register = mir.Register;
 const BlockId = mir.BlockId;
@@ -54,7 +53,6 @@ pub const FunctionBuilder = struct {
     analyzer: *Analyzer,
     module: usize,
     prefix: []const u8,
-    has_frames: bool,
     /// Stage 6's tape.  Every decision this walk reaches is recorded
     /// on it in the order it is reached; the only things ever read
     /// back are a register's type and a local's type.
@@ -702,7 +700,7 @@ pub const FunctionBuilder = struct {
     /// simply be handed out of the frame that made it.
     fn carriesText(of: Type) bool {
         return switch (of) {
-            .string, .bytes => true,
+            .string => true,
             .optional => |payload| carriesText(payload.asType()),
             else => false,
         };
@@ -1688,14 +1686,6 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
-        if (std.mem.eql(u8, base, "output")) {
-            try self.fail("luce.sema.output", span, "assign to output.NAME", .{});
-            return;
-        }
-        if (std.mem.eql(u8, base, "input")) {
-            try self.fail("luce.sema.input", span, "input ports are read-only", .{});
-            return;
-        }
         const found = self.findLocal(base) orelse {
             const qualified = try self.analyzer.qualify(self.prefix, base);
             if (self.analyzer.constant_names.contains(qualified)) {
@@ -1806,41 +1796,6 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
-        if (std.mem.eql(u8, target.base, "output")) {
-            if (!self.has_frames) {
-                try self.fail("luce.sema.name", target.span, "output exists only in the evaluator entry", .{});
-                return;
-            }
-            const port = self.analyzer.schema.findOutput(target.field) orelse {
-                try self.fail("luce.sema.port", target.span, "no output port named {s}", .{target.field});
-                return;
-            };
-            if (assign.compound != null) {
-                try self.fail("luce.sema.output", target.span, "output ports are write-only; compound assignment must read the place", .{});
-                return;
-            }
-            const expected = Type.fromPort(self.analyzer.schema.outputs[port].declared);
-            const value = (try self.lowerExpression(assign.value, false)) orelse return;
-            if (!value.value_type.eql(expected)) {
-                try self.fail("luce.sema.type", assign.span, "output.{s} is {s} but the value is {s}", .{
-                    target.field,
-                    try self.analyzer.typeName(expected),
-                    try self.analyzer.typeName(value.value_type),
-                });
-                return;
-            }
-            _ = try self.code.emit(.{ .output_store = .{ .port = port, .value = value.register } }, .none);
-            return;
-        }
-        if (std.mem.eql(u8, target.base, "input")) {
-            if (self.has_frames) {
-                try self.fail("luce.sema.input", target.span, "input ports are read-only", .{});
-            } else {
-                try self.fail("luce.sema.name", target.span, "input exists only in the evaluator entry", .{});
-            }
-            return;
-        }
-
         const found = self.findLocal(target.base) orelse {
             try self.failUnknownName(target.base, target.span);
             return;
@@ -2527,19 +2482,11 @@ pub const FunctionBuilder = struct {
             .string_literal => |literal| {
                 const constant = try self.analyzer.pool.intern(literal.decoded);
                 return .{
-                    .register = try self.code.emit(.{ .const_data = .{ .constant = constant, .data_type = .string } }, .string),
+                    .register = try self.code.emit(.{ .const_string = constant }, .string),
                     .value_type = .string,
                 };
             },
             .name => |name| {
-                if (std.mem.eql(u8, name.text, "input") or std.mem.eql(u8, name.text, "output")) {
-                    if (self.has_frames) {
-                        try self.fail("luce.sema.port", name.span, "{s} is used as {s}.PORT", .{ name.text, name.text });
-                    } else {
-                        try self.fail("luce.sema.name", name.span, "{s} exists only in the evaluator entry", .{name.text});
-                    }
-                    return null;
-                }
                 const found = self.findLocal(name.text) orelse {
                     // Not a local: perhaps a file-scope constant.
                     const qualified = try self.analyzer.qualify(self.prefix, name.text);
@@ -2918,7 +2865,7 @@ pub const FunctionBuilder = struct {
             .string => |folded| blk: {
                 const constant = try self.analyzer.pool.intern(folded);
                 break :blk try self.code.emit(
-                    .{ .const_data = .{ .constant = constant, .data_type = .string } },
+                    .{ .const_string = constant },
                     .string,
                 );
             },
@@ -3121,30 +3068,8 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Value {
-        // input.NAME reads a port; anything else reads a struct field.
         if (field.target.* == .name) {
             const base = field.target.name.text;
-            if (std.mem.eql(u8, base, "input")) {
-                if (!self.has_frames) {
-                    try self.fail("luce.sema.name", field.span, "input exists only in the evaluator entry", .{});
-                    return null;
-                }
-                const port = self.analyzer.schema.findInput(field.name) orelse {
-                    try self.fail("luce.sema.port", field.span, "no input port named {s}", .{field.name});
-                    return null;
-                };
-                try self.analyzer.reads.put(self.analyzer.temporary, port, {});
-                const port_type = Type.fromPort(self.analyzer.schema.inputs[port].declared);
-                return .{ .register = try self.code.emit(.{ .input_load = port }, port_type), .value_type = port_type };
-            }
-            if (std.mem.eql(u8, base, "output")) {
-                if (self.has_frames) {
-                    try self.fail("luce.sema.output", field.span, "output ports are write-only", .{});
-                } else {
-                    try self.fail("luce.sema.name", field.span, "output exists only in the evaluator entry", .{});
-                }
-                return null;
-            }
             // geo.pi — an imported module's file-scope constant.
             if (self.findLocal(base) == null and self.analyzer.importsModule(self.module, base)) {
                 const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
@@ -4413,14 +4338,13 @@ pub const FunctionBuilder = struct {
             },
             .len => {
                 const measurable = arguments[0].value_type == .string or
-                    arguments[0].value_type == .bytes or
                     arguments[0].value_type == .heap;
                 if (!measurable) {
                     if (arguments[0].value_type == .optional) {
                         try self.failAbsence(call.span, "len", arguments[0].value_type, call.arguments[0].value);
                         return .failed;
                     }
-                    return self.failIntrinsic(call, "len takes a String, Bytes, List, Map, Array, or Builder");
+                    return self.failIntrinsic(call, "len takes a String, List, Map, Array, or Builder");
                 }
                 result = .int;
             },

@@ -35,7 +35,6 @@ the innermost 64 frames and counts the rest.
 | `assertion_failed` | assertion failed | `assert(false)` |
 | `explicit_trap` | explicit trap | `trap(message)` |
 | `missing_return` | function ended without returning a value | a value-returning function fell off its end |
-| `step_budget_exhausted` | evaluation step budget exhausted | the host's step budget ran out |
 | `call_depth_exceeded` | call depth exceeded | the call-depth budget ran out |
 | `string_bounds` | string index out of bounds | a `String` index or slice past the end |
 | `string_boundary` | string slice splits a UTF-8 sequence | a `String` slice cutting a character |

@@ -286,7 +286,7 @@ pub const Object = struct {
                 .float => .float,
                 .int => .int,
                 .boolean => .boolean,
-                .none, .string, .bytes, .strukt, .object => .value,
+                .none, .string, .strukt, .object => .value,
             };
         }
     };
@@ -563,7 +563,7 @@ pub const Runtime = struct {
 
     /// Unique per call: object ownership names (serial, local) pairs,
     /// so recursion never confuses two frames' bindings.  u64 — loom
-    /// runs with an unlimited step budget, so 2^32 calls is an
+    /// runs with no instruction budget at all, so 2^32 calls is an
     /// afternoon, and a wrapped serial would let ownership confuse
     /// two frames.
     next_serial: u64 = 1,
@@ -937,7 +937,7 @@ pub const Runtime = struct {
     /// and the constant itself is never reached by a release.
     pub fn ownValue(self: *Runtime, held: Value) Error!Value {
         switch (held.tag) {
-            .string, .bytes => {
+            .string => {
                 const text = held.asString();
                 // Short text is the value: copying the slot copies the
                 // bytes, so there is nothing to allocate and nothing to
@@ -975,7 +975,7 @@ pub const Runtime = struct {
     /// emptied value back, and an empty value frees nothing.
     pub fn releaseStorage(self: *Runtime, held: Value) void {
         switch (held.tag) {
-            .string, .bytes => {
+            .string => {
                 // Inline text is the value, and a value is not an
                 // allocation: there is nothing here to give back.
                 if (!held.ownsStorage()) return;
@@ -1000,7 +1000,7 @@ pub const Runtime = struct {
             // An emptied String is inline and zero bytes long, which
             // reads as `""` — the same thing it read as before, and
             // nothing to free.
-            .string, .bytes, .strukt => .{ .tag = held.tag },
+            .string, .strukt => .{ .tag = held.tag },
             else => held,
         };
     }
@@ -1021,7 +1021,7 @@ pub const Runtime = struct {
     /// before short text lived in the value at all.
     pub fn exportValue(self: *Runtime, held: Value) Error!Value {
         switch (held.tag) {
-            .string, .bytes => {
+            .string => {
                 if (!held.textIsInline()) return held;
                 const text = held.asString();
                 // Empty text has nothing to allocate and no address

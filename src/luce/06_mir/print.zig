@@ -90,14 +90,9 @@ fn printInstruction(
         .const_boolean => |value| try appendPrint(text, allocator, "const {}", .{value}),
         .const_int => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_float => |value| try appendPrint(text, allocator, "const {d}", .{value}),
-        .const_data => |data| try appendPrint(text, allocator, "const data#{d}", .{data.constant}),
+        .const_string => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
         .local_get => |local| try appendPrint(text, allocator, "local_get %{d}", .{local}),
         .local_set => |set| try appendPrint(text, allocator, "local_set %{d}, r{d}", .{ set.local, set.value }),
-        .input_load => |port| try appendPrint(text, allocator, "input_load {s}", .{program.inputs[port].name}),
-        .output_store => |store| try appendPrint(text, allocator, "output_store {s}, r{d}", .{
-            program.outputs[store.port].name,
-            store.value,
-        }),
         .binary => |binary| {
             const operand_type_name = try typeName(allocator, program, binary.operand_type);
             defer allocator.free(operand_type_name);

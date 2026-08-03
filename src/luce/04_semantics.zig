@@ -1,12 +1,11 @@
 //! Stage 4 — semantics: name resolution, type checking, and validation.
 //!
 //! Consumes: the untyped `ast.Program` of every module in the import
-//! graph, plus the Port schema and the compile options (entry mode
-//! and the host gate).
+//! graph, plus the compile options (the host gate).
 //! Produces: an `Analyzed` — struct layouts, heap-type shapes, the
-//! constant pool, the ports read, the entry, and one function's worth
-//! of decided operations per declaration — or `luce.sema.*`
-//! diagnostics and nothing at all.
+//! constant pool, the entry, and one function's worth of decided
+//! operations per declaration — or `luce.sema.*` diagnostics and
+//! nothing at all.
 //!
 //! **The three concerns are one subsystem by design, not by neglect.**
 //! Resolution, typing, and validation are mutually recursive in any
@@ -31,9 +30,8 @@
 //!
 //! Rules enforced here, per docs/LANGUAGE.md: static types with no
 //! implicit numeric conversion, immutable `let` and parameters, no
-//! shadowing, definite initialization, `return` on every path, struct
-//! cycles refused, input read-only and output write-only, and only the
-//! ports the schema declares.  Nothing about any backend appears here.
+//! shadowing, definite initialization, `return` on every path, and
+//! struct cycles refused.  Nothing about any backend appears here.
 //!
 //! **This stage is the last word on the memory model.**  The MIR
 //! verifier checks structure and types, not meaning, so `let`

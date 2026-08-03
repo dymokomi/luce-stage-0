@@ -178,8 +178,7 @@ fn installedTools(gpa: Allocator) !native.Tools {
 }
 
 fn compileScript(gpa: Allocator, source: []const u8) !luce.mir.Program {
-    var result = try luce.compile.compile(gpa, source, .{}, .{
-        .entry_mode = .script,
+    var result = try luce.compile.compile(gpa, source, .{
         .allow_host = true,
         .source_name = "product.luc",
     });

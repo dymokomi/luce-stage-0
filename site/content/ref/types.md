@@ -14,7 +14,7 @@ no value.
 The line between them decides everything about memory.
 
 **Values** copy on assignment and on call, and nobody frees them:
-`Bool`, `Int`, `Float`, `String`, `Bytes`, and `struct`s. A value
+`Bool`, `Int`, `Float`, `String`, and `struct`s. A value
 never takes an ownership word.
 
 **Heap objects** are referenced, created with `new` or a literal, and
@@ -30,7 +30,6 @@ freed by scope ownership: `List(T)`, `Map(K, V)`, `Array(T, ...)`,
 | `Int` | Signed 64-bit, two's complement, **checked**: overflow traps. |
 | `Float` | IEEE 754 binary64. Does not trap. |
 | `String` | Immutable UTF-8. A value. |
-| `Bytes` | Declared but **unconstructible** — nothing produces one and nothing consumes one. It is the one thing keeping the backend from being total, and it is on the list to be cut or grown. |
 
 `Int` division truncates toward zero; `%` takes the sign of the
 dividend. Division or remainder by zero traps.

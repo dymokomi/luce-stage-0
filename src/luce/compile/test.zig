@@ -8,26 +8,13 @@ const compile_mod = @import("../compile.zig");
 const luce_source = @import("../01_source.zig");
 
 const testing = std.testing;
-const PortSchema = types.PortSchema;
 
-const point_schema: PortSchema = .{
-    .inputs = &.{
-        .{ .name = "x", .declared = .float },
-        .{ .name = "y", .declared = .float },
-        .{ .name = "scale", .declared = .float },
-    },
-    .outputs = &.{
-        .{ .name = "x", .declared = .float },
-        .{ .name = "y", .declared = .float },
-    },
-};
-
-fn expectCompiles(source: []const u8, schema: PortSchema) !mir.Program {
-    return expectCompilesOptions(source, schema, .{});
+fn expectCompiles(source: []const u8) !mir.Program {
+    return expectCompilesOptions(source, .{});
 }
 
-fn expectCompilesOptions(source: []const u8, schema: PortSchema, options: types.CompileOptions) !mir.Program {
-    var result = try compile_mod.compile(testing.allocator, source, schema, options);
+fn expectCompilesOptions(source: []const u8, options: types.CompileOptions) !mir.Program {
+    var result = try compile_mod.compile(testing.allocator, source, options);
     switch (result) {
         .success => |program| return program,
         .failure => |*diagnostics| {
@@ -40,17 +27,16 @@ fn expectCompilesOptions(source: []const u8, schema: PortSchema, options: types.
     }
 }
 
-fn expectFails(source: []const u8, schema: PortSchema, expected_code: []const u8) !void {
-    return expectFailsOptions(source, schema, .{}, expected_code);
+fn expectFails(source: []const u8, expected_code: []const u8) !void {
+    return expectFailsOptions(source, .{}, expected_code);
 }
 
 fn expectFailsOptions(
     source: []const u8,
-    schema: PortSchema,
     options: types.CompileOptions,
     expected_code: []const u8,
 ) !void {
-    var result = try compile_mod.compile(testing.allocator, source, schema, options);
+    var result = try compile_mod.compile(testing.allocator, source, options);
     defer result.deinit();
     switch (result) {
         .success => return error.TestUnexpectedResult,
@@ -84,8 +70,8 @@ const Expected = struct { code: []const u8, line: usize, column: usize };
 /// token — invisible to a code-only check, and this is an
 /// editor-facing project where the span IS the product — now fails a
 /// test.  Wording stays unasserted per the coding guide.
-fn expectDiagnostics(source: []const u8, schema: PortSchema, options: types.CompileOptions, wanted: []const Expected) !void {
-    var result = try compile_mod.compile(testing.allocator, source, schema, options);
+fn expectDiagnostics(source: []const u8, options: types.CompileOptions, wanted: []const Expected) !void {
+    var result = try compile_mod.compile(testing.allocator, source, options);
     defer result.deinit();
     if (result == .success) {
         std.debug.print("expected diagnostics, but this compiled:\n{s}", .{source});
@@ -105,10 +91,10 @@ fn expectDiagnostics(source: []const u8, schema: PortSchema, options: types.Comp
 
 test "func is strict and fn is an ordinary identifier" {
     try expectFails(
-        \\fn evaluate(input: Input, output: Output):
+        \\fn main():
         \\    return
         \\
-    , .{}, "luce.parse.top");
+    , "luce.parse.top");
 }
 
 test "lexer diagnostics carry the right code and location, and do not cascade" {
@@ -120,19 +106,16 @@ test "lexer diagnostics carry the right code and location, and do not cascade" {
     try expectDiagnostics(
         "func main():\n\tlet a = 1\n",
         .{},
-        .{ .entry_mode = .script },
         &.{.{ .code = "luce.lex.tab", .line = 2, .column = 1 }},
     );
     try expectDiagnostics(
         "func main():\n    let a = 12ab\n",
         .{},
-        .{ .entry_mode = .script },
         &.{.{ .code = "luce.lex.number", .line = 2, .column = 13 }},
     );
     try expectDiagnostics(
         "func main():\n    let a = \"open\n",
         .{},
-        .{ .entry_mode = .script },
         &.{.{ .code = "luce.lex.string", .line = 2, .column = 13 }},
     );
 }
@@ -141,7 +124,6 @@ test "parser diagnostics carry the right code and location" {
     try expectDiagnostics(
         "let 3 = 4\n",
         .{},
-        .{ .entry_mode = .script },
         &.{.{ .code = "luce.parse.expected", .line = 1, .column = 5 }},
     );
 }
@@ -152,13 +134,13 @@ test "semantic diagnostics carry the right code and location" {
         \\func main():
         \\    var x: Widget = 1
         \\
-    , .{}, .{ .entry_mode = .script }, &.{.{ .code = "luce.sema.type", .line = 2, .column = 12 }});
+    , .{}, &.{.{ .code = "luce.sema.type", .line = 2, .column = 12 }});
     // A bad conversion argument, pointed at the call.
     try expectDiagnostics(
         \\func main():
         \\    let x = Int("no")
         \\
-    , .{}, .{ .entry_mode = .script }, &.{.{ .code = "luce.sema.convert", .line = 2, .column = 13 }});
+    , .{}, &.{.{ .code = "luce.sema.convert", .line = 2, .column = 13 }});
     // An unknown field, pointed at the access.
     try expectDiagnostics(
         \\struct Point:
@@ -168,7 +150,7 @@ test "semantic diagnostics carry the right code and location" {
         \\    var p = Point(x = 1.0)
         \\    let y = p.y
         \\
-    , .{}, .{ .entry_mode = .script }, &.{.{ .code = "luce.sema.field", .line = 6, .column = 13 }});
+    , .{}, &.{.{ .code = "luce.sema.field", .line = 6, .column = 13 }});
 }
 
 test "the previously-unasserted diagnostic codes fire" {
@@ -186,7 +168,7 @@ test "the previously-unasserted diagnostic codes fire" {
         .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
     };
     for (cases) |case| {
-        try expectFailsOptions(case.source, .{}, .{ .entry_mode = .script }, case.code);
+        try expectFailsOptions(case.source, .{}, case.code);
     }
 }
 
@@ -216,7 +198,7 @@ test "the pipeline survives every allocation failure" {
     ;
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(gpa: std.mem.Allocator) !void {
-            var result = try compile_mod.compile(gpa, representative, .{}, .{ .entry_mode = .script, .allow_host = true });
+            var result = try compile_mod.compile(gpa, representative, .{ .allow_host = true });
             result.deinit();
         }
     }.run, .{});
@@ -224,13 +206,11 @@ test "the pipeline survives every allocation failure" {
 
 test "decode survives every allocation failure" {
     var program = try expectCompiles(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.doubled = input.value * 2
+        \\func main():
+        \\    var value = 21
+        \\    assert(value * 2 == 42)
         \\
-    , .{
-        .inputs = &.{.{ .name = "value", .declared = .int }},
-        .outputs = &.{.{ .name = "doubled", .declared = .int }},
-    });
+    );
     defer program.deinit();
     const module = @import("../06_mir.zig").module;
     const encoded = try module.encode(testing.allocator, &program);
@@ -246,44 +226,40 @@ test "decode survives every allocation failure" {
     }.run, .{encoded});
 }
 
-test "entry mode enforces evaluator and script contracts" {
-    try expectFailsOptions(
-        \\func main():
-        \\    return
+test "the entry is exactly func main(), and nothing else will do" {
+    try expectFails(
+        \\func helper() -> Int:
+        \\    return 1
         \\
-    , .{}, .{ .entry_mode = .evaluator }, "luce.sema.evaluate");
-    try expectFailsOptions(
-        \\func evaluate(input: Input, output: Output):
-        \\    return
-        \\
-    , .{}, .{ .entry_mode = .script }, "luce.sema.main");
-    try expectFailsOptions(
+    , "luce.sema.main");
+    try expectFails(
         \\func main(value: Int):
         \\    return
         \\
-    , .{}, .{ .entry_mode = .script }, "luce.sema.main");
+    , "luce.sema.main");
+    try expectFails(
+        \\func main() -> Int:
+        \\    return 1
+        \\
+    , "luce.sema.main");
 
     var script = try compile_mod.compile(testing.allocator,
         \\func main():
         \\    return
         \\
-    , .{}, .{ .entry_mode = .script });
+    , .{});
     defer script.deinit();
     try testing.expect(script == .success);
-}
 
-test "zero-port evaluators still require exact frame parameters" {
-    try expectFails(
-        \\func evaluate():
-        \\    return
-        \\
-    , .{}, "luce.sema.evaluate");
-    var program = try expectCompiles(
-        \\func evaluate(input: Input, output: Output):
+    // `func main() -> !:` is the other legal shape: a program that
+    // says the world can stop it (docs/FAILURE.md).
+    var fallible = try compile_mod.compile(testing.allocator,
+        \\func main() -> !:
         \\    return
         \\
     , .{});
-    defer program.deinit();
+    defer fallible.deinit();
+    try testing.expect(fallible == .success);
 }
 
 test "struct namespaces collect functions and reject invalid members" {
@@ -297,16 +273,10 @@ test "struct namespaces collect functions and reject invalid members" {
         \\    func sum(left: Int, right: Int) -> Int:
         \\        return left + right
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.value = Math.double(Pair.sum(input.left, input.right))
+        \\func main():
+        \\    assert(Math.double(Pair.sum(3, 4)) == 14)
         \\
-    , .{
-        .inputs = &.{
-            .{ .name = "left", .declared = .int },
-            .{ .name = "right", .declared = .int },
-        },
-        .outputs = &.{.{ .name = "value", .declared = .int }},
-    });
+    );
     defer program.deinit();
     try testing.expectEqualStrings("Math.double", program.functions[1].name);
 
@@ -316,42 +286,28 @@ test "struct namespaces collect functions and reject invalid members" {
         \\    func value() -> Int:
         \\        return 1
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    return
         \\
-    , .{}, "luce.sema.duplicate");
+    , "luce.sema.duplicate");
     try expectFails(
         \\struct Helpers:
         \\    func one() -> Int:
         \\        return 1
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let bad = Helpers.missing()
         \\
-    , .{}, "luce.sema.call");
+    , "luce.sema.call");
     try expectFails(
         \\struct Helpers:
         \\    func one() -> Int:
         \\        return 1
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let bad = Helpers()
         \\
-    , .{}, "luce.sema.construct");
-}
-
-test "frame access is scoped to evaluator entry" {
-    try expectFails(
-        \\func helper() -> Int:
-        \\    return input.value
-        \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.value = helper()
-        \\
-    , .{
-        .inputs = &.{.{ .name = "value", .declared = .int }},
-        .outputs = &.{.{ .name = "value", .declared = .int }},
-    }, "luce.sema.name");
+    , "luce.sema.construct");
 }
 
 test "the plan's scale example compiles and verifies" {
@@ -366,24 +322,22 @@ test "the plan's scale example compiles and verifies" {
         \\        y = point.y * factor,
         \\    )
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    let position = Point(x = input.x, y = input.y)
-        \\    let scaled = scale_point(position, input.scale)
-        \\    output.x = scaled.x
-        \\    output.y = scaled.y
+        \\func main():
+        \\    let position = Point(x = 1.0, y = 2.0)
+        \\    let scaled = scale_point(position, 3.0)
+        \\    assert(scaled.x == 3.0)
+        \\    assert(scaled.y == 6.0)
         \\
-    , point_schema);
+    );
     defer program.deinit();
 
     try testing.expectEqual(@as(usize, 1), program.structs.len);
     try testing.expectEqual(@as(usize, 2), program.functions.len);
-    // The program reads all three declared inputs.
-    try testing.expectEqualSlices(u32, &.{ 0, 1, 2 }, program.reads);
 }
 
 test "control flow, loops, and builtins compile and verify" {
     var program = try expectCompiles(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    var total = 0
         \\    for index in range(0, 10):
         \\        if index % 2 == 0 and index != 4:
@@ -394,11 +348,10 @@ test "control flow, loops, and builtins compile and verify" {
         \\            total = max(total, index)
         \\    while total > 100:
         \\        total = total - 1
-        \\    output.total = clamp(total, 0, 50)
+        \\    assert(clamp(total, 0, 50) == 20)
         \\
-    , .{ .outputs = &.{.{ .name = "total", .declared = .int }} });
+    );
     defer program.deinit();
-    try testing.expectEqual(@as(usize, 0), program.reads.len);
 }
 
 test "functions unreachable from the entry are pruned from the artifact" {
@@ -411,7 +364,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\func main():
         \\    print("hi")
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true });
+    , .{ .allow_host = true });
     defer unused.deinit();
     try testing.expectEqual(@as(usize, 1), unused.functions.len);
 
@@ -424,7 +377,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\func main():
         \\    print(str("abc".find("b")))
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true });
+    , .{ .allow_host = true });
     defer used.deinit();
     var kept_find = false;
     var kept_dead = false;
@@ -463,29 +416,25 @@ test "functions unreachable from the entry are pruned from the artifact" {
 
 test "the IR dump is readable and deterministic" {
     const source =
-        \\func evaluate(input: Input, output: Output):
-        \\    let doubled = input.value * 2
-        \\    output.value = doubled
+        \\func main():
+        \\    var value = 21
+        \\    let doubled = value * 2
+        \\    assert(doubled == 42)
         \\
     ;
-    const schema: PortSchema = .{
-        .inputs = &.{.{ .name = "value", .declared = .int }},
-        .outputs = &.{.{ .name = "value", .declared = .int }},
-    };
-    var program = try expectCompiles(source, schema);
+    var program = try expectCompiles(source);
     defer program.deinit();
     const first = try mir.print(testing.allocator, &program);
     defer testing.allocator.free(first);
 
-    var again = try expectCompiles(source, schema);
+    var again = try expectCompiles(source);
     defer again.deinit();
     const second = try mir.print(testing.allocator, &again);
     defer testing.allocator.free(second);
 
     try testing.expectEqualStrings(first, second);
-    try testing.expect(std.mem.indexOf(u8, first, "func evaluate() -> None") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "input_load value") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "output_store value") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "func main() -> None") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: Int") != null);
     try testing.expect(std.mem.indexOf(u8, first, "multiply.Int") != null);
 }
 
@@ -512,7 +461,7 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\    if len(xs) > 0 and xs[0] == 1:
         \\        xs.append(3)
         \\
-    , .{}, .{ .entry_mode = .script });
+    , .{});
     defer program.deinit();
     const dump = try mir.print(testing.allocator, &program);
     defer testing.allocator.free(dump);
@@ -558,80 +507,42 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     , dump);
 }
 
-test "unknown ports and port type mismatches diagnose" {
-    try expectFails(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.ghost = 1
-        \\
-    , point_schema, "luce.sema.port");
-    try expectFails(
-        \\func evaluate(input: Input, output: Output):
-        \\    let missing = input.ghost
-        \\
-    , point_schema, "luce.sema.port");
-    try expectFails(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.x = 1
-        \\
-    , point_schema, "luce.sema.type");
-    try expectFails(
-        \\func evaluate(input: Input, output: Output):
-        \\    input.x = 1.0
-        \\
-    , point_schema, "luce.sema.input");
-    try expectFails(
-        \\func evaluate(input: Input, output: Output):
-        \\    let peek = output.x
-        \\
-    , point_schema, "luce.sema.output");
-}
-
 test "no implicit conversion, no reassigned let, no shadowing" {
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let mixed = 1 + 2.0
         \\
-    , .{}, "luce.sema.type");
+    , "luce.sema.type");
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let once = 1
         \\    once = 2
         \\
-    , .{}, "luce.sema.let");
+    , "luce.sema.let");
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let name = 1
         \\    if true:
         \\        let name = 2
         \\
-    , .{}, "luce.sema.duplicate");
+    , "luce.sema.duplicate");
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let value: Float = 3
         \\
-    , .{}, "luce.sema.type");
+    , "luce.sema.type");
 }
 
-test "return paths and evaluate's shape are checked" {
+test "return paths are checked on every branch" {
     try expectFails(
         \\func partial(flag: Bool) -> Int:
         \\    if flag:
         \\        return 1
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let unused = partial(true)
         \\
-    , .{}, "luce.sema.return");
-    try expectFails(
-        \\func helper() -> Int:
-        \\    return 1
-        \\
-    , .{}, "luce.sema.evaluate");
-    try expectFails(
-        \\func evaluate(input: Input, output: Output) -> Int:
-        \\    return 1
-        \\
-    , .{}, "luce.sema.evaluate");
+    , "luce.sema.return");
 }
 
 test "struct construction is complete, named, and typed" {
@@ -642,28 +553,28 @@ test "struct construction is complete, named, and typed" {
         \\
     ;
     try expectFails(source_prefix ++
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let missing = Color(red = 1.0)
         \\
-    , .{}, "luce.sema.construct");
+    , "luce.sema.construct");
     try expectFails(source_prefix ++
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let doubled = Color(red = 1.0, red = 2.0, green = 3.0)
         \\
-    , .{}, "luce.sema.construct");
+    , "luce.sema.construct");
     try expectFails(source_prefix ++
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let wrong = Color(red = 1, green = 2.0)
         \\
-    , .{}, "luce.sema.type");
+    , "luce.sema.type");
     try expectFails(
         \\struct Loop:
         \\    inner: Loop
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let never = 1
         \\
-    , .{}, "luce.sema.struct");
+    , "luce.sema.struct");
 }
 
 test "calls check arity, types, and none results" {
@@ -671,36 +582,36 @@ test "calls check arity, types, and none results" {
         \\func helper(value: Int) -> Int:
         \\    return value
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let wrong = helper(1, 2)
         \\
-    , .{}, "luce.sema.call");
+    , "luce.sema.call");
     try expectFails(
         \\func nothing():
         \\    return
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let value = nothing()
         \\
-    , .{}, "luce.sema.call");
+    , "luce.sema.call");
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let bad = sqrt(4)
         \\
-    , .{}, "luce.sema.type");
+    , "luce.sema.type");
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let bad = unknown_helper(1)
         \\
-    , .{}, "luce.sema.call");
+    , "luce.sema.call");
 }
 
 test "break and continue require a loop" {
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    break
         \\
-    , .{}, "luce.sema.loop");
+    , "luce.sema.loop");
 }
 
 test "var struct fields update through functional struct_set" {
@@ -709,12 +620,12 @@ test "var struct fields update through functional struct_set" {
         \\    x: Float
         \\    y: Float
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    var point = Point(x = 0.0, y = 0.0)
         \\    point.x = 4.5
-        \\    output.x = point.x
+        \\    assert(point.x == 4.5)
         \\
-    , point_schema);
+    );
     defer program.deinit();
     const dump = try mir.print(testing.allocator, &program);
     defer testing.allocator.free(dump);
@@ -723,31 +634,31 @@ test "var struct fields update through functional struct_set" {
 
 test "string operations type-check" {
     var program = try expectCompiles(
-        \\func evaluate(input: Input, output: Output):
-        \\    let greeting = "hello, " + input.name
+        \\func main():
+        \\    var name = "world"
+        \\    let greeting = "hello, " + name
+        \\    var text = ""
         \\    if len(greeting) > 3 and greeting != "":
-        \\        output.text = greeting
+        \\        text = greeting
         \\    else:
-        \\        output.text = "short"
+        \\        text = "short"
+        \\    assert(text == "hello, world")
         \\
-    , .{
-        .inputs = &.{.{ .name = "name", .declared = .string }},
-        .outputs = &.{.{ .name = "text", .declared = .string }},
-    });
+    );
     defer program.deinit();
 }
 
 test "host builtins type-check and stay host-gated" {
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    print("hello")
         \\
-    , .{}, "luce.sema.host");
+    , "luce.sema.host");
     try expectFails(
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    let text = file_read("notes.txt")
         \\
-    , .{}, "luce.sema.host");
+    , "luce.sema.host");
 
     var hosted = try compile_mod.compile(testing.allocator,
         \\func main() -> !:
@@ -761,7 +672,7 @@ test "host builtins type-check and stay host-gated" {
         \\    term_write(key_read() + key_text())
         \\    term_flush()
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true });
+    , .{ .allow_host = true });
     defer hosted.deinit();
     try testing.expect(hosted == .success);
 
@@ -769,7 +680,7 @@ test "host builtins type-check and stay host-gated" {
         \\func main() -> !:
         \\    let bad = try file_read(7)
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.type");
+    , .{ .allow_host = true }, "luce.sema.type");
     // A call that can fail may not be written as if it could not:
     // this is the shape `if files.write_lines(...)` used to have, and
     // it is the whole of why a swallowed failure is now unwritable.
@@ -777,22 +688,22 @@ test "host builtins type-check and stay host-gated" {
         \\func main():
         \\    let text = file_read("notes.txt")
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.fallible");
+    , .{ .allow_host = true }, "luce.sema.fallible");
     // And `try` needs a caller that said it can fail.
     try expectFailsOptions(
         \\func main():
         \\    let text = try file_read("notes.txt")
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.fallible");
+    , .{ .allow_host = true }, "luce.sema.fallible");
     try expectFailsOptions(
         \\func main():
         \\    term_style(1, 2, 3)
         \\
-    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.type");
+    , .{ .allow_host = true }, "luce.sema.type");
 }
 
 test "collections type-check and reject misuse at compile time" {
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
 
     var featured = try compile_mod.compile(testing.allocator,
         \\func sum(values: List(Int)) -> Int:
@@ -814,7 +725,7 @@ test "collections type-check and reject misuse at compile time" {
         \\    let total = sum(values[0:])
         \\    free(values)
         \\
-    , .{}, script);
+    , script);
     defer featured.deinit();
     try testing.expect(featured == .success);
 
@@ -822,52 +733,52 @@ test "collections type-check and reject misuse at compile time" {
         \\func main():
         \\    let mixed = [1, "two"]
         \\
-    , .{}, script, "luce.sema.type");
+    , script, "luce.sema.type");
     try expectFailsOptions(
         \\func main():
         \\    var untyped = []
         \\
-    , .{}, script, "luce.sema.type");
+    , script, "luce.sema.type");
     try expectFailsOptions(
         \\func main():
         \\    var m = new Map(Float, Int)
         \\
-    , .{}, script, "luce.sema.type");
+    , script, "luce.sema.type");
     try expectFailsOptions(
         \\func main():
         \\    var grid = new Array(Int, 2, 2)
         \\    let bad = grid[0]
         \\
-    , .{}, script, "luce.sema.index");
+    , script, "luce.sema.index");
     try expectFailsOptions(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    let bad = m[7]
         \\
-    , .{}, script, "luce.sema.index");
+    , script, "luce.sema.index");
     try expectFailsOptions(
         \\func main():
         \\    let bad = 5.append(1)
         \\
-    , .{}, script, "luce.sema.method");
+    , script, "luce.sema.method");
     try expectFailsOptions(
         \\func main():
         \\    for x in 7:
         \\        let unused = x
         \\
-    , .{}, script, "luce.sema.loop");
+    , script, "luce.sema.loop");
     try expectFailsOptions(
         \\func main():
         \\    let xs = [1]
         \\    let bad = xs < xs
         \\
-    , .{}, script, "luce.sema.type");
+    , script, "luce.sema.type");
     try expectFailsOptions(
         \\func main():
         \\    var xs = [1]
         \\    xs[0] = "text"
         \\
-    , .{}, script, "luce.sema.type");
+    , script, "luce.sema.type");
 }
 
 // ---------------------------------------------------------------------------
@@ -938,7 +849,7 @@ test "a file is a module: imports, qualified names, and shared types" {
         \\    assert(copied.y == 2.0)
         \\    assert(geo.Text.double(21) == 42)
         \\
-    , files.loader(), .{}, .{ .entry_mode = .script });
+    , files.loader(), .{});
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {
@@ -956,12 +867,12 @@ test "a file is a module: imports, qualified names, and shared types" {
     const backend = @import("../backend.zig");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &program, &.{}, &.{}, .{});
+    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &program, .{});
     try testing.expect(ran == .success);
 }
 
 test "imports are explicit, checked, and reported per file" {
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
 
     // Reaching a loaded-but-unimported namespace names the fix; a
@@ -972,7 +883,7 @@ test "imports are explicit, checked, and reported per file" {
         \\func main():
         \\    let bad = util.hypot(3.0, 4.0)
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer unimported.deinit();
     try testing.expect(unimported == .failure);
     try testing.expectEqualStrings("luce.sema.import", unimported.failure.at(0).?.code);
@@ -980,7 +891,7 @@ test "imports are explicit, checked, and reported per file" {
         \\func main():
         \\    let bad = geo.make(1.0, 2.0)
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer unknown.deinit();
     try testing.expect(unknown == .failure);
     try testing.expectEqualStrings("luce.sema.name", unknown.failure.at(0).?.code);
@@ -992,7 +903,7 @@ test "imports are explicit, checked, and reported per file" {
         \\func main():
         \\    return
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer missing.deinit();
     try testing.expect(missing == .failure);
     try testing.expectEqualStrings("luce.import.missing", missing.failure.at(0).?.code);
@@ -1004,7 +915,7 @@ test "imports are explicit, checked, and reported per file" {
         \\func main():
         \\    return
         \\
-    , .{}, script);
+    , script);
     defer lonely.deinit();
     try testing.expect(lonely == .failure);
     try testing.expectEqualStrings("luce.import.missing", lonely.failure.at(0).?.code);
@@ -1022,7 +933,7 @@ test "imports are explicit, checked, and reported per file" {
         \\func main():
         \\    let bad = broken.helper()
         \\
-    , broken_files.loader(), .{}, script);
+    , broken_files.loader(), script);
     defer imported_error.deinit();
     try testing.expect(imported_error == .failure);
     const rendered = try imported_error.failure.render(testing.allocator);
@@ -1031,7 +942,7 @@ test "imports are explicit, checked, and reported per file" {
 }
 
 test "every way an import can fail is a diagnostic, not a crash or an empty module" {
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     const uses_geo =
         \\import geo
         \\
@@ -1043,7 +954,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     // Present but unreadable is not the same as absent: the message
     // says why, so the fix is different.
     var locked: TestLoader = .{ .modules = &.{}, .locked = &.{"geo"} };
-    var unreadable = try compile_mod.compileProject(testing.allocator, uses_geo, locked.loader(), .{}, script);
+    var unreadable = try compile_mod.compileProject(testing.allocator, uses_geo, locked.loader(), script);
     defer unreadable.deinit();
     try testing.expect(unreadable == .failure);
     try testing.expectEqualStrings("luce.import.unreadable", unreadable.failure.at(0).?.code);
@@ -1054,7 +965,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     var binary: TestLoader = .{ .modules = &.{
         .{ .name = "geo", .source = "func area() -> Int:\n    return \x00\n" },
     } };
-    var not_text = try compile_mod.compileProject(testing.allocator, uses_geo, binary.loader(), .{}, script);
+    var not_text = try compile_mod.compileProject(testing.allocator, uses_geo, binary.loader(), script);
     defer not_text.deinit();
     try testing.expect(not_text == .failure);
     try testing.expectEqualStrings("luce.source.binary", not_text.failure.at(0).?.code);
@@ -1071,7 +982,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     var recursive: TestLoader = .{ .modules = &.{
         .{ .name = "geo", .source = "import geo\n\nfunc area() -> Int:\n    return 4\n" },
     } };
-    var itself = try compile_mod.compileProject(testing.allocator, uses_geo, recursive.loader(), .{}, script);
+    var itself = try compile_mod.compileProject(testing.allocator, uses_geo, recursive.loader(), script);
     defer itself.deinit();
     try testing.expect(itself == .failure);
     try testing.expectEqualStrings("luce.import.self", itself.failure.at(0).?.code);
@@ -1079,7 +990,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
 }
 
 test "std is a namespace, not a reserved name: a sibling module may be called math" {
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
         .{ .name = "math", .source = "func answer() -> Int:\n    return 42\n" },
     } };
@@ -1093,7 +1004,7 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
         \\func main():
         \\    assert(math.answer() == 42)
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer sibling.deinit();
     if (sibling == .failure) {
         printDiagnostics(&sibling);
@@ -1107,7 +1018,7 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
         \\func main():
         \\    assert(math.ipow(2, 5) == 32)
         \\
-    , .{}, script);
+    , script);
     defer library.deinit();
     if (library == .failure) {
         printDiagnostics(&library);
@@ -1123,7 +1034,7 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
         \\func main():
         \\    assert(math.answer() == 42)
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer collision.deinit();
     try testing.expect(collision == .failure);
     try testing.expectEqualStrings("luce.import.collision", collision.failure.at(0).?.code);
@@ -1132,7 +1043,7 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
 }
 
 test "a missing import is spelled the way the author would have to write it" {
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
         .{ .name = "math", .source = "func answer() -> Int:\n    return 42\n" },
         .{ .name = "user", .source = "import math\n\nfunc go() -> Int:\n    return math.answer()\n" },
@@ -1146,7 +1057,7 @@ test "a missing import is spelled the way the author would have to write it" {
         \\func main():
         \\    assert(math.answer() == user.go())
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer sibling.deinit();
     try testing.expect(sibling == .failure);
     try testing.expectEqualStrings("luce.sema.import", sibling.failure.at(0).?.code);
@@ -1158,7 +1069,7 @@ test "a missing import is spelled the way the author would have to write it" {
         \\func main():
         \\    let p: math.Angle = 1
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer library.deinit();
     try testing.expect(library == .failure);
     try testing.expectEqualStrings("luce.sema.import", library.failure.at(0).?.code);
@@ -1166,7 +1077,7 @@ test "a missing import is spelled the way the author would have to write it" {
 }
 
 test "the std namespace holds the library and nothing else" {
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     // A file really named std.luc, which the namespace makes
     // unreachable — said plainly rather than resolved behind the
     // author's back.
@@ -1180,7 +1091,7 @@ test "the std namespace holds the library and nothing else" {
         \\func main():
         \\    return
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer absent.deinit();
     try testing.expect(absent == .failure);
     try testing.expectEqualStrings("luce.import.standard", absent.failure.at(0).?.code);
@@ -1193,7 +1104,7 @@ test "the std namespace holds the library and nothing else" {
         \\func main():
         \\    return
         \\
-    , files.loader(), .{}, script);
+    , files.loader(), script);
     defer bare.deinit();
     try testing.expect(bare == .failure);
     try testing.expectEqualStrings("luce.import.reserved", bare.failure.at(0).?.code);
@@ -1219,7 +1130,7 @@ test "a project's diagnostics name every file they come from" {
         \\    let bad: Int = geo.area()
         \\    let worse: Int = math.pi
         \\
-    , files.loader(), .{}, .{ .entry_mode = .script, .source_name = "program.luc" });
+    , files.loader(), .{ .source_name = "program.luc" });
     defer result.deinit();
     try testing.expect(result == .failure);
 
@@ -1243,7 +1154,7 @@ test "an imported module compiles the same with CRLF line endings" {
         \\func main():
         \\    assert(geo.area() == 3)
         \\
-    , files.loader(), .{}, .{ .entry_mode = .script });
+    , files.loader(), .{});
     defer result.deinit();
     if (result == .failure) {
         printDiagnostics(&result);
@@ -1255,8 +1166,6 @@ test "an imported module compiles the same with CRLF line endings" {
     const ran = try backend.evaluate(
         .{ .arena = arena.allocator(), .objects = testing.allocator },
         &result.success,
-        &.{},
-        &.{},
         .{},
     );
     try testing.expect(ran == .success);
@@ -1289,14 +1198,14 @@ test "modules may import each other; mutual recursion crosses files" {
         \\    assert(even.check(10))
         \\    assert(not even.check(7))
         \\
-    , files.loader(), .{}, .{ .entry_mode = .script });
+    , files.loader(), .{});
     defer result.deinit();
     try testing.expect(result == .success);
 
     const backend = @import("../backend.zig");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, &.{}, &.{}, .{});
+    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, .{});
     try testing.expect(ran == .success);
 }
 
@@ -1305,7 +1214,7 @@ test "an import cycle is allowed; what may not be circular is checked finer" {
     // has no initialization phase, so there is nothing to catch half
     // done and no reason to inherit Python's partially initialized
     // module.  A three-file ring loads, compiles, and runs.
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     var ring: TestLoader = .{ .modules = &.{
         .{ .name = "a", .source = "import b\n\nfunc step(v: Int) -> Int:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
         .{ .name = "b", .source = "import c\n\nfunc step(v: Int) -> Int:\n    return c.step(v)\n" },
@@ -1317,7 +1226,7 @@ test "an import cycle is allowed; what may not be circular is checked finer" {
         \\func main():
         \\    assert(a.step(9) == 0)
         \\
-    , ring.loader(), .{}, script);
+    , ring.loader(), script);
     defer looped.deinit();
     printDiagnostics(&looped);
     try testing.expect(looped == .success);
@@ -1325,7 +1234,7 @@ test "an import cycle is allowed; what may not be circular is checked finer" {
     const backend = @import("../backend.zig");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &looped.success, &.{}, &.{}, .{});
+    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &looped.success, .{});
     try testing.expect(ran == .success);
 
     // The circularity that *does* mean something is caught where it
@@ -1341,7 +1250,7 @@ test "an import cycle is allowed; what may not be circular is checked finer" {
         \\func main():
         \\    print(str(a.width))
         \\
-    , constants.loader(), .{}, script);
+    , constants.loader(), script);
     defer knotted.deinit();
     try testing.expect(knotted == .failure);
     try testing.expectEqualStrings("luce.sema.const", knotted.failure.at(0).?.code);
@@ -1351,7 +1260,7 @@ test "short-circuit operands survive block splits everywhere" {
     // Every multi-operand construct with a splitting (and/or) operand
     // once emitted registers across block boundaries; the verifier
     // rejected the program as an internal compiler error.
-    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const script: types.CompileOptions = .{};
     var featured = try compile_mod.compile(testing.allocator,
         \\struct Flags:
         \\    left: Bool
@@ -1377,7 +1286,7 @@ test "short-circuit operands survive block splits everywhere" {
         \\    free(flags)
         \\    free(cells)
         \\
-    , .{}, script);
+    , script);
     defer featured.deinit();
     switch (featured) {
         .success => {},
@@ -1392,7 +1301,7 @@ test "short-circuit operands survive block splits everywhere" {
     const backend = @import("../backend.zig");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &featured.success, &.{}, &.{}, .{});
+    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &featured.success, .{});
     try testing.expect(ran == .success);
     try testing.expectEqual(@as(u32, 0), ran.success.leaked_objects);
 }
@@ -1401,10 +1310,10 @@ test "short-circuit operands survive block splits everywhere" {
 // File-scope constants (docs/V2.md Phase 2)
 // ---------------------------------------------------------------------------
 
-const script_options: types.CompileOptions = .{ .entry_mode = .script };
+const script_options: types.CompileOptions = .{};
 
 fn runsClean(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script_options);
+    var result = try compile_mod.compile(testing.allocator, source, script_options);
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
@@ -1417,7 +1326,7 @@ fn runsClean(source: []const u8) !void {
             const backend = @import("../backend.zig");
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
-            const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, &.{}, &.{}, .{});
+            const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{});
             if (ran != .success) {
                 std.debug.print("unexpected trap: {s}\n", .{ran.trap.message});
                 return error.TestUnexpectedResult;
@@ -1428,7 +1337,7 @@ fn runsClean(source: []const u8) !void {
 }
 
 fn failsWith(source: []const u8, code: []const u8) !void {
-    return expectFailsOptions(source, .{}, script_options, code);
+    return expectFailsOptions(source, script_options, code);
 }
 
 test "file-scope constants fold every value kind" {
@@ -1507,7 +1416,7 @@ test "constants reach across modules through imports" {
         \\    assert(banner.starts_with("loom"))
         \\    assert(config.version.contains("."))
         \\
-    , files.loader(), .{}, script_options);
+    , files.loader(), script_options);
     switch (result) {
         .failure => |*diagnostics| {
             const rendered = try diagnostics.render(testing.allocator);
@@ -1523,7 +1432,7 @@ test "constants reach across modules through imports" {
     const backend = @import("../backend.zig");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &program, &.{}, &.{}, .{});
+    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &program, .{});
     try testing.expect(ran == .success);
 }
 

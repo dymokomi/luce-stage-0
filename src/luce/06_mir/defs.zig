@@ -7,7 +7,6 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 const Type = types.Type;
 const StructLayout = types.StructLayout;
-const Port = types.Port;
 
 pub const Register = u32;
 pub const BlockId = u32;
@@ -225,7 +224,6 @@ pub const TrapCode = enum {
     assertion_failed,
     explicit_trap,
     missing_return,
-    step_budget_exhausted,
     call_depth_exceeded,
     string_bounds,
     string_boundary,
@@ -247,7 +245,6 @@ pub const TrapCode = enum {
             .assertion_failed => "assertion failed",
             .explicit_trap => "explicit trap",
             .missing_return => "function ended without returning a value",
-            .step_budget_exhausted => "evaluation step budget exhausted",
             .call_depth_exceeded => "call depth exceeded",
             .string_bounds => "string index out of bounds",
             .string_boundary => "string slice splits a UTF-8 sequence",
@@ -268,11 +265,9 @@ pub const Instruction = union(enum) {
     const_boolean: bool,
     const_int: i64,
     const_float: f64,
-    const_data: struct { constant: u32, data_type: Type },
+    const_string: u32,
     local_get: LocalId,
     local_set: struct { local: LocalId, value: Register },
-    input_load: u32,
-    output_store: struct { port: u32, value: Register },
     binary: Binary,
     unary: Unary,
     convert: struct { kind: ConvertKind, operand: Register },
@@ -361,9 +356,6 @@ pub const Program = struct {
     heap_types: []types.HeapType = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},
-    inputs: []Port = &.{},
-    outputs: []Port = &.{},
-    reads: []u32 = &.{},
     entry_function: u32 = 0,
 
     pub fn deinit(self: *Program) void {

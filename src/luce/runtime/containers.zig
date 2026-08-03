@@ -18,12 +18,11 @@ const OwnedBy = heap.OwnedBy;
 const Runtime = heap.Runtime;
 const Value = value.Value;
 
-/// `len(x)`: bytes for a String or Bytes, elements for a list, entries
-/// for a map, the first axis for an array, bytes for a Builder.
+/// `len(x)`: bytes for a String, elements for a list, entries for a
+/// map, the first axis for an array, bytes for a Builder.
 pub fn length(runtime: *Runtime, target: Value) Error!Value {
     const measured: usize = switch (target.view()) {
         .string => |text| text.len,
-        .bytes => |text| text.len,
         .object => blk: {
             const object = try runtime.resolve(target);
             break :blk switch (object.data) {

@@ -2,8 +2,8 @@
 //! the pass that builds it.
 //!
 //! Consumes: `Lowered`, the value stage 4 hands over — struct layouts,
-//! heap-type shapes, the constant pool, the ports read, the entry, and
-//! one open `Lowering` per function.
+//! heap-type shapes, the constant pool, the entry, and one open
+//! `Lowering` per function.
 //! Produces: `Program` — an instruction pool plus basic blocks per
 //! function.  Registers never cross a block boundary; state that must
 //! survive a loop lives in a mutable local.  This is the form the `.lc`

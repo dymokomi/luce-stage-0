@@ -4,14 +4,13 @@
 //! function signatures, file-scope constants folded, the selected
 //! entry.  Then `builder.zig` walks every function body, checking it
 //! and recording what it decides on stage 6's tape.  The type checker
-//! knows Luce types and the Texel's Port schema; nothing about any
-//! backend appears here.
+//! knows Luce types and nothing else; nothing about any backend
+//! appears here.
 //!
 //! Rules enforced here, per docs/LANGUAGE.md: static types with no
 //! implicit numeric conversion, immutable let and parameters, no
 //! shadowing, definite initialization (bindings always carry a value),
-//! return on every path, input is read-only and output write-only, and
-//! only ports the schema declares exist.
+//! and return on every path.
 
 const std = @import("std");
 const source_mod = @import("../01_source.zig");
@@ -25,7 +24,6 @@ const diagnostics_mod = @import("../support/diagnostics.zig");
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
 const Type = types.Type;
-const PortSchema = types.PortSchema;
 const StructLayout = types.StructLayout;
 const Diagnostics = diagnostics_mod.Diagnostics;
 const Register = mir.Register;
@@ -49,31 +47,28 @@ pub const max_diagnostics: u32 = 100;
 
 /// Names the language reserves; nothing user-declared may take them.
 pub const reserved_names = [_][]const u8{
-    "input",       "output",      "Input",      "Output",      "range",
-    "Int",         "Float",       "Bool",       "String",      "Bytes",
-    "List",        "Map",         "Array",      "Builder",     "None",
-    "abs",         "min",         "max",        "clamp",       "sqrt",
-    "floor",       "ceil",        "len",        "slice",       "byte_at",
-    "assert",      "trap",        "evaluate",   "str",         "parse_int",
-    "parse_float", "chr",         "ord",        "append",      "pop",
-    "insert",      "remove",      "has",        "dim",         "free",
-    "print",       "file_read",   "file_write", "file_exists", "arg",
-    "arg_count",   "key_read",    "key_text",   "error",       "read_line",
-    "print_error", "clock_ms",    "sleep_ms",   "env",         "file_append",
-    "file_delete", "file_rename", "dir_list",
+    "range",       "Int",        "Float",       "Bool",        "String",
+    "List",        "Map",        "Array",       "Builder",     "None",
+    "abs",         "min",        "max",         "clamp",       "sqrt",
+    "floor",       "ceil",       "len",         "slice",       "byte_at",
+    "assert",      "trap",       "str",         "parse_int",   "parse_float",
+    "chr",         "ord",        "append",      "pop",         "insert",
+    "remove",      "has",        "dim",         "free",        "print",
+    "file_read",   "file_write", "file_exists", "arg",         "arg_count",
+    "key_read",    "key_text",   "error",       "read_line",   "print_error",
+    "clock_ms",    "sleep_ms",   "env",         "file_append", "file_delete",
+    "file_rename", "dir_list",
 };
 
 pub fn isReserved(name: []const u8) bool {
     for (reserved_names) |reserved| {
-        if (std.mem.eql(u8, name, reserved)) {
-            return !std.mem.eql(u8, name, "evaluate");
-        }
+        if (std.mem.eql(u8, name, reserved)) return true;
     }
     return false;
 }
 
 /// What this stage hands to stage 6: struct layouts, heap-type shapes,
-/// the constant pool, the ports read, the entry, and one open
+/// the constant pool, the entry, and one open
 /// `Lowering` per function.  All of it is arena-allocated and none of
 /// it points back here, so `mir.build` can close it on its own.
 ///
@@ -91,13 +86,12 @@ pub const ModuleTree = struct {
     file: source_mod.FileId,
 };
 
-/// Check the project against the schema and lower it to IR.  Returns
-/// null when errors were reported; the diagnostics tell the story.
+/// Check the project and lower it to IR.  Returns null when errors
+/// were reported; the diagnostics tell the story.
 pub fn analyze(
     arena: Allocator,
     temporary: Allocator,
     modules: []const ModuleTree,
-    schema: PortSchema,
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
 ) Error!?Analyzed {
@@ -110,7 +104,6 @@ pub fn analyze(
         .arena = arena,
         .temporary = temporary,
         .modules = modules,
-        .schema = schema,
         .options = options,
         .diagnostics = diagnostics,
         .pool = pool,
@@ -240,7 +233,6 @@ pub const Analyzer = struct {
     arena: Allocator,
     temporary: Allocator,
     modules: []const ModuleTree,
-    schema: PortSchema,
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
 
@@ -269,7 +261,6 @@ pub const Analyzer = struct {
     pool: *mir.build.ConstantPool,
     constant_infos: std.ArrayList(ConstantInfo) = .empty,
     constant_names: std.StringHashMapUnmanaged(u32) = .empty,
-    reads: std.AutoHashMapUnmanaged(u32, void) = .empty,
 
     pub fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
@@ -279,7 +270,6 @@ pub const Analyzer = struct {
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
         self.constant_names.deinit(self.temporary);
-        self.reads.deinit(self.temporary);
     }
 
     /// Add one semantic diagnostic, honoring the report cap.  Every
@@ -317,21 +307,13 @@ pub const Analyzer = struct {
         }
         if (self.diagnostics.hasErrors()) return null;
 
-        const entry_name = if (self.options.entry_mode == .evaluator) "evaluate" else "main";
-        const entry_index = self.function_names.get(entry_name) orelse return null;
-
-        var reads: std.ArrayList(u32) = .empty;
-        defer reads.deinit(self.arena);
-        var read_ports = self.reads.keyIterator();
-        while (read_ports.next()) |port| try reads.append(self.arena, port.*);
-        std.mem.sort(u32, reads.items, {}, std.sort.asc(u32));
+        const entry_index = self.function_names.get("main") orelse return null;
 
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.pool.items.toOwnedSlice(self.arena),
-            .reads = try reads.toOwnedSlice(self.arena),
             .entry_function = entry_index,
         };
     }
@@ -411,7 +393,6 @@ pub const Analyzer = struct {
             .{ .name = "Int", .resolved = .int },
             .{ .name = "Float", .resolved = .float },
             .{ .name = "String", .resolved = .string },
-            .{ .name = "Bytes", .resolved = .bytes },
         };
         for (table) |entry| {
             if (std.mem.eql(u8, written.name, entry.name)) {
@@ -494,7 +475,7 @@ pub const Analyzer = struct {
     /// type errors and the cheapest to answer well.
     fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!void {
         const builtin_types = [_][]const u8{
-            "Bool", "Int", "Float", "String", "Bytes", "List", "Map", "Array", "Builder",
+            "Bool", "Int", "Float", "String", "List", "Map", "Array", "Builder",
         };
         const prefix = self.modules[module].prefix;
         var suggestion = helpers.Suggestion.init(written.name);
@@ -562,7 +543,7 @@ pub const Analyzer = struct {
             // A struct owns its field run whatever is in it, so this
             // needs no shape lookup — an all-Int struct still has a
             // run to give back.
-            .string, .bytes, .strukt => true,
+            .string, .strukt => true,
             .optional => |payload| self.ownsStorage(payload.asType()),
             else => false,
         };
@@ -1280,9 +1261,7 @@ pub const Analyzer = struct {
         top_level: bool,
     ) Error!void {
         const in_root = self.modules[module].prefix.len == 0;
-        if (isReserved(declaration.name) and
-            !(top_level and std.mem.eql(u8, declaration.name, "evaluate")))
-        {
+        if (isReserved(declaration.name)) {
             try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
             return;
         }
@@ -1294,8 +1273,7 @@ pub const Analyzer = struct {
             return;
         }
 
-        const entry_name = if (self.options.entry_mode == .evaluator) "evaluate" else "main";
-        const is_entry = top_level and in_root and std.mem.eql(u8, declaration.name, entry_name);
+        const is_entry = top_level and in_root and std.mem.eql(u8, declaration.name, "main");
         var parameter_types: std.ArrayList(Type) = .empty;
         defer parameter_types.deinit(self.arena);
         var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
@@ -1336,37 +1314,16 @@ pub const Analyzer = struct {
     }
 
     pub fn checkEntry(self: *Analyzer) Error!void {
-        const mode = self.options.entry_mode;
-        const name = if (mode == .evaluator) "evaluate" else "main";
-        const code = if (mode == .evaluator) "luce.sema.evaluate" else "luce.sema.main";
-        const index = self.function_names.get(name) orelse {
-            try self.fail(code, .{ .start = 0, .end = 0 }, "missing func {s}{s}", .{
-                name,
-                if (mode == .evaluator) "(input: Input, output: Output):" else "():",
-            });
+        const index = self.function_names.get("main") orelse {
+            try self.fail("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
             return;
         };
         const declaration = self.functions.items[index].declaration;
-        // A script entry may be `func main():` or `func main() -> !:`
-        // — the second is how a program says the world can stop it,
-        // and loom reports what it raised (docs/FAILURE.md).  An
-        // evaluator entry may not: `evaluate` has ports to publish and
-        // no channel to raise through.
-        var valid = declaration.return_type == null;
-        if (mode == .evaluator) {
-            valid = valid and !declaration.fallible and declaration.parameters.len == 2;
-            if (declaration.parameters.len == 2) {
-                valid = valid and
-                    std.mem.eql(u8, declaration.parameters[0].name, "input") and
-                    std.mem.eql(u8, declaration.parameters[0].type_name.name, "Input") and
-                    std.mem.eql(u8, declaration.parameters[1].name, "output") and
-                    std.mem.eql(u8, declaration.parameters[1].type_name.name, "Output");
-            }
-            if (!valid) {
-                try self.fail(code, declaration.span, "evaluator entry must be exactly func evaluate(input: Input, output: Output):", .{});
-            }
-        } else if (declaration.parameters.len != 0 or !valid) {
-            try self.fail(code, declaration.span, "script entry must be exactly func main():", .{});
+        // The entry may be `func main():` or `func main() -> !:` — the
+        // second is how a program says the world can stop it, and loom
+        // reports what it raised (docs/FAILURE.md).
+        if (declaration.parameters.len != 0 or declaration.return_type != null) {
+            try self.fail("luce.sema.main", declaration.span, "script entry must be exactly func main():", .{});
         }
     }
 
@@ -1383,7 +1340,6 @@ pub const Analyzer = struct {
             .analyzer = self,
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
-            .has_frames = info.is_entry and self.options.entry_mode == .evaluator,
             .code = .{
                 .arena = self.arena,
                 .pool = self.pool,

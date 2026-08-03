@@ -20,9 +20,8 @@ const semantics = @import("../04_semantics.zig");
 
 const testing = std.testing;
 
-const script: types.CompileOptions = .{ .entry_mode = .script };
-const hosted: types.CompileOptions = .{ .entry_mode = .script, .allow_host = true };
-const evaluator: types.CompileOptions = .{ .entry_mode = .evaluator };
+const script: types.CompileOptions = .{};
+const hosted: types.CompileOptions = .{ .allow_host = true };
 
 const Diagnostics = @import("../support/diagnostics.zig").Diagnostics;
 
@@ -36,16 +35,15 @@ fn printAll(diagnostics: *const Diagnostics) void {
 /// diagnostic carrying `code` somewhere in the list.  The everyday
 /// rejection assertion.
 fn expectError(source: []const u8, code: []const u8) !void {
-    try expectErrorOptions(source, .{}, script, code);
+    try expectErrorOptions(source, script, code);
 }
 
 fn expectErrorOptions(
     source: []const u8,
-    schema: types.PortSchema,
     options: types.CompileOptions,
     code: []const u8,
 ) !void {
-    var result = try compile_mod.compile(testing.allocator, source, schema, options);
+    var result = try compile_mod.compile(testing.allocator, source, options);
     defer result.deinit();
     switch (result) {
         .success => {
@@ -67,7 +65,7 @@ fn expectErrorOptions(
 /// Assert the FIRST diagnostic is exactly `code` at `line`:`column`.
 /// Used where the span itself is the guarantee under test.
 fn expectErrorAt(source: []const u8, code: []const u8, line: usize, column: usize) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .success => return error.TestUnexpectedResult,
@@ -111,7 +109,6 @@ test "CRLF line endings compile, and keep every line and column" {
     var result = try compile_mod.compile(
         testing.allocator,
         "func main():\r\n    let a = 1\r\n\r\n    let b = a\r\n    let c: String = b\r\n",
-        .{},
         script,
     );
     defer result.deinit();
@@ -126,7 +123,6 @@ test "a byte-order mark is not a syntax error" {
     var result = try compile_mod.compile(
         testing.allocator,
         "\xEF\xBB\xBFfunc main():\n    return\n",
-        .{},
         script,
     );
     defer result.deinit();
@@ -238,8 +234,7 @@ test "luce.parse.chain: comparison operators do not chain" {
     var result = try compile_mod.compile(
         testing.allocator,
         "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(str(c))\n",
-        .{},
-        .{ .entry_mode = .script, .allow_host = true },
+        .{ .allow_host = true },
     );
     defer result.deinit();
     if (result == .failure) printAll(&result.failure);
@@ -263,10 +258,6 @@ test "luce.parse.nesting: pathological nesting is rejected, not overflowed" {
 test "luce.sema.main: a script needs exactly func main()" {
     try expectError("func other():\n    return\n", "luce.sema.main");
     try expectError("func main(x: Int):\n    return\n", "luce.sema.main");
-}
-
-test "luce.sema.evaluate: an evaluator needs exactly the two-port entry" {
-    try expectErrorOptions("func main():\n    return\n", .{}, evaluator, "luce.sema.evaluate");
 }
 
 // ---------------------------------------------------------------------------
@@ -466,27 +457,10 @@ test "luce.sema.host: host builtins are gated off by default" {
 // few common sema codes are additionally pinned to a line:column.
 // ===========================================================================
 
-/// A three-float-in, two-float-out schema for evaluator-mode cases,
-/// mirroring compile.zig's point_schema.
-const point_schema: types.PortSchema = .{
-    .inputs = &.{
-        .{ .name = "x", .declared = .float },
-        .{ .name = "y", .declared = .float },
-    },
-    .outputs = &.{
-        .{ .name = "x", .declared = .float },
-        .{ .name = "y", .declared = .float },
-    },
-};
-
-/// The same, for a program that reaches the host: every file builtin
-/// does, and so does the standard `files` module.
+/// For a program that reaches the host: every file builtin does, and
+/// so does the standard `files` module.
 fn expectHostError(source: []const u8, code: []const u8) !void {
-    try expectErrorOptions(source, .{}, hosted, code);
-}
-
-fn expectEvalError(source: []const u8, code: []const u8) !void {
-    try expectErrorOptions(source, point_schema, evaluator, code);
+    try expectErrorOptions(source, hosted, code);
 }
 
 // ---------------------------------------------------------------------------
@@ -752,14 +726,6 @@ test "luce.sema.type: String has no arithmetic operator" {
 
 test "luce.sema.type: range bounds must be Int" {
     try expectError("func main():\n    for i in range(1.0, 2.0):\n        return\n", "luce.sema.type");
-}
-
-test "luce.sema.type: an output port takes its declared type" {
-    try expectEvalError(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.x = 1
-        \\
-    , "luce.sema.type");
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,7 +1113,7 @@ test "an ordinary deep expression still compiles" {
     // The bound must sit well above anything a person writes.
     const source = try longChain(testing.allocator, "func main():\n    let a = ", "1", 200, "\n");
     defer testing.allocator.free(source);
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     if (result == .failure) printAll(&result.failure);
     try testing.expect(result == .success);
@@ -1389,7 +1355,7 @@ test "luce.sema.limit: reporting is capped so one broken file cannot flood" {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let a{d}: Int = \"x\"\n", .{index}));
     }
-    var result = try compile_mod.compile(testing.allocator, text.items, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, text.items, script);
     defer result.deinit();
     try testing.expect(result == .failure);
     // The cap, plus the one diagnostic that says the cap was reached.
@@ -1412,7 +1378,7 @@ test "every statement is checked, not just the first that fails" {
         \\    let b: Float = 1
         \\    let c = 1 < true
         \\
-    , .{}, script);
+    , script);
     defer result.deinit();
     try testing.expect(result == .failure);
     try testing.expectEqual(@as(usize, 3), result.failure.count());
@@ -1430,7 +1396,7 @@ test "a binding whose initializer failed does not make every later use an error"
         \\    let doubled = total * 2
         \\    assert(doubled == 2)
         \\
-    , .{}, script);
+    , script);
     defer result.deinit();
     try testing.expect(result == .failure);
     errdefer printAll(&result.failure);
@@ -1445,7 +1411,7 @@ test "a binding whose initializer failed does not make every later use an error"
 /// Compile `source`, expect failure, and require the first message to
 /// contain `fragment`.  Used where the *advice* is the guarantee.
 fn expectMessage(source: []const u8, fragment: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .success => return error.TestUnexpectedResult,
@@ -1572,7 +1538,7 @@ test "a wide struct graph with no cycle compiles, and quickly" {
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: S10\n    assert(g.a.a.a.a.a.a.a.a.a.a.v == 0)\n");
-    var result = try compile_mod.compile(testing.allocator, text.items, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, text.items, script);
     defer result.deinit();
     if (result == .failure) printAll(&result.failure);
     try testing.expect(result == .success);
@@ -1657,42 +1623,6 @@ test "luce.import.reserved: std is a namespace, not a module" {
 // binding one name — needs a loader with a sibling module in it, so it
 // is proven in compile/test.zig rather than through this single-file
 // harness.
-
-// ---------------------------------------------------------------------------
-// Evaluator-mode ports: luce.sema.port / input / output
-// ---------------------------------------------------------------------------
-
-test "luce.sema.port: an unknown output port is rejected" {
-    try expectEvalError(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.ghost = 1.0
-        \\
-    , "luce.sema.port");
-}
-
-test "luce.sema.port: an unknown input port is rejected" {
-    try expectEvalError(
-        \\func evaluate(input: Input, output: Output):
-        \\    let a = input.ghost
-        \\
-    , "luce.sema.port");
-}
-
-test "luce.sema.input: input ports are read-only" {
-    try expectEvalError(
-        \\func evaluate(input: Input, output: Output):
-        \\    input.x = 1.0
-        \\
-    , "luce.sema.input");
-}
-
-test "luce.sema.output: output ports are write-only" {
-    try expectEvalError(
-        \\func evaluate(input: Input, output: Output):
-        \\    let a = output.x
-        \\
-    , "luce.sema.output");
-}
 
 // ---------------------------------------------------------------------------
 // Failure: luce.sema.fallible
@@ -1793,9 +1723,9 @@ test "luce.sema.main: a script entry may say ! and nothing else" {
         \\    return 1
         \\
     , "luce.sema.main");
-    try expectEvalError(
-        \\func evaluate(input: Input, output: Output) -> !:
-        \\    output.x = 1.0
+    try expectError(
+        \\func main() -> Int:
+        \\    return 1
         \\
-    , "luce.sema.evaluate");
+    , "luce.sema.main");
 }

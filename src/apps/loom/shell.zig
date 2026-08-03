@@ -198,7 +198,6 @@ test "the embedded editor source compiles as a hosted script" {
     var result = try @import("luce").compile.compile(
         testing.allocator,
         embedded_editor,
-        .{},
         runner.compile_options,
     );
     defer result.deinit();

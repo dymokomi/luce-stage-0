@@ -101,9 +101,9 @@ build/loom edit notes.txt
 
 ## The host gate
 
-Every one of those builtins is gated. A program compiled with the gate
-off — the pure `evaluate()` API — cannot name them at all, and saying
-one is a `luce.sema.host` diagnostic rather than a runtime surprise.
+Every one of those builtins is gated. A program compiled with the
+gate off cannot name them at all, and saying one is a
+`luce.sema.host` diagnostic rather than a runtime surprise.
 That is what keeps "the language is pure" a statement about the
 language rather than about good behaviour.
 

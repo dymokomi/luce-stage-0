@@ -810,8 +810,6 @@ const Reference = struct {
         const result = try backend.evaluateHosted(
             .{ .arena = arena.allocator(), .objects = self.gpa },
             compiled,
-            &.{},
-            &.{},
             .{ .call_depth = self.provided.call_depth },
             self.host(),
         );
@@ -851,7 +849,6 @@ const Reference = struct {
                     raised.origin.column,
                 ));
             },
-            .unavailable => return error.UnexpectedlyUnavailable,
         }
     }
 };
@@ -863,8 +860,7 @@ const Reference = struct {
 /// Compile one script; the caller owns the program.  A compile failure
 /// is a broken test, not an outcome under test, so it fails loudly.
 fn program(gpa: Allocator, source: []const u8) !mir.Program {
-    var result = try compile.compile(gpa, source, .{}, .{
-        .entry_mode = .script,
+    var result = try compile.compile(gpa, source, .{
         .allow_host = true,
         .source_name = "test.luc",
     });
@@ -893,52 +889,6 @@ fn render(gpa: Allocator, source: []const u8) !?[]const u8 {
         .text => |rendered| rendered,
         .unsupported => null,
     };
-}
-
-/// Lower a script and hand back the tag it could not lower.
-fn scriptGap(gpa: Allocator, source: []const u8) ![]const u8 {
-    var compiled = try program(gpa, source);
-    defer compiled.deinit();
-
-    const triple = try emit.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    switch (try lower.lower(gpa, &compiled, .{ .triple = triple })) {
-        .bitcode => |bytes| {
-            gpa.free(bytes);
-            return error.ShouldNotHaveLowered;
-        },
-        .unsupported => |what| return what,
-    }
-}
-
-/// Lower an evaluator against `schema` and hand back the tag it could
-/// not lower.  Evaluator ports are what the backend still has no
-/// lowering for, and they are only reachable in evaluator mode.
-fn evaluatorGap(gpa: Allocator, source: []const u8, schema: types.PortSchema) ![]const u8 {
-    var result = try compile.compile(gpa, source, schema, .{
-        .entry_mode = .evaluator,
-        .source_name = "test.luc",
-    });
-    var compiled = switch (result) {
-        .success => |produced| produced,
-        .failure => {
-            result.deinit();
-            return error.CompileFailed;
-        },
-    };
-    defer compiled.deinit();
-
-    const triple = try emit.hostTriple(gpa);
-    defer gpa.free(triple);
-
-    switch (try lower.lower(gpa, &compiled, .{ .triple = triple })) {
-        .bitcode => |bytes| {
-            gpa.free(bytes);
-            return error.ShouldNotHaveLowered;
-        },
-        .unsupported => |what| return what,
-    }
 }
 
 /// How the artifact under test was built (docs/MODES.md).  Release
@@ -1074,23 +1024,6 @@ test "an optional lowers to its payload beside a presence bit" {
     // the fallback is a branch on the bit.
     try std.testing.expect(std.mem.indexOf(u8, rendered, "{ i64, i1 }") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "extractvalue") != null);
-}
-
-test "a construct with no lowering yet names itself" {
-    const gpa = std.testing.allocator;
-    // Everything a script can say now lowers; evaluator ports are what
-    // is left, and they say so rather than miscompiling.
-    try std.testing.expectEqualStrings("input_load (evaluator ports)", try evaluatorGap(
-        gpa,
-        \\func evaluate(input: Input, output: Output):
-        \\    output.doubled = input.value * 2
-        \\
-    ,
-        .{
-            .inputs = &.{.{ .name = "value", .declared = .int }},
-            .outputs = &.{.{ .name = "doubled", .declared = .int }},
-        },
-    ));
 }
 
 test "floats, structs, and the host services all lower" {

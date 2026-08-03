@@ -182,13 +182,13 @@ also keeps them a live test that it does.
 `loom run` prefers native and falls back to the interpreter, silently,
 because the two agree by construction and which one ran is a
 performance fact rather than a behavioural one.  The fallback exists
-because the compiled path needs four things the interpreter does not:
-the `luce` compiler, a lowering for everything the program says, a C
-toolchain, and somewhere to put the result.
+because the compiled path needs three things the interpreter does not:
+the `luce` compiler, a C toolchain, and somewhere to put the result.
+A lowering is no longer one of them — the lowering is total.
 
 - `LOOM_ENGINE=native` turns the fallback into an error naming what
-  was missing — "it uses Bytes, which has no lowering yet", "the
-  `luce` compiler is not beside /usr/local/bin and not on PATH".
+  was missing — "the `luce` compiler is not beside /usr/local/bin and
+  not on PATH", "no C toolchain".
 - `LOOM_ENGINE=interpreter` takes the reference engine on purpose,
   which is what an `agree` comparison and any report of a
   disagreement need to be able to ask for.
@@ -758,8 +758,8 @@ capability a host may withhold.
   different sentences.
 - **Every effect service is optional and fails closed.**  A null slot
   traps `host_unavailable` rather than touching anything — the same
-  rule the interpreter follows, and what keeps the pure `evaluate()`
-  API pure.
+  rule the interpreter follows, and what keeps a program given no
+  host from touching anything.
 - **Every fallible service answers an `Answer`:** `yes` (done, results
   in the out-parameters), `no` (the service said no — the file could
   not be read, the index is out of range; what that means is the
@@ -827,20 +827,21 @@ the conventions already there rather than inventing new ones:
   interpreter parks, so a `T?` from the host means one thing on both
   engines.
 
-## What is not lowered yet
+## The lowering is total
 
-Each of these fails by naming itself, so the compiler says what is
-missing rather than miscompiling:
+There is no list here any more.  Everything a program can say lowers:
+Int, Float, String, structs, all four container kinds, `T?`, `T!`,
+ownership, the math builtins, and every host service.  The two things
+that did not — `Bytes` and the evaluator ports — were cut rather than
+grown (docs/ENGINE.md steps 1 and 2), because nothing constructed a
+`Bytes` and nothing reached an evaluator.
 
-- **Bytes** — every operation on it, and the type itself.
-- **Evaluator ports** — `input_load`, `output_store`, and an entry
-  function with parameters.
-
-The last two are v1 machinery on its way out.  Everything else a
-script can say lowers: Float, structs, all four container kinds,
-ownership, the math builtins, and every host service.  `grep 'self.fail("' src/luce/08_llvm/lower.zig` is the
-authority — the rest of what that grep finds is refusals for IR that
-could only arrive damaged.
+`grep 'self.fail("' src/luce/08_llvm/lower.zig` is still the
+authority, and what it finds now is entirely refusals of IR that could
+only arrive damaged: a block without a terminator, arithmetic on a
+type that has none, an entry function with parameters.  A `.lc` is
+trusted like an executable, so those are how a forged one reports
+itself instead of being `unreachable`.
 
 Trap reporting is **not** on that list any more: a compiled trap
 reports its code, its message, and its call stack with

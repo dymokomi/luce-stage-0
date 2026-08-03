@@ -231,7 +231,7 @@ fn writesPlainElement(
     const shape = arrayShape(program, function.result_types[target]) orelse return false;
     return switch (shape.element) {
         .boolean, .int, .float, .string => true,
-        .none, .bytes, .strukt, .heap, .optional => false,
+        .none, .strukt, .heap, .optional => false,
     };
 }
 
@@ -474,8 +474,7 @@ const Planned = struct {
 };
 
 fn planned(gpa: Allocator, source: []const u8) !Planned {
-    var result = try compile.compile(gpa, source, .{}, .{
-        .entry_mode = .script,
+    var result = try compile.compile(gpa, source, .{
         .allow_host = true,
         .source_name = "test.luc",
     });

@@ -55,13 +55,17 @@ true     try      var      while
 The language reserves these; nothing user-declared may take them.
 
 ```
-input   output   Input   output   range   Int     Float   Bool
-String  Bytes    List    Map      Array   Builder None    abs
-min     max      clamp   sqrt     floor   ceil    len     slice
-byte_at assert   trap    str      parse_int        parse_float
-chr     ord      append  pop      insert  remove  has     dim
-free    print    file_read        file_write       file_exists
-arg     arg_count         key_read         key_text         error
+range       Int         Float       Bool        String
+List        Map         Array       Builder     None
+abs         min         max         clamp       sqrt
+floor       ceil        len         slice       byte_at
+assert      trap        str         parse_int   parse_float
+chr         ord         append      pop         insert
+remove      has         dim         free        print
+file_read   file_write  file_exists arg         arg_count
+key_read    key_text    error       read_line   print_error
+clock_ms    sleep_ms    env         file_append file_delete
+file_rename dir_list
 ```
 
 ## Number literals

@@ -2,9 +2,9 @@
 //!
 //! `luce build` encodes a compiled mir.Program into a compact binary
 //! module; `loom` decodes it back and runs it.  The format is a direct
-//! serialization of the IR: constants, struct layouts, functions with
-//! their instruction pools and blocks, the Port schema, and the entry
-//! function.  Decoding re-runs the IR verifier, so a damaged or
+//! serialization of the IR: constants, struct layouts, heap-type
+//! shapes, functions with their instruction pools and blocks, and the
+//! entry function.  Decoding re-runs the IR verifier, so a damaged or
 //! hand-forged module is rejected instead of executed; instruction
 //! *types* beyond the verifier's checks are trusted, so treat .lc
 //! files like executables — run only what you built or trust.
@@ -20,7 +20,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 16;
+pub const format_version: u32 = 17;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -56,11 +56,6 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
 
     try writer.int(u32, @intCast(program.heap_types.len));
     for (program.heap_types) |descriptor| try writer.heapType(descriptor);
-
-    try writer.ports(program.inputs);
-    try writer.ports(program.outputs);
-    try writer.int(u32, @intCast(program.reads.len));
-    for (program.reads) |read| try writer.int(u32, read);
 
     try writer.int(u32, @intCast(program.functions.len));
     for (program.functions) |*function| try writer.function(function);
@@ -113,14 +108,6 @@ const Writer = struct {
         }
     }
 
-    fn ports(self: *Writer, declared: []const types.Port) error{OutOfMemory}!void {
-        try self.int(u32, @intCast(declared.len));
-        for (declared) |port| {
-            try self.blob(port.name);
-            try self.int(u8, @intFromEnum(port.declared));
-        }
-    }
-
     fn registers(self: *Writer, list: []const mir.Register) error{OutOfMemory}!void {
         try self.int(u32, @intCast(list.len));
         for (list) |register| try self.int(u32, register);
@@ -164,19 +151,11 @@ const Writer = struct {
             .const_boolean => |value| try self.int(u8, @intFromBool(value)),
             .const_int => |value| try self.int(i64, value),
             .const_float => |value| try self.int(u64, @bitCast(value)),
-            .const_data => |data| {
-                try self.int(u32, data.constant);
-                try self.valueType(data.data_type);
-            },
+            .const_string => |constant| try self.int(u32, constant),
             .local_get => |local| try self.int(u32, local),
             .local_set => |set| {
                 try self.int(u32, set.local);
                 try self.int(u32, set.value);
-            },
-            .input_load => |port| try self.int(u32, port),
-            .output_store => |store| {
-                try self.int(u32, store.port);
-                try self.int(u32, store.value);
             },
             .binary => |binary| {
                 try self.int(u8, @intFromEnum(binary.op));
@@ -285,14 +264,6 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     for (heap_types) |*descriptor| descriptor.* = try reader.heapType();
     program.heap_types = heap_types;
 
-    program.inputs = try reader.ports(arena);
-    program.outputs = try reader.ports(arena);
-
-    const read_count = try reader.count();
-    const reads = try arena.alloc(u32, read_count);
-    for (reads) |*slot| slot.* = try reader.int(u32);
-    program.reads = reads;
-
     const function_count = try reader.count();
     const functions = try arena.alloc(mir.Function, function_count);
     for (functions) |*function| try reader.function(arena, function);
@@ -356,7 +327,6 @@ const Reader = struct {
             .int => .int,
             .float => .float,
             .string => .string,
-            .bytes => .bytes,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
             // `T??` has no representation, so a payload that decodes
@@ -380,16 +350,6 @@ const Reader = struct {
             } },
             .builder => .builder,
         };
-    }
-
-    fn ports(self: *Reader, arena: Allocator) DecodeError![]types.Port {
-        const port_count = try self.count();
-        const declared = try arena.alloc(types.Port, port_count);
-        for (declared) |*port| {
-            port.name = try arena.dupe(u8, try self.blob());
-            port.declared = try self.enumTag(types.PortType);
-        }
-        return declared;
     }
 
     fn registers(self: *Reader, arena: Allocator) DecodeError![]mir.Register {
@@ -448,18 +408,10 @@ const Reader = struct {
             .const_boolean => .{ .const_boolean = (try self.int(u8)) != 0 },
             .const_int => .{ .const_int = try self.int(i64) },
             .const_float => .{ .const_float = @bitCast(try self.int(u64)) },
-            .const_data => .{ .const_data = .{
-                .constant = try self.int(u32),
-                .data_type = try self.valueType(),
-            } },
+            .const_string => .{ .const_string = try self.int(u32) },
             .local_get => .{ .local_get = try self.int(u32) },
             .local_set => .{ .local_set = .{
                 .local = try self.int(u32),
-                .value = try self.int(u32),
-            } },
-            .input_load => .{ .input_load = try self.int(u32) },
-            .output_store => .{ .output_store = .{
-                .port = try self.int(u32),
                 .value = try self.int(u32),
             } },
             .binary => .{ .binary = .{
@@ -536,8 +488,7 @@ const compile_mod = @import("../compile.zig");
 const backend = @import("../backend.zig");
 
 fn compileScript(source: []const u8) !mir.Program {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, .{
-        .entry_mode = .script,
+    var result = try compile_mod.compile(testing.allocator, source, .{
         .allow_host = true,
     });
     switch (result) {
@@ -742,7 +693,7 @@ test "a decoded module runs behind the backend boundary" {
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &loaded, &.{}, &.{}, .{});
+    const result = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &loaded, .{});
     try testing.expect(result == .success);
 }
 
@@ -803,16 +754,19 @@ test "a damaged register reference fails verification, not execution" {
 
 // A compact program touching every interesting wire shape: structs,
 // heap types, intrinsics, calls, branches, ownership instructions.
+//
+// **Loop-free on purpose.**  The mutation test below runs what it
+// decodes, and a run has to end for the suite to end.  Nothing bounds
+// how long a Luce program runs — `while true:` is a legal program —
+// so termination is a property of the corpus, not of the engine, and
+// the corpus keeps it by being acyclic (see `forwardOnly`).
 const mutation_source =
     \\struct Point:
     \\    x: Float
     \\    tag: String
     \\
     \\func total(values: List(Int)) -> Int:
-    \\    var sum = 0
-    \\    for value in values:
-    \\        sum = sum + value
-    \\    return sum
+    \\    return values[0] + values[1] + values[2]
     \\
     \\func main():
     \\    var xs = [3, 1, 2]
@@ -822,9 +776,33 @@ const mutation_source =
     \\    let point = Point(x = sqrt(4.0), tag = "p"[0:1])
     \\    if point.x > 1.0 and ages.has("ada"):
     \\        xs.append(Int(point.x))
-    \\    assert(total(xs) == 8)
+    \\    assert(len(xs) == 4)
     \\
 ;
+
+/// True when no terminator in `program` jumps to a block at or before
+/// its own — which, with a call-depth bound in front of recursion, is
+/// enough to make every run end.
+///
+/// The unmutated module satisfies this by construction and the test
+/// asserts that it does; a flipped byte that turns a forward jump into
+/// a back edge is skipped, because how long a damaged program runs is
+/// not what this test is about and no engine promises it stops.
+fn forwardOnly(program: *const mir.Program) bool {
+    for (program.functions) |function| {
+        for (function.blocks, 0..) |block, index| {
+            const last = block.items[block.items.len - 1];
+            switch (function.instructions[last]) {
+                .jump => |target| if (target <= index) return false,
+                .branch => |branch| {
+                    if (branch.then_block <= index or branch.else_block <= index) return false;
+                },
+                else => {},
+            }
+        }
+    }
+    return true;
+}
 
 test "single-byte damage is rejected or runs to a clean outcome — never a crash" {
     var program = try compileScript(mutation_source);
@@ -832,10 +810,14 @@ test "single-byte damage is rejected or runs to a clean outcome — never a cras
     const encoded = try encode(testing.allocator, &program);
     defer testing.allocator.free(encoded);
 
+    try testing.expect(forwardOnly(&program));
+
     // Every byte, six adversarial values: decode must reject or the
-    // program must terminate as success/trap within budget.  This is
-    // the corpus-mode stand-in for fuzzing the trust boundary; any
-    // panic here is a verifier hole (a real one was found this way).
+    // program must run to a clean success/trap.  This is the
+    // corpus-mode stand-in for fuzzing the trust boundary; any panic
+    // here is a verifier hole (a real one was found this way).
+    var ran: usize = 0;
+    var looping: usize = 0;
     for (0..encoded.len) |index| {
         for ([_]u8{ 0x00, 0x01, 0x02, 0x7f, 0x80, 0xff }) |value| {
             if (encoded[index] == value) continue;
@@ -844,6 +826,11 @@ test "single-byte damage is rejected or runs to a clean outcome — never a cras
             mutant[index] = value;
             var decoded = decode(testing.allocator, mutant) catch continue;
             defer decoded.deinit();
+            if (!forwardOnly(&decoded)) {
+                looping += 1;
+                continue;
+            }
+            ran += 1;
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
             // Objects draw on the same arena as values here, and
@@ -855,14 +842,16 @@ test "single-byte damage is rejected or runs to a clean outcome — never a cras
             // other suite runs the runtime under
             // `std.testing.allocator`, which is where reclamation is
             // proved.
-            const outputs = try arena.allocator().alloc(?backend.RuntimeValue, decoded.outputs.len);
-            @memset(outputs, null);
-            _ = try backend.evaluate(.{ .arena = arena.allocator(), .objects = arena.allocator() }, &decoded, &.{}, outputs, .{
-                .steps = 50_000,
+            _ = try backend.evaluate(.{ .arena = arena.allocator(), .objects = arena.allocator() }, &decoded, .{
                 .call_depth = 64,
             });
         }
     }
+
+    // The skip is a narrow one — a handful of block-index bytes — and
+    // saying so here is what keeps it from quietly swallowing the
+    // corpus if the lowering or the format ever changes shape.
+    try testing.expect(looping * 20 < ran);
 }
 
 test "decode allocates in proportion to its input" {
@@ -902,6 +891,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap or error codes: bump format_version and update BOTH
     // numbers.
-    try testing.expectEqual(@as(u32, 16), format_version);
-    try testing.expectEqual(@as(u64, 12607434173611959139), hasher.final());
+    try testing.expectEqual(@as(u32, 17), format_version);
+    try testing.expectEqual(@as(u64, 17919741998905907687), hasher.final());
 }

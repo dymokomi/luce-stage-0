@@ -327,7 +327,6 @@ const Module = struct {
             // the layout `libluce_rt` already reads, so a struct
             // crosses into the runtime without being rebuilt.
             .strukt => .ptr,
-            .bytes => self.fail("Bytes"),
             // `{T, i1}` for every payload — the payload beside a bit
             // that says whether it is there.  One shape, no sentinel.
             //
@@ -480,7 +479,6 @@ const Module = struct {
             .int,
             .float,
             .string,
-            .bytes,
             .strukt,
             .heap,
             .optional,
@@ -691,7 +689,6 @@ const Module = struct {
                 try self.structZero(nested),
                 .i64,
             ) },
-            .bytes => return self.fail("Bytes"),
             // The zero of a `T?` is absence, and absence is the `none`
             // tag with no payload — the very `Value` the interpreter
             // parks in the same field (S43).
@@ -705,7 +702,7 @@ const Module = struct {
         // null address, none of them — which reads as `""` and owns
         // nothing, the same value `Value.ofString("")` is.
         const form: u8 = switch (of) {
-            .string, .bytes => runtime.text_outside,
+            .string => runtime.text_outside,
             else => 0,
         };
         const head = try self.builder.arrayType(8 - runtime.inline_at, .i8);
@@ -912,11 +909,9 @@ const Module = struct {
                 .boolean => 2,
                 .int, .float, .strukt, .heap => 16,
                 .string => 24,
-                .bytes => 0, // `valueType` has already refused Bytes
             },
-            // Neither reaches here: a function returning nothing has
-            // no slot, and `valueType` has already refused Bytes.
-            .none, .bytes => 0,
+            // Never reached: a function returning nothing has no slot.
+            .none => 0,
         };
     }
 
@@ -1497,11 +1492,9 @@ const Body = struct {
                 .const_boolean,
                 .const_int,
                 .const_float,
-                .const_data,
+                .const_string,
                 .local_get,
                 .local_set,
-                .input_load,
-                .output_store,
                 .binary,
                 .unary,
                 .convert,
@@ -1643,7 +1636,6 @@ const Body = struct {
             .heap => try self.module.builder.intValue(.i64, runtime.null_index),
             .strukt => |layout| (try self.module.structZero(layout)).toValue(),
             .none => self.fail("a local of type None"),
-            .bytes => self.fail("Bytes"),
             // The zero of a `T?` is absence: the payload's own zero,
             // beside a bit saying it is not there.  Giving the unused
             // half a defined value rather than `poison` is what makes
@@ -1804,7 +1796,6 @@ const Body = struct {
             .heap => .object,
             .float => .float,
             .strukt => .strukt,
-            .bytes => self.fail("Bytes"),
             .optional => self.fail("the tag of a T? read from its type"),
         };
     }
@@ -1824,7 +1815,6 @@ const Body = struct {
                 .i64,
                 "box.bits",
             ),
-            .bytes => self.fail("Bytes"),
             .optional => self.fail("the bits of a T? read from its type"),
         };
     }
@@ -1841,7 +1831,6 @@ const Body = struct {
                 self.module.program.structs[layout].fields.len,
             ),
             .string => try self.wip.extractValue(held, &.{1}, "box.length"),
-            .bytes => self.fail("Bytes"),
             .optional => self.fail("the length of a T? read from its type"),
         };
     }
@@ -1870,7 +1859,7 @@ const Body = struct {
         // that decides to inline, at the store sites where it copies
         // anyway (docs/STRINGS.md).  So the form byte is a constant
         // here and rides to the entry block with the tag.
-        if (of == .string or of == .bytes) {
+        if (of == .string) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
         if (boxLengthIsFixed(of)) {
@@ -1923,7 +1912,7 @@ const Body = struct {
         // Absence is the `none` tag, and nothing reads the form byte of
         // a value that is not text, so a present String's constant
         // serves for both.
-        if (of == .string or of == .bytes) {
+        if (of == .string) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
         try self.storeBoxField(slot, box_bits, try self.wip.select(
@@ -1982,7 +1971,6 @@ const Body = struct {
             // address of the run travels back.
             .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
-            .bytes => self.fail("Bytes"),
         };
     }
 
@@ -2230,7 +2218,7 @@ const Body = struct {
     fn ownsNothing(of: types.Type) bool {
         return switch (of) {
             .boolean, .int, .float => true,
-            .none, .string, .bytes, .strukt, .heap, .optional => false,
+            .none, .string, .strukt, .heap, .optional => false,
         };
     }
 
@@ -2390,7 +2378,7 @@ const Body = struct {
             .boolean => .i8,
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
-            .none, .string, .bytes, .strukt, .heap, .optional => self.module.value_type,
+            .none, .string, .strukt, .heap, .optional => self.module.value_type,
         };
     }
 
@@ -2401,7 +2389,6 @@ const Body = struct {
             .int,
             .float,
             .string,
-            .bytes,
             .strukt,
             .heap,
             .optional,
@@ -2669,7 +2656,7 @@ const Body = struct {
             ),
             // A boxed cell: the tag and the length are already the
             // element type's, so only the payload words are read.
-            .none, .string, .bytes, .strukt, .heap, .optional => try self.unboxed(
+            .none, .string, .strukt, .heap, .optional => try self.unboxed(
                 element,
                 address,
                 "element",
@@ -2699,7 +2686,7 @@ const Body = struct {
                 address,
                 cellAlignment(element),
             ),
-            .none, .string, .bytes, .strukt, .heap, .optional => try self.fillBoxValue(
+            .none, .string, .strukt, .heap, .optional => try self.fillBoxValue(
                 address,
                 element,
                 held,
@@ -3311,20 +3298,9 @@ const Body = struct {
             .const_float => |value| {
                 self.values[register] = try self.module.builder.doubleValue(value);
             },
-            .const_data => |data| switch (data.data_type) {
-                .string => {
-                    const text = self.module.program.constants[data.constant];
-                    self.values[register] = (try self.module.textConstant(text)).toValue();
-                },
-                .none,
-                .boolean,
-                .int,
-                .float,
-                .bytes,
-                .strukt,
-                .heap,
-                .optional,
-                => return self.fail("const_data of a type other than String"),
+            .const_string => |constant| {
+                const text = self.module.program.constants[constant];
+                self.values[register] = (try self.module.textConstant(text)).toValue();
             },
             .local_get => |local| {
                 const held = self.function.locals[local];
@@ -3347,8 +3323,6 @@ const Body = struct {
                 );
             },
             .local_set => |set| try self.emitLocalSet(set.local, set.value),
-            .input_load => return self.fail("input_load (evaluator ports)"),
-            .output_store => return self.fail("output_store (evaluator ports)"),
             .binary => |operation| try self.emitBinary(register, operation),
             .unary => |operation| try self.emitUnary(register, operation),
             .convert => |operation| try self.emitConvert(register, operation.kind, operation.operand),
@@ -3565,7 +3539,6 @@ const Body = struct {
             }),
             .none,
             .boolean,
-            .bytes,
             .strukt,
             .heap,
             .optional,
@@ -3754,7 +3727,6 @@ const Body = struct {
                 => return self.fail("arithmetic on the comparison path"),
             },
             .float, .string, .strukt => unreachable, // answered above
-            .bytes => return self.fail("Bytes comparison"),
             .none => return self.fail("a comparison of None"),
             // `x == none` is `is_none` by the time it gets here, and
             // the analyzer refuses every other comparison of a `T?`
@@ -3788,7 +3760,6 @@ const Body = struct {
                 .none,
                 .boolean,
                 .string,
-                .bytes,
                 .strukt,
                 .heap,
                 .optional,
@@ -3941,7 +3912,7 @@ const Body = struct {
     /// which form the bytes were in.
     fn carriesText(of: types.Type) bool {
         return switch (of) {
-            .string, .bytes => true,
+            .string => true,
             .optional => |payload| carriesText(payload.asType()),
             .none, .boolean, .int, .float, .strukt, .heap => false,
         };
@@ -4526,7 +4497,6 @@ const Body = struct {
             .none,
             .boolean,
             .string,
-            .bytes,
             .strukt,
             .heap,
             .optional,

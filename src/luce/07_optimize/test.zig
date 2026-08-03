@@ -33,14 +33,14 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Program = mir.Program;
 
-const script: types.CompileOptions = .{ .entry_mode = .script, .allow_host = true };
+const script: types.CompileOptions = .{ .allow_host = true };
 
 /// Compile as a script with the stage off, so a test can drive one
 /// pass at a time over exactly the lowering the analyzer produced.
 fn compileRaw(source: []const u8) !Program {
     var options = script;
     options.prune = false;
-    var result = try compile_mod.compile(testing.allocator, source, .{}, options);
+    var result = try compile_mod.compile(testing.allocator, source, options);
     switch (result) {
         .failure => |*diagnostics| {
             const rendered = try diagnostics.render(testing.allocator);
@@ -377,7 +377,7 @@ const Recorder = struct {
 fn observe(source: []const u8, optimized: bool) !Behavior {
     var options = script;
     options.prune = optimized;
-    var result = try compile_mod.compile(testing.allocator, source, .{}, options);
+    var result = try compile_mod.compile(testing.allocator, source, options);
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
@@ -394,9 +394,7 @@ fn observe(source: []const u8, optimized: bool) !Behavior {
             const outcome = try backend.evaluateHosted(
                 .{ .arena = arena.allocator(), .objects = testing.allocator },
                 program,
-                &.{},
-                &.{},
-                .{ .steps = 20_000_000, .call_depth = 256 },
+                .{ .call_depth = 256 },
                 .{ .context = &recorder, .printFn = Recorder.printLine },
             );
             return switch (outcome) {
@@ -414,7 +412,7 @@ fn observe(source: []const u8, optimized: bool) !Behavior {
                 },
                 // The passes are proved on pure programs, so neither
                 // outcome can happen without the spec having drifted.
-                .errored, .unavailable => error.TestUnexpectedResult,
+                .errored => error.TestUnexpectedResult,
             };
         },
     }

@@ -13,10 +13,10 @@ const backend = @import("../backend.zig");
 
 const testing = std.testing;
 
-const script: types.CompileOptions = .{ .entry_mode = .script };
+const script: types.CompileOptions = .{};
 
 fn expectOk(source: []const u8) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
@@ -28,8 +28,7 @@ fn expectOk(source: []const u8) !void {
         .success => |*program| {
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, &.{}, &.{}, .{
-                .steps = 50_000_000,
+            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
                 .call_depth = 4096,
             });
             switch (outcome) {
@@ -42,22 +41,20 @@ fn expectOk(source: []const u8) !void {
                     std.debug.print("unexpected error: {s} ({s})\n", .{ raised.message, @tagName(raised.code) });
                     return error.TestUnexpectedResult;
                 },
-                .unavailable => return error.TestUnexpectedResult,
             }
         },
     }
 }
 
 fn expectTrap(source: []const u8, code: @import("../06_mir.zig").TrapCode) !void {
-    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
         .failure => return error.TestUnexpectedResult,
         .success => |*program| {
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
-            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, &.{}, &.{}, .{
-                .steps = 50_000_000,
+            const outcome = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, program, .{
                 .call_depth = 4096,
             });
             if (outcome != .trap or outcome.trap.code != code) return error.TestUnexpectedResult;
@@ -472,7 +469,7 @@ test "std modules obey the host gate: files needs a host" {
         \\func main():
         \\    let found = files.exists("x")
         \\
-    , .{}, script);
+    , script);
     defer result.deinit();
     try testing.expect(result == .failure);
     // The gate fires inside the std module, attributed to it.

@@ -108,8 +108,7 @@ door into them:
 | 16 | `key_text` | `luce_rt_set_key_text` | already copies — into the arena | copies into one owned slot, frees the old |
 | 17 | host text in (`file_read`, `arg`) | `luce_rt_intern_text` | copies into the arena | copies into an owned temporary |
 | 18 | trap message | `Runtime.failMessage` | arena | at most one per run; a run ends on a trap |
-| 19 | evaluator Port output | `output_store` | arena | interpreter-only; `08_llvm` refuses it, and the caller already copies out what it publishes |
-| 20 | `Array(String)` zero fill | `Runtime.newArray` | the static `""` | static, no owner |
+| 19 | `Array(String)` zero fill | `Runtime.newArray` | the static `""` | static, no owner |
 
 Rows 11–14 are the ones easiest to miss: `deepCopy`'s `else => return
 held` arm passes a String through by pointer, so `copy` of a
@@ -376,7 +375,7 @@ identical:
 Three places need a clause added, and nothing else in S1–S43 moves:
 
 1. **The vocabulary line.** *"Everything else (`Int`, `Float`, `Bool`,
-   `String`, `Bytes`, structs) is a value: copied freely, never freed,
+   `String`, structs) is a value: copied freely, never freed,
    never verbed."* — "never freed" is a statement about the *program*,
    and stays true; the runtime does free value storage, at the point
    its owner dies. Add: *"never freed by the program — the runtime
@@ -482,7 +481,7 @@ free the old, then store.
 meaning of `object_unbind` is not, and a stale module would simply not
 release its strings.
 
-`Bytes` gets the same treatment mechanically. It is v1 machinery on the
+`Bytes` would have got the same treatment mechanically. It was v1 machinery on the
 way out, `08_llvm` does not lower it, and it has no producer in the
 language today.
 

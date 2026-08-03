@@ -136,7 +136,7 @@ pub const Loader = struct {
 // Std modules are Luce source embedded in the compiler — the way Zig
 // ships lib/std with its compiler, minus the install path.  Being
 // ordinary modules, they obey every language rule, including the host
-// gate: `import std.files` inside a host-less evaluator is a compile
+// gate: `import std.files` inside a host-less program is a compile
 // error, reported against std/files.luc's own line and column.
 
 /// The namespace the standard library lives under, spelled as it is

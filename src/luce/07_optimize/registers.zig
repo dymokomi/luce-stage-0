@@ -33,15 +33,13 @@ pub fn mapOperands(
         .const_boolean,
         .const_int,
         .const_float,
-        .const_data,
+        .const_string,
         .local_get,
-        .input_load,
         .jump,
         .trap,
         .unwind,
         => {},
         .local_set => |*set| set.value = map[set.value],
-        .output_store => |*store| store.value = map[store.value],
         .binary => |*binary| {
             binary.left = map[binary.left];
             binary.right = map[binary.right];
@@ -82,15 +80,13 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .const_boolean,
         .const_int,
         .const_float,
-        .const_data,
+        .const_string,
         .local_get,
-        .input_load,
         .jump,
         .trap,
         .unwind,
         => {},
         .local_set => |set| used[set.value] = true,
-        .output_store => |store| used[store.value] = true,
         .binary => |binary| {
             used[binary.left] = true;
             used[binary.right] = true;
@@ -174,7 +170,6 @@ test "every operand of every instruction shape is rewritten" {
     var dims = [_]Register{4};
     var shapes = [_]Instruction{
         .{ .local_set = .{ .local = 0, .value = 0 } },
-        .{ .output_store = .{ .port = 0, .value = 1 } },
         .{ .binary = .{ .op = .add, .operand_type = .int, .left = 2, .right = 3 } },
         .{ .unary = .{ .op = .negate, .operand = 4 } },
         .{ .convert = .{ .kind = .int_to_float, .operand = 5 } },
@@ -194,22 +189,21 @@ test "every operand of every instruction shape is rewritten" {
     for (&shapes) |*shape| try mapOperands(arena, shape, &map);
 
     try testing.expectEqual(@as(Register, 1), shapes[0].local_set.value);
-    try testing.expectEqual(@as(Register, 2), shapes[1].output_store.value);
-    try testing.expectEqual(@as(Register, 3), shapes[2].binary.left);
-    try testing.expectEqual(@as(Register, 4), shapes[2].binary.right);
-    try testing.expectEqual(@as(Register, 5), shapes[3].unary.operand);
-    try testing.expectEqual(@as(Register, 6), shapes[4].convert.operand);
-    try testing.expectEqualSlices(Register, &.{ 1, 2 }, shapes[5].struct_make.fields);
-    try testing.expectEqual(@as(Register, 7), shapes[6].struct_get.target);
-    try testing.expectEqual(@as(Register, 1), shapes[7].struct_set.target);
-    try testing.expectEqual(@as(Register, 2), shapes[7].struct_set.value);
-    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[8].call.arguments);
-    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[9].intrinsic.arguments);
-    try testing.expectEqualSlices(Register, &.{5}, shapes[10].heap_new.dims);
-    try testing.expectEqual(@as(Register, 3), shapes[11].object_bind.value);
-    try testing.expectEqual(@as(Register, 4), shapes[12].object_unbind.value);
-    try testing.expectEqual(@as(Register, 5), shapes[13].branch.condition);
-    try testing.expectEqual(@as(Register, 6), shapes[14].ret.?);
+    try testing.expectEqual(@as(Register, 3), shapes[1].binary.left);
+    try testing.expectEqual(@as(Register, 4), shapes[1].binary.right);
+    try testing.expectEqual(@as(Register, 5), shapes[2].unary.operand);
+    try testing.expectEqual(@as(Register, 6), shapes[3].convert.operand);
+    try testing.expectEqualSlices(Register, &.{ 1, 2 }, shapes[4].struct_make.fields);
+    try testing.expectEqual(@as(Register, 7), shapes[5].struct_get.target);
+    try testing.expectEqual(@as(Register, 1), shapes[6].struct_set.target);
+    try testing.expectEqual(@as(Register, 2), shapes[6].struct_set.value);
+    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[7].call.arguments);
+    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[8].intrinsic.arguments);
+    try testing.expectEqualSlices(Register, &.{5}, shapes[9].heap_new.dims);
+    try testing.expectEqual(@as(Register, 3), shapes[10].object_bind.value);
+    try testing.expectEqual(@as(Register, 4), shapes[11].object_unbind.value);
+    try testing.expectEqual(@as(Register, 5), shapes[12].branch.condition);
+    try testing.expectEqual(@as(Register, 6), shapes[13].ret.?);
     // Rewriting hands each instruction its own slice, so the two that
     // shared `arguments` above did not map it twice.
     try testing.expectEqualSlices(Register, &.{ 2, 3 }, &arguments);

@@ -54,13 +54,12 @@ pub const Tag = enum(u8) {
     int = 2,
     float = 3,
     string = 4,
-    bytes = 5,
     /// A struct value: `bits` addresses `length` fields.  Struct
     /// storage is never mutated in place — `struct_set` allocates a
     /// fresh array — so sharing one array between copies is safe.
-    strukt = 6,
+    strukt = 5,
     /// A `Handle` into the runtime's object table.
-    object = 7,
+    object = 6,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -118,8 +117,8 @@ pub const Handle = struct {
 pub const Value = extern struct {
     tag: Tag = .none,
     /// How many bytes of text live in this value, or `text_outside`
-    /// when `bits` addresses them.  Read only for `string` and
-    /// `bytes`; every other tag leaves it zero.
+    /// when `bits` addresses them.  Read only for `string`; every
+    /// other tag leaves it zero.
     inline_length: u8 = 0,
     /// The first six bytes of inline text.  The other sixteen are
     /// `bits` and `length` — offsets 2 through 23 are one run, and
@@ -157,10 +156,6 @@ pub const Value = extern struct {
     /// takes, because a view must not copy.
     pub fn ofString(held: []const u8) Value {
         return ofOutside(.string, held);
-    }
-
-    pub fn ofBytes(held: []const u8) Value {
-        return ofOutside(.bytes, held);
     }
 
     /// The same, for a caller that already has the tag in hand.
@@ -232,10 +227,6 @@ pub const Value = extern struct {
         return self.textOf();
     }
 
-    pub fn asBytes(self: *const Value) []const u8 {
-        return self.textOf();
-    }
-
     /// How long this value's text is, without looking at the bytes —
     /// safe on a temporary, unlike `asString`.
     pub fn textLength(self: Value) usize {
@@ -253,7 +244,7 @@ pub const Value = extern struct {
     /// text answers false: the bytes are the value.
     pub fn ownsStorage(self: Value) bool {
         return switch (self.tag) {
-            .string, .bytes => !self.textIsInline() and self.bits != 0 and self.length != 0,
+            .string => !self.textIsInline() and self.bits != 0 and self.length != 0,
             .strukt => self.bits != 0 and self.length != 0,
             else => false,
         };
@@ -316,7 +307,6 @@ pub const Value = extern struct {
             .int => .{ .int = self.asInt() },
             .float => .{ .float = self.asFloat() },
             .string => .{ .string = self.asString() },
-            .bytes => .{ .bytes = self.asBytes() },
             .strukt => .{ .strukt = self.asStruct() },
             .object => .{ .object = self.asObject() },
         };
@@ -331,7 +321,6 @@ pub const View = union(enum) {
     int: i64,
     float: f64,
     string: []const u8,
-    bytes: []const u8,
     strukt: []Value,
     object: Handle,
 };

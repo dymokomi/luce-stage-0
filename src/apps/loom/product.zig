@@ -295,7 +295,7 @@ test "a compiler that refuses the program is asked once; one that fails a place 
         var install = try Install.make(gpa, false);
         defer install.deinit(gpa);
         try install.write("sums.luc", greeting);
-        try install.plantCompiler(gpa, 2, "sums.lc: no lowering for Bytes yet");
+        try install.plantCompiler(gpa, 2, "sums.lc: linking failed: no C toolchain");
 
         const program = try install.at(gpa, "sums.luc");
         defer gpa.free(program);
@@ -309,7 +309,7 @@ test "a compiler that refuses the program is asked once; one that fails a place 
         defer gpa.free(ran.stdout);
         defer gpa.free(ran.stderr);
         try testing.expectEqual(@as(u8, 1), ran.term.exited);
-        try testing.expect(std.mem.indexOf(u8, ran.stderr, "no lowering for Bytes") != null);
+        try testing.expect(std.mem.indexOf(u8, ran.stderr, "no C toolchain") != null);
         try testing.expectEqual(@as(usize, 1), try install.calls(gpa));
     }
 }

@@ -826,7 +826,7 @@ export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callco
 // ---------------------------------------------------------------------------
 
 /// Comparison for the types generated code cannot compare inline —
-/// String, Bytes, structs.  The one export that answers its result
+/// String, structs.  The one export that answers its result
 /// directly rather than through an out-pointer, because comparison is
 /// the one operation here that cannot fail.  `op` is `mir.BinaryOp`.
 export fn luce_rt_compare(

@@ -44,7 +44,7 @@ pub const Error = error{OutOfMemory};
 // ---------------------------------------------------------------------------
 
 /// The program's string and byte constants, interned: one slot per
-/// distinct value, so `const_data` is an index and two identical
+/// distinct value, so `const_string` is an index and two identical
 /// literals cost one copy.
 ///
 /// Interning happens while stage 4 checks — a string literal is a
@@ -360,10 +360,7 @@ pub const Lowering = struct {
             .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
             .int => try self.emit(.{ .const_int = 0 }, .int),
             .float => try self.emit(.{ .const_float = 0.0 }, .float),
-            .string, .bytes => try self.emit(
-                .{ .const_data = .{ .constant = try self.pool.intern(""), .data_type = of } },
-                of,
-            ),
+            .string => try self.emit(.{ .const_string = try self.pool.intern("") }, .string),
             .heap => try self.emit(
                 .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
                 of,
@@ -385,7 +382,7 @@ pub const Lowering = struct {
                     // and a nested struct's own run moves in whole
                     // (docs/STRINGS.md).
                     slot.* = switch (field.field_type) {
-                        .string, .bytes => try self.ownStorage(zero),
+                        .string => try self.ownStorage(zero),
                         else => zero,
                     };
                 }
@@ -818,8 +815,6 @@ pub const Lowered = struct {
     heap_types: []types.HeapType,
     /// The constant pool, in the order the checker interned it.
     constants: []const []const u8,
-    /// Input ports the program reads, ascending.
-    reads: []u32,
     entry_function: u32,
     functions: []Lowering,
 };
@@ -830,7 +825,6 @@ pub fn build(
     arena: Allocator,
     scratch: Allocator,
     sources: *const source_mod.Sources,
-    schema: types.PortSchema,
     lowered: Lowered,
     program: *defs.Program,
 ) Error!void {
@@ -865,10 +859,7 @@ pub fn build(
     program.heap_types = lowered.heap_types;
     program.functions = functions;
     program.constants = lowered.constants;
-    program.reads = lowered.reads;
     program.entry_function = lowered.entry_function;
-    program.inputs = try copyPorts(arena, schema.inputs);
-    program.outputs = try copyPorts(arena, schema.outputs);
 }
 
 /// How a trap trace names a file ("editor.luc").  The root source may
@@ -886,12 +877,4 @@ fn fileName(
     const name = try arena.dupe(u8, if (path.len != 0) path else "main.luc");
     try cache.put(scratch, file, name);
     return name;
-}
-
-fn copyPorts(arena: Allocator, ports: []const types.Port) Error![]types.Port {
-    const copied = try arena.alloc(types.Port, ports.len);
-    for (ports, copied) |port, *slot| {
-        slot.* = .{ .name = try arena.dupe(u8, port.name), .declared = port.declared };
-    }
-    return copied;
 }

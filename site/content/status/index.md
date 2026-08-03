@@ -140,10 +140,10 @@ workaround-dense and the proof that the language moved.
    manipulation. Each is one builtin plus one wrapper.
 7. **No default or named arguments.** `term_style(fg, bg, bold)` is
    called 16 times and 13 of them end in the same noise word `false`.
-8. **`Bytes` is unconstructible.** `var b: Bytes` compiles; nothing
-   produces one and nothing consumes one. It is the only thing keeping
-   the backend from lowering everything a script can say. Cut it or
-   grow it.
+8. ~~**`Bytes` is unconstructible.**~~ Cut. Nothing produced one and
+   nothing consumed one, and it was one of the two things keeping the
+   backend from lowering everything a program can say. The backend is
+   now total. A real `Bytes` would be designed fresh.
 9. **No integer-division spelling.** A decrement is written
    `(tape[pointer] + 255) % 256`; neither `//` nor `rem_euclid`
    exists.
@@ -177,13 +177,12 @@ stale — it still lists builtins from a removed era.
 1. The cheap slice: character classes, a frozen container or a `Set`,
    a clock, `sleep`, `exit`, environment access, stderr, directory
    listing.
-2. Cut `Bytes`.
-3. `m.get(k) -> V?`, and a corpus sweep.
-4. Decide receivers, multiple returns, and integer-division spelling —
+2. `m.get(k) -> V?`, and a corpus sweep.
+3. Decide receivers, multiple returns, and integer-division spelling —
    one memo each.
-5. Sum types, if the experience with `T?` says the hole is still
+4. Sum types, if the experience with `T?` says the hole is still
    there.
-6. The faithful syntax tree, which a formatter and a language server
+5. The faithful syntax tree, which a formatter and a language server
    both need.
 
 ## The honest summary

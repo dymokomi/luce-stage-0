@@ -21,18 +21,17 @@
 //! yet" — anything without a lowering returns `.unsupported` naming
 //! the tag.  A gap is therefore always a message, never wrong code.
 //!
-//! What is not lowered today: `Bytes`, and the evaluator ports
-//! (`input_load`/`output_store`, plus an entry function with
-//! parameters).  That is the whole list, and every item on it is v1
-//! machinery on its way out — so this stage becomes total over the
-//! instruction set the day that goes.  Everything a script can say
-//! lowers: integers, floats, strings, structs, all four container
-//! kinds, ownership, the math builtins, and every host service.
+//! **The lowering is total over the instruction set.**  Everything a
+//! program can say lowers: integers, floats, strings, structs, all
+//! four container kinds, `T?`, `T!`, ownership, the math builtins, and
+//! every host service.  There is no list of gaps here because there
+//! are none.
 //!
-//! The other `fail` messages in `lower.zig` are not gaps.  They name
-//! invariants the front end already guarantees — a block without a
-//! terminator, arithmetic on a type that has none — and exist so a
-//! broken invariant reports itself instead of being `unreachable`.
+//! The `fail` messages that remain in `lower.zig` are not gaps.  They
+//! name invariants the front end already guarantees — a block without
+//! a terminator, arithmetic on a type that has none, an entry function
+//! with parameters — and exist so IR that could only arrive damaged
+//! reports itself instead of being `unreachable`.
 //! `lower.zig` is the authority; docs/CODEGEN.md keeps the prose.
 //!
 //! `src/apps/luce/object.zig` carries a lowered program the rest of the

@@ -8,7 +8,6 @@ const machine_mod = @import("machine.zig");
 
 const Machine = machine_mod.Machine;
 const RuntimeValue = backend.RuntimeValue;
-const InputValue = backend.InputValue;
 const Result = backend.Result;
 const Allocator = std.mem.Allocator;
 const max_trace_frames = 64;
@@ -16,10 +15,9 @@ const max_trace_frames = 64;
 const Bench = struct {
     program: mir.Program,
     arena: std.heap.ArenaAllocator,
-    outputs: []?RuntimeValue,
 
-    fn setup(source: []const u8, schema: types.PortSchema, options: types.CompileOptions) !Bench {
-        var result = try compile_mod.compile(testing.allocator, source, schema, options);
+    fn setup(source: []const u8, options: types.CompileOptions) !Bench {
+        var result = try compile_mod.compile(testing.allocator, source, options);
         switch (result) {
             .success => {},
             .failure => |*diagnostics| {
@@ -30,11 +28,10 @@ const Bench = struct {
                 return error.TestUnexpectedResult;
             },
         }
-        var arena = std.heap.ArenaAllocator.init(testing.allocator);
-        errdefer arena.deinit();
-        const outputs = try arena.allocator().alloc(?RuntimeValue, schema.outputs.len);
-        @memset(outputs, null);
-        return .{ .program = result.success, .arena = arena, .outputs = outputs };
+        return .{
+            .program = result.success,
+            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        };
     }
 
     fn deinit(self: *Bench) void {
@@ -42,29 +39,28 @@ const Bench = struct {
         self.program.deinit();
     }
 
-    fn evaluate(self: *Bench, inputs: []const InputValue) !Result {
-        @memset(self.outputs, null);
+    fn evaluate(self: *Bench) !Result {
         return backend.evaluate(
             .{ .arena = self.arena.allocator(), .objects = testing.allocator },
             &self.program,
-            inputs,
-            self.outputs,
-            .{ .steps = 200_000, .call_depth = 64 },
+            .{ .call_depth = 64 },
         );
     }
 
-    fn evaluateHosted(self: *Bench, inputs: []const InputValue, host: backend.Host) !Result {
-        @memset(self.outputs, null);
+    fn evaluateHosted(self: *Bench, host: backend.Host) !Result {
         return backend.evaluateHosted(
             .{ .arena = self.arena.allocator(), .objects = testing.allocator },
             &self.program,
-            inputs,
-            self.outputs,
-            .{ .steps = 200_000, .call_depth = 64 },
+            .{ .call_depth = 64 },
             host,
         );
     }
 };
+
+/// The four bytes of U+1F642, written where a Luce string literal has
+/// to carry them: the lexer's escape set is `\n \t \\ \"` and nothing
+/// else, so a codepoint above ASCII arrives as itself.
+const smiley = "\xF0\x9F\x99\x82";
 
 test "the plan's vertical slice: smooth pointer transform" {
     var bench = try Bench.setup(
@@ -78,38 +74,17 @@ test "the plan's vertical slice: smooth pointer transform" {
         \\        y = current.y + (target.y - current.y) * amount,
         \\    )
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    let previous = Point(x = input.previous_x, y = input.previous_y)
-        \\    let pointer = Point(x = input.pointer_x, y = input.pointer_y)
-        \\    let eased = smooth(previous, pointer, input.amount)
-        \\    output.x = eased.x
-        \\    output.y = eased.y
+        \\func main():
+        \\    let previous = Point(x = 0.0, y = 0.0)
+        \\    let pointer = Point(x = 10.0, y = -4.0)
+        \\    let eased = smooth(previous, pointer, 0.25)
+        \\    assert(eased.x == 2.5)
+        \\    assert(eased.y == -1.0)
         \\
-    , .{
-        .inputs = &.{
-            .{ .name = "previous_x", .declared = .float },
-            .{ .name = "previous_y", .declared = .float },
-            .{ .name = "pointer_x", .declared = .float },
-            .{ .name = "pointer_y", .declared = .float },
-            .{ .name = "amount", .declared = .float },
-        },
-        .outputs = &.{
-            .{ .name = "x", .declared = .float },
-            .{ .name = "y", .declared = .float },
-        },
-    }, .{});
+    , script_options);
     defer bench.deinit();
 
-    const result = try bench.evaluate(&.{
-        .{ .value = .ofFloat(0.0) },
-        .{ .value = .ofFloat(0.0) },
-        .{ .value = .ofFloat(10.0) },
-        .{ .value = .ofFloat(-4.0) },
-        .{ .value = .ofFloat(0.25) },
-    });
-    try testing.expect(result == .success);
-    try testing.expectEqual(@as(f64, 2.5), bench.outputs[0].?.asFloat());
-    try testing.expectEqual(@as(f64, -1.0), bench.outputs[1].?.asFloat());
+    try testing.expect(try bench.evaluate() == .success);
 }
 
 test "namespaced struct functions execute through qualified calls" {
@@ -121,24 +96,13 @@ test "namespaced struct functions execute through qualified calls" {
         \\    func plus(left: Int, right: Int) -> Int:
         \\        return left + right
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.value = Math.twice(Math.plus(input.left, input.right))
+        \\func main():
+        \\    assert(Math.twice(Math.plus(3, 4)) == 14)
         \\
-    , .{
-        .inputs = &.{
-            .{ .name = "left", .declared = .int },
-            .{ .name = "right", .declared = .int },
-        },
-        .outputs = &.{.{ .name = "value", .declared = .int }},
-    }, .{});
+    , script_options);
     defer bench.deinit();
 
-    const result = try bench.evaluate(&.{
-        .{ .value = .ofInt(3) },
-        .{ .value = .ofInt(4) },
-    });
-    try testing.expect(result == .success);
-    try testing.expectEqual(@as(i64, 14), bench.outputs[0].?.asInt());
+    try testing.expect(try bench.evaluate() == .success);
 }
 
 test "loops, recursion, strings, and builtins compute" {
@@ -148,228 +112,126 @@ test "loops, recursion, strings, and builtins compute" {
         \\        return 1
         \\    return value * factorial(value - 1)
         \\
-        \\func evaluate(input: Input, output: Output):
+        \\func main():
         \\    var total = 0
         \\    for index in range(1, 11):
         \\        total = total + index
-        \\    output.sum = total
-        \\    output.fact = factorial(10)
-        \\    output.label = "sum " + input.name
-        \\    output.small = min(clamp(total, 0, 40), abs(-3))
+        \\    assert(total == 55)
+        \\    assert(factorial(10) == 3628800)
+        \\    assert("sum " + "of ten" == "sum of ten")
+        \\    assert(min(clamp(total, 0, 40), abs(-3)) == 3)
         \\
-    , .{
-        .inputs = &.{.{ .name = "name", .declared = .string }},
-        .outputs = &.{
-            .{ .name = "sum", .declared = .int },
-            .{ .name = "fact", .declared = .int },
-            .{ .name = "label", .declared = .string },
-            .{ .name = "small", .declared = .int },
-        },
-    }, .{});
+    , script_options);
     defer bench.deinit();
 
-    const result = try bench.evaluate(&.{.{ .value = .ofString("of ten") }});
-    try testing.expect(result == .success);
-    try testing.expectEqual(@as(i64, 55), bench.outputs[0].?.asInt());
-    try testing.expectEqual(@as(i64, 3628800), bench.outputs[1].?.asInt());
-    try testing.expectEqualStrings("sum of ten", bench.outputs[2].?.asString());
-    try testing.expectEqual(@as(i64, 3), bench.outputs[3].?.asInt());
+    try testing.expect(try bench.evaluate() == .success);
 }
 
 test "checked string intrinsics slice and inspect UTF-8 bytes" {
-    var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.prefix = input.text[0:2]
-        \\    output.middle = input.text[2:6]
-        \\    output.byte = input.text.byte_at(2)
-        \\
-    , .{
-        .inputs = &.{.{ .name = "text", .declared = .string }},
-        .outputs = &.{
-            .{ .name = "prefix", .declared = .string },
-            .{ .name = "middle", .declared = .string },
-            .{ .name = "byte", .declared = .int },
-        },
-    }, .{});
+    var bench = try Bench.setup("func main():\n" ++
+        "    let text = \"ab" ++ smiley ++ "cd\\nnext\"\n" ++
+        "    assert(text[0:2] == \"ab\")\n" ++
+        "    assert(text[2:6] == \"" ++ smiley ++ "\")\n" ++
+        "    assert(text.byte_at(2) == 240)\n", script_options);
     defer bench.deinit();
 
-    const result = try bench.evaluate(&.{.{ .value = .ofString("ab\xF0\x9F\x99\x82cd\nnext") }});
-    try testing.expect(result == .success);
-    try testing.expectEqualStrings("ab", bench.outputs[0].?.asString());
-    try testing.expectEqualStrings("\xF0\x9F\x99\x82", bench.outputs[1].?.asString());
-    try testing.expectEqual(@as(i64, 0xf0), bench.outputs[2].?.asInt());
+    try testing.expect(try bench.evaluate() == .success);
 }
 
 test "string intrinsics implement multiline UTF-8-safe edits" {
-    var bench = try Bench.setup(
-        \\func continuation(byte: Int) -> Bool:
-        \\    return byte >= 128 and byte < 192
-        \\
-        \\func previous(value: String, cursor: Int) -> Int:
-        \\    var at = cursor - 1
-        \\    while at > 0 and continuation(value.byte_at(at)):
-        \\        at = at - 1
-        \\    return at
-        \\
-        \\func evaluate(input: Input, output: Output):
-        \\    if input.insert:
-        \\        output.text = input.text[0:input.cursor] + input.added + input.text[input.cursor:len(input.text)]
-        \\        output.cursor = input.cursor + len(input.added)
-        \\    else:
-        \\        let before = previous(input.text, input.cursor)
-        \\        output.text = input.text[0:before] + input.text[input.cursor:len(input.text)]
-        \\        output.cursor = before
-        \\
-    , .{
-        .inputs = &.{
-            .{ .name = "insert", .declared = .boolean },
-            .{ .name = "text", .declared = .string },
-            .{ .name = "cursor", .declared = .int },
-            .{ .name = "added", .declared = .string },
-        },
-        .outputs = &.{
-            .{ .name = "text", .declared = .string },
-            .{ .name = "cursor", .declared = .int },
-        },
-    }, .{});
+    var bench = try Bench.setup("func continuation(byte: Int) -> Bool:\n" ++
+        "    return byte >= 128 and byte < 192\n" ++
+        "\n" ++
+        "func previous(value: String, cursor: Int) -> Int:\n" ++
+        "    var at = cursor - 1\n" ++
+        "    while at > 0 and continuation(value.byte_at(at)):\n" ++
+        "        at = at - 1\n" ++
+        "    return at\n" ++
+        "\n" ++
+        "func inserted(text: String, cursor: Int, added: String) -> String:\n" ++
+        "    return text[0:cursor] + added + text[cursor:len(text)]\n" ++
+        "\n" ++
+        "func erased(text: String, cursor: Int) -> String:\n" ++
+        "    let before = previous(text, cursor)\n" ++
+        "    return text[0:before] + text[cursor:len(text)]\n" ++
+        "\n" ++
+        "func main():\n" ++
+        "    let original = \"A" ++ smiley ++ "\\nB\"\n" ++
+        "    assert(inserted(original, 5, \"x\") == \"A" ++ smiley ++ "x\\nB\")\n" ++
+        "    assert(erased(original, 5) == \"A\\nB\")\n" ++
+        "    assert(previous(original, 5) == 1)\n", script_options);
     defer bench.deinit();
 
-    const original = "A\xF0\x9F\x99\x82\nB";
-    const inserted = try bench.evaluate(&.{
-        .{ .value = .ofBoolean(true) },
-        .{ .value = .ofString(original) },
-        .{ .value = .ofInt(5) },
-        .{ .value = .ofString("x") },
-    });
-    try testing.expect(inserted == .success);
-    try testing.expectEqualStrings("A\xF0\x9F\x99\x82x\nB", bench.outputs[0].?.asString());
-    try testing.expectEqual(@as(i64, 6), bench.outputs[1].?.asInt());
-
-    const erased = try bench.evaluate(&.{
-        .{ .value = .ofBoolean(false) },
-        .{ .value = .ofString(original) },
-        .{ .value = .ofInt(5) },
-        .{ .value = .ofString("") },
-    });
-    try testing.expect(erased == .success);
-    try testing.expectEqualStrings("A\nB", bench.outputs[0].?.asString());
-    try testing.expectEqual(@as(i64, 1), bench.outputs[1].?.asInt());
+    try testing.expect(try bench.evaluate() == .success);
 }
 
 test "checked string intrinsics trap on bounds and UTF-8 splits" {
-    var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    if input.mode == 1:
-        \\        output.text = input.text[-1:0]
-        \\    elif input.mode == 2:
-        \\        output.text = input.text[0:len(input.text) + 1]
-        \\    elif input.mode == 3:
-        \\        output.text = input.text[0:2]
-        \\    else:
-        \\        output.byte = input.text.byte_at(len(input.text))
-        \\
-    , .{
-        .inputs = &.{
-            .{ .name = "mode", .declared = .int },
-            .{ .name = "text", .declared = .string },
-        },
-        .outputs = &.{
-            .{ .name = "text", .declared = .string },
-            .{ .name = "byte", .declared = .int },
-        },
-    }, .{});
-    defer bench.deinit();
-
-    const text: InputValue = .{ .value = .ofString("a\xF0\x9F\x99\x82b") };
-    try expectTrap(&bench, &.{ .{ .value = .ofInt(1) }, text }, .string_bounds);
-    try expectTrap(&bench, &.{ .{ .value = .ofInt(2) }, text }, .string_bounds);
-    try expectTrap(&bench, &.{ .{ .value = .ofInt(3) }, text }, .string_boundary);
-    try expectTrap(&bench, &.{ .{ .value = .ofInt(4) }, text }, .string_bounds);
+    const text = "\"a" ++ smiley ++ "b\"";
+    const cases = [_]struct { edit: []const u8, code: mir.TrapCode }{
+        .{ .edit = "assert(len(" ++ text ++ "[-1:0]) == 0)", .code = .string_bounds },
+        .{ .edit = "assert(len(" ++ text ++ "[0:7]) == 0)", .code = .string_bounds },
+        .{ .edit = "assert(len(" ++ text ++ "[0:2]) == 0)", .code = .string_boundary },
+        .{ .edit = "assert(" ++ text ++ ".byte_at(6) == 0)", .code = .string_bounds },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "func main():\n    {s}\n",
+            .{case.edit},
+        );
+        defer testing.allocator.free(source);
+        var bench = try Bench.setup(source, script_options);
+        defer bench.deinit();
+        try expectTrap(&bench, case.code);
+    }
 }
 
 test "string intrinsics reject wrong argument types" {
     var result = try compile_mod.compile(testing.allocator,
-        \\func evaluate(input: Input, output: Output):
-        \\    output.text = 1[0:1]
+        \\func main():
+        \\    let text = 1[0:1]
         \\
-    , .{ .outputs = &.{.{ .name = "text", .declared = .string }} }, .{});
+    , script_options);
     defer result.deinit();
     try testing.expect(result == .failure);
     try testing.expectEqualStrings("luce.sema.index", result.failure.at(0).?.code);
 }
 
-test "an unavailable read input gates evaluation" {
-    var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.doubled = input.value * 2
-        \\
-    , .{
-        .inputs = &.{.{ .name = "value", .declared = .int }},
-        .outputs = &.{.{ .name = "doubled", .declared = .int }},
-    }, .{});
-    defer bench.deinit();
-
-    try testing.expectEqual(Result.unavailable, try bench.evaluate(&.{.unavailable}));
-    try testing.expectEqual(@as(?RuntimeValue, null), bench.outputs[0]);
-
-    const available = try bench.evaluate(&.{.{ .value = .ofInt(21) }});
-    try testing.expect(available == .success);
-    try testing.expectEqual(@as(i64, 42), bench.outputs[0].?.asInt());
-}
-
-fn expectTrap(bench: *Bench, inputs: []const InputValue, code: mir.TrapCode) !void {
-    const result = try bench.evaluate(inputs);
+fn expectTrap(bench: *Bench, code: mir.TrapCode) !void {
+    const result = try bench.evaluate();
     try testing.expect(result == .trap);
     try testing.expectEqual(code, result.trap.code);
 }
 
 test "checked arithmetic and conversions trap" {
-    var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    if input.mode == 1:
-        \\        output.value = 9223372036854775807 + input.mode
-        \\    elif input.mode == 2:
-        \\        output.value = 1 / (input.mode - 2)
-        \\    elif input.mode == 3:
-        \\        output.value = Int(1.0e300)
-        \\    elif input.mode == 4:
-        \\        assert(input.mode == 0)
-        \\    elif input.mode == 5:
-        \\        trap("torn seam")
-        \\    else:
-        \\        output.value = 0
+    const cases = [_]struct { line: []const u8, code: mir.TrapCode }{
+        .{ .line = "assert(9223372036854775807 + 1 == 0)", .code = .integer_overflow },
+        .{ .line = "assert(1 / (2 - 2) == 0)", .code = .divide_by_zero },
+        .{ .line = "assert(Int(1.0e300) == 0)", .code = .conversion_range },
+        .{ .line = "assert(1 == 0)", .code = .assertion_failed },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "func main():\n    {s}\n",
+            .{case.line},
+        );
+        defer testing.allocator.free(source);
+        var bench = try Bench.setup(source, script_options);
+        defer bench.deinit();
+        try expectTrap(&bench, case.code);
+    }
+
+    var explicit_bench = try Bench.setup(
+        \\func main():
+        \\    trap("torn seam")
         \\
-    , .{
-        .inputs = &.{.{ .name = "mode", .declared = .int }},
-        .outputs = &.{.{ .name = "value", .declared = .int }},
-    }, .{});
-    defer bench.deinit();
-
-    try expectTrap(&bench, &.{.{ .value = .ofInt(1) }}, .integer_overflow);
-    try expectTrap(&bench, &.{.{ .value = .ofInt(2) }}, .divide_by_zero);
-    try expectTrap(&bench, &.{.{ .value = .ofInt(3) }}, .conversion_range);
-    try expectTrap(&bench, &.{.{ .value = .ofInt(4) }}, .assertion_failed);
-
-    const explicit = try bench.evaluate(&.{.{ .value = .ofInt(5) }});
+    , script_options);
+    defer explicit_bench.deinit();
+    const explicit = try explicit_bench.evaluate();
     try testing.expect(explicit == .trap);
     try testing.expectEqual(mir.TrapCode.explicit_trap, explicit.trap.code);
     try testing.expectEqualStrings("torn seam", explicit.trap.message);
-
-    const fine = try bench.evaluate(&.{.{ .value = .ofInt(0) }});
-    try testing.expect(fine == .success);
-}
-
-test "the step budget stops an infinite loop" {
-    var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    var spinning = 0
-        \\    while true:
-        \\        spinning = spinning + 1
-        \\    output.value = spinning
-        \\
-    , .{ .outputs = &.{.{ .name = "value", .declared = .int }} }, .{});
-    defer bench.deinit();
-    try expectTrap(&bench, &.{}, .step_budget_exhausted);
 }
 
 test "unbounded recursion hits the call depth limit" {
@@ -377,35 +239,12 @@ test "unbounded recursion hits the call depth limit" {
         \\func dive(depth: Int) -> Int:
         \\    return dive(depth + 1)
         \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.value = dive(0)
+        \\func main():
+        \\    assert(dive(0) == 0)
         \\
-    , .{ .outputs = &.{.{ .name = "value", .declared = .int }} }, .{});
+    , script_options);
     defer bench.deinit();
-    try expectTrap(&bench, &.{}, .call_depth_exceeded);
-}
-
-test "unwritten outputs stay unwritten; conditional writes land" {
-    var bench = try Bench.setup(
-        \\func evaluate(input: Input, output: Output):
-        \\    if input.flag:
-        \\        output.first = 1
-        \\    else:
-        \\        output.second = 2
-        \\
-    , .{
-        .inputs = &.{.{ .name = "flag", .declared = .boolean }},
-        .outputs = &.{
-            .{ .name = "first", .declared = .int },
-            .{ .name = "second", .declared = .int },
-        },
-    }, .{});
-    defer bench.deinit();
-
-    const result = try bench.evaluate(&.{.{ .value = .ofBoolean(true) }});
-    try testing.expect(result == .success);
-    try testing.expectEqual(@as(i64, 1), bench.outputs[0].?.asInt());
-    try testing.expectEqual(@as(?RuntimeValue, null), bench.outputs[1]);
+    try expectTrap(&bench, .call_depth_exceeded);
 }
 
 const TestHost = struct {
@@ -657,16 +496,16 @@ const TestHost = struct {
     }
 };
 
-const hosted_options: types.CompileOptions = .{ .entry_mode = .script, .allow_host = true };
+const hosted_options: types.CompileOptions = .{ .allow_host = true };
 
 test "host builtins fail closed without a host" {
     var bench = try Bench.setup(
         \\func main():
         \\    print("hello")
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
-    try expectTrap(&bench, &.{}, .host_unavailable);
+    try expectTrap(&bench, .host_unavailable);
 }
 
 test "print, arguments, and files flow through the host" {
@@ -689,7 +528,7 @@ test "print, arguments, and files flow through the host" {
         \\        left = left / 10
         \\    return text
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{
@@ -698,7 +537,7 @@ test "print, arguments, and files flow through the host" {
         .file_content = "file body",
     };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expect(result == .success);
     try testing.expectEqualStrings("args: 1\nfile body\n", host.printed.items);
     try testing.expectEqualStrings("out.txt", host.written_path.items);
@@ -719,7 +558,7 @@ test "std files wraps the host builtins faithfully" {
         \\    try files.write_lines("out.txt", lines)
         \\    try files.write("plain.txt", try files.read("notes.txt"))
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{
@@ -727,7 +566,7 @@ test "std files wraps the host builtins faithfully" {
         .file_content = "alpha\nbeta\n",
     };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expect(result == .success);
     try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
     try testing.expectEqualStrings("plain.txt", host.written_path.items);
@@ -749,7 +588,7 @@ test "std files reaches the four services beyond read and write" {
         \\    print(names.join(","))
         \\    free(names)
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{
@@ -759,7 +598,7 @@ test "std files reaches the four services beyond read and write" {
         .directory = &.{ "gamma", "alpha", "beta" },
     };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expect(result == .success);
     try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
     try testing.expectEqualStrings(
@@ -779,12 +618,12 @@ test "a listing the world refuses is an error naming the path" {
         \\    let names = try files.list("nowhere")
         \\    free(names)
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{};
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expectEqual(mir.ErrorCode.io_failed, result.errored.code);
     try testing.expectEqualStrings("cannot list nowhere", result.errored.message);
 }
@@ -800,12 +639,12 @@ test "read_line answers a line, then absence; the prompt goes out in front" {
         \\        line = read_line("> ")
         \\    print("done")
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{ .lines = &.{ "alpha", "beta" } };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expect(result == .success);
     try testing.expectEqualStrings("1:alpha\n2:beta\ndone\n", host.printed.items);
     // Three reads, three prompts: the third is what discovered the
@@ -825,12 +664,12 @@ test "the clock, the wait and the environment reach the host" {
         \\    print(env("LUCE_MODE") else "(unset)")
         \\    print(env("NOTHING") else "(unset)")
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{};
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expect(result == .success);
     try testing.expectEqualStrings("elapsed 17\ntest\n(unset)\n", host.printed.items);
     try testing.expectEqualStrings("to stderr\n", host.reported.items);
@@ -881,14 +720,14 @@ test "every new host service fails closed when the host withholds it" {
         ,
     };
     for (cases) |source| {
-        var bench = try Bench.setup(source, .{}, hosted_options);
+        var bench = try Bench.setup(source, hosted_options);
         defer bench.deinit();
         // A host with a console and nothing else: every service below
         // is optional, and reaching one that is not there touches
         // nothing (docs/V2.md's fail-closed rule).
         var host: TestHost = .{};
         defer host.deinit();
-        const result = try bench.evaluateHosted(&.{}, .{
+        const result = try bench.evaluateHosted(.{
             .context = &host,
             .printFn = TestHost.printLine,
         });
@@ -906,12 +745,12 @@ test "an argument out of range traps, and a refused write is an error" {
         \\        print("refused")
         \\    let missing = arg(5)
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{ .fail_write = true };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expectEqual(mir.TrapCode.argument_bounds, result.trap.code);
     try testing.expectEqualStrings("refused\n", host.printed.items);
 }
@@ -926,12 +765,12 @@ test "an uncaught error names its code, its words, and where it was raised" {
         \\    try save("out.txt")
         \\    print("never")
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{ .fail_write = true };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expectEqual(mir.ErrorCode.io_failed, result.errored.code);
     try testing.expectEqualStrings("cannot write out.txt", result.errored.message);
     // One position, and it is the raise site rather than a stack: the
@@ -953,12 +792,12 @@ test "error() raises the program's own words, and catch discards them" {
         \\    print(str(try check(7)))
         \\    print(str(try check(-2)))
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{};
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expectEqual(mir.ErrorCode.user_error, result.errored.code);
     try testing.expectEqualStrings("negative: -2", result.errored.message);
     try testing.expectEqualStrings("0\n7\n", host.printed.items);
@@ -984,7 +823,7 @@ test "terminal builtins drive the host screen and key queue" {
         \\        text = "24x80"
         \\    return text
         \\
-    , .{}, hosted_options);
+    , hosted_options);
     defer bench.deinit();
 
     var host: TestHost = .{
@@ -994,7 +833,7 @@ test "terminal builtins drive the host screen and key queue" {
         },
     };
     defer host.deinit();
-    const result = try bench.evaluateHosted(&.{}, host.host());
+    const result = try bench.evaluateHosted(host.host());
     try testing.expect(result == .success);
     try testing.expectEqualStrings(
         "[clear][move 1,2][style 114,-1,true]hi textλ[flush]",
@@ -1007,10 +846,10 @@ test "terminal builtins drive the host screen and key queue" {
 // Collections, explicit memory, and conversions
 // ---------------------------------------------------------------------------
 
-const script_options: types.CompileOptions = .{ .entry_mode = .script };
+const script_options: types.CompileOptions = .{};
 
 fn expectLeaks(bench: *Bench, wanted: u32) !void {
-    const result = try bench.evaluate(&.{});
+    const result = try bench.evaluate();
     try testing.expect(result == .success);
     try testing.expectEqual(wanted, result.success.leaked_objects);
 }
@@ -1041,7 +880,7 @@ test "lists grow, index, slice, iterate, and free explicitly" {
         \\    free(mid)
         \\    free(xs)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1067,7 +906,7 @@ test "maps upsert, look up, and iterate keys in insertion order" {
         \\    free(ages)
         \\    free(joined)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1094,7 +933,7 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
         \\    free(grid)
         \\    free(row)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1115,9 +954,9 @@ test "conversions: str, parse_int, parse_float, chr, ord" {
         \\    assert(ord("λ") == 955)
         \\    assert(ord("A") == 65)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
-    const result = try bench.evaluate(&.{});
+    const result = try bench.evaluate();
     try testing.expect(result == .success);
 }
 
@@ -1139,7 +978,7 @@ test "structs and nested collections share objects by reference" {
         \\    assert(len(nested[0]) == 4)
         \\    assert(len(bag.items) == 3)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1199,9 +1038,9 @@ test "collection misuse traps with stable codes" {
         , .code = .index_bounds },
     };
     for (cases) |case| {
-        var bench = try Bench.setup(case.source, .{}, script_options);
+        var bench = try Bench.setup(case.source, script_options);
         defer bench.deinit();
-        try expectTrap(&bench, &.{}, case.code);
+        try expectTrap(&bench, case.code);
     }
 }
 
@@ -1214,7 +1053,7 @@ test "S33: nothing leaks — scope ownership frees what free() used to" {
         \\    free(released)
         \\    assert(len(copied) == 2)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1236,7 +1075,7 @@ test "interpreter memory is bounded by depth and data, not by calls made" {
         \\        total += nudge(Point(x = i, y = 1))
         \\    assert(total > 0)
         \\
-    , .{}, script_options);
+    , script_options);
     defer result.deinit();
     try testing.expect(result == .success);
 
@@ -1246,9 +1085,6 @@ test "interpreter memory is bounded by depth and data, not by calls made" {
         .arena = arena.allocator(),
         .runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator }),
         .program = &result.success,
-        .inputs = &.{},
-        .outputs = &.{},
-        .steps = 50_000_000,
         .max_depth = 256,
         .host = null,
     };
@@ -1276,21 +1112,19 @@ test "the explicit frame stack survives deep recursion" {
         \\func main():
         \\    assert(dive(50000) == 0)
         \\
-    , .{}, script_options);
+    , script_options);
     defer result.deinit();
     try testing.expect(result == .success);
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const deep = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, &.{}, &.{}, .{
-        .steps = 10_000_000,
+    const deep = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, .{
         .call_depth = 60_000,
     });
     try testing.expect(deep == .success);
 
     _ = arena.reset(.retain_capacity);
-    const shallow = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, &.{}, &.{}, .{
-        .steps = 10_000_000,
+    const shallow = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &result.success, .{
         .call_depth = 1_000,
     });
     try testing.expectEqual(mir.TrapCode.call_depth_exceeded, shallow.trap.code);
@@ -1325,7 +1159,7 @@ test "string methods: search, case, trim, replace, repeat, split" {
         \\    free(words)
         \\    free(csv)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1370,7 +1204,7 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    free(ages)
         \\    free(listed)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     try expectLeaks(&bench, 0);
 }
@@ -1390,10 +1224,10 @@ test "a trap reports its statement's line and the full call trace" {
         \\func main():
         \\    let x = ratio(0)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
 
-    const result = try bench.evaluate(&.{});
+    const result = try bench.evaluate();
     try testing.expect(result == .trap);
     const trap = result.trap;
     try testing.expectEqual(mir.TrapCode.divide_by_zero, trap.code);
@@ -1420,11 +1254,11 @@ test "a stripped program still names its trap frames, without lines" {
         \\func main():
         \\    let x = boom()
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
     mir.strip(&bench.program);
 
-    const result = try bench.evaluate(&.{});
+    const result = try bench.evaluate();
     try testing.expect(result == .trap);
     const trap = result.trap;
     try testing.expectEqual(@as(usize, 2), trap.trace.len);
@@ -1442,10 +1276,10 @@ test "a trap inside std code points into the std module" {
         \\    var decimals = -1
         \\    let bad = strings.format_float(1.0, decimals)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
 
-    const result = try bench.evaluate(&.{});
+    const result = try bench.evaluate();
     try testing.expect(result == .trap);
     const trap = result.trap;
     try testing.expectEqual(mir.TrapCode.explicit_trap, trap.code);
@@ -1466,15 +1300,13 @@ test "a runaway recursion reports a capped trace and counts the rest" {
         \\func main():
         \\    let x = spiral(0)
         \\
-    , .{}, script_options);
+    , script_options);
     defer bench.deinit();
 
     const result = try backend.evaluate(
         .{ .arena = bench.arena.allocator(), .objects = testing.allocator },
         &bench.program,
-        &.{},
-        bench.outputs,
-        .{ .steps = 200_000, .call_depth = 100 },
+        .{ .call_depth = 100 },
     );
     try testing.expect(result == .trap);
     const trap = result.trap;

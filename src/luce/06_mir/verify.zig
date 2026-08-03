@@ -22,7 +22,6 @@ pub const VerifyError = error{
     ValuelessRegister,
     TypeMismatch,
     BadLocal,
-    BadPort,
     BadBlock,
     BadFunction,
     BadStruct,
@@ -227,10 +226,9 @@ fn verifyInstruction(
         .const_boolean => try expectType(result, .boolean),
         .const_int => try expectType(result, .int),
         .const_float => try expectType(result, .float),
-        .const_data => |data| {
-            if (data.constant >= program.constants.len) return error.BadConstant;
-            if (data.data_type != .string and data.data_type != .bytes) return error.TypeMismatch;
-            try expectType(result, data.data_type);
+        .const_string => |constant| {
+            if (constant >= program.constants.len) return error.BadConstant;
+            try expectType(result, .string);
         },
         .local_get => |local| {
             if (local >= function.locals.len) return error.BadLocal;
@@ -240,15 +238,6 @@ fn verifyInstruction(
             if (set.local >= function.locals.len) return error.BadLocal;
             const value = try operandType(function, defined, set.value);
             try expectType(value, function.locals[set.local].local_type);
-        },
-        .input_load => |port| {
-            if (port >= program.inputs.len) return error.BadPort;
-            try expectType(result, Type.fromPort(program.inputs[port].declared));
-        },
-        .output_store => |store| {
-            if (store.port >= program.outputs.len) return error.BadPort;
-            const value = try operandType(function, defined, store.value);
-            try expectType(value, Type.fromPort(program.outputs[store.port].declared));
         },
         .binary => |binary| {
             const left = try operandType(function, defined, binary.left);
@@ -452,8 +441,7 @@ fn verifyIntrinsic(
         },
         .len => {
             try exactly(arguments, 1);
-            const measurable = arguments[0] == .string or arguments[0] == .bytes or
-                arguments[0] == .heap;
+            const measurable = arguments[0] == .string or arguments[0] == .heap;
             if (!measurable) return error.BadIntrinsic;
             try expectType(result, .int);
         },

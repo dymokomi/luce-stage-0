@@ -17,6 +17,12 @@ Everything below was measured on this tree at `df5d48f`, Apple M4 Max,
 `./build.sh` (ReleaseSafe) unless a number says otherwise. `zig build
 test` is green: **849/849 in 71.1 s**.
 
+> **Steps 1, 2 and 3 are done.** `.lc` `format_version` is 17,
+> `abi.version` is unchanged at 8 (nothing in the host ABI ever named a
+> port or a `Bytes`), the lowering is total, and `zig build test` is
+> **836/836**. The interpreter's own suite is 36 tests (39 before). Each step below
+> carries a note on what it cost in contact with the code.
+
 ---
 
 ## What is actually there
@@ -507,7 +513,7 @@ what proves it safe, and what it forecloses.
 
 ### Now — this week, in any order, no prerequisites
 
-**1. Cut `Bytes`.**
+**1. Cut `Bytes`. — DONE.**
 *Deletes:* the type from `support/types.zig`, its arms in
 `04_semantics/builder.zig`, `06_mir/defs.zig` and `machine.zig`, and 8
 of the 34 `self.fail(` sites in `lower.zig`. Bumps `format_version`.
@@ -517,8 +523,14 @@ grep across `src/luce/std/`, `programs/`, `bench/` and the site's 173
 samples finds zero uses. The suite and the site build are the check.
 *Forecloses:* nothing. A real `Bytes` would be designed fresh, and
 `docs/MISSING.md` already says "cut it or grow it".
+*What it took, in contact with the code:* the `Value` tag went too, so
+`strukt`/`object` renumbered (nothing hard-codes a tag number — every
+site is `@intFromEnum`), and `const_data`'s `data_type` field went with
+it: the field existed only to tell String from Bytes, so the
+instruction is now `const_string: u32` and one more `fail` site went
+with the field. `Bytes` also left `reserved_names`.
 
-**2. Cut the evaluator ports.**
+**2. Cut the evaluator ports. — DONE.**
 *Deletes:* `input_load`, `output_store`, `types.Port`, `PortSchema`,
 `PortType`, `EntryMode.evaluator`, `backend.InputValue`, the `outputs`
 slice, `Result.unavailable`, and 3 more `fail` sites. Bumps
@@ -531,14 +543,34 @@ re-derive a schema. That is the right trade — it is deferred
 machinery holding a live path hostage.
 *After 1 and 2, stage 10's lowering is total*: `grep 'self.fail("'
 lower.zig` leaves only refusals for IR that could only arrive damaged.
+**Confirmed: 34 sites became 23, and all 23 are invariant refusals.**
+*What it took, in contact with the code:* more than the memo listed.
+`compile()`/`compileProject()`/`analyze()`/`mir.build.build()` all lost
+their `schema` parameter; `backend.evaluate` lost `inputs` and
+`outputs`; `Program.inputs`/`outputs`/`reads` and the `Analyzer.reads`
+set went; and `EntryMode` went entirely rather than becoming a
+one-variant enum, so `CompileOptions` is now `allow_host` plus two
+cosmetic fields. `input`, `output`, `Input`, `Output` and `evaluate`
+left `reserved_names` with it — `programs/calc.luc` has a function
+called `evaluate` that only compiled because `isReserved` special-cased
+the name, and that special case is gone.
 
-**3. Delete the step budget.**
+**3. Delete the step budget. — DONE.**
 *Deletes:* `Budget.steps`, the counter and its branch in the dispatch
 loop, `TrapCode.step_budget_exhausted`, one test.
 *Proves it safe:* the only production setting is `maxInt(u64)`
 (`runner.zig:80`); every other site is a test.
 *Forecloses:* a deadline. It never was one — it counts instructions,
 not time — and call depth, which is the promise that matters, stays.
+*What it took, in contact with the code:* one of the "fifteen tests"
+was load-bearing. `06_mir/module.zig`'s single-byte mutation fuzz ran
+what it decoded, and the step budget was the only thing that made that
+run end — a flipped block index can turn a forward jump into a back
+edge, and no engine promises a Luce program stops. `mutation_source`
+is now loop-free and the harness skips any mutant whose CFG is not
+forward-only, with the skip counted and bounded so it cannot quietly
+swallow the corpus. Termination is a property of that corpus, which is
+the honest place for it.
 
 ### In order — each needs the one before it
 

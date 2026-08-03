@@ -37,17 +37,10 @@ VS Code or Cursor to launch an Extension Development Host. There is no build
 step: `package.json`, `language-configuration.json`, and the TextMate grammar
 are loaded directly.
 
-The grammar follows the strict Luce contract: `func` declarations,
-`func main():` scripts, `func evaluate(input: Input, output: Output):`
-evaluators, compiler-generated `Input`/`Output` frame types, and qualified
-static calls such as `Rendering.frame(...)`.
+The grammar follows the strict Luce contract: `func` declarations, the one
+`func main():` entry, and qualified static calls such as
+`Rendering.frame(...)`.
 
-When Luce syntax changes, keep
-`syntaxes/luce.tmLanguage.json` aligned with `luce/token.zig` and the builtin
-list in `luce/analyzer.zig`. The highlighted hosted builtins are implemented:
-`script_directory() -> Bytes` obtains a one-run grant for the executing
-script's directory, and the general `read_file(Bytes, String) -> String` reads
-through an explicit capability. Ordinary evaluators receive that Bytes value
-through an Input Port; the terminal's `allow-read` command can issue a
-session-only grant. `bootstrap/editor.luc` uses the script grant to load the
-readable stored evaluator from `bootstrap/editor_view.luc`.
+When Luce syntax changes, keep `syntaxes/luce.tmLanguage.json` aligned with
+`src/luce/02_lex/token.zig` and the reserved-name list in
+`src/luce/04_semantics/declarations.zig`.
