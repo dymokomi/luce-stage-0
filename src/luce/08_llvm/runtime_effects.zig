@@ -38,19 +38,37 @@
 //!     the `*Runtime` itself (its trap slot, its serial counter, its
 //!     leak count), a borrowed `*const Value`, an out-parameter.  Every
 //!     export that can trap writes `runtime.pending`, so every one of
-//!     them is at least `argmem: readwrite`.
-//!   * **inaccessiblemem** — the object table, container storage, and
-//!     the value arena.  Generated code cannot reach any of it: it
-//!     holds objects as `i32` handles and Strings as `{ptr, len}` pairs
-//!     it never loads through, and the only memory it ever *writes* is
-//!     its own `alloca`s.  So this memory is exactly what LangRef calls
-//!     inaccessible — "not accessible by the current module" — and
-//!     naming it separately is what lets a reader (`luce_rt_len`) be
-//!     distinguished from a mutator (`luce_rt_append`).
-//!   * **the default** — globals and captured pointers.  No export
-//!     touches either, with one licensed exception: `luce_rt_unwound`
-//!     reads the `luce.functions` table, and reading a *constant*
-//!     global is always permitted, whatever the memory attribute says.
+//!     them is at least `argmem: readwrite`.  "Based on" is LangRef's
+//!     term and it is narrow: a pointer *loaded out of* argument
+//!     memory is based on nothing, so an object's element buffer is
+//!     **not** argmem even though `%rt` is how the runtime finds it.
+//!   * **inaccessiblemem** — the run's private storage: the value
+//!     arena (String bytes, struct field runs), a List's, Map's or
+//!     Builder's element buffer, and the unwind trace.  Generated code
+//!     cannot reach any of it — it holds Strings as `{ptr, len}` pairs
+//!     it never loads through, and it has no way at all to find a
+//!     List's buffer.  That is exactly LangRef's "not accessible by
+//!     the current module".
+//!   * **the default** — globals, and **the object heap**: the table's
+//!     rows, and the `dims` and `elements` of an Array.  Generated code
+//!     *does* reach those: since inline container access
+//!     (docs/CODEGEN.md) it loads the table base out of `%rt`, tests a
+//!     row's `alive` byte, and loads and stores array elements
+//!     directly.  The moment it did, calling that storage inaccessible
+//!     became false, and a false `inaccessiblemem` is not a lost
+//!     optimization — it lets LLVM conclude that `luce_rt_append`
+//!     cannot disturb an element this module just stored.  So anything
+//!     that resolves a handle names the default location, and what is
+//!     left in `inaccessiblemem` is only what generated code still
+//!     cannot see.  Reading a *constant* global — `luce_rt_unwound`
+//!     and the `luce.functions` table — is permitted whatever the
+//!     summary says.
+//!
+//! The distinction that survives is the one that pays: a reader
+//! (`luce_rt_len`) still promises to write nothing but its arguments,
+//! so it cannot disturb an element store, while a mutator
+//! (`luce_rt_append`) promises nothing about the heap and is assumed
+//! to move everything in it.
 //!
 //! ## Parameters
 //!
@@ -236,25 +254,54 @@ pub const Effect = struct {
     returns_noalias: bool = false,
 };
 
-// The five summaries the table below is written in terms of.  Naming
-// them once keeps the table readable and keeps a reader from having to
+// The summaries the table below is written in terms of.  Naming them
+// once keeps the table readable and keeps a reader from having to
 // re-derive what `argmem: readwrite, inaccessiblemem: read` means
 // fifteen times.
+//
+// They come in two families, and which family an export belongs to is
+// decided by one question: **does it resolve an object handle?**  If it
+// does it touches the object table, which generated code can now reach,
+// and it must name the default location.  If it only moves bytes
+// through the arena or a String, it does not.
 
 /// Touches nothing at all.
 const pure: Memory = .{};
 /// Reads through its arguments and nothing else.
 const reads_run: Memory = .{ .argmem = .read };
-/// Reads its arguments and the runtime's own storage; writes neither.
-const reads_only: Memory = .{ .argmem = .read, .inaccessiblemem = .read };
-/// Reads the runtime's storage, and writes only through its arguments
-/// — an out-parameter, and the trap slot when it fails.
-const reads_heap: Memory = .{ .argmem = .readwrite, .inaccessiblemem = .read };
 /// Writes only through its arguments.
 const touches_run: Memory = .{ .argmem = .readwrite };
-/// The general case: reads and writes its arguments and the runtime's
-/// own storage, and nothing else.
-const touches_heap: Memory = .{ .argmem = .readwrite, .inaccessiblemem = .readwrite };
+
+/// Reads its arguments and the run's private storage; writes neither.
+const reads_private: Memory = .{ .argmem = .read, .inaccessiblemem = .read };
+/// Reads the run's private storage, and writes only through its
+/// arguments — an out-parameter, and the trap slot when it fails.
+const reads_text: Memory = .{ .argmem = .readwrite, .inaccessiblemem = .read };
+/// Reads and writes its arguments and the run's private storage, and
+/// nothing generated code can see.
+const touches_text: Memory = .{ .argmem = .readwrite, .inaccessiblemem = .readwrite };
+
+/// Resolves a handle — so it reads the object heap, which this module
+/// reaches — and writes only through its arguments.
+const reads_heap: Memory = .{
+    .argmem = .readwrite,
+    .inaccessiblemem = .read,
+    .other = .read,
+};
+/// The general case: allocates, frees, or mutates an object, so
+/// everything is assumed to move.
+const touches_heap: Memory = .{
+    .argmem = .readwrite,
+    .inaccessiblemem = .readwrite,
+    .other = .readwrite,
+};
+/// Reads the object heap and writes the run's private storage: `str`,
+/// which renders a Builder's bytes into fresh arena text.
+const reads_heap_makes_text: Memory = .{
+    .argmem = .readwrite,
+    .inaccessiblemem = .readwrite,
+    .other = .read,
+};
 
 /// What each entry point does.  One arm per service, no `else`: a new
 /// runtime call is a compile error here, which is the only way a
@@ -302,7 +349,7 @@ pub fn describe(service: Service) Effect {
         // the `luce.functions` table too — a constant global, which any
         // memory summary permits.
         .luce_rt_unwound => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .plain, .plain },
             .cold = true,
         },
@@ -322,11 +369,11 @@ pub fn describe(service: Service) Effect {
         // Both copy borrowed bytes into the run's arena, which
         // allocates; `key_text` only hands back the copy already made.
         .luce_rt_intern_text => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .bytes_in, .plain, .value_out },
         },
         .luce_rt_set_key_text => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .bytes_in, .plain },
         },
         .luce_rt_key_text => .{
@@ -372,11 +419,11 @@ pub fn describe(service: Service) Effect {
         //
         // Both allocate a fresh run of fields in the arena.
         .luce_rt_struct_make => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .values_in, .plain, .value_out },
         },
         .luce_rt_struct_set => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .value_in, .plain, .value_in, .value_out },
         },
 
@@ -448,32 +495,32 @@ pub fn describe(service: Service) Effect {
         // do not.  `slice` is a borrow of the original bytes, which is
         // why it is on the reading side.
         .luce_rt_concat => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .value_in, .value_in, .value_out },
         },
         .luce_rt_string_slice => .{
-            .memory = reads_heap,
+            .memory = reads_text,
             .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
         },
         .luce_rt_parse_int, .luce_rt_parse_float, .luce_rt_ord => .{
-            .memory = reads_heap,
+            .memory = reads_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },
         .luce_rt_string_byte => .{
-            .memory = reads_heap,
+            .memory = reads_text,
             .parameters = &.{ .run, .value_in, .plain, .value_out },
         },
         .luce_rt_string_find_byte => .{
-            .memory = reads_heap,
+            .memory = reads_text,
             .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
         },
         .luce_rt_str => .{
-            .memory = touches_heap,
+            .memory = reads_heap_makes_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },
         // `chr` takes the codepoint itself, not a boxed value.
         .luce_rt_chr => .{
-            .memory = touches_heap,
+            .memory = touches_text,
             .parameters = &.{ .run, .plain, .value_out },
         },
 
@@ -491,7 +538,7 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .plain, .plain, .plain },
         },
         .luce_rt_compare => .{
-            .memory = reads_only,
+            .memory = reads_private,
             .parameters = &.{ .plain, .value_in, .value_in },
         },
     };

@@ -35,14 +35,31 @@ pub const Options = struct {
     /// opaque calls into `libluce_rt` rather than arithmetic an
     /// instruction-selector can improve.  Naming a CPU would therefore
     /// buy nothing today and cost the artifact its portability — an
-    /// object built here would refuse to run on an older Mac.  Revisit
-    /// when the container operations are generated inline: at that
-    /// point there is a vectorizable loop to tune for, and the knob is
-    /// already here.
+    /// object built here would refuse to run on an older Mac.
+    ///
+    /// **Re-measured now that the container operations *are* generated
+    /// inline** (docs/CODEGEN.md), because that was the condition the
+    /// paragraph above set for revisiting: there is a vectorized loop
+    /// to tune for at last.  The answer did not change — `apple-m4`
+    /// moves matmul, arrays and stats by 0-3%, inside the round-to-
+    /// round spread — because the baseline AArch64 the generic target
+    /// assumes already has the 128-bit NEON the vectorizer uses.  A
+    /// wider machine would change it; the knob is here for that day.
     cpu: []const u8 = "",
     features: []const u8 = "",
     /// The pass pipeline, in the new pass manager's textual form.
-    passes: []const u8 = "default<O2>",
+    ///
+    /// **O3, and the reason is one pass.**  A Luce array access
+    /// carries a bounds check, and a bounds check is a side exit; a
+    /// loop with a side exit does not vectorize.  What removes it is
+    /// *nontrivial* loop unswitching — the transform that hoists a
+    /// check whose operands are loop-invariant out of the loop and
+    /// duplicates the body — and `default<O2>` disables it while
+    /// `default<O3>` enables it.  Measured on the emitted shape:
+    /// matmul's inner loop is 30 ms at O2 and 10 ms at O3, against
+    /// 10 ms for the C twin.  Everything else O3 adds (more
+    /// aggressive inlining, unrolling) is noise here by comparison.
+    passes: []const u8 = "default<O3>",
     /// Position-independent code, which a shared library needs.
     relocation: Relocation = .pic,
 };

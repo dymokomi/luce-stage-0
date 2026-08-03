@@ -402,6 +402,58 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
     try testing.expectEqual(mir.TrapCode.index_bounds, runtime.pending.?.code);
 }
 
+test "compiled code's byte offsets find the fields they name" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofFloat(0.0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(2) }, Value.ofFloat(7.5));
+
+    // Exactly the walk `08_llvm/lower.zig` emits: the table base out of
+    // the `Runtime`, the row by handle, then `alive`, `count`, `dims`,
+    // and `elements` out of the row — every step through
+    // `heap.layout`'s numbers and nothing through a field name.
+    const base: [*]const u8 = @ptrCast(runtime);
+    const table: [*]const u8 = @as(*const [*]const u8, @ptrCast(@alignCast(
+        base + heap.layout.table_pointer,
+    ))).*;
+    try testing.expectEqual(@intFromPtr(runtime.table.items.ptr), @intFromPtr(table));
+
+    const row = table + heap.layout.row_size * grid.asObject();
+    try testing.expectEqual(@as(u8, 1), (row + heap.layout.alive)[0]);
+    const dims: [*]const i64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
+        row + heap.layout.array_dims,
+    ))).*));
+    try testing.expectEqual(@as(i64, 2), dims[0]);
+    try testing.expectEqual(@as(i64, 3), dims[1]);
+    try testing.expectEqual(@as(usize, 6), @as(*const usize, @ptrCast(@alignCast(
+        row + heap.layout.array_count,
+    ))).*);
+    // An `Array(Float)` stores `f64`s, so the element is one load and
+    // no unboxing — which is the whole reason the storage is typed.
+    const elements: [*]const f64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
+        row + heap.layout.array_elements,
+    ))).*));
+    try testing.expectEqual(@as(f64, 7.5), elements[1 * 3 + 2]);
+
+    // A freed row reads dead through the same offset, which is what
+    // makes the inline `use_after_free` check a one-byte load.
+    runtime.freeObject(grid.asObject());
+    try testing.expectEqual(@as(u8, 0), (row + heap.layout.alive)[0]);
+
+    // And the slice layout the three pointer reads assume.
+    var measured: []const u8 = "ab";
+    measured.len = 2;
+    const words: *const [2]usize = @ptrCast(&measured);
+    try testing.expectEqual(
+        @intFromPtr(measured.ptr),
+        words[heap.layout.slice_pointer / @sizeOf(usize)],
+    );
+    try testing.expectEqual(measured.len, words[heap.layout.slice_count / @sizeOf(usize)]);
+}
+
 test "a builder collects bytes and str takes a snapshot of them" {
     var bench: Bench = undefined;
     bench.setup();

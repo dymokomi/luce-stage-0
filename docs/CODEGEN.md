@@ -131,8 +131,88 @@ Because the trace only exists once unwinding is over, the trap is
 reported once, from `luce_main`, with everything in it.
 
 Scalars are generated inline: checked integer arithmetic, comparison,
-branches, calls.  Everything below the instruction level is a call
-into `libluce_rt`.
+branches, calls.  So are the container shapes a numeric program spends
+its time in — see "Inline access" below.  Everything else below the
+instruction level is a call into `libluce_rt`.
+
+## Inline access
+
+An `Array` element and the String primitives are **generated, not
+called**.  `a[i]`, `grid[r, c]`, `len(a)`, `a.dim(k)`, `s.byte_at(i)`,
+`s[a:b]` and `len(s)` all lower to the bounds check and the load they
+are, with no boxed subscript and no call.
+
+The box, not the call, is the barrier: a value crosses into
+`libluce_rt` through a 24-byte `alloca` that has to be refilled at
+every use, and LLVM cannot hoist a store to memory whose address is
+passed to a call.  So a loop-invariant box pins the call inside the
+loop however precisely the call is described.
+
+This is stage 10's work rather than stage 9's because MIR has no load,
+no `getelementptr` and no pointer: the transformation is not
+expressible above LLVM IR.  And it is not LLVM's work either, because
+the object's kind lives in MIR's type table and nowhere in the emitted
+IR — `heap_types` says statically that a handle is an
+`Array(Float, _)`, which collapses the runtime's four-way switch to one
+arm before an instruction is emitted.
+
+Three things make it pay, and all three are needed together:
+
+- **The row is walked directly.**  `runtime.layout` (in
+  `runtime/heap.zig`) gives the byte offsets of the object table's
+  base, a row's `alive` byte, and an Array's `dims`, `elements` and
+  `count`.  Every one is measured from the Zig types with `@offsetOf`
+  and checked against a real `Runtime` by a test beside them, so the
+  two cannot drift.  An Array's storage is a field of the row rather
+  than a payload inside the `data` union for exactly this reason: Zig
+  promises a layout for a struct field and none for a tagged union's
+  payload.
+- **Elements are stored as themselves.**  An `Array(Float)` is `f64`s,
+  an `Array(Int)` is `i64`s, an `Array(Bool)` is bytes; only Strings,
+  structs and objects keep the 24-byte slot.  `Value` is the
+  *boundary* type — how an element crosses into a caller — never the
+  storage type.  Reading a Float element becomes one `ldr d0`, the
+  memory traffic is a third of a boxed array's, and an array of
+  untagged doubles is the only kind that can ever reach a SIMD unit or
+  a GPU.
+- **The resolution leaves the loop** (`08_llvm/loops.zig`).  Resolving
+  at every access leaves four loads in front of every element read,
+  and LICM cannot lift them: the loop also *stores* an element through
+  a pointer loaded out of the row, and nothing in the IR says the two
+  do not overlap.  Saying otherwise wants TBAA or `!alias.scope`, and
+  `std.zig.llvm.Builder` attaches metadata to branches and to nothing
+  else.  So the compiler does it: the row is read once in the
+  preheader of the outermost loop that cannot disturb it — nothing
+  that attaches an object, frees one, or replaces an Array's storage
+  (`optimize.effects.viewStable`).
+
+**The loads move; the checks stay.**  A lifted resolution reads a row
+without deciding anything about it — a null handle reads an all-zero
+dead row, so the loads are safe unconditionally — and every access
+still tests the handle for null and the row for `alive` before it
+touches an element.  A trap fires at exactly the instruction that owes
+it, with exactly the trace it had before, and a loop that runs zero
+times over a freed array still traps nowhere.  What the loop is left
+holding is two comparisons against loop-invariant values, which LLVM's
+own unswitching lifts, and the bounds check, which it keeps and then
+versions the loop around — that is what lets the vectorizer in.
+
+Measured against the C twins on an Apple M4 Max, best of three, both
+sides through LLVM:
+
+| benchmark | before | after |
+|-----------|--------|-------|
+| matmul    | 73.9x  | 0.97x |
+| arrays    | 12.7x  | 1.06x |
+| stats     |  8.5x  | 0.99x |
+| strings   |  2.5x  | 1.73x |
+| loops     |  1.04x | 1.04x |
+| math      |  1.03x | 1.03x |
+
+`Map` is deliberately not on the inline path: a hash probe is genuinely
+call-worthy.  Neither is `List`, whose buffer moves under `append`, nor
+`find_byte`, which is a vectorized `memchr` in the runtime and would be
+slower unrolled here.
 
 ## What the module tells LLVM about the runtime
 
@@ -183,22 +263,26 @@ hidden arguments: `%host` is `readonly nocapture nonnull noundef align
 `const LuceHost *` for the whole run — `%rt` is `nocapture nonnull`,
 and `%out` is `writeonly nocapture nonnull dereferenceable(n)`.
 
-**Measured, and honest about it:** none of this moves a benchmark
-today.  Interleaved A/B over the whole `bench/` set with the attributes
-on and off lands inside ±0.7% on every program, and the objects have
-identical instruction counts with only prologue scheduling shuffled.
-The reason is in `08_llvm/lower.zig`: a value crosses into the runtime
-through a fresh 24-byte `alloca` that is *refilled at every use*, so a
-loop that reads `xs[i]` restores the same three words describing `xs`
-on every iteration.  LLVM cannot hoist a store to memory whose address
-is passed to a call — LICM's promotion needs every use of the pointer
-to be a load or a store — so the loop-invariant box keeps the call
-pinned inside the loop no matter how precisely the call is described.
-The second barrier is `*Runtime` itself: every export can write the
-trap slot through it, so no runtime call can be hoisted past another
-one.  These attributes are the half of the fix that has to be in place
-before the other half — generating the hot container operations inline,
-so no box is built at all — can pay.
+**What `inaccessiblemem` may cover moved when inline access
+arrived.**  It means, in LangRef's words, memory *not accessible by the
+current module*, and until generated code walked the object table that
+described the whole heap.  It no longer does: the module loads the
+table's base out of `%rt`, tests a row's `alive` byte, and loads and
+stores array elements directly.  A false `inaccessiblemem` is not a
+lost optimization but a miscompile — it would let LLVM conclude that
+`luce_rt_append` cannot disturb an element this module just stored — so
+anything that resolves a handle now names the *default* location
+instead, and `inaccessiblemem` is left holding only what generated code
+still cannot see: the value arena, a List's, Map's or Builder's own
+buffer, and the unwind trace.
+
+The distinction that survives is the one that pays.  A reader
+(`luce_rt_len`) still promises to write nothing but its arguments, so
+it cannot disturb an element store; a mutator (`luce_rt_append`)
+promises nothing about the heap and is assumed to move everything in
+it.  The parameter attributes are unchanged and do more work than the
+summary: `readonly nocapture` on a borrowed box is what keeps a call
+from being assumed to scribble on it.
 
 ## `libluce_rt`
 
@@ -314,20 +398,16 @@ carried, which the runtime remembers, so it fails closed on
 Each of these fails by naming itself, so the compiler says what is
 missing rather than miscompiling:
 
-- **Float** — every constant, local, parameter, arithmetic and
-  comparison involving `Float`, plus `convert` (`Int(x)` / `Float(x)`).
-- **Struct values** — `struct_make`, `struct_get`, `struct_set`, and
-  any struct-typed local or signature.
-- **Bytes.**
+- **Bytes** — every operation on it, and the type itself.
 - **Evaluator ports** — `input_load`, `output_store`, and an entry
   function with parameters.
-- **The scalar math intrinsics** — `abs`, `min`, `max`, `clamp`,
-  `sqrt`, `floor`, `ceil`.  These want LLVM intrinsics rather than
-  runtime calls, which is why they are still open.
-- **Every host service except `print`** — `file_read`, `file_write`,
-  `file_exists`, `arg_count`, `arg`, all seven `term_*`, `key_read`,
-  `key_text`.  The ABI table has slots for all of them; the lowering
-  has not caught up.  Check `lower.zig` before trusting this bullet.
+
+Both are v1 machinery on its way out, so this stage goes total the day
+that does.  Everything else a script can say lowers: Float, structs,
+all four container kinds, ownership, the math builtins, and every host
+service.  `grep 'self.fail("' src/luce/08_llvm/lower.zig` is the
+authority — the rest of what that grep finds is refusals for IR that
+could only arrive damaged.
 
 Trap reporting is **not** on that list any more: a compiled trap
 reports its code, its message, and its call stack with

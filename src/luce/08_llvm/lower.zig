@@ -88,6 +88,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const mir = @import("../06_mir.zig");
+const optimize = @import("../07_optimize.zig");
+const loops = @import("loops.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 const abi = @import("abi.zig");
@@ -252,6 +254,15 @@ const Module = struct {
     /// Declarations of the `libluce_rt` entry points this module calls,
     /// one slot per `effects.Service`, filled on first use.
     services: std.EnumMap(Service, Builder.Function.Index) = .{},
+
+    /// One all-zero object row, read in place of a null handle's when a
+    /// resolution is lifted out of a loop (`loops.zig`).  A lifted
+    /// resolution loads the row without deciding anything about it, so
+    /// it has to be safe to load from even when the handle names no
+    /// object; this is what makes it so.  Its `alive` byte is zero and
+    /// its element pointer is null, but neither is ever read: the null
+    /// check stays at the access and traps first.
+    dead_row: ?Builder.Constant = null,
 
     fn deinit(self: *Module) void {
         self.gpa.free(self.functions);
@@ -475,6 +486,28 @@ const Module = struct {
         variable.setMutability(.constant, self.builder);
         variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
         return variable.toConst(self.builder);
+    }
+
+    /// The all-zero row a lifted resolution reads for a null handle.
+    fn deadRow(self: *Module) Error!Builder.Constant {
+        if (self.dead_row) |found| return found;
+        const run_type = try self.builder.arrayType(runtime.layout.row_size, .i8);
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabString("luce.dead.row"),
+            run_type,
+            .default,
+        );
+        try variable.setInitializer(try self.builder.zeroInitConst(run_type), self.builder);
+        variable.setMutability(.constant, self.builder);
+        variable.setAlignment(
+            Builder.Alignment.fromByteUnits(runtime.layout.row_alignment),
+            self.builder,
+        );
+        const global = variable.ptrConst(self.builder).global;
+        global.setLinkage(.private, self.builder);
+        const made = variable.toConst(self.builder);
+        self.dead_row = made;
+        return made;
     }
 
     // -- struct zeros ----------------------------------------------------
@@ -1057,11 +1090,34 @@ const Body = struct {
     /// which no jump ever targets.
     blocks: []BlockIndex = &.{},
 
+    /// Arrays already resolved in the block being filled, and the axis
+    /// lengths they carry.  Both are cleared at every block boundary
+    /// and by any instruction `effects.viewStable` refuses.
+    views: std.ArrayList(ArrayView) = .empty,
+    view_bounds: std.ArrayList(Builder.Value) = .empty,
+
+    /// The resolutions this function lifts out of its loops, and the
+    /// values each one produced.  `loops.zig` decides which and where;
+    /// these are what the preheader left behind.
+    hoists: loops.Plan = .{},
+    hoisted: []Hoisted = &.{},
+    /// Axis lengths belonging to `hoisted`, which — unlike the
+    /// block-local ones — outlive the block that made them.
+    hoist_bounds: std.ArrayList(Builder.Value) = .empty,
+    /// The IR block being filled, which is what says whether a lifted
+    /// resolution is in scope.
+    block: mir.BlockId = 0,
+
     fn deinit(self: *Body) void {
         const gpa = self.module.gpa;
         gpa.free(self.values);
         gpa.free(self.local_slots);
         gpa.free(self.blocks);
+        self.views.deinit(gpa);
+        self.view_bounds.deinit(gpa);
+        self.hoists.deinit(gpa);
+        gpa.free(self.hoisted);
+        self.hoist_bounds.deinit(gpa);
         self.* = undefined;
     }
 
@@ -1104,10 +1160,29 @@ const Body = struct {
         try self.emitFrame();
         _ = try self.wip.br(self.blocks[0]);
 
-        for (function.blocks, self.blocks) |block, llvm_block| {
+        self.hoists = try loops.plan(gpa, self.module.program, function);
+        self.hoisted = try gpa.alloc(Hoisted, self.hoists.hoists.len);
+        @memset(self.hoisted, .{});
+
+        for (function.blocks, self.blocks, 0..) |block, llvm_block, index| {
+            self.block = @intCast(index);
             self.seek(llvm_block);
-            for (block.items) |item| {
+            // A resolved Array is SSA, so it reaches only the blocks
+            // the one it was resolved in dominates.  A basic block is
+            // the horizon MIR registers already keep to, and it is the
+            // horizon a *block-local* view keeps to for the same
+            // reason; a lifted one is defined in a preheader that
+            // dominates the whole loop, so it outlives the block.
+            self.forgetViews();
+            for (block.items, 0..) |item, at| {
+                // The lifted resolutions go at the very end of the
+                // block, in front of its terminator, so everything the
+                // block itself does has already happened.
+                if (at + 1 == block.items.len) try self.emitHoists();
                 try self.emitInstruction(item, function.instructions[item]);
+                if (!optimize.effects.viewStable(function.instructions[item])) {
+                    self.forgetViews();
+                }
             }
         }
     }
@@ -1549,6 +1624,649 @@ const Body = struct {
             );
         }
         return .{ run, try self.module.builder.intValue(.i64, of.len) };
+    }
+
+    // -- Arrays, without the runtime call ---------------------------------
+    //
+    // `a[i]`, `grid[r, c]`, and `len(a)` on an `Array` are generated
+    // here rather than called: the object table row, the bounds check,
+    // and the element load, inline.  A call cannot be: a boxed
+    // subscript is a store the loop cannot hoist, so the call stays
+    // pinned inside the loop however precisely it is described
+    // (docs/CODEGEN.md).
+    //
+    // Two facts make it sound.  The program already knows the target is
+    // an Array and what it holds — `heap_types` says so, statically —
+    // so the runtime's four-way switch on the object's kind has one
+    // arm left at compile time.  And an Array's `dims` and `elements`
+    // never move after `new`: only `alive` ever changes, which is why
+    // this is the container the inline path starts with and a List,
+    // whose buffer moves under `append`, is still a call.
+    //
+    // The offsets come from `runtime.layout`, measured from the Zig
+    // types with `@offsetOf` and checked against a real `Runtime` by a
+    // test beside them.
+
+    /// The shape of the Array a register holds, or null when it holds
+    /// anything else — a List, a Map, a Builder, or no object at all.
+    const ArrayShape = struct { element: types.Type, rank: u8 };
+
+    fn arrayShape(self: *Body, register: mir.Register) ?ArrayShape {
+        const of = self.function.result_types[register];
+        if (of != .heap) return null;
+        return switch (self.module.program.heap_types[of.heap]) {
+            .array => |shape| .{ .element = shape.element, .rank = shape.rank },
+            .list, .map, .builder => null,
+        };
+    }
+
+    /// Whether an element of type `of` can be written in place.
+    ///
+    /// A store into a container frees the element it replaced and
+    /// adopts the one arriving (S20, S22).  Neither happens for a value
+    /// — a scalar or a String owns nothing — so those write inline,
+    /// while an element that could *hold* an object goes on calling the
+    /// runtime, which is the one place that walk is written.
+    fn ownsNothing(of: types.Type) bool {
+        return switch (of) {
+            .boolean, .int, .float, .string => true,
+            .none, .bytes, .strukt, .heap => false,
+        };
+    }
+
+    /// `base + offset` bytes.
+    fn byteOffset(
+        self: *Body,
+        base: Builder.Value,
+        offset: usize,
+        name: []const u8,
+    ) Error!Builder.Value {
+        if (offset == 0) return base;
+        return self.wip.gep(.inbounds, .i8, base, &.{
+            try self.module.builder.intValue(.i64, offset),
+        }, name);
+    }
+
+    /// The object table row a handle names, having made the two checks
+    /// `Runtime.resolve` makes: the null handle traps `null_object`, a
+    /// freed one `use_after_free`.
+    ///
+    /// `resolve`'s third check — the handle inside the table's bounds —
+    /// is not emitted and cannot fire: every non-null handle in a
+    /// register came from `attach`, which appended the very row it
+    /// names, and rows are never removed.
+    fn checkHandle(self: *Body, register: mir.Register) Error!void {
+        try self.check(try self.wip.icmp(
+            .eq,
+            self.values[register],
+            try self.module.builder.intValue(.i32, runtime.null_index),
+            "is.null",
+        ), .null_object);
+    }
+
+    fn resolveRow(self: *Body, register: mir.Register) Error!Builder.Value {
+        const builder = self.module.builder;
+        const handle = self.values[register];
+        try self.checkHandle(register);
+
+        const table = try self.wip.load(
+            .normal,
+            .ptr,
+            try self.byteOffset(self.runtime, runtime.layout.table_pointer, "table.at"),
+            pointer_alignment,
+            "table",
+        );
+        const row = try self.wip.gep(.inbounds, .i8, table, &.{try self.wip.bin(
+            .@"mul nsw",
+            try self.wip.cast(.zext, handle, .i64, "handle"),
+            try builder.intValue(.i64, runtime.layout.row_size),
+            "row.at",
+        )}, "row");
+
+        const alive = try self.wip.load(
+            .normal,
+            .i8,
+            try self.byteOffset(row, runtime.layout.alive, "alive.at"),
+            Builder.Alignment.fromByteUnits(1),
+            "alive",
+        );
+        try self.check(try self.wip.icmp(
+            .eq,
+            alive,
+            try builder.intValue(.i8, 0),
+            "freed",
+        ), .use_after_free);
+        return row;
+    }
+
+    /// One Array, resolved: the element base and one axis length per
+    /// rank, all as SSA values.
+    ///
+    /// **Where the resolve happens is the whole point.**  Resolving at
+    /// every access leaves four loads — the table base, the row's
+    /// `alive` byte, the `dims` pointer, and `dims[0]` — in front of
+    /// every element read, and LLVM cannot hoist any of them out of a
+    /// loop that also *stores* an element, because it has no way to
+    /// know the two do not overlap.  Resolving once per basic block
+    /// turns them into values, and a value cannot be invalidated by a
+    /// store.
+    ///
+    /// Resolving at the handle's **first use in the block**, rather
+    /// than lifting it above the loop, is what keeps the trap ordering
+    /// exactly as it is: `use_after_free` still fires at the
+    /// instruction it fires at today, because the block a view lives
+    /// in ends at every instruction that could free anything
+    /// (`effects.viewStable`).
+    const ArrayView = struct {
+        /// The MIR register whose handle this resolves.
+        register: mir.Register,
+        /// `Object.array.dims.ptr`, or `.none` for a rank-1 array,
+        /// which never reads it: its one bound is `Object.array.count`,
+        /// a word in the row rather than a word behind a pointer in
+        /// the row.  That saved load is not a micro-optimization — the
+        /// dependent load is what stops LLVM's loop unswitching, and
+        /// with it the vectorizer, on the loop around the access.
+        dims: Builder.Value,
+        /// `Object.array.elements.ptr`, indexed as the element kind's
+        /// own cell type.
+        elements: Builder.Value,
+        /// Where this view's axis lengths start in `view_bounds`.
+        bounds_at: u32,
+        rank: u8,
+
+        fn bounds(self: ArrayView, body: *const Body) []const Builder.Value {
+            return body.view_bounds.items[self.bounds_at..][0..self.rank];
+        }
+    };
+
+    /// The LLVM type one cell of an `Array(element)` is.
+    ///
+    /// It mirrors `runtime.Object.ElementKind`, which is what the
+    /// runtime actually allocates: an `Array(Float)` is `f64`s, so
+    /// reading one is a `load double` and nothing else.  The two are
+    /// held together by the byte-offset test in `runtime/test.zig`,
+    /// which reads a Float array's element as an `f64`.
+    fn cellType(self: *Body, element: types.Type) Builder.Type {
+        return switch (element) {
+            .float => .double,
+            .int => .i64,
+            .boolean => .i8,
+            // Everything whose tag or length is not settled by the
+            // type keeps the 24-byte slot.
+            .none, .string, .bytes, .strukt, .heap => self.module.value_type,
+        };
+    }
+
+    fn cellAlignment(element: types.Type) Builder.Alignment {
+        return switch (element) {
+            .boolean => Builder.Alignment.fromByteUnits(1),
+            .none,
+            .int,
+            .float,
+            .string,
+            .bytes,
+            .strukt,
+            .heap,
+            => Builder.Alignment.fromByteUnits(8),
+        };
+    }
+
+    /// One resolution the preheader of a loop already made: the row's
+    /// three facts, read once for the whole loop.
+    const Hoisted = struct {
+        alive: Builder.Value = .none,
+        dims: Builder.Value = .none,
+        elements: Builder.Value = .none,
+        bounds_at: u32 = 0,
+        made: bool = false,
+    };
+
+    fn forgetViews(self: *Body) void {
+        self.views.clearRetainingCapacity();
+        self.view_bounds.clearRetainingCapacity();
+    }
+
+    /// Read every row this block's loops want, once, here.
+    ///
+    /// The loads are made *safe rather than checked*: a null handle
+    /// reads the module's dead row instead of an address 4 GB past the
+    /// table, so nothing here can fault and nothing here decides
+    /// anything.  Every access still tests the handle and the `alive`
+    /// byte for itself, so a trap fires where it always did.
+    fn emitHoists(self: *Body) Error!void {
+        const gpa = self.module.gpa;
+        const builder = self.module.builder;
+        for (self.hoists.emitted[self.block]) |index| {
+            const hoist = self.hoists.hoists[index];
+            const handle = try self.wip.load(
+                .normal,
+                .i32,
+                self.local_slots[hoist.local],
+                Module.valueAlignment(self.function.locals[hoist.local].local_type),
+                "hoist.handle",
+            );
+            const table = try self.wip.load(
+                .normal,
+                .ptr,
+                try self.byteOffset(self.runtime, runtime.layout.table_pointer, "table.at"),
+                pointer_alignment,
+                "table",
+            );
+            const row = try self.wip.select(
+                .normal,
+                try self.wip.icmp(
+                    .eq,
+                    handle,
+                    try builder.intValue(.i32, runtime.null_index),
+                    "hoist.null",
+                ),
+                (try self.module.deadRow()).toValue(),
+                try self.wip.gep(.inbounds, .i8, table, &.{try self.wip.bin(
+                    .@"mul nsw",
+                    try self.wip.cast(.zext, handle, .i64, "hoist.index"),
+                    try builder.intValue(.i64, runtime.layout.row_size),
+                    "hoist.at",
+                )}, "hoist.row"),
+                "row",
+            );
+
+            var made: Hoisted = .{
+                .made = true,
+                .bounds_at = @intCast(self.hoist_bounds.items.len),
+                .alive = try self.wip.load(
+                    .normal,
+                    .i8,
+                    try self.byteOffset(row, runtime.layout.alive, "alive.at"),
+                    Builder.Alignment.fromByteUnits(1),
+                    "alive",
+                ),
+                .elements = try self.wip.load(
+                    .normal,
+                    .ptr,
+                    try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
+                    pointer_alignment,
+                    "elements",
+                ),
+            };
+            if (hoist.rank == 1) {
+                try self.hoist_bounds.append(gpa, try self.wip.load(
+                    .normal,
+                    .i64,
+                    try self.byteOffset(row, runtime.layout.array_count, "count.at"),
+                    value_alignment,
+                    "count",
+                ));
+            } else {
+                made.dims = try self.wip.load(
+                    .normal,
+                    .ptr,
+                    try self.byteOffset(row, runtime.layout.array_dims, "dims.at"),
+                    pointer_alignment,
+                    "dims",
+                );
+                for (0..hoist.rank) |axis| {
+                    try self.hoist_bounds.append(gpa, try self.wip.load(
+                        .normal,
+                        .i64,
+                        try self.wip.gep(
+                            .inbounds,
+                            .i64,
+                            made.dims,
+                            &.{try builder.intValue(.i64, axis)},
+                            "dim.at",
+                        ),
+                        value_alignment,
+                        "dim",
+                    ));
+                }
+            }
+            self.hoisted[index] = made;
+        }
+    }
+
+    /// The lifted resolution this block may read for `register`, if
+    /// the register is a handle read straight out of a local and some
+    /// enclosing loop's preheader already resolved it.
+    fn liftedView(self: *Body, register: mir.Register) ?u32 {
+        const local = switch (self.function.instructions[register]) {
+            .local_get => |which| which,
+            else => return null,
+        };
+        const index = self.hoists.find(self.block, local) orelse return null;
+        if (!self.hoisted[index].made) return null;
+        return index;
+    }
+
+    /// The Array in `register`, resolved — reusing the resolution
+    /// already made in this block if there is one.
+    fn arrayView(self: *Body, register: mir.Register, shape: ArrayShape) Error!ArrayView {
+        for (self.views.items) |found| {
+            if (found.register == register) return found;
+        }
+        const gpa = self.module.gpa;
+        if (self.liftedView(register)) |index| {
+            // The loads happened in the preheader; the checks happen
+            // here, which is what keeps the trap where it belongs.
+            try self.checkHandle(register);
+            try self.check(try self.wip.icmp(
+                .eq,
+                self.hoisted[index].alive,
+                try self.module.builder.intValue(.i8, 0),
+                "freed",
+            ), .use_after_free);
+            const made: ArrayView = .{
+                .register = register,
+                .dims = self.hoisted[index].dims,
+                .elements = self.hoisted[index].elements,
+                .bounds_at = @intCast(self.view_bounds.items.len),
+                .rank = shape.rank,
+            };
+            try self.view_bounds.appendSlice(
+                gpa,
+                self.hoist_bounds.items[self.hoisted[index].bounds_at..][0..shape.rank],
+            );
+            try self.views.append(gpa, made);
+            return made;
+        }
+        const row = try self.resolveRow(register);
+        const bounds_at: u32 = @intCast(self.view_bounds.items.len);
+        var dims: Builder.Value = .none;
+        if (shape.rank == 1) {
+            // `count` is the product of the axes, so for one axis it
+            // *is* that axis — one load nearer than `dims[0]`.
+            try self.view_bounds.append(gpa, try self.wip.load(
+                .normal,
+                .i64,
+                try self.byteOffset(row, runtime.layout.array_count, "count.at"),
+                value_alignment,
+                "count",
+            ));
+        } else {
+            dims = try self.wip.load(
+                .normal,
+                .ptr,
+                try self.byteOffset(row, runtime.layout.array_dims, "dims.at"),
+                pointer_alignment,
+                "dims",
+            );
+            for (0..shape.rank) |axis| {
+                try self.view_bounds.append(gpa, try self.wip.load(
+                    .normal,
+                    .i64,
+                    try self.wip.gep(
+                        .inbounds,
+                        .i64,
+                        dims,
+                        &.{try self.module.builder.intValue(.i64, axis)},
+                        "dim.at",
+                    ),
+                    value_alignment,
+                    "dim",
+                ));
+            }
+        }
+        const made: ArrayView = .{
+            .register = register,
+            .dims = dims,
+            .elements = try self.wip.load(
+                .normal,
+                .ptr,
+                try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
+                pointer_alignment,
+                "elements",
+            ),
+            .bounds_at = bounds_at,
+            .rank = shape.rank,
+        };
+        try self.views.append(gpa, made);
+        return made;
+    }
+
+    /// The address of the element `indices` names, bound-checked axis
+    /// by axis and flattened exactly as `heap.flattenIndex` does it.
+    fn arrayElement(
+        self: *Body,
+        view: ArrayView,
+        element: types.Type,
+        indices: []const mir.Register,
+    ) Error!Builder.Value {
+        const builder = self.module.builder;
+        var flat = try builder.intValue(.i64, 0);
+        for (indices, view.bounds(self)) |register, size| {
+            const index = self.values[register];
+            const below = try self.wip.icmp(.slt, index, try builder.intValue(.i64, 0), "below");
+            const above = try self.wip.icmp(.sge, index, size, "above");
+            try self.check(
+                try self.wip.bin(.@"or", below, above, "out.of.range"),
+                .index_bounds,
+            );
+            flat = try self.wip.bin(
+                .@"add nsw",
+                try self.wip.bin(.@"mul nsw", flat, size, "axis.base"),
+                index,
+                "flat",
+            );
+        }
+        return self.wip.gep(
+            .inbounds,
+            self.cellType(element),
+            view.elements,
+            &.{flat},
+            "element",
+        );
+    }
+
+    /// Read one cell as the Luce value it holds.
+    fn loadCell(self: *Body, element: types.Type, address: Builder.Value) Error!Builder.Value {
+        return switch (element) {
+            .float, .int => try self.wip.load(
+                .normal,
+                self.cellType(element),
+                address,
+                cellAlignment(element),
+                "element",
+            ),
+            .boolean => try self.wip.icmp(
+                .ne,
+                try self.wip.load(.normal, .i8, address, cellAlignment(element), "cell"),
+                try self.module.builder.intValue(.i8, 0),
+                "element",
+            ),
+            // A boxed cell: the tag and the length are already the
+            // element type's, so only the payload words are read.
+            .none, .string, .bytes, .strukt, .heap => try self.unboxed(
+                element,
+                address,
+                "element",
+            ),
+        };
+    }
+
+    /// Write one cell.  The element type is the same for every slot, so
+    /// a typed cell takes the payload as it stands and a boxed one
+    /// keeps the tag and length `new` wrote.
+    fn storeCell(
+        self: *Body,
+        element: types.Type,
+        address: Builder.Value,
+        held: Builder.Value,
+    ) Error!void {
+        switch (element) {
+            .float, .int => _ = try self.wip.store(
+                .normal,
+                held,
+                address,
+                cellAlignment(element),
+            ),
+            .boolean => _ = try self.wip.store(
+                .normal,
+                try self.wip.cast(.zext, held, .i8, "cell"),
+                address,
+                cellAlignment(element),
+            ),
+            .none, .string, .bytes, .strukt, .heap => try self.fillBoxValue(
+                address,
+                element,
+                held,
+            ),
+        }
+    }
+
+    /// `len(a)` on an Array: the first axis.
+    fn emitArrayLength(
+        self: *Body,
+        register: mir.Register,
+        target: mir.Register,
+        shape: ArrayShape,
+    ) Error!void {
+        if (shape.rank == 0) {
+            self.values[register] = try self.module.builder.intValue(.i64, 0);
+            return;
+        }
+        const view = try self.arrayView(target, shape);
+        self.values[register] = view.bounds(self)[0];
+    }
+
+    /// `a.dim(k)` on an Array.  The rank is a compile-time fact, so the
+    /// axis check is against a constant.
+    fn emitArrayDimSize(
+        self: *Body,
+        register: mir.Register,
+        target: mir.Register,
+        axis: mir.Register,
+        shape: ArrayShape,
+    ) Error!void {
+        const builder = self.module.builder;
+        const view = try self.arrayView(target, shape);
+        const wanted = self.values[axis];
+        const below = try self.wip.icmp(.slt, wanted, try builder.intValue(.i64, 0), "below");
+        const above = try self.wip.icmp(
+            .sge,
+            wanted,
+            try builder.intValue(.i64, shape.rank),
+            "above",
+        );
+        try self.check(try self.wip.bin(.@"or", below, above, "out.of.range"), .index_bounds);
+        // A rank-1 array has one axis, and the check above has already
+        // said the wanted one is it.
+        if (shape.rank == 1) {
+            self.values[register] = view.bounds(self)[0];
+            return;
+        }
+        self.values[register] = try self.wip.load(
+            .normal,
+            .i64,
+            try self.wip.gep(.inbounds, .i64, view.dims, &.{wanted}, "dim.at"),
+            value_alignment,
+            "dim",
+        );
+    }
+
+    // -- Strings, without the runtime call --------------------------------
+    //
+    // A String already travels through generated code as an unboxed
+    // `{ ptr, i64 }`, so `len`, `byte_at` and a slice are a compare and
+    // a load — and boxing one to ask the runtime for it costs more than
+    // the answer.  These are the same three checks `runtime/text.zig`
+    // makes, in the same order, so the trap a bad index raises is the
+    // same trap with the same words.
+
+    /// Trap unless `index` falls between UTF-8 sequences: `index ==
+    /// length`, or a byte that is not a continuation.
+    /// `text.isStringBoundary`, inline — **including its
+    /// short-circuit**, which is not decoration: the end of a String is
+    /// a legal slice bound, and the byte there is one past the last,
+    /// which is not ours to read.  So the load sits behind the branch,
+    /// exactly as the `or` puts it behind one in Zig.
+    fn checkBoundary(
+        self: *Body,
+        text: Builder.Value,
+        length: Builder.Value,
+        index: Builder.Value,
+    ) Error!void {
+        const builder = self.module.builder;
+        const looking = try self.wip.block(1, "boundary");
+        // Two ways on: the index was the end, or the byte there begins
+        // a sequence.
+        const settled = try self.wip.block(2, "on.boundary");
+        _ = try self.wip.brCond(
+            try self.wip.icmp(.eq, index, length, "at.end"),
+            settled,
+            looking,
+            .none,
+        );
+
+        self.seek(looking);
+        const byte = try self.wip.load(
+            .normal,
+            .i8,
+            try self.wip.gep(.inbounds, .i8, text, &.{index}, "byte.at"),
+            Builder.Alignment.fromByteUnits(1),
+            "byte",
+        );
+        try self.check(try self.wip.icmp(
+            .eq,
+            try self.wip.bin(.@"and", byte, try builder.intValue(.i8, 0xc0), "top.bits"),
+            try builder.intValue(.i8, @as(i8, @bitCast(@as(u8, 0x80)))),
+            "continuation",
+        ), .string_boundary);
+        _ = try self.wip.br(settled);
+        self.seek(settled);
+    }
+
+    /// `s.byte_at(i)` — one raw byte, below the UTF-8 layer on purpose.
+    fn emitStringByte(
+        self: *Body,
+        register: mir.Register,
+        text_register: mir.Register,
+        index_register: mir.Register,
+    ) Error!void {
+        const builder = self.module.builder;
+        const text, const length = try self.textParts(text_register, "text");
+        const index = self.values[index_register];
+        const below = try self.wip.icmp(.slt, index, try builder.intValue(.i64, 0), "below");
+        const above = try self.wip.icmp(.sge, index, length, "above");
+        try self.check(
+            try self.wip.bin(.@"or", below, above, "out.of.range"),
+            .string_bounds,
+        );
+        self.values[register] = try self.wip.cast(.zext, try self.wip.load(
+            .normal,
+            .i8,
+            try self.wip.gep(.inbounds, .i8, text, &.{index}, "byte.at"),
+            Builder.Alignment.fromByteUnits(1),
+            "byte",
+        ), .i64, "byte.value");
+    }
+
+    /// `s[a:b]` — a borrow of the original bytes, checked twice: in
+    /// range, and on a UTF-8 boundary at both ends.
+    fn emitStringSlice(
+        self: *Body,
+        register: mir.Register,
+        text_register: mir.Register,
+        from: mir.Register,
+        to: mir.Register,
+    ) Error!void {
+        const builder = self.module.builder;
+        const text, const length = try self.textParts(text_register, "text");
+        const first = self.values[from];
+        const end = self.values[to];
+        const below = try self.wip.icmp(.slt, first, try builder.intValue(.i64, 0), "below");
+        const inverted = try self.wip.icmp(.slt, end, first, "inverted");
+        const past = try self.wip.icmp(.sgt, end, length, "past.end");
+        try self.check(try self.wip.bin(
+            .@"or",
+            below,
+            try self.wip.bin(.@"or", inverted, past, "misordered"),
+            "out.of.range",
+        ), .string_bounds);
+        try self.checkBoundary(text, length, first);
+        try self.checkBoundary(text, length, end);
+        self.values[register] = try self.wip.buildAggregate(self.module.string_type, &.{
+            try self.wip.gep(.inbounds, .i8, text, &.{first}, "slice.at"),
+            try self.wip.bin(.@"sub nsw", end, first, "slice.length"),
+        }, "slice");
     }
 
     // -- the host table ------------------------------------------------
@@ -2367,11 +3085,32 @@ const Body = struct {
             .null_object => {
                 self.values[register] = try self.module.builder.intValue(.i32, runtime.null_index);
             },
-            .len => try self.callAnswering(register, .luce_rt_len, &.{
-                rt,
-                try self.boxedRegister(of[0], "target"),
-            }),
+            .len => {
+                // A String is `{ ptr, i64 }` in a register already, so
+                // its length is the second word and nothing else.
+                if (self.function.result_types[of[0]] == .string) {
+                    self.values[register] = try self.wip.extractValue(
+                        self.values[of[0]],
+                        &.{1},
+                        "length",
+                    );
+                    return;
+                }
+                if (self.arrayShape(of[0])) |shape| {
+                    return self.emitArrayLength(register, of[0], shape);
+                }
+                try self.callAnswering(register, .luce_rt_len, &.{
+                    rt,
+                    try self.boxedRegister(of[0], "target"),
+                });
+            },
             .index_get => {
+                if (self.arrayShape(of[0])) |shape| {
+                    const view = try self.arrayView(of[0], shape);
+                    const address = try self.arrayElement(view, shape.element, of[1..]);
+                    self.values[register] = try self.loadCell(shape.element, address);
+                    return;
+                }
                 const run, const rank = try self.subscripts(of[1..]);
                 try self.callAnswering(register, .luce_rt_index_get, &.{
                     rt,
@@ -2381,6 +3120,22 @@ const Body = struct {
                 });
             },
             .index_set => {
+                if (self.arrayShape(of[0])) |shape| {
+                    if (ownsNothing(shape.element)) {
+                        const view = try self.arrayView(of[0], shape);
+                        const address = try self.arrayElement(
+                            view,
+                            shape.element,
+                            of[1 .. of.len - 1],
+                        );
+                        try self.storeCell(
+                            shape.element,
+                            address,
+                            self.values[of[of.len - 1]],
+                        );
+                        return;
+                    }
+                }
                 const held = try self.boxedRegister(of[of.len - 1], "element");
                 const run, const rank = try self.subscripts(of[1 .. of.len - 1]);
                 try self.callChecked(.luce_rt_index_set, &.{
@@ -2437,11 +3192,16 @@ const Body = struct {
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
             }),
-            .dim_size => try self.callAnswering(register, .luce_rt_dim_size, &.{
-                rt,
-                try self.boxedRegister(of[0], "target"),
-                self.values[of[1]],
-            }),
+            .dim_size => {
+                if (self.arrayShape(of[0])) |shape| {
+                    return self.emitArrayDimSize(register, of[0], of[1], shape);
+                }
+                try self.callAnswering(register, .luce_rt_dim_size, &.{
+                    rt,
+                    try self.boxedRegister(of[0], "target"),
+                    self.values[of[1]],
+                });
+            },
             .list_sort => try self.callChecked(.luce_rt_sort, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
@@ -2527,17 +3287,8 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
-            .string_slice => try self.callAnswering(register, .luce_rt_string_slice, &.{
-                rt,
-                try self.boxedRegister(of[0], "text"),
-                self.values[of[1]],
-                self.values[of[2]],
-            }),
-            .string_byte => try self.callAnswering(register, .luce_rt_string_byte, &.{
-                rt,
-                try self.boxedRegister(of[0], "text"),
-                self.values[of[1]],
-            }),
+            .string_slice => try self.emitStringSlice(register, of[0], of[1], of[2]),
+            .string_byte => try self.emitStringByte(register, of[0], of[1]),
             .string_find_byte => try self.callAnswering(register, .luce_rt_string_find_byte, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
@@ -2683,10 +3434,19 @@ const Body = struct {
     /// `min` when `wants_minimum`, `max` otherwise.
     ///
     /// Int is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
-    /// Float is a runtime call, because `llvm.minnum` does not: it
-    /// leaves `(-0.0, +0.0)` unspecified, and LLVM's constant folder and
-    /// the target's min instruction pick differently
-    /// (`runtime/exports.zig`).  One answer, so one implementation.
+    ///
+    /// Float is spelled out, because no single LLVM intrinsic means
+    /// what the interpreter's `@min` means.  `llvm.minnum` leaves
+    /// `(-0.0, +0.0)` unspecified, and LLVM's constant folder and the
+    /// target's instruction then pick differently — which is why this
+    /// used to be a runtime call.  `llvm.minimum` *is* specified there
+    /// (`-0.0 < +0.0`, folded and lowered alike) but propagates NaN,
+    /// where the interpreter answers the operand that is a number.  So
+    /// the two are composed: `minimum`, with the NaN cases selected
+    /// around it.  That is four instructions and no call — `vmin` over
+    /// a million-element array was a million calls — and
+    /// `specs/behavior_spec.zig` holds both engines to the same answer
+    /// for every signed zero and NaN pairing.
     fn emitExtremum(
         self: *Body,
         wants_minimum: bool,
@@ -2703,11 +3463,27 @@ const Body = struct {
                 &.{ left, right },
                 "extremum",
             ),
-            .float => return self.callRuntime(.luce_rt_float_extremum, .double, &.{
-                try self.module.builder.intValue(.i32, @intFromBool(wants_minimum)),
-                left,
-                right,
-            }, "extremum"),
+            .float => {
+                const ordered = try self.wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    if (wants_minimum) .minimum else .maximum,
+                    &.{.double},
+                    &.{ left, right },
+                    "extremum",
+                );
+                // NaN compares unordered with itself, and an extremum
+                // against one is the other operand.
+                const right_is_nan = try self.wip.fcmp(.normal, .uno, right, right, "right.nan");
+                const left_is_nan = try self.wip.fcmp(.normal, .uno, left, left, "left.nan");
+                return self.wip.select(
+                    .normal,
+                    left_is_nan,
+                    right,
+                    try self.wip.select(.normal, right_is_nan, left, ordered, "numeric"),
+                    "extremum",
+                );
+            },
         }
     }
 

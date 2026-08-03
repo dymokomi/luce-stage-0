@@ -29,7 +29,10 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
             break :blk switch (object.data) {
                 .list => |list| list.items.len,
                 .map => |map| map.entries.items.len,
-                .array => |array| if (array.dims.len == 0) 0 else @intCast(array.dims[0]),
+                .array => if (object.array.dims.len == 0)
+                    0
+                else
+                    @intCast(object.array.dims[0]),
                 .builder => |builder| builder.items.len,
             };
         },
@@ -53,10 +56,10 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
             const at = map.find(indices[0]) orelse return runtime.fail(.key_missing);
             return map.entries.items[at].value;
         },
-        .array => |array| {
-            const flat = heap.flattenIndex(array.dims, indices) orelse
+        .array => {
+            const flat = heap.flattenIndex(object.array.dims, indices) orelse
                 return runtime.fail(.index_bounds);
-            return array.elements[flat];
+            return object.array.at(flat);
         },
         .builder => unreachable,
     }
@@ -82,11 +85,13 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
                 try map.insert(runtime.objects, .{ .key = key, .value = held });
             }
         },
-        .array => |array| {
-            const flat = heap.flattenIndex(array.dims, indices) orelse
+        .array => {
+            const flat = heap.flattenIndex(object.array.dims, indices) orelse
                 return runtime.fail(.index_bounds);
-            runtime.freeValue(array.elements[flat]);
-            array.elements[flat] = held;
+            // An element overwrite frees the old owned element (S22);
+            // only a `Value` cell can be holding one.
+            if (object.array.kind == .value) runtime.freeValue(object.array.at(flat));
+            object.array.put(flat, held);
         },
         .builder => unreachable,
     }
@@ -189,9 +194,9 @@ pub fn valueAt(runtime: *Runtime, target: Value, index: i64) Error!Value {
 
 pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
     const object = try runtime.resolve(target);
-    const array = object.data.array;
-    if (axis < 0 or axis >= array.dims.len) return runtime.fail(.index_bounds);
-    return Value.ofInt(array.dims[@intCast(axis)]);
+    const dims = object.array.dims;
+    if (axis < 0 or axis >= dims.len) return runtime.fail(.index_bounds);
+    return Value.ofInt(dims[@intCast(axis)]);
 }
 
 /// `xs.sort()` and `xs.reverse()`, in place, on a list or an array.
@@ -203,29 +208,69 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
 /// unstable order would be observable in a program's output.  It
 /// replaces an insertion sort that was stable too, and quadratic.
 pub fn sort(runtime: *Runtime, target: Value) Error!void {
-    std.sort.block(Value, try elementsOf(runtime, target), {}, operators.orderedBefore);
+    const object = try runtime.resolve(target);
+    switch (object.data) {
+        .list => |*list| std.sort.block(Value, list.items, {}, operators.orderedBefore),
+        // An array's cells are its own storage type, so the sort runs
+        // on `f64`s or `i64`s directly; the ordering is still Luce's,
+        // read through `Value` by the comparator.
+        .array => switch (object.array.kind) {
+            inline else => |kind| {
+                const Cell = kind.Cell();
+                std.sort.block(Cell, object.array.cells(Cell), {}, cellBefore(kind).before);
+            },
+        },
+        else => unreachable,
+    }
 }
 
 pub fn reverse(runtime: *Runtime, target: Value) Error!void {
-    std.mem.reverse(Value, try elementsOf(runtime, target));
+    const object = try runtime.resolve(target);
+    switch (object.data) {
+        .list => |*list| std.mem.reverse(Value, list.items),
+        .array => switch (object.array.kind) {
+            inline else => |kind| std.mem.reverse(kind.Cell(), object.array.cells(kind.Cell())),
+        },
+        else => unreachable,
+    }
 }
 
 /// `xs.find(v)` — the index of the first equal element, or -1.
 pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!i64 {
-    for (try elementsOf(runtime, target), 0..) |element, at| {
-        if (operators.compare(.equal, element, wanted)) return @intCast(at);
+    const object = try runtime.resolve(target);
+    switch (object.data) {
+        .list => |*list| for (list.items, 0..) |element, at| {
+            if (operators.compare(.equal, element, wanted)) return @intCast(at);
+        },
+        .array => {
+            const array = object.array;
+            for (0..array.count) |at| {
+                if (operators.compare(.equal, array.at(at), wanted)) return @intCast(at);
+            }
+        },
+        else => unreachable,
     }
     return -1;
 }
 
-/// The mutable elements of a list or an array; the two sequence
-/// algorithms treat them alike.
-fn elementsOf(runtime: *Runtime, target: Value) Error![]Value {
-    const object = try runtime.resolve(target);
-    return switch (object.data) {
-        .list => |*list| list.items,
-        .array => |array| array.elements,
-        else => unreachable,
+/// Luce's ordering on one element kind's own cells.  `sort` is the
+/// language's sort whatever an array stores, so the comparison goes
+/// back through `Value` — which costs nothing: the wrapping folds
+/// away once the kind is comptime.
+fn cellBefore(comptime kind: heap.Object.ElementKind) type {
+    return struct {
+        fn before(_: void, left: kind.Cell(), right: kind.Cell()) bool {
+            return operators.orderedBefore({}, lift(left), lift(right));
+        }
+
+        fn lift(cell: kind.Cell()) Value {
+            return switch (kind) {
+                .value => cell,
+                .float => Value.ofFloat(cell),
+                .int => Value.ofInt(cell),
+                .boolean => Value.ofBoolean(cell != 0),
+            };
+        }
     };
 }
 
@@ -288,7 +333,7 @@ pub fn mapGet(runtime: *Runtime, target: Value, key: Value, fallback: Value) Err
 
 pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
-    @memset(object.data.array.elements, held);
+    object.array.fill(held);
 }
 
 // ---------------------------------------------------------------------------

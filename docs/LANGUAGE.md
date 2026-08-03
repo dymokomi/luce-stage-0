@@ -420,4 +420,5 @@ final), implicit conversions, shadowing, mutable file-scope `var`
 decision), optionals and nullable types (Phase 3, designed with
 error handling), garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
-string interpolation, and enums/unions.
+and enums/unions.  (String interpolation shipped: see f-strings
+above.)

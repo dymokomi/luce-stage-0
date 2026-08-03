@@ -76,54 +76,195 @@ pub const Owner = union(enum) {
 pub const Object = struct {
     alive: bool = true,
     owner: Owner = .loose,
+
+    /// An Array's shape and elements — a field of the row rather than a
+    /// payload inside `data`, which is a deliberate exception and the
+    /// only one.
+    ///
+    /// Compiled code indexes an Array *inline*: no runtime call, no
+    /// boxed subscript, just the bounds check and the element load
+    /// docs/CODEGEN.md describes.  To emit that it needs the byte
+    /// offset of `dims` and `elements` at **compile** time, and Zig
+    /// promises a layout for a struct field while promising nothing for
+    /// a tagged union's payload.  So the one shape generated code walks
+    /// lives here, where `@offsetOf` can answer for it (`layout`
+    /// below), and every other kind's storage stays in `data`, reached
+    /// only through a checked switch.
+    ///
+    /// Meaningful exactly when `data == .array`; `.empty` otherwise,
+    /// and `.empty` again once the object is released.
+    array: Array = .empty,
+
     data: Data,
 
     pub const Data = union(enum) {
         list: std.ArrayList(Value),
         map: Map,
-        array: Array,
+        /// The storage is `Object.array`, for the reason above.
+        array,
         builder: std.ArrayList(u8),
+    };
 
-        /// Give the contents back and leave an empty thing of the same
-        /// kind behind.
-        ///
-        /// The kind is kept on purpose.  Nothing reads a freed object's
-        /// data — `alive` is false, so `resolve` traps `use_after_free`
-        /// and the ownership walks skip it — but an empty List is a far
-        /// better thing for a bug to find than a dangling pointer, and
-        /// it costs a store.
-        pub fn release(self: *Data, allocator: Allocator) void {
-            switch (self.*) {
-                .list => |*list| {
-                    list.deinit(allocator);
-                    self.* = .{ .list = .empty };
-                },
-                .map => |*map| {
-                    map.deinit(allocator);
-                    self.* = .{ .map = .empty };
-                },
-                .array => |shape| {
-                    allocator.free(shape.dims);
-                    allocator.free(shape.elements);
-                    self.* = .{ .array = .{ .dims = &.{}, .elements = &.{} } };
-                },
-                .builder => |*builder| {
-                    builder.deinit(allocator);
-                    self.* = .{ .builder = .empty };
-                },
+    /// An Array's shape and its elements.
+    ///
+    /// **The elements are stored as themselves, not as `Value`s.**  An
+    /// `Array(Float)` is `f64`s, an `Array(Int)` is `i64`s, an
+    /// `Array(Bool)` is bytes; only the kinds whose tag or length is
+    /// not a compile-time fact — Strings, structs, objects — keep the
+    /// 24-byte slot.  Three reasons, in the order they matter:
+    /// compiled code loads and stores an element with one instruction
+    /// and no unboxing; a `double` array is a third of the memory
+    /// traffic of a boxed one, which is what a numeric loop is bound
+    /// by; and an array of tagged slots is not something that can ever
+    /// be handed to a SIMD unit or a GPU.  `Value` is the *boundary*
+    /// type — how an element crosses into a caller — never the storage
+    /// type, and nothing outside this struct needs to know the
+    /// difference: `at` and `put` speak `Value` on both sides.
+    pub const Array = struct {
+        /// How one element is stored.
+        kind: ElementKind = .value,
+        /// The axis lengths, `rank` of them.  Immutable after `new`.
+        dims: []i64 = &.{},
+        /// The elements, `kind.width()` bytes apart — one pointer
+        /// whatever the kind, so compiled code loads it from one
+        /// place.  Allocated at `Value`'s alignment, which every kind
+        /// is satisfied by.
+        elements: Storage = &.{},
+        /// How many elements there are: the product of `dims`, and for
+        /// a rank-1 array its one and only bound.  Compiled code
+        /// bound-checks a rank-1 index against this rather than
+        /// against `dims[0]`, which saves it the load through `dims`
+        /// — and that indirection is exactly what stops LLVM
+        /// vectorizing the loop around it.
+        count: usize = 0,
+
+        pub const empty: Array = .{};
+
+        /// Element storage, at `Value`'s alignment so every kind fits.
+        pub const Storage = []align(@alignOf(Value)) u8;
+
+        /// Element `index`, as the `Value` every caller speaks.
+        pub fn at(self: Array, index: usize) Value {
+            return switch (self.kind) {
+                .value => self.cells(Value)[index],
+                .float => Value.ofFloat(self.cells(f64)[index]),
+                .int => Value.ofInt(self.cells(i64)[index]),
+                .boolean => Value.ofBoolean(self.cells(u8)[index] != 0),
+            };
+        }
+
+        /// Write element `index`.  The value's type is the array's
+        /// element type — the analyzer settled that — so only the
+        /// payload travels.
+        pub fn put(self: Array, index: usize, held: Value) void {
+            switch (self.kind) {
+                .value => self.cells(Value)[index] = held,
+                .float => self.cells(f64)[index] = held.asFloat(),
+                .int => self.cells(i64)[index] = held.asInt(),
+                .boolean => self.cells(u8)[index] = @intFromBool(held.asBoolean()),
             }
+        }
+
+        /// Every element set to `held` — `new`'s zero fill and
+        /// `a.fill(v)`.
+        pub fn fill(self: Array, held: Value) void {
+            switch (self.kind) {
+                .value => @memset(self.cells(Value), held),
+                .float => @memset(self.cells(f64), held.asFloat()),
+                .int => @memset(self.cells(i64), held.asInt()),
+                .boolean => @memset(self.cells(u8), @intFromBool(held.asBoolean())),
+            }
+        }
+
+        /// The elements as their own storage type.  `T` must be
+        /// `kind`'s cell type; every caller either switches on the
+        /// kind or knows it from the value it is about to store.
+        pub fn cells(self: Array, comptime T: type) []T {
+            const base: [*]T = @ptrCast(@alignCast(self.elements.ptr));
+            return base[0..self.count];
         }
     };
 
-    pub const Array = struct { dims: []i64, elements: []Value };
+    /// How an Array stores one element.
+    pub const ElementKind = enum(u32) {
+        /// A 24-byte `Value`: a String, a struct, or an object handle
+        /// — anything the element type does not settle to one machine
+        /// word.  The only kind that can own something.
+        value,
+        float,
+        int,
+        boolean,
 
-    /// Give the object's storage back.  What does *not* happen here is
-    /// the object leaving the table — the slot and its handle stay dead
-    /// forever, which is what makes S9 a clean trap rather than
-    /// undefined behaviour.  Only the storage is reclaimed, never the
-    /// identity.
+        /// The cell type `Array.cells` reads, so a switch with an
+        /// `inline else` gets the storage type for free.
+        pub fn Cell(comptime self: ElementKind) type {
+            return switch (self) {
+                .value => Value,
+                .float => f64,
+                .int => i64,
+                .boolean => u8,
+            };
+        }
+
+        pub fn width(self: ElementKind) usize {
+            return switch (self) {
+                .value => @sizeOf(Value),
+                .float => @sizeOf(f64),
+                .int => @sizeOf(i64),
+                .boolean => 1,
+            };
+        }
+
+        /// How to store an element whose zero is `zero`.
+        ///
+        /// The element *type* lives in the program's type table, which
+        /// the runtime deliberately does not know — but `newArray`
+        /// already takes the element zero for exactly that reason, and
+        /// its tag is the type.  So the kind arrives with the array
+        /// and nothing new crosses the boundary.
+        pub fn of(zero: Value) ElementKind {
+            return switch (zero.tag) {
+                .float => .float,
+                .int => .int,
+                .boolean => .boolean,
+                .none, .string, .bytes, .strukt, .object => .value,
+            };
+        }
+    };
+
+    /// Give the object's storage back and leave an empty thing of the
+    /// same kind behind.
+    ///
+    /// What does *not* happen here is the object leaving the table —
+    /// the slot and its handle stay dead forever, which is what makes
+    /// S9 a clean trap rather than undefined behaviour.  Only the
+    /// storage is reclaimed, never the identity.
+    ///
+    /// The kind is kept on purpose.  Nothing reads a freed object's
+    /// data — `alive` is false, so `resolve` traps `use_after_free` and
+    /// the ownership walks skip it — but an empty List is a far better
+    /// thing for a bug to find than a dangling pointer, and it costs a
+    /// store.
     pub fn release(self: *Object, allocator: Allocator) void {
-        self.data.release(allocator);
+        switch (self.data) {
+            .list => |*list| {
+                list.deinit(allocator);
+                self.data = .{ .list = .empty };
+            },
+            .map => |*map| {
+                map.deinit(allocator);
+                self.data = .{ .map = .empty };
+            },
+            .array => {
+                allocator.free(self.array.dims);
+                allocator.free(self.array.elements);
+                self.array = .empty;
+            },
+            .builder => |*builder| {
+                builder.deinit(allocator);
+                self.data = .{ .builder = .empty };
+            },
+        }
     }
 };
 
@@ -250,6 +391,57 @@ pub const Map = struct {
 /// A safety valve, not a design limit: one array allocation cannot
 /// exceed this many elements.
 pub const max_array_elements = 1 << 24;
+
+// ---------------------------------------------------------------------------
+// What compiled code walks
+// ---------------------------------------------------------------------------
+
+/// Where an object row's fields sit, in bytes, for the one reader that
+/// cannot call a function to ask: generated machine code
+/// (`08_llvm/lower.zig`), which indexes an `Array` inline.
+///
+/// Nothing here is *written down* — every offset is measured from the
+/// Zig types above with `@offsetOf`, so the two cannot drift, and the
+/// test at the foot of this file reads a real `Runtime` through these
+/// numbers and checks it sees the fields it means to.  That is the same
+/// bargain `runtime/value.zig` strikes for the 24-byte `Value`: one
+/// layout, asserted rather than assumed.
+///
+/// The compiler and `libluce_rt` are built from this file by one Zig
+/// compiler for one target, so a measured offset is the same number on
+/// both sides.  An artifact is not portable across runtime builds —
+/// neither is the `Value` layout, nor the service signatures.
+pub const layout = struct {
+    /// `Runtime.table.items.ptr` — the base of the object table.
+    pub const table_pointer = @offsetOf(Runtime, "table") +
+        @offsetOf(std.ArrayList(Object), "items") + slice_pointer;
+    /// One row.
+    pub const row_size = @sizeOf(Object);
+    pub const row_alignment = @alignOf(Object);
+    /// `Object.alive` — a `bool`, so one byte, zero meaning freed.
+    pub const alive = @offsetOf(Object, "alive");
+    /// `Object.array.dims.ptr` — `[*]i64`, one entry per axis.  The
+    /// rank is a compile-time fact, so the length is not read.  Only a
+    /// rank-2-or-higher access reads it at all: rank 1 bound-checks
+    /// against `array_count`, one load nearer.
+    pub const array_dims = @offsetOf(Object, "array") +
+        @offsetOf(Object.Array, "dims") + slice_pointer;
+    /// `Object.array.elements.ptr` — the elements, in the element
+    /// kind's own storage (`Object.ElementKind`), which the program
+    /// knows statically.
+    pub const array_elements = @offsetOf(Object, "array") +
+        @offsetOf(Object.Array, "elements") + slice_pointer;
+    /// `Object.array.count` — the product of the axes, and the one
+    /// bound a rank-1 index is checked against.
+    pub const array_count = @offsetOf(Object, "array") +
+        @offsetOf(Object.Array, "count");
+
+    /// A Zig slice is `{ ptr, len }`, in that order, on every target.
+    /// Named here rather than spelled `0` at four call sites, and
+    /// checked by the same test.
+    pub const slice_pointer = 0;
+    pub const slice_count = @sizeOf(usize);
+};
 
 // ---------------------------------------------------------------------------
 // The runtime instance
@@ -423,15 +615,15 @@ pub const Runtime = struct {
     // -- allocation --------------------------------------------------------
 
     pub fn newList(self: *Runtime) Error!Value {
-        return self.attach(.{ .list = .empty });
+        return self.attach(.{ .data = .{ .list = .empty } });
     }
 
     pub fn newMap(self: *Runtime) Error!Value {
-        return self.attach(.{ .map = .empty });
+        return self.attach(.{ .data = .{ .map = .empty } });
     }
 
     pub fn newBuilder(self: *Runtime) Error!Value {
-        return self.attach(.{ .builder = .empty });
+        return self.attach(.{ .data = .{ .builder = .empty } });
     }
 
     /// A fresh array of `dims`, every element `zero`.  The element zero
@@ -448,25 +640,37 @@ pub const Runtime = struct {
                 return self.fail(.index_bounds);
             if (total > max_array_elements) return self.fail(.index_bounds);
         }
-        const elements = try self.objects.alloc(Value, total);
+        const kind: Object.ElementKind = .of(zero);
+        const elements = try self.objects.alignedAlloc(
+            u8,
+            .of(Value),
+            total * kind.width(),
+        );
         errdefer self.objects.free(elements);
-        @memset(elements, zero);
-        return self.attach(.{ .array = .{ .dims = shape, .elements = elements } });
+        const array: Object.Array = .{
+            .kind = kind,
+            .dims = shape,
+            .elements = elements,
+            .count = total,
+        };
+        array.fill(zero);
+        return self.attach(.{ .data = .array, .array = array });
     }
 
     /// Adopt an already-built list as a new object — what the
     /// list-producing operations (`xs[a:b]`, `m.keys()`, `m.values()`)
     /// hand back once they have filled their elements in.
     pub fn attachList(self: *Runtime, elements: std.ArrayList(Value)) Error!Value {
-        return self.attach(.{ .list = elements });
+        return self.attach(.{ .data = .{ .list = elements } });
     }
 
-    /// Put `data` in the object table and hand back a loose handle.
-    /// On failure `data` is untouched and still the caller's to
-    /// release — every caller here builds it under an `errdefer`.
-    fn attach(self: *Runtime, data: Object.Data) Error!Value {
+    /// Put `object`'s storage in the table and hand back a loose
+    /// handle.  On failure the storage is untouched and still the
+    /// caller's to release — every caller here builds it under an
+    /// `errdefer`.
+    fn attach(self: *Runtime, object: Object) Error!Value {
         const index: u32 = @intCast(self.table.items.len);
-        try self.table.append(self.objects, .{ .data = data });
+        try self.table.append(self.objects, object);
         self.live += 1;
         return Value.ofObject(index);
     }
@@ -614,7 +818,11 @@ pub const Runtime = struct {
         switch (object.data) {
             .list => |list| for (list.items) |item| self.freeValue(item),
             .map => |map| for (map.entries.items) |entry| self.freeValue(entry.value),
-            .array => |array| for (array.elements) |item| self.freeValue(item),
+            // Only a `Value` element can hold an object; a `f64`
+            // or `i64` cell owns nothing and has nothing to walk.
+            .array => if (object.array.kind == .value) {
+                for (object.array.cells(Value)) |item| self.freeValue(item);
+            },
             .builder => {},
         }
         object.release(self.objects);
@@ -672,7 +880,7 @@ pub const Runtime = struct {
                 // before recursing: `deepCopy` allocates objects, which
                 // moves the table, and the source's own buffers do not
                 // move with it.
-                var storage: Object.Data = switch (self.table.items[index].data) {
+                var storage: Object = switch (self.table.items[index].data) {
                     .list => |list| blk: {
                         var copied: std.ArrayList(Value) = .empty;
                         errdefer copied.deinit(self.objects);
@@ -680,7 +888,7 @@ pub const Runtime = struct {
                         for (list.items) |item| {
                             copied.appendAssumeCapacity(try self.deepCopy(item));
                         }
-                        break :blk .{ .list = copied };
+                        break :blk .{ .data = .{ .list = copied } };
                     },
                     .map => |map| blk: {
                         var copied: Map = .empty;
@@ -691,32 +899,52 @@ pub const Runtime = struct {
                                 .value = try self.deepCopy(entry.value),
                             });
                         }
-                        break :blk .{ .map = copied };
+                        break :blk .{ .data = .{ .map = copied } };
                     },
-                    .array => |array| blk: {
+                    .array => blk: {
+                        const array = self.table.items[index].array;
                         const dims = try self.objects.dupe(i64, array.dims);
                         errdefer self.objects.free(dims);
-                        const elements = try self.objects.alloc(Value, array.elements.len);
+                        const elements = try self.objects.alignedAlloc(
+                            u8,
+                            .of(Value),
+                            array.elements.len,
+                        );
                         errdefer self.objects.free(elements);
-                        for (array.elements, elements) |item, *slot| {
-                            slot.* = try self.deepCopy(item);
+                        const copied: Object.Array = .{
+                            .kind = array.kind,
+                            .dims = dims,
+                            .elements = elements,
+                            .count = array.count,
+                        };
+                        // Cells that own nothing copy as bytes; only a
+                        // `Value` element needs a walk of its own.
+                        if (array.kind == .value) {
+                            for (array.cells(Value), copied.cells(Value)) |item, *slot| {
+                                slot.* = try self.deepCopy(item);
+                            }
+                        } else {
+                            @memcpy(elements, array.elements);
                         }
-                        break :blk .{ .array = .{ .dims = dims, .elements = elements } };
+                        break :blk .{ .data = .array, .array = copied };
                     },
                     .builder => |builder| blk: {
                         var copied: std.ArrayList(u8) = .empty;
                         errdefer copied.deinit(self.objects);
                         try copied.appendSlice(self.objects, builder.items);
-                        break :blk .{ .builder = copied };
+                        break :blk .{ .data = .{ .builder = copied } };
                     },
                 };
                 errdefer storage.release(self.objects);
                 const duplicate = try self.attach(storage);
                 // The copy's own elements belong to it.
-                switch (self.table.items[duplicate.asObject()].data) {
+                const made = &self.table.items[duplicate.asObject()];
+                switch (made.data) {
                     .list => |list| for (list.items) |item| self.adopt(item),
                     .map => |map| for (map.entries.items) |entry| self.adopt(entry.value),
-                    .array => |array| for (array.elements) |item| self.adopt(item),
+                    .array => if (made.array.kind == .value) {
+                        for (made.array.cells(Value)) |item| self.adopt(item);
+                    },
                     .builder => {},
                 }
                 return duplicate;

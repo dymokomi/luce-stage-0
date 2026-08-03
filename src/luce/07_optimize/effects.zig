@@ -202,6 +202,146 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     };
 }
 
+/// Can a resolved Array view survive this instruction?
+///
+/// Stage 8 resolves a handle *once per basic block* and reuses the SSA
+/// values it got — the row's address, the axis lengths, the element
+/// base — for every later access in that block (`08_llvm/lower.zig`).
+/// Three things have to hold for that to be sound, and this answers
+/// whether all three still do:
+///
+///   * **the table does not grow** — its rows are one allocation, and
+///     a row's address moves when it is reallocated, so any
+///     instruction that can attach an object invalidates every view;
+///   * **nothing is freed** — a freed row's `alive` byte turns over,
+///     and reusing a view past that would skip the `use_after_free`
+///     the next access owes;
+///   * **no Array's storage is replaced** — `dims` and `elements`
+///     never move for a *live* array, which is the whole reason this
+///     is the container the inline path starts with.
+///
+/// The question is asked *after* the instruction is emitted, so an
+/// instruction may use the view it then invalidates: `a[i] = a[i] + 1`
+/// resolves once, and the write happens before the invalidation it
+/// causes.
+///
+/// `false` for anything that can disturb any of the three, which is
+/// the safe answer.  It needs no `Function`: unlike `classify`, no
+/// answer here turns on an operand's type.
+pub fn viewStable(instruction: Instruction) bool {
+    return switch (instruction) {
+        // Values, locals, immutable struct storage, control flow: the
+        // object table is not involved at all.
+        .const_boolean,
+        .const_int,
+        .const_float,
+        .const_data,
+        .local_get,
+        .local_set,
+        .input_load,
+        .output_store,
+        .struct_get,
+        .struct_make,
+        .struct_set,
+        .binary,
+        .unary,
+        .convert,
+        .jump,
+        .branch,
+        .ret,
+        .trap,
+        => true,
+
+        // A fresh object appends a row, and the table moves when it
+        // grows.
+        .heap_new => false,
+        // A callee may do any of the three.
+        .call => false,
+        // Binding writes one row's owner field; unbinding is the
+        // scope-exit release, and that frees.
+        .object_bind => true,
+        .object_unbind => false,
+
+        .intrinsic => |call| switch (call.kind) {
+            // Scalars and text: no handle is resolved, nothing is
+            // attached, nothing is freed.  `str` of a Builder reads a
+            // row, which is a read.
+            .abs,
+            .min,
+            .max,
+            .clamp,
+            .sqrt,
+            .floor,
+            .ceil,
+            .string_slice,
+            .string_byte,
+            .string_find_byte,
+            .parse_int,
+            .parse_float,
+            .chr_code,
+            .ord_text,
+            .null_object,
+            .str_value,
+            .assert_true,
+            .trap_message,
+            => true,
+
+            // Reads of the heap.  Every one of them resolves a handle
+            // and looks; none attaches, frees, or moves storage.
+            .len,
+            .dim_size,
+            .index_get,
+            .has_key,
+            .key_at,
+            .value_at,
+            .map_get,
+            .list_find,
+            .list_contains,
+            => true,
+
+            // In place over elements already there, and `give` only
+            // re-labels an owner.
+            .list_sort, .list_reverse, .give_object => true,
+
+            // Attaches a fresh object, so the table may grow.
+            .list_slice, .map_keys, .map_values, .copy_object => false,
+            // Frees something, or replaces an element that owned
+            // something.
+            .free_object,
+            .index_set,
+            .array_fill,
+            .pop_value,
+            .remove_entry,
+            .clear_object,
+            => false,
+            // Grow a container's own buffer.  That buffer is not the
+            // table and not an Array's, but a List's elements are
+            // read through the same row, so this stays conservative.
+            .append_value, .append_ascii, .insert_value => false,
+
+            // Effects.  A host service reaches the outside world and
+            // the run's arena; it has no way to touch the object
+            // table.
+            .print,
+            .file_read,
+            .file_write,
+            .file_exists,
+            .arg_count,
+            .arg_get,
+            .term_rows,
+            .term_cols,
+            .term_clear,
+            .term_move,
+            .term_style,
+            .term_write,
+            .term_flush,
+            .key_read,
+            .key_text,
+            => true,
+        },
+    };
+}
+
 /// Can this instruction change which binding owns an object, or free
 /// one?  `false` for anything that can, which is the safe answer.
 ///

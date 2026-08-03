@@ -75,5 +75,6 @@ pub const hostTriple = @import("08_llvm/emit.zig").hostTriple;
 test {
     _ = abi;
     _ = effects;
+    _ = @import("08_llvm/loops.zig");
     _ = @import("08_llvm/test.zig");
 }

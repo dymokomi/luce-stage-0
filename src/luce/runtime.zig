@@ -44,6 +44,9 @@ pub const Memory = @import("runtime/heap.zig").Memory;
 pub const Owner = @import("runtime/heap.zig").Owner;
 pub const OwnedBy = @import("runtime/heap.zig").OwnedBy;
 pub const flattenIndex = @import("runtime/heap.zig").flattenIndex;
+/// Where an object row's fields sit, for the one reader that cannot
+/// call a function to ask: generated code walking an Array inline.
+pub const layout = @import("runtime/heap.zig").layout;
 pub const max_array_elements = @import("runtime/heap.zig").max_array_elements;
 
 pub const Tag = @import("runtime/value.zig").Tag;

@@ -841,7 +841,7 @@ test "every runtime declaration carries what the compiler knows about it" {
         const at = std.mem.indexOf(u8, rendered, group) orelse return error.Undescribed;
         const end = std.mem.indexOfScalarPos(u8, rendered, at, '\n').?;
         const described = rendered[at..end];
-        for ([_][]const u8{ "nounwind", "willreturn", "memory(" }) |wanted| {
+        for ([_][]const u8{ "nounwind", "willreturn" }) |wanted| {
             if (std.mem.indexOf(u8, described, wanted) == null) {
                 std.debug.print("{s}\n  is {s}\n", .{ line, described });
                 return error.Undescribed;
@@ -868,11 +868,16 @@ test "every runtime declaration carries what the compiler knows about it" {
             return error.Undescribed;
         }
     }
-    // A reader of the heap is not a writer of it.
+    // A reader of the heap is not a writer of it: it may write its own
+    // arguments, and everything else it only looks at.  A *mutator*
+    // says nothing, because since inline container access the heap is
+    // memory this module can reach and "may move anything" is the
+    // truth — see `runtime_effects.zig`, and note that `memory(...)`
+    // prints nothing when it claims the default.
     try std.testing.expect(std.mem.indexOf(
         u8,
         rendered,
-        "memory(argmem: readwrite, inaccessiblemem: read)",
+        "memory(read, argmem: readwrite)",
     ) != null);
     // The trap machinery is off the straight-line path.
     try std.testing.expect(std.mem.indexOf(u8, rendered, "cold") != null);
@@ -1559,6 +1564,127 @@ test "zero-initialized structs agree, nested ones included" {
         \\    print(str(grid[1, 0].inner.n) + " " + str(grid[0, 1].inner.n))
         \\    print(str(grid[0, 0] == grid[0, 1]) + str(grid[0, 0] == grid[1, 0]))
         \\    free(grid)
+        \\
+    );
+}
+
+test "an inline array access agrees on every element kind and rank" {
+    // Since `Array` storage is typed (`runtime/heap.zig`), a Float
+    // array is `f64`s and a Bool array is bytes, while a String or an
+    // object element keeps the 24-byte slot — and compiled code reads
+    // each one inline rather than through the runtime.  Four kinds,
+    // two ranks, both engines.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var grid = new Array(Int, 3, 4)
+        \\    for r in range(0, 3):
+        \\        for c in range(0, 4):
+        \\            grid[r, c] = r * 10 + c
+        \\    var total = 0
+        \\    for r in range(0, 3):
+        \\        for c in range(0, 4):
+        \\            total += grid[r, c]
+        \\    print(str(total) + " " + str(grid.dim(0)) + " " + str(grid.dim(1)) + " " + str(len(grid)))
+        \\
+        \\    var names = new Array(String, 3)
+        \\    var flags = new Array(Bool, 3)
+        \\    var weights = new Array(Float, 3)
+        \\    for i in range(0, 3):
+        \\        names[i] = "n" + str(i)
+        \\        flags[i] = i % 2 == 0
+        \\        weights[i] = Float(i) * 0.5
+        \\    for i in range(0, 3):
+        \\        print(names[i] + " " + str(flags[i]) + " " + str(weights[i]))
+        \\
+        \\    var rows = new Array(List(Int), 2)
+        \\    for i in range(0, 2):
+        \\        var row = new List(Int)
+        \\        row.append(i)
+        \\        rows[i] = give row
+        \\    print(str(rows[0][0] + rows[1][0]))
+        \\
+        \\    free(rows)
+        \\    free(weights)
+        \\    free(flags)
+        \\    free(names)
+        \\    free(grid)
+        \\
+    );
+}
+
+test "a resolution lifted out of a loop still traps where the access is" {
+    // `loops.zig` reads an Array's row once per loop instead of once
+    // per access.  What must not move with it is the *deciding*: a
+    // loop that never runs must not trap for an array that is already
+    // freed, and one that does run must trap at the access, not at the
+    // preheader.  Both engines, one source, twice.
+    try agree(std.testing.allocator,
+        \\func drop(xs: give Array(Float, _)):
+        \\    free(xs)
+        \\
+        \\func main():
+        \\    var a = new Array(Float, 4)
+        \\    let alias = a
+        \\    drop(give a)
+        \\    var total = 0.0
+        \\    for i in range(0, 0):
+        \\        total += alias[i]
+        \\    print("survived " + str(Int(total)))
+        \\
+    );
+    try agree(std.testing.allocator,
+        \\func drop(xs: give Array(Float, _)):
+        \\    free(xs)
+        \\
+        \\func main():
+        \\    var a = new Array(Float, 4)
+        \\    let alias = a
+        \\    drop(give a)
+        \\    var total = 0.0
+        \\    for i in range(0, 4):
+        \\        total += alias[i]
+        \\    print("unreachable " + str(Int(total)))
+        \\
+    );
+    // And an index past the end still traps at the access it was made
+    // at, with the loop's resolution already lifted above it.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var a = new Array(Float, 4)
+        \\    var total = 0.0
+        \\    for i in range(0, 6):
+        \\        total += a[i]
+        \\    print("unreachable " + str(Int(total)))
+        \\
+    );
+}
+
+test "inline String length, byte_at and slicing agree, boundaries included" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    let text = "héllo wörld"
+        \\    print(str(len(text)) + " " + str(text.byte_at(0)) + " " + str(text.byte_at(1)))
+        \\    print(text[0:1] + "|" + text[1:3] + "|" + text[0:0] + "|" + text[3:len(text)])
+        \\    var i = 0
+        \\    var total = 0
+        \\    while i < len(text):
+        \\        total += text.byte_at(i)
+        \\        i += 1
+        \\    print(str(total))
+        \\
+    );
+    // The end of a String is a legal bound and the byte there is not
+    // ours to read; splitting a sequence is a trap, not a wrong answer.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    let text = "héllo"
+        \\    print(text[0:2])
+        \\
+    );
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    let text = "abc"
+        \\    print(str(text.byte_at(3)))
         \\
     );
 }

@@ -130,8 +130,11 @@ func main():
     let bad = view[0]         # RUNTIME trap: use_after_free (safe builds)
 ```
 Decision: this is the accepted cost of no borrow checker.  The trap
-is deterministic and names the faulting line.  A future ReleaseFast
-omits the check (Zig posture).
+is deterministic and names the faulting line.  There is no build mode
+that omits it: docs/MODES.md settles that Luce is always ReleaseSafe
+and `--release` only strips origin tables.  The check was also measured
+free once container access is inlined -- what costs is the control
+dependence it creates, not the branch.
 
 **S10. `let x = give y` — transfer between names; the giver dies.**
 ```luce
