@@ -48,12 +48,21 @@ program with a main loop.
 This is the difference between a program having a memory *footprint*
 and having a memory *lifetime*.
 
-**Cost:** a design decision, not a bug fix.  Options: a scoped arena for
-Strings (statement temporaries are already unnamed and statement-scoped,
-which S3 licenses), refcounted immutable string storage, or a free list
-of table rows with a generation counter in the handle — which keeps S9's
-clean trap while making rows reusable.  The last is small and should
-probably come first.
+**Cost:** a design decision, not a bug fix.  Two pieces, independent:
+
+- **Object identity** — a free list of table rows with a
+  non-wrapping generation counter in the handle, which keeps S9's clean
+  `use_after_free` trap while making rows reusable.  Small,
+  self-contained, no language change, and it comes first.
+- **String bytes** — reclaimed by scope, like everything else.
+  Reference counting is **permanently refused** (`docs/MEMORY.md`), so
+  the direction is to make the language's own claim literal: *values
+  copy*.  A store into a container, field or map copies the bytes it
+  stores; unstored temporaries die with their statement under S3.  That
+  dissolves the objection that killed the region approach — stored
+  views borrowing bytes they did not allocate — because under real
+  copies no such view exists.  Cost is a memcpy at store sites: local,
+  visible, bounded, and what C and Zig both pay.
 
 ### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
 

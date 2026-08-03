@@ -244,10 +244,44 @@ is usually a *borrow* of something whose region is not known there.
 Regions remain interesting as a later optimization *under* counting,
 which is where this document already filed them.
 
-### Option 5 (reference counting) is adopted, for values only
+### Option 5 (reference counting) is refused — permanently, by directive
 
-The three objections recorded above were all reasoned about objects,
-and none survives the move to values:
+**Automatic reference counting and garbage collection are both off the
+table forever.**  Not "not yet", not "not for objects": Luce does not
+acquire an automatic memory manager, in any layer, visible or hidden.
+Scope ownership is the memory model, and the runtime's job is to
+implement it honestly rather than to grow a second mechanism
+underneath it.
+
+The analysis that follows is kept because it is true and because it
+names precisely what a replacement must beat — not because the
+conclusion stands.  It does not.  **Do not relitigate this section.**
+
+What survives from it: the *problem* is real.  String bytes accumulate
+for the life of a run, the churn loop and the editor both grow without
+bound, and no amount of care in the front end fixes it.  What must
+change is the answer.
+
+The constraint a real answer has to satisfy: reclamation stays
+deterministic and source-visible in its *rules* (not necessarily its
+verbs), costs nothing on programs that hold no strings, and introduces
+no per-copy or per-scope bookkeeping traffic.  The direction that fits
+is the one the language already claims on its first page — **values
+copy** — implemented literally, with a store into a container, field
+or map copying the bytes it stores and unstored temporaries dying with
+their statement under S3.  That is C's answer and Zig's answer, it
+needs no counter, and it makes the existing "regions" objection
+(stored views borrowing bytes they did not allocate) evaporate, since
+under real copies there are no such views.  Its cost is a memcpy at
+store sites, which is visible, local, and bounded.
+
+That redesign is `docs/MISSING.md` Tier 0 item 1, and it is open.
+
+---
+
+*Retracted analysis, kept for its measurements.*  The three objections
+recorded above were all reasoned about objects, and none survives the
+move to values:
 
 - *Cycles leak* — **impossible here.**  A String is immutable bytes
   with no outgoing reference, and struct field runs are acyclic
@@ -310,8 +344,9 @@ safepoint-bearing loop hands that back.  Conservative scanning avoids
 the maps and makes *retention* nondeterministic, which a language that
 reports a leak census cannot absorb.
 
-So `docs/LANGUAGE.md`'s "deliberately absent" line needs splitting
-rather than reaffirming: garbage collection is absent and stays
-absent; reference counting is absent **from the language** — objects
-are scope-owned and values take no verbs — while the storage behind
-values is runtime-managed and unobservable.
+So `docs/LANGUAGE.md`'s "deliberately absent" line needs no splitting
+after all — it was right as written.  Garbage collection is absent and
+stays absent.  Reference counting is absent, at every layer: not in
+the language, not in the runtime, not behind values.  Scope ownership
+is the whole story, and anything that reclaims memory does it because
+a scope ended, not because a counter reached zero.
