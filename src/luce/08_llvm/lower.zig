@@ -313,11 +313,35 @@ const Module = struct {
             // crosses into the runtime without being rebuilt.
             .strukt => .ptr,
             .bytes => self.fail("Bytes"),
-            // Step 4 of docs/FAILURE.md: a heap `T?` is the existing
-            // i32 with the null index, a value `T?` is `{T, i1}`.
-            .optional => self.fail("T? (optionals)"),
+            // `{T, i1}` for every payload — the payload beside a bit
+            // that says whether it is there.  One shape, no sentinel.
+            //
+            // docs/FAILURE.md proposed the null handle for a heap `T?`
+            // and that index is already spoken for: the null handle is
+            // the zero of an object-typed place (S40), a value that is
+            // *present* and traps on use, and a program can put one in
+            // a `T?` — `look(raw)` against `func look(xs: List(Int)?)`
+            // borrows one in without a diagnostic, and the interpreter
+            // answers "present" because absence there is the tag, not
+            // the payload.  A sentinel would answer "absent" and the
+            // two engines would part company.  Int, Float, Bool,
+            // String and structs have no spare value to sentinel with
+            // anyway, so the bit is what the other six payloads cost;
+            // spending it on the seventh buys nothing and costs the
+            // one representation both engines can be checked against.
+            //
+            // SROA keeps the pair in registers, so absence is a flag
+            // the machine already had.
+            .optional => |payload| self.builder.structType(
+                .normal,
+                &.{ try self.valueType(payload.asType()), .i1 },
+            ),
         };
     }
+
+    /// Where the payload and the presence bit sit in a lowered `T?`.
+    const optional_payload = 0;
+    const optional_present = 1;
 
     /// The C signature of one host service, as generated code calls it
     /// (`abi.zig`).  One switch with no `else`, so a new slot is a
@@ -601,7 +625,10 @@ const Module = struct {
                 .i64,
             ) },
             .bytes => return self.fail("Bytes"),
-            .optional => return self.fail("T? (optionals)"),
+            // The zero of a `T?` is absence, and absence is the `none`
+            // tag with no payload — the very `Value` the interpreter
+            // parks in the same field (S43).
+            .optional => .{ .none, try self.builder.intConst(.i64, 0) },
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
@@ -785,10 +812,20 @@ const Module = struct {
             .int, .float, .strukt, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
             .string => 16,
-            // None of these reaches here: a function returning
-            // nothing has no slot, and `valueType` has already refused
-            // Bytes and optionals.
-            .none, .bytes, .optional => 0,
+            // `{T, i1}`: the payload, then one byte for the bit,
+            // rounded up to the payload's own alignment.  A Bool
+            // payload aligns to 1, so `{i1, i1}` really is two bytes —
+            // and `dereferenceable` must not claim more than the
+            // caller's `alloca` provides.
+            .optional => |payload| switch (payload) {
+                .boolean => 2,
+                .int, .float, .strukt, .heap => 16,
+                .string => 24,
+                .bytes => 0, // `valueType` has already refused Bytes
+            },
+            // Neither reaches here: a function returning nothing has
+            // no slot, and `valueType` has already refused Bytes.
+            .none, .bytes => 0,
         };
     }
 
@@ -1406,7 +1443,16 @@ const Body = struct {
             .strukt => |layout| (try self.module.structZero(layout)).toValue(),
             .none => self.fail("a local of type None"),
             .bytes => self.fail("Bytes"),
-            .optional => self.fail("T? (optionals)"),
+            // The zero of a `T?` is absence: the payload's own zero,
+            // beside a bit saying it is not there.  Giving the unused
+            // half a defined value rather than `poison` is what makes
+            // an absent heap `T?` carry the *null* handle instead of a
+            // handle to row zero, which is a live row.
+            .optional => |payload| try self.wip.buildAggregate(
+                try self.module.valueType(of),
+                &.{ try self.zeroValue(payload.asType()), .false },
+                "none",
+            ),
         };
     }
 
@@ -1488,11 +1534,11 @@ const Body = struct {
         try self.fillBoxValue(address, of, held);
     }
 
-    /// The words of a `runtime.Value` that the Luce type alone decides:
-    /// the tag, and the length for every type that has a fixed one.
-    fn fillBoxShape(self: *Body, slot: Builder.Value, of: types.Type) Error!void {
-        const builder = self.module.builder;
-        const tag: runtime.Tag = switch (of) {
+    /// Which `runtime.Tag` a value of `of` boxes as.  A `T?` has none
+    /// of its own: what it boxes as is decided by whether it is there,
+    /// so it is the one type this cannot answer.
+    fn boxTag(self: *Body, of: types.Type) Error!runtime.Tag {
+        return switch (of) {
             .none => .none,
             .boolean => .boolean,
             .int => .int,
@@ -1500,62 +1546,123 @@ const Body = struct {
             .heap => .object,
             .float => .float,
             .strukt => .strukt,
-            .bytes => return self.fail("Bytes"),
-            .optional => return self.fail("T? (optionals)"),
+            .bytes => self.fail("Bytes"),
+            .optional => self.fail("the tag of a T? read from its type"),
         };
-        // A String's length travels with its bytes, so it is the one
-        // length that is not a compile-time fact.
-        const length: ?u64 = switch (of) {
-            .none, .boolean, .int, .heap, .float => 0,
-            .strukt => |layout| self.module.program.structs[layout].fields.len,
-            .string => null,
-            .bytes, .optional => unreachable, // answered above
-        };
+    }
 
+    /// The `bits` word a value of `of` puts in a box.
+    fn boxBits(self: *Body, of: types.Type, held: Builder.Value) Error!Builder.Value {
+        return switch (of) {
+            .none => try self.module.builder.intValue(.i64, 0),
+            .boolean => try self.wip.cast(.zext, held, .i64, "box.bits"),
+            // A handle already *is* the `bits` word `Value` carries.
+            .int, .heap => held,
+            .float => try self.wip.cast(.bitcast, held, .i64, "box.bits"),
+            .strukt => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
+            .string => try self.wip.cast(
+                .ptrtoint,
+                try self.wip.extractValue(held, &.{0}, "box.text"),
+                .i64,
+                "box.bits",
+            ),
+            .bytes => self.fail("Bytes"),
+            .optional => self.fail("the bits of a T? read from its type"),
+        };
+    }
+
+    /// The `length` word a value of `of` puts in a box.  Every type but
+    /// String has one the type alone decides, which is what lets
+    /// `fillBoxShape` write it once in the entry block.
+    fn boxLength(self: *Body, of: types.Type, held: Builder.Value) Error!Builder.Value {
+        const builder = self.module.builder;
+        return switch (of) {
+            .none, .boolean, .int, .heap, .float => try builder.intValue(.i64, 0),
+            .strukt => |layout| try builder.intValue(
+                .i64,
+                self.module.program.structs[layout].fields.len,
+            ),
+            .string => try self.wip.extractValue(held, &.{1}, "box.length"),
+            .bytes => self.fail("Bytes"),
+            .optional => self.fail("the length of a T? read from its type"),
+        };
+    }
+
+    /// Whether `of`'s length is settled by the type rather than the
+    /// value — true for everything but a String, whose length travels
+    /// with its bytes.
+    fn boxLengthIsFixed(of: types.Type) bool {
+        return of != .string;
+    }
+
+    /// The words of a `runtime.Value` that the Luce type alone decides:
+    /// the tag, and the length for every type that has a fixed one.
+    ///
+    /// A `T?` has neither.  Both of its words turn on whether the value
+    /// is there, so all three are written where the value is, and this
+    /// writes nothing.
+    fn fillBoxShape(self: *Body, slot: Builder.Value, of: types.Type) Error!void {
+        if (of == .optional) return;
+        const builder = self.module.builder;
+        const tag = try self.boxTag(of);
         try self.storeBoxField(slot, 0, try builder.intValue(.i64, @intFromEnum(tag)));
-        if (length) |fixed| {
-            try self.storeBoxField(slot, 2, try builder.intValue(.i64, fixed));
+        if (boxLengthIsFixed(of)) {
+            try self.storeBoxField(slot, 2, try self.boxLength(of, .none));
         }
     }
 
     /// The word — or, for a String, the two words — that carry the
     /// value itself, stored where the value is produced.
     fn fillBoxValue(self: *Body, slot: Builder.Value, of: types.Type, held: Builder.Value) Error!void {
-        switch (of) {
-            .none => {},
-            .boolean => try self.storeBoxField(
-                slot,
-                1,
-                try self.wip.cast(.zext, held, .i64, "box.bits"),
-            ),
-            // A handle already *is* the `bits` word `Value` carries.
-            .int, .heap => try self.storeBoxField(slot, 1, held),
-            .float => try self.storeBoxField(
-                slot,
-                1,
-                try self.wip.cast(.bitcast, held, .i64, "box.bits"),
-            ),
-            .strukt => try self.storeBoxField(
-                slot,
-                1,
-                try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
-            ),
-            .string => {
-                const address = try self.wip.extractValue(held, &.{0}, "box.text");
-                try self.storeBoxField(
-                    slot,
-                    1,
-                    try self.wip.cast(.ptrtoint, address, .i64, "box.bits"),
-                );
-                try self.storeBoxField(
-                    slot,
-                    2,
-                    try self.wip.extractValue(held, &.{1}, "box.length"),
-                );
-            },
-            .bytes => return self.fail("Bytes"),
-            .optional => return self.fail("T? (optionals)"),
+        if (of == .none) return;
+        if (of == .optional) return self.fillBoxOptional(slot, of.optional, held);
+        try self.storeBoxField(slot, 1, try self.boxBits(of, held));
+        if (!boxLengthIsFixed(of)) {
+            try self.storeBoxField(slot, 2, try self.boxLength(of, held));
         }
+    }
+
+    /// All three words of a boxed `T?`, written here because none of
+    /// them is a fact about the type.
+    ///
+    /// Absence boxes as `runtime.Value.none` — tag zero, no payload,
+    /// no length — which is the very value the interpreter parks in the
+    /// same field, so the runtime's ownership walk finds nothing to own
+    /// on either engine and S43 costs no code at all.  Presence boxes
+    /// exactly as the payload would on its own.
+    fn fillBoxOptional(
+        self: *Body,
+        slot: Builder.Value,
+        payload: types.Type.Payload,
+        held: Builder.Value,
+    ) Error!void {
+        const builder = self.module.builder;
+        const of = payload.asType();
+        const present = try self.wip.extractValue(held, &.{Module.optional_present}, "box.present");
+        const inner = try self.wip.extractValue(held, &.{Module.optional_payload}, "box.held");
+        const absent_word = try builder.intValue(.i64, 0);
+
+        try self.storeBoxField(slot, 0, try self.wip.select(
+            .normal,
+            present,
+            try builder.intValue(.i64, @intFromEnum(try self.boxTag(of))),
+            absent_word,
+            "box.tag",
+        ));
+        try self.storeBoxField(slot, 1, try self.wip.select(
+            .normal,
+            present,
+            try self.boxBits(of, inner),
+            absent_word,
+            "box.bits",
+        ));
+        try self.storeBoxField(slot, 2, try self.wip.select(
+            .normal,
+            present,
+            try self.boxLength(of, inner),
+            absent_word,
+            "box.length",
+        ));
     }
 
     fn storeBoxField(
@@ -1572,6 +1679,7 @@ const Body = struct {
     /// at `slot`.
     fn unboxed(self: *Body, of: types.Type, slot: Builder.Value, name: []const u8) Error!Builder.Value {
         if (of == .none) return .none;
+        if (of == .optional) return self.unboxedOptional(of.optional, slot, name);
         const bits = try self.loadBoxField(slot, 1, "unbox.bits");
         return switch (of) {
             .int, .heap => bits,
@@ -1589,10 +1697,42 @@ const Body = struct {
             // The field count is a compile-time fact, so only the
             // address of the run travels back.
             .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
-            .none => unreachable, // answered above
+            .none, .optional => unreachable, // answered above
             .bytes => self.fail("Bytes"),
-            .optional => self.fail("T? (optionals)"),
         };
+    }
+
+    /// A `T?` read back out of a box: present when the tag is anything
+    /// but `none`, and carrying the payload's own zero when it is not.
+    ///
+    /// The absent payload is chosen rather than merely left as whatever
+    /// the zeroed words read as, because for a heap `T?` those words
+    /// read as a handle to row zero — a live row — while the zero of an
+    /// object-typed place is the *null* handle.  Nothing narrows to an
+    /// absent payload and so nothing can look, but the two halves of a
+    /// `T?` agree on what absence carries either way, on both engines.
+    fn unboxedOptional(
+        self: *Body,
+        payload: types.Type.Payload,
+        slot: Builder.Value,
+        name: []const u8,
+    ) Error!Builder.Value {
+        const of = payload.asType();
+        const present = try self.wip.icmp(
+            .ne,
+            try self.loadBoxField(slot, 0, "unbox.tag"),
+            try self.module.builder.intValue(.i64, @intFromEnum(runtime.Tag.none)),
+            "unbox.present",
+        );
+        const inner = try self.unboxed(of, slot, "unbox.held");
+        return self.wip.buildAggregate(
+            try self.module.valueType(.{ .optional = payload }),
+            &.{
+                try self.wip.select(.normal, present, inner, try self.zeroValue(of), "unbox.or.zero"),
+                present,
+            },
+            name,
+        );
     }
 
     fn loadBoxField(
@@ -3002,7 +3142,11 @@ const Body = struct {
             .float, .string, .strukt => unreachable, // answered above
             .bytes => return self.fail("Bytes comparison"),
             .none => return self.fail("a comparison of None"),
-            .optional => return self.fail("T? (optionals)"),
+            // `x == none` is `is_none` by the time it gets here, and
+            // the analyzer refuses every other comparison of a `T?`
+            // until it is narrowed, so no operand ever arrives wearing
+            // one.
+            .optional => return self.fail("a comparison of two optionals"),
         };
         return self.wip.icmp(condition, left, right, "compare");
     }
@@ -3207,15 +3351,47 @@ const Body = struct {
                 self.values[register] = try self.module.builder.intValue(.i64, runtime.null_index);
             },
 
-            // Step 4 of docs/FAILURE.md: a heap `T?` is the existing
-            // i32 with the null index, a value `T?` is `{T, i1}` that
-            // SROA keeps in registers.  Until then a program that says
-            // `T?` is named here and runs on the interpreter.
-            .none_value,
-            .is_none,
-            .optional_wrap,
-            .optional_unwrap,
-            => return self.fail("T? (optionals)"),
+            // -- absence, as four moves on `{T, i1}` ------------------
+            //
+            // Every one of them is a register shuffle: SROA takes the
+            // pair apart and the bit becomes a flag the machine was
+            // already carrying.  There is no call and no memory here,
+            // which is what makes `parse_int(s) else 0` cost what the
+            // parse costs and nothing more.
+            .none_value => {
+                self.values[register] = try self.zeroValue(
+                    self.function.result_types[register],
+                );
+            },
+            .is_none => {
+                self.values[register] = try self.wip.bin(
+                    .xor,
+                    try self.wip.extractValue(
+                        self.values[of[0]],
+                        &.{Module.optional_present},
+                        "present",
+                    ),
+                    .true,
+                    "is.none",
+                );
+            },
+            // `T <: T?`: the same payload, now known to be there.
+            .optional_wrap => {
+                self.values[register] = try self.wip.buildAggregate(
+                    try self.module.valueType(self.function.result_types[register]),
+                    &.{ self.values[of[0]], .true },
+                    "wrap",
+                );
+            },
+            // What narrowing licensed.  The analyzer has already proved
+            // the bit is set, so nothing is checked here.
+            .optional_unwrap => {
+                self.values[register] = try self.wip.extractValue(
+                    self.values[of[0]],
+                    &.{Module.optional_payload},
+                    "unwrap",
+                );
+            },
             .len => {
                 // A String is `{ ptr, i64 }` in a register already, so
                 // its length is the second word and nothing else.

@@ -107,11 +107,21 @@ does not pre-warm the bundled programs.
 
 ---
 
-## Tier 1 — the one semantic hole, fully designed, zero lines shipped
+## Tier 1 — half the semantic hole is shipped; errors are what is left
 
-**Optionals (`T?`) and errors (`T!`).**  `docs/FAILURE.md` is a complete
+**Optionals are done, on both engines.**  `T?`, `none`, narrowing and
+`else` run on the interpreter and lower to `{T, i1}` through LLVM, so a
+program that says `T?` is compiled like any other — `parse_int` and
+`parse_float` answer `Int?`/`Float?` and every bundled program that
+calls them runs as native code.  What the lowering cost that
+`docs/FAILURE.md` did not predict is one refused shortcut, recorded in
+docs/CODEGEN.md: the null handle cannot stand in for absence, because
+it already names a value that is *there*.
+
+**Errors (`T!`) are what remains.**  `docs/FAILURE.md` is a complete
 design and costs no new MIR instruction and no change to `types.Type`.
-None of it exists yet.  The corpus is unambiguous about the demand:
+None of that half exists yet.  The corpus is unambiguous about the
+demand:
 
 - `wordcount.luc:23` — `counts.has(word)` then index: three hash lookups
   on the hit path.
@@ -125,9 +135,10 @@ None of it exists yet.  The corpus is unambiguous about the demand:
 - 12 `trap(...)` calls in `std/` for conditions a caller might
   reasonably want to handle.
 
-**Deliberately deferred:** `strings.find` returns `-1` until `Int?`
-exists.  Note the wart while it lasts — `strings.luc:20` returns `-1`
-for an *argument error*, which is not the same fact as "absent", and
+**Now unblocked:** `strings.find` returns `-1` because `Int?` did not
+exist.  It does, on both engines, so the sentinel is a wart with
+nothing holding it up any more — `strings.luc:20` returns `-1` for an
+*argument error*, which is not the same fact as "absent", and
 `find_from`'s empty-needle case returns success where `count`'s returns
 failure.
 
@@ -151,8 +162,10 @@ The corpus pays constantly:
 - `editor.luc:157-185` — `is_keyword`/`is_builtin` as **46 `word == "…"`
   comparisons**: a hash set written as a truth table.
 
-**Decide after optionals ship, not before.**  A tagged union built later
-can subsume `T?` cleanly if that turns out to be the better factoring.
+**Optionals have shipped, so this is now decidable on evidence.**  A
+tagged union built later can subsume `T?` cleanly if that turns out to
+be the better factoring; what the corpus does with `T?` from here is
+what should settle it.
 
 ---
 
@@ -287,8 +300,9 @@ multi-user — all deferred by design in `docs/V2.md`.
    not less: the compiled path runs the same loop 76x faster, so it
    reaches the same wall 76x sooner.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
-3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**; `parse_int` and
-   `parse_float` answer `Int?`/`Float?`.
+3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done on both engines**;
+   `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`
+   lowers to `{T, i1}`.
 4. **The cheap Tier-3 slice:** character classes, a frozen container or
    `Set`, `read_line`, `clock`, `sleep`, `exit`, `env`, stderr,
    directory listing.

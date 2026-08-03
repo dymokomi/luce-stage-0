@@ -459,6 +459,57 @@ it.  The parameter attributes are unchanged and do more work than the
 summary: `readonly nocapture` on a borrowed box is what keeps a call
 from being assumed to scribble on it.
 
+## `T?` is the payload beside a bit
+
+A `T?` lowers to `{T, i1}` for every payload — the payload, and one bit
+saying whether it is there.  The four intrinsics are register moves and
+nothing else: `none_value` is the payload's zero beside a clear bit,
+`optional_wrap` sets the bit, `optional_unwrap` reads field zero, and
+`is_none` is the bit inverted.  No call, no memory.  SROA takes the
+pair apart in the entry block, so `parse_int(s) else 0` costs the parse
+and a branch.
+
+**docs/FAILURE.md proposed a sentinel for the heap case and it does not
+work.**  The memo said a heap `T?` could be "the existing `i32` with the
+null index".  Two things are wrong with that.  The small one is the
+width: a handle became `{index, generation}` packed in an `i64` when
+generational handles landed, so there is no `i32` any more.  The
+disqualifying one is that the null index is already spoken for.  The
+null handle is the *zero of an object-typed place* (S40) — a value that
+is **present** and traps `null_object` when used — and a program can
+put one inside a `T?` without a diagnostic:
+
+```luce
+func look(xs: List(Int)?) -> Bool:
+    return xs == none
+
+func main():
+    var raw: List(Int)          # the null handle
+    print(str(look(raw)))       # interpreter: false — it is *there*
+```
+
+Absence on the interpreter is `Value.Tag.none`, a tag beside the
+payload, so that program prints `false`.  A sentinel lowering would
+print `true`, and the two engines would part company on the one program
+that distinguishes them.  There is an agree test named for it.
+
+Nor would the sentinel have paid.  Int, Float, Bool, String and structs
+have no spare value to encode absence in, so `{T, i1}` is forced for
+six of the seven payloads; spending the seventh differently buys a word
+that SROA was going to eliminate anyway, in exchange for the one
+representation both engines can be checked against.
+
+Where a `T?` has to become a `runtime.Value` — a struct field, an
+argument crossing into `libluce_rt` — absence boxes as `Value.none`:
+tag zero, no payload, no length, byte for byte what the interpreter
+parks in the same slot.  **That is what makes ownership cost nothing.**
+The runtime's ownership walks switch on the tag and fall through on
+`none`, so "holding `none` owns nothing" (S43) is already true on both
+engines with no code written for it, and a present `List(T)?` binds and
+releases exactly as the bare handle does.  It is the one place the box
+is filled entirely at the value site rather than partly in the entry
+block, because neither its tag nor its length is a fact about the type.
+
 ## `libluce_rt`
 
 `src/luce/runtime.zig` plus
@@ -573,14 +624,6 @@ carried, which the runtime remembers, so it fails closed on
 Each of these fails by naming itself, so the compiler says what is
 missing rather than miscompiling:
 
-- **`T?`** — the type, and the four intrinsics that serve it
-  (`none_value`, `is_none`, `optional_wrap`, `optional_unwrap`).  Step
-  4 of docs/FAILURE.md, and lowering work rather than design work: a
-  heap `T?` is the existing `i32` with the null index, which is free,
-  and a value `T?` is `{T, i1}`, which SROA keeps in registers.  Until
-  it lands, a program that says `T?` — which now includes anything
-  calling `parse_int` or `parse_float` — runs on the interpreter, and
-  `LOOM_ENGINE=native` turns the fallback into a message naming it.
 - **Bytes** — every operation on it, and the type itself.
 - **Evaluator ports** — `input_load`, `output_store`, and an entry
   function with parameters.
