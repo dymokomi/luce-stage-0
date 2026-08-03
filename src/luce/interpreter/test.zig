@@ -20,7 +20,7 @@
 const std = @import("std");
 const testing = std.testing;
 const mir = @import("../06_mir.zig");
-const backend = @import("../backend.zig");
+const interpreter = @import("../interpreter.zig");
 const compile_mod = @import("../compile.zig");
 const types = @import("../support/types.zig");
 const machine_mod = @import("machine.zig");
@@ -106,18 +106,20 @@ test "the explicit frame stack survives deep recursion" {
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const deep = try backend.evaluate(
+    const deep = try interpreter.run(
         .{ .arena = arena.allocator(), .objects = testing.allocator },
         &program,
         .{ .call_depth = 60_000 },
+        null,
     );
     try testing.expect(deep == .success);
 
     _ = arena.reset(.retain_capacity);
-    const shallow = try backend.evaluate(
+    const shallow = try interpreter.run(
         .{ .arena = arena.allocator(), .objects = testing.allocator },
         &program,
         .{ .call_depth = 1_000 },
+        null,
     );
     try testing.expectEqual(mir.TrapCode.call_depth_exceeded, shallow.trap.code);
 }

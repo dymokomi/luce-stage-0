@@ -7,10 +7,12 @@
 //! program text is sanitized so a Luce program can never emit raw
 //! escape sequences — the host writes every control byte itself.
 //!
-//! The same services are offered twice, over one implementation: as
-//! `luce.backend.Host` for the interpreter, and as `luce.llvm.abi`'s
-//! C table for a compiled artifact.  Only the calling convention
-//! differs — what a program can reach is decided once, here.
+//! The services reach a program as `luce.llvm.abi`'s C table, which is
+//! the one calling convention there is: a compiled artifact indexes it
+//! with `getelementptr`, and every slot is filled, because loom
+//! withholds nothing.  This file built a second table as well until
+//! the interpreter stopped being an engine; the specification carries
+//! its own host now (docs/ENGINE.md).
 
 const std = @import("std");
 const luce = @import("luce");
@@ -21,10 +23,10 @@ const abi = luce.llvm.abi;
 
 /// How many nested Luce calls loom allows before a program traps
 /// `call_depth_exceeded`.  Depth is policy, not a native-stack
-/// accident, and the policy is the host's: this one number reaches the
-/// interpreter as `backend.Budget.call_depth` and a compiled artifact
-/// through the ABI's `call_depth` slot, so runaway recursion traps at
-/// the same call whichever engine ran it.  Conservative on purpose —
+/// accident, and the policy is the host's: this one number reaches a
+/// compiled artifact through the ABI's `call_depth` slot, and the
+/// specification hands the oracle the same one, so runaway recursion
+/// traps at the same call on either.  Conservative on purpose —
 /// deep enough for any reasonable program, shallow enough that a
 /// runaway one reports promptly and well inside the machine's own
 /// stack.
@@ -155,8 +157,8 @@ pub const Host = struct {
     pub const Reported = struct {
         code: luce.mir.TrapCode,
         message: []const u8,
-        /// Innermost first, the same order and shape the interpreter
-        /// reports (`backend.Trap.trace`).
+        /// Innermost first, the same order and shape the oracle
+        /// reports (`luce.interpreter.Trap.trace`).
         trace: []const Frame,
         dropped: u32,
 
@@ -171,39 +173,7 @@ pub const Host = struct {
         };
     };
 
-    pub fn host(self: *Host) luce.backend.Host {
-        return .{
-            .context = self,
-            .printFn = printLine,
-            .argCountFn = argCount,
-            .argFn = argAt,
-            .readFileFn = readFile,
-            .writeFileFn = writeFile,
-            .fileExistsFn = fileExists,
-            .appendFileFn = appendFile,
-            .deleteFileFn = deleteFile,
-            .renameFileFn = renameFile,
-            .listDirectoryFn = listDirectory,
-            .readLineFn = readLine,
-            .printErrorFn = printDiagnostic,
-            .clockFn = clockMilliseconds,
-            .sleepFn = sleepMilliseconds,
-            .envFn = environment,
-            .terminal = .{
-                .context = self,
-                .rowsFn = rows,
-                .colsFn = cols,
-                .clearFn = clear,
-                .moveFn = move,
-                .styleFn = style,
-                .writeFn = write,
-                .flushFn = flush,
-                .keyFn = key,
-            },
-        };
-    }
-
-    /// The same services as a C table, for a compiled artifact
+    /// The services, as the C table a compiled artifact is handed
     /// (`luce.llvm.abi`).  Every slot is filled: loom withholds
     /// nothing, and a host that withheld something would make the
     /// program trap `host_unavailable` rather than proceed.
@@ -253,8 +223,7 @@ pub const Host = struct {
 
     // -- console, arguments, files ------------------------------------
 
-    fn printLine(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn printLine(self: *Host, text: []const u8) error{OutOfMemory}!void {
         // A print while the screen is active would scribble over the
         // frame; route it through the frame buffer as plain text.
         if (self.screen.active) {
@@ -273,17 +242,6 @@ pub const Host = struct {
             failed = true;
         };
         if (failed) return; // a broken pipe must not kill the evaluation
-    }
-
-    fn argCount(context: *anyopaque) u32 {
-        const self: *Host = @ptrCast(@alignCast(context));
-        return @intCast(self.arguments.len);
-    }
-
-    fn argAt(context: *anyopaque, arena: Allocator, index: u32) error{OutOfMemory}!?[]const u8 {
-        const self: *Host = @ptrCast(@alignCast(context));
-        if (index >= self.arguments.len) return null;
-        return try arena.dupe(u8, self.arguments[index]);
     }
 
     /// A whole file's bytes, or null when it could not be read.  The
@@ -320,14 +278,7 @@ pub const Host = struct {
         return self.loaded_file.items;
     }
 
-    fn readFile(context: *anyopaque, arena: Allocator, path: []const u8) error{OutOfMemory}!luce.backend.FileRead {
-        const self: *Host = @ptrCast(@alignCast(context));
-        const found = (try self.loadFile(path)) orelse return .failed;
-        return .{ .content = try arena.dupe(u8, found) };
-    }
-
-    fn writeFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn writeFile(self: *Host, path: []const u8, content: []const u8) bool {
         const file = std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = true }) catch return false;
         defer file.close(self.io);
         file.writePositionalAll(self.io, content, 0) catch return false;
@@ -335,8 +286,7 @@ pub const Host = struct {
         return true;
     }
 
-    fn fileExists(context: *anyopaque, path: []const u8) bool {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn fileExists(self: *Host, path: []const u8) bool {
         const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return false;
         file.close(self.io);
         return true;
@@ -348,8 +298,7 @@ pub const Host = struct {
     /// exposes no O_APPEND: one process appending to its own log is
     /// what this is for, and two writers racing for the same tail is
     /// not something a flag here would fix anyway.
-    fn appendFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn appendFile(self: *Host, path: []const u8, content: []const u8) bool {
         const file = std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = false }) catch
             return false;
         defer file.close(self.io);
@@ -359,14 +308,12 @@ pub const Host = struct {
         return true;
     }
 
-    fn deleteFile(context: *anyopaque, path: []const u8) bool {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn deleteFile(self: *Host, path: []const u8) bool {
         std.Io.Dir.cwd().deleteFile(self.io, path) catch return false;
         return true;
     }
 
-    fn renameFile(context: *anyopaque, from: []const u8, to: []const u8) bool {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn renameFile(self: *Host, from: []const u8, to: []const u8) bool {
         const cwd = std.Io.Dir.cwd();
         cwd.rename(from, cwd, to, self.io) catch return false;
         return true;
@@ -404,17 +351,6 @@ pub const Host = struct {
             start += length + 1;
         }
         return true;
-    }
-
-    fn listDirectory(
-        context: *anyopaque,
-        arena: Allocator,
-        path: []const u8,
-    ) error{OutOfMemory}!?[]const []const u8 {
-        _ = arena;
-        const self: *Host = @ptrCast(@alignCast(context));
-        if (!try self.loadDirectory(path)) return null;
-        return self.listed_index.items;
     }
 
     // -- standard input, standard error, the clock, the environment ----
@@ -472,16 +408,6 @@ pub const Host = struct {
         }
     }
 
-    fn readLine(
-        context: *anyopaque,
-        arena: Allocator,
-        prompt: []const u8,
-    ) error{OutOfMemory}!?[]const u8 {
-        _ = arena;
-        const self: *Host = @ptrCast(@alignCast(context));
-        return self.nextLine(prompt);
-    }
-
     /// A line of standard error.
     ///
     /// **Always sanitized, unlike `print`.**  stdout is the program's
@@ -492,8 +418,7 @@ pub const Host = struct {
     /// control bytes there could scribble over a frame it does not own
     /// or forge the terminal's state.  It is host-written text on a
     /// host channel, and the same rule `term_write` follows applies.
-    fn printDiagnostic(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn printDiagnostic(self: *Host, text: []const u8) error{OutOfMemory}!void {
         self.sanitized.clearRetainingCapacity();
         try appendSanitized(&self.sanitized, self.gpa, text);
         self.err.writeAll(self.sanitized.items) catch return;
@@ -505,17 +430,15 @@ pub const Host = struct {
     /// language promises only that differences mean something, and a
     /// clock the system administrator can move backwards would break
     /// even that.
-    fn clockMilliseconds(context: *anyopaque) i64 {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn clockMilliseconds(self: *Host) i64 {
         return std.Io.Timestamp.now(self.io, .awake).toMilliseconds();
     }
 
     /// Wait at least this long.  A duration that has already elapsed —
     /// zero, or a negative one out of `deadline - clock_ms()` — is not
     /// a bug and not a failure: there is no time left to wait.
-    fn sleepMilliseconds(context: *anyopaque, milliseconds: i64) void {
+    fn sleepMilliseconds(self: *Host, milliseconds: i64) void {
         if (milliseconds <= 0) return;
-        const self: *Host = @ptrCast(@alignCast(context));
         // The pending frame goes out first, for the reason `key_read`
         // presents before blocking: a program that draws and then
         // sleeps is animating, and a frame still in the buffer is a
@@ -524,16 +447,6 @@ pub const Host = struct {
             self.present() catch {};
         }
         self.io.sleep(.{ .nanoseconds = milliseconds * std.time.ns_per_ms }, .awake) catch {};
-    }
-
-    fn environment(
-        context: *anyopaque,
-        arena: Allocator,
-        name: []const u8,
-    ) error{OutOfMemory}!?[]const u8 {
-        _ = arena;
-        const self: *Host = @ptrCast(@alignCast(context));
-        return self.lookUpEnvironment(name);
     }
 
     /// One environment variable, or null when it is unset — which the
@@ -566,18 +479,7 @@ pub const Host = struct {
         self.out.flush() catch {};
     }
 
-    fn rows(context: *anyopaque) i64 {
-        _ = context;
-        return windowSize().rows;
-    }
-
-    fn cols(context: *anyopaque) i64 {
-        _ = context;
-        return windowSize().columns;
-    }
-
-    fn clear(context: *anyopaque) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn clear(self: *Host) error{OutOfMemory}!void {
         try self.ensureScreen();
         // Reset styles before erasing: terminals fill cleared cells
         // with the *current* background, so clearing while the last
@@ -585,8 +487,7 @@ pub const Host = struct {
         try self.screen.buffer.appendSlice(self.gpa, "\x1b[?25l\x1b[0m\x1b[2J\x1b[H");
     }
 
-    fn move(context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn move(self: *Host, row: i64, col: i64) error{OutOfMemory}!void {
         try self.ensureScreen();
         var encoded: [32]u8 = undefined;
         const sequence = std.fmt.bufPrint(&encoded, "\x1b[{d};{d}H", .{
@@ -596,20 +497,17 @@ pub const Host = struct {
         try self.screen.buffer.appendSlice(self.gpa, sequence);
     }
 
-    fn style(context: *anyopaque, foreground: i64, background: i64, bold: bool) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn style(self: *Host, foreground: i64, background: i64, bold: bool) error{OutOfMemory}!void {
         try self.ensureScreen();
         try appendStyle(&self.screen.buffer, self.gpa, foreground, background, bold);
     }
 
-    fn write(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn write(self: *Host, text: []const u8) error{OutOfMemory}!void {
         try self.ensureScreen();
         try appendSanitized(&self.screen.buffer, self.gpa, text);
     }
 
-    fn flush(context: *anyopaque) error{OutOfMemory}!void {
-        const self: *Host = @ptrCast(@alignCast(context));
+    fn flush(self: *Host) error{OutOfMemory}!void {
         try self.ensureScreen();
         try self.present();
     }
@@ -654,15 +552,6 @@ pub const Host = struct {
         }
     }
 
-    fn key(context: *anyopaque, arena: Allocator) error{OutOfMemory}!luce.backend.KeyEvent {
-        const self: *Host = @ptrCast(@alignCast(context));
-        const view = try self.nextKey();
-        return .{
-            .name = try arena.dupe(u8, view.name),
-            .text = try arena.dupe(u8, view.text),
-        };
-    }
-
     const Screen = struct {
         active: bool = false,
         saved: std.posix.termios = undefined,
@@ -681,19 +570,19 @@ pub const Host = struct {
         control_name: [6]u8 = undefined,
     };
 
-    // -- the same services, as the C table ------------------------------
+    // -- the services, as the C table -----------------------------------
     //
-    // A thin layer over the callbacks above and nothing more: the two
-    // paths differ only in how a failure travels.  C cannot carry a Zig
-    // error, so running out of memory answers `.exhausted` and the run
-    // ends without a trap, because nothing about the program was wrong.
+    // A thin layer over the methods above and nothing more: what it
+    // adds is how a failure travels.  C cannot carry a Zig error, so
+    // running out of memory answers `.exhausted` and the run ends
+    // without a trap, because nothing about the program was wrong.
 
     fn of(context: ?*anyopaque) *Host {
         return @ptrCast(@alignCast(context.?));
     }
 
     fn cPrint(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        printLine(context.?, text[0..@intCast(length)]) catch return .exhausted;
+        of(context).printLine(text[0..@intCast(length)]) catch return .exhausted;
         return .yes;
     }
 
@@ -803,8 +692,7 @@ pub const Host = struct {
         content: [*]const u8,
         content_length: i64,
     ) callconv(.c) abi.Answer {
-        const wrote = writeFile(
-            context.?,
+        const wrote = of(context).writeFile(
             path[0..@intCast(path_length)],
             content[0..@intCast(content_length)],
         );
@@ -816,11 +704,11 @@ pub const Host = struct {
         path: [*]const u8,
         path_length: i64,
     ) callconv(.c) abi.Answer {
-        return if (fileExists(context.?, path[0..@intCast(path_length)])) .yes else .no;
+        return if (of(context).fileExists(path[0..@intCast(path_length)])) .yes else .no;
     }
 
     fn cArgCount(context: ?*anyopaque) callconv(.c) i64 {
-        return argCount(context.?);
+        return @intCast(of(context).arguments.len);
     }
 
     fn cArg(
@@ -837,21 +725,21 @@ pub const Host = struct {
         return .yes;
     }
 
-    fn cTermRows(context: ?*anyopaque) callconv(.c) i64 {
-        return rows(context.?);
+    fn cTermRows(_: ?*anyopaque) callconv(.c) i64 {
+        return windowSize().rows;
     }
 
-    fn cTermCols(context: ?*anyopaque) callconv(.c) i64 {
-        return cols(context.?);
+    fn cTermCols(_: ?*anyopaque) callconv(.c) i64 {
+        return windowSize().columns;
     }
 
     fn cTermClear(context: ?*anyopaque) callconv(.c) abi.Answer {
-        clear(context.?) catch return .exhausted;
+        of(context).clear() catch return .exhausted;
         return .yes;
     }
 
     fn cTermMove(context: ?*anyopaque, row: i64, col: i64) callconv(.c) abi.Answer {
-        move(context.?, row, col) catch return .exhausted;
+        of(context).move(row, col) catch return .exhausted;
         return .yes;
     }
 
@@ -861,17 +749,17 @@ pub const Host = struct {
         background: i64,
         bold: i32,
     ) callconv(.c) abi.Answer {
-        style(context.?, foreground, background, bold != 0) catch return .exhausted;
+        of(context).style(foreground, background, bold != 0) catch return .exhausted;
         return .yes;
     }
 
     fn cTermWrite(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        write(context.?, text[0..@intCast(length)]) catch return .exhausted;
+        of(context).write(text[0..@intCast(length)]) catch return .exhausted;
         return .yes;
     }
 
     fn cTermFlush(context: ?*anyopaque) callconv(.c) abi.Answer {
-        flush(context.?) catch return .exhausted;
+        of(context).flush() catch return .exhausted;
         return .yes;
     }
 
@@ -906,16 +794,16 @@ pub const Host = struct {
     }
 
     fn cPrintError(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        printDiagnostic(context.?, text[0..@intCast(length)]) catch return .exhausted;
+        of(context).printDiagnostic(text[0..@intCast(length)]) catch return .exhausted;
         return .yes;
     }
 
     fn cClock(context: ?*anyopaque) callconv(.c) i64 {
-        return clockMilliseconds(context.?);
+        return of(context).clockMilliseconds();
     }
 
     fn cSleep(context: ?*anyopaque, milliseconds: i64) callconv(.c) abi.Answer {
-        sleepMilliseconds(context.?, milliseconds);
+        of(context).sleepMilliseconds(milliseconds);
         return .yes;
     }
 
@@ -941,8 +829,7 @@ pub const Host = struct {
         content: [*]const u8,
         content_length: i64,
     ) callconv(.c) abi.Answer {
-        const added = appendFile(
-            context.?,
+        const added = of(context).appendFile(
             path[0..@intCast(path_length)],
             content[0..@intCast(content_length)],
         );
@@ -954,7 +841,7 @@ pub const Host = struct {
         path: [*]const u8,
         path_length: i64,
     ) callconv(.c) abi.Answer {
-        return if (deleteFile(context.?, path[0..@intCast(path_length)])) .yes else .no;
+        return if (of(context).deleteFile(path[0..@intCast(path_length)])) .yes else .no;
     }
 
     fn cFileRename(
@@ -964,8 +851,7 @@ pub const Host = struct {
         to: [*]const u8,
         to_length: i64,
     ) callconv(.c) abi.Answer {
-        const moved = renameFile(
-            context.?,
+        const moved = of(context).renameFile(
             from[0..@intCast(from_length)],
             to[0..@intCast(to_length)],
         );

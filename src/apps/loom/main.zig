@@ -21,13 +21,11 @@ const shell_mod = @import("shell.zig");
 const streams = @import("streams");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
-    // One allocator for loom and for the objects the program it runs
-    // allocates (`backend.Memory.objects`), which puts it on the
-    // running program's hot path: scope ownership allocates and frees
-    // objects as the program's scopes open and close.  A debug build
-    // pays for the leak check and gets it; an optimized build takes
-    // libc's malloc, which is 13x faster on that traffic and is what
-    // a compiled artifact already uses (`runtime/exports.zig`).
+    // loom's own allocator, and only its own: a program's objects come
+    // from the copy of `libluce_rt` inside the artifact, which uses
+    // libc's malloc (`runtime/exports.zig`).  A debug build pays for
+    // the leak check and gets it; an optimized build takes malloc
+    // directly.
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
     const gpa = switch (builtin.mode) {

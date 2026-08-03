@@ -1,7 +1,7 @@
 //! The host boundary, as the language sees it.
 //!
 //! Every effect a Luce program can have is an optional host service
-//! (`backend.Host` for the interpreter, `abi.Host` for compiled code),
+//! (`interpreter.Host` for the oracle, `abi.Host` for compiled code),
 //! and both tables are built here from one `World` — so a program's
 //! console, files, arguments, screen, keyboard, standard input, clock
 //! and environment are the same world twice, and the two engines are

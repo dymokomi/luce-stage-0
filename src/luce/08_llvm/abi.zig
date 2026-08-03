@@ -13,7 +13,7 @@
 //! table passed in — the artifact declares no undefined symbols beyond
 //! `libluce_rt`, which it links statically.  That is deliberate: an
 //! undefined `luce_host_print` does not link into a two-level-namespace
-//! macOS dylib, and a vtable is the same shape `backend.Host` already
+//! macOS dylib, and a vtable is the same shape `interpreter.Host` already
 //! has for the interpreter.
 //!
 //! Effects come through this table; *semantics* do not.  Lists, maps,
@@ -354,7 +354,7 @@ pub const RaisedFn = trace.ErrorReportFn;
 /// `default_call_depth`.
 ///
 /// This is the same policy limit the interpreter takes as
-/// `backend.Budget.call_depth`, and it exists for the same reason.
+/// `interpreter.Budget.call_depth`, and it exists for the same reason.
 /// Luce promises that runaway recursion is a trap with a message and a
 /// trace, never a native stack overflow — so somebody has to say how
 /// deep is too deep, and it is the host, which is the only party that
@@ -364,7 +364,7 @@ pub const RaisedFn = trace.ErrorReportFn;
 pub const CallDepthFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 
 /// The depth a host that says nothing gets.  Identical to
-/// `backend.Budget.call_depth`, so a program that recurses too far
+/// `interpreter.Budget.call_depth`, so a program that recurses too far
 /// traps at the same call on both engines.
 pub const default_call_depth: i64 = 256;
 

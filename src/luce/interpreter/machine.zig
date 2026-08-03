@@ -1,5 +1,5 @@
-//! The Luce IR interpreter machine — the reference engine behind the
-//! backend boundary.
+//! The Luce IR interpreter machine — the differential oracle's engine
+//! (`../interpreter.zig`).
 //!
 //! Deterministic and safe: checked integer arithmetic, explicit
 //! conversion range checks, and a call-depth limit.  All temporary
@@ -16,14 +16,14 @@
 
 const std = @import("std");
 const mir = @import("../06_mir.zig");
-const backend = @import("../backend.zig");
+const interpreter = @import("../interpreter.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 
 const Allocator = std.mem.Allocator;
-const RuntimeValue = backend.RuntimeValue;
-const Result = backend.Result;
-const Budget = backend.Budget;
+const RuntimeValue = runtime.Value;
+const Result = interpreter.Result;
+const Budget = interpreter.Budget;
 
 const containers = runtime.containers;
 const operators = runtime.operators;
@@ -33,7 +33,7 @@ pub fn run(
     memory: runtime.Memory,
     program: *const mir.Program,
     budget: Budget,
-    host: ?backend.Host,
+    host: ?interpreter.Host,
 ) error{OutOfMemory}!Result {
     var machine: Machine = .{
         .arena = memory.arena,
@@ -98,7 +98,7 @@ const max_trace_frames = runtime.trace.max_frames;
 
 pub const CallOutcome = union(enum) {
     value: RuntimeValue,
-    trap: backend.Trap,
+    trap: interpreter.Trap,
     /// The entry function left with an error nobody caught.  What it
     /// was is in `Runtime.raised`; the run ends here, but unlike a
     /// trap every frame on the way out released what it owned, so
@@ -136,7 +136,7 @@ pub const Machine = struct {
     runtime: runtime.Runtime,
     program: *const mir.Program,
     max_depth: u32,
-    host: ?backend.Host,
+    host: ?interpreter.Host,
     stack: std.ArrayList(Frame) = .empty,
     /// Every live frame's registers and locals, as one stack that
     /// pops on return.  Frames used to take a fresh arena slice each
@@ -191,10 +191,10 @@ pub const Machine = struct {
     /// first.  Each frame's current instruction resolves through the
     /// function's origins table when the module carries one (debug);
     /// a stripped module still names the function, with line 0.
-    fn traceback(self: *Machine, reported: *backend.Trap) error{OutOfMemory}!void {
+    fn traceback(self: *Machine, reported: *interpreter.Trap) error{OutOfMemory}!void {
         const depth = self.stack.items.len;
         const kept = @min(depth, max_trace_frames);
-        const frames = try self.arena.alloc(backend.TraceFrame, kept);
+        const frames = try self.arena.alloc(interpreter.TraceFrame, kept);
         for (frames, 0..) |*slot, out_index| {
             const frame = self.stack.items[depth - 1 - out_index];
             const function = &self.program.functions[frame.function];
@@ -246,11 +246,11 @@ pub const Machine = struct {
         for (self.stack.items) |frame| self.releaseSlots(frame);
     }
 
-    fn service(self: *Machine) EvalError!backend.Host {
+    fn service(self: *Machine) EvalError!interpreter.Host {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
 
-    fn terminal(self: *Machine) EvalError!backend.Terminal {
+    fn terminal(self: *Machine) EvalError!interpreter.Terminal {
         const host = try self.service();
         return host.terminal orelse return self.runtime.fail(.host_unavailable);
     }

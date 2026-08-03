@@ -4,7 +4,7 @@
 //! Every spec in this directory states a fact about the language, and
 //! a fact about the language is a fact about **both** engines.  So a
 //! spec never runs a program once.  It compiles once, then runs the
-//! result twice — interpreted through `backend.evaluateHosted` against
+//! result twice — interpreted through `interpreter.run` against
 //! a `Reference` host, and compiled through libLLVM, `cc` and `dlopen`
 //! against a `Capture` host built from the same `World` — and demands
 //! the same printed bytes, the same trap code, the same trap message,
@@ -35,7 +35,7 @@ const build_options = @import("build_options");
 const luce = @import("luce");
 const emit = @import("emit");
 
-const backend = luce.backend;
+const interpreter = luce.interpreter;
 const compile = luce.compile;
 const mir = luce.mir;
 const types = luce.types;
@@ -721,7 +721,7 @@ pub const Reference = struct {
         try self.printed.append(self.gpa, '\n');
     }
 
-    fn host(self: *Reference) backend.Host {
+    fn host(self: *Reference) interpreter.Host {
         return .{
             .context = self,
             .printFn = if (self.provided.print) take else null,
@@ -761,7 +761,7 @@ pub const Reference = struct {
         context: *anyopaque,
         arena: Allocator,
         path: []const u8,
-    ) error{OutOfMemory}!backend.FileRead {
+    ) error{OutOfMemory}!interpreter.FileRead {
         const found = of(context).world.read(path) orelse return .failed;
         return .{ .content = try arena.dupe(u8, found) };
     }
@@ -879,7 +879,7 @@ pub const Reference = struct {
         try of(context).record("[flush]", "");
     }
 
-    fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!backend.KeyEvent {
+    fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!interpreter.KeyEvent {
         _ = arena;
         const pressed = of(context).world.nextKey();
         return .{ .name = pressed.name, .text = pressed.text };
@@ -889,7 +889,7 @@ pub const Reference = struct {
         self.world = self.provided.world;
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
-        const result = try backend.evaluateHosted(
+        const result = try interpreter.run(
             .{ .arena = arena.allocator(), .objects = self.gpa },
             compiled,
             .{ .call_depth = self.provided.call_depth },

@@ -500,7 +500,7 @@ const Reader = struct {
 
 const testing = std.testing;
 const compile_mod = @import("../compile.zig");
-const backend = @import("../backend.zig");
+const interpreter = @import("../interpreter.zig");
 
 fn compileScript(source: []const u8) !mir.Program {
     var result = try compile_mod.compile(testing.allocator, source, .{
@@ -852,9 +852,12 @@ test "single-byte damage is rejected or runs to a clean outcome — never a cras
             // other suite runs the runtime under
             // `std.testing.allocator`, which is where reclamation is
             // proved.
-            _ = try backend.evaluate(.{ .arena = arena.allocator(), .objects = arena.allocator() }, &decoded, .{
-                .call_depth = 64,
-            });
+            _ = try interpreter.run(
+                .{ .arena = arena.allocator(), .objects = arena.allocator() },
+                &decoded,
+                .{ .call_depth = 64 },
+                null,
+            );
         }
     }
 

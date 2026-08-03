@@ -23,9 +23,11 @@ pub const optimize = @import("07_optimize.zig");
 pub const llvm = @import("08_llvm.zig");
 pub const compile = @import("compile.zig");
 
-// Running a program, and the semantics both engines share.
+// The semantics both engines share, and the one that ships in
+// nothing: `interpreter` is the differential oracle the executable
+// specification runs against, not a way to run a Luce program
+// (docs/ENGINE.md).
 pub const runtime = @import("runtime.zig");
-pub const backend = @import("backend.zig");
 pub const interpreter = @import("interpreter.zig");
 
 // Cross-cutting support: not a stage, used by all of them.
@@ -49,7 +51,6 @@ test {
     _ = llvm;
     _ = compile;
     _ = runtime;
-    _ = backend;
     _ = interpreter;
     _ = diagnostics;
     _ = types;

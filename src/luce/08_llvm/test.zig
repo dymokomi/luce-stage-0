@@ -1,4 +1,4 @@
-//! End-to-end proof for the LLVM backend.
+//! End-to-end proof for the LLVM interpreter.
 //!
 //! Two kinds of test, both of them about the one code generator that
 //! ships.  The first kind renders the LLVM IR the lowering produced
@@ -23,7 +23,7 @@ const std = @import("std");
 const luce = @import("luce");
 const spec = @import("../specs/agree.zig");
 
-const backend = luce.backend;
+const interpreter = luce.interpreter;
 const mir = luce.mir;
 const abi = luce.llvm.abi;
 
@@ -415,7 +415,7 @@ test "trap(message) reports the program's own words" {
 
 test "the ABI's default depth is the interpreter's, so neither engine is deeper" {
     try std.testing.expectEqual(
-        @as(i64, (backend.Budget{}).call_depth),
+        @as(i64, (interpreter.Budget{}).call_depth),
         abi.default_call_depth,
     );
 }

@@ -698,7 +698,7 @@ the binary, the directory, and `PATH`. `zig build test` is **836**,
 down 2 from 838, and both of the two were assertions about engine
 selection rather than about the language.
 
-**6. Move the boundary.** *(needs 5)*
+**6. Move the boundary. — DONE.** *(needs 5)*
 *Deletes from the product:* `backend.zig`'s `Host`, `Terminal`,
 `KeyEvent`, `Budget`, `Result`, `Trap`, `Raised`, `FileRead`,
 `evaluate`, `evaluateHosted`; `host.zig`'s `host()` and its 23
@@ -709,6 +709,41 @@ Zig-signature service functions. `Memory` and `RuntimeValue` move to
 *Forecloses:* a second engine slotting in behind a shared boundary.
 That was the boundary's stated purpose and it did not happen — LLVM
 brought its own published ABI, which is better.
+
+*What it took, in contact with the code:*
+
+**`backend.zig` is gone, not moved.** Its types are `interpreter.zig`
+now — the barrel is the package's header, which is where a package's
+public shapes belong, and it needed no new file. `machine.zig` imports
+`../interpreter.zig` where it imported `../backend.zig`, which is the
+same cycle that already existed with the barrel on the other side of
+it. `luce.zig` lost the `backend` export, so `luce.interpreter` is the
+only name for any of this now.
+
+**The two aliases did not both move up — one died and one stayed.**
+`RuntimeValue` was a second name for `runtime.Value` with exactly one
+reader, so it is `runtime.Value` at the use site and nowhere else.
+`Memory` stayed, in `interpreter.zig`, because it is part of `run`'s
+signature and a caller reading that signature should not have to know
+it is an alias.
+
+**`host.zig` lost 4,009 bytes and got simpler than the memo
+expected.** Deleting `host()` left seven functions with no caller —
+`readFile`, `argAt`, `listDirectory`, `readLine`, `environment`,
+`key`, and the `rows`/`cols` pair — and the rest had `*anyopaque`
+first parameters *only* because a vtable needed them. They are
+ordinary `*Host` methods now and the C wrappers call
+`of(context).method(…)`, so the `@ptrCast` happens once at the C
+boundary instead of in every service.
+
+**A comment was already wrong and the boundary is what proved it.**
+loom's `main` said its allocator was on the running program's hot path
+(`backend.Memory.objects`). With no interpreter in loom, a program's
+objects come from the copy of `libluce_rt` inside the artifact and
+loom's allocator is loom's alone.
+
+`zig build test` is **835**: 836 minus `backend.zig`'s own anonymous
+test block, which is the whole of what the file cost the suite.
 
 **7. Delete `07_optimize/values.zig` and `flow.zig`.** *(needs 5)*
 *Deletes:* 498 lines, on their own headers' instruction.
