@@ -287,20 +287,36 @@ fn discoverLlvm(b: *std.Build) Llvm {
         "llvm-config",
         "Path to llvm-config (default: found on PATH or in the usual prefixes)",
     );
-    const program = configured orelse b.findProgram(
-        &.{ "llvm-config", "llvm-config-22", "llvm-config-21", "llvm-config-20" },
-        &.{ "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin", "/usr/lib/llvm/bin" },
-    ) catch std.process.fatal(
-        \\cannot find llvm-config.
-        \\
-        \\Luce compiles through LLVM in-process (docs/CODEGEN.md), so
-        \\libLLVM and its headers must be installed.  Install LLVM
-        \\(macOS: `brew install llvm`; Debian/Ubuntu: `apt install
-        \\llvm-dev`) or point the build at it:
-        \\
-        \\    zig build -Dllvm-config=/path/to/llvm-config
-        \\
-    , .{});
+    // `./vendor-llvm.sh` builds a pinned LLVM statically into
+    // .llvm/install.  Prefer it when it is there: it is the version
+    // this compiler is tested against, and linking it leaves `luce`
+    // depending on no LLVM the machine happens to have.  A system
+    // LLVM stays supported, and -Dllvm-config still wins over both.
+    const vendored_relative = ".llvm/install/bin/llvm-config";
+    const vendored = b.pathFromRoot(vendored_relative);
+    const program = configured orelse
+        if (b.build_root.handle.access(b.graph.io, vendored_relative, .{})) |_| vendored else |_| b.findProgram(
+            &.{ "llvm-config", "llvm-config-22", "llvm-config-21", "llvm-config-20" },
+            &.{ "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin", "/usr/lib/llvm/bin" },
+        ) catch std.process.fatal(
+            \\cannot find llvm-config.
+            \\
+            \\`luce` compiles through LLVM in-process (docs/CODEGEN.md),
+            \\so libLLVM and its headers must be available.  Either build
+            \\the pinned one statically:
+            \\
+            \\    ./vendor-llvm.sh
+            \\
+            \\or install a system LLVM (macOS: `brew install llvm`;
+            \\Debian/Ubuntu: `apt install llvm-dev`), or point the build
+            \\at one you already have:
+            \\
+            \\    zig build -Dllvm-config=/path/to/llvm-config
+            \\
+            \\`loom` links no LLVM, so a machine that only runs Luce
+            \\programs needs none of this.
+            \\
+        , .{});
 
     const cxx_flags = ask(b, program, "--cxxflags");
     const linked = [_][]const u8{

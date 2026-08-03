@@ -10,3 +10,6 @@ dice_rolls.txt
 
 # Agent worktrees and local Claude Code state — never part of the tree.
 .claude/
+
+# Vendored LLVM: pinned source, build tree and install prefix (./vendor-llvm.sh).
+/.llvm/
