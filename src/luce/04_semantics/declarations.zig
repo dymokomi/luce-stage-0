@@ -196,11 +196,22 @@ pub const LocalInfo = struct {
     iterating: bool = false,
 };
 
+/// One local this scope has to release on the way out, and in which of
+/// the two senses it owns something: the objects bound to it (S1-S43),
+/// the storage in its slot (docs/STRINGS.md), or both.  They are
+/// separate questions — `let b = a` aliases a's objects and copies its
+/// String fields — so they are answered separately.
+pub const Release = struct {
+    local: LocalId,
+    objects: bool = false,
+    storage: bool = false,
+};
+
 pub const Scope = struct {
     names: std.StringHashMapUnmanaged(LocalInfo) = .empty,
-    /// Owned object-carrying locals in declaration order; scope exit
+    /// Locals this scope releases, in declaration order; scope exit
     /// releases them in reverse.
-    owned: std.ArrayList(LocalId) = .empty,
+    owned: std.ArrayList(Release) = .empty,
 };
 
 pub const FoundLocal = struct {
@@ -527,6 +538,26 @@ pub const Analyzer = struct {
             // unwrapped type would; holding `none` owns nothing (S43),
             // and every ownership walk already no-ops on absence.
             .optional => |payload| self.carriesObjects(payload.asType()),
+            else => false,
+        };
+    }
+
+    /// True for types that carry *storage* — a String's bytes, a
+    /// struct's field run — as opposed to objects (docs/STRINGS.md).
+    ///
+    /// Deliberately not `carriesObjects`, and deliberately not wired to
+    /// it.  This predicate drives release emission and nothing else:
+    /// widening `carriesObjects` to Strings would make `xs.append(name)`
+    /// demand `give name` under S21, which is a language change.  A
+    /// String takes no verbs (S32) and still gets reclaimed, which is
+    /// the whole point.
+    pub fn ownsStorage(self: *const Analyzer, of: Type) bool {
+        return switch (of) {
+            // A struct owns its field run whatever is in it, so this
+            // needs no shape lookup — an all-Int struct still has a
+            // run to give back.
+            .string, .bytes, .strukt => true,
+            .optional => |payload| self.ownsStorage(payload.asType()),
             else => false,
         };
     }
@@ -1355,11 +1386,16 @@ pub const Analyzer = struct {
                 const parameter_type = info.parameter_types[index];
                 const gives = info.parameter_modes[index] == .give;
                 const class: OwnershipClass = if (gives) .owned else .borrow_param;
-                const local = (try builder.declareLocal(
+                // A parameter borrows its caller's storage, whichever
+                // way the object goes: the caller's binding outlives
+                // the call and gives the bytes back itself
+                // (docs/STRINGS.md).
+                const local = (try builder.declareLocalAs(
                     parameter.name,
                     parameter_type,
                     false,
                     class,
+                    .borrows,
                     parameter.span,
                 )) orelse continue;
                 // A give parameter is an owned binding like any other

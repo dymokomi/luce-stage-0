@@ -155,9 +155,11 @@ pub const KeyEvent = struct {
 // ---------------------------------------------------------------------------
 
 /// Where an evaluation's memory comes from: a run-lifetime arena for
-/// values, and an ordinary freeing allocator for heap objects, which
-/// scope ownership reclaims while the program runs.  This is the
-/// runtime library's own `Memory`, not a second one.
+/// what a program cannot grow without bound, and an ordinary freeing
+/// allocator for everything with a death point — heap objects, and
+/// since copy-on-store every String's bytes and every struct value's
+/// field run (docs/STRINGS.md).  This is the runtime library's own
+/// `Memory`, not a second one.
 pub const Memory = runtime.Memory;
 
 /// Run the program's evaluate entry.  `inputs` parallels

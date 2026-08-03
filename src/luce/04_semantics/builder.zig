@@ -89,7 +89,15 @@ pub const FunctionBuilder = struct {
     /// Short enough that a linear scan is the whole lookup.
     narrowed: std.ArrayList(LocalId) = .empty,
 
-    const TempSlot = struct { local: LocalId, register: Register };
+    const TempSlot = struct {
+        local: LocalId,
+        register: Register,
+        /// Whether this temporary owns the objects in its value, its
+        /// storage, or both — the same two questions `Scope.Release`
+        /// answers for a named binding.
+        objects: bool,
+        storage: bool,
+    };
 
     fn arena(self: *FunctionBuilder) Allocator {
         return self.analyzer.arena;
@@ -354,8 +362,10 @@ pub const FunctionBuilder = struct {
     // Ownership releases -------------------------------------------------
 
     /// Emit releases for the owned locals of every scope at or above
-    /// `from`, innermost first, skipping `moved` (a returned binding —
-    /// its object moves to the caller, S16).
+    /// `from`, innermost first.  `moved` is a returned binding: its
+    /// *object* moves to the caller (S16), but its storage does not —
+    /// the return took a copy — so the slot still gives its bytes back
+    /// (docs/STRINGS.md).
     fn emitScopeReleases(self: *FunctionBuilder, from: usize, moved: ?LocalId) Error!void {
         var scope_index = self.scopes.items.len;
         while (scope_index > from) {
@@ -364,8 +374,13 @@ pub const FunctionBuilder = struct {
             var owned_index = owned.len;
             while (owned_index > 0) {
                 owned_index -= 1;
-                if (moved != null and owned[owned_index] == moved.?) continue;
-                try self.code.release(owned[owned_index]);
+                const release = owned[owned_index];
+                const keeps_objects = moved != null and release.local == moved.?;
+                try self.code.release(
+                    release.local,
+                    release.objects and !keeps_objects,
+                    release.storage,
+                );
             }
         }
     }
@@ -376,11 +391,23 @@ pub const FunctionBuilder = struct {
         try self.emitScopeReleases(self.scopes.items.len - 1, null);
     }
 
-    /// Park a fresh, unowned object in a hidden local so the end of
-    /// the statement can release it if nothing adopted it (S3, S19).
-    fn registerTemp(self: *FunctionBuilder, value: Value) Error!void {
-        const local = try self.code.park(value.register, value.value_type);
-        try self.temps.append(self.temporary(), .{ .local = local, .register = value.register });
+    /// Park a fresh value in a hidden local so the end of the statement
+    /// can release it if nothing adopted it (S3, S19): the object it
+    /// carries when `objects` is set, its freshly allocated storage
+    /// when `storage` is (docs/STRINGS.md).
+    fn registerTemp(
+        self: *FunctionBuilder,
+        value: Value,
+        objects: bool,
+        storage: bool,
+    ) Error!void {
+        const local = try self.code.park(value.register, value.value_type, objects, storage);
+        try self.temps.append(self.temporary(), .{
+            .local = local,
+            .register = value.register,
+            .objects = objects,
+            .storage = storage,
+        });
     }
 
     /// Emit releases for the temporaries above `from` without
@@ -389,7 +416,8 @@ pub const FunctionBuilder = struct {
         var index = self.temps.items.len;
         while (index > from) {
             index -= 1;
-            try self.code.release(self.temps.items[index].local);
+            const temp = self.temps.items[index];
+            try self.code.release(temp.local, temp.objects, temp.storage);
         }
     }
 
@@ -420,12 +448,31 @@ pub const FunctionBuilder = struct {
         return try self.analyzer.qualify(self.prefix, written);
     }
 
+    /// Does this binding own the storage in its slot?  Every real
+    /// binding does — `let b = a` copies a's String fields even while
+    /// it aliases a's objects (S26) — and a parameter never does: its
+    /// bytes belong to the caller's binding, which outlives the call
+    /// (docs/STRINGS.md).
+    pub const StorageClass = enum { owns, borrows };
+
     pub fn declareLocal(
         self: *FunctionBuilder,
         name: []const u8,
         local_type: Type,
         mutable: bool,
         class: OwnershipClass,
+        span: Span,
+    ) Error!?LocalId {
+        return self.declareLocalAs(name, local_type, mutable, class, .owns, span);
+    }
+
+    pub fn declareLocalAs(
+        self: *FunctionBuilder,
+        name: []const u8,
+        local_type: Type,
+        mutable: bool,
+        class: OwnershipClass,
+        storage_class: StorageClass,
         span: Span,
     ) Error!?LocalId {
         if (isReserved(name) or std.mem.eql(u8, name, "evaluate")) {
@@ -445,7 +492,8 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const carries = self.analyzer.carriesObjects(local_type);
-        const local = try self.code.addLocal(name, local_type);
+        const owns_storage = storage_class == .owns and self.analyzer.ownsStorage(local_type);
+        const local = try self.code.addLocal(name, local_type, owns_storage);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), name, .{
             .local = local,
@@ -453,10 +501,229 @@ pub const FunctionBuilder = struct {
             .class = if (carries) class else .alias,
             .carries = carries,
         });
-        if (carries and class == .owned) {
-            try scope.owned.append(self.temporary(), local);
+        const owns_objects = carries and class == .owned;
+        if (owns_objects or owns_storage) {
+            try scope.owned.append(self.temporary(), .{
+                .local = local,
+                .objects = owns_objects,
+                .storage = owns_storage,
+            });
         }
         return local;
+    }
+
+    // Value storage --------------------------------------------------------
+    //
+    // A String's bytes and a struct's field run have exactly one owner
+    // (docs/STRINGS.md).  Stage 4 says where that owner is: a fresh
+    // allocation is parked in a statement temporary the moment it is
+    // made, and every store into a place that outlives the statement
+    // takes a copy — except the one case where it provably need not,
+    // a value this statement made and nothing has claimed yet.
+
+    /// True when `register` holds storage this statement just
+    /// allocated and nobody owns yet.  Asked of the *instruction*
+    /// rather than of the expression that produced it: the set of
+    /// producers is closed and small, and reading it off the tape
+    /// cannot drift from what was actually emitted.
+    fn producesFreshStorage(self: *const FunctionBuilder, register: Register) bool {
+        return switch (self.code.instructions.items[register]) {
+            // String `+`; every other binary answers a scalar.
+            .binary => true,
+            // Both build a whole new struct value that owns its run.
+            .struct_make, .struct_set => true,
+            // A function's result is the caller's (S16), and `ret`
+            // hands out a copy rather than a view of the callee's
+            // frame.
+            .call => true,
+            .intrinsic => |call| switch (call.kind) {
+                // `str`, `chr` and the host services allocate; `pop`
+                // takes the element's storage out of its container,
+                // which leaves it owned by nobody; `copy` duplicates.
+                .str_value,
+                .chr_code,
+                .file_read,
+                .arg_get,
+                .key_read,
+                .pop_value,
+                .copy_object,
+                .own_storage,
+                => true,
+                // Everything else that answers text answers a *view*:
+                // a slice, an element, a field, a map key, the key-text
+                // slot, a constant, a parameter.
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    /// Can `register`'s storage move into a place that outlives the
+    /// statement, or must the place take a copy?  It can move only
+    /// when this statement allocated it and nothing has claimed it —
+    /// a parked temporary has an owner already, and copying is what
+    /// keeps the two from both freeing it.
+    fn storageMoves(self: *const FunctionBuilder, register: Register) bool {
+        if (!self.producesFreshStorage(register)) return false;
+        for (self.temps.items) |temp| {
+            if (temp.register == register and temp.storage) return false;
+        }
+        return true;
+    }
+
+    /// Store into a local, copying the value's storage in when the
+    /// local is the one that will have to give it back.
+    fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Value) Error!void {
+        var register = value.register;
+        if (self.code.localOwnsStorage(local) and !self.storageMoves(register)) {
+            register = try self.code.ownStorage(register);
+        }
+        try self.code.store(local, register);
+    }
+
+    /// True when `register` holds a view of storage a container or a
+    /// struct is holding, rather than storage of its own.  Those are
+    /// the reads the hazard rule above has to protect; a local, a
+    /// parameter, a constant and a fresh value are all safe, the
+    /// first three because nothing in one statement can free them and
+    /// the last because it has no other owner.
+    fn borrowsStoredValue(self: *const FunctionBuilder, register: Register) bool {
+        return switch (self.code.instructions.items[register]) {
+            .struct_get => true,
+            .intrinsic => |call| switch (call.kind) {
+                .index_get, .map_get, .key_at, .value_at => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    /// Could evaluating this expression free something a container or
+    /// a struct field is holding?
+    ///
+    /// Conservative, and it can afford to be: Luce has no mutable
+    /// globals, so the only way an expression reaches a container the
+    /// surrounding statement is also reading is by being handed one.
+    /// That means a call to a declaration or any method — a method's
+    /// receiver is the container in `xs.remove(0)`.  Every builtin but
+    /// `free` moves no ownership at all (`07_optimize/effects.zig`
+    /// answers the same question about instructions), so `str(i)` and
+    /// `len(xs)` beside a container read cost nothing.
+    fn mayMutateContainers(expression: *const ast.Expression) bool {
+        return switch (expression.*) {
+            .method => true,
+            .give, .copy => true,
+            .call => |call| blk: {
+                if (!isPureBuiltin(call.callee)) break :blk true;
+                for (call.arguments) |argument| {
+                    if (mayMutateContainers(argument.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .binary => |binary| mayMutateContainers(binary.left) or
+                mayMutateContainers(binary.right),
+            .unary => |unary| mayMutateContainers(unary.operand),
+            .field => |field| mayMutateContainers(field.target),
+            .index => |index| blk: {
+                if (mayMutateContainers(index.target)) break :blk true;
+                for (index.indices) |subscript| {
+                    if (mayMutateContainers(subscript)) break :blk true;
+                }
+                break :blk false;
+            },
+            .slice_range => |slice| blk: {
+                if (mayMutateContainers(slice.target)) break :blk true;
+                if (slice.start) |bound| {
+                    if (mayMutateContainers(bound)) break :blk true;
+                }
+                if (slice.end) |bound| {
+                    if (mayMutateContainers(bound)) break :blk true;
+                }
+                break :blk false;
+            },
+            .list_literal => |literal| blk: {
+                for (literal.elements) |element| {
+                    if (mayMutateContainers(element)) break :blk true;
+                }
+                break :blk false;
+            },
+            .new_object => |new| blk: {
+                for (new.dims) |dimension| {
+                    if (mayMutateContainers(dimension)) break :blk true;
+                }
+                break :blk false;
+            },
+            .name,
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .bool_literal,
+            .none_literal,
+            => false,
+        };
+    }
+
+    /// The same question of a whole block: could running it free
+    /// something a container or a struct field is holding?
+    fn blockMayMutateContainers(block: ast.Block) bool {
+        for (block.statements) |statement| {
+            if (statementMayMutateContainers(statement)) return true;
+        }
+        return false;
+    }
+
+    fn statementMayMutateContainers(statement: ast.Statement) bool {
+        return switch (statement) {
+            // A write through a place is exactly a container or field
+            // store, and that frees what it replaced (S22, S25).
+            .assign => |assign| assign.target != .name or
+                mayMutateContainers(assign.value),
+            .let => |binding| mayMutateContainers(binding.value),
+            .variable => |binding| binding.value != null and
+                mayMutateContainers(binding.value.?),
+            .expression => |expression| mayMutateContainers(expression.value),
+            .return_statement => |returned| returned.value != null and
+                mayMutateContainers(returned.value.?),
+            .conditional => |conditional| mayMutateContainers(conditional.condition) or
+                blockMayMutateContainers(conditional.then_block) or
+                (conditional.else_block != null and
+                    blockMayMutateContainers(conditional.else_block.?)),
+            .while_loop => |loop| mayMutateContainers(loop.condition) or
+                blockMayMutateContainers(loop.body),
+            .for_range => |loop| mayMutateContainers(loop.start) or
+                mayMutateContainers(loop.end) or
+                blockMayMutateContainers(loop.body),
+            .for_each => |loop| mayMutateContainers(loop.iterable) or
+                blockMayMutateContainers(loop.body),
+            .break_statement, .continue_statement => false,
+        };
+    }
+
+    /// The builtins that move no ownership: everything but `free`.
+    fn isPureBuiltin(callee: []const u8) bool {
+        if (std.mem.eql(u8, callee, "free")) return false;
+        const named = [_][]const u8{
+            "abs",        "min",        "max",         "clamp",       "sqrt",
+            "floor",      "ceil",       "len",         "assert",      "trap",
+            "str",        "parse_int",  "parse_float", "chr",         "ord",
+            "print",      "file_read",  "file_write",  "file_exists", "arg_count",
+            "arg",        "term_rows",  "term_cols",   "term_clear",  "term_move",
+            "term_style", "term_write", "term_flush",  "key_read",    "key_text",
+            "Int",        "Float",
+        };
+        for (named) |name| {
+            if (std.mem.eql(u8, callee, name)) return true;
+        }
+        return false;
+    }
+
+    /// Park a freshly allocated String or struct value that was not
+    /// produced through `lowerExpression` — a compound assignment's
+    /// concatenation, say — so the statement's end reclaims it.
+    fn parkFreshStorage(self: *FunctionBuilder, value: Value) Error!void {
+        if (!self.analyzer.ownsStorage(value.value_type)) return;
+        if (!self.storageMoves(value.register)) return;
+        try self.registerTemp(value, false, true);
     }
 
     /// How deep `splitsBlocks` will look before answering yes on
@@ -826,6 +1093,22 @@ pub const FunctionBuilder = struct {
             if (splitsBlocks(expressions[backwards], split_search_depth)) any_split = true;
         }
 
+        // Which operands still have something that could mutate a
+        // container running after them — the residual hazard below.
+        var later_mutates: [inline_operands]bool = undefined;
+        const mutating = if (wide)
+            try self.temporary().alloc(bool, expressions.len)
+        else
+            later_mutates[0..expressions.len];
+        defer if (wide) self.temporary().free(mutating);
+        var any_mutation = false;
+        backwards = expressions.len;
+        while (backwards > 0) {
+            backwards -= 1;
+            mutating[backwards] = any_mutation;
+            if (mayMutateContainers(expressions[backwards])) any_mutation = true;
+        }
+
         for (expressions, 0..) |expression, index| {
             const value = if (expression.* == .none_literal and expected != null)
                 ((try self.lowerTyped(expression, expected.?[index], expression.span(), "this place")) orelse
@@ -833,9 +1116,23 @@ pub const FunctionBuilder = struct {
             else
                 (try self.lowerExpression(expression, false)) orelse return null;
             values[index] = value;
+            // The residual hazard copy-on-store leaves open
+            // (docs/STRINGS.md): this register may be a *borrow* of an
+            // element's or a field's bytes, and an operand still to
+            // come could free them — `f(pieces[0], drop_first(pieces))`
+            // is the shape.  An object would go stale and trap (S9); a
+            // String has no handle to check, so it closes here, by
+            // copying the borrow before the mutation can happen.
+            if (mutating[index] and
+                self.analyzer.ownsStorage(value.value_type) and
+                self.borrowsStoredValue(value.register))
+            {
+                values[index].register = try self.code.ownStorage(value.register);
+                try self.parkFreshStorage(values[index]);
+            }
             spills[index] = null;
-            if (later_splits[index] and value.value_type != .none) {
-                spills[index] = try self.code.spill(value.register, value.value_type);
+            if (later_splits[index] and values[index].value_type != .none) {
+                spills[index] = try self.code.spill(values[index].register, values[index].value_type);
             }
         }
         for (spills, 0..) |spill, index| {
@@ -998,7 +1295,7 @@ pub const FunctionBuilder = struct {
             if (owns) .owned else .alias,
             span,
         )) orelse return;
-        try self.code.store(local, value.register);
+        try self.storeOwned(local, value);
         if (owns) {
             try self.code.bind(local, value.register);
         }
@@ -1023,7 +1320,7 @@ pub const FunctionBuilder = struct {
         // The declaration establishes the binding and its scope; the
         // scope owns whatever a later assignment fills in (S36, S40).
         const local = (try self.declareLocal(name, declared, true, .owned, span)) orelse return;
-        try self.code.store(local, zero);
+        try self.storeOwned(local, .{ .register = zero, .value_type = declared });
     }
 
     fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
@@ -1217,12 +1514,20 @@ pub const FunctionBuilder = struct {
             .remainder => .remainder,
             else => unreachable, // the parser only builds these five
         };
-        return try self.code.emit(.{ .binary = .{
+        const combined = try self.code.emit(.{ .binary = .{
             .op = operation,
             .operand_type = place_type,
             .left = current,
             .right = value.register,
         } }, place_type);
+        // `s += t` concatenates into fresh storage that no expression
+        // parked, so a place that keeps a copy would leave the join
+        // behind (docs/STRINGS.md).  Parking it makes the statement's
+        // end reclaim it either way.
+        if (string_concat) {
+            try self.parkFreshStorage(.{ .register = combined, .value_type = place_type });
+        }
+        return combined;
     }
 
     fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
@@ -1325,14 +1630,20 @@ pub const FunctionBuilder = struct {
             store = ((try self.fit(.{ .register = combined, .value_type = combine_type }, local_type)) orelse
                 return).register;
         }
+        // The copy comes first, because the value being stored may be
+        // a view of the storage the release is about to give back:
+        // `s = s[1:]` is legal (docs/STRINGS.md).
+        const owns_storage = self.code.localOwnsStorage(local);
+        if (owns_storage and !self.storageMoves(store)) {
+            store = try self.code.ownStorage(store);
+        }
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
         // Compound assignment is value-only, so `carries` is false.
-        if (info.carries and class == .owned) {
-            try self.code.release(local);
-        }
+        const owns_objects = info.carries and class == .owned;
+        try self.code.release(local, owns_objects, owns_storage);
         try self.code.store(local, store);
-        if (info.carries and class == .owned) {
+        if (owns_objects) {
             try self.code.bind(local, store);
         }
     }
@@ -1452,6 +1763,11 @@ pub const FunctionBuilder = struct {
             .field = field_index,
             .value = store,
         } }, local_type);
+        // `struct_set` built a whole new value that owns everything in
+        // it, copying out of the old one; the old run and its value
+        // fields go back now, and the objects it shares with the new
+        // value are left alone (docs/STRINGS.md, S26).
+        try self.code.release(local, false, self.code.localOwnsStorage(local));
         try self.code.store(local, updated);
         if (field_carries) {
             try self.code.bind(local, store);
@@ -1698,6 +2014,22 @@ pub const FunctionBuilder = struct {
         try self.narrowRestore(entry);
     }
 
+    /// One iteration's binding of a loop name: a plain store when the
+    /// slot borrows, a release-then-copy when it owns.
+    fn bindLoopName(
+        self: *FunctionBuilder,
+        local: LocalId,
+        value: Register,
+        value_type: Type,
+    ) Error!void {
+        if (!self.code.localOwnsStorage(local)) {
+            try self.code.store(local, value);
+            return;
+        }
+        try self.code.release(local, false, true);
+        try self.storeOwned(local, .{ .register = value, .value_type = value_type });
+    }
+
     /// for x in xs: — the element (or map key) binds immutably each
     /// iteration, and a named iterable is locked against reassignment
     /// while the loop runs.  What that costs in blocks and hidden
@@ -1754,21 +2086,50 @@ pub const FunctionBuilder = struct {
         // names: first = position, second = payload.
         const first_kind: ?mir.Intrinsic = if (two_names or map_like) position_kind else payload_kind;
         const first_type: Type = if (two_names or map_like) position_type else payload_type;
-        const name_local = (try self.declareLocal(loop.name, first_type, false, .alias, loop.span)) orelse return;
+        // A loop name holds a *view* of the element, and the body can
+        // invalidate it: an element overwrite frees the old element
+        // (S22), and unlike an object — whose handle would go stale
+        // and trap — a String has no handle to check
+        // (docs/STRINGS.md).  So a body that could free something a
+        // container holds gives the name a copy of its own, released
+        // at the top of the next iteration and at the end of the loop;
+        // a body that provably cannot keeps the borrow, which is what
+        // makes `for piece in pieces:` cost nothing.
+        const keeps_view = !blockMayMutateContainers(loop.body);
+        const storage_class: StorageClass = if (keeps_view) .borrows else .owns;
+        const name_local = (try self.declareLocalAs(
+            loop.name,
+            first_type,
+            false,
+            .alias,
+            storage_class,
+            loop.span,
+        )) orelse return;
         const value_local: ?LocalId = if (two_names)
-            (try self.declareLocal(loop.value_name.?, payload_type, false, .alias, loop.span)) orelse return
+            (try self.declareLocalAs(
+                loop.value_name.?,
+                payload_type,
+                false,
+                .alias,
+                storage_class,
+                loop.span,
+            )) orelse return
         else
             null;
         try self.code.startIteration(&shape, iterable.register);
 
         // Bind the first name: a getter intrinsic (key_at / index_get)
         // or the raw index when it is the List/Array position.
+        //
+        // The owning form releases the previous iteration's copy
+        // before storing this one; the slot starts empty, so the first
+        // release frees nothing.
         const first_value = try self.code.iterationValue(shape, first_kind, first_type);
-        try self.code.store(name_local, first_value);
+        try self.bindLoopName(name_local, first_value, first_type);
         // Bind the payload as a second name when present.
         if (value_local) |local| {
             const payload = try self.code.iterationValue(shape, payload_kind, payload_type);
-            try self.code.store(local, payload);
+            try self.bindLoopName(local, payload, payload_type);
         }
         try self.loops.append(self.temporary(), .{
             .continue_block = shape.step,
@@ -1795,6 +2156,9 @@ pub const FunctionBuilder = struct {
         }
         _ = self.loops.pop();
         try self.code.closeIteration(shape);
+        // The loop names live in the scope pushed above, so the copy
+        // the last iteration (or a `break`) left behind goes back here.
+        try self.emitScopeEnd();
         try self.narrowRestore(entry);
     }
 
@@ -1876,8 +2240,11 @@ pub const FunctionBuilder = struct {
                             return;
                         }
                         // The fresh return value was parked as a
-                        // statement temporary; un-park it so the
-                        // unwinding below leaves it alone.
+                        // statement temporary; the object in it moves
+                        // to the caller, so the unwinding below must
+                        // not free it.  Its *storage* still goes back:
+                        // the return took a copy of that
+                        // (docs/STRINGS.md).
                         var index = self.temps.items.len;
                         while (index > 0) {
                             index -= 1;
@@ -1885,16 +2252,32 @@ pub const FunctionBuilder = struct {
                             // any `T <: T?` widening, which moves no
                             // bits and keeps the same object.
                             if (self.temps.items[index].register == lowered.register) {
-                                _ = self.temps.orderedRemove(index);
+                                if (self.temps.items[index].storage) {
+                                    self.temps.items[index].objects = false;
+                                } else {
+                                    _ = self.temps.orderedRemove(index);
+                                }
                                 break;
                             }
                         }
                     },
                 }
             }
+            // Whatever a String-returning function hands back may be
+            // a view of a parameter (`strings.trim` returns
+            // `s[first:last]`) or of a local this frame is about to
+            // release, and Luce has no annotation that tells them
+            // apart — so `ret` copies, except where the value is
+            // provably this statement's own (docs/STRINGS.md).
+            var handed_out = value.register;
+            if (self.analyzer.ownsStorage(value.value_type) and
+                !self.storageMoves(handed_out))
+            {
+                handed_out = try self.code.ownStorage(handed_out);
+            }
             try self.emitTempReleases(0);
             try self.emitScopeReleases(0, moved);
-            try self.code.ret(value.register);
+            try self.code.ret(handed_out);
             return;
         }
         if (self.code.return_type != .none) {
@@ -1929,16 +2312,21 @@ pub const FunctionBuilder = struct {
         defer self.depth -= 1;
 
         const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
+        if (value.value_type == .none) return value;
         // Every ownership-yielding object is parked as a statement
         // temporary (S3).  Whatever adopts it — a binding, a
         // container, a give parameter, a return — re-owns it at run
         // time, which turns the parked release into a no-op.
-        if (value.value_type != .none and
-            self.analyzer.carriesObjects(value.value_type) and
-            try self.yieldsOwnership(expression))
-        {
-            try self.registerTemp(value);
-        }
+        const objects = self.analyzer.carriesObjects(value.value_type) and
+            try self.yieldsOwnership(expression);
+        // Freshly allocated storage is parked for the same reason and
+        // in the same slot, but the two questions differ: `give s`
+        // hands over an object while borrowing the struct run it sits
+        // in, and a String slice borrows without yielding anything
+        // (docs/STRINGS.md).
+        const storage = self.analyzer.ownsStorage(value.value_type) and
+            self.producesFreshStorage(value.register);
+        if (objects or storage) try self.registerTemp(value, objects, storage);
         return value;
     }
 
@@ -3642,6 +4030,8 @@ pub const FunctionBuilder = struct {
                 result = .int;
             },
             // Lowered from syntax or method calls, never from bare names.
+            .own_storage,
+            .drop_storage,
             .give_object,
             .copy_object,
             .null_object,

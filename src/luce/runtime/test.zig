@@ -26,6 +26,12 @@ const testing = std.testing;
 const Bench = struct {
     arena: std.heap.ArenaAllocator,
     runtime: Runtime,
+    /// Values these tests made and nothing stored.  In a program the
+    /// statement that produced one owns it and its end gives the
+    /// storage back (docs/STRINGS.md); here the bench stands in for
+    /// the statement, so a test that forgets one is a reported leak
+    /// exactly as a lowering that forgot one would be.
+    loose: std.ArrayList(Value),
 
     fn setup(self: *Bench) void {
         self.arena = .init(testing.allocator);
@@ -33,9 +39,18 @@ const Bench = struct {
             .arena = self.arena.allocator(),
             .objects = testing.allocator,
         });
+        self.loose = .empty;
+    }
+
+    /// Hand back `held` and remember to release its storage.
+    fn made(self: *Bench, held: Value) Value {
+        self.loose.append(testing.allocator, held) catch @panic("out of memory");
+        return held;
     }
 
     fn deinit(self: *Bench) void {
+        for (self.loose.items) |held| self.runtime.releaseStorage(held);
+        self.loose.deinit(testing.allocator);
         self.runtime.deinit();
         self.arena.deinit();
     }
@@ -564,7 +579,7 @@ test "a builder collects bytes and str takes a snapshot of them" {
     const held = try runtime.newBuilder();
     try containers.append(runtime, held, Value.ofString("ab"));
     try containers.appendAscii(runtime, held, 'c');
-    const taken = try text.str(runtime, held);
+    const taken = bench.made(try text.str(runtime, held));
     try testing.expectEqualStrings("abc", taken.asString());
 
     // The snapshot does not change when the builder grows again.
@@ -629,13 +644,13 @@ test "the conversions round trip and refuse what they cannot represent" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    try testing.expectEqualStrings("-12", (try text.str(runtime, Value.ofInt(-12))).asString());
-    try testing.expectEqualStrings("true", (try text.str(runtime, Value.ofBoolean(true))).asString());
+    try testing.expectEqualStrings("-12", bench.made(try text.str(runtime, Value.ofInt(-12))).asString());
+    try testing.expectEqualStrings("true", bench.made(try text.str(runtime, Value.ofBoolean(true))).asString());
     // Shortest text that round trips, not a fixed number of digits.
-    try testing.expectEqualStrings("0.1", (try text.str(runtime, Value.ofFloat(0.1))).asString());
+    try testing.expectEqualStrings("0.1", bench.made(try text.str(runtime, Value.ofFloat(0.1))).asString());
     try testing.expectEqualStrings(
         "1000000000000000000000",
-        (try text.str(runtime, Value.ofFloat(1e21))).asString(),
+        bench.made(try text.str(runtime, Value.ofFloat(1e21))).asString(),
     );
 
     // The parsers answer absence rather than trapping: "not a number"
@@ -648,7 +663,10 @@ test "the conversions round trip and refuse what they cannot represent" {
     try testing.expect((try text.parseFloat(runtime, Value.ofString("nan"))).isNone());
     try testing.expect((try text.parseFloat(runtime, Value.ofString("zero"))).isNone());
 
-    try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.chr(runtime, 0x1F642)).asString());
+    try testing.expectEqualStrings(
+        "\xF0\x9F\x99\x82",
+        bench.made(try text.chr(runtime, 0x1F642)).asString(),
+    );
     try expectTrap(.bad_codepoint, runtime, text.chr(runtime, 0x110000));
     try testing.expectEqual(@as(i64, 0x1F642), (try text.ord(runtime, Value.ofString("\xF0\x9F\x99\x82"))).asInt());
     try expectTrap(.bad_codepoint, runtime, text.ord(runtime, Value.ofString("")));
@@ -678,7 +696,7 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
     try expectTrap(.conversion_range, runtime, operators.floatToInt(runtime, Value.ofFloat(1e30)));
     try testing.expectEqual(@as(i64, -1), (try operators.floatToInt(runtime, Value.ofFloat(-1.9))).asInt());
 
-    const joined = try operators.binary(runtime, .add, Value.ofString("a"), Value.ofString("b"));
+    const joined = bench.made(try operators.binary(runtime, .add, Value.ofString("a"), Value.ofString("b")));
     try testing.expectEqualStrings("ab", joined.asString());
 }
 

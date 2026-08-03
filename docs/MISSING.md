@@ -14,28 +14,27 @@ predicament, and `T?` closed the absence half of the last semantic
 hole.  What is designed but unbuilt is errors, and `docs/FAILURE.md`
 answers it in full.
 
-The **runtime is not done**, and that is where the wall now is.  Tier
-0 held two items, both properties of what existed rather than missing
-features.  **The second is closed**: the C-parity backend is reachable
-from `loom run` and from `luce build --emit=exe`.  The first — memory
-that is never given back — is now half closed: object identity is
-reclaimed and reused, and **String bytes are what is left**, alone at
-the top of the list.
+The **runtime is not done**, but the wall is down.  Tier 0 held two
+items, both properties of what existed rather than missing features,
+and **both are now closed**: the C-parity backend is reachable from
+`loom run` and from `luce build --emit=exe`, and memory is given back
+— object identity was reclaimed first, String bytes and struct field
+runs second.  A Luce program can run all day.
 
 ---
 
-## Tier 0 — the one wall left, and it is String bytes
+## Tier 0 — ~~the one wall left~~ — **closed**
 
-### 1. Memory is never given back for values
+### 1. ~~Memory is never given back for values~~ — **closed**
 
-`runtime.Memory` splits storage in two (`runtime/heap.zig:41-62`).
-Object *storage* goes to a freeing allocator — that is the 410 MB → 60 MB
-churn fix, and it is real.  But:
+`runtime.Memory` still splits storage in two, but the line moved:
+`Memory.objects` now holds everything with a death point — container
+contents, the object table, **and every String's bytes and every
+struct value's field run** — while `Memory.arena` keeps only what a
+program cannot grow without bound (a trap's words, the interpreter's
+per-layout struct zero templates, host text on its way into owned
+storage).
 
-- **String bytes go to a run-lifetime arena and are never reclaimed.**
-  Measured on a loop building and discarding a string per iteration,
-  retaining nothing: **28 / 36 / 54 / 90 MB RSS at 0.5M / 1M / 2M / 4M
-  iterations** — dead linear, ~18 bytes per iteration, forever.
 - ~~Object table rows are never reused~~ — **closed.**  A handle is
   `{index, generation}` and a freed row goes on a free list, so the
   table grows to a program's peak object count rather than to the
@@ -44,39 +43,33 @@ churn fix, and it is real.  But:
   row's (docs/MEMORY.md).  Measured on a loop making and freeing one
   list per iteration: **281 MB → 21.2 MB at 1M iterations, 593 MB →
   21.3 MB at 4M**, flat where it was linear.
+- ~~String bytes go to a run-lifetime arena and are never reclaimed~~
+  — **closed.**  A String's bytes and a struct's field run have
+  exactly one owner, and any store into something that outlives the
+  current statement copies them, so no owner ever holds a view of
+  bytes it did not allocate (`docs/STRINGS.md`).  The same churn loop
+  — one string built and discarded per iteration, retaining nothing —
+  measured on the interpreter: **15.5 / 29.4 / 59.9 / 121.0 MB → 1.8 /
+  1.8 / 1.9 / 1.8 MB at 0.5M / 1M / 2M / 4M iterations**, and flat out
+  to 16M.  Reference counting, ARC, COW and tracing GC stay
+  permanently refused (`docs/MEMORY.md`); what replaced them is the
+  language's own claim made literal — *values copy*.
 
-The flagship program is the worked example.  `Editing.splice`
-(`programs/editor.luc:127`) is
-`value[0:cursor] + extra + value[cursor:len(value)]`; the two
-concatenations each copy the whole buffer into the arena.  Simulating
-**20,000 keystrokes into a 40 KB file peaks at 976 MB RSS.**  The editor
-is not usable for a long session on a real file, and neither is any
-program with a main loop.
+The flagship program was the worked example and is now the proof.
+`Editing.splice` (`programs/editor.luc:127`) is
+`value[0:cursor] + extra + value[cursor:len(value)]`, and 20,000
+keystrokes into a 40 KB file peaked at **1204 MB RSS**.  The same
+simulation now peaks at **3.3 MB**, and costs 24 µs a keystroke
+instead of 9 — three orders of magnitude inside a 16 ms frame either
+way.
 
-This is the difference between a program having a memory *footprint*
-and having a memory *lifetime*.
-
-**Cost:** a design decision, not a bug fix.  Two pieces, independent;
-the first is done and the second is what is left:
-
-- ~~**Object identity**~~ — shipped: a free list of table rows with a
-  non-wrapping generation counter in the handle, which keeps S9's
-  clean `use_after_free` trap while making rows reusable.  No language
-  change, no `.lc` bump, no host-ABI bump.
-- **String bytes** — reclaimed by scope, like everything else.
-  Reference counting is **permanently refused** (`docs/MEMORY.md`), so
-  the direction is to make the language's own claim literal: *values
-  copy*.  A store into a container, field or map copies the bytes it
-  stores; unstored temporaries die with their statement under S3.  That
-  dissolves the objection that killed the region approach — stored
-  views borrowing bytes they did not allocate — because under real
-  copies no such view exists.  Cost is a memcpy at store sites: local,
-  visible, bounded, and what C and Zig both pay.
-
-  **`docs/STRINGS.md` is the full design**, proved against an
-  enumeration of all twenty store sites, with the ship order and the
-  measured costs.  It is the last thing standing between Luce and a
-  program that can run all day.
+What it cost, measured by `bench/compare.sh` on one host: five of the
+six benchmarks moved less than 1%, and `bench/strings` went **2.35× C
+→ 3.40× C**.  That is allocation, not copying — 800,000 small
+allocate-and-free pairs where there used to be unreclaimed bump
+allocations and shared views — and **small-string optimisation is the
+queued answer**, step 5 of `docs/STRINGS.md`, with the average piece
+at 11.7 bytes and every `str(i)` at most 7.
 
 ### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
 
@@ -294,11 +287,13 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ## The order to work down
 
-1. **Give String storage a reclaimable lifetime.**  Object-table rows
-   are reused already; the bytes are what is left, and nothing else
-   matters if a program cannot run for an hour — it matters more now,
-   not less: the compiled path runs the same loop 76x faster, so it
-   reaches the same wall 76x sooner.
+1. ~~**Give String storage a reclaimable lifetime**~~ — **done**; see
+   Tier 0.  What follows from it is **small-string optimisation**,
+   step 5 of `docs/STRINGS.md`: the design's one real cost is 800,000
+   allocations in `bench/strings`, none of them larger than 12 bytes,
+   and 22 inline bytes fit in the `Value` that already travels.  It
+   costs an `abi.version` bump and a `.lc` `format_version` bump, and
+   it is gated on exactly the measurement that now exists.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done on both engines**;
    `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`

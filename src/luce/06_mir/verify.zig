@@ -470,6 +470,10 @@ fn verifyIntrinsic(
             const payload = arguments[0].held() orelse return error.BadIntrinsic;
             try expectType(result, payload);
         },
+        .own_storage, .drop_storage => {
+            try exactly(arguments, 1);
+            try expectType(result, arguments[0]);
+        },
         .index_get, .index_set => {
             const reads = call.kind == .index_get;
             const value_slots: usize = if (reads) 0 else 1;

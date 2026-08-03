@@ -197,32 +197,57 @@ export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
     runtime.exhausted = true;
 }
 
-/// Copy host-owned bytes into the run's arena as a Luce String.  Every
-/// string a host service hands back is borrowed for the duration of
-/// that call only; this is where it becomes a value that lives as long
-/// as the run does.
+/// Copy host-owned bytes into fresh owned storage as a Luce String.
+/// Every string a host service hands back is borrowed for the duration
+/// of that call only; this is where it becomes a value the program can
+/// keep — owned by the statement that asked for it until something
+/// stores it (docs/STRINGS.md).
 export fn luce_rt_intern_text(
     runtime: *Runtime,
     bytes: [*]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    const copied = runtime.arena.dupe(u8, bytes[0..@intCast(length)]) catch |mistake|
+    out.* = runtime.ownValue(Value.ofString(bytes[0..@intCast(length)])) catch |mistake|
         return failed(runtime, mistake);
-    out.* = Value.ofString(copied);
     return survived;
 }
 
 /// Remember the text payload of the key just read, for `key_text`.
+/// One owned slot: the previous payload goes back as this one arrives.
 export fn luce_rt_set_key_text(
     runtime: *Runtime,
     bytes: [*]const u8,
     length: i64,
 ) callconv(.c) i32 {
-    const copied = runtime.arena.dupe(u8, bytes[0..@intCast(length)]) catch |mistake|
+    runtime.setKeyText(bytes[0..@intCast(length)]) catch |mistake|
         return failed(runtime, mistake);
-    runtime.last_key_text = copied;
     return survived;
+}
+
+/// A copy of a value whose storage nothing else owns — what every
+/// store into a place that outlives the statement takes first
+/// (docs/STRINGS.md).  Scalars and object handles pass straight
+/// through.
+export fn luce_rt_own_storage(
+    runtime: *Runtime,
+    held: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.ownValue(held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+/// Give back the storage a value owns, and answer the emptied value
+/// the place should hold from here on.  Objects are untouched: they
+/// are freed by `luce_rt_unbind`, which is a different question.
+export fn luce_rt_drop_storage(
+    runtime: *Runtime,
+    held: *const Value,
+    out: *Value,
+) callconv(.c) void {
+    runtime.releaseStorage(held.*);
+    out.* = heap.Runtime.emptied(held.*);
 }
 
 /// The text payload of the most recent `key_read`.

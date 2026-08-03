@@ -20,7 +20,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 11;
+pub const format_version: u32 = 12;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -135,6 +135,7 @@ const Writer = struct {
         for (of.locals) |local| {
             try self.blob(local.name);
             try self.valueType(local.local_type);
+            try self.int(u8, @intFromBool(local.owns_storage));
         }
 
         try self.int(u32, @intCast(of.instructions.len));
@@ -406,6 +407,7 @@ const Reader = struct {
         for (locals) |*local| {
             local.name = try arena.dupe(u8, try self.blob());
             local.local_type = try self.valueType();
+            local.owns_storage = (try self.int(u8)) != 0;
         }
         out.locals = locals;
 
@@ -840,9 +842,18 @@ test "single-byte damage is rejected or runs to a clean outcome — never a cras
             defer decoded.deinit();
             var arena = std.heap.ArenaAllocator.init(testing.allocator);
             defer arena.deinit();
+            // Objects draw on the same arena as values here, and
+            // deliberately: a damaged module may *leak* value storage
+            // — an `own_storage` whose paired `local_set` a flipped
+            // byte redirected leaves its bytes in a register nothing
+            // sweeps (docs/STRINGS.md) — and this test is about
+            // termination and crashes, not about reclamation.  Every
+            // other suite runs the runtime under
+            // `std.testing.allocator`, which is where reclamation is
+            // proved.
             const outputs = try arena.allocator().alloc(?backend.RuntimeValue, decoded.outputs.len);
             @memset(outputs, null);
-            _ = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &decoded, &.{}, outputs, .{
+            _ = try backend.evaluate(.{ .arena = arena.allocator(), .objects = arena.allocator() }, &decoded, &.{}, outputs, .{
                 .steps = 50_000,
                 .call_depth = 64,
             });
@@ -885,6 +896,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     inline for (comptime std.meta.fieldNames(mir.TrapCode)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap codes: bump format_version and update BOTH numbers.
-    try testing.expectEqual(@as(u32, 11), format_version);
-    try testing.expectEqual(@as(u64, 15786221607301651074), hasher.final());
+    try testing.expectEqual(@as(u32, 12), format_version);
+    try testing.expectEqual(@as(u64, 17503378686852440726), hasher.final());
 }
