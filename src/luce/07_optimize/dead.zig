@@ -106,7 +106,15 @@ fn isDead(function: *const Function, used: []const bool, read: []const bool, ite
         // A store nobody loads.  `object_bind`/`object_unbind` name a
         // local without reading its slot, so they do not keep a store
         // alive — the runtime only needs the id, not the value.
-        .local_set => |set| !read[set.local],
+        //
+        // A slot that owns its storage is the exception, and it is not
+        // an optimization question.  A trap unwinds past every release
+        // and the engine then walks the standing frames to give that
+        // storage back (docs/STRINGS.md), so the slot's contents are
+        // read by something no block mentions: delete the store and
+        // the bytes leak, delete the store-back after a release and
+        // they are freed twice.
+        .local_set => |set| !read[set.local] and !function.locals[set.local].owns_storage,
         else => !used[item] and effects.classify(function, instruction) == .pure,
     };
 }

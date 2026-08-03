@@ -73,6 +73,13 @@ pub fn run(
             machine.traceback(&reported) catch |mistake| switch (mistake) {
                 error.OutOfMemory => return error.OutOfMemory,
             };
+            // A trap unwinds past every release (S34), which is what
+            // keeps the object census honest — but value storage is
+            // not in the census, and the frames that own it are still
+            // standing right here, so it goes back now
+            // (docs/STRINGS.md).  Reported after the traceback: a
+            // trap's words may be a String the program built.
+            machine.releaseFrameStorage();
             return .{ .trap = reported };
         },
     }
@@ -205,6 +212,50 @@ pub const Machine = struct {
         reported.dropped = @intCast(depth - kept);
     }
 
+    /// Give back the value storage one frame's slots still own.
+    ///
+    /// Called as the frame dies, whichever way it died: a return pops
+    /// it, and a trap leaves it standing until the sweep below.  Scope
+    /// ownership has usually emptied the slots already — a release
+    /// writes the emptied value back — so this is the backstop that
+    /// makes "a frame's storage dies with the frame" true on every
+    /// path, including the one a trap unwinds past (S34).
+    ///
+    /// Only the slots the module marks `owns_storage` are touched: a
+    /// parameter borrows its caller's bytes and a spill carries a
+    /// borrow across a branch, so freeing either would be a double
+    /// free (docs/STRINGS.md).
+    fn releaseSlots(self: *Machine, frame: Frame) void {
+        const function = &self.program.functions[frame.function];
+        const locals = self.frame_storage.items[frame.slots_at + frame.register_count ..];
+        for (function.locals, 0..) |local, index| {
+            if (!local.owns_storage) continue;
+            self.runtime.releaseStorage(locals[index]);
+            locals[index] = runtime.Runtime.emptied(locals[index]);
+        }
+    }
+
+    /// The same, for every frame a trap left standing.
+    fn releaseFrameStorage(self: *Machine) void {
+        for (self.stack.items) |frame| self.releaseSlots(frame);
+    }
+
+    /// A value an evaluator port publishes: copied into the arena the
+    /// caller reads it out of, because everything else this frame
+    /// holds dies with the run.
+    fn published(self: *Machine, held: RuntimeValue) error{OutOfMemory}!RuntimeValue {
+        return switch (held.view()) {
+            .string => |words| .ofString(try self.arena.dupe(u8, words)),
+            .bytes => |words| .ofBytes(try self.arena.dupe(u8, words)),
+            .strukt => |fields| blk: {
+                const copied = try self.arena.alloc(RuntimeValue, fields.len);
+                for (fields, copied) |field, *slot| slot.* = try self.published(field);
+                break :blk .ofStruct(copied);
+            },
+            else => held,
+        };
+    }
+
     fn service(self: *Machine) EvalError!backend.Host {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
@@ -241,7 +292,14 @@ pub const Machine = struct {
         // them first would only buy per-call allocations for struct
         // parameters.
         for (locals[arguments.len..], function.locals[arguments.len..]) |*slot, local| {
-            slot.* = try self.zeroValue(local.local_type);
+            // A slot that owns its storage starts *empty* rather than
+            // at the shared zero: the zero template is one value per
+            // layout, and the release this slot will get must never
+            // hand a shared run back (docs/STRINGS.md).
+            slot.* = if (local.owns_storage)
+                emptyValue(local.local_type)
+            else
+                try self.zeroValue(local.local_type);
         }
         try self.stack.append(self.arena, .{
             .function = function_index,
@@ -289,7 +347,13 @@ pub const Machine = struct {
                     .local_get => |local| registers[item] = locals[local],
                     .local_set => |set| locals[set.local] = registers[set.value],
                     .input_load => |port| registers[item] = self.inputs[port].value,
-                    .output_store => |store| self.outputs[store.port] = registers[store.value],
+                    .output_store => |store| {
+                        // A port's value is read by the caller after
+                        // the run, so it cannot be a view of storage
+                        // this frame is about to release: it is copied
+                        // into the arena the caller drops.
+                        self.outputs[store.port] = try self.published(registers[store.value]);
+                    },
                     .binary => |operation| {
                         registers[item] = operators.binary(
                             &self.runtime,
@@ -381,9 +445,11 @@ pub const Machine = struct {
                         // the returned value moves to the caller
                         // (S16): loose until something there binds it.
                         self.runtime.loosenFromFrame(returned, finished.serial);
-                        // `returned` is a copy — its string bytes and
-                        // struct fields live in the arena, not here —
-                        // so the frame's slots go back now.
+                        // `returned` is this frame's own — `ret` copies
+                        // out anything it borrowed (docs/STRINGS.md) —
+                        // so whatever the slots still hold dies here,
+                        // and then the slots go back.
+                        self.releaseSlots(finished);
                         self.frame_storage.shrinkRetainingCapacity(finished.slots_at);
                         if (self.stack.items.len == 0) return .{ .value = returned };
                         const parent = &self.stack.items[self.stack.items.len - 1];
@@ -512,6 +578,12 @@ pub const Machine = struct {
             .none_value => return .none,
             .is_none => return .ofBoolean(registers[arguments[0]].isNone()),
             .optional_wrap, .optional_unwrap => return registers[arguments[0]],
+            .own_storage => return self.runtime.ownValue(registers[arguments[0]]),
+            .drop_storage => {
+                const held = registers[arguments[0]];
+                self.runtime.releaseStorage(held);
+                return runtime.Runtime.emptied(held);
+            },
             .index_get => return containers.indexGet(
                 &self.runtime,
                 registers[arguments[0]],
@@ -655,10 +727,13 @@ pub const Machine = struct {
                 }
                 return .none;
             },
-            .trap_message => return self.runtime.failMessage(
-                .explicit_trap,
-                registers[arguments[0]].asString(),
-            ),
+            .trap_message => {
+                // The words outlive every release the unwind skips
+                // and are read once the run has stopped, so they go
+                // in the arena rather than in owned storage.
+                const words = try self.arena.dupe(u8, registers[arguments[0]].asString());
+                return self.runtime.failMessage(.explicit_trap, words);
+            },
 
             // -- host effects, not semantics --------------------------
 
@@ -673,7 +748,10 @@ pub const Machine = struct {
                 const callback = host.readFileFn orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 return switch (try callback(host.context, self.arena, path)) {
-                    .content => |content| .ofString(content),
+                    // The host allocates from the arena, which cannot
+                    // give a slice back; the program keeps an owned
+                    // copy and the arena's is scratch.
+                    .content => |content| try self.runtime.ownValue(.ofString(content)),
                     .failed => self.runtime.fail(.file_read_failed),
                 };
             },
@@ -705,7 +783,7 @@ pub const Machine = struct {
                 }
                 const value = (try callback(host.context, self.arena, @intCast(index))) orelse
                     return self.runtime.fail(.argument_bounds);
-                return .ofString(value);
+                return self.runtime.ownValue(.ofString(value));
             },
             .term_rows => {
                 const screen = try self.terminal();
@@ -752,8 +830,8 @@ pub const Machine = struct {
             .key_read => {
                 const screen = try self.terminal();
                 const event = try screen.keyFn(screen.context, self.arena);
-                self.runtime.last_key_text = event.text;
-                return .ofString(event.name);
+                try self.runtime.setKeyText(event.text);
+                return self.runtime.ownValue(.ofString(event.name));
             },
             .key_text => return .ofString(self.runtime.last_key_text),
         }
@@ -773,6 +851,20 @@ pub const Machine = struct {
         return self.index_scratch.items;
     }
 };
+
+/// What a slot that owns its storage holds before anything is stored
+/// in it: the type's tag and no storage, so the release it will get
+/// frees nothing.  Deliberately not `zeroValue`, whose struct answer is
+/// one template shared by every slot of that layout.
+fn emptyValue(of: types.Type) RuntimeValue {
+    return switch (of) {
+        .string => .ofString(""),
+        .bytes => .ofBytes(""),
+        .strukt => .{ .tag = .strukt },
+        .optional => .none,
+        else => .none,
+    };
+}
 
 /// Only the named owner frees (S6, S23): a second argument carries the
 /// binding `free`/`give` must verify against.

@@ -414,8 +414,12 @@ const TestHost = struct {
     arguments: []const []const u8 = &.{},
     file_path: []const u8 = "",
     file_content: []const u8 = "",
-    written_path: []const u8 = "",
-    written_content: []const u8 = "",
+    /// Copies, not views.  A host service borrows the bytes it is
+    /// handed for the duration of the call and no longer — a Luce
+    /// String belongs to the binding or statement that holds it, and
+    /// that may die the moment the call returns (docs/STRINGS.md).
+    written_path: std.ArrayList(u8) = .empty,
+    written_content: std.ArrayList(u8) = .empty,
     fail_write: bool = false,
     keys: []const backend.KeyEvent = &.{},
     next_key: usize = 0,
@@ -423,6 +427,8 @@ const TestHost = struct {
     fn deinit(self: *TestHost) void {
         self.printed.deinit(testing.allocator);
         self.screen.deinit(testing.allocator);
+        self.written_path.deinit(testing.allocator);
+        self.written_content.deinit(testing.allocator);
     }
 
     fn printLine(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
@@ -451,8 +457,10 @@ const TestHost = struct {
     fn writeFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
         const self: *TestHost = @ptrCast(@alignCast(context));
         if (self.fail_write) return false;
-        self.written_path = path;
-        self.written_content = content;
+        self.written_path.clearRetainingCapacity();
+        self.written_content.clearRetainingCapacity();
+        self.written_path.appendSlice(testing.allocator, path) catch return false;
+        self.written_content.appendSlice(testing.allocator, content) catch return false;
         return true;
     }
 
@@ -581,8 +589,8 @@ test "print, arguments, and files flow through the host" {
     const result = try bench.evaluateHosted(&.{}, host.host());
     try testing.expect(result == .success);
     try testing.expectEqualStrings("args: 1\nfile body\n", host.printed.items);
-    try testing.expectEqualStrings("out.txt", host.written_path);
-    try testing.expectEqualStrings("saved", host.written_content);
+    try testing.expectEqualStrings("out.txt", host.written_path.items);
+    try testing.expectEqualStrings("saved", host.written_content.items);
 }
 
 test "std files wraps the host builtins faithfully" {
@@ -610,8 +618,8 @@ test "std files wraps the host builtins faithfully" {
     const result = try bench.evaluateHosted(&.{}, host.host());
     try testing.expect(result == .success);
     try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
-    try testing.expectEqualStrings("plain.txt", host.written_path);
-    try testing.expectEqualStrings("alpha\nbeta\n", host.written_content);
+    try testing.expectEqualStrings("plain.txt", host.written_path.items);
+    try testing.expectEqualStrings("alpha\nbeta\n", host.written_content.items);
 }
 
 test "argument reads out of range trap and failed writes report false" {
@@ -924,7 +932,13 @@ test "interpreter memory is bounded by depth and data, not by calls made" {
     try testing.expect(outcome == .value);
     try testing.expectEqual(@as(usize, 0), machine.frame_storage.items.len);
     try testing.expect(machine.frame_storage.capacity < 4096);
-    try testing.expect(machine.struct_zeros.len > 0);
+    // A struct local that owns its field run starts *empty* rather
+    // than at the shared zero template, because the release it is
+    // going to get must never hand a shared run back
+    // (docs/STRINGS.md) — and an empty slot costs no allocation at
+    // all, which is what the template was there to avoid.  So a
+    // hundred thousand calls through `nudge` never build one.
+    try testing.expectEqual(@as(usize, 0), machine.struct_zeros.len);
 }
 
 test "the explicit frame stack survives deep recursion" {

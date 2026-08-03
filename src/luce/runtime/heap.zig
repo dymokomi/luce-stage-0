@@ -44,21 +44,25 @@ pub const MapEntry = struct { key: Value, value: Value };
 /// up is what made freed objects unreclaimable for as long as there was
 /// only one.
 pub const Memory = struct {
-    /// Run-lifetime storage: String bytes, struct field runs, the words
-    /// of a trap.  A Luce value has no owner and no death point — `let
-    /// b = a` copies it, containers copy it in, nothing ever frees one
-    /// — so there is nothing to reclaim individually and this is an
-    /// arena the caller drops whole once it has copied out whatever it
-    /// publishes.
+    /// Run-lifetime storage, and nothing a program can grow without
+    /// bound: the words of a trap, the interpreter's per-layout struct
+    /// zero templates, and the text a host service hands back before it
+    /// is copied into owned storage.  The caller drops it whole once it
+    /// has read whatever it publishes.
+    ///
+    /// **String bytes and struct field runs no longer live here**
+    /// (docs/STRINGS.md).  They have an owner and a death point now, so
+    /// they come from `objects` like everything else that is freed.
     arena: Allocator,
 
-    /// Heap-object storage: the elements of every List, Map, and Array,
-    /// a Builder's bytes, a Map's hash index, and the object table
-    /// itself.  Objects *do* have a death point — `freeObject`, which
-    /// scope ownership drives — so this allocator has to give memory
-    /// back, which an arena cannot.  Pass an ordinary freeing
-    /// allocator; under `std.testing.allocator` an object whose storage
-    /// is not reclaimed is a reported leak.
+    /// Everything with a death point: the elements of every List, Map,
+    /// and Array, a Builder's bytes, a Map's hash index, the object
+    /// table — and, since copy-on-store, every String's bytes and every
+    /// struct value's field run.  Scope ownership frees them while the
+    /// program runs, so this allocator has to give memory back, which
+    /// an arena cannot.  Pass an ordinary freeing allocator; under
+    /// `std.testing.allocator` anything not reclaimed is a reported
+    /// leak, which is what proves the ownership rules.
     objects: Allocator,
 };
 
@@ -573,8 +577,9 @@ pub const Runtime = struct {
     /// answers.  Per-run state rather than per-engine state: the
     /// interpreter and compiled code read and write this one field, so
     /// `key_text` cannot mean two different things (docs/CODEGEN.md).
-    /// Static or arena-owned, like every other string the runtime hands
-    /// out.
+    /// One owned slot, replaced by `setKeyText` and released with the
+    /// run; `key_text` hands out a borrow of it, and storing that
+    /// borrow copies like every other store (docs/STRINGS.md).
     last_key_text: []const u8 = "",
 
     pub fn init(memory: Memory) Runtime {
@@ -592,17 +597,45 @@ pub const Runtime = struct {
     /// stays a number in the census rather than becoming a leak of the
     /// host's memory too.
     ///
-    /// Values (Strings, struct field runs) are not touched: they live
-    /// in `arena`, which belongs to the caller.
+    /// The storage a container still holds goes with it: a leaked
+    /// `List(String)` leaked its strings too, and they come from the
+    /// same allocator now (docs/STRINGS.md).  What this cannot reach is
+    /// storage held only by a *binding* of a frame a trap unwound past
+    /// — the engines sweep their own frames for that, because only they
+    /// know where the frames are.
     ///
     /// Every row is swept, occupied or not: releasing a row whose
     /// object ownership already released reclaims nothing, because
     /// `Object.release` left the empty value of its kind behind.
     pub fn deinit(self: *Runtime) void {
-        for (self.table.items) |*object| object.release(self.objects);
+        for (self.table.items) |*object| {
+            switch (object.data) {
+                .list => |list| for (list.items) |item| self.releaseStorage(item),
+                .map => |map| for (map.entries.items) |entry| {
+                    self.releaseStorage(entry.key);
+                    self.releaseStorage(entry.value);
+                },
+                .array => if (object.array.kind == .value) {
+                    for (object.array.cells(Value)) |item| self.releaseStorage(item);
+                },
+                .builder => {},
+            }
+            object.release(self.objects);
+        }
         self.table.deinit(self.objects);
         self.unwound.deinit(self.objects);
+        if (self.last_key_text.len != 0) self.objects.free(self.last_key_text);
         self.* = undefined;
+    }
+
+    /// Remember the text payload of the key just read.  One owned slot
+    /// per run rather than a fresh allocation per keystroke: a draw
+    /// loop reads a key every frame, and the previous payload is dead
+    /// the moment the next one arrives.
+    pub fn setKeyText(self: *Runtime, bytes: []const u8) Error!void {
+        const copied = if (bytes.len == 0) "" else try self.objects.dupe(u8, bytes);
+        if (self.last_key_text.len != 0) self.objects.free(self.last_key_text);
+        self.last_key_text = copied;
     }
 
     /// A serial no other live frame carries.  One per call.
@@ -711,8 +744,29 @@ pub const Runtime = struct {
             .elements = elements,
             .count = total,
         };
-        array.fill(zero);
+        try self.fillArray(array, zero);
         return self.attach(.{ .data = .array, .array = array });
+    }
+
+    /// Every cell of `array` set to `held`.  A cell owns whatever
+    /// storage it holds, so each one takes its own copy — `new
+    /// Array(Point, 100)` is a hundred field runs, not one shared a
+    /// hundred times.  The zero of a String is empty text, which owns
+    /// nothing, so the common case is still one `@memset`.
+    pub fn fillArray(self: *Runtime, array: Object.Array, held: Value) Error!void {
+        if (array.kind != .value or (held.tag != .strukt and held.tag != .string and held.tag != .bytes)) {
+            array.fill(held);
+            return;
+        }
+        if (held.length == 0) {
+            array.fill(held);
+            return;
+        }
+        const cells = array.cells(Value);
+        // A failed copy leaves the cells it already filled owned by the
+        // array, which the caller releases; the rest stay empty.
+        @memset(cells, .{ .tag = held.tag });
+        for (cells) |*cell| cell.* = try self.ownValue(held);
     }
 
     /// Adopt an already-built list as a new object — what the
@@ -749,26 +803,130 @@ pub const Runtime = struct {
         return Value.ofObject(.{ .index = index });
     }
 
+    // -- value storage ---------------------------------------------------
+    //
+    // A String's bytes and a struct value's field run are *storage*: a
+    // heap allocation with exactly one owner — the binding, container
+    // element, map key, struct field, or statement temporary that holds
+    // it (docs/STRINGS.md).  Every store into a place that outlives the
+    // current statement goes through `ownValue`, so no owner ever holds
+    // a view of bytes it did not allocate; `releaseStorage` is the
+    // matching death point, and it frees nothing else — objects belong
+    // to the ownership walks above.
+
+    /// A copy of `held` whose storage nothing else owns.  Scalars and
+    /// object handles pass through untouched: an object field of a
+    /// struct aliases, exactly as S26 says, and only the value fields
+    /// are duplicated.
+    ///
+    /// Empty text and an empty run own nothing, so they answer
+    /// themselves — which is also what makes a program constant safe to
+    /// "own": storing one copies it, and the constant itself is never
+    /// reached by a release.
+    pub fn ownValue(self: *Runtime, held: Value) Error!Value {
+        switch (held.tag) {
+            .string, .bytes => {
+                if (held.length == 0) return held;
+                const copied = try self.objects.dupe(u8, held.asString());
+                return .{
+                    .tag = held.tag,
+                    .bits = @intFromPtr(copied.ptr),
+                    .length = copied.len,
+                };
+            },
+            .strukt => {
+                const source = held.asStruct();
+                if (source.len == 0) return held;
+                const run = try self.objects.alloc(Value, source.len);
+                var filled: usize = 0;
+                errdefer {
+                    for (run[0..filled]) |field| self.releaseStorage(field);
+                    self.objects.free(run);
+                }
+                for (source, run) |field, *slot| {
+                    slot.* = try self.ownValue(field);
+                    filled += 1;
+                }
+                return Value.ofStruct(run);
+            },
+            else => return held,
+        }
+    }
+
+    /// Give back the storage `held` owns — its bytes, or its field run
+    /// and every value field inside it.  Objects are left alone: they
+    /// have their own death point, and a struct copy shares them.
+    ///
+    /// Safe on anything that owns nothing, which is what makes a
+    /// released slot safe to release again: every release writes the
+    /// emptied value back, and an empty value frees nothing.
+    pub fn releaseStorage(self: *Runtime, held: Value) void {
+        switch (held.tag) {
+            .string, .bytes => {
+                if (held.bits == 0 or held.length == 0) return;
+                const start: [*]u8 = @ptrFromInt(@as(usize, @intCast(held.bits)));
+                self.objects.free(start[0..@intCast(held.length)]);
+            },
+            .strukt => {
+                if (held.bits == 0 or held.length == 0) return;
+                const fields = held.asStruct();
+                for (fields) |field| self.releaseStorage(field);
+                self.objects.free(fields);
+            },
+            else => {},
+        }
+    }
+
+    /// What a released place holds afterwards: the same tag, no
+    /// storage.  Releasing it again frees nothing, and reading it is
+    /// what reading an unassigned local always was.
+    pub fn emptied(held: Value) Value {
+        return switch (held.tag) {
+            .string, .bytes, .strukt => .{ .tag = held.tag },
+            else => held,
+        };
+    }
+
     // -- struct storage ------------------------------------------------
     //
-    // A struct value is a run of `Value`s in arena storage.  That run is
+    // A struct value is a run of `Value`s the value owns.  That run is
     // never written to after it is built — `setField` allocates a fresh
-    // one — so two copies of a struct can share it, which is what makes
-    // struct assignment an ordinary value copy (docs/LANGUAGE.md).
+    // one — so a struct stays an immutable value; what changed with
+    // copy-on-store is that the run has a death point, so two places
+    // never share one (docs/STRINGS.md).
 
-    /// A fresh struct value holding `fields`.
+    /// A fresh struct value holding `fields`, owning its run and every
+    /// value field in it.
     pub fn makeStruct(self: *Runtime, fields: []const Value) Error!Value {
-        const stored = try self.arena.alloc(Value, fields.len);
-        @memcpy(stored, fields);
+        if (fields.len == 0) return Value.ofStruct(&.{});
+        const stored = try self.objects.alloc(Value, fields.len);
+        var filled: usize = 0;
+        errdefer {
+            for (stored[0..filled]) |field| self.releaseStorage(field);
+            self.objects.free(stored);
+        }
+        for (fields, stored) |field, *slot| {
+            slot.* = try self.ownValue(field);
+            filled += 1;
+        }
         return Value.ofStruct(stored);
     }
 
-    /// `held` with field `index` replaced, as a fresh value.
+    /// `held` with field `index` replaced, as a fresh value that owns
+    /// everything in it.  The source is left intact — its own owner
+    /// releases it — so this is a copy, not an update in place.
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
         const source = held.asStruct();
-        const stored = try self.arena.alloc(Value, source.len);
-        @memcpy(stored, source);
-        stored[index] = to;
+        const stored = try self.objects.alloc(Value, source.len);
+        var filled: usize = 0;
+        errdefer {
+            for (stored[0..filled]) |field| self.releaseStorage(field);
+            self.objects.free(stored);
+        }
+        for (source, stored, 0..) |field, *slot, at| {
+            slot.* = try self.ownValue(if (at == index) to else field);
+            filled += 1;
+        }
         return Value.ofStruct(stored);
     }
 
@@ -902,7 +1060,13 @@ pub const Runtime = struct {
         self.live -= 1;
         switch (object.data) {
             .list => |list| for (list.items) |item| self.freeValue(item),
-            .map => |map| for (map.entries.items) |entry| self.freeValue(entry.value),
+            .map => |map| for (map.entries.items) |entry| {
+                // A map owns its keys' storage as well as its values';
+                // keys are Int or String, so there is never an object
+                // in one.
+                self.releaseStorage(entry.key);
+                self.freeValue(entry.value);
+            },
             // Only a `Value` element can hold an object; a `f64`
             // or `i64` cell owns nothing and has nothing to walk.
             .array => if (object.array.kind == .value) {
@@ -919,12 +1083,21 @@ pub const Runtime = struct {
         }
     }
 
-    /// Free the objects in a value unconditionally (owned elements
-    /// being dropped by their container: overwrite, remove, clear).
+    /// Drop a value a container owned outright — an overwrite, a
+    /// remove, a clear, or the element walk of `freeObject`.  Both
+    /// halves of ownership end here: the objects it holds are freed,
+    /// and the storage it holds is given back.
     pub fn freeValue(self: *Runtime, held: Value) void {
+        self.freeObjectsIn(held);
+        self.releaseStorage(held);
+    }
+
+    /// The object half of `freeValue`, on its own: everything a struct
+    /// value's fields name, without touching the run they sit in.
+    fn freeObjectsIn(self: *Runtime, held: Value) void {
         switch (held.view()) {
             .object => |handle| self.freeObject(handle),
-            .strukt => |fields| for (fields) |field| self.freeValue(field),
+            .strukt => |fields| for (fields) |field| self.freeObjectsIn(field),
             else => {},
         }
     }
@@ -1038,13 +1211,23 @@ pub const Runtime = struct {
                 return duplicate;
             },
             .strukt => |fields| {
-                const copied = try self.arena.alloc(Value, fields.len);
+                if (fields.len == 0) return held;
+                const copied = try self.objects.alloc(Value, fields.len);
+                var filled: usize = 0;
+                errdefer {
+                    for (copied[0..filled]) |field| self.releaseStorage(field);
+                    self.objects.free(copied);
+                }
                 for (fields, copied) |field, *slot| {
                     slot.* = try self.deepCopy(field);
+                    filled += 1;
                 }
                 return Value.ofStruct(copied);
             },
-            else => return held,
+            // A String is a value, and the copy owns its own bytes:
+            // `copy xs` of a `List(String)` used to hand back a second
+            // container sharing the first's (docs/STRINGS.md).
+            else => return self.ownValue(held),
         }
     }
 };

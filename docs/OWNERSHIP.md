@@ -12,7 +12,9 @@ error handling; global scope is Phase 2 (see docs/V2.md).
 Vocabulary used throughout:
 - **object** — a heap value: `List`, `Map`, `Array`, `Builder`.
   Everything else (`Int`, `Float`, `Bool`, `String`, `Bytes`, structs)
-  is a *value*: copied freely, never freed, never verbed.
+  is a *value*: copied freely, never freed by the program — the
+  runtime reclaims a value's storage when the place holding it dies
+  (docs/STRINGS.md) — never verbed.
 - **fresh** — an object expression nobody has named yet: `new ...`,
   a literal `[1, 2]`, a slice `xs[a:b]`, a call result, `s.split(x)`,
   `m.keys()`, `pop()`.
@@ -245,6 +247,11 @@ func pick(xs: List(Int)) -> List(Int):
 Decision: whatever a function returns, the caller owns — no
 exceptions, so the guarantee of S16 is absolute.
 
+This is a rule about objects.  A String return copies instead of
+erroring, because a String has no verb to demand (S32): `strings.trim`
+ends `return s[first:last]`, a view of its parameter, and what comes
+out is a copy the caller owns (docs/STRINGS.md).
+
 **S18. Returning a `give` parameter is legal (you own it).**
 ```luce
 func sorted(values: give List(Float)) -> List(Float):
@@ -380,6 +387,10 @@ value is freed.**
 Decision: copying a struct value never duplicates or moves objects;
 ownership stays where it was.  (Want independence? `copy` the fields
 you care about into a new construction.)
+
+Object fields alias; value fields — Strings and nested plain structs
+— copy, so a struct copy is O(bytes of its value fields)
+(docs/STRINGS.md).
 
 **S27. A struct that carries objects is itself subject to the verb
 rule when *kept*.**

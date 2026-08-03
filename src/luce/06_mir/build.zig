@@ -175,15 +175,27 @@ pub const Lowering = struct {
         return self.locals.items[local].local_type;
     }
 
+    /// Does this slot have to give its String bytes and struct field
+    /// runs back when it dies (docs/STRINGS.md)?
+    pub fn localOwnsStorage(self: *const Lowering, local: LocalId) bool {
+        return self.locals.items[local].owns_storage;
+    }
+
     // Locals ---------------------------------------------------------------
 
     /// A named slot.  The name reaches the `.lc` and a traceback, so it
     /// is duped into the program arena.
-    pub fn addLocal(self: *Lowering, name: []const u8, local_type: Type) Error!LocalId {
+    pub fn addLocal(
+        self: *Lowering,
+        name: []const u8,
+        local_type: Type,
+        owns_storage: bool,
+    ) Error!LocalId {
         const local: LocalId = @intCast(self.locals.items.len);
         try self.locals.append(self.arena, .{
             .name = try self.arena.dupe(u8, name),
             .local_type = local_type,
+            .owns_storage = owns_storage,
         });
         return local;
     }
@@ -195,11 +207,12 @@ pub const Lowering = struct {
 
     /// An unnamed slot the lowering needs for itself — a spill, a loop
     /// counter, a statement temporary.
-    pub fn hiddenLocal(self: *Lowering, local_type: Type) Error!LocalId {
+    pub fn hiddenLocal(self: *Lowering, local_type: Type, owns_storage: bool) Error!LocalId {
         const local: LocalId = @intCast(self.locals.items.len);
         try self.locals.append(self.arena, .{
             .name = hidden_name,
             .local_type = local_type,
+            .owns_storage = owns_storage,
         });
         return local;
     }
@@ -215,7 +228,9 @@ pub const Lowering = struct {
     /// Carry a value across a block boundary: park it in a hidden local
     /// now, `load` it back where it is needed.
     pub fn spill(self: *Lowering, value: Register, value_type: Type) Error!LocalId {
-        const local = try self.hiddenLocal(value_type);
+        // A spill carries a borrow across a branch and dies with the
+        // statement that made it, so it owns nothing.
+        const local = try self.hiddenLocal(value_type, false);
         try self.store(local, value);
         return local;
     }
@@ -233,19 +248,54 @@ pub const Lowering = struct {
         _ = try self.emit(.{ .object_unbind = .{ .local = local, .value = value } }, .none);
     }
 
-    /// Release one owned local: free whatever object in its slot is
-    /// still bound to it.  Safe on any path — an object given away or
-    /// adopted elsewhere is skipped at run time.
-    pub fn release(self: *Lowering, local: LocalId) Error!void {
+    /// Release one owned local, in whichever of the two senses it
+    /// owns something: `objects` frees whatever object in its slot is
+    /// still bound to it, `storage` gives its String bytes and struct
+    /// field runs back.  Safe on any path and safe twice over — an
+    /// object given away or adopted elsewhere is skipped at run time,
+    /// and a storage release writes the emptied value back, so a
+    /// second one frees nothing (docs/STRINGS.md).
+    pub fn release(self: *Lowering, local: LocalId, objects: bool, storage: bool) Error!void {
+        if (!objects and !storage) return;
         const value = try self.load(local);
-        try self.unbind(local, value);
+        if (objects) try self.unbind(local, value);
+        if (storage) try self.store(local, try self.dropStorage(value));
     }
 
-    /// Park a value in a fresh hidden local that owns it.
-    pub fn park(self: *Lowering, value: Register, value_type: Type) Error!LocalId {
-        const local = try self.hiddenLocal(value_type);
+    /// A copy of `value` whose storage nothing else owns — what a
+    /// store into a place outliving this statement takes first.
+    pub fn ownStorage(self: *Lowering, value: Register) Error!Register {
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = value;
+        return self.emit(
+            .{ .intrinsic = .{ .kind = .own_storage, .arguments = arguments } },
+            self.resultType(value),
+        );
+    }
+
+    /// Give `value`'s storage back; the result is the emptied value the
+    /// place it came from should hold from here on.
+    pub fn dropStorage(self: *Lowering, value: Register) Error!Register {
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = value;
+        return self.emit(
+            .{ .intrinsic = .{ .kind = .drop_storage, .arguments = arguments } },
+            self.resultType(value),
+        );
+    }
+
+    /// Park a value in a fresh hidden local that owns it: the objects
+    /// in it when `objects` is set, and its storage when `storage` is.
+    pub fn park(
+        self: *Lowering,
+        value: Register,
+        value_type: Type,
+        objects: bool,
+        storage: bool,
+    ) Error!LocalId {
+        const local = try self.hiddenLocal(value_type, storage);
         try self.store(local, value);
-        try self.bind(local, value);
+        if (objects) try self.bind(local, value);
         return local;
     }
 
@@ -280,10 +330,17 @@ pub const Lowering = struct {
                 for (layout.fields, fields) |field, *slot| {
                     slot.* = try self.zeroOf(field.field_type);
                 }
-                break :blk try self.emit(
+                const made = try self.emit(
                     .{ .struct_make = .{ .layout = layout_index, .fields = fields } },
                     of,
                 );
+                // A nested struct's zero is a whole value of its own,
+                // and `struct_make` copied it into the run above; the
+                // one built here is spent (docs/STRINGS.md).
+                for (layout.fields, fields) |field, nested| {
+                    if (field.field_type == .strukt) _ = try self.dropStorage(nested);
+                }
+                break :blk made;
             },
         };
     }
@@ -311,6 +368,12 @@ pub const Lowering = struct {
         value: Register,
     ) Error!void {
         var updated = value;
+        // Every `struct_set` on the way up builds a whole new struct
+        // value that owns its run, and the next step copies out of it
+        // — so each one is dead as soon as it has been consumed, and
+        // its storage goes back there (docs/STRINGS.md).  The value
+        // the caller handed in is not ours to release.
+        var intermediate: ?Register = null;
         var at = steps.len;
         while (at > 0) {
             at -= 1;
@@ -319,12 +382,15 @@ pub const Lowering = struct {
                     // struct_set copies the parent struct with one
                     // field replaced, so its result type is the parent
                     // register's type.
-                    updated = try self.emit(.{ .struct_set = .{
+                    const built = try self.emit(.{ .struct_set = .{
                         .target = field.parent,
                         .layout = field.layout,
                         .field = field.field_index,
                         .value = updated,
                     } }, self.resultType(field.parent));
+                    if (intermediate) |spent| _ = try self.dropStorage(spent);
+                    intermediate = built;
+                    updated = built;
                 },
                 .index => |step| {
                     const arguments = try self.arena.alloc(Register, step.subscripts.len + 2);
@@ -335,10 +401,19 @@ pub const Lowering = struct {
                         .{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } },
                         .none,
                     );
+                    // The element took its own copy, so ours is spent.
+                    if (intermediate) |spent| _ = try self.dropStorage(spent);
                     return; // the object mutated in place
                 },
             }
         }
+        // The root's old value is what every parent register above was
+        // read out of, so it can only go once the rebuild is complete.
+        const owns = self.locals.items[root].owns_storage;
+        // With no steps at all there is nothing fresh to store, so the
+        // root takes a copy like any other binding would.
+        if (owns and intermediate == null) updated = try self.ownStorage(updated);
+        try self.release(root, false, owns);
         try self.store(root, updated);
     }
 
@@ -442,7 +517,7 @@ pub const Lowering = struct {
         start: Register,
         limit_value: Register,
     ) Error!CountedLoop {
-        const limit = try self.hiddenLocal(.int);
+        const limit = try self.hiddenLocal(.int, false);
         try self.store(index, start);
         try self.store(limit, limit_value);
 
@@ -511,8 +586,8 @@ pub const Lowering = struct {
     /// that is the order the slots come out in.
     pub fn openIteration(self: *Lowering, object_type: Type) Error!Iteration {
         return .{
-            .object = try self.hiddenLocal(object_type),
-            .position = try self.hiddenLocal(.int),
+            .object = try self.hiddenLocal(object_type, false),
+            .position = try self.hiddenLocal(.int, false),
             .object_type = object_type,
         };
     }
@@ -586,7 +661,7 @@ pub const Lowering = struct {
         left: Register,
         evaluate_right_when: bool,
     ) Error!ShortCircuit {
-        const result = try self.hiddenLocal(.boolean);
+        const result = try self.hiddenLocal(.boolean, false);
         try self.store(result, left);
         const right_block = try self.reserveBlock();
         const merge = try self.reserveBlock();
@@ -609,7 +684,7 @@ pub const Lowering = struct {
         present: Register,
         result_type: Type,
     ) Error!ShortCircuit {
-        const result = try self.hiddenLocal(result_type);
+        const result = try self.hiddenLocal(result_type, false);
         try self.store(result, present);
         const fallback = try self.reserveBlock();
         const merge = try self.reserveBlock();

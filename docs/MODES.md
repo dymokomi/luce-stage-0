@@ -100,7 +100,7 @@ std modules resolve like any other, so a trap inside
 `line:column` pair per instruction.  Granularity is the statement,
 the way Python tracebacks work: every instruction a statement lowers
 to reports the statement's own position.  The tables live in the
-`.lc` beside the code they describe (`format_version` 10) and, on the
+`.lc` beside the code they describe (`format_version` 12) and, on the
 LLVM path, in a private constant array beside the machine code; the
 decoder rejects a table whose length disagrees with its function's
 instruction count, and the verifier enforces the same invariant on

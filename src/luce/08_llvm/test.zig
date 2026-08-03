@@ -1910,3 +1910,131 @@ test "a withheld service group fails closed on both engines" {
         \\
     , .{ .terminal = false });
 }
+
+test "owned String bytes agree, census included" {
+    // docs/STRINGS.md's store sites, all on one page: a returned view
+    // of a parameter, a container that keeps what it is handed, a copy
+    // that outlives its original, a field assigned twice, a map's keys
+    // and values, and a read that survives a call emptying the
+    // container it came from.  `agree` compares the leak census as
+    // well as the bytes, so a store that forgot to copy shows up here
+    // even when it prints the same.
+    try agree(std.testing.allocator,
+        \\import std.strings
+        \\
+        \\struct Tag:
+        \\    label: String
+        \\    count: Int
+        \\
+        \\func widen(s: String) -> String:
+        \\    return strings.trim(s)
+        \\
+        \\func drop_first(pieces: List(String)) -> Int:
+        \\    pieces.remove(0)
+        \\    return 1
+        \\
+        \\func measure(left: String, right: Int) -> Int:
+        \\    return len(left) + right
+        \\
+        \\func main():
+        \\    let trimmed = widen("   padded   ")
+        \\    print(trimmed)
+        \\
+        \\    var names = new List(String)
+        \\    names.append("ada")
+        \\    names.append(trimmed + "-lovelace")
+        \\    names[0] = names[1]
+        \\    print(names[0] + " " + str(len(names)))
+        \\    var duplicate = copy names
+        \\    free(names)
+        \\    print(duplicate[1])
+        \\    free(duplicate)
+        \\
+        \\    var tag = Tag(label = "one", count = 1)
+        \\    tag.label = "two"
+        \\    tag.label = tag.label + "-three"
+        \\    var copied = tag
+        \\    copied.label = "other"
+        \\    print(tag.label + " " + copied.label)
+        \\
+        \\    var table = new Map(String, String)
+        \\    table["k" + str(1)] = "v1"
+        \\    table["k1"] = "v" + str(2)
+        \\    var keys = table.keys()
+        \\    var values = table.values()
+        \\    print(keys[0] + values[0])
+        \\    free(keys)
+        \\    free(values)
+        \\    table.remove("k1")
+        \\    free(table)
+        \\
+        \\    var pieces = new List(String)
+        \\    pieces.append("first-piece")
+        \\    pieces.append("second")
+        \\    print(str(measure(pieces[0], drop_first(pieces))))
+        \\    free(pieces)
+        \\
+        \\    var text = "abcdef"
+        \\    text = text[1:5]
+        \\    text = text + text
+        \\    print(text)
+        \\
+        \\    var cells = new Array(String, 3)
+        \\    cells[0] = "x" + str(0)
+        \\    cells[1] = cells[0]
+        \\    cells[0] = "y"
+        \\    print(cells[0] + cells[1] + str(len(cells[2])))
+        \\    free(cells)
+        \\
+    );
+}
+
+test "a loop name agrees whether it borrows its element or copies it" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var words = new List(String)
+        \\    words.append("aa")
+        \\    words.append("bb")
+        \\    words.append("cc")
+        \\    var total = 0
+        \\    for w in words:
+        \\        total += len(w)
+        \\    print(str(total))
+        \\    var seen = ""
+        \\    for w in words:
+        \\        seen = seen + w
+        \\        words[0] = "zz"
+        \\    print(seen)
+        \\    free(words)
+        \\
+        \\    var table = new Map(String, String)
+        \\    table["a"] = "1"
+        \\    table["b"] = "2"
+        \\    var joined = ""
+        \\    for key, value in table:
+        \\        joined = joined + key + value
+        \\    print(joined)
+        \\    free(table)
+        \\
+    );
+}
+
+test "a trap agrees while every frame is still holding String bytes" {
+    try agree(std.testing.allocator,
+        \\struct Tag:
+        \\    label: String
+        \\    count: Int
+        \\
+        \\func deeper(name: String) -> Int:
+        \\    let held = name + "-held"
+        \\    var tag = Tag(label = held, count = 1)
+        \\    trap(tag.label)
+        \\    return 0
+        \\
+        \\func main():
+        \\    let outer = "kept" + "-here"
+        \\    var also = Tag(label = outer, count = 2)
+        \\    print(str(deeper(also.label)))
+        \\
+    );
+}

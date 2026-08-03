@@ -106,6 +106,15 @@ pub const Intrinsic = enum {
     term_flush,
     key_read,
     key_text,
+    /// The two halves of value storage (docs/STRINGS.md).  A String's
+    /// bytes and a struct's field run have exactly one owner, so
+    /// `own_storage` takes the copy every store into a place that
+    /// outlives the statement needs, and `drop_storage` is the death
+    /// point — it answers the emptied value, which the caller writes
+    /// back, so releasing a place twice frees nothing the second time.
+    /// Neither touches objects: those are `object_bind`'s business.
+    own_storage,
+    drop_storage,
 };
 
 pub const TrapCode = enum {
@@ -198,6 +207,16 @@ pub const Instruction = union(enum) {
 pub const Local = struct {
     name: []const u8,
     local_type: Type,
+    /// True when this slot owns the String bytes and struct field runs
+    /// it holds, and releases them when it dies (docs/STRINGS.md).
+    /// False for a parameter, which borrows its caller's, and for the
+    /// hidden slots a block-split spill uses, which borrow whatever
+    /// they carry across the branch.
+    ///
+    /// Read by both engines to decide two things: that a frame's slot
+    /// starts *empty* rather than at a shared zero, and that a trap
+    /// unwinding past every release can still give the storage back.
+    owns_storage: bool = false,
 };
 
 pub const Block = struct {

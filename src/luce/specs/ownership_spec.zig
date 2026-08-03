@@ -1740,3 +1740,233 @@ test "audit: give and free of an outer name are refused in every loop shape (S30
         try expectOwnError(source.items);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Value storage — docs/STRINGS.md
+// ---------------------------------------------------------------------------
+//
+// A String's bytes and a struct's field run have exactly one owner, and
+// the tests below are run under `std.testing.allocator`: what a program
+// does not give back is a reported leak, and what it gives back twice
+// is a reported double free.  That is the whole proof, so every one of
+// these is really two assertions — the printed answer, and the
+// allocator's silence.
+
+test "storage: a returned view of a parameter comes out owned (S17 is an object rule)" {
+    try expectClean(
+        \\import std.strings
+        \\
+        \\func widen(s: String) -> String:
+        \\    return strings.trim(s)
+        \\
+        \\func unchanged(s: String) -> String:
+        \\    return strings.replace(s, "", "!")
+        \\
+        \\func main():
+        \\    let trimmed = widen("   padded   ")
+        \\    let same = unchanged("kept")
+        \\    assert(trimmed == "padded")
+        \\    assert(same == "kept")
+        \\
+    );
+}
+
+test "storage: a container owns the bytes it is handed, and frees them with itself" {
+    try expectClean(
+        \\func main():
+        \\    var names = new List(String)
+        \\    var seed = "ada"
+        \\    names.append(seed)
+        \\    names.append(seed + "-lovelace")
+        \\    names.insert(0, "grace")
+        \\    assert(names[1] == "ada")
+        \\    names[1] = names[2]
+        \\    assert(names[1] == "ada-lovelace")
+        \\    names.remove(0)
+        \\    assert(len(names) == 2)
+        \\    var taken = names.pop()
+        \\    assert(taken == "ada-lovelace")
+        \\    free(names)
+        \\
+    );
+}
+
+test "storage: copy of a List(String) survives freeing the original (S31)" {
+    try expectClean(
+        \\func main():
+        \\    var first = new List(String)
+        \\    first.append("alpha")
+        \\    first.append("be" + "ta")
+        \\    var second = copy first
+        \\    free(first)
+        \\    assert(second[0] == "alpha")
+        \\    assert(second[1] == "beta")
+        \\    var third = second[0:1]
+        \\    free(second)
+        \\    assert(third[0] == "alpha")
+        \\    free(third)
+        \\
+    );
+}
+
+test "storage: a map owns its keys as well as its values" {
+    try expectClean(
+        \\func main():
+        \\    var table = new Map(String, String)
+        \\    table["k" + str(1)] = "v1"
+        \\    table["k1"] = "v" + str(2)
+        \\    table["k2"] = "v2"
+        \\    assert(table["k1"] == "v2")
+        \\    assert(len(table) == 2)
+        \\    var keys = table.keys()
+        \\    var values = table.values()
+        \\    assert(keys[0] == "k1")
+        \\    assert(values[1] == "v2")
+        \\    free(keys)
+        \\    free(values)
+        \\    table.remove("k1")
+        \\    assert(len(table) == 1)
+        \\    table.clear()
+        \\    free(table)
+        \\
+    );
+}
+
+test "storage: a struct field assigned twice frees what it replaced (S25, S26)" {
+    try expectClean(
+        \\struct Tag:
+        \\    label: String
+        \\    count: Int
+        \\
+        \\func main():
+        \\    var tag = Tag(label = "one", count = 1)
+        \\    tag.label = "two"
+        \\    tag.label = tag.label + "-three"
+        \\    assert(tag.label == "two-three")
+        \\    var copied = tag
+        \\    copied.label = "other"
+        \\    assert(tag.label == "two-three")
+        \\    assert(copied.label == "other")
+        \\
+    );
+}
+
+test "storage: reassignment reads the old bytes before releasing them (S5)" {
+    try expectClean(
+        \\func main():
+        \\    var text = "abcdef"
+        \\    text = text[1:5]
+        \\    text = text + text
+        \\    assert(text == "bcdebcde")
+        \\    var same = text
+        \\    text = "gone"
+        \\    assert(same == "bcdebcde")
+        \\
+    );
+}
+
+test "storage: an element read stays valid across a call that empties its container" {
+    // The residual hazard docs/STRINGS.md closes statically: `pieces[0]`
+    // is a view of an element the second argument frees.  An object
+    // would go stale and trap (S9); a String has no handle, so the read
+    // is copied instead.
+    try expectClean(
+        \\func drop_first(pieces: List(String)) -> Int:
+        \\    pieces.remove(0)
+        \\    return 1
+        \\
+        \\func measure(left: String, right: Int) -> Int:
+        \\    return len(left) + right
+        \\
+        \\func main():
+        \\    var pieces = new List(String)
+        \\    pieces.append("first-piece")
+        \\    pieces.append("second")
+        \\    assert(measure(pieces[0], drop_first(pieces)) == 12)
+        \\    free(pieces)
+        \\
+    );
+}
+
+test "storage: a loop name that outlives a mutation of its collection keeps its own copy" {
+    try expectClean(
+        \\func main():
+        \\    var words = new List(String)
+        \\    words.append("aa")
+        \\    words.append("bb")
+        \\    words.append("cc")
+        \\    var seen = ""
+        \\    for w in words:
+        \\        seen = seen + w
+        \\        words[0] = "zz"
+        \\    assert(seen == "aabbcc")
+        \\    var total = 0
+        \\    for w in words:
+        \\        total += len(w)
+        \\    assert(total == 6)
+        \\    free(words)
+        \\
+    );
+}
+
+test "storage: an Array of Strings and of structs owns every cell" {
+    try expectClean(
+        \\struct Tag:
+        \\    label: String
+        \\    count: Int
+        \\
+        \\func main():
+        \\    var cells = new Array(String, 3)
+        \\    cells[0] = "x" + str(0)
+        \\    cells[1] = cells[0]
+        \\    cells[0] = "y"
+        \\    assert(cells[0] == "y")
+        \\    assert(cells[1] == "x0")
+        \\    assert(len(cells[2]) == 0)
+        \\    cells.fill("z")
+        \\    assert(cells[1] == "z")
+        \\    free(cells)
+        \\    var marks = new Array(Tag, 2)
+        \\    marks[0] = Tag(label = "m0", count = 0)
+        \\    marks[1] = marks[0]
+        \\    assert(marks[1].label == "m0")
+        \\    free(marks)
+        \\
+    );
+}
+
+test "storage: a trap unwinds past every release and the bytes still come back" {
+    // S34 keeps the object census honest by skipping releases on the
+    // way out; value storage is not in the census, so the engine sweeps
+    // the frames it left standing (docs/STRINGS.md).  Under
+    // `std.testing.allocator` a missed sweep is a reported leak.
+    try expectTrap(
+        \\struct Tag:
+        \\    label: String
+        \\    count: Int
+        \\
+        \\func deeper(name: String) -> Int:
+        \\    let held = name + "-held"
+        \\    var tag = Tag(label = held, count = 1)
+        \\    trap(tag.label)
+        \\    return 0
+        \\
+        \\func main():
+        \\    let outer = "kept" + "-here"
+        \\    var also = Tag(label = outer, count = 2)
+        \\    assert(deeper(also.label) == 0)
+        \\
+    , .explicit_trap);
+}
+
+test "storage: a loop that retains nothing allocates nothing that outlives it" {
+    try expectClean(
+        \\func main():
+        \\    var total = 0
+        \\    for i in range(0, 2000):
+        \\        let piece = "item-" + str(i) + ";"
+        \\        total += len(piece)
+        \\    assert(total > 0)
+        \\
+    );
+}

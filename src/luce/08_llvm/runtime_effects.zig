@@ -173,6 +173,10 @@ pub const Service = enum {
     luce_rt_float_clamp,
     luce_rt_compare,
 
+    // -- value storage --------------------------------------------------
+    luce_rt_own_storage,
+    luce_rt_drop_storage,
+
     /// The C symbol this service is declared under.
     pub fn symbol(self: Service) []const u8 {
         return @tagName(self);
@@ -415,9 +419,24 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .run, .value_in, .value_out },
         },
 
+        // -- value storage --------------------------------------------
+        //
+        // One allocates a String's bytes or a struct's field run, the
+        // other gives them back (docs/STRINGS.md).  Neither resolves a
+        // handle, so neither names the default location; both write the
+        // run's private storage, so neither may be folded or sunk.
+        .luce_rt_own_storage => .{
+            .memory = touches_text,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_drop_storage => .{
+            .memory = touches_text,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+
         // -- struct values --------------------------------------------
         //
-        // Both allocate a fresh run of fields in the arena.
+        // Both allocate a fresh run of fields.
         .luce_rt_struct_make => .{
             .memory = touches_text,
             .parameters = &.{ .run, .values_in, .plain, .value_out },

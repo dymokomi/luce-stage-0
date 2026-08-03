@@ -1329,6 +1329,12 @@ const Body = struct {
         for (function.locals, self.local_slots, 0..) |local, slot, index| {
             const stored = if (index < function.parameter_count)
                 self.wip.arg(@intCast(index + 3))
+            else if (local.owns_storage)
+                // A slot that owns its storage starts empty, not at
+                // the shared zero: `structZero` is one constant run
+                // per layout, and a release must never hand a shared
+                // run back (docs/STRINGS.md).
+                try self.emptyValue(local.local_type)
             else
                 try self.zeroValue(local.local_type);
             _ = try self.wip.store(
@@ -1407,6 +1413,18 @@ const Body = struct {
             .none => self.fail("a local of type None"),
             .bytes => self.fail("Bytes"),
             .optional => self.fail("T? (optionals)"),
+        };
+    }
+
+    /// What a slot that owns its storage holds before anything is
+    /// stored in it: the same shape, owning nothing, so the release it
+    /// is going to get frees nothing (docs/STRINGS.md).  A String's
+    /// zero is already empty; a struct's is a null run, which
+    /// `luce_rt_drop_storage` answers for.
+    fn emptyValue(self: *Body, of: types.Type) Error!Builder.Value {
+        return switch (of) {
+            .strukt => try self.module.builder.nullValue(.ptr),
+            else => self.zeroValue(of),
         };
     }
 
@@ -1745,14 +1763,18 @@ const Body = struct {
     /// Whether an element of type `of` can be written in place.
     ///
     /// A store into a container frees the element it replaced and
-    /// adopts the one arriving (S20, S22).  Neither happens for a value
-    /// — a scalar or a String owns nothing — so those write inline,
-    /// while an element that could *hold* an object goes on calling the
+    /// adopts the one arriving (S20, S22).  Neither happens for a
+    /// scalar, so those write inline; anything that owns something —
+    /// an object, and since copy-on-store a String's bytes or a
+    /// struct's field run (docs/STRINGS.md) — goes on calling the
     /// runtime, which is the one place that walk is written.
+    ///
+    /// A *read* stays inline whatever the element type: reading an
+    /// element is a borrow of it, and borrows own nothing.
     fn ownsNothing(of: types.Type) bool {
         return switch (of) {
-            .boolean, .int, .float, .string => true,
-            .none, .bytes, .strukt, .heap, .optional => false,
+            .boolean, .int, .float => true,
+            .none, .string, .bytes, .strukt, .heap, .optional => false,
         };
     }
 
@@ -3122,6 +3144,29 @@ const Body = struct {
         const rt = self.runtime;
         const of = called.arguments;
         switch (called.kind) {
+            // -- value storage ----------------------------------------
+            //
+            // Both cross into `libluce_rt` as a boxed value, like every
+            // other store site, so the unboxed `{ptr, i64}` a String
+            // lives in between them does not move (docs/STRINGS.md).
+            .own_storage => try self.callAnswering(register, .luce_rt_own_storage, &.{
+                rt,
+                try self.boxedRegister(of[0], "held"),
+            }),
+            .drop_storage => {
+                const out = try self.scratch(self.module.value_type, value_alignment, "rt.out");
+                _ = try self.callRuntime(.luce_rt_drop_storage, .void, &.{
+                    rt,
+                    try self.boxedRegister(of[0], "held"),
+                    out,
+                }, "");
+                self.values[register] = try self.unboxed(
+                    self.function.result_types[register],
+                    out,
+                    "rt.value",
+                );
+            },
+
             // -- scalar math, generated here --------------------------
             .abs => switch (try self.numeric(of[0])) {
                 .int => {

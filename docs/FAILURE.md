@@ -205,7 +205,8 @@ unsupported recursion, unstable type identity, and its own community
 calling them a design error in public APIs. Error payloads beyond the
 message — Zig's most-upvoted issue, deferred across eight milestones and
 closed `not_planned`; the lifetime objection that killed it does not
-apply to us, because a String is a value from the run arena, so we can
+apply to us, because a String is a value whose bytes belong to whatever
+place holds them and are reclaimed with it (docs/STRINGS.md), so we can
 afford the one thing Zig could not, and only that one. Go's
 value-plus-error — Luce has no multiple returns, and adding them *for*
 errors is the tail wagging the dog.

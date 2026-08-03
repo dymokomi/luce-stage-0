@@ -276,7 +276,13 @@ needs no counter, and it makes the existing "regions" objection
 under real copies there are no such views.  Its cost is a memcpy at
 store sites, which is visible, local, and bounded.
 
-That redesign is `docs/MISSING.md` Tier 0 item 1, and it is open.
+That redesign is `docs/STRINGS.md`, and it **shipped**: owned String
+bytes, copy-on-store across every store site, owned struct field runs,
+and a static rule for the one register that could still hold a view of
+storage a later call in the same statement frees.  The churn loop went
+flat (121 MB → 1.8 MB at 4M iterations) and the editor went from
+1204 MB to 3.3 MB over 20,000 keystrokes.  No counter, no shared bit,
+no tracing — the language's claim made literal.
 
 ---
 
@@ -305,7 +311,9 @@ observe the difference except in RSS — that is the test, and it is
 what makes this an implementation decision rather than a model change.
 
 Projected: the churn loop goes flat, and the editor goes from 976 MB
-to **under ~1 MB of string storage, flat in keystrokes**.
+to **under ~1 MB of string storage, flat in keystrokes**.  Measured,
+under copying rather than counting: flat, and 3.3 MB peak for the
+whole editor process (`docs/STRINGS.md`).
 
 ### Object identity: generational handles — **shipped**
 

@@ -8,8 +8,17 @@
 
 `docs/MEMORY.md` records why scope ownership won for objects and then
 refuses, permanently, every automatic manager for values. This is the
-memo for what replaces them. It is `docs/MISSING.md` Tier 0 item 1,
+memo for what replaces them. It was `docs/MISSING.md` Tier 0 item 1,
 second bullet.
+
+> **Steps 2 and 3 shipped.** Owned String bytes, copy-on-store across
+> every store site, owned struct field runs, and the
+> mutation-during-statement read rule. What actually landed, what it
+> measured, and where the design met the code are in **What shipped**
+> at the foot of this document. Steps 4, 5 and 6 are still queued, and
+> step 5 (small-string optimisation) is now the one that matters:
+> `bench/strings` went **2.35× C → 3.40× C**, which is allocation, and
+> SSO is what takes it back.
 
 Nothing in the language changes. No verb, no trap, no diagnostic, no
 change to the leak census. S1–S43 keep every decision; three lines of
@@ -612,3 +621,125 @@ The one thing that cannot be predicted from here is how often the
 mutation-during-statement read rule fires on real code. The
 measurement is a count of copies it inserts across `programs/`,
 `bench/` and `src/luce/std/`. Prediction: zero.
+
+## What shipped
+
+Steps 2 and 3, whole, in one change. `.lc` `format_version` 11 → 12;
+`abi.version` unchanged, because nothing about the boxed `Value`
+moved. 795 tests green, `zig fmt --check` clean.
+
+### The measurements
+
+Against the base commit, on this host (Apple M4 Max, `--release`, warm
+artifact, `/usr/bin/time -l`):
+
+| churn loop, one string built and discarded per iteration | 0.5M | 1M | 2M | 4M |
+|---|---|---|---|---|
+| before, compiled path | 20.3 MB | 29.6 MB | 60.0 MB | 121.0 MB |
+| **after, compiled path** | **20.4 MB** | **20.2 MB** | **20.4 MB** | **20.4 MB** |
+| before, interpreter | 15.5 MB | 29.4 MB | 59.9 MB | 121.0 MB |
+| **after, interpreter** | **1.8 MB** | **1.8 MB** | **1.9 MB** | **1.8 MB** |
+
+Flat, and flat all the way out: 8M and 16M iterations are 20.4 MB too,
+so 32× the work is the same footprint. The compiled path's 20 MB is
+`libmalloc`'s working set for a hot allocate-and-free loop, not
+anything Luce is holding — the interpreter, which draws on Zig's
+general-purpose allocator, sits at the 1.8 MB do-nothing floor.
+
+**The editor**, `programs/editor.luc` verbatim with its interactive
+`main` replaced by 20,000 keystrokes played into a 40 KB buffer through
+the same `Handle.key` / `Handle.adjust` path: **1204.2 MB → 3.3 MB**
+peak RSS, same output. Wall time 0.18 s → 0.48 s for the 20,000
+strokes, i.e. 9 µs → 24 µs a keystroke — the memo predicted +4–6 µs and
+it is +15, three orders of magnitude inside a frame either way.
+
+`bench/compare.sh`, interleaved A/B on this host:
+
+| benchmark | base | head | delta |
+|---|---|---|---|
+| loops | 82.5ms | 81.7ms | −1.0% |
+| math | 105.9ms | 105.9ms | +0.0% |
+| **strings** | 45.5ms | 65.9ms | **+44.8%** |
+| arrays | 45.6ms | 45.6ms | −0.2% |
+| matmul | 11.3ms | 11.4ms | +0.8% |
+| stats | 38.5ms | 38.6ms | +0.4% |
+
+**The parity benchmarks are untouched**, exactly as predicted — five
+rows inside 1%. `strings` is the whole cost, and it is allocation:
+400,000 `str(i)` results and 400,001 split pieces that used to be
+unreclaimed bump allocations and views are now 800,000
+allocate-and-free pairs. The average piece is 11.7 bytes and every
+`str(i)` is at most 7, so **small-string optimisation removes
+essentially all of it**, which is why step 5 is next.
+
+**The mutation-during-statement rule fires on zero lines** of
+`programs/`, `bench/` and `src/luce/std/` — the memo's prediction,
+checked by counting the copies it inserts across the whole corpus. It
+does fire on the memo's own example, `f(pieces[0], drop_first(pieces))`,
+which is in the spec suite.
+
+### Where the design met the code
+
+Five things the memo did not have quite right, all found by running it:
+
+1. **Two intrinsics, not none.** The memo expected `object_bind` to
+   carry the copy and `object_unbind` the release. `bind` cannot: a
+   statement temporary holding a *fresh* value must take ownership
+   without copying, or the original leaks, and a temporary of an
+   object-carrying struct needs the bind for its objects while needing
+   no copy for its run — so one instruction cannot mean both. The copy
+   and the release are `own_storage` and `drop_storage`, two entries in
+   the intrinsic list; the `Instruction` union is the 23 tags it was.
+   `drop_storage` answers the *emptied* value, which the caller stores
+   back, and that is what makes releasing a place twice free nothing.
+
+2. **`mir.Local` carries `owns_storage`.** A parameter borrows its
+   caller's bytes and a block-split spill borrows whatever it carries
+   across the branch; a binding and a temporary own theirs. Both
+   engines read the flag for two things: a slot that owns storage
+   starts *empty* rather than at the shared per-layout zero, and a trap
+   that unwound past every release (S34) still gives the storage back —
+   the interpreter sweeps the frames it left standing, and every frame
+   sweeps its own slots as it pops. Value storage is not in the census,
+   so unlike objects there is nothing to preserve by leaving it.
+
+3. **A fresh value has an identity, so it cannot be CSE'd.**
+   `07_optimize/values.zig` folded two identical `struct_make`s
+   together — correct while a struct run was arena-lived and shared,
+   and a double free the moment the run has an owner. `struct_make`,
+   `struct_set`, `str`, `chr` and String `+` are `impure` in
+   `07_optimize/effects.zig` now, for the same reason `heap_new` always
+   was. `dead.zig` keeps a `local_set` into an owning slot for the
+   matching reason: the sweep reads that slot, and no block mentions it.
+
+4. **`str` always allocates.** `str(s)` of a String and `str(b)` of a
+   Bool used to answer a view and a static. A producer that sometimes
+   allocates and sometimes borrows cannot be told apart at its use
+   site, and the whole rule turns on being able to.
+
+5. **A `for` name over a container is a borrow, and the body can
+   invalidate it.** `for s in items:` with `items[0] = ...` in the body
+   frees the bytes `s` is looking at — an object's handle would go
+   stale and trap (S9), a String has none. The name takes a copy per
+   iteration exactly when the body could free something a container
+   holds, and keeps the borrow when it provably could not, which is
+   what keeps `for piece in pieces:` free. Same static question as the
+   residual hazard, one scope wider.
+
+Two smaller ones. An `Array(String)` element store no longer writes
+inline in compiled code — `08_llvm`'s `ownsNothing` is scalars only
+now, because a String element owns its bytes; reads stay inline, since
+reading an element is a borrow. And `Memory.arena` survives, holding
+what a program cannot grow without bound: a trap's words, the
+interpreter's per-layout struct zero templates, and host text on its
+way into owned storage.
+
+### What is still open
+
+`luce_rt_close` on a **compiled** artifact that trapped does not
+reclaim the storage its frames were holding. The interpreter walks its
+frame stack; generated code has no frame stack to walk, and the trace
+it records on the way out names functions, not slots. The run ends
+either way and the leak is bounded by the live set at the trap, but it
+is a real gap and the fix is to emit the drops on each frame's
+unwinding edge — the same place `luce_rt_unwound` is already called.

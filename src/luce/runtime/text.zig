@@ -1,11 +1,16 @@
 //! String storage and the pure conversion builtins.
 //!
-//! A Luce String is immutable, UTF-8, and never owned by the value that
-//! names it: results allocated here come from the runtime arena and
-//! stay valid for the whole run.  The String surface the language keeps
-//! is deliberately small — `+`, comparison, checked `s[a:b]`, `len`,
-//! `byte_at`, `find_byte` — and everything else is the `strings` std
-//! module built on top of it (docs/LANGUAGE.md).
+//! A Luce String is immutable and UTF-8.  Every function here that
+//! makes new text allocates it from `Runtime.objects` and hands it back
+//! owned by nobody: whatever receives it next owns it, and the
+//! statement that produced it releases it if nothing does
+//! (docs/STRINGS.md).  `slice` is the exception and stays one — it is a
+//! borrow of its argument, on both engines, and storing one copies.
+//!
+//! The String surface the language keeps is deliberately small — `+`,
+//! comparison, checked `s[a:b]`, `len`, `byte_at`, `find_byte` — and
+//! everything else is the `strings` std module built on top of it
+//! (docs/LANGUAGE.md).
 
 const std = @import("std");
 const heap = @import("heap.zig");
@@ -22,9 +27,10 @@ pub fn isStringBoundary(held: []const u8, index: usize) bool {
     return index == held.len or held[index] & 0xc0 != 0x80;
 }
 
-/// `left + right`, in fresh arena storage.
+/// `left + right`, in fresh owned storage.
 pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Value {
-    const joined = try std.mem.concat(runtime.arena, u8, &.{ left, right });
+    if (left.len + right.len == 0) return Value.ofString("");
+    const joined = try std.mem.concat(runtime.objects, u8, &.{ left, right });
     return Value.ofString(joined);
 }
 
@@ -65,10 +71,13 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
 // Conversions
 // ---------------------------------------------------------------------------
 
-/// `str(x)` for every type it accepts.  Int and Float allocate; Bool
-/// answers static text; String is already the answer; a Builder hands
-/// back a copy of its bytes, so later appends do not change the String
-/// that was taken.
+/// `str(x)` for every type it accepts.  Every answer is fresh owned
+/// text, including the two that could have been a view — `str(s)` of a
+/// String and `str(b)` of a Bool — because a producer that sometimes
+/// allocates and sometimes borrows cannot be told apart at its use
+/// site, and the whole ownership rule turns on being able to
+/// (docs/STRINGS.md).  A Builder hands back a copy of its bytes, so
+/// later appends do not change the String that was taken.
 pub fn str(runtime: *Runtime, held: Value) Error!Value {
     switch (held.view()) {
         .int => |number| return Value.ofString(try intText(runtime, number)),
@@ -76,14 +85,17 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         // trips — Zig's Ryū-derived formatter, the same one the
         // hand-written wasm runtime had to port by hand.
         .float => |number| {
-            const text = try std.fmt.allocPrint(runtime.arena, "{d}", .{number});
+            const text = try std.fmt.allocPrint(runtime.objects, "{d}", .{number});
             return Value.ofString(text);
         },
-        .boolean => |held_bool| return Value.ofString(if (held_bool) "true" else "false"),
-        .string => return held,
+        .boolean => |held_bool| return runtime.ownValue(
+            Value.ofString(if (held_bool) "true" else "false"),
+        ),
+        .string => return runtime.ownValue(held),
         .object => {
             const object = try runtime.resolve(held);
-            const text = try runtime.arena.dupe(u8, object.data.builder.items);
+            if (object.data.builder.items.len == 0) return Value.ofString("");
+            const text = try runtime.objects.dupe(u8, object.data.builder.items);
             return Value.ofString(text);
         },
         else => unreachable,
@@ -93,7 +105,7 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
 /// `str(Int)` on its own, because generated code calls it directly and
 /// wants the bytes rather than a `Value`.
 pub fn intText(runtime: *Runtime, number: i64) Error![]const u8 {
-    return std.fmt.allocPrint(runtime.arena, "{d}", .{number});
+    return std.fmt.allocPrint(runtime.objects, "{d}", .{number});
 }
 
 /// `parse_int(s) -> Int?`.  "Not a number" is the same reason every
@@ -115,14 +127,17 @@ pub fn parseFloat(runtime: *Runtime, held: Value) Error!Value {
     return Value.ofFloat(parsed);
 }
 
-/// `chr(code)` — one codepoint, UTF-8 encoded into arena storage.
+/// `chr(code)` — one codepoint, UTF-8 encoded into fresh owned
+/// storage, sized to the encoding so the release gives back exactly
+/// what was taken.
 pub fn chr(runtime: *Runtime, code: i64) Error!Value {
     if (code < 0 or code > 0x10FFFF) return runtime.fail(.bad_codepoint);
     const codepoint: u21 = @intCast(code);
-    const encoded = try runtime.arena.alloc(u8, 4);
-    const length = std.unicode.utf8Encode(codepoint, encoded) catch
+    var buffer: [4]u8 = undefined;
+    const length = std.unicode.utf8Encode(codepoint, &buffer) catch
         return runtime.fail(.bad_codepoint);
-    return Value.ofString(encoded[0..length]);
+    const encoded = try runtime.objects.dupe(u8, buffer[0..length]);
+    return Value.ofString(encoded);
 }
 
 /// `ord(s)` — the first codepoint of `s`, or a trap when there is none

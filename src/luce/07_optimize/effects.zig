@@ -24,8 +24,7 @@
 //! and the guarantees each level carries are spelled out on `Effect`
 //! below.  Read them before turning one into an LLVM attribute —
 //! `stable` in particular means "reads nothing another instruction can
-//! change", *not* `memory(none)`: several `stable` operations allocate
-//! a String or a struct value out of the run arena.
+//! change", *not* `memory(none)`.
 
 const defs = @import("../06_mir/defs.zig");
 const support = @import("../support/types.zig");
@@ -42,11 +41,17 @@ pub const Effect = enum {
     /// be folded away, and an unread one deleted.
     pure,
     /// Same operands, same result, and it reads nothing that another
-    /// instruction can change — but it may trap, and it may *allocate*
-    /// (a String, a struct value) out of the run arena.  A later
-    /// duplicate may be folded away (it is dominated by the first: if
-    /// the first did not trap, neither would the second), but an
-    /// unread one must stay, because deleting it would delete a trap.
+    /// instruction can change — but it may trap.  A later duplicate
+    /// may be folded away (it is dominated by the first: if the first
+    /// did not trap, neither would the second), but an unread one must
+    /// stay, because deleting it would delete a trap.
+    ///
+    /// **Nothing that allocates value storage is `stable`.**  A String
+    /// or a struct value has an owner and a death point now
+    /// (docs/STRINGS.md), so two identical makes are two allocations
+    /// with two releases, and folding them would leave one release
+    /// pointing at memory the other already gave back — the same
+    /// reason `heap_new` has always been `impure`.
     stable,
     /// Everything else: effects, host services, the heap, object
     /// identity, and every read of mutable state.
@@ -81,16 +86,18 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
         else if (binary.operand_type == .float)
             // IEEE arithmetic answers everything, including /0.
             .pure
+        else if (binary.operand_type == .string)
+            // String `+` allocates bytes somebody has to free.
+            .impure
         else
-            // Integer arithmetic traps on overflow and on /0; string
-            // `+` allocates.  Both are deterministic all the same.
+            // Integer arithmetic traps on overflow and on /0, and is
+            // deterministic all the same.
             .stable,
 
-        // Struct values are immutable — `struct_set` returns a fresh
-        // one rather than writing through (runtime/heap.zig) — so two
-        // identical makes may share a value.  They allocate, so they
-        // are not deleted when unread.
-        .struct_make, .struct_set => .stable,
+        // A fresh struct value has an identity for the same reason a
+        // fresh object does: it owns a field run exactly one place
+        // will give back (docs/STRINGS.md).
+        .struct_make, .struct_set => .impure,
 
         .intrinsic => |call| intrinsicEffect(
             call.kind,
@@ -138,19 +145,18 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .parse_int,
         .parse_float,
         => .pure,
+        // A slice is a borrow and the rest answer scalars, so none of
+        // these allocates.
         .string_slice,
         .string_byte,
         .string_find_byte,
-        .chr_code,
         .ord_text,
         => .stable,
 
-        // `str` of a Builder reads the heap; of a scalar or a String
-        // it does not.
-        .str_value => if (first_argument) |argument|
-            (if (argument == .heap) .impure else .stable)
-        else
-            .impure,
+        // Both make fresh owned text, so both have an identity
+        // (docs/STRINGS.md); `str` of a Builder reads the heap on top
+        // of that.
+        .chr_code, .str_value => .impure,
 
         // Reads of the heap.  These *are* deterministic between two
         // mutations, and folding them is exactly the optimization LLVM
@@ -166,6 +172,14 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .map_get,
         .list_find,
         .list_contains,
+        => .impure,
+
+        // Value storage: one allocates and one frees, and the second
+        // is a deallocation like `object_unbind` — deleting an unread
+        // one would leak, and folding two would double free
+        // (docs/STRINGS.md).
+        .own_storage,
+        .drop_storage,
         => .impure,
 
         // Fresh objects, mutation, ownership verbs, and every host
@@ -314,6 +328,11 @@ pub fn viewStable(instruction: Instruction) bool {
             // re-labels an owner.
             .list_sort, .list_reverse, .give_object => true,
 
+            // Value storage only: a String's bytes and a struct's
+            // field run are not the object table and not an Array's
+            // storage (docs/STRINGS.md).
+            .own_storage, .drop_storage => true,
+
             // Attaches a fresh object, so the table may grow.
             .list_slice, .map_keys, .map_values, .copy_object => false,
             // Frees something, or replaces an element that owned
@@ -408,6 +427,12 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             .is_none,
             .optional_wrap,
             .optional_unwrap,
+            // Copying and releasing value storage never reads or
+            // writes an owner field: an object field of a struct
+            // aliases through a copy and is untouched by a release
+            // (docs/STRINGS.md, S26).
+            .own_storage,
+            .drop_storage,
             => true,
             .str_value => function.result_types[call.arguments[0]] != .heap,
             else => false,
