@@ -72,11 +72,6 @@ pub const Host = struct {
     /// One directory listing, NUL-joined, which is the shape the ABI's
     /// `dir_list` hands out (`luce_rt_names_list` splits it).
     listed_names: std.ArrayList(u8) = .empty,
-    /// **Dead, and it should go.**  It held slices into `listed_names`
-    /// for the interpreter's Zig-signature service; that service left
-    /// with the engine, and nothing reads this now.  It is still
-    /// built and fixed up on every listing, which is work for nobody.
-    listed_index: std.ArrayList([]const u8) = .empty,
     /// What a compiled artifact reported through the C table.
     trap_code: ?luce.mir.TrapCode = null,
     trap_storage: [512]u8 = undefined,
@@ -124,7 +119,6 @@ pub const Host = struct {
         self.read_line_buffer.deinit(self.gpa);
         self.sanitized.deinit(self.gpa);
         self.listed_names.deinit(self.gpa);
-        self.listed_index.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -332,24 +326,12 @@ pub const Host = struct {
             return false;
         defer directory.close(self.io);
         self.listed_names.clearRetainingCapacity();
-        self.listed_index.clearRetainingCapacity();
         var walk = directory.iterate();
         while (true) {
             const entry = (walk.next(self.io) catch return false) orelse break;
-            // NUL is the separator, so a name is written once and the
-            // index remembers where it started.
-            const at = self.listed_names.items.len;
+            // NUL is the separator (`luce_rt_names_list` splits on it).
             try self.listed_names.appendSlice(self.gpa, entry.name);
-            try self.listed_index.append(self.gpa, self.listed_names.items[at..]);
             try self.listed_names.append(self.gpa, 0);
-        }
-        // The names moved while the list grew, so the index is rebuilt
-        // against where they finally sit.
-        var start: usize = 0;
-        for (self.listed_index.items) |*name| {
-            const length = name.len;
-            name.* = self.listed_names.items[start..][0..length];
-            start += length + 1;
         }
         return true;
     }
