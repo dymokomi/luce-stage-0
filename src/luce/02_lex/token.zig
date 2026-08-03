@@ -50,6 +50,15 @@ pub const Kind = enum {
     /// than a name, so nothing can shadow it and `none` never reads as
     /// a variable somebody forgot to declare.
     keyword_none,
+    /// `try CALL` — propagate what a fallible call raised
+    /// (docs/FAILURE.md).
+    keyword_try,
+    /// `a catch b`, and `EXPR catch:` opening a handler block.  A
+    /// keyword rather than a reuse of `else`, because the two are
+    /// different acts: `else` says "no value here, use this instead",
+    /// `catch` says "it failed, and I am deliberately discarding a
+    /// reason".
+    keyword_catch,
 
     // Literals
     /// A decimal digit run.  Its value is stage 4's business: the
@@ -75,6 +84,11 @@ pub const Kind = enum {
     dot,
     /// `?`, and only ever after a type name: `Int?`, `User?`.
     question,
+    /// `!`, and only ever after a return type: `-> String!`, `-> !`.
+    /// Never a prefix operator — `not` is the negation, and a `!x`
+    /// that mis-lexes against `!=` is the mistake this grammar
+    /// declines to make twice.
+    bang,
     assign,
     plus_assign,
     minus_assign,
@@ -127,6 +141,8 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "give", .kind = .keyword_give },
     .{ .word = "copy", .kind = .keyword_copy },
     .{ .word = "none", .kind = .keyword_none },
+    .{ .word = "try", .kind = .keyword_try },
+    .{ .word = "catch", .kind = .keyword_catch },
 };
 
 /// The same table, arranged for lookup.  `keywords` stays the

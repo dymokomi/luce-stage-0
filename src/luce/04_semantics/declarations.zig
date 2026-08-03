@@ -58,7 +58,7 @@ pub const reserved_names = [_][]const u8{
     "parse_float", "chr",       "ord",        "append",      "pop",
     "insert",      "remove",    "has",        "dim",         "free",
     "print",       "file_read", "file_write", "file_exists", "arg",
-    "arg_count",   "key_read",  "key_text",
+    "arg_count",   "key_read",  "key_text",   "error",
 };
 
 pub fn isReserved(name: []const u8) bool {
@@ -124,6 +124,10 @@ pub const FunctionInfo = struct {
     parameter_types: []Type,
     parameter_modes: []ast.ParameterMode,
     return_type: Type,
+    /// Written `-> T!` or `-> !`: every call site must say `try` or
+    /// `catch`, which is what makes a swallowed failure unwritable
+    /// (docs/FAILURE.md).
+    fallible: bool,
     is_entry: bool,
 };
 
@@ -1042,6 +1046,9 @@ pub const Analyzer = struct {
             .give, .copy => {
                 return self.constantError(expression.span(), "constants are values and never take verbs [OWNERSHIP.md S32]", .{});
             },
+            .try_call => {
+                return self.constantError(expression.span(), "a constant is folded at compile time and nothing can fail there; try belongs in a function", .{});
+            },
         }
     }
 
@@ -1126,6 +1133,11 @@ pub const Analyzer = struct {
         // a fallback to be a fallback *for*.
         if (binary.op == .coalesce) {
             return self.constantError(binary.span, "else has nothing to do in a constant: a constant is always there", .{});
+        }
+        // Nor is there anything for a catch to catch: a constant is
+        // folded at compile time and no call is made at all.
+        if (binary.op == .catch_error) {
+            return self.constantError(binary.span, "catch has nothing to do in a constant: nothing is called there", .{});
         }
         const left = (try self.foldConstant(module, binary.left)) orelse return null;
         // Short-circuit folds without evaluating the other side's
@@ -1232,7 +1244,7 @@ pub const Analyzer = struct {
                 };
                 return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
             },
-            .coalesce => unreachable, // answered above
+            .coalesce, .catch_error => unreachable, // answered above
         }
     }
 
@@ -1316,6 +1328,7 @@ pub const Analyzer = struct {
             .parameter_types = try parameter_types.toOwnedSlice(self.arena),
             .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
             .return_type = return_type,
+            .fallible = declaration.fallible,
             .is_entry = is_entry,
         });
     }
@@ -1332,9 +1345,14 @@ pub const Analyzer = struct {
             return;
         };
         const declaration = self.functions.items[index].declaration;
+        // A script entry may be `func main():` or `func main() -> !:`
+        // — the second is how a program says the world can stop it,
+        // and loom reports what it raised (docs/FAILURE.md).  An
+        // evaluator entry may not: `evaluate` has ports to publish and
+        // no channel to raise through.
         var valid = declaration.return_type == null;
         if (mode == .evaluator) {
-            valid = valid and declaration.parameters.len == 2;
+            valid = valid and !declaration.fallible and declaration.parameters.len == 2;
             if (declaration.parameters.len == 2) {
                 valid = valid and
                     std.mem.eql(u8, declaration.parameters[0].name, "input") and
@@ -1371,6 +1389,7 @@ pub const Analyzer = struct {
                 .name = info.name,
                 .parameter_count = @intCast(info.parameter_types.len),
                 .return_type = info.return_type,
+                .fallible = info.fallible,
                 .file = self.modules[info.module].file,
                 .origin = @intCast(info.declaration.span.start),
             },

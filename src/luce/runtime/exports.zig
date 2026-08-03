@@ -46,16 +46,31 @@ const Runtime = heap.Runtime;
 const Value = value.Value;
 
 /// What `luce_rt_status` answers, and what `luce_main` returns.
+///
+/// **`errored` is 3 and not 2.**  docs/FAILURE.md said "1 is trapped,
+/// 2 becomes errored" — and 2 was already `exhausted`, which had
+/// arrived between the memo and the build.  Renumbering a published
+/// status to make room would have been a silent change of meaning for
+/// every existing loader, so the new answer took the next free number.
 pub const Status = enum(i32) {
     ok = 0,
     trapped = 1,
     /// The arena gave up; nothing about the program was wrong.
     exhausted = 2,
+    /// The program ended with an uncaught error — `main() -> !` said
+    /// so out loud.  Not a trap: nothing about the program is wrong,
+    /// the world said no and nobody caught it.
+    errored = 3,
 };
 
-/// The two answers a fallible call gives.
+/// The outcome of a call, as generated code passes it around: what a
+/// Luce function returns, and what a fallible `luce_rt_*` call
+/// answers.  A runtime call is never `raised_error` — the runtime
+/// library implements semantics, and no semantic is an error
+/// (docs/FAILURE.md).
 const survived: i32 = 0;
 const raised_trap: i32 = 1;
+const raised_error: i32 = 2;
 
 /// The runtime plus the memory it draws on, for the C entry point that
 /// has no allocator to be given.  Heap-allocated and never moved: the
@@ -121,10 +136,11 @@ export fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64 {
     return runtime.live;
 }
 
-/// How the run ended, given whether the entry function unwound.
-export fn luce_rt_status(runtime: *const Runtime, trapped: i32) callconv(.c) Status {
+/// How the run ended, given the outcome the entry function answered.
+export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Status {
     if (runtime.exhausted) return .exhausted;
-    return if (trapped != 0) .trapped else .ok;
+    if (outcome == raised_error) return .errored;
+    return if (outcome != survived) .trapped else .ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +197,67 @@ export fn luce_rt_report(
         runtime.unwound.items.ptr,
         @intCast(runtime.unwound.items.len),
         runtime.dropped_frames,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// `error("…")` — the program raised an error of its own.  The words
+/// are a Luce String, which outlives the run.  `function` and
+/// `instruction` say where it was written, and are resolved here and
+/// only here: an error records its raise site and nothing else.
+export fn luce_rt_raise_error(
+    runtime: *Runtime,
+    code: i32,
+    message: [*]const u8,
+    length: i64,
+    function: u32,
+    instruction: u32,
+) callconv(.c) void {
+    const raised: mir.ErrorCode = @enumFromInt(code);
+    runtime.raise(raised, message[0..@intCast(length)], runtime.frameAt(function, instruction));
+}
+
+/// A host file service answered `no`.  The words that names the path
+/// are built in the library, so both engines report the same sentence.
+export fn luce_rt_raise_io(
+    runtime: *Runtime,
+    reading: i32,
+    path: [*]const u8,
+    length: i64,
+    function: u32,
+    instruction: u32,
+) callconv(.c) void {
+    runtime.raiseIo(
+        reading != 0,
+        path[0..@intCast(length)],
+        runtime.frameAt(function, instruction),
+    );
+}
+
+/// `catch` handled it: forget the error and its words.
+export fn luce_rt_forget_error(runtime: *Runtime) callconv(.c) void {
+    runtime.forget();
+}
+
+/// Hand the host an uncaught error: its code, its words, and the one
+/// position it carries.  Called once, from `luce_main`, and only when
+/// the entry function came back errored.
+export fn luce_rt_report_error(
+    runtime: *const Runtime,
+    context: ?*anyopaque,
+    report: trace.ErrorReportFn,
+) callconv(.c) void {
+    if (runtime.exhausted) return;
+    const raised = runtime.raised orelse return;
+    report(
+        context,
+        @intFromEnum(raised.code),
+        raised.message.ptr,
+        @intCast(raised.message.len),
+        &raised.origin,
     );
 }
 

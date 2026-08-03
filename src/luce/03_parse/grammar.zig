@@ -747,15 +747,23 @@ pub const Parser = struct {
         if (try self.missingSeparator(previous_end)) return null;
         if ((try self.expectClose(.right_paren, opener)) == null) return null;
 
+        // `-> T`, `-> T!`, or a bare `-> !`: the mark says the call may
+        // fail, the type says what it hands back when it does not, and
+        // either may be absent (docs/FAILURE.md).
         var return_type: ?ast.TypeName = null;
+        var fallible = false;
         if (self.accept(.arrow) != null) {
-            return_type = (try self.typeName()) orelse return null;
+            if (self.peekKind() != .bang) {
+                return_type = (try self.typeName()) orelse return null;
+            }
+            fallible = self.accept(.bang) != null;
         }
         const body = (try self.block("func")) orelse return null;
         return .{
             .name = self.text(name),
             .parameters = try parameters.toOwnedSlice(self.arena),
             .return_type = return_type,
+            .fallible = fallible,
             .body = body,
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
@@ -1048,6 +1056,12 @@ pub const Parser = struct {
     // one dotted field on a name, or an indexed expression.
     pub fn assignOrExpression(self: *Parser) Error!?ast.Statement {
         const left = (try self.expression()) orelse return null;
+        // `call catch:` — the handler form, for a recovery that is more
+        // than one expression.  The Pratt loop declined the `catch` on
+        // seeing the colon behind it, so it is still here.
+        if (self.peekKind() == .keyword_catch) {
+            return self.guarded(.{ .expression = .{ .value = left, .span = left.span() } });
+        }
         const compound = compoundOp(self.peekKind());
         if (self.peekKind() != .assign and compound == null) {
             // `x in xs` outside a for header: `in` is not an operator,
@@ -1091,12 +1105,42 @@ pub const Parser = struct {
 
         const target = (try self.targetFrom(left)) orelse return null;
         const value = (try self.expression()) orelse return null;
-        try self.endOfStatement("end of line after the assignment");
-        return .{ .assign = .{
+        const assigned: ast.Statement = .{ .assign = .{
             .target = target,
             .compound = compound,
             .value = value,
             .span = .{ .start = target.span().start, .end = value.span().end },
+        } };
+        // `place = call() catch:` — the same handler form.  Only a
+        // plain assignment takes it: a compound one reads its place
+        // first, so there would be two things happening in front of
+        // the word `catch` and only one of them can fail.
+        if (self.peekKind() == .keyword_catch) {
+            if (compound != null) {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "catch guards a plain assignment; write the call on its own line",
+                    .{},
+                );
+                return null;
+            }
+            return self.guarded(assigned);
+        }
+        try self.endOfStatement("end of line after the assignment");
+        return assigned;
+    }
+
+    /// The `catch:` handler behind a statement whose call may raise.
+    fn guarded(self: *Parser, attempt: ast.Statement) Error!?ast.Statement {
+        const keyword = self.advance(); // catch
+        const handler = (try self.block("catch")) orelse return null;
+        const held = try self.arena.create(ast.Statement);
+        held.* = attempt;
+        return .{ .guarded = .{
+            .attempt = held,
+            .handler = handler,
+            .span = .{ .start = attempt.span().start, .end = keyword.span.end },
         } };
     }
 
@@ -1258,6 +1302,8 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_give => "the keyword 'give'",
         .keyword_copy => "the keyword 'copy'",
         .keyword_none => "'none'",
+        .keyword_try => "the keyword 'try'",
+        .keyword_catch => "the keyword 'catch'",
 
         .int_literal => "a number",
         .float_literal => "a number",
@@ -1272,6 +1318,7 @@ pub fn describe(kind: Kind) []const u8 {
         .colon => "':'",
         .dot => "'.'",
         .question => "'?'",
+        .bang => "'!'",
         .assign => "'='",
         .plus_assign => "'+='",
         .minus_assign => "'-='",

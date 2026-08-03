@@ -106,7 +106,7 @@ const Recorder = struct {
     frames: usize = 0,
 
     fn table(self: *Recorder) abi.Host {
-        return .{ .context = self, .print = print, .trap = trap };
+        return .{ .context = self, .print = print, .trap = trap, .raised = raised };
     }
 
     fn text(self: *const Recorder) []const u8 {
@@ -145,6 +145,25 @@ const Recorder = struct {
         self.trap_length = @min(words.len, self.trap_words.len);
         @memcpy(self.trap_words[0..self.trap_length], words[0..self.trap_length]);
         self.frames = @intCast(frame_count);
+    }
+
+    /// The other way a run can end.  This recorder only ever runs
+    /// programs that finish or trap, so an error arriving here means
+    /// the test drifted — record it as a trap code nobody expects and
+    /// let the assertion say so.
+    fn raised(
+        context: ?*anyopaque,
+        code: i32,
+        message: [*]const u8,
+        message_length: i64,
+        origin: *const abi.TraceFrame,
+    ) callconv(.c) void {
+        _ = origin;
+        const self = of(context);
+        const words = message[0..@intCast(message_length)];
+        self.trap_code = code;
+        self.trap_length = @min(words.len, self.trap_words.len);
+        @memcpy(self.trap_words[0..self.trap_length], words[0..self.trap_length]);
     }
 };
 

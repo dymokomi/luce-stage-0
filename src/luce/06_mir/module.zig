@@ -20,7 +20,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 13;
+pub const format_version: u32 = 14;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -130,6 +130,7 @@ const Writer = struct {
         try self.blob(of.name);
         try self.int(u32, of.parameter_count);
         try self.valueType(of.return_type);
+        try self.int(u8, @intFromBool(of.fallible));
 
         try self.int(u32, @intCast(of.locals.len));
         for (of.locals) |local| {
@@ -237,6 +238,7 @@ const Writer = struct {
                 if (value) |returned| try self.int(u32, returned);
             },
             .trap => |code| try self.int(u8, @intFromEnum(code)),
+            .unwind => {},
         }
     }
 };
@@ -401,6 +403,7 @@ const Reader = struct {
         out.name = try arena.dupe(u8, try self.blob());
         out.parameter_count = try self.int(u32);
         out.return_type = try self.valueType();
+        out.fallible = (try self.int(u8)) != 0;
 
         const local_count = try self.count();
         const locals = try arena.alloc(mir.Local, local_count);
@@ -519,6 +522,7 @@ const Reader = struct {
                 break :blk .{ .ret = if (has_value) try self.int(u32) else null };
             },
             .trap => .{ .trap = try self.enumTag(mir.TrapCode) },
+            .unwind => .unwind,
         };
     }
 };
@@ -894,8 +898,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     inline for (comptime std.meta.fieldNames(mir.Instruction)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(mir.Intrinsic)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(mir.TrapCode)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.ErrorCode)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
-    // or the trap codes: bump format_version and update BOTH numbers.
-    try testing.expectEqual(@as(u32, 13), format_version);
-    try testing.expectEqual(@as(u64, 16376125671992188100), hasher.final());
+    // or the trap or error codes: bump format_version and update BOTH
+    // numbers.
+    try testing.expectEqual(@as(u32, 14), format_version);
+    try testing.expectEqual(@as(u64, 12820082966029638425), hasher.final());
 }

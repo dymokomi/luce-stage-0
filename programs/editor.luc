@@ -8,6 +8,8 @@
 #   loom edit FILE          (or: loom run editor.lc FILE)
 #   Ctrl-S save             Ctrl-Q quit (twice to discard changes)
 
+import std.files
+
 struct Theme:
     keyword: Int
     kind: Int
@@ -336,6 +338,18 @@ struct Handle:
         moved.cursor = Text.at_column(moved.content, start, wanted)
         return moved
 
+    # Early return on failure is the shape errors are for: the handler
+    # says what went wrong and leaves, and the success lines below it
+    # run only where the write landed (docs/FAILURE.md).
+    func save(state: State) -> State:
+        var next = state
+        file_write(next.path, next.content) catch:
+            next.message = "cannot write " + next.path
+            return next
+        next.dirty = false
+        next.message = "saved " + next.path
+        return next
+
     func key(state: State, name: String, inserted: String, visible: Int) -> State:
         var next = state
         let line = Text.line_of(next.content, next.cursor)
@@ -382,11 +396,7 @@ struct Handle:
             next.cursor = next.cursor + len(inserted)
             next.dirty = true
         elif name == "ctrl_s":
-            if file_write(next.path, next.content):
-                next.dirty = false
-                next.message = "saved " + next.path
-            else:
-                next.message = "cannot write " + next.path
+            next = Handle.save(next)
         elif name == "ctrl_q":
             if next.dirty and not next.quit_pending:
                 next.quit_pending = true
@@ -409,11 +419,14 @@ func main():
         print("usage: editor FILE")
         return
     let path = arg(0)
+    # One read, and what it answers decides the greeting.  The
+    # exists-then-read this used to write had a window between the two
+    # calls that nothing could close, and it could not tell "not
+    # there" from "would not open" either (docs/FAILURE.md).
     var opening = ""
-    var greeting = "new file"
-    if file_exists(path):
-        opening = file_read(path)
-        greeting = ""
+    var greeting = ""
+    opening = files.read(path) catch:
+        greeting = "new file"
     var state = State(
         path = path,
         content = opening,

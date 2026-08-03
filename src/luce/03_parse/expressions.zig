@@ -29,9 +29,12 @@ pub const Precedence = enum(u8) {
     logic_or = 1,
     logic_and = 2,
     comparison = 3,
-    /// `a else b`, between comparison and arithmetic: `x else 0 > 5`
-    /// compares the fallback and `x else n + 1` falls back to the sum,
-    /// which is where Swift puts `??` and for the same reasons.
+    /// `a else b` and `a catch b`, between comparison and arithmetic:
+    /// `x else 0 > 5` compares the fallback and `x else n + 1` falls
+    /// back to the sum, which is where Swift puts `??` and for the
+    /// same reasons.  `catch` sits at the same level because it is the
+    /// same shape of question — a value, or a value instead — and the
+    /// two never meet in one expression.
     coalesce = 4,
     additive = 5,
     multiplicative = 6,
@@ -42,7 +45,7 @@ fn binaryPrecedence(kind: Kind) Precedence {
         .keyword_or => .logic_or,
         .keyword_and => .logic_and,
         .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => .comparison,
-        .keyword_else => .coalesce,
+        .keyword_else, .keyword_catch => .coalesce,
         .plus, .minus => .additive,
         .star, .slash, .percent => .multiplicative,
         else => .none,
@@ -67,6 +70,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_not,
         .keyword_give,
         .keyword_copy,
+        .keyword_try,
         .minus,
         .left_paren,
         .left_bracket,
@@ -80,6 +84,7 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
         .keyword_or => .logic_or,
         .keyword_and => .logic_and,
         .keyword_else => .coalesce,
+        .keyword_catch => .catch_error,
         .equal => .equal,
         .not_equal => .not_equal,
         .less => .less,
@@ -114,6 +119,19 @@ fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
     // Bools stays legal.
     var first_comparison: ?Token = null;
     while (true) {
+        // `call catch:` opens a handler block and belongs to the
+        // statement, not to this expression.  One token of lookahead
+        // separates the two spellings of `catch`, and nothing else
+        // can follow the operator form with a colon.
+        if (self.peekKind() == .keyword_catch and self.peekAhead(1) == .colon) return left;
+        // A `!` never joins two expressions.  Saying so here rather
+        // than letting the statement end and complain about a stray
+        // token keeps the answer the one the reader needs, in both
+        // the `3 ! 4` and the `!x` position.
+        if (self.peekKind() == .bang) {
+            try bangIsNotAnOperator(self);
+            return null;
+        }
         const precedence = binaryPrecedence(self.peekKind());
         if (@intFromEnum(precedence) < minimum or precedence == .none) return left;
         const operator = self.advance();
@@ -139,6 +157,18 @@ fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
         } };
         left = node;
     }
+}
+
+/// The one thing `!` is for, said in the one place a reader can meet
+/// it by accident.  It marks a fallible return type (`-> T!`) and is
+/// never an operator; `not` is the negation, and `!=` lexes whole.
+fn bangIsNotAnOperator(self: *Parser) Error!void {
+    try self.report(
+        "luce.parse.expression",
+        self.peek().span,
+        "there is no '!' operator: write 'not x' for negation; '!' marks a return type that can fail ('-> T!')",
+        .{},
+    );
 }
 
 /// `a < b < c`.  Python reads it as `a < b and b < c`; this grammar
@@ -191,6 +221,13 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
     if (self.accept(.keyword_copy)) |keyword| {
         const operand = (try unaryExpression(self)) orelse return null;
         return make(self, .{ .copy = .{
+            .operand = operand,
+            .span = .{ .start = keyword.span.start, .end = operand.span().end },
+        } });
+    }
+    if (self.accept(.keyword_try)) |keyword| {
+        const operand = (try unaryExpression(self)) orelse return null;
+        return make(self, .{ .try_call = .{
             .operand = operand,
             .span = .{ .start = keyword.span.start, .end = operand.span().end },
         } });
@@ -384,6 +421,15 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
         },
         .left_bracket => return listLiteral(self),
         .keyword_new => return newObject(self),
+        // `!` is the fallibility mark on a return type and nothing
+        // else.  It used to be refused by the lexer, which is where
+        // the `not` hint lived; now that it lexes, the hint belongs
+        // here — a reader who writes `!x` still has to be told the
+        // word for it.
+        .bang => {
+            try bangIsNotAnOperator(self);
+            return null;
+        },
         else => {
             try self.report(
                 "luce.parse.expression",

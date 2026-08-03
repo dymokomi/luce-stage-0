@@ -412,7 +412,9 @@ fn observe(source: []const u8, optimized: bool) !Behavior {
                     .message = try testing.allocator.dupe(u8, trap.message),
                     .leaked = 0,
                 },
-                .unavailable => error.TestUnexpectedResult,
+                // The passes are proved on pure programs, so neither
+                // outcome can happen without the spec having drifted.
+                .errored, .unavailable => error.TestUnexpectedResult,
             };
         },
     }

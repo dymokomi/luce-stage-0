@@ -117,6 +117,14 @@ fn report(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_i
             }
             return 0;
         },
+        .errored => {
+            const raised = services.reportedError() orelse {
+                err.print("luce: the program failed and said nothing\n", .{}) catch {};
+                return exit_trapped;
+            };
+            host_mod.printError(err, "luce", @tagName(raised.code), raised.message, raised.origin);
+            return exit_trapped;
+        },
         .trapped => {
             const trap = services.reportedTrap() orelse {
                 err.print("luce: the program trapped and said nothing\n", .{}) catch {};

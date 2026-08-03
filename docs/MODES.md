@@ -100,11 +100,18 @@ std modules resolve like any other, so a trap inside
 `line:column` pair per instruction.  Granularity is the statement,
 the way Python tracebacks work: every instruction a statement lowers
 to reports the statement's own position.  The tables live in the
-`.lc` beside the code they describe (`format_version` 12) and, on the
+`.lc` beside the code they describe (`format_version` 14) and, on the
 LLVM path, in a private constant array beside the machine code; the
 decoder rejects a table whose length disagrees with its function's
 instruction count, and the verifier enforces the same invariant on
 every program, decoded or freshly compiled.
+
+An uncaught **error** reads the same tables and follows the same
+rule, for one position instead of a stack: a debug build says `raised
+in Scan.number (calc.luc:35:13)` and a `--release` build says `raised
+in Scan.number`. An error records that position once, where it was raised, and
+never assembles a trace — which is what keeps the *success* path of a
+`try` free of anything to save and restore (docs/FAILURE.md).
 
 Compile-time diagnostics are unchanged by all of this: they carry
 byte spans and stable codes in both modes, and render as

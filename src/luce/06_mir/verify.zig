@@ -28,6 +28,10 @@ pub const VerifyError = error{
     BadStruct,
     BadConstant,
     BadIntrinsic,
+    /// `raise_error` or `unwind` in a function that never said it
+    /// could fail: a caller compiled against that signature has no
+    /// branch to take, so the module is not one this build wrote.
+    NotFallible,
 };
 
 /// Check every structural and type invariant of a program.
@@ -368,7 +372,26 @@ fn verifyInstruction(
             }
         },
         .trap => {},
+        .unwind => {
+            if (!function.fallible) return error.NotFallible;
+        },
     }
+}
+
+/// Can the instruction in `register` come back errored rather than
+/// answering?  Only these two shapes can, so only these two may be
+/// asked about by `errored` — an `errored` naming anything else is a
+/// module that could branch on a word nobody wrote.
+fn raisesError(program: *const Program, function: *const Function, register: Register) bool {
+    return switch (function.instructions[register]) {
+        .call => |call| call.function < program.functions.len and
+            program.functions[call.function].fallible,
+        .intrinsic => |intrinsic| switch (intrinsic.kind) {
+            .file_read, .file_write => true,
+            else => false,
+        },
+        else => false,
+    };
 }
 
 fn verifyIntrinsic(
@@ -380,6 +403,17 @@ fn verifyIntrinsic(
 ) VerifyError!void {
     const result = function.result_types[register];
     if (call.arguments.len > 6) return error.BadIntrinsic;
+    // `errored` names an *instruction*, not a value: the call it asks
+    // about may return nothing at all (`-> !`), so its argument never
+    // goes through the operand pass below.
+    if (call.kind == .errored) {
+        if (call.arguments.len != 1) return error.BadIntrinsic;
+        const asked = call.arguments[0];
+        if (asked >= function.instructions.len) return error.UndefinedRegister;
+        if (!defined.contains(asked)) return error.UndefinedRegister;
+        if (!raisesError(program, function, asked)) return error.BadIntrinsic;
+        return expectType(result, .boolean);
+    }
     var buffer: [6]Type = undefined;
     for (call.arguments, 0..) |argument, index| {
         buffer[index] = try operandType(function, defined, argument);
@@ -469,6 +503,18 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             const payload = arguments[0].held() orelse return error.BadIntrinsic;
             try expectType(result, payload);
+        },
+        // Settled above, before the operands were typed.
+        .errored => return error.BadIntrinsic,
+        .forget => {
+            try exactly(arguments, 0);
+            try expectType(result, .none);
+        },
+        .raise_error => {
+            if (!function.fallible) return error.NotFallible;
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .none);
         },
         .own_storage, .drop_storage, .export_storage => {
             try exactly(arguments, 1);
@@ -714,7 +760,9 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             try expectType(arguments[0], .string);
             try expectType(arguments[1], .string);
-            try expectType(result, .boolean);
+            // Answers nothing: a write that did not land is an error
+            // in the channel, not a Bool (docs/FAILURE.md).
+            try expectType(result, .none);
         },
         .file_exists => {
             try exactly(arguments, 1);

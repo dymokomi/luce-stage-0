@@ -46,6 +46,10 @@ fn expectOk(source: []const u8) !void {
                         return error.TestUnexpectedResult;
                     }
                 },
+                .errored => |raised| {
+                    std.debug.print("unexpected error: {s} ({s})\n", .{ raised.message, @tagName(raised.code) });
+                    return error.TestUnexpectedResult;
+                },
                 .trap => |trap| {
                     std.debug.print("unexpected trap: {s} ({s})\n", .{ trap.message, @tagName(trap.code) });
                     return error.TestUnexpectedResult;
@@ -83,6 +87,10 @@ fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
             switch (outcome) {
                 .success => {
                     std.debug.print("expected trap {s}, ran clean\n", .{@tagName(code)});
+                    return error.TestUnexpectedResult;
+                },
+                .errored => |raised| {
+                    std.debug.print("expected trap {s}, got error {s}\n", .{ @tagName(code), @tagName(raised.code) });
                     return error.TestUnexpectedResult;
                 },
                 .trap => |trap| {

@@ -117,6 +117,7 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
         .branch,
         .ret,
         .trap,
+        .unwind,
         => .impure,
     };
 }
@@ -138,6 +139,12 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
 
         // Optionals move no bits and touch no heap: absence is a tag.
         .none_value, .is_none, .optional_wrap, .optional_unwrap => .pure,
+
+        // The error channel is mutable state one instruction writes
+        // and the next reads, so neither may be folded or deleted:
+        // `errored` reads what the call in front of it left, and
+        // `forget` is the whole of what a `catch` does.
+        .errored, .forget, .raise_error => .impure,
 
         // Text.  A String is a value, so these read nothing another
         // instruction can change.  The parsers answer absence rather
@@ -272,6 +279,7 @@ pub fn viewStable(instruction: Instruction) bool {
         .branch,
         .ret,
         .trap,
+        .unwind,
         => true,
 
         // A fresh object appends a row, and the table moves when it
@@ -310,6 +318,10 @@ pub fn viewStable(instruction: Instruction) bool {
             .str_value,
             .assert_true,
             .trap_message,
+            // The error channel is not the object table.
+            .errored,
+            .forget,
+            .raise_error,
             => true,
 
             // Reads of the heap.  Every one of them resolves a handle

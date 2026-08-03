@@ -36,6 +36,7 @@
 
 pub const Error = @import("runtime/heap.zig").Error;
 pub const Trap = @import("runtime/heap.zig").Trap;
+pub const Raised = @import("runtime/heap.zig").Raised;
 pub const Runtime = @import("runtime/heap.zig").Runtime;
 pub const Object = @import("runtime/heap.zig").Object;
 pub const MapEntry = @import("runtime/heap.zig").MapEntry;

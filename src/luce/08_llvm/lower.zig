@@ -224,6 +224,17 @@ fn build(
 
 const Error = error{ OutOfMemory, Unsupported };
 
+/// What a Luce function answers its caller.  The same three numbers
+/// `libluce_rt`'s fallible calls use, plus the one only a Luce call
+/// can give: `2` means it came back **errored** rather than returning,
+/// and its caller either propagates or catches (docs/FAILURE.md).
+/// Internal to the generated module — `internal` linkage, no stability
+/// promise — and distinct from `abi.Status`, which is what `luce_main`
+/// hands the outside world.
+const outcome_ok: u32 = 0;
+const outcome_trapped: u32 = 1;
+const outcome_errored: u32 = 2;
+
 /// One LLVM module under construction, plus the tables that keep the
 /// per-function walks from rebuilding shared things.
 const Module = struct {
@@ -363,6 +374,10 @@ const Module = struct {
                 &.{ .ptr, .i32, .ptr, .i64, .ptr, .i64, .i64 },
                 .normal,
             ),
+            // Never called from here either: `luce_main` hands the
+            // pointer to `luce_rt_report_error`, which is what holds
+            // the error and the one position it carries.
+            .raised => builder.fnType(.void, &.{ .ptr, .i32, .ptr, .i64, .ptr }, .normal),
             .finished => builder.fnType(.void, &.{ .ptr, .i64 }, .normal),
             .file_read => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
             .file_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .i64 }, .normal),
@@ -785,7 +800,7 @@ const Module = struct {
             _ = try self.valueType(function.return_type); // reject before use
             try parameters.append(self.gpa, .ptr);
         }
-        return self.builder.fnType(.i1, parameters.items, .normal);
+        return self.builder.fnType(.i32, parameters.items, .normal);
     }
 
     /// What each of a Luce function's three hidden arguments — and its
@@ -922,7 +937,7 @@ const Module = struct {
         // whether the program unwound.  Both are entry-block `alloca`s
         // that mem2reg promotes straight back to registers.
         const depth_slot = try wip.alloca(.normal, .i64, .none, word, .default, "depth");
-        const trapped_slot = try wip.alloca(.normal, .i32, .none, word, .default, "unwound");
+        const outcome_slot = try wip.alloca(.normal, .i32, .none, word, .default, "outcome");
         _ = try wip.store(
             .normal,
             try self.builder.intValue(.i64, abi.default_call_depth),
@@ -996,7 +1011,12 @@ const Module = struct {
 
         wip.cursor = .{ .block = refused };
         try self.raiseIn(&wip, started, .call_depth_exceeded);
-        _ = try wip.store(.normal, try self.builder.intValue(.i32, 1), trapped_slot, word);
+        _ = try wip.store(
+            .normal,
+            try self.builder.intValue(.i32, outcome_trapped),
+            outcome_slot,
+            word,
+        );
         _ = try wip.br(ending);
 
         wip.cursor = .{ .block = calling };
@@ -1017,35 +1037,51 @@ const Module = struct {
         }
 
         const called = self.functions[self.program.entry_function];
-        _ = try wip.store(.normal, try wip.cast(.zext, try wip.call(
+        _ = try wip.store(.normal, try wip.call(
             .normal,
             Builder.CallConv.default,
             .none,
             called.typeOf(self.builder),
             called.toValue(self.builder),
             arguments.items,
-            "trapped",
-        ), .i32, "trapped.word"), trapped_slot, word);
+            "outcome",
+        ), outcome_slot, word);
         _ = try wip.br(ending);
 
         wip.cursor = .{ .block = ending };
-        const unwound = try wip.load(.normal, .i32, trapped_slot, word, "unwound.word");
+        const outcome = try wip.load(.normal, .i32, outcome_slot, word, "outcome.word");
+        // Three answers, and each one is somebody's to hear: a trap
+        // with its trace, an error with its raise site, a finished run
+        // with its leak census (docs/FAILURE.md).
         const trapped = try wip.icmp(
-            .ne,
-            unwound,
-            try self.builder.intValue(.i32, 0),
+            .eq,
+            outcome,
+            try self.builder.intValue(.i32, outcome_trapped),
             "trapped",
         );
+        const errored = try wip.icmp(
+            .eq,
+            outcome,
+            try self.builder.intValue(.i32, outcome_errored),
+            "errored",
+        );
         try self.reportTrap(&wip, host, context, started, trapped);
+        try self.reportError(&wip, host, context, started, errored);
 
         const status = try self.callService(
             &wip,
             .luce_rt_status,
             .i32,
-            &.{ started, unwound },
+            &.{ started, outcome },
             "status",
         );
-        try self.reportLeaks(&wip, host, context, started, trapped);
+        try self.reportLeaks(
+            &wip,
+            host,
+            context,
+            started,
+            try wip.bin(.@"or", trapped, errored, "no.census"),
+        );
         _ = try self.callService(&wip, .luce_rt_close, .void, &.{started}, "");
         _ = try wip.ret(status);
         try wip.finish();
@@ -1115,9 +1151,35 @@ const Module = struct {
         wip.cursor = .{ .block = quiet };
     }
 
+    /// Hand the host the error nobody caught, once, now that the
+    /// program has stopped.  The same shape as `reportTrap`, and for
+    /// the same reason: the runtime holds what happened and decides
+    /// for itself whether there is anything to say.
+    fn reportError(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        host: Builder.Value,
+        context: Builder.Value,
+        started: Builder.Value,
+        errored: Builder.Value,
+    ) Error!void {
+        const telling = try wip.block(1, "reporting.error");
+        const quiet = try wip.block(2, "reported.error");
+        _ = try wip.brCond(errored, telling, quiet, .else_likely);
+        wip.cursor = .{ .block = telling };
+        const report = try self.loadHostSlot(wip, host, .raised, "raised.fn");
+        _ = try self.callService(wip, .luce_rt_report_error, .void, &.{
+            started,
+            context,
+            report,
+        }, "");
+        _ = try wip.br(quiet);
+        wip.cursor = .{ .block = quiet };
+    }
+
     /// Tell the host what the run did not free, when it has somewhere
-    /// to put it and the run finished.  A trapped run publishes
-    /// nothing, so it reports nothing.
+    /// to put it and the run finished.  A run that trapped or errored
+    /// publishes nothing, so it reports nothing.
     fn reportLeaks(
         self: *Module,
         wip: *Builder.WipFunction,
@@ -1277,6 +1339,12 @@ const Body = struct {
     /// without an `own_storage` in between, and `dropped` refuses text
     /// that arrives at the freeing one anyway.
     boxes: []Builder.Value = &.{},
+    /// The *outcome* each fallible call or intrinsic answered, kept
+    /// beside its value: `2` where it came back errored.  Only the
+    /// `errored` that stands beside it ever reads one, and only in the
+    /// same block, so this is the whole of the error channel on the
+    /// compiled path — no load, no runtime call (docs/CODEGEN.md).
+    outcomes: []Builder.Value = &.{},
     /// One entry-block `alloca` per Luce local.
     local_slots: []Builder.Value = &.{},
     /// The first LLVM block of each IR block.  An IR block that
@@ -1306,6 +1374,7 @@ const Body = struct {
         const gpa = self.module.gpa;
         gpa.free(self.values);
         gpa.free(self.boxes);
+        gpa.free(self.outcomes);
         gpa.free(self.local_slots);
         gpa.free(self.blocks);
         self.views.deinit(gpa);
@@ -1337,6 +1406,8 @@ const Body = struct {
         @memset(self.values, .none);
         self.boxes = try gpa.alloc(Builder.Value, function.instructions.len);
         @memset(self.boxes, .none);
+        self.outcomes = try gpa.alloc(Builder.Value, function.instructions.len);
+        @memset(self.outcomes, .none);
         self.local_slots = try gpa.alloc(Builder.Value, function.locals.len);
         @memset(self.local_slots, .none);
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
@@ -1402,7 +1473,7 @@ const Body = struct {
                     counts[taken.then_block] += 1;
                     counts[taken.else_block] += 1;
                 },
-                .ret, .trap => {},
+                .ret, .trap, .unwind => {},
                 // The verifier guarantees a block ends in a terminator.
                 // Naming the rest keeps a new IR instruction a compile
                 // error here as well as in the lowering switch.
@@ -2832,8 +2903,102 @@ const Body = struct {
         _ = try self.wip.brCond(negative, giving_up, surviving, .else_likely);
         self.seek(giving_up);
         _ = try self.callRuntime(.luce_rt_exhaust, .void, &.{self.runtime}, "");
-        _ = try self.wip.ret(.true);
+        _ = try self.wip.ret(try self.module.builder.intValue(.i32, outcome_trapped));
         self.seek(surviving);
+    }
+
+    /// `file_read`, whose two outcomes do genuinely different things:
+    /// only the side the host said yes on has bytes to intern, and
+    /// reading the out-parameters on the other side would read
+    /// whatever was on the stack.  So the branch comes first and the
+    /// two answers meet in a slot.
+    fn emitFileRead(self: *Body, register: mir.Register, path_register: mir.Register) Error!void {
+        const builder = self.module.builder;
+        const flag = Builder.Alignment.fromByteUnits(4);
+        const path, const path_length = try self.textParts(path_register, "path");
+        const content = try self.hostText("read");
+        const answer = try self.callHost(
+            .file_read,
+            &.{ path, path_length, content.text, content.length },
+            "read",
+        );
+
+        // One box, filled on both sides.  It has to be a whole
+        // `runtime.Value` rather than the register shape because the
+        // text the host handed over may be short enough to live in the
+        // value, and a caller carrying this result across the branch on
+        // its outcome copies the box, not the register
+        // (docs/STRINGS.md).
+        const box = try self.scratch(self.module.value_type, value_alignment, "read.box");
+        const outcome_slot = try self.scratch(.i32, flag, "read.outcome");
+        const failing = try self.wip.block(1, "read.failed");
+        const reading = try self.wip.block(1, "read.ok");
+        const done = try self.wip.block(2, "read.done");
+        _ = try self.wip.brCond(try self.saidNo(answer), failing, reading, .else_likely);
+
+        self.seek(failing);
+        _ = try self.callRuntime(.luce_rt_raise_io, .void, &.{
+            self.runtime,
+            try builder.intValue(.i32, 1),
+            path,
+            path_length,
+            try builder.intValue(.i32, self.index),
+            try builder.intValue(.i32, self.current),
+        }, "");
+        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_errored), outcome_slot, flag);
+        // The `errored` beside this call branches away before anything
+        // reads the value — but the box is still copied into whatever
+        // carries it, so it holds the empty String rather than
+        // whatever was on the stack.
+        try self.fillBoxShape(box, .string);
+        try self.fillBoxValue(box, .string, (try self.module.textConstant("")).toValue());
+        _ = try self.wip.br(done);
+
+        self.seek(reading);
+        const bytes, const size = try content.load(self);
+        try self.callChecked(.luce_rt_intern_text, &.{ self.runtime, bytes, size, box });
+        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_ok), outcome_slot, flag);
+        _ = try self.wip.br(done);
+
+        self.seek(done);
+        self.values[register] = try self.unboxed(.string, box, "read.value");
+        self.boxes[register] = box;
+        self.outcomes[register] = try self.wip.load(.normal, .i32, outcome_slot, flag, "read.outcome");
+    }
+
+    /// A host file service said no: raise the error and answer the
+    /// outcome the `errored` beside the call will branch on.  The
+    /// words are built inside `libluce_rt`, so both engines report the
+    /// same sentence about the same path (docs/FAILURE.md).
+    fn raiseIo(
+        self: *Body,
+        reading: bool,
+        answer: Builder.Value,
+        path: Builder.Value,
+        path_length: Builder.Value,
+    ) Error!Builder.Value {
+        const builder = self.module.builder;
+        const word = Builder.Alignment.fromByteUnits(4);
+        const slot = try self.scratch(.i32, word, "io.outcome");
+        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_ok), slot, word);
+        const raising = try self.wip.block(1, "io.failed");
+        const served = try self.wip.block(2, "io.served");
+        _ = try self.wip.brCond(try self.saidNo(answer), raising, served, .else_likely);
+
+        self.seek(raising);
+        _ = try self.callRuntime(.luce_rt_raise_io, .void, &.{
+            self.runtime,
+            try builder.intValue(.i32, @intFromBool(reading)),
+            path,
+            path_length,
+            try builder.intValue(.i32, self.index),
+            try builder.intValue(.i32, self.current),
+        }, "");
+        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_errored), slot, word);
+        _ = try self.wip.br(served);
+
+        self.seek(served);
+        return self.wip.load(.normal, .i32, slot, word, "io.outcome");
     }
 
     fn saidNo(self: *Body, answer: Builder.Value) Error!Builder.Value {
@@ -2920,7 +3085,35 @@ const Body = struct {
             try self.module.builder.intValue(.i32, self.index),
             try self.module.builder.intValue(.i32, self.current),
         }, "");
-        _ = try self.wip.ret(.true);
+        _ = try self.wip.ret(try self.module.builder.intValue(.i32, outcome_trapped));
+    }
+
+    /// Leave errored: the same edge, and deliberately *without* the
+    /// frame.  An error records where it was raised and nothing else,
+    /// because a return trace costs a hidden parameter, stack in the
+    /// first fallible frame, and a save/restore protocol on the
+    /// success path — a price on code that never fails, which
+    /// docs/MODES.md forbids (docs/FAILURE.md).
+    ///
+    /// **`%out` is emptied on the way, and that is part of the
+    /// convention.**  A caller carries a fallible call's result across
+    /// the branch on its outcome, and the store that carries it stands
+    /// *before* the branch — so it runs on this path too, and would
+    /// otherwise copy whatever the slot happened to hold.  Emptying
+    /// here rather than initializing at the call site puts the whole
+    /// cost on the path that already failed: the interpreter's answer
+    /// is the same, because a destination register it never wrote is
+    /// still the `.none` its frame started at.
+    fn leaveErrored(self: *Body) Error!void {
+        if (self.result_slot != .none) {
+            _ = try self.wip.store(
+                .normal,
+                try self.emptyValue(self.function.return_type),
+                self.result_slot,
+                Module.valueAlignment(self.function.return_type),
+            );
+        }
+        _ = try self.wip.ret(try self.module.builder.intValue(.i32, outcome_errored));
     }
 
     /// The trap the interpreter raises for `code`, with its standard
@@ -3063,9 +3256,10 @@ const Body = struct {
                         Module.valueAlignment(self.function.return_type),
                     );
                 }
-                _ = try self.wip.ret(.false);
+                _ = try self.wip.ret(try self.module.builder.intValue(.i32, outcome_ok));
             },
             .trap => |code| try self.emitCodeTrap(code),
+            .unwind => try self.leaveErrored(),
         }
     }
 
@@ -3481,16 +3675,26 @@ const Body = struct {
             try arguments.append(gpa, result_slot);
         }
 
-        const trapped = try self.wip.call(
+        const outcome = try self.wip.call(
             .normal,
             Builder.CallConv.default,
             .none,
             target.typeOf(self.module.builder),
             target.toValue(self.module.builder),
             arguments.items,
-            "trapped",
+            "outcome",
         );
-        try self.propagate(trapped);
+        if (self.module.program.functions[called.function].fallible) {
+            try self.propagateTrapOnly(outcome);
+            self.outcomes[register] = outcome;
+        } else {
+            try self.propagate(try self.wip.icmp(
+                .ne,
+                outcome,
+                try self.module.builder.intValue(.i32, outcome_ok),
+                "trapped",
+            ));
+        }
 
         if (result != .none) {
             self.values[register] = try self.wip.load(
@@ -3503,8 +3707,9 @@ const Body = struct {
         }
     }
 
-    /// `if (trapped) return true` — the unwind edge after a call, and
-    /// where this frame joins the trace on the way out.
+    /// `if (trapped) return trapped` — the unwind edge after a call
+    /// that cannot error, and where this frame joins the trace on the
+    /// way out.
     fn propagate(self: *Body, trapped: Builder.Value) Error!void {
         const unwinding = try self.wip.block(1, "unwind");
         const surviving = try self.wip.block(1, "returned");
@@ -3512,6 +3717,20 @@ const Body = struct {
         self.seek(unwinding);
         try self.leaveUnwinding();
         self.seek(surviving);
+    }
+
+    /// The same edge after a call that *can* error: a trap still
+    /// leaves immediately, an error falls through with its outcome in
+    /// hand for the `errored` beside it to branch on.  Two answers in
+    /// one word, which is why the flag is an `i32` and not a bit.
+    fn propagateTrapOnly(self: *Body, outcome: Builder.Value) Error!void {
+        const trapped = try self.wip.icmp(
+            .eq,
+            outcome,
+            try self.module.builder.intValue(.i32, outcome_trapped),
+            "rt.trapped",
+        );
+        try self.propagate(trapped);
     }
 
     /// The box `drop_storage` gives back — **the place itself**, not a
@@ -3601,6 +3820,40 @@ const Body = struct {
                 rt,
                 try self.storageOf(of[0]),
             }),
+
+            // -- errors -----------------------------------------------
+            //
+            // The channel is the outcome word the call beside it
+            // answered, so asking costs a compare and nothing else.
+            .errored => {
+                const outcome = self.outcomes[of[0]];
+                if (outcome == .none) return self.fail("errored without a fallible call in its block");
+                self.values[register] = try self.wip.icmp(
+                    .eq,
+                    outcome,
+                    try self.module.builder.intValue(.i32, outcome_errored),
+                    "errored",
+                );
+            },
+            .forget => {
+                _ = try self.callRuntime(.luce_rt_forget_error, .void, &.{rt}, "");
+            },
+            .raise_error => {
+                // The pointer this hands over may address *this frame*:
+                // short text lives in the value it was read out of
+                // (docs/STRINGS.md).  Sound only because `raise` copies
+                // before it returns, which it must anyway — the unwind
+                // that follows releases what the words were read from.
+                const words, const length = try self.textParts(of[0], "words");
+                _ = try self.callRuntime(.luce_rt_raise_error, .void, &.{
+                    rt,
+                    try self.module.builder.intValue(.i32, @intFromEnum(mir.ErrorCode.user_error)),
+                    words,
+                    length,
+                    try self.module.builder.intValue(.i32, self.index),
+                    try self.module.builder.intValue(.i32, self.current),
+                }, "");
+            },
 
             // -- scalar math, generated here --------------------------
             .abs => switch (try self.numeric(of[0])) {
@@ -3936,18 +4189,12 @@ const Body = struct {
             }),
 
             // -- the rest of the host services ------------------------
-            .file_read => {
-                const path, const path_length = try self.textParts(of[0], "path");
-                const content = try self.hostText("read");
-                const answer = try self.callHost(
-                    .file_read,
-                    &.{ path, path_length, content.text, content.length },
-                    "read",
-                );
-                try self.check(try self.saidNo(answer), .file_read_failed);
-                const bytes, const size = try content.load(self);
-                try self.callAnswering(register, .luce_rt_intern_text, &.{ rt, bytes, size });
-            },
+            // A file the world would not read or write is an error
+            // and not a trap: `file_exists` in front of it is a race,
+            // which is the proof a guard cannot stand in for a result
+            // (docs/FAILURE.md).  Both answer an outcome the `errored`
+            // beside them branches on.
+            .file_read => try self.emitFileRead(register, of[0]),
             .file_write => {
                 const path, const path_length = try self.textParts(of[0], "path");
                 const content, const content_length = try self.textParts(of[1], "content");
@@ -3956,7 +4203,7 @@ const Body = struct {
                     &.{ path, path_length, content, content_length },
                     "wrote",
                 );
-                self.values[register] = try self.saidYes(answer);
+                self.outcomes[register] = try self.raiseIo(false, answer, path, path_length);
             },
             .file_exists => {
                 const path, const path_length = try self.textParts(of[0], "path");

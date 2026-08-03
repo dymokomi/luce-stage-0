@@ -60,6 +60,21 @@ pub const Trap = struct {
     dropped: u32 = 0,
 };
 
+/// An uncaught error: the program said `-> !` and nothing caught what
+/// it raised (docs/FAILURE.md).  Not a trap — nothing about the
+/// program is wrong — so it carries news rather than a diagnosis: a
+/// code from a closed set of two, the words, and the one position it
+/// records, the place it was raised.
+pub const Raised = struct {
+    code: mir.ErrorCode,
+    /// Arena-owned or static; valid until the evaluation arena frees.
+    message: []const u8,
+    /// Where `error(…)` was written, or where the host said no.  A
+    /// stripped (--release) module reports line 0 and still names the
+    /// function, exactly as a trap's frames do.
+    origin: TraceFrame,
+};
+
 pub const Success = struct {
     /// Heap objects still alive when the program returned — memory is
     /// explicit in Luce, so the host reports what was not freed.
@@ -71,6 +86,9 @@ pub const Result = union(enum) {
     success: Success,
     /// The evaluator failed; the output frame must not be published.
     trap: Trap,
+    /// The program ended with an uncaught error.  The output frame
+    /// must not be published either: `main` did not finish.
+    errored: Raised,
     /// An input the program reads was unavailable; nothing ran.
     unavailable,
 };

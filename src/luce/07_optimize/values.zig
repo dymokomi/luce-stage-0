@@ -227,6 +227,7 @@ fn encode(
         .branch,
         .ret,
         .trap,
+        .unwind,
         => unreachable,
     }
 }

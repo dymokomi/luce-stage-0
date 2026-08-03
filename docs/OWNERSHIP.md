@@ -63,18 +63,26 @@ outermost statement containing the expression."
 
 **S4. Early exits unwind scopes.**
 ```luce
-func first_line(path: String) -> String:
-    if not file_exists(path):
-        return ""             # nothing allocated yet — fine
-    var lines = file_read(path).split("\n")
+func first_line(path: String) -> String!:
+    var lines = (try file_read(path)).split("\n")   # `try` is one too
     if len(lines) == 0:
         return ""             # lines is freed on the way out
     return copy lines[0]      # (S22: element out via copy — String is
                               # a value, so plain `return lines[0]` is
                               # fine here; shown for shape only)
 ```
-Decision: `return`, `break`, and `continue` free what the scopes they
-exit still own.  No single-exit contortions, ever.
+Decision: `return`, `break`, `continue` — and `try`, which arrived
+with errors — free what the scopes they exit still own.  No
+single-exit contortions, ever.
+
+`try` is the fourth of them and needed no fifth rule: it emits the
+same three lines `return` does — release the temporaries, release the
+scopes innermost first, terminate — with one terminator changed
+(docs/FAILURE.md).  The one difference is what it *keeps*: `return`
+passes the returned binding as moved and skips freeing it, and `try`
+passes nothing, because it hands back no value.  That one bit is the
+whole of what Zig spells `errdefer`, and it was already a parameter of
+this unwinder.
 
 **S5. Reassigning an owning `var` frees the old object immediately.**
 ```luce
@@ -610,6 +618,20 @@ rules.**
   this document changed when `T?` arrived, which is the strongest
   thing that can be said about it.
 
+**Errors, as they shipped** (docs/FAILURE.md, docs/LANGUAGE.md).
+Nothing in this document changed for them either, and the reason is
+S4: the unwinder was already static, already emitted at compile time,
+and already knew the one thing an error path needs to know.  What a
+`try` releases is what a `return` on the same line would release.  The
+two shapes that did have to be settled were both about *where*, not
+*what*.  A fallible call's value crosses the branch on its outcome
+through a hidden slot, and that slot is the one that **owns** it (S3):
+one place rather than two, with the statement's temporary recorded on
+the returning side, so the failing side never releases what it never
+stored.  And one value is parked once, because `try f()` hands back
+what `f()` produced and two hidden locals claiming one String's bytes
+free them twice.
+
 **Optionals, as they shipped** (docs/FAILURE.md, docs/LANGUAGE.md).
 When absence is part of a *contract* — `parse_int(s)` on text that is
 not a number — the answer is a distinct type, not implicit
@@ -637,6 +659,13 @@ not the program).
 trap, teardown reclaims everything regardless of ownership state —
 whatever the unwind never released, the runtime releases when the run
 ends — and publish-nothing-on-failure is unchanged.
+
+An **error** is the other case and gets no such safety net, because it
+does not end the run: a `catch` resumes with the program still going.
+So error propagation releases precisely, the way `return` does (S4),
+and never the way a trap does.  The leak census is what proves it —
+`agree` compares it after a caught error, and a frame that forgot
+something would show up there as a number.
 
 **S35. File scope owns nothing, so a constant is a value.**  The three
 owner kinds in S33 are a binding, a container, and the statement

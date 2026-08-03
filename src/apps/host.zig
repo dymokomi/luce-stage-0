@@ -68,6 +68,13 @@ pub const Host = struct {
     trace_storage: [trace_text_bytes]u8 = undefined,
     trace_used: usize = 0,
     leaked: ?i64 = null,
+    /// What a compiled artifact raised and nobody caught, if it did.
+    /// One position and not a trace, which is the whole of what an
+    /// error carries (docs/FAILURE.md).
+    error_code: ?luce.mir.ErrorCode = null,
+    error_storage: [512]u8 = undefined,
+    error_length: usize = 0,
+    error_origin: Reported.Frame = .{ .function = "", .source = "", .line = 0, .column = 0 },
 
     pub fn setup(
         self: *Host,
@@ -91,6 +98,22 @@ pub const Host = struct {
         self.loaded_file.deinit(self.gpa);
         self.* = undefined;
     }
+
+    /// The error a compiled artifact reported, if it did.  Borrowed
+    /// from this Host and valid until the next run.
+    pub fn reportedError(self: *const Host) ?Raised {
+        return .{
+            .code = self.error_code orelse return null,
+            .message = self.error_storage[0..self.error_length],
+            .origin = self.error_origin,
+        };
+    }
+
+    pub const Raised = struct {
+        code: luce.mir.ErrorCode,
+        message: []const u8,
+        origin: Reported.Frame,
+    };
 
     /// The trap a compiled artifact reported, if it did.  The words are
     /// borrowed from this Host and last until the next run.
@@ -169,6 +192,7 @@ pub const Host = struct {
             .term_flush = cTermFlush,
             .key_read = cKeyRead,
             .call_depth = cCallDepth,
+            .raised = cRaised,
         };
     }
 
@@ -455,6 +479,32 @@ pub const Host = struct {
         }
     }
 
+    fn cRaised(
+        context: ?*anyopaque,
+        code: i32,
+        message: [*]const u8,
+        message_length: i64,
+        origin: *const abi.TraceFrame,
+    ) callconv(.c) void {
+        const self = of(context);
+        const words = message[0..@intCast(message_length)];
+        const kept = @min(words.len, self.error_storage.len);
+        self.error_code = @enumFromInt(code);
+        @memcpy(self.error_storage[0..kept], words[0..kept]);
+        self.error_length = kept;
+        // The names come out of the artifact's constant data and are
+        // borrowed for this call only, so they are copied like a
+        // trap's — into the same pool, which nothing else is using
+        // because a run ends one way or the other.
+        self.trace_used = 0;
+        self.error_origin = .{
+            .function = self.keepText(origin.function[0..@intCast(origin.function_length)]) orelse "",
+            .source = self.keepText(origin.source[0..@intCast(origin.source_length)]) orelse "",
+            .line = origin.line,
+            .column = origin.column,
+        };
+    }
+
     /// Copy borrowed trace text into this Host, or answer null when
     /// the pool is full — a frame nobody can name is a frame dropped,
     /// never a truncated name.
@@ -630,6 +680,32 @@ pub fn printTrap(
     }
     const hidden = dropped + @as(u32, @intCast(trace.len -| max_printed_frames));
     if (hidden != 0) err.print("    ... {d} more frames\n", .{hidden}) catch {};
+}
+
+/// Report an uncaught error, in the one shape both engines produce.
+///
+/// **Not "trap", and it does not print a stack.**  A trap is a bug and
+/// the stack is its diagnosis; an error is news, and the news is what
+/// the world said and where the program asked it (docs/FAILURE.md).
+/// `origin` carries `function`, `source`, `line` and `column` — the
+/// interpreter's frame and the ABI's are the same four facts in two
+/// structs, so this takes either.
+pub fn printError(
+    err: *std.Io.Writer,
+    reporter: []const u8,
+    code: []const u8,
+    message: []const u8,
+    origin: anytype,
+) void {
+    err.print("{s}: error: {s} [{s}]\n", .{ reporter, message, code }) catch {};
+    if (origin.function.len == 0) return;
+    if (origin.line != 0) {
+        err.print("    raised in {s} ({s}:{d}:{d})\n", .{
+            origin.function, origin.source, origin.line, origin.column,
+        }) catch {};
+    } else {
+        err.print("    raised in {s}\n", .{origin.function}) catch {};
+    }
 }
 
 /// The one thing to say about a run that ended without trapping.

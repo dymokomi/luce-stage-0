@@ -21,6 +21,7 @@ const semantics = @import("../04_semantics.zig");
 const testing = std.testing;
 
 const script: types.CompileOptions = .{ .entry_mode = .script };
+const hosted: types.CompileOptions = .{ .entry_mode = .script, .allow_host = true };
 const evaluator: types.CompileOptions = .{ .entry_mode = .evaluator };
 
 const Diagnostics = @import("../support/diagnostics.zig").Diagnostics;
@@ -478,6 +479,12 @@ const point_schema: types.PortSchema = .{
     },
 };
 
+/// The same, for a program that reaches the host: every file builtin
+/// does, and so does the standard `files` module.
+fn expectHostError(source: []const u8, code: []const u8) !void {
+    try expectErrorOptions(source, .{}, hosted, code);
+}
+
 fn expectEvalError(source: []const u8, code: []const u8) !void {
     try expectErrorOptions(source, point_schema, evaluator, code);
 }
@@ -515,14 +522,16 @@ test "luce.lex.escape: an unknown escape is pinned to the backslash" {
     try expectErrorAt("func main():\n    let a = \"\\q\"\n", "luce.lex.escape", 2, 14);
 }
 
-test "luce.lex.character: '!' alone is rejected in favor of 'not'" {
+test "luce.parse.expression: '!' is not an operator, in either position" {
     // `not` binds tighter than a comparison, so `not a == 1` is
     // `(not a) == 1` and refused at the parser rather than left to
     // become a type error (docs/LANGUAGE.md); parenthesized, the same
     // spelling reaches the type checker it always did.
     try expectError("func main():\n    let a = 1\n    if not a == 1:\n        return\n", "luce.parse.precedence");
     try expectError("func main():\n    let a = 1\n    if (not a) == 1:\n        return\n", "luce.sema.type");
-    try expectError("func main():\n    let a = 3 ! 4\n", "luce.lex.character");
+    // `!` lexes now — it is the fallibility mark on a return type —
+    // so the hint toward `not` moved to the parser with it.
+    try expectError("func main():\n    let a = 3 ! 4\n", "luce.parse.expression");
 }
 
 test "luce.lex.character: an unexpected symbol is rejected" {
@@ -1683,4 +1692,110 @@ test "luce.sema.output: output ports are write-only" {
         \\    let a = output.x
         \\
     , "luce.sema.output");
+}
+
+// ---------------------------------------------------------------------------
+// Failure: luce.sema.fallible
+// ---------------------------------------------------------------------------
+
+test "luce.sema.fallible: a call that can fail must say try or catch" {
+    // The whole point of the diagnostic, and the shape the live bug in
+    // `dice.luc` had: a fallible call written as if it could not fail
+    // (docs/FAILURE.md).
+    try expectHostError(
+        \\func main():
+        \\    file_write("out.txt", "body")
+        \\
+    , "luce.sema.fallible");
+    try expectHostError(
+        \\import std.files
+        \\
+        \\func main():
+        \\    let text = files.read("notes.txt")
+        \\
+    , "luce.sema.fallible");
+}
+
+test "luce.sema.fallible: try needs a caller that said it can fail" {
+    try expectHostError(
+        \\func main():
+        \\    let text = try file_read("notes.txt")
+        \\
+    , "luce.sema.fallible");
+}
+
+test "luce.sema.fallible: try and catch need a call that can fail" {
+    try expectHostError(
+        \\func main() -> !:
+        \\    let n = try len("abc")
+        \\
+    , "luce.sema.fallible");
+    try expectHostError(
+        \\func main() -> !:
+        \\    let n = len("abc") catch 0
+        \\
+    , "luce.sema.fallible");
+    try expectHostError(
+        \\func main() -> !:
+        \\    print("hi") catch:
+        \\        print("no")
+        \\
+    , "luce.sema.fallible");
+}
+
+test "luce.sema.fallible: error() needs a caller that said it can fail" {
+    try expectError(
+        \\func main():
+        \\    error("no")
+        \\
+    , "luce.sema.fallible");
+}
+
+test "luce.sema.call: a fallible builtin that answers nothing has nothing to test" {
+    // What `if files.write_lines(...)` became.  There is no Bool left
+    // to swallow, so the mistake is unwritable rather than silent.
+    try expectHostError(
+        \\func main() -> !:
+        \\    if try file_write("out.txt", "body"):
+        \\        print("wrote")
+        \\
+    , "luce.sema.call");
+}
+
+test "luce.sema.own: the two sides of catch agree on ownership" {
+    try expectHostError(
+        \\func load(path: String) -> List(String)!:
+        \\    let lines = new List(String)
+        \\    lines.append(try file_read(path))
+        \\    return lines
+        \\
+        \\func main():
+        \\    let kept = new List(String)
+        \\    let got = load("notes.txt") catch kept
+        \\    free(kept)
+        \\
+    , "luce.sema.own");
+}
+
+test "luce.parse.expected: catch guards a plain assignment, not a compound one" {
+    try expectHostError(
+        \\func main():
+        \\    var text = ""
+        \\    text += file_read("notes.txt") catch:
+        \\        print("no")
+        \\
+    , "luce.parse.expected");
+}
+
+test "luce.sema.main: a script entry may say ! and nothing else" {
+    try expectError(
+        \\func main() -> Int!:
+        \\    return 1
+        \\
+    , "luce.sema.main");
+    try expectEvalError(
+        \\func evaluate(input: Input, output: Output) -> !:
+        \\    output.x = 1.0
+        \\
+    , "luce.sema.evaluate");
 }

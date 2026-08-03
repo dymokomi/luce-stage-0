@@ -37,6 +37,25 @@ pub const Trap = struct {
     message: []const u8,
 };
 
+/// A Luce error: a stable code from a closed set of two, the words it
+/// carries, and where it was raised (docs/FAILURE.md).
+///
+/// **One frame, not a trace.**  An error return trace would cost an
+/// extra hidden parameter, stack in the first fallible frame, and a
+/// save/restore protocol on the *success* path, because a caught error
+/// has to pop what it collected — a cost on code that never fails,
+/// which docs/MODES.md forbids.  So the raise site is recorded once,
+/// at the raise, and nothing else is.  Traps keep their full trace.
+///
+/// The message is arena-owned and outlives every release the unwind
+/// skips, exactly as a trap's words do; `origin` borrows names from
+/// the program or the artifact's constant data.
+pub const Raised = struct {
+    code: mir.ErrorCode,
+    message: []const u8,
+    origin: trace.Frame,
+};
+
 pub const MapEntry = struct { key: Value, value: Value };
 
 /// Where a run's memory comes from.  Luce has two kinds of data with
@@ -554,6 +573,19 @@ pub const Runtime = struct {
     /// no per-operation outcome plumbing.
     pending: ?Trap = null,
 
+    /// The error a `try`-able call left behind, or null when the last
+    /// one returned.  Separate from `pending` because the two are
+    /// different acts: a trap ends the program, an error is news a
+    /// caller may `catch` — and only one of them is ever set, because
+    /// an error that is not caught unwinds without running any code
+    /// that could trap.
+    ///
+    /// This is the whole of the error channel on the interpreter.
+    /// Compiled code carries the *outcome* in the value a Luce
+    /// function returns and reads this only for the words
+    /// (docs/CODEGEN.md).
+    raised: ?Raised = null,
+
     /// Set when the arena gave up.  A C caller cannot see
     /// `error.OutOfMemory`, so the exports record it here and the
     /// entry wrapper turns it into a distinct status.
@@ -665,6 +697,95 @@ pub const Runtime = struct {
         return error.Trap;
     }
 
+    // -- the error channel -------------------------------------------------
+    //
+    // Errors are news, not bugs (docs/FAILURE.md), so unlike a trap
+    // they do not end the run: they wait here until the frame that
+    // asked propagates them or a `catch` forgets them.
+
+    /// Record an error raised at `origin`.
+    ///
+    /// **The words are copied here, and that is not optional.**  An
+    /// error unwinds *through* releases — that is the whole difference
+    /// from a trap, which unwinds past them — so `error("x: " + str(n))`
+    /// hands over bytes a statement temporary is about to give back.
+    /// The copy goes in the values arena, which nothing releases and
+    /// the run drops whole.  An arena that cannot hold it falls back
+    /// to the code's own words rather than losing the error.
+    pub fn raise(
+        self: *Runtime,
+        code: mir.ErrorCode,
+        message: []const u8,
+        origin: trace.Frame,
+    ) void {
+        const words = self.arena.dupe(u8, message) catch code.message();
+        self.raised = .{ .code = code, .message = words, .origin = origin };
+    }
+
+    /// The error a host file service's `no` becomes.  The words name
+    /// the path, because "the file operation failed" without saying
+    /// which file is a message that helps nobody — and they are built
+    /// here, once, so both engines report the same sentence.  An arena
+    /// that cannot hold them falls back to the code's own words rather
+    /// than losing the error.
+    pub fn raiseIo(
+        self: *Runtime,
+        reading: bool,
+        path: []const u8,
+        origin: trace.Frame,
+    ) void {
+        const verb = if (reading) "cannot read " else "cannot write ";
+        // Built in the arena already, so it skips `raise`'s copy.
+        const words = std.fmt.allocPrint(self.arena, "{s}{s}", .{ verb, path }) catch {
+            self.raised = .{
+                .code = .io_failed,
+                .message = mir.ErrorCode.io_failed.message(),
+                .origin = origin,
+            };
+            return;
+        };
+        self.raised = .{ .code = .io_failed, .message = words, .origin = origin };
+    }
+
+    /// `catch`: the error is handled, so the channel is empty again.
+    /// The words go back with the arena at the end of the run; there
+    /// is nothing to free here and nothing that outlives it.
+    pub fn forget(self: *Runtime) void {
+        self.raised = null;
+    }
+
+    /// Where instruction `instruction` of function `function` was
+    /// written, resolved through the artifact's own tables.  A caller
+    /// with no tables — the interpreter, which reads the program it is
+    /// walking — builds its frames itself and never comes here.
+    pub fn frameAt(self: *const Runtime, function: u32, instruction: u32) trace.Frame {
+        if (function >= self.functions.len) return .{
+            .function = "".ptr,
+            .function_length = 0,
+            .source = "".ptr,
+            .source_length = 0,
+            .line = 0,
+            .column = 0,
+        };
+        const info = self.functions[function];
+        var line: u32 = 0;
+        var column: u32 = 0;
+        if (info.origins) |origins| {
+            if (instruction < info.origin_count) {
+                line = origins[instruction].line;
+                column = origins[instruction].column;
+            }
+        }
+        return .{
+            .function = info.name,
+            .function_length = info.name_length,
+            .source = info.source,
+            .source_length = info.source_length,
+            .line = line,
+            .column = column,
+        };
+    }
+
     // -- the unwind trace --------------------------------------------------
 
     /// Record one frame of a trapped compiled program's call stack:
@@ -682,23 +803,7 @@ pub const Runtime = struct {
             self.dropped_frames +|= 1;
             return;
         }
-        const info = self.functions[function];
-        var line: u32 = 0;
-        var column: u32 = 0;
-        if (info.origins) |origins| {
-            if (instruction < info.origin_count) {
-                line = origins[instruction].line;
-                column = origins[instruction].column;
-            }
-        }
-        self.unwound.append(self.objects, .{
-            .function = info.name,
-            .function_length = info.name_length,
-            .source = info.source,
-            .source_length = info.source_length,
-            .line = line,
-            .column = column,
-        }) catch {
+        self.unwound.append(self.objects, self.frameAt(function, instruction)) catch {
             self.dropped_frames +|= 1;
         };
     }

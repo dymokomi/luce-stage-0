@@ -543,6 +543,14 @@ fn runLoaded(
             host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
             return 1;
         },
+        .errored => {
+            const raised = services.reportedError() orelse {
+                try err.print("loom: the program failed and said nothing\n", .{});
+                return 1;
+            };
+            host_mod.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
+            return 1;
+        },
         .exhausted => {
             try err.print("loom: out of memory\n", .{});
             return 1;
@@ -597,6 +605,10 @@ fn runInterpreted(
         },
         .trap => |trap| {
             host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
+            return 1;
+        },
+        .errored => |raised| {
+            host_mod.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
             return 1;
         },
         .unavailable => {

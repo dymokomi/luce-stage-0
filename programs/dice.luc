@@ -14,7 +14,7 @@ import std.strings
 func bar(count: Int) -> String:
     return "#".repeat(count)
 
-func main():
+func main() -> !:
     var seed = 2026
     var count = 20
     if arg_count() > 0:
@@ -38,5 +38,5 @@ func main():
     for face in range(1, 7):
         print(f"{face}: " + bar(histogram[face]))
 
-    if files.write_lines("dice_rolls.txt", rolls):
-        print("rolls written to dice_rolls.txt")
+    try files.write_lines("dice_rolls.txt", rolls)
+    print("rolls written to dice_rolls.txt")

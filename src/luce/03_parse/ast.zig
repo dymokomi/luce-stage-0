@@ -49,6 +49,11 @@ pub const BinaryOp = enum {
     /// "otherwise" without ambiguity and no new token is needed
     /// (docs/FAILURE.md).
     coalesce,
+    /// `a catch b` — the value of `a` when the call succeeded, `b`
+    /// when it raised.  A different act from `else`, and so a
+    /// different word: `catch` discards a reason on purpose, and is
+    /// greppable for it (docs/FAILURE.md).
+    catch_error,
 };
 
 pub const UnaryOp = enum { negate, logic_not };
@@ -80,6 +85,7 @@ pub const Method = struct { target: *Expression, name: []const u8, arguments: []
 pub const Give = struct { operand: *Expression, span: Span };
 pub const Copy = struct { operand: *Expression, span: Span };
 pub const NoneLiteral = struct { span: Span };
+pub const Try = struct { operand: *Expression, span: Span };
 
 pub const Expression = union(enum) {
     int_literal: Literal,
@@ -112,6 +118,9 @@ pub const Expression = union(enum) {
     give: Give,
     /// copy x — a deep, independent duplicate (S31).
     copy: Copy,
+    /// try CALL — hand the caller whatever the call raised, releasing
+    /// what this frame owns on the way out (docs/FAILURE.md).
+    try_call: Try,
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {
@@ -183,6 +192,18 @@ pub const ForEach = struct {
     span: Span,
 };
 pub const Return = struct { value: ?*Expression, span: Span };
+/// A statement and an indented handler that runs where the one call
+/// in it raised — the statement form of `catch`, for a recovery that
+/// is more than one expression.
+///
+/// Two shapes reach here and no others: a call written as a
+/// statement, and a plain assignment whose value is a call.  Both
+/// guard exactly *one* call, so "which statement failed" has one
+/// answer — which is what separates this from the Python
+/// `try:`/`except:` block docs/FAILURE.md refuses.  A `let` is not
+/// among them: the handler would have to supply the value the name
+/// binds, and only `catch EXPR` can say that.
+pub const Guarded = struct { attempt: *Statement, handler: Block, span: Span };
 pub const Marker = struct { span: Span };
 pub const ExpressionStatement = struct { value: *Expression, span: Span };
 
@@ -201,6 +222,8 @@ pub const Statement = union(enum) {
     break_statement: Marker,
     continue_statement: Marker,
     expression: ExpressionStatement,
+    /// call catch: — the handler runs only where the call raised.
+    guarded: Guarded,
 
     pub fn span(self: *const Statement) Span {
         return switch (self.*) {
@@ -248,6 +271,11 @@ pub const FuncDecl = struct {
     name: []const u8,
     parameters: []Parameter,
     return_type: ?TypeName,
+    /// Written `-> T!` or `-> !`.  Fallibility is an attribute of the
+    /// function, never part of `return_type`: there is no `T!` type
+    /// to resolve, so nothing downstream of here grows a case for one
+    /// (docs/FAILURE.md).
+    fallible: bool = false,
     body: Block,
     span: Span,
 };

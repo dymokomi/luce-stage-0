@@ -559,12 +559,12 @@ test "host builtins fail closed without a host" {
 
 test "print, arguments, and files flow through the host" {
     var bench = try Bench.setup(
-        \\func main():
+        \\func main() -> !:
         \\    print("args: " + Int_to_text(arg_count()))
         \\    let path = arg(0)
         \\    if file_exists(path):
-        \\        print(file_read(path))
-        \\    assert(file_write("out.txt", "saved"))
+        \\        print(try file_read(path))
+        \\    try file_write("out.txt", "saved")
         \\
         \\func Int_to_text(value: Int) -> String:
         \\    if value == 0:
@@ -597,15 +597,15 @@ test "std files wraps the host builtins faithfully" {
     var bench = try Bench.setup(
         \\import std.files
         \\
-        \\func main():
+        \\func main() -> !:
         \\    assert(files.exists("notes.txt"))
         \\    assert(not files.exists("ghost.txt"))
-        \\    var lines = files.read_lines("notes.txt")
+        \\    var lines = try files.read_lines("notes.txt")
         \\    assert(len(lines) == 2)
         \\    assert(lines[0] == "alpha" and lines[1] == "beta")
         \\    lines.append("gamma")
-        \\    assert(files.write_lines("out.txt", lines))
-        \\    assert(files.write("plain.txt", files.read("notes.txt")))
+        \\    try files.write_lines("out.txt", lines)
+        \\    try files.write("plain.txt", try files.read("notes.txt"))
         \\
     , .{}, hosted_options);
     defer bench.deinit();
@@ -622,11 +622,14 @@ test "std files wraps the host builtins faithfully" {
     try testing.expectEqualStrings("alpha\nbeta\n", host.written_content.items);
 }
 
-test "argument reads out of range trap and failed writes report false" {
+test "an argument out of range traps, and a refused write is an error" {
+    // The two failures a host can hand back, and the line between
+    // them: an index no argument could have is the program's mistake,
+    // and a write the world would not take is not (docs/FAILURE.md).
     var bench = try Bench.setup(
         \\func main():
-        \\    if file_write("out.txt", "ignored"):
-        \\        print("wrote")
+        \\    file_write("out.txt", "ignored") catch:
+        \\        print("refused")
         \\    let missing = arg(5)
         \\
     , .{}, hosted_options);
@@ -636,7 +639,55 @@ test "argument reads out of range trap and failed writes report false" {
     defer host.deinit();
     const result = try bench.evaluateHosted(&.{}, host.host());
     try testing.expectEqual(mir.TrapCode.argument_bounds, result.trap.code);
-    try testing.expectEqualStrings("", host.printed.items);
+    try testing.expectEqualStrings("refused\n", host.printed.items);
+}
+
+test "an uncaught error names its code, its words, and where it was raised" {
+    var bench = try Bench.setup(
+        \\func save(path: String) -> !:
+        \\    try file_write(path, "body")
+        \\
+        \\func main() -> !:
+        \\    print("before")
+        \\    try save("out.txt")
+        \\    print("never")
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{ .fail_write = true };
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expectEqual(mir.ErrorCode.io_failed, result.errored.code);
+    try testing.expectEqualStrings("cannot write out.txt", result.errored.message);
+    // One position, and it is the raise site rather than a stack: the
+    // `try file_write` inside `save`, not the `try save` in `main`.
+    try testing.expectEqualStrings("save", result.errored.origin.function);
+    try testing.expect(result.errored.origin.line != 0);
+    try testing.expectEqualStrings("before\n", host.printed.items);
+}
+
+test "error() raises the program's own words, and catch discards them" {
+    var bench = try Bench.setup(
+        \\func check(n: Int) -> Int!:
+        \\    if n < 0:
+        \\        error("negative: " + str(n))
+        \\    return n
+        \\
+        \\func main() -> !:
+        \\    print(str(check(-1) catch 0))
+        \\    print(str(try check(7)))
+        \\    print(str(try check(-2)))
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{};
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expectEqual(mir.ErrorCode.user_error, result.errored.code);
+    try testing.expectEqualStrings("negative: -2", result.errored.message);
+    try testing.expectEqualStrings("0\n7\n", host.printed.items);
 }
 
 test "terminal builtins drive the host screen and key queue" {

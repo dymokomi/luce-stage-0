@@ -7,12 +7,11 @@ wins and it is said so.
 
 ## Scorecard
 
-The **language surface is close to done.**  Ten conceptual stages,
-eight folders, four executable specs, stages 1 and 2 marked *Locked*,
-and a front end whose diagnostics name the fix rather than the parser's
-predicament, and `T?` closed the absence half of the last semantic
-hole.  What is designed but unbuilt is errors, and `docs/FAILURE.md`
-answers it in full.
+The **language surface is done.**  Ten conceptual stages, eight
+folders, four executable specs, stages 1 and 2 marked *Locked*, and a
+front end whose diagnostics name the fix rather than the parser's
+predicament.  `T?` closed the absence half of the last semantic hole
+and `T!` closed the failure half; nothing designed is now unbuilt.
 
 The **runtime is not done**, but the wall is down.  Tier 0 held two
 items, both properties of what existed rather than missing features,
@@ -105,7 +104,7 @@ does not pre-warm the bundled programs.
 
 ---
 
-## Tier 1 — half the semantic hole is shipped; errors are what is left
+## Tier 1 — ~~the semantic hole~~ — **closed**
 
 **Optionals are done, on both engines.**  `T?`, `none`, narrowing and
 `else` run on the interpreter and lower to `{T, i1}` through LLVM, so a
@@ -116,29 +115,52 @@ calls them runs as native code.  What the lowering cost that
 docs/CODEGEN.md: the null handle cannot stand in for absence, because
 it already names a value that is *there*.
 
-**Errors (`T!`) are what remains.**  `docs/FAILURE.md` is a complete
-design and costs no new MIR instruction and no change to `types.Type`.
-None of that half exists yet.  The corpus is unambiguous about the
-demand:
+**Errors are done too, on both engines.**  `T!`, `try`, `catch` and
+`error(...)` run on the interpreter and lower through LLVM as the
+outcome word a Luce function already answered, so the success path of
+a `try` reads nothing at all.  `T!` really did leave `types.Type`
+untouched — fallibility is a bool on `mir.Function`, and not one
+`Type` switch grew an arm — which is the one prediction docs/FAILURE.md
+made about the cost that survived contact whole.  What it got wrong is
+recorded there: ABI 6 rather than 5, `catch` needing a statement form
+as well as an expression one, and `file_write` having to become
+fallible too, without which the live bug below stayed writable.
 
-- `wordcount.luc:23` — `counts.has(word)` then index: three hash lookups
-  on the hit path.
-- `wordcount.luc:33` — `var best = ""` as "no answer", indistinguishable
-  from an empty key.
-- `dice.luc:41` — `if files.write_lines(...)` with **no else**.  A
-  silently swallowed write failure, caused directly by Bool-as-error.
-  A live bug in the shipped corpus.
-- `editor.luc:414`, `wordcount.luc:46` — `file_exists` then `file_read`,
-  the TOCTOU pattern FAILURE.md names as the proof.
-- 12 `trap(...)` calls in `std/` for conditions a caller might
-  reasonably want to handle.
+The corpus that argued for it, item by item:
 
-**Now unblocked:** `strings.find` returns `-1` because `Int?` did not
-exist.  It does, on both engines, so the sentinel is a wart with
-nothing holding it up any more — `strings.luc:20` returns `-1` for an
-*argument error*, which is not the same fact as "absent", and
-`find_from`'s empty-needle case returns success where `count`'s returns
-failure.
+- `dice.luc:41` — `if files.write_lines(...)` with **no else**, a
+  silently swallowed write failure.  **Fixed, and unwritable**: the
+  call answers nothing, so there is no Bool to test and no branch to
+  forget, and `main() -> !` reports what the disk said.
+- `editor.luc:414`, `wordcount.luc:46` — `file_exists` then
+  `file_read`.  **Both gone.**  One read each, and what it answers
+  decides: `catch:` sets the editor's greeting, `try` ends wordcount
+  with the path it could not open.  What that removes is a window
+  between two calls that nothing could close, and a guard that could
+  not tell "not there" from "would not open" anyway.
+- `calc.luc` — four `trap(...)` calls about the *user's* typing.  Now
+  four `error(...)` calls carried up through four frames of recursion
+  by `try`, with no `if` written for any of them.  It is the worked
+  example.
+- `std/files.luc` — real signatures throughout.
+
+**Still open, and the honest remainder:**
+
+- `wordcount.luc:23` — `counts.has(word)` then index: three hash
+  lookups on the hit path.  `m.get(k) -> V?` is the answer and is not
+  built.
+- `wordcount.luc:33` — `var best = ""` as "no answer",
+  indistinguishable from an empty key.
+- 11 `trap(...)` calls in `std/math.luc`.  Four of them —
+  `mean`, `vmin`, `vmax`, `variance` of an empty array — are the
+  ordinary shape of stats over filtered data, and are candidates for
+  `!` in a pass of their own.  The rest are genuine caller bugs and
+  stay traps.
+- `strings.find` returns `-1` because `Int?` did not exist.  It does,
+  on both engines, so the sentinel is a wart with nothing holding it
+  up any more — `strings.luc:20` returns `-1` for an *argument error*,
+  which is not the same fact as "absent", and `find_from`'s
+  empty-needle case returns success where `count`'s returns failure.
 
 ---
 
@@ -147,8 +169,10 @@ failure.
 No enums, no tagged unions, no `match`.  This is the second-order
 blocker: `docs/FAILURE.md` refuses `Result<T, E>` *because* there are no
 tagged unions, which is what forced `T!` to be a function attribute.
-That answer is probably right, but it is the third design bent around
-the same hole.
+Now that it is built, that answer looks better than "probably right":
+the attribute is what gave Luce Ok-wrapping for free and kept
+`types.Type` out of the feature entirely.  It is still the third design
+bent around the same hole.
 
 The corpus pays constantly:
 
@@ -308,7 +332,7 @@ multi-user — all deferred by design in `docs/V2.md`.
 5. **Cut `Bytes`** — stage 10 goes total the same day.
 6. **`m.get(k) -> V?`**, rewrite `wordcount.luc`, and sweep the corpus
    for `ord("x")` and f-strings.
-7. **Errors** — steps 5–7 of FAILURE.md.
+7. ~~**Errors** — steps 5–7 of FAILURE.md.~~ **Done.**
 8. **Decide receivers, multiple returns, and integer-division
    spelling** — one memo each.
 9. **Sum types**, if the `T?` experience says the hole is still there.
@@ -317,9 +341,10 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ---
 
-**The honest summary:** the language is nearly complete.  The front end
-is in genuinely good shape, and the remaining language work is one
-designed feature, one open question, and a short list of library and
-host builtins.  The real distance left is in the runtime, and it is
-now one thing rather than three: String bytes that are never
-returned.
+**The honest summary:** the language is complete as designed.  The
+front end is in genuinely good shape, and the remaining language work
+is one open question (sum types) and a short list of library and host
+builtins.  The runtime's outstanding item is not correctness but
+speed: `strings` is the one benchmark row still well behind its C
+twin, and small-string optimisation is the queued answer
+(docs/STRINGS.md).

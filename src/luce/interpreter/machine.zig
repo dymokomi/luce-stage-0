@@ -65,6 +65,23 @@ pub fn run(
         .value => return .{ .success = .{
             .leaked_objects = machine.runtime.live,
         } },
+        // An uncaught error is news, not a bug: every frame released
+        // what it owned on the way out, so the census is honest and
+        // there is nothing standing to sweep (docs/FAILURE.md).  The
+        // words live in the arena the caller reads them from.
+        .errored => {
+            const raised = machine.runtime.raised.?;
+            return .{ .errored = .{
+                .code = raised.code,
+                .message = raised.message,
+                .origin = .{
+                    .function = raised.origin.function[0..@intCast(raised.origin.function_length)],
+                    .source = raised.origin.source[0..@intCast(raised.origin.source_length)],
+                    .line = raised.origin.line,
+                    .column = raised.origin.column,
+                },
+            } };
+        },
         .trap => |trap| {
             var reported = trap;
             // The frame stack survives a trap intact, so the trace
@@ -95,6 +112,11 @@ const max_trace_frames = runtime.trace.max_frames;
 pub const CallOutcome = union(enum) {
     value: RuntimeValue,
     trap: backend.Trap,
+    /// The entry function left with an error nobody caught.  What it
+    /// was is in `Runtime.raised`; the run ends here, but unlike a
+    /// trap every frame on the way out released what it owned, so
+    /// there is nothing standing to sweep.
+    errored,
 };
 
 /// One live call.  Frames live on an explicit heap-allocated stack, so
@@ -422,8 +444,12 @@ pub const Machine = struct {
                         continue :dispatch;
                     },
                     .intrinsic => |operation| {
-                        registers[item] = self.intrinsic(operation, registers, frame.serial) catch |mistake|
-                            return self.caught(mistake);
+                        registers[item] = self.intrinsic(
+                            operation,
+                            registers,
+                            frame.serial,
+                            .{ .function = frame.function, .instruction = item },
+                        ) catch |mistake| return self.caught(mistake);
                     },
                     .jump => |target| {
                         frame.block = target;
@@ -460,6 +486,19 @@ pub const Machine = struct {
                         continue :dispatch;
                     },
                     .trap => |code| return self.trap(code),
+                    // The error is already in the channel — `try` put
+                    // it there by not catching it, `error(…)` by
+                    // raising it — and the releases it owes stand in
+                    // the block in front of this.  So this is `ret`
+                    // with nothing to hand back and one thing left
+                    // behind (docs/FAILURE.md).
+                    .unwind => {
+                        const finished = self.stack.pop().?;
+                        self.releaseSlots(finished);
+                        self.frame_storage.shrinkRetainingCapacity(finished.slots_at);
+                        if (self.stack.items.len == 0) return .{ .errored = {} };
+                        continue :dispatch;
+                    },
                 }
             }
             unreachable; // the verifier guarantees a terminator
@@ -545,11 +584,34 @@ pub const Machine = struct {
     // runtime library.  The only arms with a body of their own are the
     // host effects, which are not language semantics but services.
 
+    /// Where the instruction being run was written — what an error
+    /// records, and the one position it carries (docs/FAILURE.md).
+    /// Two indices passed in registers, so nothing is resolved until
+    /// something actually raises.
+    pub const Site = struct { function: u32, instruction: mir.Register };
+
+    /// The frame an error raised at `site` reports.  Resolved through
+    /// the program's own tables — the interpreter has the program, so
+    /// unlike compiled code it never needs `Runtime.functions`.
+    fn placeOf(self: *const Machine, site: Site) runtime.trace.Frame {
+        const function = &self.program.functions[site.function];
+        const has_origin = site.instruction < function.origins.len;
+        return .{
+            .function = function.name.ptr,
+            .function_length = @intCast(function.name.len),
+            .source = function.source.ptr,
+            .source_length = @intCast(function.source.len),
+            .line = if (has_origin) function.origins[site.instruction].line else 0,
+            .column = if (has_origin) function.origins[site.instruction].column else 0,
+        };
+    }
+
     pub fn intrinsic(
         self: *Machine,
         operation: mir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
         serial: u64,
+        site: Site,
     ) EvalError!RuntimeValue {
         const arguments = operation.arguments;
         switch (operation.kind) {
@@ -577,6 +639,28 @@ pub const Machine = struct {
             // proved the value is there (docs/FAILURE.md).
             .none_value => return .none,
             .is_none => return .ofBoolean(registers[arguments[0]].isNone()),
+
+            // Errors.  The channel is a field on the runtime, so
+            // "did that call raise" is a load and "forget it" a store
+            // (docs/FAILURE.md).  `errored` reads the channel rather
+            // than its argument: it can only stand where the call it
+            // names has just returned, and nothing else can be in it.
+            .errored => return .ofBoolean(self.runtime.raised != null),
+            .forget => {
+                self.runtime.forget();
+                return .none;
+            },
+            .raise_error => {
+                // `raise` takes the copy that outlives the releases
+                // the unwind is about to emit — one implementation of
+                // that rule, and both engines reach it.
+                self.runtime.raise(
+                    .user_error,
+                    registers[arguments[0]].asString(),
+                    self.placeOf(site),
+                );
+                return .none;
+            },
             .optional_wrap, .optional_unwrap => return registers[arguments[0]],
             .own_storage => return self.runtime.ownValue(registers[arguments[0]]),
             .export_storage => return self.runtime.exportValue(registers[arguments[0]]),
@@ -753,17 +837,25 @@ pub const Machine = struct {
                     // give a slice back; the program keeps an owned
                     // copy and the arena's is scratch.
                     .content => |content| try self.runtime.ownValue(.ofString(content)),
-                    .failed => self.runtime.fail(.file_read_failed),
+                    // A file that would not read is the world
+                    // deciding, and `file_exists` before it is a race
+                    // — so it is an error, not a trap.  The answer is
+                    // a value nothing reads: the `errored` in front of
+                    // the branch has already seen the channel.
+                    .failed => blk: {
+                        self.runtime.raiseIo(true, path, self.placeOf(site));
+                        break :blk .ofString("");
+                    },
                 };
             },
             .file_write => {
                 const host = try self.service();
                 const callback = host.writeFileFn orelse return self.runtime.fail(.host_unavailable);
-                return .ofBoolean(callback(
-                    host.context,
-                    registers[arguments[0]].asString(),
-                    registers[arguments[1]].asString(),
-                ));
+                const path = registers[arguments[0]].asString();
+                if (!callback(host.context, path, registers[arguments[1]].asString())) {
+                    self.runtime.raiseIo(false, path, self.placeOf(site));
+                }
+                return .none;
             },
             .file_exists => {
                 const host = try self.service();

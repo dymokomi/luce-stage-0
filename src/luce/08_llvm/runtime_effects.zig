@@ -112,6 +112,12 @@ pub const Service = enum {
     luce_rt_unwound,
     luce_rt_report,
 
+    // -- errors, and the one position they carry ----------------------
+    luce_rt_raise_error,
+    luce_rt_raise_io,
+    luce_rt_forget_error,
+    luce_rt_report_error,
+
     // -- host text ----------------------------------------------------
     luce_rt_intern_text,
     luce_rt_set_key_text,
@@ -358,6 +364,39 @@ pub fn describe(service: Service) Effect {
         // is the host's, so nothing is promised: not the memory it
         // touches, not that it comes back, not that it does not unwind.
         .luce_rt_report => .{
+            .memory = null,
+            .parameters = &.{ .run, .unknown, .unknown },
+            .nounwind = false,
+            .willreturn = false,
+            .cold = true,
+        },
+
+        // -- errors ---------------------------------------------------
+        //
+        // `raise_error` copies the program's words into run-lifetime
+        // storage, because the releases the unwind emits run after it
+        // and would otherwise take them back (docs/FAILURE.md); that
+        // copy is why it allocates and why the bytes are only read.
+        // `raise_io` builds its words the same way.  Neither is `cold`
+        // — a file that will not open is ordinary weather, and a
+        // program built around `catch` runs this edge as often as the
+        // other one.
+        .luce_rt_raise_error => .{
+            .memory = touches_text,
+            .parameters = &.{ .run, .plain, .bytes_in, .plain, .plain, .plain },
+        },
+        .luce_rt_raise_io => .{
+            .memory = touches_text,
+            .parameters = &.{ .run, .plain, .bytes_in, .plain, .plain, .plain },
+        },
+        // One store: the channel is empty again.
+        .luce_rt_forget_error => .{
+            .memory = .{ .argmem = .write },
+            .parameters = &.{.run},
+        },
+        // The host's, like `luce_rt_report`, and promised nothing for
+        // the same reason.
+        .luce_rt_report_error => .{
             .memory = null,
             .parameters = &.{ .run, .unknown, .unknown },
             .nounwind = false,
@@ -670,7 +709,7 @@ test "the boxed-value promises match the layout generated code writes" {
 test "only the host-calling export withholds nounwind and willreturn" {
     for (std.enums.values(Service)) |service| {
         const effect = describe(service);
-        const opaque_to_us = service == .luce_rt_report;
+        const opaque_to_us = service == .luce_rt_report or service == .luce_rt_report_error;
         try std.testing.expectEqual(!opaque_to_us, effect.nounwind);
         try std.testing.expectEqual(!opaque_to_us, effect.willreturn);
         try std.testing.expectEqual(opaque_to_us, effect.memory == null);

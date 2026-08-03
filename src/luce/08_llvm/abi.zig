@@ -67,13 +67,20 @@ const trace = @import("../runtime/trace.zig");
 /// than the way LLVM does.  Same field, same layout, different string:
 /// `machine` below is a compile-time constant, so a loader answers
 /// "is this artifact mine?" without libLLVM in the process.
+///
 /// 6 — short text lives inside a `LuceValue`.  The tag is one byte
 /// where it was eight, and the twenty-two bytes that frees are where a
 /// String's text goes when it fits (docs/STRINGS.md).  No field moved
 /// and nothing was reordered — `bits` and `length` are still at 8 and
 /// 16 — but generated code reads a `Value` differently, so an artifact
 /// built against the old reading has to be rebuilt.
-pub const version: u32 = 6;
+///
+/// 7 — a run can end a third way.  `luce_main` answers `errored` for a
+/// program that raised something nobody caught, and `raised` arrived
+/// beside `trap` to say what it was.  Required, like `trap`: a host
+/// that can run a program has to be able to say why it stopped, and
+/// the two reasons are different sentences.
+pub const version: u32 = 7;
 
 /// The machine an artifact runs on, as a string both the compiler and
 /// the loader can produce.
@@ -247,6 +254,15 @@ pub const Status = enum(i32) {
     /// The runtime could not get memory.  Nothing about the program
     /// was wrong, so this is not a trap.
     exhausted = 2,
+    /// The program ended with an error nobody caught; `Host.raised`
+    /// was called with the details.
+    ///
+    /// **Three, and not two.**  docs/FAILURE.md said "1 is trapped, 2
+    /// becomes errored", and by the time errors were built 2 had been
+    /// `exhausted` for two ABI versions.  Renumbering a published
+    /// answer would have changed what every existing loader believes,
+    /// so the new one took the next free number.
+    errored = 3,
     _,
 };
 
@@ -308,6 +324,21 @@ pub const TrapFn = trace.ReportFn;
 /// One call in a trap's trace, innermost first.  A `--release`
 /// artifact reports line and column zero and still names the function.
 pub const TraceFrame = trace.Frame;
+
+/// Report an uncaught error.  Called once, when the program has
+/// stopped and immediately before `luce_main` returns `.errored`.
+/// `code` is the numeric value of `mir.ErrorCode`; the message and the
+/// origin are borrowed for the duration of the call.
+///
+/// **One position, not a trace** (docs/FAILURE.md).  `origin` is where
+/// the error was raised, recorded once at the raise.  A trap carries
+/// the whole stack because a trap is a bug and the stack is the
+/// diagnosis; an error is news, and where it came from is the news.
+///
+/// Required, on the same terms as `trap`: this is the runtime
+/// contract, not a capability, and `luce_main` calls it without a null
+/// check.
+pub const RaisedFn = trace.ErrorReportFn;
 
 /// How many nested Luce calls the host allows before the program traps
 /// `call_depth_exceeded`.  Optional: a null slot means
@@ -454,6 +485,10 @@ pub const Host = extern struct {
     /// Optional — a null slot means `default_call_depth`.  Not an
     /// effect: a policy the host sets, like the interpreter's budget.
     call_depth: ?CallDepthFn = null,
+    /// Required — the other way a run can end (docs/FAILURE.md).
+    /// Appended rather than placed beside `trap`, because every field
+    /// before it keeps the offset it had.
+    raised: RaisedFn,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -478,6 +513,7 @@ pub const Slot = enum(u32) {
     term_flush = 15,
     key_read = 16,
     call_depth = 17,
+    raised = 18,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };
@@ -585,5 +621,6 @@ test "the source hash keys on content and nothing else" {
 test "the host's trap callback is the runtime's reporter, not a copy of it" {
     const runtime = @import("../runtime.zig");
     try std.testing.expect(TrapFn == runtime.trace.ReportFn);
+    try std.testing.expect(RaisedFn == runtime.trace.ErrorReportFn);
     try std.testing.expect(TraceFrame == runtime.trace.Frame);
 }

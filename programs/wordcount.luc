@@ -2,6 +2,8 @@
 #
 #   loom run wordcount.lc FILE [TOP_N]
 
+import std.files
+
 func is_word_byte(byte: Int) -> Bool:
     if byte >= 97 and byte <= 122:
         return true
@@ -38,20 +40,21 @@ func heaviest(counts: Map(String, Int)) -> String:
             best_count = counts[word]
     return best
 
-func main():
+func main() -> !:
     if arg_count() == 0:
         print("usage: wordcount FILE [TOP_N]")
         return
     let path = arg(0)
-    if not file_exists(path):
-        print("wordcount: no such file: " + path)
-        return
     var top = 5
     if arg_count() > 1:
         top = parse_int(arg(1)) else top
 
+    # One read, and its answer is the whole story.  The exists-then-
+    # read this used to write had a window between the two calls that
+    # nothing could close, and it could not tell "not there" from
+    # "would not open" either (docs/FAILURE.md).
     var counts = new Map(String, Int)
-    count_words(file_read(path), counts)
+    count_words(try files.read(path), counts)
     print(str(len(counts)) + " distinct words in " + path)
 
     var shown = 0

@@ -88,6 +88,33 @@ pub const FunctionBuilder = struct {
     /// each branch, and cleared for anything a loop body assigns.
     /// Short enough that a linear scan is the whole lookup.
     narrowed: std.ArrayList(LocalId) = .empty,
+    /// Set for exactly one hop.  `try` and `catch` raise it, and the
+    /// very next `lowerExpressionInner` reads and clears it, so the
+    /// permission reaches the call they are written in front of and
+    /// nothing nested inside it (docs/FAILURE.md).
+    allow_fallible: bool = false,
+    /// What a fallible call left for the `try` or `catch` in front of
+    /// it to finish.  Set by `openFallible` and consumed once.
+    opened: ?Opened = null,
+    /// Registers that are a *reload* of another register across a
+    /// fallible call's branch.  The value is the same value — the slot
+    /// only carries it from one block to the next — so every question
+    /// asked about where a value came from has to look through the
+    /// link, or a call's fresh String would be nobody's to free.
+    carried: std.ArrayList(Carried) = .empty,
+
+    /// A fallible call whose failing side is still an empty block.
+    const Opened = struct {
+        /// Where control goes when the call raised.
+        handler: BlockId,
+        /// How many statement temporaries existed when the branch was
+        /// taken.  Anything parked after it belongs to the side where
+        /// the call *returned*, and releasing it on the failing side
+        /// would release a slot nothing ever stored into.
+        temps_floor: usize,
+    };
+
+    const Carried = struct { register: Register, origin: Register };
 
     const TempSlot = struct {
         local: LocalId,
@@ -117,6 +144,7 @@ pub const FunctionBuilder = struct {
         self.temps.deinit(self.temporary());
         self.undeclared.deinit(self.temporary());
         self.narrowed.deinit(self.temporary());
+        self.carried.deinit(self.temporary());
     }
 
     // Narrowing ------------------------------------------------------------
@@ -410,10 +438,34 @@ pub const FunctionBuilder = struct {
         });
     }
 
+    /// Is this exact register already parked?
+    ///
+    /// **One value, one park.**  A `try` hands back what the call it
+    /// wraps produced, so the walk sees the same register twice — once
+    /// for the call and once for the `try` around it — and two hidden
+    /// locals both claiming one String's bytes free them twice.  The
+    /// question is asked of the register rather than of the
+    /// expression, which is why `a else b` is untouched: its three
+    /// registers are three different values.
+    fn parkedAlready(self: *const FunctionBuilder, register: Register) bool {
+        for (self.temps.items) |temp| {
+            if (temp.register == register) return true;
+        }
+        return false;
+    }
+
     /// Emit releases for the temporaries above `from` without
     /// forgetting them (unwinding paths: return, break, continue).
     fn emitTempReleases(self: *FunctionBuilder, from: usize) Error!void {
-        var index = self.temps.items.len;
+        try self.emitTempReleasesUpTo(from, self.temps.items.len);
+    }
+
+    /// The same, stopping below `limit`.  A `try`'s failing side takes
+    /// this form: the temporaries parked *after* the call was made
+    /// live on the side where it returned, and their slots were never
+    /// stored into on the side where it did not.
+    fn emitTempReleasesUpTo(self: *FunctionBuilder, from: usize, limit: usize) Error!void {
+        var index = @min(self.temps.items.len, limit);
         while (index > from) {
             index -= 1;
             const temp = self.temps.items[index];
@@ -527,7 +579,7 @@ pub const FunctionBuilder = struct {
     /// producers is closed and small, and reading it off the tape
     /// cannot drift from what was actually emitted.
     fn producesFreshStorage(self: *const FunctionBuilder, register: Register) bool {
-        return switch (self.code.instructions.items[register]) {
+        return switch (self.code.instructions.items[self.sourceOf(register)]) {
             // String `+`; every other binary answers a scalar.
             .binary => true,
             // Both build a whole new struct value that owns its run.
@@ -556,6 +608,19 @@ pub const FunctionBuilder = struct {
             },
             else => false,
         };
+    }
+
+    /// The register that actually produced this value.  A fallible
+    /// call's result crosses its own branch through a hidden slot, so
+    /// the register a `try` hands back is a `local_get` of a value the
+    /// *call* made — and "did this statement allocate it" has to be
+    /// asked of the call.  One hop is all there ever is: the slot is
+    /// written once, right where the call stands.
+    fn sourceOf(self: *const FunctionBuilder, register: Register) Register {
+        for (self.carried.items) |link| {
+            if (link.register == register) return link.origin;
+        }
+        return register;
     }
 
     /// Can `register`'s storage move into a place that outlives the
@@ -625,6 +690,7 @@ pub const FunctionBuilder = struct {
         return switch (expression.*) {
             .method => true,
             .give, .copy => true,
+            .try_call => true,
             .call => |call| blk: {
                 if (!isPureBuiltin(call.callee)) break :blk true;
                 for (call.arguments) |argument| {
@@ -694,6 +760,8 @@ pub const FunctionBuilder = struct {
             .variable => |binding| binding.value != null and
                 mayMutateContainers(binding.value.?),
             .expression => |expression| mayMutateContainers(expression.value),
+            .guarded => |guarded| statementMayMutateContainers(guarded.attempt.*) or
+                blockMayMutateContainers(guarded.handler),
             .return_statement => |returned| returned.value != null and
                 mayMutateContainers(returned.value.?),
             .conditional => |conditional| mayMutateContainers(conditional.condition) or
@@ -755,7 +823,7 @@ pub const FunctionBuilder = struct {
         const left = budget - 1;
         return switch (expression.*) {
             .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
-                binary.op == .coalesce or
+                binary.op == .coalesce or binary.op == .catch_error or
                 splitsBlocks(binary.left, left) or splitsBlocks(binary.right, left),
             .unary => |unary| splitsBlocks(unary.operand, left),
             .field => |field| splitsBlocks(field.target, left),
@@ -776,6 +844,8 @@ pub const FunctionBuilder = struct {
                 anySplits(method.arguments, left),
             .give => |give| splitsBlocks(give.operand, left),
             .copy => |copied| splitsBlocks(copied.operand, left),
+            // A fallible call branches on its outcome, always.
+            .try_call => true,
             else => false,
         };
     }
@@ -808,9 +878,14 @@ pub const FunctionBuilder = struct {
     fn yieldsOwnership(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
         return switch (expression.*) {
             .new_object, .list_literal, .slice_range, .call, .give, .copy => true,
-            // `a else b` hands over an object exactly when both sides
-            // do; `lowerCoalesce` refuses the case where they differ.
-            .binary => |binary| binary.op == .coalesce and
+            // `try f()` hands over exactly what `f()` does: the value
+            // crosses a block boundary through a slot, and a slot
+            // carrying an object changes nothing about who owns it.
+            .try_call => |attempt| try self.yieldsOwnership(attempt.operand),
+            // `a else b` and `a catch b` hand over an object exactly
+            // when both sides do; both lowerings refuse the case where
+            // they differ.
+            .binary => |binary| (binary.op == .coalesce or binary.op == .catch_error) and
                 try self.yieldsOwnership(binary.left) and
                 try self.yieldsOwnership(binary.right),
             .method => |method| blk: {
@@ -1215,6 +1290,7 @@ pub const FunctionBuilder = struct {
             .expression => |expression| {
                 _ = try self.lowerExpression(expression.value, true);
             },
+            .guarded => |guarded| try self.lowerGuarded(guarded),
         }
     }
 
@@ -2339,19 +2415,26 @@ pub const FunctionBuilder = struct {
         // container, a give parameter, a return — re-owns it at run
         // time, which turns the parked release into a no-op.
         const objects = self.analyzer.carriesObjects(value.value_type) and
-            try self.yieldsOwnership(expression);
+            try self.yieldsOwnership(expression) and
+            !self.parkedAlready(value.register);
         // Freshly allocated storage is parked for the same reason and
         // in the same slot, but the two questions differ: `give s`
         // hands over an object while borrowing the struct run it sits
         // in, and a String slice borrows without yielding anything
         // (docs/STRINGS.md).
         const storage = self.analyzer.ownsStorage(value.value_type) and
-            self.producesFreshStorage(value.register);
+            self.producesFreshStorage(value.register) and
+            !self.parkedAlready(value.register);
         if (objects or storage) try self.registerTemp(value, objects, storage);
         return value;
     }
 
     fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
+        // The permission a `try` or `catch` raised reaches exactly the
+        // expression it was written in front of.  Read and cleared
+        // here, before anything nested can see it.
+        const fallible_allowed = self.allow_fallible;
+        self.allow_fallible = false;
         switch (expression.*) {
             .int_literal => |literal| {
                 const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
@@ -2429,17 +2512,229 @@ pub const FunctionBuilder = struct {
                 return null;
             },
             .field => |field| return self.lowerField(field),
-            .call => |call| return self.lowerCall(call, as_statement),
-            .binary => |binary| return self.lowerBinary(binary),
+            .call => |call| return self.lowerCall(call, as_statement, fallible_allowed),
+            .binary => |binary| {
+                if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
+                return self.lowerBinary(binary);
+            },
             .unary => |unary| return self.lowerUnary(unary),
-            .method => |method| return self.lowerMethod(method, as_statement),
+            .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed),
             .new_object => |new| return self.lowerNew(new),
             .list_literal => |literal| return self.lowerListLiteral(literal),
             .index => |index| return self.lowerIndex(index),
             .slice_range => |slice| return self.lowerSliceRange(slice),
             .give => |give| return self.lowerGive(give),
             .copy => |copied| return self.lowerCopy(copied),
+            .try_call => |attempt| return self.lowerTry(attempt, as_statement),
         }
+    }
+
+    // Errors ---------------------------------------------------------------
+    //
+    // A fallible call ends in three instructions: ask whether it came
+    // back errored, carry its value across the branch, and take the
+    // failing side to a block the `try` or `catch` in front of it
+    // fills.  Everything below is about which of those two fills it.
+
+    /// Close a fallible call: emit the question, the branch, and the
+    /// reload, and leave the lowering on the side where the call
+    /// returned.  The failing side is an empty block waiting for
+    /// whoever asked for it.
+    fn openFallible(self: *FunctionBuilder, call: Register, result_type: Type) Error!Value {
+        const failed = try self.code.errored(call);
+        // What the call answered has to survive the branch on its
+        // outcome, and it arrives owning something — so the slot that
+        // carries it across *is* the slot that owns it (S3).  One
+        // place, not two, and a String's form survives the crossing
+        // because an owning slot holds a whole value; a borrowing one
+        // would carry a pointer into whatever scratch the call
+        // answered into (docs/STRINGS.md).
+        const objects = self.analyzer.carriesObjects(result_type);
+        const storage = self.analyzer.ownsStorage(result_type);
+        const slot: ?LocalId = if (result_type == .none)
+            null
+        else
+            try self.code.carry(call, result_type, storage);
+
+        const handler = try self.code.reserveBlock();
+        const returned = try self.code.reserveBlock();
+        try self.code.branch(failed, handler, returned);
+        self.code.switchTo(returned);
+        // Taken before the temporary below is recorded: the failing
+        // side releases what the statement owned *before* the call,
+        // and this slot was never stored into on that path.
+        self.opened = .{ .handler = handler, .temps_floor = self.temps.items.len };
+
+        const carried = slot orelse return .{ .register = call, .value_type = .none };
+        const reload = try self.code.load(carried);
+        try self.carried.append(self.temporary(), .{ .register = reload, .origin = call });
+        // The binding waits for this side too: on the failing side the
+        // call answered no object, and naming one would name whatever
+        // the slot happens to hold.
+        if (objects) try self.code.bind(carried, reload);
+        if (objects or storage) {
+            try self.temps.append(self.temporary(), .{
+                .local = carried,
+                .register = reload,
+                .objects = objects,
+                .storage = storage,
+            });
+        }
+        return .{ .register = reload, .value_type = result_type };
+    }
+
+    /// Lower the one call a `try` or `catch` is written in front of,
+    /// with the permission that makes a fallible call legal.  Answers
+    /// the value and what `openFallible` left, or null when the
+    /// operand was not a call that can fail.
+    fn lowerAttempt(
+        self: *FunctionBuilder,
+        operand: *ast.Expression,
+        span: Span,
+        verb: []const u8,
+        as_statement: bool,
+    ) Error!?struct { value: ?Value, opened: Opened } {
+        self.opened = null;
+        self.allow_fallible = true;
+        const lowered = try self.lowerExpression(operand, as_statement);
+        self.allow_fallible = false;
+        const opened = self.opened orelse {
+            // A mistake inside the operand has already been reported;
+            // adding "this cannot fail" to it would be noise.
+            if (lowered != null) {
+                try self.fail(
+                    "luce.sema.fallible",
+                    span,
+                    "{s} applies to a call that can fail, and this one cannot; drop the {s}",
+                    .{ verb, verb },
+                );
+            }
+            return null;
+        };
+        self.opened = null;
+        return .{ .value = lowered, .opened = opened };
+    }
+
+    /// `try CALL` — pass the error on.  The failing side is
+    /// `lowerReturn`'s three lines with one terminator changed:
+    /// release the temporaries, release the scopes innermost first,
+    /// leave (docs/FAILURE.md).
+    fn lowerTry(self: *FunctionBuilder, attempt: ast.Try, as_statement: bool) Error!?Value {
+        if (!self.code.fallible) {
+            try self.fail(
+                "luce.sema.fallible",
+                attempt.span,
+                "try hands the error to the caller, and {s} does not say it can fail; write '-> !' (or '-> T!') on its signature, or handle it with catch",
+                .{self.code.name},
+            );
+            return null;
+        }
+        const attempted = (try self.lowerAttempt(
+            attempt.operand,
+            attempt.span,
+            "try",
+            as_statement,
+        )) orelse return null;
+
+        const resume_at = self.code.current;
+        self.code.switchTo(attempted.opened.handler);
+        try self.emitTempReleasesUpTo(0, attempted.opened.temps_floor);
+        try self.emitScopeReleases(0, null);
+        try self.code.unwind();
+        self.code.switchTo(resume_at);
+        return attempted.value;
+    }
+
+    /// `CALL catch FALLBACK` — the fallback runs only where the call
+    /// raised, and the reason is deliberately discarded there.
+    fn lowerCatch(self: *FunctionBuilder, binary: ast.Binary, as_statement: bool) Error!?Value {
+        const attempted = (try self.lowerAttempt(
+            binary.left,
+            binary.span,
+            "catch",
+            as_statement,
+        )) orelse return null;
+        const value = attempted.value orelse return null;
+
+        // A call that answers nothing has no value to fall back to, so
+        // both sides are statements and the whole thing is one.
+        if (value.value_type == .none) {
+            const merge = try self.code.reserveBlock();
+            try self.code.jump(merge);
+            self.code.switchTo(attempted.opened.handler);
+            try self.code.forget();
+            const floor = self.temps.items.len;
+            _ = try self.lowerExpression(binary.right, true);
+            try self.flushTemps(floor);
+            try self.code.jump(merge);
+            self.code.switchTo(merge);
+            return .{ .register = value.register, .value_type = .none };
+        }
+
+        // Both sides must agree on ownership, for the reason `else`
+        // does: the binding that receives the result either owns an
+        // object or does not, and that is one static fact (S1, S8).
+        if (self.analyzer.carriesObjects(value.value_type) and
+            !(try self.yieldsOwnership(binary.right)))
+        {
+            try self.fail(
+                "luce.sema.own",
+                binary.span,
+                "the two sides of catch must agree on ownership: the call hands over a fresh object, so the fallback must too [OWNERSHIP.md S1, S8]",
+                .{},
+            );
+            return null;
+        }
+
+        const result = try self.code.hiddenLocal(value.value_type, false);
+        const merge = try self.code.reserveBlock();
+        try self.code.store(result, value.register);
+        try self.code.jump(merge);
+
+        self.code.switchTo(attempted.opened.handler);
+        try self.code.forget();
+        if (isLeavingCall(binary.right)) {
+            // `f() catch trap("…")` and `f() catch error("…")` never
+            // come back, so they leave nothing to store — the same
+            // shape `x else trap("…")` has.
+            _ = try self.lowerExpression(binary.right, true);
+        } else if (try self.lowerTyped(binary.right, value.value_type, binary.span, "the catch fallback")) |fallback| {
+            try self.code.store(result, fallback.value.register);
+        }
+        try self.code.jump(merge);
+
+        self.code.switchTo(merge);
+        return .{ .register = try self.code.load(result), .value_type = value.value_type };
+    }
+
+    /// `CALL catch:` and an indented handler — the statement form, for
+    /// a recovery that is more than one expression.
+    fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
+        // The permission reaches the *value* of the statement, which
+        // is the first expression either shape lowers: the call
+        // itself, or the value side of `place = call()`.
+        self.opened = null;
+        self.allow_fallible = true;
+        try self.lowerStatement(guarded.attempt.*);
+        self.allow_fallible = false;
+        const opened = self.opened orelse {
+            try self.fail(
+                "luce.sema.fallible",
+                guarded.span,
+                "catch guards a call that can fail, and this statement has none; drop the catch",
+                .{},
+            );
+            return;
+        };
+        self.opened = null;
+
+        const merge = try self.code.reserveBlock();
+        try self.code.jump(merge);
+        self.code.switchTo(opened.handler);
+        try self.code.forget();
+        try self.lowerBlock(guarded.handler);
+        try self.code.jump(merge);
+        self.code.switchTo(merge);
     }
 
     /// give NAME — the named object transfers to whatever receives it;
@@ -2850,7 +3145,7 @@ pub const FunctionBuilder = struct {
             .less_equal => .less_equal,
             .greater => .greater,
             .greater_equal => .greater_equal,
-            .logic_and, .logic_or, .coalesce => unreachable, // answered above
+            .logic_and, .logic_or, .coalesce, .catch_error => unreachable, // answered above
         };
 
         // An operator wants a value, and a `T?` may not be one.  Said
@@ -2948,8 +3243,10 @@ pub const FunctionBuilder = struct {
     /// expression that never yields one and is still legal there,
     /// because it never comes back; `trap` is a reserved name, so
     /// nothing else can wear it.
-    fn isTrapCall(expression: *const ast.Expression) bool {
-        return expression.* == .call and std.mem.eql(u8, expression.call.callee, "trap");
+    fn isLeavingCall(expression: *const ast.Expression) bool {
+        if (expression.* != .call) return false;
+        const callee = expression.call.callee;
+        return std.mem.eql(u8, callee, "trap") or std.mem.eql(u8, callee, "error");
     }
 
     /// `a else b` — `a` when it is there, `b` when it is not.  The
@@ -2998,7 +3295,7 @@ pub const FunctionBuilder = struct {
             payload,
         );
         const either = try self.code.openCoalesce(absent, present, payload);
-        if (isTrapCall(binary.right)) {
+        if (isLeavingCall(binary.right)) {
             // `x else trap("…")` is the assert-unwrap, and it is
             // greppable — which is why Luce has no force-unwrap sigil
             // (docs/FAILURE.md).  The fallback leaves nothing behind
@@ -3091,14 +3388,19 @@ pub const FunctionBuilder = struct {
     //
     // Struct construction, explicit conversion, namespaced calls, and
     // builtin methods on values.
-    fn lowerCall(self: *FunctionBuilder, call: ast.Call, as_statement: bool) Error!?Value {
+    fn lowerCall(
+        self: *FunctionBuilder,
+        call: ast.Call,
+        as_statement: bool,
+        fallible_allowed: bool,
+    ) Error!?Value {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
             if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
                 return self.lowerConvert(call);
             }
-            switch (try self.lowerIntrinsic(call, as_statement)) {
+            switch (try self.lowerIntrinsic(call, as_statement, fallible_allowed)) {
                 .not_builtin => {},
                 .failed => return null,
                 .value => |value| return value,
@@ -3113,7 +3415,14 @@ pub const FunctionBuilder = struct {
             try self.failUnknownFunction(call.callee, call.span);
             return null;
         };
-        return self.lowerUserCall(function_index, call.callee, call.arguments, call.span, as_statement);
+        return self.lowerUserCall(
+            function_index,
+            call.callee,
+            call.arguments,
+            call.span,
+            as_statement,
+            fallible_allowed,
+        );
     }
 
     fn lowerUserCall(
@@ -3123,10 +3432,23 @@ pub const FunctionBuilder = struct {
         call_arguments: []const ast.Argument,
         span: Span,
         as_statement: bool,
+        fallible_allowed: bool,
     ) Error!?Value {
         const info = self.analyzer.functions.items[function_index];
         if (info.is_entry) {
             try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
+            return null;
+        }
+        // See `callUser`: a call that can fail has to say which of
+        // `try` and `catch` it means, and the check comes before the
+        // arguments so the reader is told the one thing that matters.
+        if (info.fallible and !fallible_allowed) {
+            try self.fail(
+                "luce.sema.fallible",
+                span,
+                "{s} can fail: write 'try {s}(…)' to pass the error on, or '{s}(…) catch …' to handle it",
+                .{ name, name, name },
+            );
             return null;
         }
         if (call_arguments.len != info.parameter_types.len) {
@@ -3189,10 +3511,12 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
             return null;
         }
-        return .{
-            .register = try self.code.emit(.{ .call = .{ .function = function_index, .arguments = registers } }, info.return_type),
-            .value_type = info.return_type,
-        };
+        const call = try self.code.emit(
+            .{ .call = .{ .function = function_index, .arguments = registers } },
+            info.return_type,
+        );
+        if (info.fallible) return try self.openFallible(call, info.return_type);
+        return .{ .register = call, .value_type = info.return_type };
     }
 
     /// target.name(args): a namespaced call when the target chain is
@@ -3200,14 +3524,26 @@ pub const FunctionBuilder = struct {
     /// module.Struct(...) construction), otherwise a builtin method on
     /// the target value.  Locals shadow nothing, so a chain whose head
     /// is a local is always a value method.
-    fn lowerMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
+    fn lowerMethod(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        as_statement: bool,
+        fallible_allowed: bool,
+    ) Error!?Value {
         switch (try self.methodNamespace(method)) {
             .resolved => |resolved| {
                 if (self.analyzer.struct_names.get(resolved)) |layout_index| {
                     return self.lowerConstruct(method.arguments, method.span, layout_index);
                 }
                 const function_index = self.analyzer.function_names.get(resolved).?;
-                return self.lowerUserCall(function_index, resolved, method.arguments, method.span, as_statement);
+                return self.lowerUserCall(
+                    function_index,
+                    resolved,
+                    method.arguments,
+                    method.span,
+                    as_statement,
+                    fallible_allowed,
+                );
             },
             .reported => return null,
             .value => return self.lowerValueMethod(method, as_statement),
@@ -3455,7 +3791,10 @@ pub const FunctionBuilder = struct {
             }
             return null;
         };
-        return self.callUser(function_index, qualified, values, method.span, as_statement);
+        // A `strings` routing is a call like any other, and the
+        // module's functions do not fail, so nothing is permitted
+        // here: `s.split(",")` can never need a `try`.
+        return self.callUser(function_index, qualified, values, method.span, as_statement, false);
     }
 
     /// The emitting half of a user call, for callers that already
@@ -3468,8 +3807,22 @@ pub const FunctionBuilder = struct {
         values: []const Value,
         span: Span,
         as_statement: bool,
+        fallible_allowed: bool,
     ) Error!?Value {
         const info = self.analyzer.functions.items[function_index];
+        // **The whole of why a swallowed failure is unwritable.**  A
+        // function that says it can fail cannot be called as if it
+        // could not, so `if files.write_lines(...)` with no else is a
+        // shape the grammar no longer has (docs/FAILURE.md).
+        if (info.fallible and !fallible_allowed) {
+            try self.fail(
+                "luce.sema.fallible",
+                span,
+                "{s} can fail: write 'try {s}(…)' to pass the error on, or '{s}(…) catch …' to handle it",
+                .{ name, name, name },
+            );
+            return null;
+        }
         if (values.len != info.parameter_types.len) {
             try self.fail("luce.sema.call", span, "{s} takes {d} arguments, got {d}", .{
                 name,
@@ -3496,10 +3849,12 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
             return null;
         }
-        return .{
-            .register = try self.code.emit(.{ .call = .{ .function = function_index, .arguments = registers } }, info.return_type),
-            .value_type = info.return_type,
-        };
+        const call = try self.code.emit(
+            .{ .call = .{ .function = function_index, .arguments = registers } },
+            info.return_type,
+        );
+        if (info.fallible) return try self.openFallible(call, info.return_type);
+        return .{ .register = call, .value_type = info.return_type };
     }
 
     /// The method names each receiver kind answers to — the tables
@@ -3818,7 +4173,12 @@ pub const FunctionBuilder = struct {
 
     /// Lower a builtin call; .not_builtin when the callee is no
     /// builtin, .failed after reporting bad arguments.
-    fn lowerIntrinsic(self: *FunctionBuilder, call: ast.Call, as_statement: bool) Error!IntrinsicResult {
+    fn lowerIntrinsic(
+        self: *FunctionBuilder,
+        call: ast.Call,
+        as_statement: bool,
+        fallible_allowed: bool,
+    ) Error!IntrinsicResult {
         const Builtin = struct {
             name: []const u8,
             kind: mir.Intrinsic,
@@ -3836,6 +4196,7 @@ pub const FunctionBuilder = struct {
             .{ .name = "len", .kind = .len, .arity = 1 },
             .{ .name = "assert", .kind = .assert_true, .arity = 1 },
             .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+            .{ .name = "error", .kind = .raise_error, .arity = 1 },
             .{ .name = "free", .kind = .free_object, .arity = 1 },
             .{ .name = "str", .kind = .str_value, .arity = 1 },
             .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
@@ -4097,6 +4458,13 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "trap takes a String message");
                 result = .none;
             },
+            .raise_error => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "error takes a String message");
+                result = .none;
+            },
+            // Emitted by `try` and `catch`; never written by a reader.
+            .errored, .forget => unreachable,
             .print, .term_write => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "this builtin takes a String");
@@ -4110,7 +4478,11 @@ pub const FunctionBuilder = struct {
             .file_write => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .string)
                     return self.failIntrinsic(call, "file_write takes (path String, content String)");
-                result = .boolean;
+                // The world decided, so a failed write is news and not
+                // a Bool nobody looked at (docs/FAILURE.md).  It
+                // answers nothing and every call site says which of
+                // `try` and `catch` it means.
+                result = .none;
             },
             .file_exists => {
                 if (arguments[0].value_type != .string)
@@ -4144,7 +4516,20 @@ pub const FunctionBuilder = struct {
                 result = .string;
             },
         }
-        if (result == .none and !as_statement) {
+        // `error("…")` leaves the function, so it can stand where a
+        // value belongs the way `trap("…")` can — but only inside a
+        // function that said it can fail.
+        if (matched.kind == .raise_error and !self.code.fallible) {
+            try self.fail(
+                "luce.sema.fallible",
+                call.span,
+                "error raises, and {s} does not say it can fail; write '-> !' (or '-> T!') on its signature",
+                .{self.code.name},
+            );
+            return .failed;
+        }
+        const leaves = matched.kind == .raise_error;
+        if (result == .none and !as_statement and !leaves) {
             try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{matched.name});
             return .failed;
         }
@@ -4153,10 +4538,36 @@ pub const FunctionBuilder = struct {
         const registers = try self.arena().alloc(Register, register_count);
         for (arguments, registers[0..arguments.len]) |value, *register| register.* = value.register;
         if (extra_argument) |extra| registers[register_count - 1] = extra;
-        return .{ .value = .{
-            .register = try self.code.emit(.{ .intrinsic = .{ .kind = matched.kind, .arguments = registers } }, result),
-            .value_type = result,
-        } };
+        const emitted = try self.code.emit(
+            .{ .intrinsic = .{ .kind = matched.kind, .arguments = registers } },
+            result,
+        );
+
+        // Two host services can be told no by the world, and one
+        // builtin says no itself.  All three end this frame or hand
+        // their caller a branch, exactly as a fallible call does.
+        if (leaves) {
+            // The words were copied into run-lifetime storage by the
+            // instruction above, so the releases below cannot take
+            // them back out from under the error (docs/FAILURE.md).
+            try self.emitTempReleases(0);
+            try self.emitScopeReleases(0, null);
+            try self.code.unwind();
+            return .{ .value = .{ .register = emitted, .value_type = .none } };
+        }
+        if (matched.kind == .file_read or matched.kind == .file_write) {
+            if (!fallible_allowed) {
+                try self.fail(
+                    "luce.sema.fallible",
+                    call.span,
+                    "{s} can fail: write 'try {s}(…)' to pass the error on, or '{s}(…) catch …' to handle it",
+                    .{ matched.name, matched.name, matched.name },
+                );
+                return .failed;
+            }
+            return .{ .value = try self.openFallible(emitted, result) };
+        }
+        return .{ .value = .{ .register = emitted, .value_type = result } };
     }
 
     fn failIntrinsic(self: *FunctionBuilder, call: ast.Call, message: []const u8) Error!IntrinsicResult {

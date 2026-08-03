@@ -62,6 +62,22 @@ pub const Intrinsic = enum {
     is_none,
     optional_wrap,
     optional_unwrap,
+    /// The two an error needs beyond its terminators (docs/FAILURE.md).
+    /// `errored` asks whether the fallible call or intrinsic naming its
+    /// one argument came back errored rather than returning; it is the
+    /// only instruction that may read that register's outcome, and it
+    /// must stand in the same block as what it asks about.  `forget`
+    /// discards the pending error and its words — what `catch` does,
+    /// and the reason a caught error leaks nothing.
+    errored,
+    forget,
+    /// `error("…")` — record `user_error` and the program's own words
+    /// in the channel.  Not a terminator: the `unwind` that follows it
+    /// comes *after* the releases this frame owes, and the words are
+    /// copied into run-lifetime storage here, before any of them run
+    /// (docs/FAILURE.md).  The same shape as `trap_message`, for the
+    /// same reason.
+    raise_error,
     index_get,
     index_set,
     list_slice,
@@ -123,6 +139,30 @@ pub const Intrinsic = enum {
     export_storage,
 };
 
+/// Why a call failed, from the closed set an error may carry
+/// (docs/FAILURE.md).
+///
+/// **Two codes, and deliberately not four.**  `not_found` and
+/// `permission_denied` are the pair every reader expects, and neither
+/// can be told the truth here: a host service answers `abi.Answer`,
+/// which is `yes`/`no`/`exhausted`, so the boundary the errors come
+/// through physically cannot distinguish them.  Inventing the codes
+/// would be inventing the distinction.
+pub const ErrorCode = enum {
+    /// The world said no to an effect: a file that would not read, a
+    /// write that did not land.
+    io_failed,
+    /// `error("…")` — the program decided, and supplied the words.
+    user_error,
+
+    pub fn message(self: ErrorCode) []const u8 {
+        return switch (self) {
+            .io_failed => "the file operation failed",
+            .user_error => "error",
+        };
+    }
+};
+
 pub const TrapCode = enum {
     integer_overflow,
     divide_by_zero,
@@ -136,7 +176,6 @@ pub const TrapCode = enum {
     string_boundary,
     host_unavailable,
     argument_bounds,
-    file_read_failed,
     index_bounds,
     key_missing,
     empty_collection,
@@ -159,7 +198,6 @@ pub const TrapCode = enum {
             .string_boundary => "string slice splits a UTF-8 sequence",
             .host_unavailable => "host service unavailable",
             .argument_bounds => "program argument out of range",
-            .file_read_failed => "file read failed",
             .index_bounds => "index out of bounds",
             .key_missing => "key not found in map",
             .empty_collection => "pop from an empty list",
@@ -195,6 +233,12 @@ pub const Instruction = union(enum) {
     branch: struct { condition: Register, then_block: BlockId, else_block: BlockId },
     ret: ?Register,
     trap: TrapCode,
+    /// Leave this frame with an error already in the channel — what
+    /// `try` does on the failing side, and what follows `raise_error`.
+    /// It carries nothing because the releases it owes stand in the
+    /// block in front of it: `lowerReturn`'s three lines with one
+    /// terminator changed (docs/FAILURE.md).
+    unwind,
 
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };
@@ -204,7 +248,7 @@ pub const Instruction = union(enum) {
 
     pub fn isTerminator(self: Instruction) bool {
         return switch (self) {
-            .jump, .branch, .ret, .trap => true,
+            .jump, .branch, .ret, .trap, .unwind => true,
             else => false,
         };
     }
@@ -238,6 +282,16 @@ pub const Function = struct {
     name: []const u8,
     parameter_count: u32,
     return_type: Type,
+    /// Written `-> T!` or `-> !`: this function may come back errored
+    /// instead of returning, and every caller has to say which of
+    /// `try` and `catch` it means (docs/FAILURE.md).
+    ///
+    /// **Fallibility is an attribute of the function, not of its
+    /// type.**  `return_type` is the `T`, unchanged and unwidened,
+    /// which is what keeps `types.Type` out of this entirely — and
+    /// what gives Luce Ok-wrapping for free: `return x` in a `-> T!`
+    /// function returns `x`.
+    fallible: bool = false,
     locals: []Local,
     instructions: []Instruction,
     result_types: []Type,

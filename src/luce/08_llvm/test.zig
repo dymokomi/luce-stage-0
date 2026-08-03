@@ -155,6 +155,13 @@ const Capture = struct {
     trap_code: ?mir.TrapCode = null,
     trap_storage: [256]u8 = undefined,
     trap_length: usize = 0,
+    /// The error nobody caught, and the one position it carries — the
+    /// other way a run can end (docs/FAILURE.md).
+    error_code: ?mir.ErrorCode = null,
+    error_storage: [256]u8 = undefined,
+    error_length: usize = 0,
+    origin_storage: [256]u8 = undefined,
+    origin_length: usize = 0,
     /// The call trace that came with the trap, already rendered — the
     /// host has nowhere to allocate, and the text is what is compared.
     trace_storage: [8192]u8 = undefined,
@@ -174,6 +181,14 @@ const Capture = struct {
 
     fn trapTrace(self: *const Capture) []const u8 {
         return self.trace_storage[0..self.trace_length];
+    }
+
+    fn errorMessage(self: *const Capture) []const u8 {
+        return self.error_storage[0..self.error_length];
+    }
+
+    fn errorOrigin(self: *const Capture) []const u8 {
+        return self.origin_storage[0..self.origin_length];
     }
 
     /// The table the compiled program indexes.  A withheld group leaves
@@ -199,6 +214,7 @@ const Capture = struct {
             .term_write = if (provided.terminal) termWrite else null,
             .term_flush = if (provided.terminal) termFlush else null,
             .key_read = if (provided.terminal) keyRead else null,
+            .raised = raised,
         };
     }
 
@@ -221,6 +237,28 @@ const Capture = struct {
     fn print(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
         of(context).record("", text[0..@intCast(length)]);
         return .yes;
+    }
+
+    fn raised(
+        context: ?*anyopaque,
+        code: i32,
+        message: [*]const u8,
+        message_length: i64,
+        origin: *const abi.TraceFrame,
+    ) callconv(.c) void {
+        const self = of(context);
+        const words = message[0..@intCast(message_length)];
+        self.error_code = @enumFromInt(code);
+        self.error_length = @min(words.len, self.error_storage.len);
+        @memcpy(self.error_storage[0..self.error_length], words[0..self.error_length]);
+        const rendered = traceLine(
+            &self.origin_storage,
+            origin.function[0..@intCast(origin.function_length)],
+            origin.source[0..@intCast(origin.source_length)],
+            origin.line,
+            origin.column,
+        );
+        self.origin_length = rendered.len;
     }
 
     fn callDepth(context: ?*anyopaque) callconv(.c) i64 {
@@ -390,12 +428,18 @@ const Reference = struct {
     /// The trap's call trace, rendered the same way the compiled host
     /// renders its own.
     trap_trace: std.ArrayList(u8) = .empty,
+    /// The error nobody caught, and the one line it carries.
+    error_code: ?mir.ErrorCode = null,
+    error_message: []const u8 = "",
+    error_origin: std.ArrayList(u8) = .empty,
     leaked: ?u32 = null,
 
     fn deinit(self: *Reference) void {
         self.printed.deinit(self.gpa);
         self.trap_trace.deinit(self.gpa);
+        self.error_origin.deinit(self.gpa);
         self.gpa.free(self.trap_message);
+        self.gpa.free(self.error_message);
     }
 
     fn of(context: *anyopaque) *Reference {
@@ -540,6 +584,18 @@ const Reference = struct {
                         droppedLine(&encoded, raised.dropped),
                     );
                 }
+            },
+            .errored => |raised| {
+                self.error_code = raised.code;
+                self.error_message = try self.gpa.dupe(u8, raised.message);
+                var encoded: [512]u8 = undefined;
+                try self.error_origin.appendSlice(self.gpa, traceLine(
+                    &encoded,
+                    raised.origin.function,
+                    raised.origin.source,
+                    raised.origin.line,
+                    raised.origin.column,
+                ));
             },
             .unavailable => return error.UnexpectedlyUnavailable,
         }
@@ -728,7 +784,9 @@ test "the entry point is exported and every Luce function is internal" {
     defer gpa.free(rendered);
 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "define i32 @luce_main(ptr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "define internal i1 @luce.") != null);
+    // The result is the *outcome* word, not a bit: a Luce function
+    // answers ok, trapped, or errored (docs/FAILURE.md).
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "define internal i32 @luce.") != null);
 }
 
 test "checked integer arithmetic lowers to the overflow intrinsics" {
@@ -1293,6 +1351,15 @@ fn agreeGiven(gpa: Allocator, source: []const u8, provided: Provided) !void {
         // Same frames, same lines, same "... N more" — a trap is not
         // reported identically until its trace is.
         try std.testing.expectEqualStrings(reference.trap_trace.items, capture.trapTrace());
+    } else if (reference.error_code) |code| {
+        // An error is news, so what has to match is the news: the
+        // code, the words, and the one place it was raised
+        // (docs/FAILURE.md).  Not the census — a run that ended
+        // errored publishes nothing, on either engine.
+        try std.testing.expectEqual(abi.Status.errored, status);
+        try std.testing.expectEqual(code, capture.error_code.?);
+        try std.testing.expectEqualStrings(reference.error_message, capture.errorMessage());
+        try std.testing.expectEqualStrings(reference.error_origin.items, capture.errorOrigin());
     } else {
         try std.testing.expectEqual(abi.Status.ok, status);
         try std.testing.expectEqual(@as(?mir.TrapCode, null), capture.trap_code);
@@ -2224,11 +2291,11 @@ test "the null object put in a T? is present, because absence is not a handle" {
 
 test "files, arguments, the screen, and the keyboard agree" {
     try agree(std.testing.allocator,
-        \\func main():
+        \\func main() -> !:
         \\    print(str(arg_count()) + " " + arg(0) + "," + arg(1))
         \\    print(str(file_exists("notes.txt")))
-        \\    print(str(file_write("notes.txt", "hello world")))
-        \\    print(str(file_exists("notes.txt")) + " " + file_read("notes.txt"))
+        \\    try file_write("notes.txt", "hello world")
+        \\    print(str(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
         \\    print(str(term_rows()) + "x" + str(term_cols()))
         \\    term_clear()
         \\    term_move(2, 3)
@@ -2243,11 +2310,128 @@ test "files, arguments, the screen, and the keyboard agree" {
     );
 }
 
-test "a file that was never written traps file_read_failed on both engines" {
+test "a file that was never written errors on both engines" {
+    // The world said no, so this is news and not a bug: the two
+    // engines have to agree on the code, the words, and the one line
+    // the error records (docs/FAILURE.md).
+    try agree(std.testing.allocator,
+        \\func main() -> !:
+        \\    print("before")
+        \\    print(try file_read("nothing-here.txt"))
+        \\
+    );
+}
+
+test "a caught error is handled and the run finishes clean" {
     try agree(std.testing.allocator,
         \\func main():
-        \\    print("before")
-        \\    print(file_read("nothing-here.txt"))
+        \\    let text = file_read("nothing-here.txt") catch "(none)"
+        \\    print(text)
+        \\    file_write("/nowhere/at/all/notes.txt", "x") catch:
+        \\        print("write refused")
+        \\    print("still running")
+        \\
+    );
+}
+
+test "error() crosses several frames, and the origin is the raise site" {
+    try agree(std.testing.allocator,
+        \\func inner(n: Int) -> Int!:
+        \\    if n > 2:
+        \\        error("too big: " + str(n))
+        \\    return n * 2
+        \\
+        \\func middle(n: Int) -> Int!:
+        \\    return try inner(n)
+        \\
+        \\func outer(n: Int) -> Int!:
+        \\    return try middle(n)
+        \\
+        \\func main() -> !:
+        \\    print(str(try outer(1)))
+        \\    print(str(try outer(5)))
+        \\
+    );
+}
+
+test "an error path releases the objects and the String storage it owns" {
+    // The leak census is the proof: every frame the error left
+    // through released what it owned, so a caught error leaves the
+    // heap exactly where a returning call would (S4, S34).
+    try agree(std.testing.allocator,
+        \\func gather(path: String) -> Int!:
+        \\    let words = new List(String)
+        \\    words.append("alpha")
+        \\    words.append("beta")
+        \\    let held = "prefix-" + path
+        \\    let text = try file_read(path)
+        \\    words.append(held + text)
+        \\    return len(words)
+        \\
+        \\func main():
+        \\    var total = 0
+        \\    var round = 0
+        \\    while round < 3:
+        \\        total = total + (gather("nothing-here.txt") catch -1)
+        \\        round = round + 1
+        \\    print(str(total))
+        \\
+    );
+}
+
+test "text carried across a try keeps the form it was in" {
+    // The crossing a `try` needs is where errors and small-string
+    // optimisation meet.  A fallible call's result has to survive the
+    // branch on its outcome, and the slot it crosses in is the slot
+    // that owns it — so short text stays inside the value and long
+    // text keeps pointing where it did (docs/STRINGS.md).  Carrying
+    // it in a borrowing slot instead marked inline text as *outside*,
+    // and the release at the end of the statement freed a pointer into
+    // the frame.
+    try agree(std.testing.allocator,
+        \\func main() -> !:
+        \\    try file_write("notes.txt", "hello world")
+        \\    let short = try file_read("notes.txt")
+        \\    print(short + "/" + str(len(short)))
+        \\    try file_write("notes.txt", "a string well past the inline capacity of a value")
+        \\    let long = try file_read("notes.txt")
+        \\    print(long + "/" + str(len(long)))
+        \\    print(str(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
+        \\
+    );
+}
+
+test "a caught error leaves the value it never produced releasable" {
+    // A fallible function that errors writes nothing through `%out`,
+    // and the store that carries its result across the branch runs on
+    // that path too.  So the errored edge empties `%out` on the way
+    // out, and what the caller carries is the empty String rather than
+    // whatever the stack held — which the census then proves.
+    try agree(std.testing.allocator,
+        \\func load(path: String) -> String!:
+        \\    return try file_read(path)
+        \\
+        \\func main():
+        \\    var round = 0
+        \\    while round < 3:
+        \\        let text = load("nothing-here.txt") catch "(none)"
+        \\        print(text)
+        \\        round = round + 1
+        \\
+    );
+}
+
+test "a fallible call handing back an object gives it up on both paths" {
+    try agree(std.testing.allocator,
+        \\func load(path: String) -> List(String)!:
+        \\    let lines = new List(String)
+        \\    lines.append(try file_read(path))
+        \\    return lines
+        \\
+        \\func main():
+        \\    let missing = load("nothing-here.txt") catch new List(String)
+        \\    print(str(len(missing)))
+        \\    free(missing)
         \\
     );
 }

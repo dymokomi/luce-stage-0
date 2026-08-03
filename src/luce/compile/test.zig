@@ -750,12 +750,11 @@ test "host builtins type-check and stay host-gated" {
     , .{}, "luce.sema.host");
 
     var hosted = try compile_mod.compile(testing.allocator,
-        \\func main():
+        \\func main() -> !:
         \\    print("hello " + arg(0))
-        \\    if file_exists("notes.txt"):
-        \\        let text = file_read("notes.txt")
-        \\        if file_write("copy.txt", text):
-        \\            print("copied")
+        \\    let text = file_read("notes.txt") catch ""
+        \\    try file_write("copy.txt", text)
+        \\    print("copied")
         \\    term_clear()
         \\    term_move(0, 0)
         \\    term_style(114, -1, false)
@@ -767,10 +766,24 @@ test "host builtins type-check and stay host-gated" {
     try testing.expect(hosted == .success);
 
     try expectFailsOptions(
-        \\func main():
-        \\    let bad = file_read(7)
+        \\func main() -> !:
+        \\    let bad = try file_read(7)
         \\
     , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.type");
+    // A call that can fail may not be written as if it could not:
+    // this is the shape `if files.write_lines(...)` used to have, and
+    // it is the whole of why a swallowed failure is now unwritable.
+    try expectFailsOptions(
+        \\func main():
+        \\    let text = file_read("notes.txt")
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.fallible");
+    // And `try` needs a caller that said it can fail.
+    try expectFailsOptions(
+        \\func main():
+        \\    let text = try file_read("notes.txt")
+        \\
+    , .{}, .{ .entry_mode = .script, .allow_host = true }, "luce.sema.fallible");
     try expectFailsOptions(
         \\func main():
         \\    term_style(1, 2, 3)

@@ -144,20 +144,26 @@ strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
 ## files
 
 A thin, honest layer over the host's file builtins (host-gated; loom
-resolves paths relative to the current directory):
+resolves paths relative to the current directory).
+
+Everything that touches a file says `!`: the world decides whether a
+read or a write lands, so `try` it or `catch` it (docs/LANGUAGE.md).
+`exists` answers a plain Bool and is the exception — but it is a
+question about the past, never a guard for the call after it. Read
+the file and handle what the read says.
 
 ```luce
 import std.files
 
-files.exists(path)               # Bool
-files.read(path)                 # String; missing file traps
-                                 # file_read_failed — guard with exists
-files.write(path, text)          # Bool; false on failure
-files.read_lines(path)           # List(String), newlines stripped; a
+files.exists(path)               # Bool — a question, not a guard
+files.read(path)                 # String!
+files.write(path, text)          # !
+files.read_lines(path)           # List(String)!, newlines stripped; a
                                  # trailing final newline adds no
                                  # phantom empty line
-files.write_lines(path, lines)   # joined with newlines, ends with one;
-                                 # an empty list writes an empty file
+files.write_lines(path, lines)   # !; joined with newlines, ends with
+                                 # one, and an empty list writes an
+                                 # empty file
 ```
 
 ---
@@ -175,6 +181,9 @@ files.write_lines(path, lines)   # joined with newlines, ends with one;
 Deliberate constraints, until the language grows the features:
 no module state (top-level `let` is constant — the RNG's List-state
 pattern is the idiom for mutable state), and a function that may find
-nothing answers a `T?` (docs/LANGUAGE.md) while one that may *fail*
-still traps — recoverable errors are designed in docs/FAILURE.md and
-not built, so those signatures will be revisited then.
+nothing answers a `T?` while one that may *fail* says `!`
+(docs/LANGUAGE.md) — `files` is written that way throughout. What has
+not been revisited is `math`: eleven of its functions still `trap` on
+a domain they were handed, and the ones a caller might reasonably meet
+(`mean`, `vmin`, `vmax`, `variance` of an empty array) are candidates
+for `!` in their own pass.

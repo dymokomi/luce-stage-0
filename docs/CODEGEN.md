@@ -295,22 +295,27 @@ fires.  Never drop the prefix from this one.
 
 ## The generated module
 
-Each Luce function becomes an `internal` LLVM function whose `i1`
-result is the **trapped** flag:
+Each Luce function becomes an `internal` LLVM function whose `i32`
+result is the **outcome**:
 
 ```llvm
-define internal i1 @"luce.3.gcd"(ptr %host, ptr %rt, i64 %depth, i64 %0, i64 %1, ptr %out)
+define internal i32 @"luce.3.gcd"(ptr %host, ptr %rt, i64 %depth, i64 %0, i64 %1, ptr %out)
 ```
 
-True means the program is unwinding and the caller must return true in
-turn without reading `%out`.  Traps are fatal and uncatchable, so the
-flag only ever travels one way.  A returned value goes through `%out`,
-which is absent when the function returns nothing.  Every function
-carries `%host`, `%rt`, and `%depth` as hidden leading arguments.
+`0` returned, `1` trapped, `2` errored.  Anything but `0` means the
+program is unwinding and `%out` must not be read.  A trap is fatal and
+uncatchable, so it only travels one way and every caller propagates it
+unchanged; an **error** may be caught, so a caller that wrote `try` or
+`catch` branches on the word instead (see below).  A returned value
+goes through `%out`, which is absent when the function returns
+nothing.  Every function carries `%host`, `%rt`, and `%depth` as
+hidden leading arguments.
 
 That convention beat the zero-cost alternative — a `noreturn` host
 callback plus `longjmp` — because it needs no platform unwinding
-machinery and works unchanged on wasm32.
+machinery and works unchanged on wasm32.  It was an `i1` until errors
+arrived; widening it cost nothing (a register either way, `internal`
+linkage, no stability promise) and bought the whole error channel.
 
 Locals are entry-block `alloca`s that mem2reg promotes.  Every
 `alloca`, including scratch slots created deep in the walk, is emitted
@@ -608,6 +613,71 @@ releases exactly as the bare handle does.  It is the one place the box
 is filled entirely at the value site rather than partly in the entry
 block, because neither its tag nor its length is a fact about the type.
 
+## `T!` is the outcome word, and nothing else
+
+A fallible call ends in three instructions and no memory traffic:
+
+```llvm
+  %outcome = call i32 @"luce.2.read"(ptr %host, ptr %rt, i64 %d, ptr %out)
+  %trapped = icmp eq i32 %outcome, 1
+  br i1 %trapped, label %unwind, label %returned      ; a trap still leaves
+returned:
+  %errored = icmp eq i32 %outcome, 2                  ; …an error is a branch
+  br i1 %errored, label %handler, label %ok
+```
+
+**The success path reads nothing.**  No runtime call, no load of an
+error flag, no save/restore protocol — the word the callee answered
+*is* the channel, and `errored` is one `icmp` against a register.  That
+is the whole reason the outcome is a word rather than a bit
+(docs/FAILURE.md).
+
+The two engines are the least alike here of anything the oracle
+compares, and deliberately so.  The interpreter has no outcome word:
+it keeps the error in `Runtime.raised` and `errored` reads that field,
+because its frames are on an explicit stack and a `ret` there is a
+pop.  Compiled frames are native frames and the value comes back in a
+register, so that is where the answer lives.  Two mechanisms, one set
+of answers — which is what `agree` checks, down to the leak census
+after a caught error.
+
+The message travels as `libluce_rt`, not as generated code:
+`luce_rt_raise_error` takes the words and copies them, and
+`luce_rt_raise_io` builds `cannot read PATH` itself.  Both copies are
+mandatory rather than tidy: an error unwinds *through* releases, so
+`error("x: " + str(n))` hands over bytes a statement temporary is
+about to give back.  Building the words in one place is also what
+makes both engines report the same sentence about the same path.
+
+`file_read` is the one host service whose two outcomes do genuinely
+different things, and it branches before it interns: the
+out-parameters are filled only where the host said yes, and reading
+them on the other side would read whatever was on the stack.
+
+Nothing is recorded on the way out.  An error's **origin** — one
+function index and one instruction index, resolved through the same
+constant tables a trap's trace uses — is written once at the raise and
+never appended to.  So the unwinding edge for an error carries no
+`luce_rt_unwound` call at all: it empties `%out` and returns `2`.
+
+That emptying is part of the convention rather than tidiness.  A
+caller carries a fallible call's result across the branch on its
+outcome, and the store that carries it stands *before* the branch — so
+it runs on the failing path too, and a callee that wrote nothing would
+leave it copying whatever the stack held.  Putting the store on the
+callee's errored edge charges the path that already failed and leaves
+the success path untouched, and it makes the compiled answer the one
+the interpreter gives for free: a destination register nobody wrote is
+still the `.none` its frame started at.
+
+The slot that carries the value is the slot that **owns** it, and that
+is where errors meet small-string optimisation.  An owning slot holds
+a whole `runtime.Value`; a borrowing one holds the register shape,
+which for a String is `{ptr, i64}` and cannot say the text is *inside*
+the value it came from.  Carrying a result in a borrowing slot marked
+short text as outside text, and the release at the end of the
+statement freed a pointer into the frame (docs/STRINGS.md).
+
 ## `libluce_rt`
 
 `src/luce/runtime.zig` plus
@@ -660,7 +730,7 @@ it; `abi.version` is the number a loader checks.  A compiled artifact
 exports one symbol:
 
 ```c
-int32_t luce_main(const LuceHost *host);   /* 0 ok, 1 trapped, 2 exhausted */
+int32_t luce_main(const LuceHost *host);   /* 0 ok, 1 trapped, 2 exhausted, 3 errored */
 ```
 
 `LuceHost` is a flat `extern struct` of `context` followed by one
@@ -679,10 +749,13 @@ capability a host may withhold.
 
 **Three rules hold the whole thing together:**
 
-- **`trap` is required.**  `luce_main` calls it without a null check,
-  once, after the program has stopped, with the trap's code, its
-  words, its call trace, and the number of frames the trace's cap cut.
-  One channel, always present.
+- **`trap` is required, and so is `raised`.**  `luce_main` calls each
+  without a null check, once, after the program has stopped: `trap`
+  with the trap's code, its words, its call trace, and the number of
+  frames the trace's cap cut; `raised` with an uncaught error's code,
+  its words, and the one position it carries.  A host that can run a
+  program has to be able to say why it stopped, and those are two
+  different sentences.
 - **Every effect service is optional and fails closed.**  A null slot
   traps `host_unavailable` rather than touching anything — the same
   rule the interpreter follows, and what keeps the pure `evaluate()`
@@ -714,7 +787,15 @@ single `Answer` convention, which changed `print`'s return type and so
 required the bump.  **4** made a trap a whole trap: `trap` carries the
 call trace and is called once when the program has stopped, and
 `call_depth` arrived beside it, because a trace of a runaway recursion
-is only worth having if the recursion traps in the first place.
+is only worth having if the recursion traps in the first place.  **5**
+made the artifact tag name its machine the way Zig names one, so a
+loader answers "is this mine?" without libLLVM in the process.  **6**
+put a short String in the value itself.  **7** gave a run a third way
+to end: `raised` arrived beside `trap`, and `luce_main` answers `3` for
+a program that raised something nobody caught.  Three and not two —
+docs/FAILURE.md predicted `2`, which `exhausted` had held since
+version 3, and renumbering a published answer would have changed what
+every existing loader believes.
 
 `key_text` has no slot of its own: it answers what the last `key_read`
 carried, which the runtime remembers, so it fails closed on

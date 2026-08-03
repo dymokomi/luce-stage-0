@@ -77,6 +77,22 @@ pub const ReportFn = *const fn (
     dropped: i64,
 ) callconv(.c) void;
 
+/// How an uncaught error reaches the host: once, from `luce_main`,
+/// when nothing caught it.  `code` is the numeric value of
+/// `mir.ErrorCode`; `message` and `origin` are borrowed for the
+/// duration of the call.
+///
+/// **One frame, not a trace** (docs/FAILURE.md).  `origin` is where
+/// the error was raised and the only position it carries, because the
+/// alternative charges the success path for it.
+pub const ErrorReportFn = *const fn (
+    context: ?*anyopaque,
+    code: i32,
+    message: [*]const u8,
+    message_length: i64,
+    origin: *const Frame,
+) callconv(.c) void;
+
 /// A trace keeps this many innermost frames and counts the rest.
 /// Runaway recursion would otherwise report the whole depth budget,
 /// and the innermost frames are the ones that say anything.  The

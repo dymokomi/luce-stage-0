@@ -34,7 +34,10 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         }
         const return_type_name = try typeName(allocator, program, function.return_type);
         defer allocator.free(return_type_name);
-        try appendPrint(&text, allocator, ") -> {s}\n", .{return_type_name});
+        try appendPrint(&text, allocator, ") -> {s}{s}\n", .{
+            return_type_name,
+            if (function.fallible) "!" else "",
+        });
         for (function.locals[function.parameter_count..], function.parameter_count..) |local, index| {
             const local_type_name = try typeName(allocator, program, local.local_type);
             defer allocator.free(local_type_name);
@@ -152,6 +155,7 @@ fn printInstruction(
             }
         },
         .trap => |code| try appendPrint(text, allocator, "trap {s}", .{@tagName(code)}),
+        .unwind => try appendPrint(text, allocator, "unwind", .{}),
     }
     try text.append(allocator, '\n');
 }

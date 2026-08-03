@@ -108,6 +108,8 @@ pub const Lowering = struct {
     name: []const u8,
     parameter_count: u32 = 0,
     return_type: Type,
+    /// Written `-> T!` or `-> !` (docs/FAILURE.md).
+    fallible: bool = false,
     /// Stage 1's registry entry every origin offset indexes.  `build`
     /// turns the offsets into lines and columns through it, and names
     /// the function's file from it for tracebacks.
@@ -231,6 +233,30 @@ pub const Lowering = struct {
         // A spill carries a borrow across a branch and dies with the
         // statement that made it, so it owns nothing.
         const local = try self.hiddenLocal(value_type, false);
+        try self.store(local, value);
+        return local;
+    }
+
+    /// The same crossing, for a value that is *this frame's own*: a
+    /// fallible call's result has to survive the branch on its outcome
+    /// (docs/FAILURE.md), and unlike a spill it arrives owning
+    /// something.
+    ///
+    /// So the slot that carries it is the slot that owns it — one
+    /// place rather than two, and the caller registers it as the
+    /// statement's temporary on the side where the call returned.
+    /// **A borrowing slot would not do**, and not only for tidiness: a
+    /// slot that owns its storage holds a whole `runtime.Value`, which
+    /// is the only shape short text survives in, and one that holds
+    /// the register shape instead would carry a pointer into whatever
+    /// scratch the call answered into (docs/STRINGS.md).
+    pub fn carry(
+        self: *Lowering,
+        value: Register,
+        value_type: Type,
+        owns_storage: bool,
+    ) Error!LocalId {
+        const local = try self.hiddenLocal(value_type, owns_storage);
         try self.store(local, value);
         return local;
     }
@@ -446,6 +472,43 @@ pub const Lowering = struct {
 
     pub fn ret(self: *Lowering, value: ?Register) Error!void {
         _ = try self.emit(.{ .ret = value }, .none);
+    }
+
+    /// `error("…")` — put `user_error` and the program's words in the
+    /// channel.  The caller emits its releases and then `unwind`.
+    pub fn raiseError(self: *Lowering, message: Register) Error!void {
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = message;
+        _ = try self.emit(
+            .{ .intrinsic = .{ .kind = .raise_error, .arguments = arguments } },
+            .none,
+        );
+    }
+
+    /// `try` on a call that raised — leave this frame with whatever
+    /// the callee already put in the channel.  The releases stand in
+    /// the block in front of it.
+    pub fn unwind(self: *Lowering) Error!void {
+        _ = try self.emit(.unwind, .none);
+    }
+
+    /// Did the fallible call or intrinsic in `register` come back
+    /// errored?  Must be emitted in the block the call stands in.
+    pub fn errored(self: *Lowering, register: Register) Error!Register {
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = register;
+        return self.emit(
+            .{ .intrinsic = .{ .kind = .errored, .arguments = arguments } },
+            .boolean,
+        );
+    }
+
+    /// `catch` handled it: the error and its words are discarded.
+    pub fn forget(self: *Lowering) Error!void {
+        _ = try self.emit(
+            .{ .intrinsic = .{ .kind = .forget, .arguments = &.{} } },
+            .none,
+        );
     }
 
     // Control flow ----------------------------------------------------------
@@ -785,6 +848,7 @@ pub fn build(
             .name = lowering.name,
             .parameter_count = lowering.parameter_count,
             .return_type = lowering.return_type,
+            .fallible = lowering.fallible,
             .locals = try lowering.locals.toOwnedSlice(arena),
             .instructions = try lowering.instructions.toOwnedSlice(arena),
             .result_types = try lowering.result_types.toOwnedSlice(arena),

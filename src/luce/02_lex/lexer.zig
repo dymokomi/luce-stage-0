@@ -461,7 +461,10 @@ const Lexer = struct {
                     try self.emit(.not_equal, .{ .start = self.offset, .end = self.offset + 2 });
                     self.offset += 2;
                 } else {
-                    try self.unexpectedCharacter();
+                    // A lone `!` is the fallibility mark on a return
+                    // type and nothing else; the parser is where it
+                    // has to be one.
+                    try self.single(.bang);
                 }
             },
             '<' => {
@@ -1586,7 +1589,7 @@ test "a lone apostrophe does not swallow the rest of the line" {
 
 test "habitual punctuation gets a hint toward the Luce spelling" {
     const allocator = testing.allocator;
-    for ([_][]const u8{ "a = 1;\n", "a = 1 & 2\n", "a = {1}\n", "a = ! b\n" }) |source| {
+    for ([_][]const u8{ "a = 1;\n", "a = 1 & 2\n", "a = {1}\n" }) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
         const tokens = try lex(allocator, source, &diagnostics);

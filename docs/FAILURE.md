@@ -118,6 +118,50 @@ Not `not_found`/`permission_denied`, because `abi.Answer` is
 `yes/no/exhausted` and the host physically cannot tell them apart;
 inventing those codes would be a lie.
 
+> **Corrected once built: `catch` has two forms, and it needs both.**
+>
+> The memo assumed one — the expression `a catch b` — and the corpus
+> refused it twice. `editor.luc` handles a failed save by setting two
+> fields and a failed open by choosing a greeting; neither is a
+> fallback *value*, and writing them as one produced worse code than
+> the Bool it replaced. So a statement whose call may raise also takes
+> an indented handler:
+>
+> ```luce
+> files.write_lines(path, rolls) catch:
+>     print("could not write " + path)
+>
+> opening = files.read(path) catch:
+>     greeting = "new file"
+> ```
+>
+> **This is not the Python block this memo refuses**, and the
+> difference is the one the refusal turns on: it guards exactly one
+> call, so "which statement failed" has one answer and static cleanup
+> emission has one place to put it. Two statement shapes take it — a
+> call, and a plain assignment whose value is a call — and no others.
+> A `let` is deliberately not among them: the handler would have to
+> supply the value the name binds, and only `catch EXPR` can say that.
+> A compound assignment is refused for the same reason in reverse —
+> `x += f()` reads its place first, so there would be two things in
+> front of the word and only one of them can fail.
+>
+> One token of lookahead separates the two spellings, because nothing
+> else can follow the operator form with a colon.
+
+> **Corrected once built: `file_write` is fallible too.** The memo
+> named only `file_read_failed`, and named `dice.luc:41` — `if
+> files.write_lines(...)` with no else — as a live bug "caused directly
+> by Bool-as-error". Those two sentences do not fit together: leaving
+> `file_write` a Bool leaves the bug writable. So a write that did not
+> land is `io_failed` as well, `files.write` and `files.write_lines`
+> are `-> !`, and the `if` with no `else` is now a `luce.sema.call`
+> because there is nothing to test. The rule at the top of this memo
+> was always going to say so — a disk that refuses a write is the world
+> deciding, and no non-racy check prevents it.
+>
+> `file_exists` stays a Bool. It is a question, not a failure.
+
 ## Ownership on the error path needs nothing new
 
 This is where the answer is Zig's, wholesale, and the reason is in our
@@ -193,6 +237,60 @@ outcome channel already has room: `1` is trapped, `2` becomes errored,
 and the value still travels in `%out`. Compare Zig, which sret-returns
 every payload-carrying `!T` — even an 8-byte one — through memory.
 
+> **Corrected once built.** Half of that paragraph held and half of it
+> did not.
+>
+> The channel *did* have room, and the numbers are the ones written
+> here — but the channel was an `i1`, so making room meant widening
+> every internal Luce function's result to `i32`. That is free (a
+> register either way, `internal` linkage, no promise to keep) and it
+> is the reason the compiled path reads no flag on the success side of
+> a `try`: the outcome word the call answered *is* the channel, and
+> `errored` is one `icmp` against it. No load, no runtime call.
+>
+> `luce_main`'s status is a different number and could not take `2`,
+> which `exhausted` had held since ABI 3 — a version that arrived
+> between this memo and the build. So the published answer is
+> `errored = 3`, and `abi.version` went to **7**, not 5: 5 named the
+> artifact's machine, 6 put a short String in the value, and the
+> memo's arithmetic was two versions out of date by the time anyone
+> read it. `.lc` `format_version` is 14.
+>
+> Three things did need a shape after all. **`raise_error` copies the
+> words**: an error unwinds *through* releases, which is the whole
+> difference from a trap, so `error("x: " + str(n))` hands over bytes a
+> statement temporary is about to give back. The copy is one line in
+> `Runtime.raise` and both engines reach it. **A fallible call's value
+> crosses a block boundary**, because the branch on its outcome ends
+> the block it was made in — so it travels through a hidden slot, and
+> that slot is the one that *owns* it: one place, not two, with the
+> statement's temporary recorded on the returning side so the failing
+> side does not release what it never stored. And **one value must be
+> parked once**: `try f()` hands back what `f()` produced, so the walk
+> sees the same register twice, and two hidden locals both claiming one
+> String's bytes free them twice. That was a real double free, found by
+> running the feature.
+>
+> The crossing is also where errors meet small-string optimisation,
+> which landed between the design and the build. A slot that owns its
+> storage holds a whole `runtime.Value`; a borrowing one holds the
+> register shape, which for a String is `{ptr, i64}` and cannot say
+> that the text is *inside* the value it was read out of. Carrying a
+> fallible call's result in a borrowing slot therefore marked short
+> text as outside text, and the release at the end of the statement
+> freed a pointer into the frame. Making the carrying slot the owning
+> slot fixes it at the root rather than at the symptom, and it is what
+> the value wanted anyway.
+>
+> One more thing the two features settled between them: a fallible
+> function **empties `%out` on its errored edge**. The store that
+> carries a result across the branch stands before the branch, so it
+> runs on the failing path too, and a callee that returned nothing
+> would leave it copying whatever the stack held. Emptying costs the
+> failing path one store and the success path nothing, and it makes the
+> compiled answer the one the interpreter already gave: a destination
+> register nobody wrote is still the `.none` its frame started at.
+
 ## Order
 
 Optionals ship first and foreclose nothing. Every seam is disjoint:
@@ -212,9 +310,14 @@ to exist.
    correction above. Steps 2 and 3 were overtaken: leaving `T?` on the
    interpreter made every program calling `parse_int` fall back, so
    this came before them.
-5. Errors on the interpreter.
-6. LLVM, ABI 5, loom reporting.
-7. `files.luc` real signatures; `calc.luc` as the worked example.
+5. ~~Errors on the interpreter.~~ **Done.**
+6. ~~LLVM, ABI 5, loom reporting.~~ **Done**, at ABI **6** — see the
+   correction below.
+7. ~~`files.luc` real signatures; `calc.luc` as the worked example.~~
+   **Done**, except that the worked example turned out to be
+   `dice.luc` and `editor.luc` — see below. Steps 5, 6 and 7 shipped
+   together, because leaving errors on the interpreter would have
+   repeated exactly the regression step 4 had to undo.
 
 ## Refused, with reasons
 

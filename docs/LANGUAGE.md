@@ -80,7 +80,8 @@ self-check, not a program diagnostic.
 
 A trailing `?` makes a type nullable: `Int?` is an `Int` that may not
 be there, and `none` is the value that is not.  `?` means nullable and
-**only** nullable — it is never spent on errors (docs/FAILURE.md).
+**only** nullable — failure is `!` and is never spelled with a `?`
+(see the next section).
 
 ```luce
 var user: User? = none
@@ -154,6 +155,124 @@ Using a `T?` where a `T` belongs is `luce.sema.absent` (or a
 the name in front of you.  So is a test or a fallback that can never
 fire: once a name is known to hold a value, saying so again is dead
 code, not caution.
+
+## Failure: `T!`, `try`, `catch`
+
+A trailing `!` on a return type says the call may not succeed:
+`String!` hands back a String or an error, and a bare `-> !` hands
+back nothing or an error. `!` means *failure* and only failure — it is
+never spent on absence, which is `?`'s job (docs/FAILURE.md).
+
+```luce
+func read(path: String) -> String!:
+    return try file_read(path)
+
+func main() -> !:
+    let text = try files.read(arg(0))
+    let cfg  = files.read("settings") catch ""
+```
+
+**`T!` is not a type.** Fallibility is an attribute of the *function*,
+so there is no `T!` to declare a variable of, put in a List, or write
+in a struct field — and `return x` in a `-> T!` function just returns
+`x`, with nothing to wrap it in.
+
+**The rule that decides which failures are errors:**
+
+> A failure is an **error** if and only if a correct program, given
+> correct input, can still meet it — because the world decided, not the
+> program. Everything else is a trap. **Traps are bugs. Errors are
+> news.**
+
+Operationally: could the caller have prevented it with a check that is
+not racy? If yes, it is a trap and the check is the program's job. If
+the check is inherently racy or impossible, it is an error. And if the
+answer is simply "there is nothing there", with no reason worth
+carrying, it is neither — it is `T?`.
+
+That rule leaves eighteen of the twenty trap codes exactly where they
+were. What it moves is the host's file boundary: a read or a write the
+world refuses is an error, because `file_exists` before `file_read` is
+a race no program can close.
+
+**A call that can fail must say which it means.** Ignoring the outcome
+is not a spelling the grammar has:
+
+```luce
+files.write(path, text)            # luce.sema.fallible
+try files.write(path, text)        # pass it to my caller
+files.write(path, text) catch:     # handle it here
+    print("cannot write " + path)
+```
+
+`try` propagates: it releases what this frame owns, innermost scope
+first, and leaves — the same three lines `return` ends with, with one
+terminator changed. It needs a caller that said `!`, or it is
+`luce.sema.fallible`.
+
+`catch` handles, and deliberately discards the reason. It has two
+forms, for the two shapes recovery takes:
+
+```luce
+let text = files.read(path) catch ""        # a fallback value
+
+files.write(path, text) catch:              # a handler block
+    print("cannot write " + path)
+
+opening = files.read(path) catch:           # …after a plain assignment
+    greeting = "new file"
+```
+
+The block form guards exactly one call, which is what separates it
+from an exception block: there is never a question about which
+statement failed. It attaches to a call written as a statement and to
+a plain assignment, and to nothing else — a `let` would need the
+handler to supply the value the name binds, and only `catch EXPR` can
+say that.
+
+`catch` binds like `else`, between the comparisons and `+`, and
+associates right. Both sides must agree on ownership: if the call
+hands over a fresh object, the fallback must too.
+
+**`error("…")` raises**, with the program's own words:
+
+```luce
+func check(n: Int) -> Int!:
+    if n < 0:
+        error("negative: " + str(n))
+    return n
+```
+
+It never comes back, so — like `trap("…")` — it may stand where a
+value belongs: `parse_int(digits) else error("not a number")`.
+
+An error carries a stable code and a message. There are exactly two
+codes: **`io_failed`**, which the host's file services raise, and
+**`user_error`**, which `error(...)` raises. Not `not_found` and
+`permission_denied`, because a host service answers yes, no, or out of
+memory, and cannot tell those two apart — inventing the codes would be
+inventing the distinction.
+
+An uncaught error out of `main() -> !` ends the run, and loom prints
+the words and the **one** place the error was raised:
+
+```
+loom: error: expected a number at position 4 [user_error]
+    raised in Scan.number (calc.luc:35:13)
+```
+
+One line, not a stack. A trap is a bug and the stack is its diagnosis;
+an error is news, and where it came from is the news. (Carrying a full
+trace would also charge the *success* path for it, which docs/MODES.md
+forbids.)
+
+There is no `errdefer` and there never will be: Luce's cleanup is
+scope ownership, which already knows that `return` moves what it hands
+back and `try` moves nothing. The one bit `errdefer` encodes is
+already a parameter of the unwinder (docs/OWNERSHIP.md S4).
+
+`programs/calc.luc` is the worked example, and `docs/FAILURE.md` is
+the decision record.
 
 ## Collections
 
@@ -430,8 +549,10 @@ arrives is a separate decision — docs/V2.md).
 
 ## Traps
 
-Errors are traps: deterministic, with stable codes, and they abort the
-program without publishing anything.  New codes in this round:
+A trap is a **bug**: deterministic, with a stable code, and it aborts
+the program without publishing anything.  What a correct program can
+meet anyway is an *error* and is not here (see the section above).
+New codes in this round:
 `index_bounds`, `key_missing`, `empty_collection`, `use_after_free`,
 `null_object`, `not_owned`, `bad_codepoint`.
 Long-standing codes:
@@ -513,9 +634,9 @@ First-class functions, closures, user-defined methods/receivers
 (`x.f()` is builtin sugar, not dispatch), exceptions (traps are
 final), implicit conversions, shadowing, mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate
-decision), recoverable errors (`T!`, `try`, `catch` — designed in
-docs/FAILURE.md, not built; traps and `T?` are what exist),
-garbage collection and reference counting (scope
+decision), `errdefer` and error return traces (docs/FAILURE.md
+refuses both, with reasons), typed error sets and error payloads
+beyond the message, garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
 and enums/unions.  (String interpolation shipped: see f-strings
 above.)

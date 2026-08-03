@@ -43,7 +43,9 @@ fn run(source: []const u8) !Outcome {
             return switch (outcome) {
                 .success => |success| .{ .leaked = success.leaked_objects },
                 .trap => |trap| .{ .trap = trap.code },
-                .unavailable => error.TestUnexpectedResult,
+                // Ownership is proved with pure programs; nothing here
+                // can raise, so an error would mean the spec drifted.
+                .errored, .unavailable => error.TestUnexpectedResult,
             };
         },
     }

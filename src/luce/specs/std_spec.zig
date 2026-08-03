@@ -38,6 +38,10 @@ fn expectOk(source: []const u8) !void {
                     std.debug.print("unexpected trap: {s} ({s})\n", .{ trap.message, @tagName(trap.code) });
                     return error.TestUnexpectedResult;
                 },
+                .errored => |raised| {
+                    std.debug.print("unexpected error: {s} ({s})\n", .{ raised.message, @tagName(raised.code) });
+                    return error.TestUnexpectedResult;
+                },
                 .unavailable => return error.TestUnexpectedResult,
             }
         },

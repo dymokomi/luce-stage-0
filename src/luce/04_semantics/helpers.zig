@@ -82,6 +82,7 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
         .unary => |unary| deeperThan(unary.operand, left),
         .give => |give| deeperThan(give.operand, left),
         .copy => |copied| deeperThan(copied.operand, left),
+        .try_call => |attempt| deeperThan(attempt.operand, left),
         .binary => |binary| deeperThan(binary.left, left) or deeperThan(binary.right, left),
         .call => |call| anyDeeperArgument(call.arguments, left),
         .method => |method| deeperThan(method.target, left) or
@@ -234,6 +235,15 @@ pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     return previous[b.len];
 }
 
+/// `trap("…")` and `error("…")` never come back, so a block ending in
+/// one leaves as surely as one that returns.  Both names are reserved,
+/// so nothing a reader declares can wear them.
+fn leavesByCall(expression: *const ast.Expression) bool {
+    if (expression.* != .call) return false;
+    const callee = expression.call.callee;
+    return std.mem.eql(u8, callee, "trap") or std.mem.eql(u8, callee, "error");
+}
+
 /// Conservative all-paths-return: a block returns when some statement
 /// certainly returns; an if returns only when both arms do.  Loops
 /// never guarantee a return.
@@ -241,6 +251,7 @@ pub fn returnsOnAllPaths(block: ast.Block) bool {
     for (block.statements) |statement| {
         switch (statement) {
             .return_statement => return true,
+            .expression => |written| if (leavesByCall(written.value)) return true,
             .conditional => |conditional| {
                 if (conditional.else_block) |else_block| {
                     if (returnsOnAllPaths(conditional.then_block) and
@@ -264,6 +275,7 @@ pub fn alwaysExits(block: ast.Block) bool {
     for (block.statements) |statement| {
         switch (statement) {
             .return_statement, .break_statement, .continue_statement => return true,
+            .expression => |written| if (leavesByCall(written.value)) return true,
             .conditional => |conditional| {
                 if (conditional.else_block) |else_block| {
                     if (alwaysExits(conditional.then_block) and

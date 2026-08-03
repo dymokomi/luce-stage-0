@@ -860,6 +860,16 @@ Five things the SSO section did not have quite right.
    words they had, which is what keeps `find_from`'s inner loop over a
    String parameter exactly as it was.
 
+   Errors arrived after this and had to honour it. A fallible call's
+   result crosses the branch on its outcome through a hidden slot
+   (docs/FAILURE.md), and that slot is *not* a borrowing spill: it is
+   the slot that owns the value, so the form survives the crossing.
+   Carrying it in a borrowing one instead marked inline text as
+   outside text, and the release at the end of the statement freed a
+   pointer into the frame — the same failure this rule exists to
+   prevent, met from a direction that did not exist when it was
+   written.
+
 3. **The backend has to remember which box a register came from.** Two
    intrinsics ask *which form* rather than merely reading the bytes:
    `drop_storage`, which frees, and `export_storage`, which decides
