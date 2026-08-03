@@ -29,13 +29,13 @@ If a change makes the architecture harder to see, do not merge it.
   no panics for ordinary failure
 - Allocation is explicit: functions that allocate take an `Allocator`
 - Anything that may touch the host takes an explicit `std.Io`; the
-  language module (`src/luce/`) never sees the host except through
-  `backend.Host`
+  language module (`src/luce/`) never sees the host except through the
+  host table it is handed (`08_llvm/abi.zig`, `interpreter.Host`)
 - Tagged unions over class hierarchies (`Value`, `Instruction`,
   `Result`); named payload structs so signatures say what they take —
   `anytype` is for format arguments, not for data
 - Function-pointer tables only where substitution is real
-  (`backend.Host`, `compile.Loader`)
+  (`abi.Host`, `compile.Loader`)
 
 ## Ownership
 
@@ -86,12 +86,11 @@ src/luce/                     the language, one numbered folder per stage:
   01_source 02_lex 03_parse   bytes to tokens to tree
   04_semantics                resolve + type-check + validate (and, still, the MIR lowering)
   05_hir                      a named seam; nothing in it yet
-  06_mir                      the typed MIR, verifier, printer, and the .lc format
-  07_optimize                 MIR passes; dead-code elimination is the only one
+  06_mir                      the typed MIR, verifier, printer, module format
+  07_optimize                 three MIR passes: prune, ownership, dead
   08_llvm                     MIR to LLVM IR to an object; the host ABI
   runtime                     libluce_rt: the heap, ownership, containers, text
-  interpreter                 the reference engine over that runtime
-  backend.zig                 the execution boundary
+  interpreter                 the differential oracle over that runtime
   support/                    types and diagnostics, used by every stage
   specs/                      the executable specification — its own module
 src/apps/luce/                the compiler CLI (build, check, ir)

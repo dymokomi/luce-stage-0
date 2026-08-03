@@ -77,30 +77,33 @@ what removes those.
 
 ### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
 
-It can now.  `luce build --emit=exe` writes a standalone binary,
-`--emit=library` writes a tagged `.lcn` artifact, and **`loom run`
-prefers compiled code for every `.lc` it is handed**, building the
-artifact beside the program on first use and falling back to the
-interpreter only when the compiled path is genuinely unavailable.
-`LOOM_ENGINE` forces either engine.
+It is the only engine now.  **A `.lc` *is* machine code** — the
+tagged shared library `luce build` writes — and `loom run FILE.lc` is
+one `dlopen`, one symbol lookup and one call.  `--emit=exe` writes a
+standalone binary, `--emit=object` a relocatable object, and there is
+nothing left to fall back to or select between (docs/ENGINE.md).
 
-What that delivers, measured through `loom run` rather than in a
-harness: **loops 6995 ms → 92 ms, matmul 5767 ms → 22 ms, strings
-931 ms → 57 ms.**  Warm startup is the interpreter's within noise; a
-cold run pays LLVM at `-O3` and one `cc` link (80–320 ms) and still
-finishes far ahead on anything that computes.
+What that delivered, measured through `loom run` while there was still
+an interpreter to measure against: **loops 6995 ms → 92 ms, matmul
+5767 ms → 22 ms, strings 931 ms → 57 ms.**  Startup is 3–4 ms and
+compiles nothing; compiling is `luce build`'s job and happens when it
+is asked for.
 
 The three decisions, all in `docs/CODEGEN.md`: `cc` links, at build
 time only, so the *run* path still invokes nothing; a standalone
 binary gets **loom's own host**, terminal included, because a
 program's behaviour must not depend on who started it; and every
-artifact carries an `abi.Artifact` tag — machine, ABI version, and a
-content hash of the program — so a stale or foreign one is refused by
-name instead of crashing.  The cache keys on content, never mtime.
+artifact carries an `abi.Artifact` tag — machine, ABI version, a
+content hash of the program, and the identity of the code generator —
+so a stale or foreign one is refused by name instead of crashing.  The
+key is content, never mtime.
 
-What is left of this item is small and named in CODEGEN.md's last
-section: no wasm32 emit, nothing sweeps `.lcn` files, and `zig build`
-does not pre-warm the bundled programs.
+What is left of this item is named in docs/ENGINE.md: an artifact is
+666–716 KB whatever the program says, because `libluce_rt` is linked
+statically into each one, and a shared `libluce_rt` is the named
+future optimization; and a `.lc` runs only on the machine that built
+it, because cross-compilation needs one `libluce_rt` per target and a
+linker willing to take it.
 
 ---
 

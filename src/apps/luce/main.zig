@@ -265,8 +265,14 @@ fn buildNative(
         },
     }
 
-    // The machine the tag claims, which is the one a loader checks.
-    try out.print("{s} -> {s} ({s})\n", .{ request.path, target, luce.llvm.abi.machine });
+    // One line, the same on every host: what went in and what came
+    // out.  The machine is deliberately not in it — every artifact is
+    // for the machine that built it, the tag is where that fact is
+    // written down, and a loader is what reads it (`llvm.abi.machine`).
+    // A build line that named the host would also make every recorded
+    // transcript of one host-specific, which the site's samples are
+    // compared against byte for byte.
+    try out.print("{s} -> {s}\n", .{ files.displayName(request.path), target });
     try out.flush();
     return 0;
 }

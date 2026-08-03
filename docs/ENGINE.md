@@ -17,13 +17,19 @@ Everything below was measured on this tree at `df5d48f`, Apple M4 Max,
 `./build.sh` (ReleaseSafe) unless a number says otherwise. `zig build
 test` is green: **849/849 in 71.1 s**.
 
-> **Steps 1, 2, 3 and 8 are done.** `.lc` `format_version` is 17,
-> `abi.version` is unchanged at 8 (nothing in the host ABI ever named a
-> port or a `Bytes`), the lowering is total, and `zig build test` is
-> **838/838 in ~4 min** (3 m 59 s – 4 m 06 s over two runs). The executable specification is its own
-> module and every test in it runs on both engines; the interpreter's
-> own suite is **2** tests (36 before, 39 before that). Each step below
-> carries a note on what it cost in contact with the code.
+> **All eight steps are done.** The interpreter ships in nothing:
+> `luce` and `loom` do not reach it, and it is the second arm of every
+> spec. `luce build` writes machine code and calls it `.lc`;
+> serialized MIR keeps the format, loses the deliverable, and answers
+> to `.lcm` when it has to reach a disk. There is no fallback, no
+> `LOOM_ENGINE`, no `backend.zig`, and stage 7 is three passes. The
+> module's `format_version` is 17 and `abi.version` is unchanged at 8
+> — nothing about the *contract* moved, only what is on either side of
+> it. `zig build test` is **832/832 in ~4 min**, of which 536 are the
+> executable specification, every one of them run on both engines and
+> compared. Each step below carries a note on what it cost in contact
+> with the code, and every one of those notes exists because the memo
+> was wrong about something.
 
 ---
 

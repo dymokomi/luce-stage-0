@@ -5,12 +5,19 @@ hands that to libLLVM, and gets back machine code.  `docs/CODEGEN.md`
 is the decision record for why; this is the description of what is
 there.
 
-The path is **delivered**: `luce build --emit=exe` writes a standalone
-binary, `--emit=library` writes a loadable artifact, and `loom run`
-prefers compiled code over the interpreter for every `.lc` it is
-handed.  The interpreter remains the reference engine and stays
-selectable.  What follows says exactly how far the LLVM path reaches
-and how it reaches a person.
+The path is **the only one**: `luce build` writes a loadable artifact
+and calls it `.lc`, `--emit=exe` writes a standalone binary, and
+`loom run FILE.lc` opens and calls machine code.  The interpreter is
+no longer an engine — it ships in nothing and survives as the
+differential oracle in the test suite (docs/ENGINE.md).  What follows
+says exactly how far this path reaches and how it reaches a person.
+
+> **Dated sections below.**  This file is the decision record as well
+> as the description, and the parts of it written while there were two
+> engines still say so — `.lcn`, the fallback, "the interpreter runs
+> the `.lc`".  They are kept as the record of how the decisions were
+> taken.  `docs/ENGINE.md` is what is true now, and where the two
+> disagree ENGINE.md wins.
 
 ## The pipeline
 
@@ -27,12 +34,12 @@ FILE.luc → 02_lex → 03_parse → 04_semantics → typed MIR → 07_optimize
                                              ↓
                             cc  (src/apps/native.zig)
                                     ↓                ↓
-                            FILE.lcn            FILE (executable)
+                            FILE.lc             FILE (executable)
 ```
 
 ```sh
+luce build FILE.luc                 # FILE.lc   — loom loads and calls it
 luce build FILE.luc --emit=object   # FILE.o    — you link it
-luce build FILE.luc --emit=library  # FILE.lcn  — loom loads it
 luce build FILE.luc --emit=exe      # FILE      — a shell runs it
 ```
 

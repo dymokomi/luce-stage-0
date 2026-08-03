@@ -8,13 +8,12 @@ luce build dice.luc              # debug (the default)
 luce build dice.luc --release    # stripped
 ```
 
-Every build path means the same thing by it.  The LLVM path (`luce
-build --emit=object|library|exe`) emits the origins as constant data
-beside the code rather than as LLVM debug metadata, and `--release`
-leaves them out; everything below is true of a compiled artifact — a
-`.lcn` under loom, or a standalone executable — as well as of the
-`.lc` the interpreter runs.  A compiled artifact's tag records which
-of the two it is, so a loader can say so without running it
+Every shape means the same thing by it.  The origins travel as
+constant data beside the code rather than as LLVM debug metadata, and
+`--release` leaves them out; everything below is true of the `.lc`
+loom runs, of a standalone executable, and of the serialized module
+the two are built from.  An artifact's tag records which of the two
+modes it is, so a loader can say so without running it
 (`abi.Artifact.debug`).
 
 A debug module carries *origins* — for every IR instruction, the
@@ -85,12 +84,14 @@ line tables are inert bytes.  Luce works the same way:
   cap at the same number, so the same trap reports the same frames.
 
 So the honest statement is: **debug and release run at identical
-speed**; release buys a smaller `.lc` (roughly a third off, more
-when functions are long) and gives up trap locations.  Ship
-`--release` when module size matters or source lines would mean
-nothing to the recipient; ship debug everywhere else.  When a
-release module misbehaves, recompile from source and reproduce —
-the deterministic interpreter makes that reliable.
+speed**; release gives up trap locations and buys very little back.
+It takes roughly a third off the serialized module, and an artifact is
+mostly the runtime library it carries, so on the `.lc` itself it is
+**2.3%** (`editor.lc`, 716 KB → 699 KB) and nothing measurable on a
+small program.  Ship `--release` when source lines would mean nothing
+to the recipient; ship debug everywhere else.  When a release artifact
+misbehaves, recompile from source and reproduce — the language is
+deterministic, so that is reliable.
 
 ## What's in the tables
 
@@ -100,8 +101,9 @@ std modules resolve like any other, so a trap inside
 `line:column` pair per instruction.  Granularity is the statement,
 the way Python tracebacks work: every instruction a statement lowers
 to reports the statement's own position.  The tables live in the
-`.lc` beside the code they describe (`format_version` 17) and, on the
-LLVM path, in a private constant array beside the machine code; the
+serialized module beside the code they describe (`format_version` 17)
+and, in the artifact, in a private constant array beside the machine
+code; the
 decoder rejects a table whose length disagrees with its function's
 instruction count, and the verifier enforces the same invariant on
 every program, decoded or freshly compiled.
