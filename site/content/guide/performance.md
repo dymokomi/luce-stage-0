@@ -44,12 +44,11 @@ programs, each written twice with the same algorithm and cross-checked
 for identical output before either is timed. A different six programs
 would give different ratios.
 
-**They are not the interpreter.** Luce has two engines. The
-interpreter is the reference arm — deterministic, the fallback where
-compilation is unavailable, and one half of the agreement tests — and
-it is 30–60× slower than the compiled path on compute. Measured
-through `loom run` rather than in a harness: loops 6995 ms → 92 ms,
-matmul 5767 ms → 22 ms, strings 931 ms → 57 ms.
+**They are not the interpreter.** There is one engine that runs your
+programs, and it is this one. Luce keeps a second implementation — an
+IR interpreter — purely as the differential oracle in its own test
+suite; it ships in nothing, and it was 30–60× slower than compiled
+code when it did run programs.
 
 **They are not measured against a debug build of anything.** A Zig
 debug build of the toolchain is 4–5× slower and its numbers would be
@@ -60,9 +59,10 @@ meaningless. Only optimised builds are timed.
 **One code generator, one runtime.** Every semantic — the object heap,
 scope ownership, the four containers, string storage, checked
 arithmetic, the trap channel — lives in `libluce_rt`, a real static
-library behind a C ABI. The interpreter calls it and so does compiled
-code, so there is exactly one implementation of every rule and no
-second one to be slower or subtly different.
+library behind a C ABI. Compiled code calls it, and so does the
+interpreter that acts as the test suite's oracle, so there is exactly
+one implementation of every rule and no second one to be slower or
+subtly different.
 
 **Effects travel in a vtable, not as undefined symbols.** Generated
 code indexes a `LuceHost` table with `getelementptr`. Every service is

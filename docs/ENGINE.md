@@ -663,7 +663,7 @@ best-of-20 went 3.57 ms → 3.13–3.70 ms across runs. It is the same
 `dlopen` minus reading and verifying a `.lc`'s IR, and both are lost
 in process startup.
 
-**5. Delete the fallback.** *(needs 4)*
+**5. Delete the fallback. — DONE.** *(needs 4)*
 *Deletes:* `runner.Engine`, `Policy.engine`, `LOOM_ENGINE`,
 `runInterpreted`, the `refusal` plumbing, `product.zig`'s
 engine-selection tests, and `verify.zig`'s second arm.
@@ -672,6 +672,31 @@ engine-selection tests, and `verify.zig`'s second arm.
 `loom edit` fail with `native.findCompiler`'s existing sentence.
 *Forecloses:* the site's differential check over 148 samples (Hat 5).
 Say so in `site/src/verify.zig`'s header rather than letting it vanish.
+
+*What it took, in contact with the code:*
+
+**The `refusal` plumbing was not deleted — it was promoted.** It
+existed to decide between falling back quietly and reporting; with
+nothing to fall back to it is the only outcome, so `run` now ends
+either in a loaded artifact or in `loom: cannot compile NAME: WHY`.
+Losing it would have been losing the sentence, which is the whole
+value of the direction: *"the `luce` compiler is not beside /opt/luce
+and not on PATH"* is a fact a person can act on where a 40× slowdown
+was not.
+
+**`Policy` survives, smaller.** It is no longer "which engine" but
+"where the compiler is and where a built artifact may go" —
+`search_path` and `temporary_directory`. Both are still process
+policy read once from the environment, and `LOOM_ENGINE` is simply
+not one of the things read.
+
+**Two tests became one.** `product.zig`'s "with no luce the program
+still runs — on the interpreter" and "`LOOM_ENGINE=native` says which
+binary is missing" were the two halves of a choice, and the choice is
+gone: what is left is one test that a `.luc` with no compiler names
+the binary, the directory, and `PATH`. `zig build test` is **836**,
+down 2 from 838, and both of the two were assertions about engine
+selection rather than about the language.
 
 **6. Move the boundary.** *(needs 5)*
 *Deletes from the product:* `backend.zig`'s `Host`, `Terminal`,

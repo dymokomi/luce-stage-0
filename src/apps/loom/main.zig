@@ -51,8 +51,9 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     defer environ_map.deinit();
     const no_color = environ_map.get("NO_COLOR") != null;
     const editor_override = environ_map.get("LOOM_EDITOR");
-    // Which engine runs a program, read once: it is process policy,
-    // not something a program or a command can change (runner.zig).
+    // Where the compiler is and where a built artifact may go, read
+    // once: it is process policy, not something a program or a command
+    // can change (runner.zig).
     const policy = runner.Policy.read(&environ_map);
     var err_writer = streams.diagnostics(io);
     const err = &err_writer.interface;

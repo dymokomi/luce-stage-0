@@ -20,7 +20,7 @@ pub const Shell = struct {
     err: *std.Io.Writer,
     palette: palette_mod.Palette,
     editor_override: ?[]const u8,
-    /// Which engine programs launched from here run on (runner.zig).
+    /// Where a program launched from here gets compiled (runner.zig).
     policy: runner.Policy = .{},
 
     pub fn run(self: *Shell, reader: *std.Io.Reader, interactive: bool) !u8 {

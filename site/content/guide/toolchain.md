@@ -95,23 +95,33 @@ loader binds it before `main`, which cost every `loom` invocation
 binary's 2.4. It also means **a machine that only runs Luce programs
 needs no LLVM installed at all**.
 
-## The two engines
+## One engine
 
-`loom run` prefers native code. Given a `.lc` it looks for `NAME.lcn`
-beside it, builds one if there is none or it was built from different
-bytes, and falls back to the interpreter only when the compiled path
-is genuinely unavailable.
+There is no engine selection, because there is one engine. `loom run
+FILE.lc` calls machine code and `loom luce FILE.luc` compiles first —
+caching the result as `FILE.lc` beside the source, keyed on the
+program's bytes, so an unchanged program is warm and a changed one is
+rebuilt.
 
-| Variable | Effect |
-|---|---|
-| `LOOM_ENGINE=native` | The fallback becomes an error naming what was missing |
-| `LOOM_ENGINE=interpreter` | Take the reference engine on purpose |
+A `.luc` therefore needs a compiler, exactly as a `.c` does, and a
+loom that cannot find one says so rather than doing something slower
+and quieter:
 
-The two agree by construction: one runtime library, one host, one
-rendering of a trap. The interpreter is the reference arm of the
-agreement tests, the only engine on a machine with no C toolchain, and
-what `loom run` falls back to; its dispatch loop goes last, and not
-soon.
+```
+loom: cannot compile sums.luc: the `luce` compiler is not beside /opt/luce and not on PATH
+```
+
+A `.lc` needs nothing at all.
+
+There is still a second implementation of the language — a Luce IR
+interpreter — and it ships in nothing. It is the differential oracle
+in the compiler's test suite, where every program in the executable
+specification runs on both it and the compiled path and the two are
+compared on printed bytes, trap code, trap message, call trace frame
+for frame, leak census and the world each left behind. That is the
+same arrangement Rust has with Miri and Zig with one behaviour suite
+run against every backend: an implementation that exists to disagree,
+not to run your programs.
 
 ## The two build modes
 

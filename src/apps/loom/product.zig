@@ -13,11 +13,10 @@
 //!     the artifact beside itself for the next run to find;
 //!   * the `.lc` `luce build` writes runs under a loom that has no
 //!     compiler at all, because a `.lc` is machine code;
-//!   * a loom that cannot find `luce` still runs the program, on the
-//!     interpreter, because that engine needs no compiler at all;
-//!   * and `LOOM_ENGINE=native`, which asked for compiled code, gets a
-//!     sentence naming the binary that is missing and where it was
-//!     looked for.
+//!   * and a loom that cannot find `luce` says so, naming the binary
+//!     that is missing and where it was looked for — there is no
+//!     second engine to fall back to, and a `.luc` needs a compiler
+//!     exactly as a `.c` does.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -207,7 +206,7 @@ test "the .lc luce writes runs on a loom with no compiler at all" {
     try testing.expectEqual(@as(u8, 0), ran.term.exited);
 }
 
-test "with no luce to run, the program still runs — on the interpreter" {
+test "a .luc with no luce to compile it says which binary is missing and where it looked" {
     const gpa = testing.allocator;
     var install = try Install.make(gpa, false);
     defer install.deinit(gpa);
@@ -225,30 +224,6 @@ test "with no luce to run, the program still runs — on the interpreter" {
     const ran = try runLoom(gpa, &install, &.{program}, &bare);
     defer gpa.free(ran.stdout);
     defer gpa.free(ran.stderr);
-    try testing.expectEqualStrings("", ran.stderr);
-    try testing.expectEqualStrings(expected, ran.stdout);
-    try testing.expectEqual(@as(u8, 0), ran.term.exited);
-    // Nothing was built, and nothing was left behind pretending to be.
-    try testing.expect(!install.exists("sums.lc"));
-}
-
-test "LOOM_ENGINE=native with no luce says which binary is missing and where it looked" {
-    const gpa = testing.allocator;
-    var install = try Install.make(gpa, false);
-    defer install.deinit(gpa);
-    try install.write("sums.luc", greeting);
-
-    const program = try install.at(gpa, "sums.luc");
-    defer gpa.free(program);
-
-    var bare: std.process.Environ.Map = .init(gpa);
-    defer bare.deinit();
-    try bare.put("PATH", install.root);
-    try bare.put("LOOM_ENGINE", "native");
-
-    const ran = try runLoom(gpa, &install, &.{program}, &bare);
-    defer gpa.free(ran.stdout);
-    defer gpa.free(ran.stderr);
     try testing.expectEqual(@as(u8, 1), ran.term.exited);
     try testing.expectEqualStrings("", ran.stdout);
     // The tool by name, the directory it should have been in, and the
@@ -256,6 +231,8 @@ test "LOOM_ENGINE=native with no luce says which binary is missing and where it 
     try testing.expect(std.mem.indexOf(u8, ran.stderr, "`luce`") != null);
     try testing.expect(std.mem.indexOf(u8, ran.stderr, install.root) != null);
     try testing.expect(std.mem.indexOf(u8, ran.stderr, "PATH") != null);
+    // Nothing was built, and nothing was left behind pretending to be.
+    try testing.expect(!install.exists("sums.lc"));
 }
 
 test "a compiler that refuses the program is asked once; one that fails a place is asked again" {
@@ -274,7 +251,6 @@ test "a compiler that refuses the program is asked once; one that fails a place 
         var environment: std.process.Environ.Map = .init(gpa);
         defer environment.deinit();
         try environment.put("PATH", install.root);
-        try environment.put("LOOM_ENGINE", "native");
         try environment.put("TMPDIR", install.root);
 
         const ran = try runLoom(gpa, &install, &.{program}, &environment);
@@ -298,7 +274,6 @@ test "a compiler that refuses the program is asked once; one that fails a place 
         var environment: std.process.Environ.Map = .init(gpa);
         defer environment.deinit();
         try environment.put("PATH", install.root);
-        try environment.put("LOOM_ENGINE", "native");
         try environment.put("TMPDIR", install.root);
 
         const ran = try runLoom(gpa, &install, &.{program}, &environment);

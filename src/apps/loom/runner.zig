@@ -58,33 +58,14 @@ const host_mod = @import("host");
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
 
-/// Interactive programs run until they return.  Call depth is policy,
-/// not a native stack limit, and the policy is the host's —
-/// `host.call_depth` is the one number, so the interpreter and a
-/// compiled artifact refuse the same call.
-const program_budget: luce.backend.Budget = .{
-    .call_depth = host_mod.call_depth,
-};
-
 pub const compile_options: luce.types.CompileOptions = .{
     .allow_host = true,
 };
 
-/// Which engine runs a program.
-pub const Engine = enum {
-    /// Native if it can be had, the interpreter otherwise.
-    auto,
-    /// Native, or say why not and refuse to run.
-    native,
-    /// The reference engine, always.
-    interpreter,
-};
-
-/// How this loom runs programs.  Read once from the environment and
-/// carried down, because it is process policy rather than anything a
-/// program can change.
+/// How this loom builds what it is asked to run.  Read once from the
+/// environment and carried down, because it is process policy rather
+/// than anything a program can change.
 pub const Policy = struct {
-    engine: Engine = .auto,
     /// `PATH` — where the `luce` compiler is looked for after the
     /// directory loom's own binary sits in.  Everything else the
     /// compiler needs (`LUCE_LIB`, `LUCE_CC`) it reads from the
@@ -102,7 +83,6 @@ pub const Policy = struct {
 
     pub fn read(environment: *const std.process.Environ.Map) Policy {
         return .{
-            .engine = named(environment.get("LOOM_ENGINE")) orelse .auto,
             .search_path = environment.get("PATH"),
             .temporary_directory = trimSeparator(
                 environment.get("TMPDIR") orelse default_temporary_directory,
@@ -115,10 +95,6 @@ pub const Policy = struct {
     fn trimSeparator(directory: []const u8) []const u8 {
         const trimmed = std.mem.trimEnd(u8, directory, std.fs.path.sep_str);
         return if (trimmed.len == 0) default_temporary_directory else trimmed;
-    }
-
-    fn named(text: ?[]const u8) ?Engine {
-        return std.meta.stringToEnum(Engine, text orelse return null);
     }
 };
 
@@ -233,13 +209,16 @@ pub fn runSource(
     // the bytes the compiler is handed when one has to be built.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
-    return run(gpa, io, out, err, policy, name, encoded, &program, arguments);
+    return run(gpa, io, out, err, policy, name, encoded, arguments);
 }
 
-/// Run one program on whichever engine the policy allows.
+/// Get this program's artifact — cached or freshly built — and run it.
 ///
-/// `encoded` is the serialized module — what an artifact is keyed on,
-/// and what the compiler is handed when one has to be built.
+/// `encoded` is the serialized module: what the artifact is keyed on,
+/// and what the compiler is handed when one has to be built.  There is
+/// nothing to fall back to and nothing to choose between, so a program
+/// that cannot be compiled here is a sentence naming what was missing,
+/// which is a fact the person can act on.
 pub fn run(
     gpa: Allocator,
     io: std.Io,
@@ -248,29 +227,20 @@ pub fn run(
     policy: Policy,
     name: []const u8,
     encoded: []const u8,
-    program: *const luce.mir.Program,
     arguments: []const []const u8,
 ) !u8 {
-    if (policy.engine != .interpreter) {
-        var refusal: ?[]const u8 = null;
-        defer if (refusal) |why| gpa.free(why);
-        if (try artifactFor(gpa, io, policy, name, encoded, &refusal)) |opened| {
-            var loaded = opened;
-            defer loaded.close();
-            return runLoaded(gpa, io, out, err, &loaded, arguments);
-        }
-        // Forcing the native engine turns the fallback into a report:
-        // somebody asked for compiled code and is owed the reason they
-        // did not get it.
-        if (policy.engine == .native) {
-            try err.print("loom: cannot run {s} as native code: {s}\n", .{
-                name,
-                refusal orelse "the compiled path is unavailable",
-            });
-            return 1;
-        }
+    var refusal: ?[]const u8 = null;
+    defer if (refusal) |why| gpa.free(why);
+    if (try artifactFor(gpa, io, policy, name, encoded, &refusal)) |opened| {
+        var loaded = opened;
+        defer loaded.close();
+        return runLoaded(gpa, io, out, err, &loaded, arguments);
     }
-    return runInterpreted(gpa, io, out, err, program, arguments);
+    try err.print("loom: cannot compile {s}: {s}\n", .{
+        name,
+        refusal orelse "the compiler is unavailable",
+    });
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -519,69 +489,10 @@ fn runLoaded(
 }
 
 // ---------------------------------------------------------------------------
-// The reference engine
-// ---------------------------------------------------------------------------
-
-/// The execution boundary: one hosted evaluation against the real
-/// terminal, filesystem, and arguments.
-fn runInterpreted(
-    gpa: Allocator,
-    io: std.Io,
-    out: *std.Io.Writer,
-    err: *std.Io.Writer,
-    program: *const luce.mir.Program,
-    arguments: []const []const u8,
-) !u8 {
-    var services: host_mod.Host = undefined;
-    services.setup(gpa, io, out, err, arguments);
-    defer services.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
-    const result = try luce.backend.evaluateHosted(
-        .{ .arena = arena.allocator(), .objects = gpa },
-        program,
-        program_budget,
-        services.host(),
-    );
-
-    // Land back on the ordinary screen before reporting anything.
-    services.restoreScreen();
-    switch (result) {
-        .success => |success| {
-            host_mod.printLeaks(err, "loom", success.leaked_objects);
-            return 0;
-        },
-        .trap => |trap| {
-            host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
-            return 1;
-        },
-        .errored => |raised| {
-            host_mod.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
-            return 1;
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-
-test "the engine is named, and a name nobody recognises is not one of them" {
-    var environment: std.process.Environ.Map = .init(testing.allocator);
-    defer environment.deinit();
-    try testing.expectEqual(Engine.auto, Policy.read(&environment).engine);
-
-    try environment.put("LOOM_ENGINE", "interpreter");
-    try testing.expectEqual(Engine.interpreter, Policy.read(&environment).engine);
-    try environment.put("LOOM_ENGINE", "native");
-    try testing.expectEqual(Engine.native, Policy.read(&environment).engine);
-    try environment.put("LOOM_ENGINE", "quick");
-    try testing.expectEqual(Engine.auto, Policy.read(&environment).engine);
-}
 
 test "the compiler is looked for on the PATH loom itself was given" {
     var environment: std.process.Environ.Map = .init(testing.allocator);
@@ -592,7 +503,7 @@ test "the compiler is looked for on the PATH loom itself was given" {
     try testing.expectEqualStrings("/usr/local/bin:/usr/bin", Policy.read(&environment).search_path.?);
 }
 
-test "the fallback artifact directory is the session's own, not a shared one" {
+test "the spare artifact directory is the session's own, not a shared one" {
     var environment: std.process.Environ.Map = .init(testing.allocator);
     defer environment.deinit();
     try testing.expectEqualStrings(

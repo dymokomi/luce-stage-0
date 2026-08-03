@@ -60,8 +60,8 @@ pub fn build(b: *std.Build) void {
     // What produced an artifact's machine code, as one number both
     // binaries carry (`generatorIdentity` below).  `08_llvm/lower.zig`
     // stamps it into every artifact's tag and every loader checks it,
-    // so a `luce` and a `loom` from one build agree, and a `.lcn` some
-    // earlier build left beside a program is rebuilt rather than run.
+    // so a `luce` and a `loom` from one build agree, and a `.lc` some
+    // earlier build left beside a program is refused rather than run.
     // It belongs to the language module because both halves of that
     // deal live there: the tag is written in `08_llvm` and read in
     // `08_llvm/abi.zig`, which is all loom needs to link.
@@ -482,7 +482,7 @@ const generator_trees = [_][]const u8{
 
 /// What produced an artifact's machine code, as one number.
 ///
-/// A `.lcn` is a cache entry, and `source_hash` keys it on the program
+/// An artifact is a cache entry, and `source_hash` keys it on the program
 /// alone: change the code generator and every artifact already sitting
 /// beside a program keeps running the instructions the *previous* one
 /// wrote, silently, because the `.lc` still re-encodes to the same
