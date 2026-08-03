@@ -53,7 +53,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
             return list.items[@intCast(index)];
         },
         .map => |map| {
-            const at = map.find(indices[0]) orelse return runtime.fail(.key_missing);
+            const at = map.find(&indices[0]) orelse return runtime.fail(.key_missing);
             return map.entries.items[at].value;
         },
         .array => {
@@ -88,7 +88,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         },
         .map => |*map| {
             const key = indices[0];
-            if (map.find(key)) |at| {
+            if (map.find(&key)) |at| {
                 runtime.freeValue(map.entries.items[at].value);
                 map.entries.items[at].value = stored;
             } else {
@@ -189,7 +189,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
             runtime.freeValue(list.orderedRemove(@intCast(index)));
         },
         .map => |*map| {
-            if (map.find(which)) |at| {
+            if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
                 runtime.releaseStorage(removed.key);
                 runtime.freeValue(removed.value);
@@ -201,7 +201,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
 
 pub fn hasKey(runtime: *Runtime, target: Value, key: Value) Error!Value {
     const object = try runtime.resolve(target);
-    return Value.ofBoolean(object.data.map.find(key) != null);
+    return Value.ofBoolean(object.data.map.find(&key) != null);
 }
 
 /// `m.key_at(i)` — maps keep insertion order, so iteration by index is
@@ -360,7 +360,7 @@ pub fn mapValues(runtime: *Runtime, target: Value) Error!Value {
 /// m[key]), or the caller's default when the key is absent.
 pub fn mapGet(runtime: *Runtime, target: Value, key: Value, fallback: Value) Error!Value {
     const object = try runtime.resolve(target);
-    if (object.data.map.find(key)) |at| {
+    if (object.data.map.find(&key)) |at| {
         return object.data.map.entries.items[at].value;
     }
     return fallback;

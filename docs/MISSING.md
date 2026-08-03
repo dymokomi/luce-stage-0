@@ -65,11 +65,16 @@ way.
 
 What it cost, measured by `bench/compare.sh` on one host: five of the
 six benchmarks moved less than 1%, and `bench/strings` went **2.35× C
-→ 3.40× C**.  That is allocation, not copying — 800,000 small
+→ 3.40× C**.  That was allocation, not copying — 800,000 small
 allocate-and-free pairs where there used to be unreclaimed bump
-allocations and shared views — and **small-string optimisation is the
-queued answer**, step 5 of `docs/STRINGS.md`, with the average piece
-at 11.7 bytes and every `str(i)` at most 7.
+allocations and shared views — and **small-string optimisation took
+most of it back**: a String of 22 bytes or fewer now lives inside the
+`Value` holding it, `str(Int)` and `chr` never allocate at all, and
+`bench/strings` came back to **within 12% of where it stood before
+copy-on-store** (step 5 of `docs/STRINGS.md`, which records the
+phase-by-phase measurement).  What is left is the copying itself —
+400,001 twelve-byte duplications into list elements — and step 6 is
+what removes those.
 
 ### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
 
@@ -287,13 +292,12 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ## The order to work down
 
-1. ~~**Give String storage a reclaimable lifetime**~~ — **done**; see
-   Tier 0.  What follows from it is **small-string optimisation**,
-   step 5 of `docs/STRINGS.md`: the design's one real cost is 800,000
-   allocations in `bench/strings`, none of them larger than 12 bytes,
-   and 22 inline bytes fit in the `Value` that already travels.  It
-   costs an `abi.version` bump and a `.lc` `format_version` bump, and
-   it is gated on exactly the measurement that now exists.
+1. ~~**Give String storage a reclaimable lifetime**~~ — **done**, and
+   so is the **small-string optimisation** that paid for it; see Tier
+   0 and step 5 of `docs/STRINGS.md`.  Twenty-two bytes of text live
+   in the `Value` that already travels, which cost an `abi.version`
+   bump and a `.lc` `format_version` bump and removed every allocation
+   the benchmark's 400,000 `str(i)` results were making.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done on both engines**;
    `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`

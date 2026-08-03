@@ -570,6 +570,98 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(measured.len, words[heap.layout.slice_count / @sizeOf(usize)]);
 }
 
+test "text owns, releases and leaves the frame the same on both sides of 22 bytes" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    var words: [128]u8 = undefined;
+    for (&words, 0..) |*byte, index| byte.* = @intCast('a' + index % 26);
+
+    // Every length the two forms meet at, and one well past it.  Each
+    // one goes the whole way round: owned into a place, read back,
+    // handed out of a frame, and released — under the test allocator,
+    // so a storage class that frees what it does not own or keeps what
+    // it does is a reported double free or a reported leak.
+    const lengths = [_]usize{ 0, 1, 21, 22, 23, 64 };
+    for (lengths) |length| {
+        const wanted = words[0..length];
+        const owned = try runtime.ownValue(Value.ofString(wanted));
+        try testing.expectEqualStrings(wanted, owned.asString());
+        try testing.expectEqual(Value.fitsInline(length), owned.textIsInline());
+        try testing.expectEqual(!Value.fitsInline(length), owned.ownsStorage());
+
+        // A slice of owned text follows the form it came from, so a
+        // view of inline bytes is never a view of somebody's frame.
+        const cut = try text.slice(runtime, owned, 0, @intCast(length));
+        try testing.expectEqual(owned.textIsInline(), cut.textIsInline());
+        try testing.expectEqualStrings(wanted, cut.asString());
+
+        // Leaving the frame always answers text with an address, and
+        // does it by transfer when there already was one.
+        const handed = try runtime.exportValue(owned);
+        try testing.expect(!handed.textIsInline());
+        try testing.expectEqualStrings(wanted, handed.asString());
+        if (!Value.fitsInline(length)) {
+            try testing.expectEqual(owned.bits, handed.bits);
+        }
+        runtime.releaseStorage(handed);
+
+        // And releasing a place twice frees nothing the second time.
+        const emptied = heap.Runtime.emptied(handed);
+        try testing.expectEqualStrings("", emptied.asString());
+        runtime.releaseStorage(emptied);
+    }
+
+    // A container element and a map key take their own copy in
+    // whichever form fits, and the container gives both back.
+    const kept = try runtime.newList();
+    const table = try runtime.newMap();
+    for (lengths) |length| {
+        const wanted = words[0..length];
+        try containers.append(runtime, kept, Value.ofString(wanted));
+        try containers.indexSet(runtime, table, &.{Value.ofString(wanted)}, Value.ofInt(1));
+    }
+    for (lengths, 0..) |length, index| {
+        const held = try containers.indexGet(runtime, kept, &.{Value.ofInt(@intCast(index))});
+        try testing.expectEqualStrings(words[0..length], held.asString());
+    }
+    try testing.expectEqual(@as(i64, lengths.len), (try containers.length(runtime, table)).asInt());
+    runtime.freeObject(kept.asObject());
+    runtime.freeObject(table.asObject());
+}
+
+test "str and chr answer text that needs no allocation at all" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // Twenty digits and a sign is the widest an i64 gets, so no
+    // number's text ever leaves the value it is answered in.
+    for ([_]i64{ 0, -1, 9, 1234567, std.math.minInt(i64), std.math.maxInt(i64) }) |number| {
+        const made = try text.str(runtime, Value.ofInt(number));
+        try testing.expect(made.textIsInline());
+        try testing.expect(!made.ownsStorage());
+        var digits: [24]u8 = undefined;
+        try testing.expectEqualStrings(
+            try std.fmt.bufPrint(&digits, "{d}", .{number}),
+            made.asString(),
+        );
+    }
+    // A codepoint is four bytes at the most.
+    for ([_]i64{ 0, 'a', 0x00e9, 0x10FFFF }) |code| {
+        const made = try text.chr(runtime, code);
+        try testing.expect(made.textIsInline());
+    }
+    // Text long enough to need one still allocates, and is released
+    // like any other owned storage.
+    const long = try text.str(runtime, Value.ofString("a" ** 40));
+    try testing.expect(long.ownsStorage());
+    runtime.releaseStorage(long);
+}
+
 test "a builder collects bytes and str takes a snapshot of them" {
     var bench: Bench = undefined;
     bench.setup();

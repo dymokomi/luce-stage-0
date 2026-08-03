@@ -648,7 +648,10 @@ so a host can tell "the program failed" from "the machine ran out".
 
 A Luce value crosses the boundary as a pointer to a 24-byte
 `runtime.Value` in an entry-block `alloca`.  The layout is asserted
-against the Zig struct, so the two cannot drift.
+against the Zig struct, so the two cannot drift.  Its tag is one byte
+and the twenty-two after it are where a String's text lives when it
+fits; generated code only ever *writes* the other form, and reads both
+(docs/STRINGS.md).
 
 ## The published host ABI
 

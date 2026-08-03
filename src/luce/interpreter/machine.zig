@@ -579,6 +579,7 @@ pub const Machine = struct {
             .is_none => return .ofBoolean(registers[arguments[0]].isNone()),
             .optional_wrap, .optional_unwrap => return registers[arguments[0]],
             .own_storage => return self.runtime.ownValue(registers[arguments[0]]),
+            .export_storage => return self.runtime.exportValue(registers[arguments[0]]),
             .drop_storage => {
                 const held = registers[arguments[0]];
                 self.runtime.releaseStorage(held);

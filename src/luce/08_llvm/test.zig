@@ -2363,6 +2363,89 @@ test "owned String bytes agree, census included" {
     );
 }
 
+test "text agrees on both sides of the boundary between its two forms" {
+    // Short text lives inside the value and long text behind a pointer
+    // (docs/STRINGS.md), and the two engines choose the same form for
+    // the same bytes — but nothing in the language says so, which is
+    // exactly why every length around the boundary is checked here on
+    // every path a String can take: a binding, a container element, a
+    // map key, a struct field, a return, a slice, and a concat.
+    //
+    // 22 is `runtime.inline_capacity`.  If that number ever moves,
+    // these lengths must move with it.
+    try agree(std.testing.allocator,
+        \\import std.strings
+        \\
+        \\struct Held:
+        \\    label: String
+        \\
+        \\func echo(s: String) -> String:
+        \\    return s
+        \\
+        \\func grow(s: String) -> String:
+        \\    return s + s
+        \\
+        \\func main():
+        \\    var words = new List(String)
+        \\    var table = new Map(String, String)
+        \\    for size in [0, 1, 21, 22, 23, 64]:
+        \\        let text = strings.repeat("a", size)
+        \\        let kept = echo(text)
+        \\        words.append(kept)
+        \\        table[kept] = kept
+        \\        let held = Held(label = kept)
+        \\        print(str(size) + " " + str(len(kept)) + " " + str(len(held.label)) +
+        \\            " " + str(len(words[len(words) - 1])) + " " + str(len(table[kept])) +
+        \\            " " + str(table.has(kept)))
+        \\    free(words)
+        \\    free(table)
+        \\
+    );
+    // The transitions in both directions: short grown long by `+`,
+    // long cut back to short by a slice, and both stored afterwards.
+    try agree(std.testing.allocator,
+        \\import std.strings
+        \\
+        \\func grow(s: String) -> String:
+        \\    return s + s
+        \\
+        \\func main():
+        \\    var kept = new List(String)
+        \\    for size in [1, 11, 12, 21, 22, 23]:
+        \\        var text = strings.repeat("b", size)
+        \\        text = grow(text)
+        \\        kept.append(text)
+        \\        var cut = text[0:1]
+        \\        cut = cut + text[0:size]
+        \\        kept.append(cut)
+        \\        print(str(len(text)) + ":" + text + " " + str(len(cut)) + ":" + cut)
+        \\    var joined = ""
+        \\    for piece in kept:
+        \\        joined = joined + str(len(piece)) + ","
+        \\    print(joined)
+        \\    free(kept)
+        \\
+    );
+    // A long String cut down to short, kept, and then the original
+    // overwritten — the case where a borrow of the long bytes would
+    // still be looking at them.
+    try agree(std.testing.allocator,
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var source = strings.repeat("cd", 40)
+        \\    var small = source[0:6]
+        \\    var cells = new Array(String, 2)
+        \\    cells[0] = small
+        \\    cells[1] = source
+        \\    source = "replaced"
+        \\    small = small + "!"
+        \\    print(cells[0] + " " + str(len(cells[1])) + " " + small + " " + source)
+        \\    free(cells)
+        \\
+    );
+}
+
 test "a loop name agrees whether it borrows its element or copies it" {
     try agree(std.testing.allocator,
         \\func main():

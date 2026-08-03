@@ -99,7 +99,18 @@ fn numberFunction(arena: Allocator, function: *Function) Allocator.Error!void {
 
             switch (instruction.*) {
                 .local_set => |set| {
-                    held[set.local] = set.value;
+                    // A slot that owns its storage does not hold the
+                    // register that was stored into it: it holds an
+                    // owned copy, and for text the runtime chooses the
+                    // form — short text goes inside the value, long
+                    // text stays an allocation (docs/STRINGS.md).  So
+                    // the store says nothing about what a later load
+                    // answers, and forwarding it would hand the release
+                    // a value that is not the one in the slot.
+                    held[set.local] = if (function.locals[set.local].owns_storage)
+                        null
+                    else
+                        set.value;
                     block.items[kept] = item;
                     kept += 1;
                     continue;

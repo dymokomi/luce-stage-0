@@ -669,8 +669,18 @@ const Module = struct {
             .strukt => |nested| self.program.structs[nested].fields.len,
             else => 0,
         };
+        // An empty String's zero says its bytes are outside, at the
+        // null address, none of them — which reads as `""` and owns
+        // nothing, the same value `Value.ofString("")` is.
+        const form: u8 = switch (of) {
+            .string, .bytes => runtime.text_outside,
+            else => 0,
+        };
+        const head = try self.builder.arrayType(8 - runtime.inline_at, .i8);
         return self.builder.structConst(self.value_type, &.{
-            try self.builder.intConst(.i64, @intFromEnum(tag)),
+            try self.builder.intConst(.i8, @intFromEnum(tag)),
+            try self.builder.intConst(.i8, form),
+            try self.builder.zeroInitConst(head),
             bits,
             try self.builder.intConst(.i64, length),
         });
@@ -680,7 +690,16 @@ const Module = struct {
 
     fn build(self: *Module) Error!void {
         self.string_type = try self.builder.structType(.normal, &.{ .ptr, .i64 });
-        self.value_type = try self.builder.structType(.normal, &.{ .i64, .i64, .i64 });
+        self.value_type = try self.builder.structType(.normal, &.{
+            .i8, // tag
+            .i8, // inline_length
+            // `inline_head`: the inline run's first bytes, up to where
+            // `bits` begins.  The rest of the run *is* `bits` and
+            // `length`, which is what makes twenty-two of them fit.
+            try self.builder.arrayType(8 - runtime.inline_at, .i8),
+            .i64, // bits
+            .i64, // length
+        });
         self.host_type = try self.builder.structType(
             .normal,
             &([_]Builder.Type{.ptr} ** abi.Slot.count),
@@ -1238,6 +1257,26 @@ const Body = struct {
     /// blocks (the verifier enforces it), so one array per function is
     /// enough.
     values: []Builder.Value = &.{},
+    /// The `runtime.Value` each register was read out of, where there
+    /// was one: a runtime call's answer slot, an array cell, a struct's
+    /// field run, a local's own slot.  `.none` for a register built any
+    /// other way.
+    ///
+    /// It exists because unboxing a String throws away which form its
+    /// text was in, and three places need that back: a store into a
+    /// slot that owns its storage, which must keep short text short;
+    /// `drop_storage`, which must not free a pointer into a frame; and
+    /// `export_storage`, which must not transfer one out of the frame
+    /// (docs/STRINGS.md).
+    ///
+    /// The three are reachable only from a register that *has* a box.
+    /// A store into an owning slot is preceded by `own_storage` or by
+    /// a fresh producer, and both answer into one; the two intrinsics
+    /// take their argument from the same place.  What is left without
+    /// one — a constant, a parameter, a slice — reaches none of them
+    /// without an `own_storage` in between, and `dropped` refuses text
+    /// that arrives at the freeing one anyway.
+    boxes: []Builder.Value = &.{},
     /// One entry-block `alloca` per Luce local.
     local_slots: []Builder.Value = &.{},
     /// The first LLVM block of each IR block.  An IR block that
@@ -1266,6 +1305,7 @@ const Body = struct {
     fn deinit(self: *Body) void {
         const gpa = self.module.gpa;
         gpa.free(self.values);
+        gpa.free(self.boxes);
         gpa.free(self.local_slots);
         gpa.free(self.blocks);
         self.views.deinit(gpa);
@@ -1295,6 +1335,8 @@ const Body = struct {
 
         self.values = try gpa.alloc(Builder.Value, function.instructions.len);
         @memset(self.values, .none);
+        self.boxes = try gpa.alloc(Builder.Value, function.instructions.len);
+        @memset(self.boxes, .none);
         self.local_slots = try gpa.alloc(Builder.Value, function.locals.len);
         @memset(self.local_slots, .none);
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
@@ -1389,6 +1431,26 @@ const Body = struct {
         return counts;
     }
 
+    /// What a local's slot holds.
+    ///
+    /// A slot that owns its storage holds a whole `runtime.Value`,
+    /// because that is the only shape short text fits in: unbox a
+    /// String into `{ptr, i64}` and the form is gone, so a slot that
+    /// stored one would be pointing at whatever scratch the runtime
+    /// answered into (docs/STRINGS.md).  Every other slot — a
+    /// parameter, a spill, anything that borrows — keeps the register
+    /// shape it always had, which is what keeps a String parameter's
+    /// inner loop two words in registers.
+    fn slotType(self: *Body, local: mir.Local) Error!Builder.Type {
+        if (local.owns_storage) return self.module.value_type;
+        return self.module.valueType(local.local_type);
+    }
+
+    fn slotAlignment(local: mir.Local) Builder.Alignment {
+        if (local.owns_storage) return value_alignment;
+        return Module.valueAlignment(local.local_type);
+    }
+
     /// Entry-block frame: one `alloca` per local, parameters stored in,
     /// every other local zeroed the way the interpreter zeroes it.
     fn emitFrame(self: *Body) Error!void {
@@ -1396,9 +1458,9 @@ const Body = struct {
         for (function.locals, self.local_slots) |local, *slot| {
             slot.* = try self.wip.alloca(
                 .normal,
-                try self.module.valueType(local.local_type),
+                try self.slotType(local),
                 .none,
-                Module.valueAlignment(local.local_type),
+                slotAlignment(local),
                 .default,
                 "local",
             );
@@ -1414,6 +1476,11 @@ const Body = struct {
                 try self.emptyValue(local.local_type)
             else
                 try self.zeroValue(local.local_type);
+            if (local.owns_storage) {
+                try self.fillBoxShape(slot, local.local_type);
+                try self.fillBoxValue(slot, local.local_type, stored);
+                continue;
+            }
             _ = try self.wip.store(
                 .normal,
                 stored,
@@ -1526,6 +1593,16 @@ const Body = struct {
     // writes what the *value* decides and goes where the value is.
 
     const value_alignment = Builder.Alignment.fromByteUnits(8);
+    const byte_alignment = Builder.Alignment.fromByteUnits(1);
+
+    /// Which field of `value_type` each part of a `runtime.Value` is.
+    /// `inline_head` is never named here: inline text is read as one
+    /// run from `box_inline`, not field by field.
+    const box_tag = 0;
+    const box_inline_length = 1;
+    const box_inline = 2;
+    const box_bits = 3;
+    const box_length = 4;
 
     /// A pointer to a scratch `runtime.Value` holding `held`, whose
     /// Luce type is `of`.
@@ -1663,10 +1740,23 @@ const Body = struct {
         if (of == .optional) return;
         const builder = self.module.builder;
         const tag = try self.boxTag(of);
-        try self.storeBoxField(slot, 0, try builder.intValue(.i64, @intFromEnum(tag)));
-        if (boxLengthIsFixed(of)) {
-            try self.storeBoxField(slot, 2, try self.boxLength(of, .none));
+        try self.storeBoxByte(slot, box_tag, try builder.intValue(.i8, @intFromEnum(tag)));
+        // **Generated code never writes inline text.**  A String in a
+        // register is `{ptr, i64}` and boxing one says so, which is
+        // what keeps a box one store per word; the runtime is the side
+        // that decides to inline, at the store sites where it copies
+        // anyway (docs/STRINGS.md).  So the form byte is a constant
+        // here and rides to the entry block with the tag.
+        if (of == .string or of == .bytes) {
+            try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
         }
+        if (boxLengthIsFixed(of)) {
+            try self.storeBoxField(slot, box_length, try self.boxLength(of, .none));
+        }
+    }
+
+    fn outsideText(self: *Body) Error!Builder.Value {
+        return self.module.builder.intValue(.i8, runtime.text_outside);
     }
 
     /// The word — or, for a String, the two words — that carry the
@@ -1674,9 +1764,9 @@ const Body = struct {
     fn fillBoxValue(self: *Body, slot: Builder.Value, of: types.Type, held: Builder.Value) Error!void {
         if (of == .none) return;
         if (of == .optional) return self.fillBoxOptional(slot, of.optional, held);
-        try self.storeBoxField(slot, 1, try self.boxBits(of, held));
+        try self.storeBoxField(slot, box_bits, try self.boxBits(of, held));
         if (!boxLengthIsFixed(of)) {
-            try self.storeBoxField(slot, 2, try self.boxLength(of, held));
+            try self.storeBoxField(slot, box_length, try self.boxLength(of, held));
         }
     }
 
@@ -1700,21 +1790,27 @@ const Body = struct {
         const inner = try self.wip.extractValue(held, &.{Module.optional_payload}, "box.held");
         const absent_word = try builder.intValue(.i64, 0);
 
-        try self.storeBoxField(slot, 0, try self.wip.select(
+        try self.storeBoxByte(slot, box_tag, try self.wip.select(
             .normal,
             present,
-            try builder.intValue(.i64, @intFromEnum(try self.boxTag(of))),
-            absent_word,
+            try builder.intValue(.i8, @intFromEnum(try self.boxTag(of))),
+            try builder.intValue(.i8, @intFromEnum(runtime.Tag.none)),
             "box.tag",
         ));
-        try self.storeBoxField(slot, 1, try self.wip.select(
+        // Absence is the `none` tag, and nothing reads the form byte of
+        // a value that is not text, so a present String's constant
+        // serves for both.
+        if (of == .string or of == .bytes) {
+            try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
+        }
+        try self.storeBoxField(slot, box_bits, try self.wip.select(
             .normal,
             present,
             try self.boxBits(of, inner),
             absent_word,
             "box.bits",
         ));
-        try self.storeBoxField(slot, 2, try self.wip.select(
+        try self.storeBoxField(slot, box_length, try self.wip.select(
             .normal,
             present,
             try self.boxLength(of, inner),
@@ -1733,12 +1829,22 @@ const Body = struct {
         _ = try self.wip.store(.normal, word, address, value_alignment);
     }
 
+    fn storeBoxByte(
+        self: *Body,
+        slot: Builder.Value,
+        index: usize,
+        byte: Builder.Value,
+    ) Error!void {
+        const address = try self.wip.gepStruct(self.module.value_type, slot, index, "box.at");
+        _ = try self.wip.store(.normal, byte, address, byte_alignment);
+    }
+
     /// Read a Luce value of type `of` back out of the `runtime.Value`
     /// at `slot`.
     fn unboxed(self: *Body, of: types.Type, slot: Builder.Value, name: []const u8) Error!Builder.Value {
         if (of == .none) return .none;
         if (of == .optional) return self.unboxedOptional(of.optional, slot, name);
-        const bits = try self.loadBoxField(slot, 1, "unbox.bits");
+        const bits = try self.loadBoxField(slot, box_bits, "unbox.bits");
         return switch (of) {
             .int, .heap => bits,
             .boolean => try self.wip.icmp(
@@ -1748,16 +1854,49 @@ const Body = struct {
                 name,
             ),
             .float => try self.wip.cast(.bitcast, bits, .double, name),
-            .string => try self.wip.buildAggregate(self.module.string_type, &.{
-                try self.wip.cast(.inttoptr, bits, .ptr, "unbox.text"),
-                try self.loadBoxField(slot, 2, "unbox.length"),
-            }, name),
+            .string => try self.unboxedText(slot, bits, name),
             // The field count is a compile-time fact, so only the
             // address of the run travels back.
             .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
             .bytes => self.fail("Bytes"),
         };
+    }
+
+    /// The `{ptr, i64}` a String travels in, read out of a box in
+    /// whichever form the text is in.
+    ///
+    /// **The pointer this answers may be into the box itself.**  Short
+    /// text lives in the value, so a register reading one borrows the
+    /// place holding it — a frame slot, an array cell, a struct's
+    /// field run, or the scratch a runtime call answered into.  That is
+    /// sound because a MIR register never leaves its block, so it
+    /// cannot outlive any of those; what it must never do is leave the
+    /// *frame*, which is why `ret` goes through `export_storage`
+    /// (docs/STRINGS.md).
+    fn unboxedText(
+        self: *Body,
+        slot: Builder.Value,
+        bits: Builder.Value,
+        name: []const u8,
+    ) Error!Builder.Value {
+        const form = try self.loadBoxByte(slot, box_inline_length, "unbox.form");
+        const outside = try self.wip.icmp(.eq, form, try self.outsideText(), "text.outside");
+        const address = try self.wip.select(
+            .normal,
+            outside,
+            try self.wip.cast(.inttoptr, bits, .ptr, "unbox.text"),
+            try self.wip.gepStruct(self.module.value_type, slot, box_inline, "unbox.inline"),
+            "text.at",
+        );
+        const length = try self.wip.select(
+            .normal,
+            outside,
+            try self.loadBoxField(slot, box_length, "unbox.length"),
+            try self.wip.cast(.zext, form, .i64, "inline.length"),
+            "text.length",
+        );
+        return self.wip.buildAggregate(self.module.string_type, &.{ address, length }, name);
     }
 
     /// A `T?` read back out of a box: present when the tag is anything
@@ -1778,8 +1917,8 @@ const Body = struct {
         const of = payload.asType();
         const present = try self.wip.icmp(
             .ne,
-            try self.loadBoxField(slot, 0, "unbox.tag"),
-            try self.module.builder.intValue(.i64, @intFromEnum(runtime.Tag.none)),
+            try self.loadBoxByte(slot, box_tag, "unbox.tag"),
+            try self.module.builder.intValue(.i8, @intFromEnum(runtime.Tag.none)),
             "unbox.present",
         );
         const inner = try self.unboxed(of, slot, "unbox.held");
@@ -1801,6 +1940,16 @@ const Body = struct {
     ) Error!Builder.Value {
         const address = try self.wip.gepStruct(self.module.value_type, slot, index, "unbox.at");
         return self.wip.load(.normal, .i64, address, value_alignment, name);
+    }
+
+    fn loadBoxByte(
+        self: *Body,
+        slot: Builder.Value,
+        index: usize,
+        name: []const u8,
+    ) Error!Builder.Value {
+        const address = try self.wip.gepStruct(self.module.value_type, slot, index, "unbox.at");
+        return self.wip.load(.normal, .i8, address, byte_alignment, name);
     }
 
     /// This call's ownership serial, minted once in the entry block.
@@ -1884,6 +2033,10 @@ const Body = struct {
             out,
             "rt.value",
         );
+        // This slot belongs to this call site alone and nothing writes
+        // it again before the register dies, so it is the box the
+        // register was read from.
+        self.boxes[register] = out;
     }
 
     /// The subscripts of one indexing operation, as a run of boxed
@@ -2820,24 +2973,26 @@ const Body = struct {
                 => return self.fail("const_data of a type other than String"),
             },
             .local_get => |local| {
-                const local_type = self.function.locals[local].local_type;
+                const held = self.function.locals[local];
+                const slot = self.local_slots[local];
+                if (held.owns_storage) {
+                    self.values[register] = try self.unboxed(
+                        held.local_type,
+                        slot,
+                        "local.get",
+                    );
+                    self.boxes[register] = slot;
+                    return;
+                }
                 self.values[register] = try self.wip.load(
                     .normal,
-                    try self.module.valueType(local_type),
-                    self.local_slots[local],
-                    Module.valueAlignment(local_type),
+                    try self.module.valueType(held.local_type),
+                    slot,
+                    Module.valueAlignment(held.local_type),
                     "local.get",
                 );
             },
-            .local_set => |set| {
-                const local_type = self.function.locals[set.local].local_type;
-                _ = try self.wip.store(
-                    .normal,
-                    self.values[set.value],
-                    self.local_slots[set.local],
-                    Module.valueAlignment(local_type),
-                );
-            },
+            .local_set => |set| try self.emitLocalSet(set.local, set.value),
             .input_load => return self.fail("input_load (evaluator ports)"),
             .output_store => return self.fail("output_store (evaluator ports)"),
             .binary => |operation| try self.emitBinary(register, operation),
@@ -2858,6 +3013,7 @@ const Body = struct {
                     address,
                     "field",
                 );
+                self.boxes[register] = address;
             },
             .struct_set => |set| try self.callAnswering(register, .luce_rt_struct_set, &.{
                 self.runtime,
@@ -2911,6 +3067,46 @@ const Body = struct {
             },
             .trap => |code| try self.emitCodeTrap(code),
         }
+    }
+
+    /// Store a register into a local's slot.
+    ///
+    /// A slot that owns its storage holds a whole `runtime.Value`, and
+    /// a String's form has to survive the store: if the register was
+    /// read out of a box, the twenty-four bytes are copied across
+    /// whole, so short text stays short and long text keeps pointing
+    /// where it did.  A register with no box behind it is outside text
+    /// by construction — a constant, a parameter, a slice, a callee's
+    /// result — and is boxed the ordinary way (docs/STRINGS.md).
+    fn emitLocalSet(self: *Body, local: mir.LocalId, value: mir.Register) Error!void {
+        const held = self.function.locals[local];
+        const slot = self.local_slots[local];
+        if (!held.owns_storage) {
+            _ = try self.wip.store(
+                .normal,
+                self.values[value],
+                slot,
+                Module.valueAlignment(held.local_type),
+            );
+            return;
+        }
+        if (self.boxes[value] != .none) {
+            _ = try self.wip.callMemCpy(
+                slot,
+                value_alignment,
+                self.boxes[value],
+                value_alignment,
+                try self.module.builder.intValue(.i64, @sizeOf(runtime.Value)),
+                .normal,
+                true,
+            );
+            return;
+        }
+        // The shape goes here, not in the entry block: an earlier store
+        // may have left this slot holding inline text, and the form
+        // byte has to say otherwise before the words are written.
+        try self.fillBoxShape(slot, held.local_type);
+        try self.fillBoxValue(slot, held.local_type, self.values[value]);
     }
 
     // -- conversion and struct values ----------------------------------
@@ -3318,6 +3514,55 @@ const Body = struct {
         self.seek(surviving);
     }
 
+    /// The box `drop_storage` gives back — **the place itself**, not a
+    /// fresh box built from the register.
+    ///
+    /// Boxing an unboxed String says its text is outside, because that
+    /// is all a `{ptr, i64}` can say; handing that to the runtime with
+    /// short text in the slot would ask it to free a pointer into this
+    /// frame.  The register being dropped was always read out of the
+    /// place being emptied — stage 4 emits the release as load, drop,
+    /// store back — so the place is what to hand over, and it is one
+    /// fewer copy besides.
+    ///
+    /// A register with no box behind it can only be carrying a struct's
+    /// run, which survives the round trip whole; text without a place
+    /// is refused rather than silently freed.
+    fn dropped(self: *Body, register: mir.Register) Error!Builder.Value {
+        if (self.boxes[register] == .none and
+            carriesText(self.function.result_types[register]))
+        {
+            return self.fail("drop_storage of text that was not read out of a place");
+        }
+        return self.storageOf(register);
+    }
+
+    /// The same, for the two intrinsics that ask *which form* a value's
+    /// storage is in rather than merely reading its bytes.
+    ///
+    /// Every other runtime call reads through the pointer a box hands
+    /// it, so an outside box over inline bytes tells it the truth. Only
+    /// `drop_storage`, which frees, and `export_storage`, which decides
+    /// between a transfer and a copy, would be misled — so both take the
+    /// place the register was read from.  A text register with no place
+    /// behind it is a constant or a callee's result, and `ret` already
+    /// made both of those frame-independent (docs/STRINGS.md).
+    fn storageOf(self: *Body, register: mir.Register) Error!Builder.Value {
+        if (self.boxes[register] != .none) return self.boxes[register];
+        return self.boxedRegister(register, "held");
+    }
+
+    /// Whether a value of this type can be text in its own right — the
+    /// one payload whose box does not round trip, because boxing loses
+    /// which form the bytes were in.
+    fn carriesText(of: types.Type) bool {
+        return switch (of) {
+            .string, .bytes => true,
+            .optional => |payload| carriesText(payload.asType()),
+            .none, .boolean, .int, .float, .strukt, .heap => false,
+        };
+    }
+
     // -- intrinsics ------------------------------------------------------
 
     fn emitIntrinsic(
@@ -3330,9 +3575,10 @@ const Body = struct {
         switch (called.kind) {
             // -- value storage ----------------------------------------
             //
-            // Both cross into `libluce_rt` as a boxed value, like every
-            // other store site, so the unboxed `{ptr, i64}` a String
-            // lives in between them does not move (docs/STRINGS.md).
+            // All three cross into `libluce_rt` as a boxed value, like
+            // every other store site, so the unboxed `{ptr, i64}` a
+            // String lives in between them does not move
+            // (docs/STRINGS.md).
             .own_storage => try self.callAnswering(register, .luce_rt_own_storage, &.{
                 rt,
                 try self.boxedRegister(of[0], "held"),
@@ -3341,7 +3587,7 @@ const Body = struct {
                 const out = try self.scratch(self.module.value_type, value_alignment, "rt.out");
                 _ = try self.callRuntime(.luce_rt_drop_storage, .void, &.{
                     rt,
-                    try self.boxedRegister(of[0], "held"),
+                    try self.dropped(of[0]),
                     out,
                 }, "");
                 self.values[register] = try self.unboxed(
@@ -3349,7 +3595,12 @@ const Body = struct {
                     out,
                     "rt.value",
                 );
+                self.boxes[register] = out;
             },
+            .export_storage => try self.callAnswering(register, .luce_rt_export_storage, &.{
+                rt,
+                try self.storageOf(of[0]),
+            }),
 
             // -- scalar math, generated here --------------------------
             .abs => switch (try self.numeric(of[0])) {
@@ -3496,6 +3747,7 @@ const Body = struct {
                     const view = try self.arrayView(of[0], shape);
                     const address = try self.arrayElement(view, shape.element, of[1..]);
                     self.values[register] = try self.loadCell(shape.element, address);
+                    if (!ownsNothing(shape.element)) self.boxes[register] = address;
                     return;
                 }
                 const run, const rank = try self.subscripts(of[1..]);

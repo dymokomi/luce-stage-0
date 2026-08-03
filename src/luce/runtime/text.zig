@@ -1,11 +1,14 @@
 //! String storage and the pure conversion builtins.
 //!
 //! A Luce String is immutable and UTF-8.  Every function here that
-//! makes new text allocates it from `Runtime.objects` and hands it back
-//! owned by nobody: whatever receives it next owns it, and the
-//! statement that produced it releases it if nothing does
-//! (docs/STRINGS.md).  `slice` is the exception and stays one — it is a
-//! borrow of its argument, on both engines, and storing one copies.
+//! makes new text hands it back owned by nobody: whatever receives it
+//! next owns it, and the statement that produced it releases it if
+//! nothing does (docs/STRINGS.md).  Where the bytes go is the value's
+//! own business — short text lives inside the `Value` and costs no
+//! allocation at all, which is why `str(Int)` and `chr` never call the
+//! allocator.  `slice` is the one borrow here, on both engines, and
+//! storing one copies; a slice of inline text is a copy already,
+//! because there is nothing to borrow from.
 //!
 //! The String surface the language keeps is deliberately small — `+`,
 //! comparison, checked `s[a:b]`, `len`, `byte_at`, `find_byte` — and
@@ -27,15 +30,30 @@ pub fn isStringBoundary(held: []const u8, index: usize) bool {
     return index == held.len or held[index] & 0xc0 != 0x80;
 }
 
-/// `left + right`, in fresh owned storage.
+/// `left + right`, in fresh owned storage — inside the value when the
+/// result fits there, which costs the join nothing and the release
+/// nothing (docs/STRINGS.md).
 pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Value {
-    if (left.len + right.len == 0) return Value.ofString("");
-    const joined = try std.mem.concat(runtime.objects, u8, &.{ left, right });
-    return Value.ofString(joined);
+    const length = left.len + right.len;
+    if (length == 0) return Value.ofString("");
+    if (Value.fitsInline(length)) {
+        var joined: [value.inline_capacity]u8 = undefined;
+        @memcpy(joined[0..left.len], left);
+        @memcpy(joined[left.len..length], right);
+        return Value.ofInlineText(.string, joined[0..length]);
+    }
+    return Value.ofString(try std.mem.concat(runtime.objects, u8, &.{ left, right }));
 }
 
 /// `s[start:end]` — a borrow of the original bytes, checked twice: in
 /// range, and on UTF-8 sequence boundaries at both ends.
+///
+/// A slice of *inline* text is a copy rather than a borrow, and costs
+/// nothing for it: the source is at most `inline_capacity` bytes, so
+/// any part of it fits inline too.  That is not an optimisation, it is
+/// what keeps the borrow honest — inline bytes live in the value, and
+/// `held` is a copy of the caller's, so a view of it would be a view of
+/// something about to go (docs/STRINGS.md).
 pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
     const text = held.asString();
     if (start < 0 or end < start or end > text.len) return runtime.fail(.string_bounds);
@@ -44,7 +62,9 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
     if (!isStringBoundary(text, start_index) or !isStringBoundary(text, end_index)) {
         return runtime.fail(.string_boundary);
     }
-    return Value.ofString(text[start_index..end_index]);
+    const wanted = text[start_index..end_index];
+    if (held.textIsInline()) return Value.ofInlineText(held.tag, wanted);
+    return Value.ofString(wanted);
 }
 
 /// `s.byte_at(i)` — one raw byte, below the UTF-8 layer on purpose.
@@ -80,13 +100,29 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
 /// later appends do not change the String that was taken.
 pub fn str(runtime: *Runtime, held: Value) Error!Value {
     switch (held.view()) {
-        .int => |number| return Value.ofString(try intText(runtime, number)),
+        // Twenty digits and a sign is the longest an i64 gets, so a
+        // number's text always fits inside the value and `str(i)` in a
+        // loop allocates nothing at all.
+        .int => |number| {
+            var digits: [24]u8 = undefined;
+            return Value.ofInlineText(.string, std.fmt.bufPrint(
+                &digits,
+                "{d}",
+                .{number},
+            ) catch unreachable);
+        },
         // `{d}` on a float is the shortest representation that round
         // trips — Zig's Ryū-derived formatter, the same one the
         // hand-written wasm runtime had to port by hand.
         .float => |number| {
-            const text = try std.fmt.allocPrint(runtime.objects, "{d}", .{number});
-            return Value.ofString(text);
+            var written: [64]u8 = undefined;
+            const text = std.fmt.bufPrint(&written, "{d}", .{number}) catch
+                return Value.ofString(try std.fmt.allocPrint(
+                    runtime.objects,
+                    "{d}",
+                    .{number},
+                ));
+            return runtime.ownValue(Value.ofString(text));
         },
         .boolean => |held_bool| return runtime.ownValue(
             Value.ofString(if (held_bool) "true" else "false"),
@@ -94,18 +130,10 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         .string => return runtime.ownValue(held),
         .object => {
             const object = try runtime.resolve(held);
-            if (object.data.builder.items.len == 0) return Value.ofString("");
-            const text = try runtime.objects.dupe(u8, object.data.builder.items);
-            return Value.ofString(text);
+            return runtime.ownValue(Value.ofString(object.data.builder.items));
         },
         else => unreachable,
     }
-}
-
-/// `str(Int)` on its own, because generated code calls it directly and
-/// wants the bytes rather than a `Value`.
-pub fn intText(runtime: *Runtime, number: i64) Error![]const u8 {
-    return std.fmt.allocPrint(runtime.objects, "{d}", .{number});
 }
 
 /// `parse_int(s) -> Int?`.  "Not a number" is the same reason every
@@ -136,8 +164,8 @@ pub fn chr(runtime: *Runtime, code: i64) Error!Value {
     var buffer: [4]u8 = undefined;
     const length = std.unicode.utf8Encode(codepoint, &buffer) catch
         return runtime.fail(.bad_codepoint);
-    const encoded = try runtime.objects.dupe(u8, buffer[0..length]);
-    return Value.ofString(encoded);
+    // Four bytes at the most, so a codepoint always fits in the value.
+    return Value.ofInlineText(.string, buffer[0..length]);
 }
 
 /// `ord(s)` — the first codepoint of `s`, or a trap when there is none

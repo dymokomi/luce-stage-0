@@ -60,6 +60,12 @@ pub const null_index = @import("runtime/value.zig").null_index;
 /// Where a handle's generation sits in `Value.bits`, for the reader
 /// that takes the two halves apart itself: generated code.
 pub const generation_shift = @import("runtime/value.zig").generation_shift;
+/// Where short text sits inside a `Value`, how much of it fits, and the
+/// `inline_length` that says it is somewhere else instead.  Generated
+/// code reads all three (`08_llvm/lower.zig`).
+pub const inline_at = @import("runtime/value.zig").inline_at;
+pub const inline_capacity = @import("runtime/value.zig").inline_capacity;
+pub const text_outside = @import("runtime/value.zig").text_outside;
 pub const keyEquals = @import("runtime/value.zig").keyEquals;
 
 pub const containers = @import("runtime/containers.zig");

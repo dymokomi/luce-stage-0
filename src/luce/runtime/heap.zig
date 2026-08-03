@@ -356,14 +356,14 @@ pub const Map = struct {
     /// Where `key` sits in `entries`, or null when the map has no such
     /// key.  The probe stops at the first free slot: insertion never
     /// leaves a gap in a run, and removal reindexes.
-    pub fn find(self: *const Map, key: Value) ?usize {
+    pub fn find(self: *const Map, key: *const Value) ?usize {
         if (self.slots.len == 0) return null;
         const mask = self.slots.len - 1;
         var at = hashOf(key) & mask;
         while (true) : (at = (at + 1) & mask) {
             const position = self.slots[at];
             if (position == free_slot) return null;
-            if (value.keyEquals(self.entries.items[position].key, key)) return position;
+            if (value.keyEquals(&self.entries.items[position].key, key)) return position;
         }
     }
 
@@ -412,7 +412,7 @@ pub const Map = struct {
     /// its hash.  The caller guarantees room, so the probe terminates.
     fn place(self: *Map, position: u32) void {
         const mask = self.slots.len - 1;
-        var at = hashOf(self.entries.items[position].key) & mask;
+        var at = hashOf(&self.entries.items[position].key) & mask;
         while (self.slots[at] != free_slot) at = (at + 1) & mask;
         self.slots[at] = position;
     }
@@ -423,7 +423,7 @@ pub const Map = struct {
     /// equally.  Ints go through a bit mixer rather than being used
     /// raw: sequential keys are the common case and linear probing
     /// wants their low bits spread.
-    fn hashOf(key: Value) usize {
+    fn hashOf(key: *const Value) usize {
         return switch (key.view()) {
             .int => |held| @truncate(std.hash.int(@as(u64, @bitCast(held)))),
             .string => |held| @truncate(std.hash.Wyhash.hash(0, held)),
@@ -754,11 +754,10 @@ pub const Runtime = struct {
     /// hundred times.  The zero of a String is empty text, which owns
     /// nothing, so the common case is still one `@memset`.
     pub fn fillArray(self: *Runtime, array: Object.Array, held: Value) Error!void {
-        if (array.kind != .value or (held.tag != .strukt and held.tag != .string and held.tag != .bytes)) {
-            array.fill(held);
-            return;
-        }
-        if (held.length == 0) {
+        // A value with no allocation of its own — a scalar, a handle,
+        // empty or inline text — is the same twenty-four bytes in
+        // every cell, so filling is one `@memset`.
+        if (array.kind != .value or !held.ownsStorage()) {
             array.fill(held);
             return;
         }
@@ -819,20 +818,21 @@ pub const Runtime = struct {
     /// struct aliases, exactly as S26 says, and only the value fields
     /// are duplicated.
     ///
-    /// Empty text and an empty run own nothing, so they answer
-    /// themselves — which is also what makes a program constant safe to
-    /// "own": storing one copies it, and the constant itself is never
-    /// reached by a release.
+    /// Text that fits inside a value owns nothing and needs no
+    /// allocator, and an empty run answers itself — which is also what
+    /// makes a program constant safe to "own": storing one copies it,
+    /// and the constant itself is never reached by a release.
     pub fn ownValue(self: *Runtime, held: Value) Error!Value {
         switch (held.tag) {
             .string, .bytes => {
-                if (held.length == 0) return held;
-                const copied = try self.objects.dupe(u8, held.asString());
-                return .{
-                    .tag = held.tag,
-                    .bits = @intFromPtr(copied.ptr),
-                    .length = copied.len,
-                };
+                const text = held.asString();
+                // Short text is the value: copying the slot copies the
+                // bytes, so there is nothing to allocate and nothing to
+                // give back.  This is where the allocation copy-on-store
+                // bought goes away again (docs/STRINGS.md).
+                if (Value.fitsInline(text.len)) return .ofInlineText(held.tag, text);
+                const copied = try self.objects.dupe(u8, text);
+                return .ofOutside(held.tag, copied);
             },
             .strukt => {
                 const source = held.asStruct();
@@ -863,7 +863,9 @@ pub const Runtime = struct {
     pub fn releaseStorage(self: *Runtime, held: Value) void {
         switch (held.tag) {
             .string, .bytes => {
-                if (held.bits == 0 or held.length == 0) return;
+                // Inline text is the value, and a value is not an
+                // allocation: there is nothing here to give back.
+                if (!held.ownsStorage()) return;
                 const start: [*]u8 = @ptrFromInt(@as(usize, @intCast(held.bits)));
                 self.objects.free(start[0..@intCast(held.length)]);
             },
@@ -882,9 +884,40 @@ pub const Runtime = struct {
     /// what reading an unassigned local always was.
     pub fn emptied(held: Value) Value {
         return switch (held.tag) {
+            // An emptied String is inline and zero bytes long, which
+            // reads as `""` — the same thing it read as before, and
+            // nothing to free.
             .string, .bytes, .strukt => .{ .tag = held.tag },
             else => held,
         };
+    }
+
+    /// `held` with storage that outlives the frame it was made in —
+    /// what `ret` hands the caller (docs/STRINGS.md).
+    ///
+    /// Inline text is the one form that cannot leave: on the compiled
+    /// path the bytes sit in a frame slot, and the `{ptr, length}` the
+    /// caller receives would point into a frame that has gone.  So
+    /// inline text is copied out to an allocation the caller owns, and
+    /// everything else — outside text, a struct's run, a scalar, a
+    /// handle — is already frame-independent and moves untouched.
+    ///
+    /// This is a *transfer*, not a copy: the caller of a
+    /// String-returning function owns exactly one allocation either
+    /// way, which is why `ret` costs no more allocations than it did
+    /// before short text lived in the value at all.
+    pub fn exportValue(self: *Runtime, held: Value) Error!Value {
+        switch (held.tag) {
+            .string, .bytes => {
+                if (!held.textIsInline()) return held;
+                const text = held.asString();
+                // Empty text has nothing to allocate and no address
+                // worth handing out, so it leaves as the static one.
+                if (text.len == 0) return .ofOutside(held.tag, "");
+                return .ofOutside(held.tag, try self.objects.dupe(u8, text));
+            },
+            else => return held,
+        }
     }
 
     // -- struct storage ------------------------------------------------

@@ -571,6 +571,18 @@ pub const FunctionBuilder = struct {
         return true;
     }
 
+    /// Whether a value of this type can be text in its own right —
+    /// the one payload whose storage might be inside the value rather
+    /// than an allocation of its own, and so the one that cannot
+    /// simply be handed out of the frame that made it.
+    fn carriesText(of: Type) bool {
+        return switch (of) {
+            .string, .bytes => true,
+            .optional => |payload| carriesText(payload.asType()),
+            else => false,
+        };
+    }
+
     /// Store into a local, copying the value's storage in when the
     /// local is the one that will have to give it back.
     fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Value) Error!void {
@@ -2274,6 +2286,15 @@ pub const FunctionBuilder = struct {
                 !self.storageMoves(handed_out))
             {
                 handed_out = try self.code.ownStorage(handed_out);
+            }
+            // And whatever it is by then has to be able to leave: short
+            // text lives in the value, a value lives in a slot, and
+            // this frame's slots are about to go (docs/STRINGS.md).  A
+            // struct's run and text that is already an allocation move
+            // untouched, so the caller owns exactly the one allocation
+            // it owned before short text lived in values at all.
+            if (carriesText(value.value_type)) {
+                handed_out = try self.code.exportStorage(handed_out);
             }
             try self.emitTempReleases(0);
             try self.emitScopeReleases(0, moved);
@@ -4032,6 +4053,7 @@ pub const FunctionBuilder = struct {
             // Lowered from syntax or method calls, never from bare names.
             .own_storage,
             .drop_storage,
+            .export_storage,
             .give_object,
             .copy_object,
             .null_object,

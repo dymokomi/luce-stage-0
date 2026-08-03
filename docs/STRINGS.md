@@ -11,14 +11,14 @@ refuses, permanently, every automatic manager for values. This is the
 memo for what replaces them. It was `docs/MISSING.md` Tier 0 item 1,
 second bullet.
 
-> **Steps 2 and 3 shipped.** Owned String bytes, copy-on-store across
-> every store site, owned struct field runs, and the
-> mutation-during-statement read rule. What actually landed, what it
-> measured, and where the design met the code are in **What shipped**
-> at the foot of this document. Steps 4, 5 and 6 are still queued, and
-> step 5 (small-string optimisation) is now the one that matters:
-> `bench/strings` went **2.35× C → 3.40× C**, which is allocation, and
-> SSO is what takes it back.
+> **Steps 2, 3 and 5 shipped.** Owned String bytes, copy-on-store
+> across every store site, owned struct field runs, the
+> mutation-during-statement read rule, and now small-string
+> optimisation: a String of twenty-two bytes or fewer lives inside the
+> `Value` holding it and costs no allocation at all. What actually
+> landed, what it measured, and where the design met the code are in
+> **What shipped** and **What SSO shipped** at the foot of this
+> document. Steps 4 and 6 are still queued.
 
 Nothing in the language changes. No verb, no trap, no diagnostic, no
 change to the leak census. S1–S43 keep every decision; three lines of
@@ -286,12 +286,12 @@ Two costs, both honest:
   ≤22-byte copy at 0.29 ns — which keeps the register form uniform and
   removes the hazard rather than documenting it.
 
-It costs an `abi.version` bump (4 → 5) and a `.lc` `format_version`
-bump (10 → 11). Both are cheap: an artifact already carries a tag and
-is refused by name when foreign, and modules recompile from source.
-Because of that ABI cost and because the core change is worth shipping
-without it, SSO goes last — after the measurement that says how much of
-the predicted 1.9–2.1× it recovers.
+It costs an `abi.version` bump and a `.lc` `format_version` bump. Both
+are cheap: an artifact already carries a tag and is refused by name
+when foreign, and modules recompile from source. Because of that ABI
+cost and because the core change is worth shipping without it, SSO goes
+last — after the measurement that says how much of the predicted
+1.9–2.1× it recovers.
 
 ## `s[a:b]` on a String
 
@@ -500,8 +500,8 @@ Each piece is independently valuable and independently shippable.
 4. **Destructive `struct_set`** when the source register is dead after
    it. Pure optimisation, provable from MIR liveness, no semantic
    change. Takes the editor from ~10× today's copy traffic to ~3×.
-5. **Small-string optimisation.** ABI 5, format 11. Gated on step 2's
-   measurement.
+5. **Small-string optimisation.** ABI 6, format 13. Shipped; see
+   **What SSO shipped**.
 6. **Move-instead-of-copy for statically fresh stores.** `xs.append(a +
    b)` and `next.content = Editing.splice(…)` hand over the temporary's
    allocation instead of duplicating it. Removes one 40 KB copy per
@@ -743,3 +743,154 @@ it records on the way out names functions, not slots. The run ends
 either way and the leak is bounded by the live set at the trap, but it
 is a real gap and the fix is to emit the drops on each frame's
 unwinding edge — the same place `luce_rt_unwound` is already called.
+Still open after SSO, and smaller than it was: a frame's short strings
+are in its slots and go with them.
+
+## What SSO shipped
+
+Step 5, whole. `.lc` `format_version` 12 → 13; `abi.version` 5 → 6,
+because generated code reads a `Value` differently even though no field
+moved. 812 tests green, `zig fmt --check` clean.
+
+**The threshold is 22, and the tag demotion was clean.** `Tag` is
+`enum(u8)`, `inline_length` is the byte after it, and offsets 2 through
+23 — `inline_head` plus `bits` plus `length` — are the one contiguous
+run inline text lives in. `@sizeOf(Value)` is 24 before and 24 after,
+`@alignOf` is 8 before and after, and **`bits` and `length` did not
+move**: they are still at 8 and 16, so an object handle is the same
+word in the same place and `generation_shift` never came into it. The
+form byte says which: `text_outside` (255) when `bits` addresses the
+text, a count from 0 to 22 when the text is in the slot. Nothing in the
+runtime switches on a new tag, so `Tag`'s eight values are the eight
+they were.
+
+### The measurements
+
+`bench/compare.sh`, interleaved A/B on this host (Apple M4 Max), against
+the commit this started from:
+
+| benchmark | base | head | delta |
+|---|---|---|---|
+| loops | 85.4ms | 83.5ms | −2.2% |
+| math | 108.9ms | 107.4ms | −1.3% |
+| **strings** | 68.2ms | 52.0ms | **−23.8%** |
+| arrays | 46.4ms | 46.4ms | −0.0% |
+| matmul | 11.7ms | 11.7ms | +0.4% |
+| stats | 33.8ms | 34.2ms | +1.2% |
+
+`bench/strings` compute ratio **3.61× C → 2.88× C**. And the honest
+comparison, the same A/B against `957a3b0` — the commit *before*
+copy-on-store, whose ratio was the 2.35–2.51× the regression was
+measured from:
+
+| benchmark | pre-copy-on-store | head | delta |
+|---|---|---|---|
+| **strings** | 49.8ms | 55.5ms | **+11.6%** |
+| loops, math, arrays, matmul, stats | — | — | within ±0.5% |
+
+**So SSO took back roughly three quarters of the regression, not all of
+it**, and the memo's prediction that it "removes essentially all" was
+too strong. Timing the benchmark in phases says exactly where the rest
+is, and it is not allocation:
+
+| phase | pre-copy-on-store | head |
+|---|---|---|
+| build 400,000 pieces with a Builder, `str(b)` | 18ms | **18ms** |
+| + `split(";")` and sum the pieces | 27ms | 30ms |
+| + `count`, `upper`, `replace` | 46ms | 51ms |
+
+The build phase — 400,000 `str(i)` results, which is where 400,000 of
+the 800,000 allocations were — is **recovered exactly**, to the
+millisecond. What remains is in `split` and the fold, and it is the
+*copying* copy-on-store introduced: `pieces.append(s[run:at])` used to
+store a borrow and now duplicates twelve bytes into the element cell,
+400,001 times. That is the design's own trade, made deliberately
+(*"the copy is free and the allocation is not"*), and the memo's
+estimate of it — 0.1 ms, "beneath notice" — was the number that was
+wrong, by about thirty times. Removing it would need step 6, not a
+larger threshold.
+
+The parity benchmarks did not move.
+
+### Memory
+
+The churn loop — one string built and discarded per iteration, nothing
+retained — is flat and slightly *below* where copy-on-store left it,
+because a loop whose strings all fit inline now calls the allocator
+zero times rather than in a matched pair:
+
+| iterations | 0.5M | 1M | 2M | 4M | 8M |
+|---|---|---|---|---|---|
+| compiled | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB |
+| interpreter | 1.8 MB | 1.8 MB | 1.8 MB | 1.8 MB | 1.8 MB |
+
+The editor simulation — `programs/editor.luc` verbatim with its
+interactive `main` replaced by 20,000 keystrokes played into a 40 KB
+buffer through the same `Handle.adjust` / `Handle.key` path — is
+**3.5 MB compiled and 5.3 MB on the interpreter**, against 3.0 MB and
+7.3 MB before. Flat either way, and the difference is allocator working
+set, not retention.
+
+One correction to the earlier table while we are here: its compiled
+column (20.4 MB, and the editor's 3.3 MB) was measured on a cold
+artifact, so it included `luce`'s own LLVM run in the same process.
+Warm, the figure was always ~2 MB. Measure a compiled artifact twice.
+
+### Where the design met the code
+
+Five things the SSO section did not have quite right.
+
+1. **A String register cannot leave the frame that made it, so `ret`
+   needed a third storage intrinsic.** The memo treated SSO as a change
+   to *reads*. It is, but the read throws away *which form* the text
+   was in: unbox a String and you have `{ptr, i64}`, and if the text was
+   inline that pointer is into a frame slot. `ret` hands it to the
+   caller, whose frame outlives it. So `export_storage` joins
+   `own_storage` and `drop_storage`: it answers a value whose storage
+   outlives the frame — copying inline text out to an allocation,
+   passing everything already independent through untouched. It costs
+   the caller no allocation it was not already paying, because in every
+   case the value it replaces had allocated one.
+
+2. **A slot that owns its storage holds a whole `Value`, not the
+   register shape.** Same reason, one scope smaller: `own_storage`
+   answers a value that may be inline, and a `{ptr, i64}` slot could
+   only record a pointer into the runtime's answer scratch. Locals that
+   *borrow* — every parameter, every block-split spill — keep the two
+   words they had, which is what keeps `find_from`'s inner loop over a
+   String parameter exactly as it was.
+
+3. **The backend has to remember which box a register came from.** Two
+   intrinsics ask *which form* rather than merely reading the bytes:
+   `drop_storage`, which frees, and `export_storage`, which decides
+   between a transfer and a copy. Both take the place the register was
+   read out of — a frame slot, an array cell, a struct's field run, the
+   scratch a runtime call answered into — rather than a box rebuilt
+   from the register, which would say "outside" over inline bytes and
+   ask the runtime to free a pointer into the stack. Every *other*
+   runtime call reads through the pointer, so an outside box over inline
+   bytes tells it the truth and nothing else changed. A text register
+   with no place behind it is refused rather than guessed at.
+
+4. **Store-to-load forwarding had to stop at slots that own storage.**
+   `07_optimize/values.zig` made `local_get %L` after `local_set %L, rV`
+   answer `rV`. That was true while a slot held what was stored into it.
+   It no longer is: the slot holds an owned copy, and for text the
+   runtime picks the form, so the register and the slot are two
+   different things and the release needs the slot.
+
+5. **A slice of inline text is a copy, and has to be.** `text.slice`
+   answered `Value.ofString(text[a..b])` — a borrow of its argument,
+   which is a *copy of the caller's value* when the text is inline, so
+   the view pointed at a parameter about to go. The source is at most
+   twenty-two bytes, so any part of it fits inline too: the fix is a
+   copy that allocates nothing. This is the one place where the two
+   engines take visibly different routes to the same answer — the
+   compiled path slices in registers, since its source is already a
+   `{ptr, i64}` — and the boundary tests are what say they agree.
+
+Two smaller ones. `str(Int)` and `chr` now *never* allocate: twenty
+digits and a sign is the longest an `i64` gets and a codepoint is four
+bytes, so both always fit. And `Value.asString` takes a pointer
+receiver, which is not decoration — it is the compiler refusing to let
+anyone read inline text out of a temporary.

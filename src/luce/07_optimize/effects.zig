@@ -180,6 +180,7 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // (docs/STRINGS.md).
         .own_storage,
         .drop_storage,
+        .export_storage,
         => .impure,
 
         // Fresh objects, mutation, ownership verbs, and every host
@@ -331,7 +332,7 @@ pub fn viewStable(instruction: Instruction) bool {
             // Value storage only: a String's bytes and a struct's
             // field run are not the object table and not an Array's
             // storage (docs/STRINGS.md).
-            .own_storage, .drop_storage => true,
+            .own_storage, .drop_storage, .export_storage => true,
 
             // Attaches a fresh object, so the table may grow.
             .list_slice, .map_keys, .map_values, .copy_object => false,
@@ -433,6 +434,7 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             // (docs/STRINGS.md, S26).
             .own_storage,
             .drop_storage,
+            .export_storage,
             => true,
             .str_value => function.result_types[call.arguments[0]] != .heap,
             else => false,

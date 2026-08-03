@@ -238,6 +238,19 @@ export fn luce_rt_own_storage(
     return survived;
 }
 
+/// A value with storage that outlives the frame that made it — what
+/// `ret` hands the caller.  Text that lives inside the value is copied
+/// out to an allocation; everything else moves untouched
+/// (docs/STRINGS.md).
+export fn luce_rt_export_storage(
+    runtime: *Runtime,
+    held: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.exportValue(held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
 /// Give back the storage a value owns, and answer the emptied value
 /// the place should hold from here on.  Objects are untouched: they
 /// are freed by `luce_rt_unbind`, which is a different question.

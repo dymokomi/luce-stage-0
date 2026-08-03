@@ -115,6 +115,12 @@ pub const Intrinsic = enum {
     /// Neither touches objects: those are `object_bind`'s business.
     own_storage,
     drop_storage,
+    /// The third: what `ret` does to a value on its way out of the
+    /// frame that made it.  Short text lives in the value, and on the
+    /// compiled path a value lives in a frame slot — so text that fits
+    /// inline is copied into storage the caller owns, and everything
+    /// already independent of the frame moves untouched.
+    export_storage,
 };
 
 pub const TrapCode = enum {

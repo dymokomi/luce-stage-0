@@ -20,7 +20,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 12;
+pub const format_version: u32 = 13;
 
 pub const DecodeError = error{
     OutOfMemory,
@@ -896,6 +896,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     inline for (comptime std.meta.fieldNames(mir.TrapCode)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap codes: bump format_version and update BOTH numbers.
-    try testing.expectEqual(@as(u32, 12), format_version);
-    try testing.expectEqual(@as(u64, 17503378686852440726), hasher.final());
+    try testing.expectEqual(@as(u32, 13), format_version);
+    try testing.expectEqual(@as(u64, 16376125671992188100), hasher.final());
 }

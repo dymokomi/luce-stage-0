@@ -174,6 +174,7 @@ pub const Service = enum {
     // -- value storage --------------------------------------------------
     luce_rt_own_storage,
     luce_rt_drop_storage,
+    luce_rt_export_storage,
 
     /// The C symbol this service is declared under.
     pub fn symbol(self: Service) []const u8 {
@@ -426,6 +427,10 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .run, .value_in, .value_out },
         },
         .luce_rt_drop_storage => .{
+            .memory = touches_text,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_export_storage => .{
             .memory = touches_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },

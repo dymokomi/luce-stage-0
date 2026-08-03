@@ -67,7 +67,13 @@ const trace = @import("../runtime/trace.zig");
 /// than the way LLVM does.  Same field, same layout, different string:
 /// `machine` below is a compile-time constant, so a loader answers
 /// "is this artifact mine?" without libLLVM in the process.
-pub const version: u32 = 5;
+/// 6 — short text lives inside a `LuceValue`.  The tag is one byte
+/// where it was eight, and the twenty-two bytes that frees are where a
+/// String's text goes when it fits (docs/STRINGS.md).  No field moved
+/// and nothing was reordered — `bits` and `length` are still at 8 and
+/// 16 — but generated code reads a `Value` differently, so an artifact
+/// built against the old reading has to be rebuilt.
+pub const version: u32 = 6;
 
 /// The machine an artifact runs on, as a string both the compiler and
 /// the loader can produce.

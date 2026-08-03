@@ -273,6 +273,19 @@ pub const Lowering = struct {
         );
     }
 
+    /// `value` with storage that outlives this frame — what `ret` hands
+    /// the caller.  Text that fits inside a value lives in the slot
+    /// holding it, and a slot dies with its frame, so this is where it
+    /// moves out (docs/STRINGS.md).
+    pub fn exportStorage(self: *Lowering, value: Register) Error!Register {
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = value;
+        return self.emit(
+            .{ .intrinsic = .{ .kind = .export_storage, .arguments = arguments } },
+            self.resultType(value),
+        );
+    }
+
     /// Give `value`'s storage back; the result is the emptied value the
     /// place it came from should hold from here on.
     pub fn dropStorage(self: *Lowering, value: Register) Error!Register {

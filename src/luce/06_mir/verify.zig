@@ -470,7 +470,7 @@ fn verifyIntrinsic(
             const payload = arguments[0].held() orelse return error.BadIntrinsic;
             try expectType(result, payload);
         },
-        .own_storage, .drop_storage => {
+        .own_storage, .drop_storage, .export_storage => {
             try exactly(arguments, 1);
             try expectType(result, arguments[0]);
         },
