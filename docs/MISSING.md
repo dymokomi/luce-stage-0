@@ -23,7 +23,7 @@ the top of the list.
 
 ---
 
-## Tier 0 — the two walls a large program hits first
+## Tier 0 — the one wall left, and it is String bytes
 
 ### 1. Memory is never given back for values
 
@@ -71,6 +71,11 @@ the first is done and the second is what is left:
   views borrowing bytes they did not allocate — because under real
   copies no such view exists.  Cost is a memcpy at store sites: local,
   visible, bounded, and what C and Zig both pay.
+
+  **`docs/STRINGS.md` is the full design**, proved against an
+  enumeration of all twenty store sites, with the ship order and the
+  measured costs.  It is the last thing standing between Luce and a
+  program that can run all day.
 
 ### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
 
@@ -255,10 +260,13 @@ the proof the language moved.
   discovering `func test_*():` would be cheap and very Zig.  `fmt` and
   an LSP both want stage 5's faithful tree first — an argument for
   writing it.
-- **Docs to correct:** `LANGUAGE.md` lists string interpolation as
-  deliberately absent, 200 lines after documenting f-strings.
-  `OWNERSHIP.md` still says "a future ReleaseFast"; `MODES.md` refuses
-  one.  `STD.md` lists 14 of 17 string functions.
+- **Docs to correct:** none outstanding.  The interpolation
+  contradiction in `LANGUAGE.md` and the "future ReleaseFast" in
+  `OWNERSHIP.md` are both fixed.  `STD.md` documents sixteen of the
+  eighteen functions in `strings.luc`, and the two it omits —
+  `fold_case` and `is_space_byte` — are omitted on purpose because
+  they are internals; that they are *reachable* anyway is the
+  visibility gap above, not a documentation gap.
 
 ---
 
