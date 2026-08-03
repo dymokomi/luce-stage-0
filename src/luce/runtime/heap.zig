@@ -20,6 +20,7 @@ const trace = @import("trace.zig");
 const value = @import("value.zig");
 
 const Allocator = std.mem.Allocator;
+const Handle = value.Handle;
 const Value = value.Value;
 
 /// What every fallible runtime operation can do.  `Trap` is a Luce
@@ -73,8 +74,43 @@ pub const Owner = union(enum) {
     binding: OwnedBy,
 };
 
+/// The generation a row is retired at: reached, it is never handed
+/// out again.
+///
+/// **Generations do not wrap.**  slotmap accepts wraparound after 2³¹
+/// reuses and EnTT's 12-bit version wraps routinely; here a stale
+/// handle catching up with a live one is a use-after-free that stops
+/// trapping, and S9 is a safety guarantee rather than an ECS
+/// convenience.  So the last generation a row can hold is
+/// `retired - 1`, the free that ends it puts the row *out* of the free
+/// list instead of back on it, and no handle ever carries `retired`.
+/// The cost is at most one leaked row per four billion frees of that
+/// same row.
+pub const retired: u32 = std.math.maxInt(u32);
+
 pub const Object = struct {
-    alive: bool = true,
+    /// Which occupant of this row is the current one.  A handle names
+    /// this object only while the two agree; every free moves it on,
+    /// which is what makes a stale handle stay stale across the reuse
+    /// of its row (`Runtime.freeObject`).
+    ///
+    /// Generated code reads this field itself, at `layout.generation`
+    /// — a measured offset, because Zig orders a plain struct's
+    /// fields as it pleases.
+    generation: u32 = 0,
+
+    /// The next row on `Runtime.free_row`, or `value.null_index` at
+    /// the end of it.  Meaningful only while this row is free; a live
+    /// row's link is not read.
+    ///
+    /// The list is threaded through the rows rather than kept beside
+    /// them because `freeObject` cannot fail — an allocation there
+    /// would have to choose between a leak and an error path no
+    /// caller could do anything with — and because it is free: these
+    /// four bytes and the generation's together fill the tail padding
+    /// a row already had, so it is the 128 bytes it always was.
+    next_free: u32 = value.null_index,
+
     owner: Owner = .loose,
 
     /// An Array's shape and elements — a field of the row rather than a
@@ -235,16 +271,20 @@ pub const Object = struct {
     /// Give the object's storage back and leave an empty thing of the
     /// same kind behind.
     ///
-    /// What does *not* happen here is the object leaving the table —
-    /// the slot and its handle stay dead forever, which is what makes
-    /// S9 a clean trap rather than undefined behaviour.  Only the
-    /// storage is reclaimed, never the identity.
+    /// What does *not* happen here is the row leaving the table.
+    /// `freeObject` decides the row's fate — reuse or retirement —
+    /// and this only reclaims what the object was holding.
+    ///
+    /// Releasing twice reclaims nothing the second time: an empty
+    /// List, Map or Builder holds no allocation and an empty slice
+    /// frees nothing.  That is what lets `Runtime.deinit` sweep every
+    /// row without first asking which of them are still occupied.
     ///
     /// The kind is kept on purpose.  Nothing reads a freed object's
-    /// data — `alive` is false, so `resolve` traps `use_after_free` and
-    /// the ownership walks skip it — but an empty List is a far better
-    /// thing for a bug to find than a dangling pointer, and it costs a
-    /// store.
+    /// data — the row's generation has moved on, so `resolve` traps
+    /// `use_after_free` and the ownership walks skip it — but an empty
+    /// List is a far better thing for a bug to find than a dangling
+    /// pointer, and it costs a store.
     pub fn release(self: *Object, allocator: Allocator) void {
         switch (self.data) {
             .list => |*list| {
@@ -418,8 +458,11 @@ pub const layout = struct {
     /// One row.
     pub const row_size = @sizeOf(Object);
     pub const row_alignment = @alignOf(Object);
-    /// `Object.alive` — a `bool`, so one byte, zero meaning freed.
-    pub const alive = @offsetOf(Object, "alive");
+    /// `Object.generation` — a `u32`.  The row holds the object a
+    /// handle names exactly while the two are equal, so the liveness
+    /// test generated code emits is this one load and one compare,
+    /// and a reused row fails it for every handle but the newest.
+    pub const generation = @offsetOf(Object, "generation");
     /// `Object.array.dims.ptr` — `[*]i64`, one entry per axis.  The
     /// rank is a compile-time fact, so the length is not read.  Only a
     /// rank-2-or-higher access reads it at all: rank 1 bound-checks
@@ -458,16 +501,23 @@ pub const Runtime = struct {
     /// back.
     objects: Allocator,
 
-    /// Every object the run allocated, alive or freed; handles index
-    /// this table.  The `Object`s sit in it directly rather than behind
-    /// pointers — a handle is one bounds check and one load, not two.
+    /// Every row the run has ever needed; handles index this table.
+    /// The `Object`s sit in it directly rather than behind pointers —
+    /// a handle is one bounds check and one load, not two.
     ///
-    /// Slots are never reused, so a freed handle stays detectably dead
-    /// for the whole run: that is what makes a use-after-free a clean
-    /// `use_after_free` trap (S9) instead of undefined behaviour, and
-    /// it is the accepted alternative to a borrow checker.  Only the
-    /// *storage* of a freed object comes back (`Object.release`); its
-    /// identity never does.
+    /// Rows are reused: a freed one goes on `free_row` and the next
+    /// `new` moves into it, so the table grows to the program's peak
+    /// object count and not to the number of objects it ever made.
+    /// What keeps that from turning a use-after-free into somebody
+    /// else's object is the generation each row carries: a handle
+    /// names the row's *current* occupant only, and a stale one traps
+    /// `use_after_free` (S9) exactly as it did when rows were retained
+    /// forever.
+    ///
+    /// A row is never *removed*, only re-occupied, so a handle is
+    /// always in bounds or null — which is why generated code omits
+    /// the bounds check that `resolve` still makes for its Zig
+    /// callers.
     ///
     /// Because the objects are inline, `resolve` hands out a pointer
     /// into a slice that moves when the table grows.  Nothing may hold
@@ -475,6 +525,12 @@ pub const Runtime = struct {
     /// re-resolve, or work through a copy of the object's contents,
     /// whose buffers the table does not own.
     table: std.ArrayList(Object) = .empty,
+
+    /// The first row free for reuse, or `value.null_index` when there
+    /// is none.  A last-in-first-out list threaded through
+    /// `Object.next_free`, so a free costs two stores and an
+    /// allocation costs two loads, and neither can fail.
+    free_row: u32 = value.null_index,
 
     /// Objects allocated and not yet freed — the leak census the host
     /// reports when a program returns (`Success.leaked_objects`).
@@ -538,10 +594,12 @@ pub const Runtime = struct {
     ///
     /// Values (Strings, struct field runs) are not touched: they live
     /// in `arena`, which belongs to the caller.
+    ///
+    /// Every row is swept, occupied or not: releasing a row whose
+    /// object ownership already released reclaims nothing, because
+    /// `Object.release` left the empty value of its kind behind.
     pub fn deinit(self: *Runtime) void {
-        for (self.table.items) |*object| {
-            if (object.alive) object.release(self.objects);
-        }
+        for (self.table.items) |*object| object.release(self.objects);
         self.table.deinit(self.objects);
         self.unwound.deinit(self.objects);
         self.* = undefined;
@@ -664,15 +722,31 @@ pub const Runtime = struct {
         return self.attach(.{ .data = .{ .list = elements } });
     }
 
-    /// Put `object`'s storage in the table and hand back a loose
-    /// handle.  On failure the storage is untouched and still the
-    /// caller's to release — every caller here builds it under an
-    /// `errdefer`.
-    fn attach(self: *Runtime, object: Object) Error!Value {
+    /// Put `storage` in a table row and hand back a loose handle.
+    ///
+    /// A row a previous object vacated is taken in preference to a
+    /// fresh one; it keeps the generation its last occupant's death
+    /// left it at, so the handle handed out here differs from every
+    /// handle that row's earlier occupants were named by.  Only when
+    /// the free list is empty does the table grow.
+    ///
+    /// On failure the storage is untouched and still the caller's to
+    /// release — every caller here builds it under an `errdefer`.
+    fn attach(self: *Runtime, storage: Object) Error!Value {
+        if (self.free_row != value.null_index) {
+            const index = self.free_row;
+            const row = &self.table.items[index];
+            self.free_row = row.next_free;
+            const generation = row.generation;
+            row.* = storage;
+            row.generation = generation;
+            self.live += 1;
+            return Value.ofObject(.{ .index = index, .generation = generation });
+        }
         const index: u32 = @intCast(self.table.items.len);
-        try self.table.append(self.objects, object);
+        try self.table.append(self.objects, storage);
         self.live += 1;
-        return Value.ofObject(index);
+        return Value.ofObject(.{ .index = index });
     }
 
     // -- struct storage ------------------------------------------------
@@ -703,14 +777,19 @@ pub const Runtime = struct {
     /// Resolve a handle to its live object, or fail: null slots trap
     /// null_object, freed ones use_after_free.
     ///
+    /// The generation is the whole liveness test.  A handle whose
+    /// generation is not the row's names an object that has been
+    /// freed, whether or not somebody else has since moved into the
+    /// row — so reuse costs the reader nothing and hides nothing.
+    ///
     /// The pointer is into the object table and is only good until the
     /// next object is allocated (see `table`).
     pub fn resolve(self: *Runtime, held: Value) Error!*Object {
-        const index = held.asObject();
-        if (index == value.null_index) return self.fail(.null_object);
-        if (index >= self.table.items.len) return self.fail(.use_after_free);
-        const found = &self.table.items[index];
-        if (!found.alive) return self.fail(.use_after_free);
+        const handle = held.asObject();
+        if (handle.index == value.null_index) return self.fail(.null_object);
+        if (handle.index >= self.table.items.len) return self.fail(.use_after_free);
+        const found = &self.table.items[handle.index];
+        if (found.generation != handle.generation) return self.fail(.use_after_free);
         return found;
     }
 
@@ -718,10 +797,13 @@ pub const Runtime = struct {
     /// out of range, or already freed.  Ownership walks use this: they
     /// must never trap, because they run on paths that are already
     /// unwinding or already correct.
-    fn liveObject(self: *Runtime, index: u32) ?*Object {
-        if (index == value.null_index or index >= self.table.items.len) return null;
-        const object = &self.table.items[index];
-        if (!object.alive) return null;
+    ///
+    /// The null handle's index is out of every table's bounds, so the
+    /// range test answers it too.
+    fn liveObject(self: *Runtime, handle: Handle) ?*Object {
+        if (handle.index >= self.table.items.len) return null;
+        const object = &self.table.items[handle.index];
+        if (object.generation != handle.generation) return null;
         return object;
     }
 
@@ -735,8 +817,8 @@ pub const Runtime = struct {
     /// The objects in `held` now belong to `local` of frame `serial`.
     pub fn bind(self: *Runtime, held: Value, serial: u64, local: u32) void {
         switch (held.view()) {
-            .object => |index| {
-                const object = self.liveObject(index) orelse return;
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
                 object.owner = .{ .binding = .{ .serial = serial, .local = local } };
             },
             .strukt => |fields| for (fields) |field| self.bind(field, serial, local),
@@ -747,8 +829,8 @@ pub const Runtime = struct {
     /// The objects in `held` were adopted by a container (S20).
     pub fn adopt(self: *Runtime, held: Value) void {
         switch (held.view()) {
-            .object => |index| {
-                const object = self.liveObject(index) orelse return;
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
                 object.owner = .container;
             },
             .strukt => |fields| for (fields) |field| self.adopt(field),
@@ -760,8 +842,8 @@ pub const Runtime = struct {
     /// returned values (the receiver adopts or binds them next).
     pub fn loosen(self: *Runtime, held: Value) void {
         switch (held.view()) {
-            .object => |index| {
-                const object = self.liveObject(index) orelse return;
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
                 object.owner = .loose;
             },
             .strukt => |fields| for (fields) |field| self.loosen(field),
@@ -773,8 +855,8 @@ pub const Runtime = struct {
     /// returned value moves out loose; the caller owns it (S16).
     pub fn loosenFromFrame(self: *Runtime, held: Value, serial: u64) void {
         switch (held.view()) {
-            .object => |index| {
-                const object = self.liveObject(index) orelse return;
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
                 if (object.owner == .binding and object.owner.binding.serial == serial) {
                     object.owner = .loose;
                 }
@@ -789,13 +871,13 @@ pub const Runtime = struct {
     /// alone, which makes releases safe on every path.
     pub fn unbind(self: *Runtime, held: Value, serial: u64, local: u32) void {
         switch (held.view()) {
-            .object => |index| {
-                const object = self.liveObject(index) orelse return;
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
                 if (object.owner == .binding and
                     object.owner.binding.serial == serial and
                     object.owner.binding.local == local)
                 {
-                    self.freeObject(index);
+                    self.freeObject(handle);
                 }
             },
             .strukt => |fields| for (fields) |field| self.unbind(field, serial, local),
@@ -803,17 +885,20 @@ pub const Runtime = struct {
         }
     }
 
-    /// Free one object and everything it owns, recursively (S20), and
-    /// give its storage back.
+    /// Free one object and everything it owns, recursively (S20), give
+    /// its storage back, and offer its row to the next `new`.
     ///
-    /// The two halves are in that order on purpose: the elements have
-    /// to be walked while they are still there, and only then can the
-    /// buffer holding them go.  Neither half allocates, so the pointer
-    /// into the table stays good across both.
-    pub fn freeObject(self: *Runtime, index: u32) void {
-        const object = &self.table.items[index];
-        if (!object.alive) return;
-        object.alive = false;
+    /// The order is deliberate all the way through.  The generation
+    /// moves first, so the object is dead before its own elements are
+    /// walked and an element naming it stops the walk instead of
+    /// recursing forever.  The elements are walked next, while they
+    /// are still there, and only then can the buffer holding them go.
+    /// The row joins the free list last, once nothing about it is
+    /// still being read.  Nothing here allocates, so the pointer into
+    /// the table stays good across all of it.
+    pub fn freeObject(self: *Runtime, handle: Handle) void {
+        const object = self.liveObject(handle) orelse return;
+        object.generation += 1;
         self.live -= 1;
         switch (object.data) {
             .list => |list| for (list.items) |item| self.freeValue(item),
@@ -826,15 +911,19 @@ pub const Runtime = struct {
             .builder => {},
         }
         object.release(self.objects);
+        // A row that has run out of generations is retired rather than
+        // handed out again: see `retired`.
+        if (object.generation != retired) {
+            object.next_free = self.free_row;
+            self.free_row = handle.index;
+        }
     }
 
     /// Free the objects in a value unconditionally (owned elements
     /// being dropped by their container: overwrite, remove, clear).
     pub fn freeValue(self: *Runtime, held: Value) void {
         switch (held.view()) {
-            .object => |index| {
-                if (self.liveObject(index) != null) self.freeObject(index);
-            },
+            .object => |handle| self.freeObject(handle),
             .strukt => |fields| for (fields) |field| self.freeValue(field),
             else => {},
         }
@@ -847,11 +936,10 @@ pub const Runtime = struct {
     /// simply carried along.
     pub fn checkGivable(self: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
         switch (held.view()) {
-            .object => |index| {
-                if (index == value.null_index) return;
-                if (index >= self.table.items.len) return self.fail(.use_after_free);
-                const found = &self.table.items[index];
-                if (!found.alive) return self.fail(.use_after_free);
+            .object => |handle| {
+                if (handle.index == value.null_index) return;
+                const found = self.liveObject(handle) orelse
+                    return self.fail(.use_after_free);
                 if (found.owner == .container) return self.fail(.not_owned);
                 if (expected) |owner| {
                     if (!(found.owner == .binding and
@@ -872,10 +960,10 @@ pub const Runtime = struct {
     /// (only the copy verb itself demands a filled top-level object).
     pub fn deepCopy(self: *Runtime, held: Value) Error!Value {
         switch (held.view()) {
-            .object => |index| {
-                if (index == value.null_index) return held;
-                if (index >= self.table.items.len) return self.fail(.use_after_free);
-                if (!self.table.items[index].alive) return self.fail(.use_after_free);
+            .object => |handle| {
+                if (handle.index == value.null_index) return held;
+                if (self.liveObject(handle) == null) return self.fail(.use_after_free);
+                const index = handle.index;
                 // Each arm copies the source object's contents out
                 // before recursing: `deepCopy` allocates objects, which
                 // moves the table, and the source's own buffers do not
@@ -938,7 +1026,7 @@ pub const Runtime = struct {
                 errdefer storage.release(self.objects);
                 const duplicate = try self.attach(storage);
                 // The copy's own elements belong to it.
-                const made = &self.table.items[duplicate.asObject()];
+                const made = &self.table.items[duplicate.asObject().index];
                 switch (made.data) {
                     .list => |list| for (list.items) |item| self.adopt(item),
                     .map => |map| for (map.entries.items) |entry| self.adopt(entry.value),

@@ -46,10 +46,13 @@
 //!
 //! **The window.**  Both rewrites hold only while nothing between the
 //! two instructions can change an owner or free an object —
-//! `effects.ownershipTransparent`.  A call, a container operation, a
-//! `give`/`free`/`copy`, or a `heap_new` (a fresh object may reuse a
-//! freed table slot, so a stale handle can start naming somebody
-//! else's object) ends the window and everything known is forgotten.
+//! `effects.ownershipTransparent`.  A call, a container operation, or
+//! a `give`/`free`/`copy` ends the window and everything known is
+//! forgotten.  So does a `heap_new`, though nothing turns on it: a
+//! fresh object is named at a generation no live handle carries even
+//! when it moves into a row somebody else vacated, and the pattern
+//! this pass serves has its allocation in front of both binds rather
+//! than between them.
 //! Knowledge is also keyed by *register*, not by object, and a bind
 //! forgets every other register, because two registers may name one
 //! object and rebinding through one of them would make a conclusion

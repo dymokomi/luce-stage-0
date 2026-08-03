@@ -17,13 +17,15 @@ The **runtime is not done**, and that is where the wall now is.  Tier
 0 held two items, both properties of what existed rather than missing
 features.  **The second is closed**: the C-parity backend is reachable
 from `loom run` and from `luce build --emit=exe`.  The first — memory
-that is never given back — is untouched and now outranks everything.
+that is never given back — is now half closed: object identity is
+reclaimed and reused, and **String bytes are what is left**, alone at
+the top of the list.
 
 ---
 
 ## Tier 0 — the two walls a large program hits first
 
-### 1. Memory is never given back for values or for object identity
+### 1. Memory is never given back for values
 
 `runtime.Memory` splits storage in two (`runtime/heap.zig:41-62`).
 Object *storage* goes to a freeing allocator — that is the 410 MB → 60 MB
@@ -33,9 +35,14 @@ churn fix, and it is real.  But:
   Measured on a loop building and discarding a string per iteration,
   retaining nothing: **28 / 36 / 54 / 90 MB RSS at 0.5M / 1M / 2M / 4M
   iterations** — dead linear, ~18 bytes per iteration, forever.
-- **Object table rows are never reused** (`heap.zig:238-241`).  That is
-  a deliberate trade for making S9 a clean `use_after_free` trap, and
-  it costs **~100 bytes retained per object ever created**.
+- ~~Object table rows are never reused~~ — **closed.**  A handle is
+  `{index, generation}` and a freed row goes on a free list, so the
+  table grows to a program's peak object count rather than to the
+  number of objects it ever made, and S9 stays a clean
+  `use_after_free` trap because a stale handle's generation is not the
+  row's (docs/MEMORY.md).  Measured on a loop making and freeing one
+  list per iteration: **281 MB → 21.2 MB at 1M iterations, 593 MB →
+  21.3 MB at 4M**, flat where it was linear.
 
 The flagship program is the worked example.  `Editing.splice`
 (`programs/editor.luc:127`) is
@@ -48,12 +55,13 @@ program with a main loop.
 This is the difference between a program having a memory *footprint*
 and having a memory *lifetime*.
 
-**Cost:** a design decision, not a bug fix.  Two pieces, independent:
+**Cost:** a design decision, not a bug fix.  Two pieces, independent;
+the first is done and the second is what is left:
 
-- **Object identity** — a free list of table rows with a
-  non-wrapping generation counter in the handle, which keeps S9's clean
-  `use_after_free` trap while making rows reusable.  Small,
-  self-contained, no language change, and it comes first.
+- ~~**Object identity**~~ — shipped: a free list of table rows with a
+  non-wrapping generation counter in the handle, which keeps S9's
+  clean `use_after_free` trap while making rows reusable.  No language
+  change, no `.lc` bump, no host-ABI bump.
 - **String bytes** — reclaimed by scope, like everything else.
   Reference counting is **permanently refused** (`docs/MEMORY.md`), so
   the direction is to make the language's own claim literal: *values
@@ -263,10 +271,11 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ## The order to work down
 
-1. **Reuse object-table rows and give String storage a reclaimable
-   lifetime.**  Nothing else matters if a program cannot run for an
-   hour — and it matters more now, not less: the compiled path runs
-   the same loop 76x faster, so it reaches the same wall 76x sooner.
+1. **Give String storage a reclaimable lifetime.**  Object-table rows
+   are reused already; the bytes are what is left, and nothing else
+   matters if a program cannot run for an hour — it matters more now,
+   not less: the compiled path runs the same loop 76x faster, so it
+   reaches the same wall 76x sooner.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. **`T?`, `none`, narrowing, `else`** — step 1 of FAILURE.md's order,
    with `parse_int`/`parse_float` as day-one users.
@@ -288,5 +297,6 @@ multi-user — all deferred by design in `docs/V2.md`.
 **The honest summary:** the language is nearly complete.  The front end
 is in genuinely good shape, and the remaining language work is one
 designed feature, one open question, and a short list of library and
-host builtins.  The real distance left is in the runtime — memory that
-is never returned, and a C-parity backend nobody can run.
+host builtins.  The real distance left is in the runtime, and it is
+now one thing rather than three: String bytes that are never
+returned.

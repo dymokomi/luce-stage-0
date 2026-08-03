@@ -294,6 +294,25 @@ test "S9: an alias after the owner freed traps at use" {
     , .use_after_free);
 }
 
+test "S9: reusing the freed object's row does not revive its handle" {
+    // The object table hands a freed row to the next `new`
+    // (docs/MEMORY.md), so `fresh` occupies the row `xs` vacated.  S9
+    // is a promise about the *object*, not about the row: the stale
+    // alias traps here exactly as it does when nothing has moved in,
+    // and never reads what `fresh` put there.
+    try expectTrap(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let view = xs
+        \\    free(xs)
+        \\    var fresh = [30, 40, 50]
+        \\    assert(len(fresh) == 3)
+        \\    assert(not (view == fresh))
+        \\    let bad = view[0]
+        \\
+    , .use_after_free);
+}
+
 test "S10: give transfers between names and poisons the giver" {
     try expectClean(
         \\func main():

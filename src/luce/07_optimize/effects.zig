@@ -213,9 +213,11 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
 ///   * **the table does not grow** — its rows are one allocation, and
 ///     a row's address moves when it is reallocated, so any
 ///     instruction that can attach an object invalidates every view;
-///   * **nothing is freed** — a freed row's `alive` byte turns over,
-///     and reusing a view past that would skip the `use_after_free`
-///     the next access owes;
+///   * **nothing is freed** — a freed row's generation moves on and
+///     the row itself may be handed straight to the next `new`, so a
+///     view reused past a free would skip the `use_after_free` the
+///     next access owes and could read a whole different object's
+///     storage;
 ///   * **no Array's storage is replaced** — `dims` and `elements`
 ///     never move for a *live* array, which is the whole reason this
 ///     is the container the inline path starts with.
@@ -349,12 +351,15 @@ pub fn viewStable(instruction: Instruction) bool {
 /// only `object_bind`, `object_unbind`, the ownership verbs, container
 /// adoption, and a call can write it.
 ///
-/// `heap_new` is excluded, but not because it could disturb anything:
-/// object slots are never reused, so a fresh object has an identity no
-/// live handle shares, and it touches nobody else's owner field.  It
-/// is simply not on the list because no pass has needed it to be — the
-/// pattern this serves has its allocation before the binds, not
-/// between them.
+/// `heap_new` is excluded, but not because it could disturb anything.
+/// It does take a row a freed object vacated — rows are reused
+/// (`runtime/heap.zig`) — and it still cannot be confused with the
+/// object that left, because the row's generation moved when that one
+/// died and a fresh object is named at the new one.  So a `heap_new`
+/// writes the owner field of a row nothing else can still be talking
+/// about, and touches no other.  It is simply not on the list because
+/// no pass has needed it to be — the pattern this serves has its
+/// allocation before the binds, not between them.
 pub fn ownershipTransparent(function: *const Function, instruction: Instruction) bool {
     return switch (instruction) {
         .const_boolean,

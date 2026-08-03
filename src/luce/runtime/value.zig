@@ -19,8 +19,8 @@
 //! from the program's constants or from the runtime arena, and they
 //! stay valid for the whole run — a value is a view, never a handle to
 //! free.  Heap objects are the exception in spirit only: `object`
-//! carries an index into the runtime's object table, and the table
-//! entry, not the value, decides who frees it (docs/OWNERSHIP.md).
+//! carries a `Handle` into the runtime's object table, and the table
+//! row, not the value, decides who frees it (docs/OWNERSHIP.md).
 //!
 //! `view()` exists for Zig callers.  Switching on a tagged union is how
 //! the semantics were written and how they read best; the extern struct
@@ -42,7 +42,7 @@ pub const Tag = enum(u64) {
     /// storage is never mutated in place — `struct_set` allocates a
     /// fresh array — so sharing one array between copies is safe.
     strukt = 6,
-    /// An index into the runtime's object table, or `null_index`.
+    /// A `Handle` into the runtime's object table.
     object = 7,
 };
 
@@ -50,6 +50,41 @@ pub const Tag = enum(u64) {
 /// place is this handle, and using it traps `null_object` instead of
 /// touching anything.
 pub const null_index: u32 = std.math.maxInt(u32);
+
+/// Where a handle's generation sits in `Value.bits`: above the index,
+/// in the high 32 bits, which carried nothing before.  Published
+/// because generated code takes the two halves apart itself
+/// (`08_llvm/lower.zig`) and the two must not drift.
+pub const generation_shift = 32;
+
+/// Which object: the row of the runtime's object table it lives in,
+/// and which occupant of that row it is.
+///
+/// **The index alone does not name an object.**  A row is reused once
+/// its occupant is freed (`heap.Runtime`), so what makes a handle
+/// name one specific object is the generation beside it: a row's
+/// generation moves on every time its occupant dies, so a handle to a
+/// freed object stays detectably stale even after somebody else has
+/// moved into its row, and using it traps `use_after_free`
+/// (docs/OWNERSHIP.md S9) rather than silently naming the newcomer.
+///
+/// A handle travels whole in `Value.bits` — the index in the low 32
+/// bits, the generation in the high 32 — so resolving one is still
+/// one load and one compare.  Nothing serializes a handle: an object
+/// exists only while a program runs, so the `.lc` format has never
+/// heard of this.
+pub const Handle = struct {
+    index: u32,
+    generation: u32 = 0,
+
+    /// The handle that names no object at all.
+    pub const none: Handle = .{ .index = null_index };
+
+    /// Object identity: the same row *and* the same occupant of it.
+    pub fn same(self: Handle, other: Handle) bool {
+        return self.index == other.index and self.generation == other.generation;
+    }
+};
 
 pub const Value = extern struct {
     tag: Tag = .none,
@@ -64,7 +99,7 @@ pub const Value = extern struct {
     pub const false_value: Value = .{ .tag = .boolean, .bits = 0 };
     pub const true_value: Value = .{ .tag = .boolean, .bits = 1 };
     /// The zero value of an object-typed place.
-    pub const null_object: Value = .{ .tag = .object, .bits = null_index };
+    pub const null_object: Value = ofObject(.none);
 
     pub fn ofBoolean(held: bool) Value {
         return .{ .tag = .boolean, .bits = @intFromBool(held) };
@@ -90,8 +125,12 @@ pub const Value = extern struct {
         return .{ .tag = .strukt, .bits = @intFromPtr(fields.ptr), .length = fields.len };
     }
 
-    pub fn ofObject(index: u32) Value {
-        return .{ .tag = .object, .bits = index };
+    pub fn ofObject(handle: Handle) Value {
+        return .{
+            .tag = .object,
+            .bits = handle.index |
+                @as(u64, handle.generation) << generation_shift,
+        };
     }
 
     // -- reading ---------------------------------------------------------
@@ -127,12 +166,15 @@ pub const Value = extern struct {
         return fields[0..@intCast(self.length)];
     }
 
-    pub fn asObject(self: Value) u32 {
-        return @truncate(self.bits);
+    pub fn asObject(self: Value) Handle {
+        return .{
+            .index = @truncate(self.bits),
+            .generation = @truncate(self.bits >> generation_shift),
+        };
     }
 
     pub fn isNullObject(self: Value) bool {
-        return self.asObject() == null_index;
+        return self.asObject().index == null_index;
     }
 
     fn textOf(self: Value) []const u8 {
@@ -169,7 +211,7 @@ pub const View = union(enum) {
     string: []const u8,
     bytes: []const u8,
     strukt: []Value,
-    object: u32,
+    object: Handle,
 };
 
 /// Map keys compare by content: the analyzer admits Int and String
@@ -196,13 +238,34 @@ test "every payload survives a round trip" {
     try std.testing.expect(!Value.ofBoolean(false).asBoolean());
     try std.testing.expectEqualStrings("hi", Value.ofString("hi").asString());
     try std.testing.expectEqualStrings("", Value.ofString("").asString());
-    try std.testing.expectEqual(@as(u32, 7), Value.ofObject(7).asObject());
     try std.testing.expect(Value.null_object.isNullObject());
 
     var fields = [_]Value{ Value.ofInt(1), Value.ofString("two") };
     const held = Value.ofStruct(&fields);
     try std.testing.expectEqual(@as(usize, 2), held.asStruct().len);
     try std.testing.expectEqualStrings("two", held.asStruct()[1].asString());
+}
+
+test "a handle keeps its row and its occupant apart" {
+    const handle: Handle = .{ .index = 7, .generation = 3 };
+    const held = Value.ofObject(handle);
+    try std.testing.expectEqual(@as(u32, 7), held.asObject().index);
+    try std.testing.expectEqual(@as(u32, 3), held.asObject().generation);
+    try std.testing.expect(!held.isNullObject());
+
+    // Every corner of both halves survives, and neither reaches into
+    // the other.
+    const extreme: Handle = .{ .index = null_index - 1, .generation = std.math.maxInt(u32) };
+    try std.testing.expect(extreme.same(Value.ofObject(extreme).asObject()));
+
+    // Two occupants of one row are not the same object.
+    try std.testing.expect(!handle.same(.{ .index = 7, .generation = 4 }));
+    try std.testing.expect(!handle.same(.{ .index = 8, .generation = 3 }));
+    try std.testing.expect(handle.same(.{ .index = 7, .generation = 3 }));
+
+    // The null handle names no row, at no generation.
+    try std.testing.expectEqual(null_index, Value.null_object.asObject().index);
+    try std.testing.expectEqual(@as(u32, 0), Value.null_object.asObject().generation);
 }
 
 test "a view carries the same payload as the accessors" {

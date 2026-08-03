@@ -264,13 +264,15 @@ const Module = struct {
     /// one slot per `effects.Service`, filled on first use.
     services: std.EnumMap(Service, Builder.Function.Index) = .{},
 
-    /// One all-zero object row, read in place of a null handle's when a
+    /// One retired object row, read in place of a null handle's when a
     /// resolution is lifted out of a loop (`loops.zig`).  A lifted
     /// resolution loads the row without deciding anything about it, so
     /// it has to be safe to load from even when the handle names no
-    /// object; this is what makes it so.  Its `alive` byte is zero and
-    /// its element pointer is null, but neither is ever read: the null
-    /// check stays at the access and traps first.
+    /// object; this is what makes it so.  Its element pointer is null
+    /// and never read — the null check stays at the access and traps
+    /// first — and its generation is `runtime.retired`, which no
+    /// handle carries, so an access that somehow reached the liveness
+    /// test would still trap rather than follow that pointer.
     dead_row: ?Builder.Constant = null,
 
     fn deinit(self: *Module) void {
@@ -298,9 +300,12 @@ const Module = struct {
             .int => .i64,
             .float => .double,
             .string => self.string_type,
-            // A heap object is its index in the runtime's object
-            // table; the table entry, not the value, owns it.
-            .heap => .i32,
+            // A heap object is a `runtime.Handle`: the row of the
+            // object table it lives in, and which occupant of that
+            // row it is, packed as the `Value.bits` word carries them
+            // (index low, generation high).  The row, not the value,
+            // owns the object.
+            .heap => .i64,
             // A struct is a pointer to its run of `Value` fields —
             // the layout `libluce_rt` already reads, so a struct
             // crosses into the runtime without being rebuilt.
@@ -375,13 +380,13 @@ const Module = struct {
     fn valueAlignment(of: types.Type) Builder.Alignment {
         return switch (of) {
             .boolean => Builder.Alignment.fromByteUnits(1),
-            .heap => Builder.Alignment.fromByteUnits(4),
             .none,
             .int,
             .float,
             .string,
             .bytes,
             .strukt,
+            .heap,
             => Builder.Alignment.fromByteUnits(8),
         };
     }
@@ -497,16 +502,34 @@ const Module = struct {
         return variable.toConst(self.builder);
     }
 
-    /// The all-zero row a lifted resolution reads for a null handle.
+    /// The retired row a lifted resolution reads for a null handle:
+    /// `{ generation = runtime.retired, everything else zero }`.
     fn deadRow(self: *Module) Error!Builder.Constant {
         if (self.dead_row) |found| return found;
-        const run_type = try self.builder.arrayType(runtime.layout.row_size, .i8);
+        // Zeroes, the generation where `runtime.layout` says it sits,
+        // then zeroes again.  Packed, because the offset comes from
+        // `@offsetOf` and Zig places a plain struct's fields where it
+        // likes: LLVM must lay these three out exactly as given and
+        // insert no padding of its own.
+        const leading_type = try self.builder.arrayType(runtime.layout.generation, .i8);
+        const trailing_type = try self.builder.arrayType(
+            runtime.layout.row_size - runtime.layout.generation - @sizeOf(u32),
+            .i8,
+        );
+        const run_type = try self.builder.structType(
+            .@"packed",
+            &.{ leading_type, .i32, trailing_type },
+        );
         const variable = try self.builder.addVariable(
             try self.builder.strtabString("luce.dead.row"),
             run_type,
             .default,
         );
-        try variable.setInitializer(try self.builder.zeroInitConst(run_type), self.builder);
+        try variable.setInitializer(try self.builder.structConst(run_type, &.{
+            try self.builder.zeroInitConst(leading_type),
+            try self.builder.intConst(.i32, runtime.retired),
+            try self.builder.zeroInitConst(trailing_type),
+        }), self.builder);
         variable.setMutability(.constant, self.builder);
         variable.setAlignment(
             Builder.Alignment.fromByteUnits(runtime.layout.row_alignment),
@@ -752,8 +775,7 @@ const Module = struct {
     fn resultSize(of: types.Type) u32 {
         return switch (of) {
             .boolean => 1,
-            .heap => 4,
-            .int, .float, .strukt => 8,
+            .int, .float, .strukt, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
             .string => 16,
             // Neither reaches here: a function returning nothing has no
@@ -1372,7 +1394,7 @@ const Body = struct {
             .string => (try self.module.textConstant("")).toValue(),
             // The zero of an object-typed place is the null handle;
             // using it traps rather than touching anything.
-            .heap => try self.module.builder.intValue(.i32, runtime.null_index),
+            .heap => try self.module.builder.intValue(.i64, runtime.null_index),
             .strukt => |layout| (try self.module.structZero(layout)).toValue(),
             .none => self.fail("a local of type None"),
             .bytes => self.fail("Bytes"),
@@ -1491,12 +1513,13 @@ const Body = struct {
     fn fillBoxValue(self: *Body, slot: Builder.Value, of: types.Type, held: Builder.Value) Error!void {
         switch (of) {
             .none => {},
-            .boolean, .heap => try self.storeBoxField(
+            .boolean => try self.storeBoxField(
                 slot,
                 1,
                 try self.wip.cast(.zext, held, .i64, "box.bits"),
             ),
-            .int => try self.storeBoxField(slot, 1, held),
+            // A handle already *is* the `bits` word `Value` carries.
+            .int, .heap => try self.storeBoxField(slot, 1, held),
             .float => try self.storeBoxField(
                 slot,
                 1,
@@ -1540,14 +1563,13 @@ const Body = struct {
         if (of == .none) return .none;
         const bits = try self.loadBoxField(slot, 1, "unbox.bits");
         return switch (of) {
-            .int => bits,
+            .int, .heap => bits,
             .boolean => try self.wip.icmp(
                 .ne,
                 bits,
                 try self.module.builder.intValue(.i64, 0),
                 name,
             ),
-            .heap => try self.wip.cast(.trunc, bits, .i32, name),
             .float => try self.wip.cast(.bitcast, bits, .double, name),
             .string => try self.wip.buildAggregate(self.module.string_type, &.{
                 try self.wip.cast(.inttoptr, bits, .ptr, "unbox.text"),
@@ -1687,9 +1709,9 @@ const Body = struct {
     // an Array and what it holds — `heap_types` says so, statically —
     // so the runtime's four-way switch on the object's kind has one
     // arm left at compile time.  And an Array's `dims` and `elements`
-    // never move after `new`: only `alive` ever changes, which is why
-    // this is the container the inline path starts with and a List,
-    // whose buffer moves under `append`, is still a call.
+    // never move while it lives: only the row's generation changes,
+    // which is why this is the container the inline path starts with
+    // and a List, whose buffer moves under `append`, is still a call.
     //
     // The offsets come from `runtime.layout`, measured from the Zig
     // types with `@offsetOf` and checked against a real `Runtime` by a
@@ -1735,27 +1757,70 @@ const Body = struct {
         }, name);
     }
 
+    /// The two halves of a handle, as the row walk needs them: which
+    /// row, and which occupant of it (`runtime.Handle`).
+    ///
+    /// Both are free.  The index is the handle's low word and the
+    /// generation its high one, so a machine reads the first as a
+    /// sub-register and the second as one shift.
+    const Parts = struct { index: Builder.Value, generation: Builder.Value };
+
+    fn handleParts(self: *Body, handle: Builder.Value) Error!Parts {
+        const builder = self.module.builder;
+        return .{
+            .index = try self.wip.cast(.trunc, handle, .i32, "handle.index"),
+            .generation = try self.wip.cast(
+                .trunc,
+                try self.wip.bin(
+                    .lshr,
+                    handle,
+                    try builder.intValue(.i64, runtime.generation_shift),
+                    "handle.high",
+                ),
+                .i32,
+                "handle.generation",
+            ),
+        };
+    }
+
     /// The object table row a handle names, having made the two checks
     /// `Runtime.resolve` makes: the null handle traps `null_object`, a
     /// freed one `use_after_free`.
     ///
     /// `resolve`'s third check — the handle inside the table's bounds —
     /// is not emitted and cannot fire: every non-null handle in a
-    /// register came from `attach`, which appended the very row it
-    /// names, and rows are never removed.
-    fn checkHandle(self: *Body, register: mir.Register) Error!void {
+    /// register came from `attach`, which returned the very row it
+    /// names, and a row is only ever re-occupied, never removed.
+    fn checkHandle(self: *Body, index: Builder.Value) Error!void {
         try self.check(try self.wip.icmp(
             .eq,
-            self.values[register],
+            index,
             try self.module.builder.intValue(.i32, runtime.null_index),
             "is.null",
         ), .null_object);
     }
 
+    /// The row's generation is not the handle's, so the object the
+    /// handle names is gone — whether or not somebody else has since
+    /// moved into the row.  One load and one compare, which is what it
+    /// cost when a row was retained forever.
+    fn checkOccupant(
+        self: *Body,
+        generation: Builder.Value,
+        expected: Builder.Value,
+    ) Error!void {
+        try self.check(try self.wip.icmp(
+            .ne,
+            generation,
+            expected,
+            "stale",
+        ), .use_after_free);
+    }
+
     fn resolveRow(self: *Body, register: mir.Register) Error!Builder.Value {
         const builder = self.module.builder;
-        const handle = self.values[register];
-        try self.checkHandle(register);
+        const parts = try self.handleParts(self.values[register]);
+        try self.checkHandle(parts.index);
 
         const table = try self.wip.load(
             .normal,
@@ -1766,24 +1831,18 @@ const Body = struct {
         );
         const row = try self.wip.gep(.inbounds, .i8, table, &.{try self.wip.bin(
             .@"mul nsw",
-            try self.wip.cast(.zext, handle, .i64, "handle"),
+            try self.wip.cast(.zext, parts.index, .i64, "row.index"),
             try builder.intValue(.i64, runtime.layout.row_size),
             "row.at",
         )}, "row");
 
-        const alive = try self.wip.load(
+        try self.checkOccupant(try self.wip.load(
             .normal,
-            .i8,
-            try self.byteOffset(row, runtime.layout.alive, "alive.at"),
-            Builder.Alignment.fromByteUnits(1),
-            "alive",
-        );
-        try self.check(try self.wip.icmp(
-            .eq,
-            alive,
-            try builder.intValue(.i8, 0),
-            "freed",
-        ), .use_after_free);
+            .i32,
+            try self.byteOffset(row, runtime.layout.generation, "generation.at"),
+            Builder.Alignment.fromByteUnits(4),
+            "generation",
+        ), parts.generation);
         return row;
     }
 
@@ -1792,7 +1851,7 @@ const Body = struct {
     ///
     /// **Where the resolve happens is the whole point.**  Resolving at
     /// every access leaves four loads — the table base, the row's
-    /// `alive` byte, the `dims` pointer, and `dims[0]` — in front of
+    /// generation, the `dims` pointer, and `dims[0]` — in front of
     /// every element read, and LLVM cannot hoist any of them out of a
     /// loop that also *stores* an element, because it has no way to
     /// know the two do not overlap.  Resolving once per basic block
@@ -1862,7 +1921,7 @@ const Body = struct {
     /// One resolution the preheader of a loop already made: the row's
     /// three facts, read once for the whole loop.
     const Hoisted = struct {
-        alive: Builder.Value = .none,
+        generation: Builder.Value = .none,
         dims: Builder.Value = .none,
         elements: Builder.Value = .none,
         bounds_at: u32 = 0,
@@ -1879,8 +1938,8 @@ const Body = struct {
     /// The loads are made *safe rather than checked*: a null handle
     /// reads the module's dead row instead of an address 4 GB past the
     /// table, so nothing here can fault and nothing here decides
-    /// anything.  Every access still tests the handle and the `alive`
-    /// byte for itself, so a trap fires where it always did.
+    /// anything.  Every access still tests the handle and the row's
+    /// generation for itself, so a trap fires where it always did.
     fn emitHoists(self: *Body) Error!void {
         const gpa = self.module.gpa;
         const builder = self.module.builder;
@@ -1888,11 +1947,12 @@ const Body = struct {
             const hoist = self.hoists.hoists[index];
             const handle = try self.wip.load(
                 .normal,
-                .i32,
+                .i64,
                 self.local_slots[hoist.local],
                 Module.valueAlignment(self.function.locals[hoist.local].local_type),
                 "hoist.handle",
             );
+            const parts = try self.handleParts(handle);
             const table = try self.wip.load(
                 .normal,
                 .ptr,
@@ -1904,14 +1964,14 @@ const Body = struct {
                 .normal,
                 try self.wip.icmp(
                     .eq,
-                    handle,
+                    parts.index,
                     try builder.intValue(.i32, runtime.null_index),
                     "hoist.null",
                 ),
                 (try self.module.deadRow()).toValue(),
                 try self.wip.gep(.inbounds, .i8, table, &.{try self.wip.bin(
                     .@"mul nsw",
-                    try self.wip.cast(.zext, handle, .i64, "hoist.index"),
+                    try self.wip.cast(.zext, parts.index, .i64, "hoist.index"),
                     try builder.intValue(.i64, runtime.layout.row_size),
                     "hoist.at",
                 )}, "hoist.row"),
@@ -1921,12 +1981,12 @@ const Body = struct {
             var made: Hoisted = .{
                 .made = true,
                 .bounds_at = @intCast(self.hoist_bounds.items.len),
-                .alive = try self.wip.load(
+                .generation = try self.wip.load(
                     .normal,
-                    .i8,
-                    try self.byteOffset(row, runtime.layout.alive, "alive.at"),
-                    Builder.Alignment.fromByteUnits(1),
-                    "alive",
+                    .i32,
+                    try self.byteOffset(row, runtime.layout.generation, "generation.at"),
+                    Builder.Alignment.fromByteUnits(4),
+                    "generation",
                 ),
                 .elements = try self.wip.load(
                     .normal,
@@ -1995,13 +2055,9 @@ const Body = struct {
         if (self.liftedView(register)) |index| {
             // The loads happened in the preheader; the checks happen
             // here, which is what keeps the trap where it belongs.
-            try self.checkHandle(register);
-            try self.check(try self.wip.icmp(
-                .eq,
-                self.hoisted[index].alive,
-                try self.module.builder.intValue(.i8, 0),
-                "freed",
-            ), .use_after_free);
+            const parts = try self.handleParts(self.values[register]);
+            try self.checkHandle(parts.index);
+            try self.checkOccupant(self.hoisted[index].generation, parts.generation);
             const made: ArrayView = .{
                 .register = register,
                 .dims = self.hoisted[index].dims,
@@ -3131,7 +3187,7 @@ const Body = struct {
 
             // -- the runtime library, one call each -------------------
             .null_object => {
-                self.values[register] = try self.module.builder.intValue(.i32, runtime.null_index);
+                self.values[register] = try self.module.builder.intValue(.i64, runtime.null_index);
             },
             .len => {
                 // A String is `{ ptr, i64 }` in a register already, so
