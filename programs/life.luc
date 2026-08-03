@@ -1,7 +1,16 @@
 # Conway's Game of Life: a multi-dimensional Array on the terminal.
 #
 #   loom run life.lc
-#   any key steps a generation, space runs ten, Ctrl-Q quits
+#   any key steps a generation, space runs a hundred, Ctrl-Q quits
+#
+# The run is *paced*, not merely repeated: each frame is drawn, then
+# the loop waits out whatever is left of its share of a second.  That
+# is what `clock_ms` is for — measure the frame, subtract, wait the
+# remainder — and it is why a frame that overran asks to sleep a
+# negative number of milliseconds.  That is not a bug and does not
+# trap: there is no time left to wait, so the wait returns.
+
+let frame_ms = 80
 
 struct World:
     func rows() -> Int:
@@ -63,7 +72,7 @@ struct World:
                     term_write(" ·")
         term_move(grid.dim(0), 0)
         term_style(252, 237, false)
-        term_write(" generation " + str(generation) + "  |  any key: step   space: run 10   Ctrl-Q: quit ")
+        term_write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():
     var grid = new Array(Bool, World.rows(), World.cols())
@@ -78,10 +87,14 @@ func main():
         else:
             var steps = 1
             if key == "text" and key_text() == " ":
-                steps = 10
+                steps = 100
             for tick in range(0, steps):
+                let began = clock_ms()
                 grid = World.step(grid)   # the old grid frees right here (S5)
                 generation = generation + 1
                 if steps > 1:
                     World.draw(grid, generation)
-                    term_flush()
+                    # What is left of this frame's share of a second.
+                    # A slow machine leaves nothing, or less than
+                    # nothing, and the wait simply returns.
+                    sleep_ms(frame_ms - (clock_ms() - began))

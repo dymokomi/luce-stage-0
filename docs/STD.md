@@ -164,7 +164,34 @@ files.read_lines(path)           # List(String)!, newlines stripped; a
 files.write_lines(path, lines)   # !; joined with newlines, ends with
                                  # one, and an empty list writes an
                                  # empty file
+
+files.append_text(path, text)    # !; adds to the end, creating the
+                                 # file if it is not there
+files.append_lines(path, lines)  # !; the same, one line each; an
+                                 # empty list adds nothing at all
+files.delete(path)               # !
+files.rename(from, to)           # !; replaces `to` if it exists, so
+                                 # write-then-rename replaces a file
+                                 # without ever leaving half of one
+files.list(path)                 # List(String)!, sorted; plain names,
+                                 # not paths, and no "." or ".."
 ```
+
+`append_text` is spelled that way because `append` is a **reserved
+name** — it is `xs.append(v)`, the List method — and nothing
+user-declared may take one, module-qualified or not.  It is a wart and
+it is recorded as one in `docs/MISSING.md`.
+
+`list` sorts because the host's order is whatever the file system felt
+like, and two machines holding the same files answer differently.  A
+program that prints a listing should print the same listing.
+
+The four new ones are `!` for the reason `read` and `write` are: the
+world decides, and no non-racy check stands in for the result.
+Deleting a file that is not there answers `io_failed` rather than
+succeeding quietly — the host says `yes` or `no` and cannot tell
+"absent" from "refused" (`abi.Answer`), so inventing the distinction
+would be inventing it.
 
 ---
 

@@ -110,6 +110,48 @@ test "a freed row is reused, so the table follows live objects and not allocatio
     for (held) |slot| runtime.freeObject(slot.asObject());
 }
 
+test "a directory listing splits the same list out of both shapes" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // The interpreter hands over slices and a compiled program hands
+    // over the same names NUL-joined; a `dir_list` that answered two
+    // different lists would be two engines disagreeing about a value.
+    const names = [_][]const u8{ "alpha.txt", "b", "a name with spaces" };
+    const joined = "alpha.txt\x00b\x00a name with spaces\x00";
+
+    const from_slices = try containers.listOfText(runtime, &names);
+    const from_bytes = try containers.namesList(runtime, joined);
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_slices)).asInt());
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_bytes)).asInt());
+    for (names, 0..) |wanted, at| {
+        const index = Value.ofInt(@intCast(at));
+        try testing.expectEqualStrings(
+            wanted,
+            (try containers.indexGet(runtime, from_slices, &.{index})).asString(),
+        );
+        try testing.expectEqualStrings(
+            wanted,
+            (try containers.indexGet(runtime, from_bytes, &.{index})).asString(),
+        );
+    }
+
+    // An empty directory is an empty list, not a list holding one
+    // empty name — and a buffer with no trailing separator is still
+    // read whole, because a host is not ours to promise for.
+    const empty = try containers.namesList(runtime, "");
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asInt());
+    const unterminated = try containers.namesList(runtime, "one\x00two");
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, unterminated)).asInt());
+
+    runtime.freeObject(from_slices.asObject());
+    runtime.freeObject(from_bytes.asObject());
+    runtime.freeObject(empty.asObject());
+    runtime.freeObject(unterminated.asObject());
+}
+
 test "a stale handle to a reused row names nobody, not the newcomer" {
     var bench: Bench = undefined;
     bench.setup();

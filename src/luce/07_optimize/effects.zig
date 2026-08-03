@@ -225,6 +225,15 @@ pub fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .term_flush,
         .key_read,
         .key_text,
+        .read_line,
+        .print_error,
+        .clock_ms,
+        .sleep_ms,
+        .env_get,
+        .file_append,
+        .file_delete,
+        .file_rename,
+        .dir_list,
         => .impure,
     };
 }
@@ -380,7 +389,19 @@ pub fn viewStable(instruction: Instruction) bool {
             .term_flush,
             .key_read,
             .key_text,
+            .read_line,
+            .print_error,
+            .clock_ms,
+            .sleep_ms,
+            .env_get,
+            .file_append,
+            .file_delete,
+            .file_rename,
             => true,
+            // The one host service that makes an object: it takes a
+            // table row, which is exactly what a resolved Array view
+            // cannot survive.
+            .dir_list => false,
         },
     };
 }

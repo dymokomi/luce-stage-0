@@ -390,6 +390,23 @@ const Module = struct {
             .term_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .key_read => builder.fnType(.i32, &.{ .ptr, .ptr, .ptr, .ptr, .ptr }, .normal),
             .call_depth => builder.fnType(.i64, &.{.ptr}, .normal),
+            // Prompt in, line out — one call, so the prompt is on the
+            // screen before the host blocks.
+            .read_line, .env => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .ptr, .ptr },
+                .normal,
+            ),
+            .print_error => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            .clock_ms => builder.fnType(.i64, &.{.ptr}, .normal),
+            .sleep_ms => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
+            .file_append, .file_rename => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .ptr, .i64 },
+                .normal,
+            ),
+            .file_delete => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            .dir_list => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
         };
     }
 
@@ -2972,14 +2989,7 @@ const Body = struct {
         _ = try self.wip.brCond(try self.saidNo(answer), failing, reading, .else_likely);
 
         self.seek(failing);
-        _ = try self.callRuntime(.luce_rt_raise_io, .void, &.{
-            self.runtime,
-            try builder.intValue(.i32, 1),
-            path,
-            path_length,
-            try builder.intValue(.i32, self.index),
-            try builder.intValue(.i32, self.current),
-        }, "");
+        try self.emitRaiseIo(.read, path, path_length);
         _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_errored), outcome_slot, flag);
         // The `errored` beside this call branches away before anything
         // reads the value — but the box is still copied into whatever
@@ -3007,7 +3017,7 @@ const Body = struct {
     /// same sentence about the same path (docs/FAILURE.md).
     fn raiseIo(
         self: *Body,
-        reading: bool,
+        act: mir.FileAct,
         answer: Builder.Value,
         path: Builder.Value,
         path_length: Builder.Value,
@@ -3021,19 +3031,115 @@ const Body = struct {
         _ = try self.wip.brCond(try self.saidNo(answer), raising, served, .else_likely);
 
         self.seek(raising);
-        _ = try self.callRuntime(.luce_rt_raise_io, .void, &.{
-            self.runtime,
-            try builder.intValue(.i32, @intFromBool(reading)),
-            path,
-            path_length,
-            try builder.intValue(.i32, self.index),
-            try builder.intValue(.i32, self.current),
-        }, "");
+        try self.emitRaiseIo(act, path, path_length);
         _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_errored), slot, word);
         _ = try self.wip.br(served);
 
         self.seek(served);
         return self.wip.load(.normal, .i32, slot, word, "io.outcome");
+    }
+
+    /// The `io_failed` itself: the words are built inside `libluce_rt`
+    /// from the verb and the path, so both engines report the same
+    /// sentence about the same file (docs/FAILURE.md).
+    fn emitRaiseIo(
+        self: *Body,
+        act: mir.FileAct,
+        path: Builder.Value,
+        path_length: Builder.Value,
+    ) Error!void {
+        const builder = self.module.builder;
+        _ = try self.callRuntime(.luce_rt_raise_io, .void, &.{
+            self.runtime,
+            try builder.intValue(.i32, @intFromEnum(act)),
+            path,
+            path_length,
+            try builder.intValue(.i32, self.index),
+            try builder.intValue(.i32, self.current),
+        }, "");
+    }
+
+    /// A host service that answers text it may not have: `read_line`
+    /// at end of input, `env` for a variable nobody set.  Both take one
+    /// String and hand back a `String?`.
+    ///
+    /// No branch: the answer becomes the `present` flag `luce_rt_maybe_text`
+    /// reads, which parks `Value.none` in the box when the host said
+    /// no.  That is the same value the interpreter parks there, so a
+    /// `T?` means one thing on both engines — and the out-parameters
+    /// are cleared first, because a host that answers no leaves them
+    /// untouched and this side must not load what was on the stack.
+    fn emitMaybeText(
+        self: *Body,
+        register: mir.Register,
+        slot: abi.Slot,
+        argument: mir.Register,
+        name: []const u8,
+    ) Error!void {
+        const given, const given_length = try self.textParts(argument, name);
+        const answered = try self.hostText(name);
+        try answered.clear(self);
+        const answer = try self.callHost(
+            slot,
+            &.{ given, given_length, answered.text, answered.length },
+            name,
+        );
+        const present = try self.wip.cast(.zext, try self.saidYes(answer), .i32, "present");
+        const bytes, const size = try answered.load(self);
+        try self.callAnswering(register, .luce_rt_maybe_text, &.{
+            self.runtime,
+            present,
+            bytes,
+            size,
+        });
+    }
+
+    /// `dir_list(path)` — the names the host joined, as the
+    /// `List(String)` the program asked for.
+    ///
+    /// Two sides that do genuinely different things, like `file_read`:
+    /// only the side the host said yes on has a buffer to split, and
+    /// only the other one raises.  The list is an object, so the value
+    /// the failing side parks is the null handle — nothing reads it,
+    /// because the `errored` beside the call branches first, but a
+    /// live row would be worse than a handle that traps.
+    fn emitDirList(self: *Body, register: mir.Register, path_register: mir.Register) Error!void {
+        const builder = self.module.builder;
+        const flag = Builder.Alignment.fromByteUnits(4);
+        const listed = self.function.result_types[register];
+        const path, const path_length = try self.textParts(path_register, "path");
+        const names = try self.hostText("names");
+        try names.clear(self);
+        const answer = try self.callHost(
+            .dir_list,
+            &.{ path, path_length, names.text, names.length },
+            "listed",
+        );
+
+        const box = try self.scratch(self.module.value_type, value_alignment, "list.box");
+        const outcome_slot = try self.scratch(.i32, flag, "list.outcome");
+        const failing = try self.wip.block(1, "list.failed");
+        const listing = try self.wip.block(1, "list.ok");
+        const done = try self.wip.block(2, "list.done");
+        _ = try self.wip.brCond(try self.saidNo(answer), failing, listing, .else_likely);
+
+        self.seek(failing);
+        try self.emitRaiseIo(.list, path, path_length);
+        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_errored), outcome_slot, flag);
+        try self.fillBoxShape(box, listed);
+        try self.fillBoxValue(box, listed, try self.zeroValue(listed));
+        _ = try self.wip.br(done);
+
+        self.seek(listing);
+        const bytes, const size = try names.load(self);
+        try self.callChecked(.luce_rt_names_list, &.{ self.runtime, bytes, size, box });
+        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_ok), outcome_slot, flag);
+        _ = try self.wip.br(done);
+
+        self.seek(done);
+        self.values[register] = try self.unboxed(listed, box, "list.value");
+        self.boxes[register] = box;
+        self.outcomes[register] = try self.wip.load(.normal, .i32, outcome_slot, flag, "list.outcome");
     }
 
     fn saidNo(self: *Body, answer: Builder.Value) Error!Builder.Value {
@@ -3081,6 +3187,26 @@ const Body = struct {
                 try body.wip.load(.normal, .ptr, self.text, pointer_alignment, "host.text"),
                 try body.wip.load(.normal, .i64, self.length, pointer_alignment, "host.length"),
             };
+        }
+
+        /// Empty, for a service whose `no` leaves these untouched and
+        /// whose caller reads them anyway.  Two stores in front of a
+        /// blocking call, and what they buy is that the load after it
+        /// is never of whatever the stack happened to hold.
+        fn clear(self: HostText, body: *Body) Error!void {
+            const builder = body.module.builder;
+            _ = try body.wip.store(
+                .normal,
+                try builder.nullValue(.ptr),
+                self.text,
+                pointer_alignment,
+            );
+            _ = try body.wip.store(
+                .normal,
+                try builder.intValue(.i64, 0),
+                self.length,
+                pointer_alignment,
+            );
         }
     };
 
@@ -4242,7 +4368,58 @@ const Body = struct {
                     &.{ path, path_length, content, content_length },
                     "wrote",
                 );
-                self.outcomes[register] = try self.raiseIo(false, answer, path, path_length);
+                self.outcomes[register] = try self.raiseIo(.write, answer, path, path_length);
+            },
+            .file_append => {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const content, const content_length = try self.textParts(of[1], "content");
+                const answer = try self.callHost(
+                    .file_append,
+                    &.{ path, path_length, content, content_length },
+                    "appended",
+                );
+                self.outcomes[register] = try self.raiseIo(.append, answer, path, path_length);
+            },
+            .file_delete => {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const answer = try self.callHost(
+                    .file_delete,
+                    &.{ path, path_length },
+                    "deleted",
+                );
+                self.outcomes[register] = try self.raiseIo(.delete, answer, path, path_length);
+            },
+            .file_rename => {
+                const from, const from_length = try self.textParts(of[0], "from");
+                const to, const to_length = try self.textParts(of[1], "to");
+                const answer = try self.callHost(
+                    .file_rename,
+                    &.{ from, from_length, to, to_length },
+                    "renamed",
+                );
+                // The words name the file that was to move, which is
+                // the one the program asked about.
+                self.outcomes[register] = try self.raiseIo(.rename, answer, from, from_length);
+            },
+            .dir_list => try self.emitDirList(register, of[0]),
+            .read_line => try self.emitMaybeText(
+                register,
+                .read_line,
+                of[0],
+                "line",
+            ),
+            .env_get => try self.emitMaybeText(register, .env, of[0], "env"),
+            .print_error => {
+                const text, const length = try self.textParts(of[0], "diagnostic");
+                _ = try self.callHost(.print_error, &.{ text, length }, "reported");
+            },
+            .clock_ms => {
+                self.values[register] = try self.callHostNumber(.clock_ms, "clock");
+            },
+            .sleep_ms => {
+                // A duration already elapsed is not a bug and not a
+                // failure: the host waits no time and answers yes.
+                _ = try self.callHost(.sleep_ms, &.{self.values[of[0]]}, "slept");
             },
             .file_exists => {
                 const path, const path_length = try self.textParts(of[0], "path");

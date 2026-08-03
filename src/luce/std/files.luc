@@ -44,3 +44,41 @@ func write_lines(path: String, lines: List(String)) -> !:
         try file_write(path, "")
         return
     try file_write(path, lines.join("\n") + "\n")
+
+# Add to the end of a file, creating it if it is not there.  This is
+# what a log wants and what `write` cannot be: `read` then `write` is
+# two calls with a window between them, and the second one throws away
+# whatever landed in the first one's shadow.
+#
+# Spelled `append_text` and not `append` because `append` is a
+# reserved name — it is `xs.append(v)`, the List method — and nothing
+# user-declared may take one, module-qualified or not.
+func append_text(path: String, text: String) -> !:
+    try file_append(path, text)
+
+# The same, one line at a time, each ending in a newline.  An empty
+# list adds nothing at all rather than an empty line.
+func append_lines(path: String, lines: List(String)) -> !:
+    if len(lines) == 0:
+        return
+    try file_append(path, lines.join("\n") + "\n")
+
+func delete(path: String) -> !:
+    try file_delete(path)
+
+# Move a file.  Renaming onto an existing name replaces it, which is
+# what makes write-then-rename the way to replace a file without ever
+# leaving half of one on disk.
+func rename(from: String, to: String) -> !:
+    try file_rename(from, to)
+
+# The names in a directory, sorted.
+#
+# Sorted because the host's order is whatever the file system felt
+# like, which differs between two machines holding the same files —
+# and a program that prints a listing should print the same listing.
+# The names are plain names, not paths: join them yourself.
+func list(path: String) -> List(String)!:
+    var names = try dir_list(path)
+    names.sort()
+    return names

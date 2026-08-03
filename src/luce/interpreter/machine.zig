@@ -843,7 +843,7 @@ pub const Machine = struct {
                     // a value nothing reads: the `errored` in front of
                     // the branch has already seen the channel.
                     .failed => blk: {
-                        self.runtime.raiseIo(true, path, self.placeOf(site));
+                        self.runtime.raiseIo(.read, path, self.placeOf(site));
                         break :blk .ofString("");
                     },
                 };
@@ -853,9 +853,90 @@ pub const Machine = struct {
                 const callback = host.writeFileFn orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 if (!callback(host.context, path, registers[arguments[1]].asString())) {
-                    self.runtime.raiseIo(false, path, self.placeOf(site));
+                    self.runtime.raiseIo(.write, path, self.placeOf(site));
                 }
                 return .none;
+            },
+            .file_append => {
+                const host = try self.service();
+                const callback = host.appendFileFn orelse return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asString();
+                if (!callback(host.context, path, registers[arguments[1]].asString())) {
+                    self.runtime.raiseIo(.append, path, self.placeOf(site));
+                }
+                return .none;
+            },
+            .file_delete => {
+                const host = try self.service();
+                const callback = host.deleteFileFn orelse return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asString();
+                if (!callback(host.context, path)) {
+                    self.runtime.raiseIo(.delete, path, self.placeOf(site));
+                }
+                return .none;
+            },
+            .file_rename => {
+                const host = try self.service();
+                const callback = host.renameFileFn orelse return self.runtime.fail(.host_unavailable);
+                const from = registers[arguments[0]].asString();
+                if (!callback(host.context, from, registers[arguments[1]].asString())) {
+                    self.runtime.raiseIo(.rename, from, self.placeOf(site));
+                }
+                return .none;
+            },
+            .dir_list => {
+                const host = try self.service();
+                const callback = host.listDirectoryFn orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asString();
+                const names = (try callback(host.context, self.arena, path)) orelse {
+                    // The `errored` in front of the branch has already
+                    // seen the channel, so the value nobody reads is
+                    // the null handle rather than a live object.
+                    self.runtime.raiseIo(.list, path, self.placeOf(site));
+                    return .none;
+                };
+                return containers.listOfText(&self.runtime, names);
+            },
+            .read_line => {
+                const host = try self.service();
+                const callback = host.readLineFn orelse return self.runtime.fail(.host_unavailable);
+                const prompt = registers[arguments[0]].asString();
+                // End of input is absence and not failure: there is
+                // nothing there, and no reason worth carrying
+                // (docs/FAILURE.md).
+                const line = (try callback(host.context, self.arena, prompt)) orelse
+                    return .none;
+                return self.runtime.ownValue(.ofString(line));
+            },
+            .print_error => {
+                const host = try self.service();
+                const callback = host.printErrorFn orelse
+                    return self.runtime.fail(.host_unavailable);
+                try callback(host.context, registers[arguments[0]].asString());
+                return .none;
+            },
+            .clock_ms => {
+                const host = try self.service();
+                const callback = host.clockFn orelse return self.runtime.fail(.host_unavailable);
+                return .ofInt(callback(host.context));
+            },
+            .sleep_ms => {
+                const host = try self.service();
+                const callback = host.sleepFn orelse return self.runtime.fail(.host_unavailable);
+                // A duration that has already elapsed is not a bug:
+                // `deadline - now` goes negative on a slow frame, and
+                // the answer is "no time left to wait".
+                callback(host.context, registers[arguments[0]].asInt());
+                return .none;
+            },
+            .env_get => {
+                const host = try self.service();
+                const callback = host.envFn orelse return self.runtime.fail(.host_unavailable);
+                const name = registers[arguments[0]].asString();
+                const found = (try callback(host.context, self.arena, name)) orelse
+                    return .none;
+                return self.runtime.ownValue(.ofString(found));
             },
             .file_exists => {
                 const host = try self.service();

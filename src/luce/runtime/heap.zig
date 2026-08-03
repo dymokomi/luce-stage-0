@@ -730,13 +730,12 @@ pub const Runtime = struct {
     /// than losing the error.
     pub fn raiseIo(
         self: *Runtime,
-        reading: bool,
+        act: mir.FileAct,
         path: []const u8,
         origin: trace.Frame,
     ) void {
-        const verb = if (reading) "cannot read " else "cannot write ";
         // Built in the arena already, so it skips `raise`'s copy.
-        const words = std.fmt.allocPrint(self.arena, "{s}{s}", .{ verb, path }) catch {
+        const words = std.fmt.allocPrint(self.arena, "{s}{s}", .{ act.verb(), path }) catch {
             self.raised = .{
                 .code = .io_failed,
                 .message = mir.ErrorCode.io_failed.message(),

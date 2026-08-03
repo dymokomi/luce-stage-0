@@ -387,7 +387,13 @@ fn raisesError(program: *const Program, function: *const Function, register: Reg
         .call => |call| call.function < program.functions.len and
             program.functions[call.function].fallible,
         .intrinsic => |intrinsic| switch (intrinsic.kind) {
-            .file_read, .file_write => true,
+            .file_read,
+            .file_write,
+            .file_append,
+            .file_delete,
+            .file_rename,
+            .dir_list,
+            => true,
             else => false,
         },
         else => false,
@@ -798,6 +804,44 @@ fn verifyIntrinsic(
         .key_read, .key_text => {
             try exactly(arguments, 0);
             try expectType(result, .string);
+        },
+        .read_line, .env_get => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .{ .optional = .string });
+        },
+        .print_error => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .none);
+        },
+        .clock_ms => {
+            try exactly(arguments, 0);
+            try expectType(result, .int);
+        },
+        .sleep_ms => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .int);
+            try expectType(result, .none);
+        },
+        .file_append, .file_rename => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .string);
+            // Answers nothing: what the world said travels in the
+            // error channel, like every other file service.
+            try expectType(result, .none);
+        },
+        .file_delete => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .none);
+        },
+        .dir_list => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            const shape = try heapShape(program, result);
+            if (shape != .list or shape.list != .string) return error.BadIntrinsic;
         },
     }
 }

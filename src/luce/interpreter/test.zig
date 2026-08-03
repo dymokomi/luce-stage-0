@@ -423,12 +423,38 @@ const TestHost = struct {
     fail_write: bool = false,
     keys: []const backend.KeyEvent = &.{},
     next_key: usize = 0,
+    /// Scripted standard input, taken in order; running off the end is
+    /// end of input.
+    lines: []const []const u8 = &.{},
+    next_line: usize = 0,
+    /// What went to standard error, and the prompts `read_line` wrote
+    /// — both kept apart from `printed`, because they are different
+    /// channels and a test that mixed them could not tell them apart.
+    reported: std.ArrayList(u8) = .empty,
+    prompted: std.ArrayList(u8) = .empty,
+    /// A clock that ticks a fixed amount per reading, and the waits
+    /// the program asked for.
+    clock: i64 = 1_000,
+    slept: std.ArrayList(i64) = .empty,
+    /// The directory this host will list, or null for a host whose
+    /// listing fails.
+    directory: ?[]const []const u8 = null,
+    /// What `file_append`, `file_delete` and `file_rename` were told.
+    appended: std.ArrayList(u8) = .empty,
+    deleted: std.ArrayList(u8) = .empty,
+    renamed: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *TestHost) void {
         self.printed.deinit(testing.allocator);
         self.screen.deinit(testing.allocator);
         self.written_path.deinit(testing.allocator);
         self.written_content.deinit(testing.allocator);
+        self.reported.deinit(testing.allocator);
+        self.prompted.deinit(testing.allocator);
+        self.slept.deinit(testing.allocator);
+        self.appended.deinit(testing.allocator);
+        self.deleted.deinit(testing.allocator);
+        self.renamed.deinit(testing.allocator);
     }
 
     fn printLine(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
@@ -467,6 +493,83 @@ const TestHost = struct {
     fn fileExists(context: *anyopaque, path: []const u8) bool {
         const self: *TestHost = @ptrCast(@alignCast(context));
         return std.mem.eql(u8, path, self.file_path);
+    }
+
+    fn appendFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (self.fail_write) return false;
+        self.appended.appendSlice(testing.allocator, path) catch return false;
+        self.appended.append(testing.allocator, ':') catch return false;
+        self.appended.appendSlice(testing.allocator, content) catch return false;
+        return true;
+    }
+
+    fn deleteFile(context: *anyopaque, path: []const u8) bool {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (!std.mem.eql(u8, path, self.file_path)) return false;
+        self.deleted.appendSlice(testing.allocator, path) catch return false;
+        return true;
+    }
+
+    fn renameFile(context: *anyopaque, from: []const u8, to: []const u8) bool {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        if (!std.mem.eql(u8, from, self.file_path)) return false;
+        self.renamed.appendSlice(testing.allocator, from) catch return false;
+        self.renamed.append(testing.allocator, '>') catch return false;
+        self.renamed.appendSlice(testing.allocator, to) catch return false;
+        return true;
+    }
+
+    fn listDirectory(
+        context: *anyopaque,
+        arena: Allocator,
+        path: []const u8,
+    ) error{OutOfMemory}!?[]const []const u8 {
+        _ = arena;
+        _ = path;
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        return self.directory;
+    }
+
+    fn readLine(
+        context: *anyopaque,
+        arena: Allocator,
+        prompt: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        _ = arena;
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.prompted.appendSlice(testing.allocator, prompt);
+        if (self.next_line >= self.lines.len) return null;
+        defer self.next_line += 1;
+        return self.lines[self.next_line];
+    }
+
+    fn printError(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        try self.reported.appendSlice(testing.allocator, text);
+        try self.reported.append(testing.allocator, '\n');
+    }
+
+    fn clockMilliseconds(context: *anyopaque) i64 {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        defer self.clock += 17;
+        return self.clock;
+    }
+
+    fn sleepMilliseconds(context: *anyopaque, milliseconds: i64) void {
+        const self: *TestHost = @ptrCast(@alignCast(context));
+        self.slept.append(testing.allocator, milliseconds) catch {};
+    }
+
+    fn environmentValue(
+        context: *anyopaque,
+        arena: Allocator,
+        name: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        _ = context;
+        _ = arena;
+        if (std.mem.eql(u8, name, "LUCE_MODE")) return "test";
+        return null;
     }
 
     fn rows(context: *anyopaque) i64 {
@@ -530,6 +633,15 @@ const TestHost = struct {
             .readFileFn = readFile,
             .writeFileFn = writeFile,
             .fileExistsFn = fileExists,
+            .appendFileFn = appendFile,
+            .deleteFileFn = deleteFile,
+            .renameFileFn = renameFile,
+            .listDirectoryFn = listDirectory,
+            .readLineFn = readLine,
+            .printErrorFn = printError,
+            .clockFn = clockMilliseconds,
+            .sleepFn = sleepMilliseconds,
+            .envFn = environmentValue,
             .terminal = .{
                 .context = self,
                 .rowsFn = rows,
@@ -620,6 +732,168 @@ test "std files wraps the host builtins faithfully" {
     try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
     try testing.expectEqualStrings("plain.txt", host.written_path.items);
     try testing.expectEqualStrings("alpha\nbeta\n", host.written_content.items);
+}
+
+test "std files reaches the four services beyond read and write" {
+    var bench = try Bench.setup(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    try files.append_text("log.txt", "one line\n")
+        \\    try files.append_lines("log.txt", ["two", "three"])
+        \\    try files.append_lines("log.txt", new List(String))
+        \\    try files.rename("notes.txt", "kept.txt")
+        \\    try files.delete("notes.txt")
+        \\    let names = try files.list(".")
+        \\    print(names.join(","))
+        \\    free(names)
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{
+        .file_path = "notes.txt",
+        // Deliberately out of order: `files.list` sorts, so that a
+        // listing does not depend on what the file system felt like.
+        .directory = &.{ "gamma", "alpha", "beta" },
+    };
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expect(result == .success);
+    try testing.expectEqual(@as(u32, 0), result.success.leaked_objects);
+    try testing.expectEqualStrings(
+        "log.txt:one line\nlog.txt:two\nthree\n",
+        host.appended.items,
+    );
+    try testing.expectEqualStrings("notes.txt>kept.txt", host.renamed.items);
+    try testing.expectEqualStrings("notes.txt", host.deleted.items);
+    try testing.expectEqualStrings("alpha,beta,gamma\n", host.printed.items);
+}
+
+test "a listing the world refuses is an error naming the path" {
+    var bench = try Bench.setup(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    let names = try files.list("nowhere")
+        \\    free(names)
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{};
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expectEqual(mir.ErrorCode.io_failed, result.errored.code);
+    try testing.expectEqualStrings("cannot list nowhere", result.errored.message);
+}
+
+test "read_line answers a line, then absence; the prompt goes out in front" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    var count = 0
+        \\    var line = read_line("> ")
+        \\    while line != none:
+        \\        count = count + 1
+        \\        print(str(count) + ":" + line)
+        \\        line = read_line("> ")
+        \\    print("done")
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{ .lines = &.{ "alpha", "beta" } };
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expect(result == .success);
+    try testing.expectEqualStrings("1:alpha\n2:beta\ndone\n", host.printed.items);
+    // Three reads, three prompts: the third is what discovered the
+    // end of input.
+    try testing.expectEqualStrings("> > > ", host.prompted.items);
+}
+
+test "the clock, the wait and the environment reach the host" {
+    var bench = try Bench.setup(
+        \\func main():
+        \\    let started = clock_ms()
+        \\    sleep_ms(30)
+        \\    print("elapsed " + str(clock_ms() - started))
+        \\    sleep_ms(0)
+        \\    sleep_ms(-5)
+        \\    print_error("to stderr")
+        \\    print(env("LUCE_MODE") else "(unset)")
+        \\    print(env("NOTHING") else "(unset)")
+        \\
+    , .{}, hosted_options);
+    defer bench.deinit();
+
+    var host: TestHost = .{};
+    defer host.deinit();
+    const result = try bench.evaluateHosted(&.{}, host.host());
+    try testing.expect(result == .success);
+    try testing.expectEqualStrings("elapsed 17\ntest\n(unset)\n", host.printed.items);
+    try testing.expectEqualStrings("to stderr\n", host.reported.items);
+    // A duration that has already elapsed still reaches the host,
+    // which is what decides there is no time left to wait — the
+    // language does not make that a trap.
+    try testing.expectEqualSlices(i64, &.{ 30, 0, -5 }, host.slept.items);
+}
+
+test "every new host service fails closed when the host withholds it" {
+    const cases = [_][]const u8{
+        \\func main():
+        \\    print(read_line("") else "x")
+        \\
+        ,
+        \\func main():
+        \\    print_error("x")
+        \\
+        ,
+        \\func main():
+        \\    print(str(clock_ms()))
+        \\
+        ,
+        \\func main():
+        \\    sleep_ms(1)
+        \\
+        ,
+        \\func main():
+        \\    print(env("X") else "y")
+        \\
+        ,
+        \\func main() -> !:
+        \\    try file_append("x", "y")
+        \\
+        ,
+        \\func main() -> !:
+        \\    try file_delete("x")
+        \\
+        ,
+        \\func main() -> !:
+        \\    try file_rename("x", "y")
+        \\
+        ,
+        \\func main() -> !:
+        \\    let names = try dir_list(".")
+        \\    free(names)
+        \\
+        ,
+    };
+    for (cases) |source| {
+        var bench = try Bench.setup(source, .{}, hosted_options);
+        defer bench.deinit();
+        // A host with a console and nothing else: every service below
+        // is optional, and reaching one that is not there touches
+        // nothing (docs/V2.md's fail-closed rule).
+        var host: TestHost = .{};
+        defer host.deinit();
+        const result = try bench.evaluateHosted(&.{}, .{
+            .context = &host,
+            .printFn = TestHost.printLine,
+        });
+        try testing.expectEqual(mir.TrapCode.host_unavailable, result.trap.code);
+    }
 }
 
 test "an argument out of range traps, and a refused write is an error" {

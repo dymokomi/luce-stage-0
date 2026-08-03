@@ -47,6 +47,7 @@ pub const ConvertKind = @import("06_mir/defs.zig").ConvertKind;
 pub const Intrinsic = @import("06_mir/defs.zig").Intrinsic;
 pub const TrapCode = @import("06_mir/defs.zig").TrapCode;
 pub const ErrorCode = @import("06_mir/defs.zig").ErrorCode;
+pub const FileAct = @import("06_mir/defs.zig").FileAct;
 pub const Instruction = @import("06_mir/defs.zig").Instruction;
 pub const Local = @import("06_mir/defs.zig").Local;
 pub const Block = @import("06_mir/defs.zig").Block;

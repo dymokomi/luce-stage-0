@@ -43,11 +43,79 @@ const World = struct {
     file_content_length: usize = 0,
     /// How many keys the program has read; the script repeats.
     keys_read: usize = 0,
+    /// How many lines of standard input have been taken.  The script
+    /// does *not* repeat: running off the end is end of input, which
+    /// is the case a `String?` exists for.
+    lines_read: usize = 0,
+    /// A clock that ticks a fixed amount per reading rather than a
+    /// real one.  Two engines cannot agree on a wall clock, and what
+    /// is under test is the marshalling, not the calendar.
+    clock: i64 = 1_000,
 
     const rows: i64 = 24;
     const cols: i64 = 80;
+    const clock_step: i64 = 17;
 
     const arguments = [_][]const u8{ "alpha", "beta" };
+
+    const lines = [_][]const u8{ "first line", "second line" };
+
+    /// One directory, in the two shapes the two hosts hand over: the
+    /// interpreter takes slices, a compiled program takes them
+    /// NUL-joined.  The joined text is built from the same list, so
+    /// the two can never say different things.
+    const directory = [_][]const u8{ "alpha.txt", "beta.txt", "notes" };
+    const joined_directory = blk: {
+        var text: []const u8 = "";
+        for (directory) |name| text = text ++ name ++ "\x00";
+        break :blk text;
+    };
+
+    const environment = [_]struct { name: []const u8, value: []const u8 }{
+        .{ .name = "LUCE_MODE", .value = "test" },
+        .{ .name = "EMPTY", .value = "" },
+    };
+
+    fn variable(name: []const u8) ?[]const u8 {
+        for (environment) |entry| {
+            if (std.mem.eql(u8, entry.name, name)) return entry.value;
+        }
+        return null;
+    }
+
+    fn nextLine(self: *World) ?[]const u8 {
+        if (self.lines_read >= lines.len) return null;
+        defer self.lines_read += 1;
+        return lines[self.lines_read];
+    }
+
+    fn tick(self: *World) i64 {
+        defer self.clock += clock_step;
+        return self.clock;
+    }
+
+    fn append(self: *World, path: []const u8, content: []const u8) bool {
+        if (!self.exists(path)) return self.write(path, content);
+        if (self.file_content_length + content.len > self.file_content.len) return false;
+        @memcpy(self.file_content[self.file_content_length..][0..content.len], content);
+        self.file_content_length += content.len;
+        return true;
+    }
+
+    fn delete(self: *World, path: []const u8) bool {
+        if (!self.exists(path)) return false;
+        self.file_name_length = 0;
+        self.file_content_length = 0;
+        return true;
+    }
+
+    fn rename(self: *World, from: []const u8, to: []const u8) bool {
+        if (!self.exists(from)) return false;
+        if (to.len == 0 or to.len > self.file_name.len) return false;
+        @memcpy(self.file_name[0..to.len], to);
+        self.file_name_length = to.len;
+        return true;
+    }
 
     const Key = struct { name: []const u8, text: []const u8 = "" };
     const keys = [_]Key{
@@ -110,6 +178,13 @@ const Provided = struct {
     files: bool = true,
     arguments: bool = true,
     terminal: bool = true,
+    /// Standard input, standard error, the clock, and the environment
+    /// — four groups because a host may plausibly have any of them
+    /// without the others, and each has to fail closed on its own.
+    input: bool = true,
+    diagnostics: bool = true,
+    clock: bool = true,
+    environment: bool = true,
     /// The depth limit both engines run under.  The ABI's default is
     /// the interpreter's default, so a test only names this when it
     /// wants a shallower one.
@@ -215,6 +290,15 @@ const Capture = struct {
             .term_flush = if (provided.terminal) termFlush else null,
             .key_read = if (provided.terminal) keyRead else null,
             .raised = raised,
+            .file_append = if (provided.files) fileAppend else null,
+            .file_delete = if (provided.files) fileDelete else null,
+            .file_rename = if (provided.files) fileRename else null,
+            .dir_list = if (provided.files) dirList else null,
+            .read_line = if (provided.input) readLine else null,
+            .print_error = if (provided.diagnostics) printError else null,
+            .clock_ms = if (provided.clock) clockMilliseconds else null,
+            .sleep_ms = if (provided.clock) sleepMilliseconds else null,
+            .env = if (provided.environment) environmentValue else null,
         };
     }
 
@@ -414,6 +498,106 @@ const Capture = struct {
         text_length.* = @intCast(pressed.text.len);
         return .yes;
     }
+
+    fn fileAppend(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        content: [*]const u8,
+        content_length: i64,
+    ) callconv(.c) abi.Answer {
+        const added = of(context).world.append(
+            path[0..@intCast(path_length)],
+            content[0..@intCast(content_length)],
+        );
+        return if (added) .yes else .no;
+    }
+
+    fn fileDelete(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (of(context).world.delete(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn fileRename(
+        context: ?*anyopaque,
+        from: [*]const u8,
+        from_length: i64,
+        to: [*]const u8,
+        to_length: i64,
+    ) callconv(.c) abi.Answer {
+        const moved = of(context).world.rename(
+            from[0..@intCast(from_length)],
+            to[0..@intCast(to_length)],
+        );
+        return if (moved) .yes else .no;
+    }
+
+    /// One directory exists, named "." ; anything else is a listing
+    /// the world refuses, which is the `io_failed` side under test.
+    fn dirList(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        names: *[*]const u8,
+        names_length: *i64,
+    ) callconv(.c) abi.Answer {
+        _ = context;
+        if (!std.mem.eql(u8, path[0..@intCast(path_length)], ".")) return .no;
+        names.* = World.joined_directory.ptr;
+        names_length.* = @intCast(World.joined_directory.len);
+        return .yes;
+    }
+
+    fn readLine(
+        context: ?*anyopaque,
+        prompt: [*]const u8,
+        prompt_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        self.record("[prompt]", prompt[0..@intCast(prompt_length)]);
+        const line = self.world.nextLine() orelse return .no;
+        text.* = line.ptr;
+        length.* = @intCast(line.len);
+        return .yes;
+    }
+
+    fn printError(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
+        of(context).record("[stderr]", text[0..@intCast(length)]);
+        return .yes;
+    }
+
+    fn clockMilliseconds(context: ?*anyopaque) callconv(.c) i64 {
+        return of(context).world.tick();
+    }
+
+    fn sleepMilliseconds(context: ?*anyopaque, milliseconds: i64) callconv(.c) abi.Answer {
+        var encoded: [32]u8 = undefined;
+        of(context).record("[sleep]", std.fmt.bufPrint(
+            &encoded,
+            "{d}",
+            .{milliseconds},
+        ) catch unreachable);
+        return .yes;
+    }
+
+    fn environmentValue(
+        context: ?*anyopaque,
+        name: [*]const u8,
+        name_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        _ = context;
+        const found = World.variable(name[0..@intCast(name_length)]) orelse return .no;
+        text.* = found.ptr;
+        length.* = @intCast(found.len);
+        return .yes;
+    }
 };
 
 /// The same program on the interpreter: the engine the specs proved,
@@ -459,6 +643,15 @@ const Reference = struct {
             .readFileFn = if (self.provided.files) readFile else null,
             .writeFileFn = if (self.provided.files) writeFile else null,
             .fileExistsFn = if (self.provided.files) fileExists else null,
+            .appendFileFn = if (self.provided.files) appendFile else null,
+            .deleteFileFn = if (self.provided.files) deleteFile else null,
+            .renameFileFn = if (self.provided.files) renameFile else null,
+            .listDirectoryFn = if (self.provided.files) listDirectory else null,
+            .readLineFn = if (self.provided.input) readLine else null,
+            .printErrorFn = if (self.provided.diagnostics) printError else null,
+            .clockFn = if (self.provided.clock) clockMilliseconds else null,
+            .sleepFn = if (self.provided.clock) sleepMilliseconds else null,
+            .envFn = if (self.provided.environment) environmentValue else null,
             .argCountFn = if (self.provided.arguments) argCount else null,
             .argFn = if (self.provided.arguments) argAt else null,
             .terminal = if (self.provided.terminal) .{
@@ -494,6 +687,67 @@ const Reference = struct {
 
     fn fileExists(context: *anyopaque, path: []const u8) bool {
         return of(context).world.exists(path);
+    }
+
+    fn appendFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
+        return of(context).world.append(path, content);
+    }
+
+    fn deleteFile(context: *anyopaque, path: []const u8) bool {
+        return of(context).world.delete(path);
+    }
+
+    fn renameFile(context: *anyopaque, from: []const u8, to: []const u8) bool {
+        return of(context).world.rename(from, to);
+    }
+
+    fn listDirectory(
+        context: *anyopaque,
+        arena: Allocator,
+        path: []const u8,
+    ) error{OutOfMemory}!?[]const []const u8 {
+        _ = context;
+        _ = arena;
+        if (!std.mem.eql(u8, path, ".")) return null;
+        return &World.directory;
+    }
+
+    fn readLine(
+        context: *anyopaque,
+        arena: Allocator,
+        prompt: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        _ = arena;
+        const self = of(context);
+        try self.record("[prompt]", prompt);
+        return self.world.nextLine();
+    }
+
+    fn printError(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
+        try of(context).record("[stderr]", text);
+    }
+
+    fn clockMilliseconds(context: *anyopaque) i64 {
+        return of(context).world.tick();
+    }
+
+    fn sleepMilliseconds(context: *anyopaque, milliseconds: i64) void {
+        var encoded: [32]u8 = undefined;
+        of(context).record("[sleep]", std.fmt.bufPrint(
+            &encoded,
+            "{d}",
+            .{milliseconds},
+        ) catch unreachable) catch {};
+    }
+
+    fn environmentValue(
+        context: *anyopaque,
+        arena: Allocator,
+        name: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        _ = context;
+        _ = arena;
+        return World.variable(name);
     }
 
     fn argCount(context: *anyopaque) u32 {
@@ -2439,6 +2693,153 @@ test "a file that was never written errors on both engines" {
         \\    print(try file_read("nothing-here.txt"))
         \\
     );
+}
+
+// ---------------------------------------------------------------------------
+// The host surface, on both engines
+// ---------------------------------------------------------------------------
+
+test "standard input, standard error, the clock and the environment agree" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    let first = read_line("> ") else "(nothing)"
+        \\    let second = read_line("> ") else "(nothing)"
+        \\    let third = read_line("> ") else "(nothing)"
+        \\    print(first + "|" + second + "|" + third)
+        \\    print_error("something went sideways")
+        \\    let started = clock_ms()
+        \\    sleep_ms(25)
+        \\    let ended = clock_ms()
+        \\    print("elapsed " + str(ended - started))
+        \\    sleep_ms(0)
+        \\    sleep_ms(-1)
+        \\    print(env("LUCE_MODE") else "(unset)")
+        \\    print("[" + (env("EMPTY") else "(unset)") + "]")
+        \\    print(env("NOT_SET_ANYWHERE") else "(unset)")
+        \\
+    );
+}
+
+test "end of input is absence, and narrowing sees it on both engines" {
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var count = 0
+        \\    var line = read_line("")
+        \\    while line != none:
+        \\        count = count + 1
+        \\        print(str(count) + ": " + line)
+        \\        line = read_line("")
+        \\    print("read " + str(count) + " lines, then nothing")
+        \\
+    );
+}
+
+test "the file services beyond read and write agree, and so does what they refuse" {
+    try agree(std.testing.allocator,
+        \\func main() -> !:
+        \\    try file_write("notes.txt", "one\n")
+        \\    try file_append("notes.txt", "two\n")
+        \\    print(try file_read("notes.txt"))
+        \\    try file_rename("notes.txt", "kept.txt")
+        \\    print(str(file_exists("notes.txt")) + " " + str(file_exists("kept.txt")))
+        \\    try file_delete("kept.txt")
+        \\    print(str(file_exists("kept.txt")))
+        \\    file_delete("kept.txt") catch:
+        \\        print("nothing to delete")
+        \\    file_rename("gone.txt", "elsewhere.txt") catch:
+        \\        print("nothing to rename")
+        \\    try file_append("fresh.txt", "made by append\n")
+        \\    print(try file_read("fresh.txt"))
+        \\
+    );
+}
+
+test "a directory listing is a List(String) the program owns, on both engines" {
+    try agree(std.testing.allocator,
+        \\func main() -> !:
+        \\    let names = try dir_list(".")
+        \\    print(str(len(names)))
+        \\    for name in names:
+        \\        print(name)
+        \\    names.sort()
+        \\    print(names[0])
+        \\    free(names)
+        \\
+    );
+}
+
+test "a directory that will not list is an error on both engines" {
+    try agree(std.testing.allocator,
+        \\func main() -> !:
+        \\    print("before")
+        \\    let names = try dir_list("nowhere")
+        \\    free(names)
+        \\
+    );
+}
+
+test "a caught listing failure leaks nothing on either engine" {
+    // The failing side parks a value nobody reads, and the value it
+    // parks must not be an object the census then counts.
+    try agree(std.testing.allocator,
+        \\func main():
+        \\    var found = 0
+        \\    let names = dir_list("nowhere") catch new List(String)
+        \\    found = len(names)
+        \\    print("caught, " + str(found) + " names")
+        \\    free(names)
+        \\
+    );
+}
+
+test "each new host service fails closed on its own" {
+    const gpa = std.testing.allocator;
+    try agreeGiven(gpa,
+        \\func main():
+        \\    print(read_line("> ") else "x")
+        \\
+    , .{ .input = false });
+    try agreeGiven(gpa,
+        \\func main():
+        \\    print_error("nobody is listening")
+        \\
+    , .{ .diagnostics = false });
+    try agreeGiven(gpa,
+        \\func main():
+        \\    print(str(clock_ms()))
+        \\
+    , .{ .clock = false });
+    try agreeGiven(gpa,
+        \\func main():
+        \\    sleep_ms(5)
+        \\
+    , .{ .clock = false });
+    try agreeGiven(gpa,
+        \\func main():
+        \\    print(env("PATH") else "x")
+        \\
+    , .{ .environment = false });
+    try agreeGiven(gpa,
+        \\func main() -> !:
+        \\    try file_append("x.txt", "y")
+        \\
+    , .{ .files = false });
+    try agreeGiven(gpa,
+        \\func main() -> !:
+        \\    try file_delete("x.txt")
+        \\
+    , .{ .files = false });
+    try agreeGiven(gpa,
+        \\func main() -> !:
+        \\    try file_rename("x.txt", "y.txt")
+        \\
+    , .{ .files = false });
+    try agreeGiven(gpa,
+        \\func main() -> !:
+        \\    let names = try dir_list(".")
+        \\    free(names)
+        \\
+    , .{ .files = false });
 }
 
 test "a caught error is handled and the run finishes clean" {

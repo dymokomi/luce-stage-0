@@ -88,7 +88,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     }
 
     var services: host_mod.Host = undefined;
-    services.setup(gpa, io, out, arguments);
+    services.setup(gpa, io, out, err, arguments);
     defer services.deinit();
 
     const table = services.table();
