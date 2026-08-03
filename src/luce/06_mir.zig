@@ -1,20 +1,24 @@
-//! Stage 6 — MIR: the typed mid-level intermediate representation.
+//! Stage 6 — MIR: the typed mid-level intermediate representation, and
+//! the pass that builds it.
 //!
-//! Consumes: the validated program from stage 4 (which, today, hands
-//! MIR over already built — see below).
+//! Consumes: `Lowered`, the value stage 4 hands over — struct layouts,
+//! heap-type shapes, the constant pool, the ports read, the entry, and
+//! one open `Lowering` per function.
 //! Produces: `Program` — an instruction pool plus basic blocks per
-//! function, with struct layouts, heap-type shapes, constants, and the
-//! entry.  Registers never cross a block boundary; state that must
+//! function.  Registers never cross a block boundary; state that must
 //! survive a loop lives in a mutable local.  This is the form the `.lc`
 //! serializes, the verifier checks, the interpreter runs, and stage 8
 //! lowers to LLVM.
 //!
-//! **What is not done yet.**  The *lowering into* MIR is not here.  It
-//! is still fused into `04_semantics/builder.zig`, which type-checks
-//! and emits in one walk; this folder holds the representation, the
-//! verifier, the printer, and the on-disk format, but not the pass
-//! that produces them.  Moving that pass here is the seam 04's header
-//! describes.
+//! **The emitter is here; the walk that drives it is stage 4's.**  A
+//! `Lowering` is a tape of already-decided operations: `build.zig`
+//! owns register numbering, block bookkeeping, the local table, the
+//! ownership instruction pairs, sealing, origin resolution, and the
+//! assembly of the program.  Stage 4 decides *what* to record and
+//! records it as it type-checks — the two cannot be separated in time,
+//! because resolving `xs.append(v)` needs the receiver's type — but
+//! they are separated in code, and the hand-over is a plain value with
+//! no path back into the checker.
 //!
 //! The verifier is a compiler invariant rather than a user diagnostic:
 //! every successful compile passes it, `module.decode` re-runs it so a
@@ -26,6 +30,8 @@
 //!
 //!   defs.zig   — the instruction set, blocks, functions, `Program`,
 //!                trap codes, and `strip` (the --release origin drop).
+//!   build.zig  — the emitter (`Lowering`), the hand-over value
+//!                (`Lowered`), and `build`, which closes and assembles.
 //!   verify.zig — the shape and type checks every program must pass.
 //!   print.zig  — the deterministic textual dump behind `luce ir`.
 //!   module.zig — the `.lc` format: a direct binary serialization of
@@ -47,6 +53,11 @@ pub const Origin = @import("06_mir/defs.zig").Origin;
 pub const Function = @import("06_mir/defs.zig").Function;
 pub const Program = @import("06_mir/defs.zig").Program;
 pub const strip = @import("06_mir/defs.zig").strip;
+
+/// Building the MIR: the emitter stage 4 records on, and the pass that
+/// closes what it recorded into a `Program`.
+pub const build = @import("06_mir/build.zig");
+
 pub const verify = @import("06_mir/verify.zig").verify;
 pub const VerifyError = @import("06_mir/verify.zig").VerifyError;
 pub const print = @import("06_mir/print.zig").print;
@@ -57,6 +68,7 @@ pub const print = @import("06_mir/print.zig").print;
 pub const module = @import("06_mir/module.zig");
 
 test {
+    _ = build;
     _ = module;
     _ = @import("06_mir/test.zig");
 }

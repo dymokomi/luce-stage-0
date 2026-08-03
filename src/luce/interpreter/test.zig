@@ -23,7 +23,7 @@ const Bench = struct {
         switch (result) {
             .success => {},
             .failure => |*diagnostics| {
-                const rendered = try diagnostics.render(testing.allocator, source);
+                const rendered = try diagnostics.render(testing.allocator);
                 defer testing.allocator.free(rendered);
                 std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
                 result.deinit();
@@ -587,7 +587,7 @@ test "print, arguments, and files flow through the host" {
 
 test "std files wraps the host builtins faithfully" {
     var bench = try Bench.setup(
-        \\import files
+        \\import std.files
         \\
         \\func main():
         \\    assert(files.exists("notes.txt"))
@@ -963,7 +963,7 @@ test "the explicit frame stack survives deep recursion" {
 
 test "string methods: search, case, trim, replace, repeat, split" {
     var bench = try Bench.setup(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let text = "  Hello, Luce World  "
@@ -997,7 +997,7 @@ test "string methods: search, case, trim, replace, repeat, split" {
 
 test "list and array methods: sort, reverse, find, contains, fill, clear" {
     var bench = try Bench.setup(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var xs = [3, 1, 4, 1, 5]
@@ -1101,7 +1101,7 @@ test "a stripped program still names its trap frames, without lines" {
 
 test "a trap inside std code points into the std module" {
     var bench = try Bench.setup(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var decimals = -1
@@ -1116,7 +1116,7 @@ test "a trap inside std code points into the std module" {
     try testing.expectEqual(mir.TrapCode.explicit_trap, trap.code);
     try testing.expect(trap.trace.len == 2);
     try testing.expectEqualStrings("strings.format_float", trap.trace[0].function);
-    try testing.expectEqualStrings("strings.luc", trap.trace[0].source);
+    try testing.expectEqualStrings("std/strings.luc", trap.trace[0].source);
     try testing.expect(trap.trace[0].line != 0);
     try testing.expectEqualStrings("main", trap.trace[1].function);
     try testing.expectEqualStrings("main.luc", trap.trace[1].source);

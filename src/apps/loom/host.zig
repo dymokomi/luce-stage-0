@@ -222,6 +222,22 @@ pub const Host = struct {
     /// bytes live in this Host and are borrowed until the next read —
     /// which is what the C table hands out, and what the interpreter's
     /// callback copies into the evaluation arena.
+    ///
+    /// **The bytes must be valid UTF-8**, because they become a Luce
+    /// `String` and the language promises that `s[a:b]` is checked
+    /// against character boundaries and `len` counts characters.  A
+    /// half-read JPEG would make both of those lies, and the trap they
+    /// are supposed to raise would fire — or not — on the *contents*
+    /// of a file rather than on anything the program did.  Source
+    /// bytes have been through `01_source.prepare` since stage 1 was
+    /// written; nothing was checking data.  A file that is not text
+    /// answers null and the program traps `file_read_failed`, which is
+    /// true: it could not be read *as a String*.
+    ///
+    /// Unlike source, data is **not** normalized: no BOM is stripped
+    /// and no CRLF is rewritten.  `file_read` hands back the file, and
+    /// a program that reads a CSV and writes it again must get the
+    /// same bytes out.
     fn loadFile(self: *Host, path: []const u8) error{OutOfMemory}!?[]const u8 {
         const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
         defer file.close(self.io);
@@ -232,6 +248,7 @@ pub const Host = struct {
         const loaded = file.readPositionalAll(self.io, self.loaded_file.items, 0) catch
             return null;
         if (loaded != size) return null;
+        if (!std.unicode.utf8ValidateSlice(self.loaded_file.items)) return null;
         return self.loaded_file.items;
     }
 
@@ -710,6 +727,51 @@ test "styles render 256-color SGR runs and clamp to defaults" {
         "\x1b[0m\x1b[1m\x1b[38;5;114m\x1b[48;5;236m" ++ "\x1b[0m" ++ "\x1b[0m",
         buffer.items,
     );
+}
+
+test "file_read refuses bytes that cannot be a String, and normalizes nothing" {
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
+
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &written.writer, &.{});
+    defer host.deinit();
+
+    const cases = [_]struct { name: []const u8, content: []const u8, readable: bool }{
+        // Every shape the language would then be lying about: a lone
+        // continuation byte, a truncated sequence, a NUL-riddled
+        // binary, an overlong encoding.
+        .{ .name = "loose.bin", .content = "ok\x80\n", .readable = false },
+        .{ .name = "cut.bin", .content = "caf\xC3", .readable = false },
+        .{ .name = "photo.jpg", .content = "\xFF\xD8\xFF\xE0\x00\x10", .readable = false },
+        .{ .name = "overlong.bin", .content = "\xC0\xAF", .readable = false },
+        // And what data is allowed to be, untouched: a BOM, CRLF, a
+        // lone CR, an empty file.  Source normalizes these; data must
+        // not, or a program that reads a file and writes it back
+        // changes it.
+        .{ .name = "windows.csv", .content = "\xEF\xBB\xBFa,b\r\nc,d\r\n", .readable = true },
+        .{ .name = "classic.txt", .content = "one\rtwo\r", .readable = true },
+        .{ .name = "empty.txt", .content = "", .readable = true },
+        .{ .name = "unicode.txt", .content = "héllo — ok\n", .readable = true },
+    };
+    for (cases) |case| {
+        const path = try std.fs.path.join(testing.allocator, &.{ directory, case.name });
+        defer testing.allocator.free(path);
+        try testing.expect(Host.writeFile(&host, path, case.content));
+
+        const found = try host.loadFile(path);
+        if (!case.readable) {
+            try testing.expect(found == null);
+            continue;
+        }
+        // Byte for byte: no BOM stripped, no CRLF rewritten.
+        try testing.expectEqualStrings(case.content, found.?);
+    }
 }
 
 test "decoded keys map to stable event names" {

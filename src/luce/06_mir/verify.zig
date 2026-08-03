@@ -47,11 +47,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.structs) |layout| {
         for (layout.fields) |field| try verifyType(program, field.field_type);
     }
-    for (0..program.structs.len) |index| {
-        if (structContainsItself(program, @intCast(index), @intCast(index), 0)) {
-            return error.BadStruct;
-        }
-    }
+    if (try anyStructContainsItself(allocator, program)) return error.BadStruct;
 
     for (program.functions) |*function| {
         try verifyFunction(allocator, program, function);
@@ -71,12 +67,96 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
     }
 }
 
-fn structContainsItself(program: *const Program, origin: u32, current: u32, depth: usize) bool {
-    if (depth > program.structs.len) return true;
-    for (program.structs[current].fields) |field| {
-        if (field.field_type == .strukt) {
-            if (field.field_type.strukt == origin) return true;
-            if (structContainsItself(program, origin, field.field_type.strukt, depth + 1)) return true;
+/// Does any struct contain itself, directly or through another?  Such
+/// a layout has no finite value and nothing downstream may assume one
+/// exists.
+///
+/// One linear pass over the containment graph — Tarjan's strongly
+/// connected components, with an explicit stack.  Asking the question
+/// per layout by walking down from it re-walks every *path* through
+/// the graph, so a struct with two struct fields doubles the work per
+/// level: twenty levels is a million walks, and forty never finishes.
+/// Stage 4 refuses cycles before they can reach a `.lc`, so from
+/// source this was already unreachable; a hand-written or fuzzed
+/// module reaches it through `decode`, which is exactly the input that
+/// must not be able to hang the decoder.  (`04_semantics/
+/// declarations.zig` answers the same question the same way, and also
+/// sums each layout's shape while it is there.)
+fn anyStructContainsItself(allocator: Allocator, program: *const Program) VerifyError!bool {
+    const count = program.structs.len;
+    if (count == 0) return false;
+
+    const unvisited = std.math.maxInt(u32);
+    const order = try allocator.alloc(u32, count);
+    defer allocator.free(order);
+    const lowest = try allocator.alloc(u32, count);
+    defer allocator.free(lowest);
+    const open = try allocator.alloc(bool, count);
+    defer allocator.free(open);
+    @memset(order, unvisited);
+    @memset(open, false);
+
+    // Tarjan's component stack, and the explicit depth-first one.
+    var pending: std.ArrayList(u32) = .empty;
+    defer pending.deinit(allocator);
+    const Step = struct { layout: u32, field: u32 };
+    var path: std.ArrayList(Step) = .empty;
+    defer path.deinit(allocator);
+
+    var next_order: u32 = 0;
+    for (0..count) |root| {
+        if (order[root] != unvisited) continue;
+        order[root] = next_order;
+        lowest[root] = next_order;
+        next_order += 1;
+        open[root] = true;
+        try pending.append(allocator, @intCast(root));
+        try path.append(allocator, .{ .layout = @intCast(root), .field = 0 });
+
+        while (path.items.len != 0) {
+            // `step` points into `path`, which the descent below may
+            // grow: everything read through it is read before that
+            // append, and nothing is read after.
+            const step = &path.items[path.items.len - 1];
+            const layout = step.layout;
+            const fields = program.structs[layout].fields;
+            if (step.field < fields.len) {
+                const field_type = fields[step.field].field_type;
+                step.field += 1;
+                if (field_type != .strukt) continue;
+                const held = field_type.strukt;
+                // `verifyType` has already bounded every field index.
+                if (held == layout) return true;
+                if (order[held] == unvisited) {
+                    order[held] = next_order;
+                    lowest[held] = next_order;
+                    next_order += 1;
+                    open[held] = true;
+                    try pending.append(allocator, held);
+                    try path.append(allocator, .{ .layout = held, .field = 0 });
+                } else if (open[held]) {
+                    lowest[layout] = @min(lowest[layout], order[held]);
+                }
+                continue;
+            }
+
+            _ = path.pop();
+            if (path.items.len != 0) {
+                const parent = path.items[path.items.len - 1].layout;
+                lowest[parent] = @min(lowest[parent], lowest[layout]);
+            }
+            if (lowest[layout] != order[layout]) continue;
+
+            // The root of a component: everything pushed at or after
+            // it is a member.  More than one member means they hold
+            // each other, so none of them has a finite value.
+            var first = pending.items.len;
+            while (pending.items[first - 1] != layout) first -= 1;
+            first -= 1;
+            const members = pending.items[first..];
+            if (members.len > 1) return true;
+            for (members) |member| open[member] = false;
+            pending.shrinkRetainingCapacity(first);
         }
     }
     return false;

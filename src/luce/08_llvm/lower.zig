@@ -91,6 +91,9 @@ const mir = @import("../06_mir.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 const abi = @import("abi.zig");
+const effects = @import("runtime_effects.zig");
+
+const Service = effects.Service;
 
 const Allocator = std.mem.Allocator;
 const Builder = std.zig.llvm.Builder;
@@ -247,14 +250,13 @@ const Module = struct {
     texts: std.StringHashMapUnmanaged(Builder.Constant) = .empty,
 
     /// Declarations of the `libluce_rt` entry points this module calls,
-    /// keyed by symbol name.  Keys are static storage.
-    services: std.StringHashMapUnmanaged(Builder.Function.Index) = .empty,
+    /// one slot per `effects.Service`, filled on first use.
+    services: std.EnumMap(Service, Builder.Function.Index) = .{},
 
     fn deinit(self: *Module) void {
         self.gpa.free(self.functions);
         self.gpa.free(self.struct_zeros);
         self.texts.deinit(self.gpa);
-        self.services.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -318,24 +320,32 @@ const Module = struct {
         };
     }
 
-    /// Declare one `libluce_rt` entry point, interned by symbol name.
-    /// The parameter types come from the values at the call site, so
-    /// this file never writes a runtime signature down twice.
+    /// Declare one `libluce_rt` entry point, interned per service.  The
+    /// parameter types come from the values at the call site, so this
+    /// file never writes a runtime signature down twice — and the
+    /// attributes come from `runtime_effects.zig`, which is the one
+    /// place that says what a runtime call does to memory, whether it
+    /// unwinds, and whether it comes back.  Without them a declaration
+    /// is the most pessimistic thing LLVM can be handed.
     fn service(
         self: *Module,
-        name: []const u8,
+        which: Service,
         result: Builder.Type,
         parameters: []const Builder.Type,
     ) Error!Builder.Function.Index {
-        if (self.services.get(name)) |found| return found;
+        if (self.services.get(which)) |found| return found;
         const signature_type = try self.builder.fnType(result, parameters, .normal);
         const declared = try self.builder.addFunction(
             signature_type,
-            try self.builder.strtabString(name),
+            try self.builder.strtabString(which.symbol()),
             .default,
         );
         declared.setLinkage(.external, self.builder);
-        try self.services.put(self.gpa, name, declared);
+        declared.setAttributes(
+            try effects.attributes(which, parameters, self.builder),
+            self.builder,
+        );
+        self.services.put(which, declared);
         return declared;
     }
 
@@ -553,6 +563,7 @@ const Module = struct {
             );
             const declared = try self.builder.addFunction(signature_type, name, .default);
             declared.setLinkage(.internal, self.builder);
+            declared.setAttributes(try self.functionAttributes(function), self.builder);
             self.functions[index] = declared;
         }
 
@@ -580,6 +591,96 @@ const Module = struct {
         return self.builder.fnType(.i1, parameters.items, .normal);
     }
 
+    /// What each of a Luce function's three hidden arguments — and its
+    /// out-parameter, and any struct it takes — is, said in the terms
+    /// LLVM reasons in.
+    ///
+    /// The one that earns its keep is `%host`: the service table is a
+    /// `const LuceHost *` for the whole run, so `readonly` is what lets
+    /// a `print` inside a loop load its slot once rather than every
+    /// iteration.  The rest are true for the same reason the runtime's
+    /// are — a frame slot is an `alloca` nobody else can reach — and
+    /// they cost nothing to say.
+    fn functionAttributes(
+        self: *Module,
+        function: *const mir.Function,
+    ) Error!Builder.FunctionAttributes {
+        const word: Builder.Alignment.Lazy = .wrap(.fromByteUnits(8));
+        var wip: Builder.FunctionAttributes.Wip = .{};
+        defer wip.deinit(self.builder);
+
+        // %host — read, never written, never kept, and always a whole
+        // service table (abi.Host is what the ABI obliges the caller to
+        // pass).
+        try wip.addParamAttr(0, .nocapture, self.builder);
+        try wip.addParamAttr(0, .readonly, self.builder);
+        try wip.addParamAttr(0, .nonnull, self.builder);
+        try wip.addParamAttr(0, .noundef, self.builder);
+        try wip.addParamAttr(0, .{ .dereferenceable = @sizeOf(abi.Host) }, self.builder);
+        try wip.addParamAttr(0, .{ .@"align" = word }, self.builder);
+
+        // %rt — written (the trap slot, the serial counter), but never
+        // kept by anything this module hands it to.
+        try wip.addParamAttr(1, .nocapture, self.builder);
+        try wip.addParamAttr(1, .nonnull, self.builder);
+        try wip.addParamAttr(1, .noundef, self.builder);
+        try wip.addParamAttr(1, .{ .@"align" = word }, self.builder);
+
+        // %depth — a count, always initialized.
+        try wip.addParamAttr(2, .noundef, self.builder);
+
+        // A struct travels as a pointer to its run of fields, and a run
+        // is never written after it is built (`heap.setField` allocates
+        // a fresh one), so every struct parameter is read-only storage.
+        // It is *not* `nocapture`: returning a struct stores the pointer
+        // through `%out`.
+        for (function.locals[0..function.parameter_count], 0..) |parameter, index| {
+            if (parameter.local_type != .strukt) continue;
+            const at = index + 3;
+            try wip.addParamAttr(at, .readonly, self.builder);
+            try wip.addParamAttr(at, .nonnull, self.builder);
+            try wip.addParamAttr(at, .noundef, self.builder);
+            try wip.addParamAttr(at, .{ .@"align" = word }, self.builder);
+        }
+
+        // %out — written once on the way out and never read.
+        if (function.return_type != .none) {
+            const at = function.parameter_count + 3;
+            _ = try self.valueType(function.return_type); // reject before use
+            try wip.addParamAttr(at, .nocapture, self.builder);
+            try wip.addParamAttr(at, .writeonly, self.builder);
+            try wip.addParamAttr(at, .nonnull, self.builder);
+            try wip.addParamAttr(at, .noundef, self.builder);
+            try wip.addParamAttr(
+                at,
+                .{ .dereferenceable = Module.resultSize(function.return_type) },
+                self.builder,
+            );
+            try wip.addParamAttr(
+                at,
+                .{ .@"align" = .wrap(Module.valueAlignment(function.return_type)) },
+                self.builder,
+            );
+        }
+        return wip.finish(self.builder);
+    }
+
+    /// How many bytes a returned value occupies in its `%out` slot —
+    /// the size of `valueType(of)`, which is what makes the slot
+    /// `dereferenceable`.
+    fn resultSize(of: types.Type) u32 {
+        return switch (of) {
+            .boolean => 1,
+            .heap => 4,
+            .int, .float, .strukt => 8,
+            // `{ ptr, i64 }` — how a String travels.
+            .string => 16,
+            // Neither reaches here: a function returning nothing has no
+            // slot, and `valueType` has already refused Bytes.
+            .none, .bytes => 0,
+        };
+    }
+
     /// The exported wrapper: open a runtime, run the entry function,
     /// hand the host the leak census, and answer a status.
     ///
@@ -597,6 +698,7 @@ const Module = struct {
             .default,
         );
         wrapper.setLinkage(.external, self.builder);
+        wrapper.setAttributes(try self.entryAttributes(), self.builder);
 
         var wip = try Builder.WipFunction.init(self.builder, .{
             .function = wrapper,
@@ -648,7 +750,7 @@ const Module = struct {
         const described = try self.describeFunctions();
         const started = try self.callService(
             &wip,
-            "luce_rt_open",
+            .luce_rt_open,
             .ptr,
             &.{
                 described.toValue(),
@@ -731,15 +833,36 @@ const Module = struct {
 
         const status = try self.callService(
             &wip,
-            "luce_rt_status",
+            .luce_rt_status,
             .i32,
             &.{ started, unwound },
             "status",
         );
         try self.reportLeaks(&wip, host, context, started, trapped);
-        _ = try self.callService(&wip, "luce_rt_close", .void, &.{started}, "");
+        _ = try self.callService(&wip, .luce_rt_close, .void, &.{started}, "");
         _ = try wip.ret(status);
         try wip.finish();
+    }
+
+    /// `luce_main`'s one argument is the service table, and the same
+    /// three things are true of it here as inside a Luce function: it
+    /// is read, it is never kept, and the ABI obliges the caller to
+    /// pass a whole one.  The function itself promises nothing — it
+    /// calls the host's trap reporter, and a host is anybody's code.
+    fn entryAttributes(self: *Module) Error!Builder.FunctionAttributes {
+        var wip: Builder.FunctionAttributes.Wip = .{};
+        defer wip.deinit(self.builder);
+        try wip.addParamAttr(0, .nocapture, self.builder);
+        try wip.addParamAttr(0, .readonly, self.builder);
+        try wip.addParamAttr(0, .nonnull, self.builder);
+        try wip.addParamAttr(0, .noundef, self.builder);
+        try wip.addParamAttr(0, .{ .dereferenceable = @sizeOf(abi.Host) }, self.builder);
+        try wip.addParamAttr(
+            0,
+            .{ .@"align" = .wrap(.fromByteUnits(8)) },
+            self.builder,
+        );
+        return wip.finish(self.builder);
     }
 
     /// Raise `code` with its standard message from `luce_main`, which
@@ -751,7 +874,7 @@ const Module = struct {
         code: mir.TrapCode,
     ) Error!void {
         const message = code.message();
-        _ = try self.callService(wip, "luce_rt_raise", .void, &.{
+        _ = try self.callService(wip, .luce_rt_raise, .void, &.{
             started,
             try self.builder.intValue(.i32, @intFromEnum(code)),
             (try self.textBytes(message)).toValue(),
@@ -776,7 +899,7 @@ const Module = struct {
         _ = try wip.brCond(trapped, telling, quiet, .else_likely);
         wip.cursor = .{ .block = telling };
         const report = try self.loadHostSlot(wip, host, .trap, "trap.fn");
-        _ = try self.callService(wip, "luce_rt_report", .void, &.{
+        _ = try self.callService(wip, .luce_rt_report, .void, &.{
             started,
             context,
             report,
@@ -811,7 +934,7 @@ const Module = struct {
         _ = try wip.brCond(skip, quiet, counting, .none);
 
         wip.cursor = .{ .block = counting };
-        const leaked = try self.callService(wip, "luce_rt_leaked", .i64, &.{started}, "leaked");
+        const leaked = try self.callService(wip, .luce_rt_leaked, .i64, &.{started}, "leaked");
         _ = try wip.call(
             .normal,
             Builder.CallConv.default,
@@ -842,7 +965,7 @@ const Module = struct {
     fn callService(
         self: *Module,
         wip: *Builder.WipFunction,
-        name: []const u8,
+        which: Service,
         result: Builder.Type,
         arguments: []const Builder.Value,
         out_name: []const u8,
@@ -852,7 +975,7 @@ const Module = struct {
         for (arguments) |argument| {
             try parameters.append(self.gpa, argument.typeOfWip(wip));
         }
-        const target = try self.service(name, result, parameters.items);
+        const target = try self.service(which, result, parameters.items);
         return wip.call(
             .normal,
             Builder.CallConv.default,
@@ -1077,13 +1200,9 @@ const Body = struct {
         alignment: Builder.Alignment,
         name: []const u8,
     ) Error!Builder.Value {
-        const resume_at = self.wip.cursor;
-        const filled = self.entry_block.ptr(self.wip).instructions.items.len;
-        std.debug.assert(filled > 0);
-        self.wip.cursor = .{ .block = self.entry_block, .instruction = @intCast(filled - 1) };
-        const slot = try self.wip.alloca(.normal, of, .none, alignment, .default, name);
-        self.wip.cursor = resume_at;
-        return slot;
+        const resume_at = self.enterEntry();
+        defer self.leaveEntry(resume_at);
+        return self.wip.alloca(.normal, of, .none, alignment, .default, name);
     }
 
     /// `count` consecutive scratch slots of `of`, in the entry block.
@@ -1096,14 +1215,30 @@ const Body = struct {
         alignment: Builder.Alignment,
         name: []const u8,
     ) Error!Builder.Value {
+        const resume_at = self.enterEntry();
+        defer self.leaveEntry(resume_at);
+        const length = try self.module.builder.intValue(.i64, count);
+        return self.wip.alloca(.normal, of, length, alignment, .default, name);
+    }
+
+    /// Move the cursor to just before the entry block's terminator and
+    /// answer where it was.  Everything emitted until the matching
+    /// `leaveEntry` runs once per call rather than once per visit, and
+    /// dominates every block — which is what a frame slot, a serial,
+    /// and the constant half of a box all want.
+    ///
+    /// Only called once the entry block is complete, which is why the
+    /// insertion point can be "one before the end".
+    fn enterEntry(self: *Body) Builder.WipFunction.Cursor {
         const resume_at = self.wip.cursor;
         const filled = self.entry_block.ptr(self.wip).instructions.items.len;
         std.debug.assert(filled > 0);
         self.wip.cursor = .{ .block = self.entry_block, .instruction = @intCast(filled - 1) };
-        const length = try self.module.builder.intValue(.i64, count);
-        const slot = try self.wip.alloca(.normal, of, length, alignment, .default, name);
+        return resume_at;
+    }
+
+    fn leaveEntry(self: *Body, resume_at: Builder.WipFunction.Cursor) void {
         self.wip.cursor = resume_at;
-        return slot;
     }
 
     fn zeroValue(self: *Body, of: types.Type) Error!Builder.Value {
@@ -1127,11 +1262,30 @@ const Body = struct {
     // `{ tag, bits, length }` in an entry-block slot.  `boxed` fills one
     // in and `unboxed` reads one back; between them they are the only
     // two places in this file that know that layout.
+    //
+    // The fill is split in two on purpose: `fillBoxShape` writes what
+    // the *type* decides and goes in the entry block, `fillBoxValue`
+    // writes what the *value* decides and goes where the value is.
 
     const value_alignment = Builder.Alignment.fromByteUnits(8);
 
     /// A pointer to a scratch `runtime.Value` holding `held`, whose
     /// Luce type is `of`.
+    ///
+    /// **Two of the three words are facts about the type, not the
+    /// value**, and MIR knows the type at compile time: the tag always,
+    /// and the length for everything but a String.  Those are written
+    /// once beside the `alloca` in the entry block; only the payload is
+    /// stored where the value is produced.  A box inside a loop is
+    /// therefore one store per iteration rather than three.
+    ///
+    /// That motion is sound because nothing writes a box between the
+    /// entry block and the call: this slot belongs to exactly one call
+    /// site, and every runtime entry point that takes a boxed value
+    /// declares the parameter `readonly` (`runtime_effects.zig`).  It is a
+    /// motion LLVM cannot make for itself — LICM promotes a store out
+    /// of a loop only when every use of the pointer is a load or a
+    /// store, and passing it to a call is neither.
     fn boxed(
         self: *Body,
         of: types.Type,
@@ -1139,7 +1293,12 @@ const Body = struct {
         name: []const u8,
     ) Error!Builder.Value {
         const slot = try self.scratch(self.module.value_type, value_alignment, name);
-        try self.fillBox(slot, of, held);
+        {
+            const resume_at = self.enterEntry();
+            defer self.leaveEntry(resume_at);
+            try self.fillBoxShape(slot, of);
+        }
+        try self.fillBoxValue(slot, of, held);
         return slot;
     }
 
@@ -1148,55 +1307,108 @@ const Body = struct {
         return self.boxed(self.function.result_types[register], self.values[register], name);
     }
 
-    /// Write `held` into the `runtime.Value` at `slot`.
-    fn fillBox(self: *Body, slot: Builder.Value, of: types.Type, held: Builder.Value) Error!void {
+    /// Element `index` of a run of boxes — a subscript list, a struct's
+    /// fields — filled the way `boxed` fills a single slot.  The run
+    /// itself is an entry-block `alloca`, so the address and the shape
+    /// go there too and only the payload is stored here.
+    fn boxAt(
+        self: *Body,
+        run: Builder.Value,
+        index: usize,
+        of: types.Type,
+        held: Builder.Value,
+    ) Error!void {
+        const address = address: {
+            const resume_at = self.enterEntry();
+            defer self.leaveEntry(resume_at);
+            const address = try self.wip.gep(
+                .inbounds,
+                self.module.value_type,
+                run,
+                &.{try self.module.builder.intValue(.i64, index)},
+                "box.element",
+            );
+            try self.fillBoxShape(address, of);
+            break :address address;
+        };
+        try self.fillBoxValue(address, of, held);
+    }
+
+    /// The words of a `runtime.Value` that the Luce type alone decides:
+    /// the tag, and the length for every type that has a fixed one.
+    fn fillBoxShape(self: *Body, slot: Builder.Value, of: types.Type) Error!void {
         const builder = self.module.builder;
-        const zero = try builder.intValue(.i64, 0);
-        var bits = zero;
-        var length = zero;
         const tag: runtime.Tag = switch (of) {
             .none => .none,
-            .boolean => blk: {
-                bits = try self.wip.cast(.zext, held, .i64, "box.bits");
-                break :blk .boolean;
-            },
-            .int => blk: {
-                bits = held;
-                break :blk .int;
-            },
-            .string => blk: {
-                const address = try self.wip.extractValue(held, &.{0}, "box.text");
-                bits = try self.wip.cast(.ptrtoint, address, .i64, "box.bits");
-                length = try self.wip.extractValue(held, &.{1}, "box.length");
-                break :blk .string;
-            },
-            .heap => blk: {
-                bits = try self.wip.cast(.zext, held, .i64, "box.bits");
-                break :blk .object;
-            },
-            .float => blk: {
-                bits = try self.wip.cast(.bitcast, held, .i64, "box.bits");
-                break :blk .float;
-            },
-            .strukt => |layout| blk: {
-                bits = try self.wip.cast(.ptrtoint, held, .i64, "box.bits");
-                length = try builder.intValue(
-                    .i64,
-                    self.module.program.structs[layout].fields.len,
-                );
-                break :blk .strukt;
-            },
+            .boolean => .boolean,
+            .int => .int,
+            .string => .string,
+            .heap => .object,
+            .float => .float,
+            .strukt => .strukt,
             .bytes => return self.fail("Bytes"),
         };
-        const words = [_]Builder.Value{
-            try builder.intValue(.i64, @intFromEnum(tag)),
-            bits,
-            length,
+        // A String's length travels with its bytes, so it is the one
+        // length that is not a compile-time fact.
+        const length: ?u64 = switch (of) {
+            .none, .boolean, .int, .heap, .float => 0,
+            .strukt => |layout| self.module.program.structs[layout].fields.len,
+            .string => null,
+            .bytes => unreachable, // answered above
         };
-        for (words, 0..) |word, index| {
-            const address = try self.wip.gepStruct(self.module.value_type, slot, index, "box.at");
-            _ = try self.wip.store(.normal, word, address, value_alignment);
+
+        try self.storeBoxField(slot, 0, try builder.intValue(.i64, @intFromEnum(tag)));
+        if (length) |fixed| {
+            try self.storeBoxField(slot, 2, try builder.intValue(.i64, fixed));
         }
+    }
+
+    /// The word — or, for a String, the two words — that carry the
+    /// value itself, stored where the value is produced.
+    fn fillBoxValue(self: *Body, slot: Builder.Value, of: types.Type, held: Builder.Value) Error!void {
+        switch (of) {
+            .none => {},
+            .boolean, .heap => try self.storeBoxField(
+                slot,
+                1,
+                try self.wip.cast(.zext, held, .i64, "box.bits"),
+            ),
+            .int => try self.storeBoxField(slot, 1, held),
+            .float => try self.storeBoxField(
+                slot,
+                1,
+                try self.wip.cast(.bitcast, held, .i64, "box.bits"),
+            ),
+            .strukt => try self.storeBoxField(
+                slot,
+                1,
+                try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
+            ),
+            .string => {
+                const address = try self.wip.extractValue(held, &.{0}, "box.text");
+                try self.storeBoxField(
+                    slot,
+                    1,
+                    try self.wip.cast(.ptrtoint, address, .i64, "box.bits"),
+                );
+                try self.storeBoxField(
+                    slot,
+                    2,
+                    try self.wip.extractValue(held, &.{1}, "box.length"),
+                );
+            },
+            .bytes => return self.fail("Bytes"),
+        }
+    }
+
+    fn storeBoxField(
+        self: *Body,
+        slot: Builder.Value,
+        index: usize,
+        word: Builder.Value,
+    ) Error!void {
+        const address = try self.wip.gepStruct(self.module.value_type, slot, index, "box.at");
+        _ = try self.wip.store(.normal, word, address, value_alignment);
     }
 
     /// Read a Luce value of type `of` back out of the `runtime.Value`
@@ -1245,7 +1457,7 @@ const Body = struct {
         self.wip.cursor = .{ .block = self.entry_block, .instruction = @intCast(filled - 1) };
         self.serial = try self.module.callService(
             self.wip,
-            "luce_rt_serial",
+            .luce_rt_serial,
             .i64,
             &.{self.runtime},
             "serial",
@@ -1276,18 +1488,18 @@ const Body = struct {
     /// Call a `libluce_rt` entry point that cannot trap.
     fn callRuntime(
         self: *Body,
-        name: []const u8,
+        which: Service,
         result: Builder.Type,
         arguments: []const Builder.Value,
         out_name: []const u8,
     ) Error!Builder.Value {
-        return self.module.callService(self.wip, name, result, arguments, out_name);
+        return self.module.callService(self.wip, which, result, arguments, out_name);
     }
 
     /// Call a `libluce_rt` entry point that can trap, and unwind if it
     /// did.  The runtime has already told the host why, at the site.
-    fn callChecked(self: *Body, name: []const u8, arguments: []const Builder.Value) Error!void {
-        const trapped = try self.callRuntime(name, .i32, arguments, "trapped");
+    fn callChecked(self: *Body, which: Service, arguments: []const Builder.Value) Error!void {
+        const trapped = try self.callRuntime(which, .i32, arguments, "trapped");
         const failed = try self.wip.icmp(
             .ne,
             trapped,
@@ -1302,7 +1514,7 @@ const Body = struct {
     fn callAnswering(
         self: *Body,
         register: mir.Register,
-        name: []const u8,
+        which: Service,
         arguments: []const Builder.Value,
     ) Error!void {
         const gpa = self.module.gpa;
@@ -1311,7 +1523,7 @@ const Body = struct {
         try all.appendSlice(gpa, arguments);
         const out = try self.scratch(self.module.value_type, value_alignment, "rt.out");
         try all.append(gpa, out);
-        try self.callChecked(name, all.items);
+        try self.callChecked(which, all.items);
         self.values[register] = try self.unboxed(
             self.function.result_types[register],
             out,
@@ -1329,14 +1541,12 @@ const Body = struct {
             "indices",
         );
         for (of, 0..) |register, index| {
-            const address = try self.wip.gep(
-                .inbounds,
-                self.module.value_type,
+            try self.boxAt(
                 run,
-                &.{try self.module.builder.intValue(.i64, index)},
-                "index.at",
+                index,
+                self.function.result_types[register],
+                self.values[register],
             );
-            try self.fillBox(address, self.function.result_types[register], self.values[register]);
         }
         return .{ run, try self.module.builder.intValue(.i64, of.len) };
     }
@@ -1431,7 +1641,7 @@ const Body = struct {
         const surviving = try self.wip.block(1, "served");
         _ = try self.wip.brCond(negative, giving_up, surviving, .else_likely);
         self.seek(giving_up);
-        _ = try self.callRuntime("luce_rt_exhaust", .void, &.{self.runtime}, "");
+        _ = try self.callRuntime(.luce_rt_exhaust, .void, &.{self.runtime}, "");
         _ = try self.wip.ret(.true);
         self.seek(surviving);
     }
@@ -1500,7 +1710,7 @@ const Body = struct {
     fn emitTrap(self: *Body, code: mir.TrapCode, message: Builder.Value) Error!void {
         const text = try self.wip.extractValue(message, &.{0}, "trap.text");
         const length = try self.wip.extractValue(message, &.{1}, "trap.length");
-        _ = try self.callRuntime("luce_rt_raise", .void, &.{
+        _ = try self.callRuntime(.luce_rt_raise, .void, &.{
             self.runtime,
             try self.module.builder.intValue(.i32, @intFromEnum(code)),
             text,
@@ -1515,7 +1725,7 @@ const Body = struct {
     /// through, innermost first — and nothing on the execution path
     /// touches any of it.
     fn leaveUnwinding(self: *Body) Error!void {
-        _ = try self.callRuntime("luce_rt_unwound", .void, &.{
+        _ = try self.callRuntime(.luce_rt_unwound, .void, &.{
             self.runtime,
             try self.module.builder.intValue(.i32, self.index),
             try self.module.builder.intValue(.i32, self.current),
@@ -1611,7 +1821,7 @@ const Body = struct {
                     "field",
                 );
             },
-            .struct_set => |set| try self.callAnswering(register, "luce_rt_struct_set", &.{
+            .struct_set => |set| try self.callAnswering(register, .luce_rt_struct_set, &.{
                 self.runtime,
                 try self.boxedRegister(set.target, "target"),
                 try self.module.builder.intValue(.i64, set.field),
@@ -1620,9 +1830,9 @@ const Body = struct {
             .call => |called| try self.emitCall(register, called),
             .intrinsic => |called| try self.emitIntrinsic(register, called),
             .heap_new => |new| try self.emitHeapNew(register, new),
-            .object_bind => |bind| try self.emitOwnership("luce_rt_bind", bind.value, bind.local),
+            .object_bind => |bind| try self.emitOwnership(.luce_rt_bind, bind.value, bind.local),
             .object_unbind => |unbind| try self.emitOwnership(
-                "luce_rt_unbind",
+                .luce_rt_unbind,
                 unbind.value,
                 unbind.local,
             ),
@@ -1646,7 +1856,7 @@ const Body = struct {
                     if (self.function.return_type == .heap or
                         self.function.return_type == .strukt)
                     {
-                        _ = try self.callRuntime("luce_rt_loosen_from_frame", .void, &.{
+                        _ = try self.callRuntime(.luce_rt_loosen_from_frame, .void, &.{
                             self.runtime,
                             try self.boxedRegister(returned, "returned"),
                             try self.frameSerial(),
@@ -1731,16 +1941,9 @@ const Body = struct {
             "fields",
         );
         for (fields, 0..) |field, index| {
-            const address = try self.wip.gep(
-                .inbounds,
-                self.module.value_type,
-                run,
-                &.{try self.module.builder.intValue(.i64, index)},
-                "field.at",
-            );
-            try self.fillBox(address, self.function.result_types[field], self.values[field]);
+            try self.boxAt(run, index, self.function.result_types[field], self.values[field]);
         }
-        try self.callAnswering(register, "luce_rt_struct_make", &.{
+        try self.callAnswering(register, .luce_rt_struct_make, &.{
             self.runtime,
             run,
             try self.module.builder.intValue(.i64, shape.fields.len),
@@ -1765,7 +1968,7 @@ const Body = struct {
             ),
             // The analyzer only admits + for strings, and the joined
             // bytes come from the runtime's arena.
-            .string => try self.callAnswering(register, "luce_rt_concat", &.{
+            .string => try self.callAnswering(register, .luce_rt_concat, &.{
                 self.runtime,
                 try self.boxedRegister(operation.left, "left"),
                 try self.boxedRegister(operation.right, "right"),
@@ -1899,7 +2102,7 @@ const Body = struct {
         // runtime owns both, and a struct comparison recurses into
         // nested fields rather than comparing the slots that hold them.
         if (operation.operand_type == .string or operation.operand_type == .strukt) {
-            const answer = try self.callRuntime("luce_rt_compare", .i32, &.{
+            const answer = try self.callRuntime(.luce_rt_compare, .i32, &.{
                 try self.module.builder.intValue(.i32, @intFromEnum(operation.op)),
                 try self.boxedRegister(operation.left, "left"),
                 try self.boxedRegister(operation.right, "right"),
@@ -2138,7 +2341,7 @@ const Body = struct {
                     );
                 },
                 .float => self.values[register] = try self.callRuntime(
-                    "luce_rt_float_clamp",
+                    .luce_rt_float_clamp,
                     .double,
                     &.{ self.values[of[0]], self.values[of[1]], self.values[of[2]] },
                     "clamp",
@@ -2164,13 +2367,13 @@ const Body = struct {
             .null_object => {
                 self.values[register] = try self.module.builder.intValue(.i32, runtime.null_index);
             },
-            .len => try self.callAnswering(register, "luce_rt_len", &.{
+            .len => try self.callAnswering(register, .luce_rt_len, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
             .index_get => {
                 const run, const rank = try self.subscripts(of[1..]);
-                try self.callAnswering(register, "luce_rt_index_get", &.{
+                try self.callAnswering(register, .luce_rt_index_get, &.{
                     rt,
                     try self.boxedRegister(of[0], "target"),
                     run,
@@ -2180,7 +2383,7 @@ const Body = struct {
             .index_set => {
                 const held = try self.boxedRegister(of[of.len - 1], "element");
                 const run, const rank = try self.subscripts(of[1 .. of.len - 1]);
-                try self.callChecked("luce_rt_index_set", &.{
+                try self.callChecked(.luce_rt_index_set, &.{
                     rt,
                     try self.boxedRegister(of[0], "target"),
                     run,
@@ -2188,101 +2391,101 @@ const Body = struct {
                     held,
                 });
             },
-            .list_slice => try self.callAnswering(register, "luce_rt_list_slice", &.{
+            .list_slice => try self.callAnswering(register, .luce_rt_list_slice, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
                 self.values[of[2]],
             }),
-            .append_value => try self.callChecked("luce_rt_append", &.{
+            .append_value => try self.callChecked(.luce_rt_append, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "element"),
             }),
-            .append_ascii => try self.callChecked("luce_rt_append_ascii", &.{
+            .append_ascii => try self.callChecked(.luce_rt_append_ascii, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
             }),
-            .pop_value => try self.callAnswering(register, "luce_rt_pop", &.{
+            .pop_value => try self.callAnswering(register, .luce_rt_pop, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .insert_value => try self.callChecked("luce_rt_insert", &.{
+            .insert_value => try self.callChecked(.luce_rt_insert, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
                 try self.boxedRegister(of[2], "element"),
             }),
-            .remove_entry => try self.callChecked("luce_rt_remove", &.{
+            .remove_entry => try self.callChecked(.luce_rt_remove, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "which"),
             }),
-            .has_key => try self.callAnswering(register, "luce_rt_has_key", &.{
+            .has_key => try self.callAnswering(register, .luce_rt_has_key, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "key"),
             }),
-            .key_at => try self.callAnswering(register, "luce_rt_key_at", &.{
+            .key_at => try self.callAnswering(register, .luce_rt_key_at, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
             }),
-            .value_at => try self.callAnswering(register, "luce_rt_value_at", &.{
+            .value_at => try self.callAnswering(register, .luce_rt_value_at, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
             }),
-            .dim_size => try self.callAnswering(register, "luce_rt_dim_size", &.{
+            .dim_size => try self.callAnswering(register, .luce_rt_dim_size, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 self.values[of[1]],
             }),
-            .list_sort => try self.callChecked("luce_rt_sort", &.{
+            .list_sort => try self.callChecked(.luce_rt_sort, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .list_reverse => try self.callChecked("luce_rt_reverse", &.{
+            .list_reverse => try self.callChecked(.luce_rt_reverse, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .list_find => try self.callAnswering(register, "luce_rt_find", &.{
+            .list_find => try self.callAnswering(register, .luce_rt_find, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "wanted"),
             }),
-            .list_contains => try self.callAnswering(register, "luce_rt_contains", &.{
+            .list_contains => try self.callAnswering(register, .luce_rt_contains, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "wanted"),
             }),
-            .clear_object => try self.callChecked("luce_rt_clear", &.{
+            .clear_object => try self.callChecked(.luce_rt_clear, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .map_keys => try self.callAnswering(register, "luce_rt_map_keys", &.{
+            .map_keys => try self.callAnswering(register, .luce_rt_map_keys, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .map_values => try self.callAnswering(register, "luce_rt_map_values", &.{
+            .map_values => try self.callAnswering(register, .luce_rt_map_values, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .map_get => try self.callAnswering(register, "luce_rt_map_get", &.{
+            .map_get => try self.callAnswering(register, .luce_rt_map_get, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "key"),
                 try self.boxedRegister(of[2], "fallback"),
             }),
-            .array_fill => try self.callChecked("luce_rt_array_fill", &.{
+            .array_fill => try self.callChecked(.luce_rt_array_fill, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "element"),
             }),
             .free_object => {
                 const owner = try self.namedBinding(of);
-                try self.callChecked("luce_rt_free", &.{
+                try self.callChecked(.luce_rt_free, &.{
                     rt,
                     try self.boxedRegister(of[0], "target"),
                     owner.owned,
@@ -2292,7 +2495,7 @@ const Body = struct {
             },
             .give_object => {
                 const owner = try self.namedBinding(of);
-                try self.callAnswering(register, "luce_rt_give", &.{
+                try self.callAnswering(register, .luce_rt_give, &.{
                     rt,
                     try self.boxedRegister(of[0], "target"),
                     owner.owned,
@@ -2300,42 +2503,42 @@ const Body = struct {
                     owner.local,
                 });
             },
-            .copy_object => try self.callAnswering(register, "luce_rt_copy", &.{
+            .copy_object => try self.callAnswering(register, .luce_rt_copy, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
             }),
-            .str_value => try self.callAnswering(register, "luce_rt_str", &.{
+            .str_value => try self.callAnswering(register, .luce_rt_str, &.{
                 rt,
                 try self.boxedRegister(of[0], "held"),
             }),
-            .parse_int => try self.callAnswering(register, "luce_rt_parse_int", &.{
+            .parse_int => try self.callAnswering(register, .luce_rt_parse_int, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
-            .parse_float => try self.callAnswering(register, "luce_rt_parse_float", &.{
+            .parse_float => try self.callAnswering(register, .luce_rt_parse_float, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
-            .chr_code => try self.callAnswering(register, "luce_rt_chr", &.{
+            .chr_code => try self.callAnswering(register, .luce_rt_chr, &.{
                 rt,
                 self.values[of[0]],
             }),
-            .ord_text => try self.callAnswering(register, "luce_rt_ord", &.{
+            .ord_text => try self.callAnswering(register, .luce_rt_ord, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
-            .string_slice => try self.callAnswering(register, "luce_rt_string_slice", &.{
+            .string_slice => try self.callAnswering(register, .luce_rt_string_slice, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
                 self.values[of[1]],
                 self.values[of[2]],
             }),
-            .string_byte => try self.callAnswering(register, "luce_rt_string_byte", &.{
+            .string_byte => try self.callAnswering(register, .luce_rt_string_byte, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
                 self.values[of[1]],
             }),
-            .string_find_byte => try self.callAnswering(register, "luce_rt_string_find_byte", &.{
+            .string_find_byte => try self.callAnswering(register, .luce_rt_string_find_byte, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
                 self.values[of[1]],
@@ -2353,7 +2556,7 @@ const Body = struct {
                 );
                 try self.check(try self.saidNo(answer), .file_read_failed);
                 const bytes, const size = try content.load(self);
-                try self.callAnswering(register, "luce_rt_intern_text", &.{ rt, bytes, size });
+                try self.callAnswering(register, .luce_rt_intern_text, &.{ rt, bytes, size });
             },
             .file_write => {
                 const path, const path_length = try self.textParts(of[0], "path");
@@ -2403,7 +2606,7 @@ const Body = struct {
                 );
                 try self.check(try self.saidNo(answer), .argument_bounds);
                 const bytes, const size = try argument.load(self);
-                try self.callAnswering(register, "luce_rt_intern_text", &.{ rt, bytes, size });
+                try self.callAnswering(register, .luce_rt_intern_text, &.{ rt, bytes, size });
             },
             .term_rows => {
                 self.values[register] = try self.callHostNumber(.term_rows, "rows");
@@ -2437,9 +2640,9 @@ const Body = struct {
                 // The payload belongs to the run, not to the host's
                 // buffer: copy it in before `key_text` can be asked.
                 const typed_bytes, const typed_size = try typed.load(self);
-                try self.callChecked("luce_rt_set_key_text", &.{ rt, typed_bytes, typed_size });
+                try self.callChecked(.luce_rt_set_key_text, &.{ rt, typed_bytes, typed_size });
                 const name_bytes, const name_size = try name.load(self);
-                try self.callAnswering(register, "luce_rt_intern_text", &.{
+                try self.callAnswering(register, .luce_rt_intern_text, &.{
                     rt,
                     name_bytes,
                     name_size,
@@ -2450,7 +2653,7 @@ const Body = struct {
                 // it reaches nothing: the text belongs to the run, and a
                 // program that never read a key simply gets "".
                 const out = try self.scratch(self.module.value_type, value_alignment, "key.text");
-                _ = try self.callRuntime("luce_rt_key_text", .void, &.{ rt, out }, "");
+                _ = try self.callRuntime(.luce_rt_key_text, .void, &.{ rt, out }, "");
                 self.values[register] = try self.unboxed(.string, out, "key.text");
             },
         }
@@ -2500,7 +2703,7 @@ const Body = struct {
                 &.{ left, right },
                 "extremum",
             ),
-            .float => return self.callRuntime("luce_rt_float_extremum", .double, &.{
+            .float => return self.callRuntime(.luce_rt_float_extremum, .double, &.{
                 try self.module.builder.intValue(.i32, @intFromBool(wants_minimum)),
                 left,
                 right,
@@ -2533,9 +2736,9 @@ const Body = struct {
     /// the entry point and only an array's sizes travel at runtime.
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
-            .list => try self.callAnswering(register, "luce_rt_new_list", &.{self.runtime}),
-            .map => try self.callAnswering(register, "luce_rt_new_map", &.{self.runtime}),
-            .builder => try self.callAnswering(register, "luce_rt_new_builder", &.{self.runtime}),
+            .list => try self.callAnswering(register, .luce_rt_new_list, &.{self.runtime}),
+            .map => try self.callAnswering(register, .luce_rt_new_map, &.{self.runtime}),
+            .builder => try self.callAnswering(register, .luce_rt_new_builder, &.{self.runtime}),
             .array => |shape| {
                 const dims = try self.scratchRun(
                     .i64,
@@ -2563,7 +2766,7 @@ const Body = struct {
                     try self.zeroValue(shape.element),
                     "element.zero",
                 );
-                try self.callAnswering(register, "luce_rt_new_array", &.{
+                try self.callAnswering(register, .luce_rt_new_array, &.{
                     self.runtime,
                     dims,
                     try self.module.builder.intValue(.i64, new.dims.len),
@@ -2578,11 +2781,11 @@ const Body = struct {
     /// (docs/OWNERSHIP.md).
     fn emitOwnership(
         self: *Body,
-        name: []const u8,
+        which: Service,
         value: mir.Register,
         local: mir.LocalId,
     ) Error!void {
-        _ = try self.callRuntime(name, .void, &.{
+        _ = try self.callRuntime(which, .void, &.{
             self.runtime,
             try self.boxedRegister(value, "bound"),
             try self.frameSerial(),

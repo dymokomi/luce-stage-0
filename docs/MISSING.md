@@ -58,7 +58,7 @@ design philosophy.
 7. ~~Compound assignment (`+=`, `-=`, ...)~~ — shipped: `+= -= *= /=
    %=` on Int/Float and `+=` on String, value-only, place evaluated
    once.
-8. ~~No `pow`, no `random`, thin math~~ — shipped as `import math`
+8. ~~No `pow`, no `random`, thin math~~ — shipped as `import std.math`
    (docs/STD.md): pow/ipow, exp/ln/log2/log10, sin/cos/tan, round,
    constants, and a deterministic seeded generator
    (`math.seed`/`random`/`random_int`).
@@ -116,11 +116,11 @@ purpose — same posture as the memory-model process.
 ## Tier 3 — standard library breadth
 
 **The mechanism is decided and shipped** (docs/STD.md): std modules
-are Luce source embedded in the compiler, resolved before the file
-loader — `import math` and `import files` lead the way.  What remains
+are Luce source embedded in the compiler under a reserved `std.`
+namespace — `import std.math` and `import std.files` lead the way.  What remains
 is breadth, added module by module:
 
-- **Strings:** ~~moved into std~~ — `import strings` now owns all
+- **Strings:** ~~moved into std~~ — `import std.strings` now owns all
   manipulation in pure Luce (the language keeps only literals,
   f-strings, `+`, comparison, slices, len, byte_at), and shipped
   `find_from`, `count`, `pad_left`/`pad_right`, and
@@ -134,7 +134,7 @@ is breadth, added module by module:
 - **Files & OS:** list directory, delete/rename, append mode,
   binary I/O (needs Bytes), `env(name)`, `exit(code)`, current
   time/clock, `sleep(ms)` (life.luc busy-waits today).
-- **Math:** ~~pow/log/exp/trig, PRNG~~ (shipped in `import math`);
+- **Math:** ~~pow/log/exp/trig, PRNG~~ (shipped in `import std.math`);
   ~~float formatting control~~ (shipped:
   `strings.format_float(x, decimals)`).
 
@@ -183,8 +183,10 @@ Recorded so the absence reads as a choice, not an oversight:
   stepping, no doc generator, no test runner for Luce programs
   themselves (`assert` in main is the current story; a `luce test`
   discovering `func test_*():` would be cheap and very Zig).
-- **Module ecosystem:** imports resolve as sibling files only — no
-  paths, no packages, no versioning, no std namespace (see Tier 3).
+- **Module ecosystem:** ~~no std namespace~~ — shipped: `import
+  std.NAME` is the library, `import NAME` is the sibling file, and
+  the two cannot collide (docs/STD.md).  Still missing: paths,
+  packages, versioning.
 
 ## Tier 6 — the OS beyond the language (V2.md's horizon)
 

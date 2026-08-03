@@ -4,12 +4,12 @@
 #
 # Rolls COUNT six-sided dice (default 20) from SEED (default 2026),
 # prints the rolls and a histogram, and writes the rolls to
-# dice_rolls.txt — a small showcase of `import math` (deterministic
-# randomness, no globals) and `import files`.
+# dice_rolls.txt — a small showcase of `import std.math` (deterministic
+# randomness, no globals) and `import std.files`.
 
-import math
-import files
-import strings
+import std.math
+import std.files
+import std.strings
 
 func bar(count: Int) -> String:
     return "#".repeat(count)

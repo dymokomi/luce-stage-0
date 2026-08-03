@@ -240,9 +240,13 @@ pub const FuncDecl = struct {
     span: Span,
 };
 
-/// import name — binds the sibling file name.luc as a namespace.
+/// An import, in either namespace: `import geo` binds the sibling
+/// file geo.luc, `import std.math` binds the standard library's math.
+/// `name` is the module's name and the namespace it takes at the call
+/// site both — the two spellings differ only in `origin`.
 pub const Import = struct {
     name: []const u8,
+    origin: source_mod.Origin,
     span: Span,
 };
 

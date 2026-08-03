@@ -134,6 +134,72 @@ Scalars are generated inline: checked integer arithmetic, comparison,
 branches, calls.  Everything below the instruction level is a call
 into `libluce_rt`.
 
+## What the module tells LLVM about the runtime
+
+Every one of those calls used to be declared bare —
+`declare i32 @luce_rt_len(ptr, ptr, ptr)` — which is the most
+pessimistic thing LLVM can be handed: reads and writes all memory, may
+unwind, may never come back.  `08_llvm/runtime_effects.zig` is the
+one place
+that says otherwise, with one arm per entry point and no `else`, so a
+new runtime call is a compile error there rather than a declaration
+that quietly goes out bare.
+
+Three claims, each justified from the body of the corresponding export:
+
+- **`nounwind`** — `libluce_rt` is Zig; a Luce trap is the `i32` a
+  fallible call returns, not an unwind.
+- **`willreturn`** — every export terminates, and a trap returns rather
+  than jumping.
+- **`memory(...)`** — per function.  `argmem` is what a pointer
+  argument reaches: the `*Runtime`'s trap slot and counters, a borrowed
+  `*const Value`, an out-parameter.  `inaccessiblemem` is the object
+  table, the container storage, and the value arena, none of which
+  generated code can reach — it holds objects as `i32` handles and
+  Strings as `{ptr, len}` pairs it never loads through, and the only
+  memory it ever *writes* is its own `alloca`s.  That separation is
+  what distinguishes a reader (`luce_rt_len` —
+  `memory(argmem: readwrite, inaccessiblemem: read)`) from a mutator
+  (`luce_rt_append` — `readwrite` on both).
+
+`luce_rt_report` is the one export that promises nothing: it hands
+control to the host's trap callback, and a host is anybody's code.
+`luce_rt_raise`, `luce_rt_unwound`, and `luce_rt_exhaust` are `cold`,
+so the blocks that call them sink out of the straight-line path.
+
+Arguments carry what is true of them at *every* call site, which is the
+bar for an attribute on a shared declaration: a boxed `Value` is
+`readonly nocapture nonnull noundef align 8 dereferenceable(24)`
+because it is always an entry-block `alloca`; an out-parameter is the
+same with `writeonly`; bytes that came from a *host* service get
+`readonly nocapture` and nothing more, because the host fills those
+slots and a host is not ours to promise for.  Two pointers the runtime
+*keeps* — a trap's message and the function table — are deliberately
+not `nocapture`.
+
+A generated Luce function makes the matching promises about its own
+hidden arguments: `%host` is `readonly nocapture nonnull noundef align
+8 dereferenceable(sizeof(LuceHost))` — the service table is a
+`const LuceHost *` for the whole run — `%rt` is `nocapture nonnull`,
+and `%out` is `writeonly nocapture nonnull dereferenceable(n)`.
+
+**Measured, and honest about it:** none of this moves a benchmark
+today.  Interleaved A/B over the whole `bench/` set with the attributes
+on and off lands inside ±0.7% on every program, and the objects have
+identical instruction counts with only prologue scheduling shuffled.
+The reason is in `08_llvm/lower.zig`: a value crosses into the runtime
+through a fresh 24-byte `alloca` that is *refilled at every use*, so a
+loop that reads `xs[i]` restores the same three words describing `xs`
+on every iteration.  LLVM cannot hoist a store to memory whose address
+is passed to a call — LICM's promotion needs every use of the pointer
+to be a load or a store — so the loop-invariant box keeps the call
+pinned inside the loop no matter how precisely the call is described.
+The second barrier is `*Runtime` itself: every export can write the
+trap slot through it, so no runtime call can be hoisted past another
+one.  These attributes are the half of the fix that has to be in place
+before the other half — generating the hot container operations inline,
+so no box is built at all — can pay.
+
 ## `libluce_rt`
 
 `src/luce/runtime.zig` plus

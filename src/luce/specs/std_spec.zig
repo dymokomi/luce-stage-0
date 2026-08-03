@@ -20,7 +20,7 @@ fn expectOk(source: []const u8) !void {
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected compile error:\n{s}", .{rendered});
             return error.TestUnexpectedResult;
@@ -67,7 +67,7 @@ fn expectTrap(source: []const u8, code: @import("../06_mir.zig").TrapCode) !void
 
 test "math: constants and round" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    assert(abs(math.pi - 3.14159265358979) < 0.000000000001)
@@ -84,7 +84,7 @@ test "math: constants and round" {
 
 test "math: exp and ln are accurate and inverse" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
         \\    return abs(a - b) < 0.000000001
@@ -106,7 +106,7 @@ test "math: exp and ln are accurate and inverse" {
 
 test "math: ln of a non-positive number traps" {
     try expectTrap(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var x = 0.0
@@ -117,7 +117,7 @@ test "math: ln of a non-positive number traps" {
 
 test "math: pow covers the sign and zero cases" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
         \\    return abs(a - b) < 0.000000001
@@ -134,7 +134,7 @@ test "math: pow covers the sign and zero cases" {
         \\
     );
     try expectTrap(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var half = 0.5
@@ -145,7 +145,7 @@ test "math: pow covers the sign and zero cases" {
 
 test "math: ipow squares its way up and stays checked" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    assert(math.ipow(2, 0) == 1)
@@ -158,7 +158,7 @@ test "math: ipow squares its way up and stays checked" {
     );
     // Past i64 the checked arithmetic traps rather than wrapping.
     try expectTrap(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var exponent = 64
@@ -169,7 +169,7 @@ test "math: ipow squares its way up and stays checked" {
 
 test "math: trig against known values, across periods" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
         \\    return abs(a - b) < 0.0000000001
@@ -192,7 +192,7 @@ test "math: trig against known values, across periods" {
 
 test "math: log2 and log10" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func close(a: Float, b: Float) -> Bool:
         \\    return abs(a - b) < 0.000000001
@@ -208,7 +208,7 @@ test "math: log2 and log10" {
 
 test "math: vector operations compute exactly on exact inputs" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var xs = new Array(Float, 5)
@@ -235,7 +235,7 @@ test "math: vector operations compute exactly on exact inputs" {
 
 test "math: vector operations trap on empty and mismatched shapes" {
     try expectTrap(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var empty = new Array(Float, 0)
@@ -243,7 +243,7 @@ test "math: vector operations trap on empty and mismatched shapes" {
         \\
     , .explicit_trap);
     try expectTrap(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var a = new Array(Float, 2)
@@ -255,7 +255,7 @@ test "math: vector operations trap on empty and mismatched shapes" {
 
 test "math: the generator is deterministic, in range, and covers its die" {
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var rng = math.seed(42)
@@ -278,7 +278,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\
     );
     try expectTrap(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    var rng = math.seed(1)
@@ -293,7 +293,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
 
 test "strings: find, find_from, contains, starts_with, ends_with, count" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let s = "hello world"
@@ -322,7 +322,7 @@ test "strings: find, find_from, contains, starts_with, ends_with, count" {
 
 test "strings: the method sugar routes to the module" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let s = "hello world"
@@ -337,7 +337,7 @@ test "strings: the method sugar routes to the module" {
 
 test "strings: trim, lower, upper keep multibyte characters whole" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    assert(strings.trim("  hi  ") == "hi")
@@ -356,7 +356,7 @@ test "strings: trim, lower, upper keep multibyte characters whole" {
 
 test "strings: replace and repeat" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    assert(strings.replace("a.b.c", ".", "-") == "a-b-c")
@@ -374,7 +374,7 @@ test "strings: replace and repeat" {
 
 test "strings: split keeps empties, whitespace mode drops them, join round-trips" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let csv = strings.split("a;b;;c", ";")
@@ -397,7 +397,7 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
 
 test "strings: pad_left and pad_right" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    assert(strings.pad_left("7", 3) == "  7")
@@ -410,7 +410,7 @@ test "strings: pad_left and pad_right" {
 
 test "strings: format_float rounds half away and carries" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    assert(strings.format_float(2.5, 2) == "2.50")
@@ -426,7 +426,7 @@ test "strings: format_float rounds half away and carries" {
         \\
     );
     try expectTrap(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var decimals = -1
@@ -443,7 +443,7 @@ test "std resolves without any loader, and std names shadow sibling files" {
     // compile() has no loader at all; import math still works — the
     // std library lives in the compiler.
     try expectOk(
-        \\import math
+        \\import std.math
         \\
         \\func main():
         \\    assert(math.ipow(2, 8) == 256)
@@ -453,7 +453,7 @@ test "std resolves without any loader, and std names shadow sibling files" {
 
 test "std modules obey the host gate: files needs a host" {
     var result = try compile_mod.compile(testing.allocator,
-        \\import files
+        \\import std.files
         \\
         \\func main():
         \\    let found = files.exists("x")
@@ -466,7 +466,7 @@ test "std modules obey the host gate: files needs a host" {
     for (0..result.failure.count()) |index| {
         const item = result.failure.at(index).?;
         if (std.mem.eql(u8, item.code, "luce.sema.host")) {
-            try testing.expectEqualStrings("files", item.module);
+            try testing.expectEqualStrings("std/files.luc", result.failure.sources.pathOf(item.file));
             saw_host = true;
         }
     }

@@ -46,6 +46,37 @@
 //! that can be tested directly rather than being spread over a parser
 //! and a type checker.
 //!
+//! ## The one rule this stage must not break
+//!
+//! **Whole-array operations survive HIR and MIR as single nodes.  Never
+//! expand one into a scalar loop.**
+//!
+//! `src/luce/std/math.luc` already speaks BLAS-1 — `sum`, `mean`, `dot`,
+//! `norm`, `variance`, `scale`, `axpy`, `fill`.  Today each is an
+//! ordinary Luce function containing a scalar loop, so by the time MIR
+//! exists the array operation has already been destroyed.  MIR is the
+//! last level at which `map ∘ map` is still a rewritable algebraic
+//! fact; fusing a chain of elementwise operations into one loop nest,
+//! with no intermediate arrays, is a local rewrite there and is
+//! impossible once the loops are written.  Measured on LLVM 22: two
+//! adjacent elementwise loops in separate functions — which is what a
+//! library `map` looks like — are fused by *no* configuration of
+//! `-O3`, and `LoopFusePass` is off by default with an in-tree FIXME
+//! about its place in the pipeline.
+//!
+//! `docs/OWNERSHIP.md` S3 already licenses the elimination: an unbound
+//! temporary dies at the end of its statement, so the intermediates in
+//! `a * b + c` are unnamed, statement-scoped, and unobservable.  The
+//! legal precondition exists; only the representation is missing.
+//!
+//! This matters now, while the stage is unwritten, because it is the
+//! one decision here that cannot be taken back.  Sugar that gets
+//! expanded too early is a refactor.  An array operation expanded into
+//! a scalar loop is information destroyed, and no later pass, second
+//! IR, or dialect recovers it — it forecloses the array-compute and GPU
+//! directions permanently.  Desugar `+=`, `for x in xs`, methods and
+//! f-strings freely; leave whole-array operations whole.
+//!
 //! Until that pass is written, this file stays empty and honest.
 
 test {}

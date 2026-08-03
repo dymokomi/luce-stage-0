@@ -27,7 +27,7 @@ fn expectOk(source: []const u8) !void {
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected compile error:\n{s}", .{rendered});
             return error.TestUnexpectedResult;
@@ -68,7 +68,7 @@ fn expectTrap(source: []const u8, code: mir.TrapCode) !void {
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected compile error (wanted trap {s}):\n{s}", .{ @tagName(code), rendered });
             return error.TestUnexpectedResult;
@@ -138,6 +138,35 @@ test "integers: the i64 range is honored" {
         \\    assert(9223372036854775807 - 1 == 9223372036854775806)
         \\    let low = 0 - 9223372036854775807
         \\    assert(low - 1 < low)
+        \\
+    );
+}
+
+test "integers: Int's minimum is written the way it reads" {
+    // `-9223372036854775808` is a minus and a literal whose magnitude
+    // is one past the largest positive Int.  Range-checking the
+    // magnitude on its own makes the smallest Int the one number
+    // nobody can spell, so the sign folds into the literal first.
+    try expectOk(
+        \\func main():
+        \\    let low = -9223372036854775808
+        \\    assert(low < 0)
+        \\    assert(low + 1 == -9223372036854775807)
+        \\    assert(low == 0 - 9223372036854775807 - 1)
+        \\    let step = -9223372036854775808 / 2
+        \\    assert(step == -4611686018427387904)
+        \\
+    );
+}
+
+test "integers: Int's minimum folds in a file-scope constant too" {
+    try expectOk(
+        \\let low = -9223372036854775808
+        \\let high = 9223372036854775807
+        \\
+        \\func main():
+        \\    assert(low < high)
+        \\    assert(low + high == -1)
         \\
     );
 }
@@ -454,6 +483,49 @@ test "conversions: str, parse, chr, ord" {
     );
 }
 
+test "ord of a literal is a compile-time constant" {
+    // Folding `ord` is what lets the language do without character
+    // literal syntax at all: `byte_at(s, i) == ord("(")` should cost
+    // exactly what `== 40` costs, or nobody will write it.
+    var result = try compile_mod.compile(testing.allocator,
+        \\func main():
+        \\    let text = "(x)"
+        \\    assert(text.byte_at(0) == ord("("))
+        \\
+    , .{}, script);
+    defer result.deinit();
+    try testing.expect(result == .success);
+    for (result.success.functions) |function| {
+        for (function.instructions) |instruction| {
+            if (instruction == .intrinsic and instruction.intrinsic.kind == .ord_text) {
+                std.debug.print("ord survived to run time\n", .{});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "ord folds in a file-scope constant, and an empty one still traps at run time" {
+    try expectOk(
+        \\let open_paren = ord("(")
+        \\let lambda = ord("λ")
+        \\
+        \\func main():
+        \\    assert(open_paren == 40)
+        \\    assert(lambda == 955)
+        \\    assert("(a)".byte_at(0) == open_paren)
+        \\
+    );
+    // A literal with no codepoint is left to the run time, so the
+    // fold cannot quietly change what the program does.
+    try expectTrap(
+        \\func main():
+        \\    var empty = ""
+        \\    assert(ord(empty) == 0)
+        \\
+    , .bad_codepoint);
+}
+
 // ---------------------------------------------------------------------------
 // String interpolation (f-strings)
 // ---------------------------------------------------------------------------
@@ -493,7 +565,7 @@ test "f-strings: empty, no holes, escapes, literal braces, nested strings" {
 
 test "f-strings compose with methods and calls in holes" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func twice(n: Int) -> Int:
         \\    return n * 2
@@ -1056,7 +1128,7 @@ test "the explicit frame stack survives a deep iterative-recursive sum" {
 
 test "strings: find, contains, starts_with, ends_with" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let s = "hello world"
@@ -1075,7 +1147,7 @@ test "strings: find, contains, starts_with, ends_with" {
 
 test "strings: trim, lower, upper, repeat" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    assert("  hi  ".trim() == "hi")
@@ -1092,7 +1164,7 @@ test "strings: trim, lower, upper, repeat" {
 
 test "strings: replace substitutes every occurrence" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    assert("a.b.c".replace(".", "-") == "a-b-c")
@@ -1105,7 +1177,7 @@ test "strings: replace substitutes every occurrence" {
 
 test "strings: split on a separator and split on whitespace" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let a = "1,2,3".split(",")
@@ -1122,7 +1194,7 @@ test "strings: split on a separator and split on whitespace" {
 
 test "strings: join round-trips split" {
     try expectOk(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let parts = "a-b-c".split("-")

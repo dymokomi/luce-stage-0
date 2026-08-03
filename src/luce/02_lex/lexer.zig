@@ -1,13 +1,119 @@
 //! The Luce lexer: bytes to tokens plus indentation structure.
 //!
-//! Indentation defines blocks.  Four-space steps are canonical, tabs
-//! are rejected, and blank or comment-only lines produce no layout
-//! tokens.  Inside parentheses, newlines and indentation are plain
-//! spacing, so calls and expressions may span lines.  The lexer never
-//! fails hard: malformed input becomes diagnostics and the closest
-//! reasonable token stream.
+//! ## Its input is stage 1's prepared text
+//!
+//! `lex()` is not a byte-hygiene gate and does not duplicate one.
+//! Stage 1 (`01_source/encoding.zig`) already decided what a *file*
+//! may be — no BOM, no NUL, no carriage return of any kind, valid
+//! UTF-8, within `max_bytes` — and every path into the compiler goes
+//! through it.  So this file starts from those guarantees rather than
+//! re-checking them: there is no CRLF handling here, no `luce.lex.utf8`
+//! code, and no lone-CR diagnostic, because those states cannot exist
+//! in a prepared buffer.  The precondition is asserted on entry in
+//! Debug builds (`isPrepared`), so a caller that skips stage 1 fails
+//! loudly at the seam instead of quietly getting different answers
+//! from two layers.  Stage 1 owns encoding; stage 2 owns *meaning*.
+//!
+//! What stage 1 deliberately leaves here is everything a *program* can
+//! be wrong about, including bytes that are perfectly valid UTF-8 and
+//! still have no business in source: control characters, form feeds,
+//! Unicode look-alikes, and the bidirectional controls below.
+//!
+//! ## The lexical surface
+//!
+//! * **Numbers** are decimal.  `12`, `1.5`, `1e10`, `1.5e-3`; a `.`
+//!   only starts a fraction when a digit follows, so `1.` is `1` then
+//!   `.`, and a leading `.5` is a `luce.lex.number` diagnostic rather
+//!   than a dot glued to an integer.  A decimal integer may not carry
+//!   a leading zero — `0755` is not octal in Luce and must not be
+//!   allowed to look as though it might be (CPython's rule, for
+//!   CPython's reason).  Hexadecimal, binary, octal and digit
+//!   separators are *not* in the language (docs/MISSING.md tier 2,
+//!   item 13) — writing one is a `luce.lex.number` diagnostic that
+//!   names the reason.  The lexer does not evaluate literals, so range
+//!   is stage 4's call (`luce.sema.literal`).
+//! * **Strings** are `"..."` on one line, with exactly four escapes:
+//!   `\n`, `\t`, `\\`, `\"`.  Anything else after a backslash is a
+//!   `luce.lex.escape` diagnostic.  `f"..."` is scanned whole and
+//!   expanded by the parser.
+//! * **Identifiers** are ASCII: a letter or `_`, then letters, digits
+//!   or `_`.  A stray non-ASCII character is one diagnostic per
+//!   *codepoint*, naming its `U+XXXX` — and for the look-alikes people
+//!   actually paste (curly quotes, en dashes, non-breaking spaces,
+//!   fullwidth punctuation, `≠`), naming the ASCII spelling to use.
+//! * **Bidirectional controls** (U+061C, U+200E/200F, U+202A-U+202E,
+//!   U+2066-U+2069) are refused *everywhere*, including inside strings
+//!   and comments, as `luce.lex.bidi`.  They reorder how a line renders
+//!   without changing what it means, which is exactly the Trojan Source
+//!   attack (CVE-2021-42574): source that reads one way and runs
+//!   another.  A program that genuinely needs one in its text builds it
+//!   with `chr(...)`.
+//! * **Comments** run from `#` to the end of the line; there is no
+//!   block comment form.  A `#!` first line therefore works by
+//!   construction.  `//` and `/* ... */` are each a `luce.lex.comment`
+//!   diagnostic that skips what their author meant to comment out,
+//!   rather than arithmetic that fails three tokens later.
+//! * **Line endings** are LF: stage 1 has already folded CRLF and
+//!   refused a lone CR.
+//! * **Layout** is indentation, and the four-space step is *enforced*,
+//!   not merely canonical: a block opens exactly four columns deeper
+//!   than the one containing it (`luce.lex.indent` otherwise).  Tabs
+//!   are rejected outright — no `TabError`-style "consistent use is
+//!   fine" rule to reason about — and blank or comment-only lines
+//!   produce no layout tokens.  Inside parentheses and brackets,
+//!   newlines and indentation are plain spacing, so calls and
+//!   expressions may span lines.  Nesting is bounded by
+//!   `max_indent_depth`.
+//!
+//! ## The recovery contract
+//!
+//! The lexer never fails hard, and one bad construct must not silence
+//! the rest of the file.  Three rules make that true:
+//!
+//! 1. Every malformed construct is reported and then *skipped* — the
+//!    scanner always advances, so there is no way to loop.
+//! 2. Where a value was clearly intended, a **recovery token** is
+//!    emitted anyway (the leading digits of a bad number, the text of
+//!    an unterminated string, a `'...'` run mistaken for a string), so
+//!    the parser sees one error instead of two.  Recovery tokens only
+//!    ever appear alongside a diagnostic, and a diagnostic means the
+//!    program is rejected before analysis, so their contents are never
+//!    observable in a compiled program — which is why a `string_literal`
+//!    token is allowed to hold text that is not a well-formed string.
+//! 3. Reporting is bounded twice over.  A run of the *same* stray
+//!    character is one message carrying its length, so four thousand
+//!    junk bytes read as one mistake (rustc's `swallow_next_invalid`);
+//!    and whatever survives that is capped at `max_diagnostics`, so a
+//!    megabyte of varied noise is a hundred messages plus one
+//!    `luce.lex.limit`.  Memory use stays proportional to what a human
+//!    can read.
+//!
+//! The codes this stage can produce, in full: `luce.lex.tab`,
+//! `luce.lex.indent`, `luce.lex.number`, `luce.lex.string`,
+//! `luce.lex.escape`, `luce.lex.character`, `luce.lex.comment`,
+//! `luce.lex.bidi`, `luce.lex.limit`.
+//!
+//! ## Deliberately not here
+//!
+//! * **Character literals.**  `'x'` is diagnosed with the two things to
+//!   write instead, and both are live: `ord("x")` folds to a constant
+//!   in stage 4 today, at top level and in expressions, so the
+//!   diagnostic is advice and not an apology.  A payload-free `Token`
+//!   could not carry a decoded codepoint anyway — the syntax could
+//!   never land in this file alone — and with the folding in place
+//!   there is nothing left for it to buy (docs/MISSING.md tier 1,
+//!   item 5).
+//! * **More escapes.**  `\r` and `\u{...}` are both defensible
+//!   additions, and both are *half* in this file: the lexer only
+//!   validates an escape, stage 3's `decodeString` produces the bytes.
+//!   Adding one here without the decoder would silently produce wrong
+//!   text, so the escape set moves as one change across two stages or
+//!   not at all.  `\xNN` is refused permanently for a different
+//!   reason: a raw byte escape can build a String that is not UTF-8,
+//!   and every other layer is allowed to assume it is.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const source_mod = @import("../01_source.zig");
 const token_mod = @import("token.zig");
 const diagnostics_mod = @import("../support/diagnostics.zig");
@@ -20,10 +126,47 @@ const Diagnostics = diagnostics_mod.Diagnostics;
 
 pub const Error = error{OutOfMemory};
 
+/// How much deeper a block sits than the one containing it.  Enforced,
+/// not merely canonical: a language whose blocks *are* their
+/// indentation cannot leave the size of a step to taste, or two files
+/// that look alike mean different things.  Tabs are already refused
+/// outright, so this is the last freedom that could make a column
+/// ambiguous, and it costs one comparison to close.
+const indent_step = 4;
+
+/// What one rejected tab stands in for while recovering: the next
+/// four-column stop, so a tab-indented file still gets the block
+/// structure its author meant.
+const tab_width = indent_step;
+
+/// How deep blocks may nest.  CPython's `MAXINDENT`, for CPython's
+/// reason: the indent stack is the one piece of lexer state that grows
+/// with the input, and a generated file of ever-deeper lines should
+/// meet a diagnostic rather than an allocator.  A hundred levels is
+/// four hundred columns — far past anything a human writes.
+const max_indent_depth = 100;
+
+/// How many lexical diagnostics one `lex()` call reports before it
+/// falls silent with a single `luce.lex.limit`.  Generous for real
+/// source, tight enough that a file of noise cannot turn into
+/// gigabytes of error text.
+const max_diagnostics = 100;
+
 /// Lex the whole buffer.  The returned tokens borrow nothing; the
 /// caller owns the slice.  Malformed input is reported through the
 /// diagnostics and skipped.
+///
+/// **Precondition:** `source` is stage 1's prepared text — valid
+/// UTF-8, LF line endings, no lone carriage return, no NUL, no leading
+/// byte-order mark (`01_source.prepare`).  Every path into the
+/// compiler passes through that gate, and this stage is written to its
+/// guarantees rather than re-deciding them; Debug builds check the
+/// precondition here so a caller that skips stage 1 fails at the seam.
 pub fn lex(allocator: Allocator, source: []const u8, diagnostics: *Diagnostics) Error![]Token {
+    if (builtin.mode == .Debug and !isPrepared(source)) std.debug.panic(
+        "lex() was handed raw bytes: its input must come from 01_source.prepare",
+        .{},
+    );
     var lexer: Lexer = .{
         .allocator = allocator,
         .source = source,
@@ -35,15 +178,46 @@ pub fn lex(allocator: Allocator, source: []const u8, diagnostics: *Diagnostics) 
     return lexer.tokens.toOwnedSlice(allocator);
 }
 
+/// Whether `source` satisfies `lex()`'s precondition.  Only Debug
+/// builds pay for this: it is a second pass over the input, and its
+/// job is to catch a *programming* mistake — a caller that bypassed
+/// stage 1 — not to handle a bad file, which stage 1 already does with
+/// a diagnostic.
+pub fn isPrepared(source: []const u8) bool {
+    if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) return false;
+    var offset: usize = 0;
+    while (offset < source.len) {
+        const first = source[offset];
+        if (first == 0 or first == '\r') return false;
+        if (first < 0x80) {
+            offset += 1;
+            continue;
+        }
+        const length = std.unicode.utf8ByteSequenceLength(first) catch return false;
+        if (offset + length > source.len) return false;
+        _ = std.unicode.utf8Decode(source[offset..][0..length]) catch return false;
+        offset += length;
+    }
+    return true;
+}
+
 const Lexer = struct {
     allocator: Allocator,
     source: []const u8,
     diagnostics: *Diagnostics,
     tokens: std.ArrayList(Token) = .empty,
+    /// The open indentation columns, innermost last; always starts
+    /// with 0, so it is never empty.
     indents: std.ArrayList(usize) = .empty,
     offset: usize = 0,
+    /// Open `(` and `[` together: layout is suspended while any are
+    /// open, exactly as in Python.
     paren_depth: usize = 0,
     at_line_start: bool = true,
+    /// Diagnostics this lexer has added, for the `max_diagnostics`
+    /// cap.  Counted here rather than read from `diagnostics`, which
+    /// may already hold other modules' errors.
+    reported: usize = 0,
 
     fn run(self: *Lexer) Error!void {
         try self.indents.append(self.allocator, 0);
@@ -71,46 +245,116 @@ const Lexer = struct {
         return self.tokens.items[self.tokens.items.len - 1].kind;
     }
 
-    // Measure indentation and emit indent/dedent when it changes.
-    // Blank and comment-only lines are layout-free.
+    // -----------------------------------------------------------------
+    // Diagnostics
+    // -----------------------------------------------------------------
+
+    /// Add one lexical diagnostic, honoring the report cap.  Every
+    /// diagnostic in this file goes through here; the scanner keeps
+    /// running either way, so the token stream never depends on how
+    /// many errors came before.
+    fn report(
+        self: *Lexer,
+        code: []const u8,
+        span: Span,
+        comptime format: []const u8,
+        arguments: anytype,
+    ) Error!void {
+        if (self.reported > max_diagnostics) return;
+        if (self.reported == max_diagnostics) {
+            self.reported += 1;
+            try self.diagnostics.add(
+                "luce.lex.limit",
+                span,
+                "too many lexical errors; only the first {d} are reported",
+                .{max_diagnostics},
+            );
+            return;
+        }
+        self.reported += 1;
+        try self.diagnostics.add(code, span, format, arguments);
+    }
+
+    // -----------------------------------------------------------------
+    // Layout
+    // -----------------------------------------------------------------
+
+    /// Whether the line ends at `at`.  Stage 1 folded CRLF, so there
+    /// is exactly one line terminator to know about.
+    fn atLineBreak(self: *const Lexer, at: usize) bool {
+        return at < self.source.len and self.source[at] == '\n';
+    }
+
+    /// Measure indentation and emit indent/dedent when it changes.
+    /// Blank and comment-only lines are layout-free.
     fn lineStart(self: *Lexer) Error!void {
         const line_begin = self.offset;
         var width: usize = 0;
+        var tab_begin: ?usize = null;
+        var tab_end: usize = 0;
         while (self.offset < self.source.len) {
             const character = self.source[self.offset];
             if (character == ' ') {
                 width += 1;
                 self.offset += 1;
             } else if (character == '\t') {
-                try self.diagnostics.add(
-                    "luce.lex.tab",
-                    .{ .start = self.offset, .end = self.offset + 1 },
-                    "tabs are not allowed; indent with four spaces",
-                    .{},
-                );
+                if (tab_begin == null) tab_begin = self.offset;
                 self.offset += 1;
-            } else {
-                break;
-            }
+                tab_end = self.offset;
+                // Recovery: a rejected tab still stands for the next
+                // four-column stop, so a tab-indented file gets the
+                // block structure its author meant and one error per
+                // line rather than a cascade of parse failures.
+                width = (width / tab_width + 1) * tab_width;
+            } else break;
+        }
+        // One diagnostic per line, however many tabs it used.
+        if (tab_begin) |begin| {
+            try self.report(
+                "luce.lex.tab",
+                .{ .start = begin, .end = tab_end },
+                "tabs are not allowed; indent with four spaces",
+                .{},
+            );
         }
         if (self.offset >= self.source.len) return;
 
-        const character = self.source[self.offset];
-        if (character == '\n') {
+        if (self.atLineBreak(self.offset)) {
             self.offset += 1;
             return; // blank line
         }
-        if (character == '#') {
-            self.skipComment();
-            if (self.offset < self.source.len and self.source[self.offset] == '\n') {
-                self.offset += 1;
-            }
+        if (self.source[self.offset] == '#') {
+            try self.skipComment();
+            if (self.atLineBreak(self.offset)) self.offset += 1;
             return; // comment-only line
         }
 
         const current = self.indents.items[self.indents.items.len - 1];
         const here: Span = .{ .start = line_begin, .end = self.offset };
         if (width > current) {
+            if (self.indents.items.len >= max_indent_depth) {
+                // Refuse to open another block rather than grow the
+                // stack: the line joins the innermost one that is
+                // open, so indents and dedents still balance.
+                try self.report(
+                    "luce.lex.indent",
+                    here,
+                    "blocks may not nest more than {d} deep",
+                    .{max_indent_depth},
+                );
+                self.at_line_start = false;
+                return;
+            }
+            // A tab already explains an odd column; do not say it
+            // twice.  One cause, one diagnostic.
+            if (tab_begin == null and width != current + indent_step) {
+                try self.report(
+                    "luce.lex.indent",
+                    here,
+                    "a block is indented exactly {d} spaces past the one containing it, not {d}",
+                    .{ indent_step, width - current },
+                );
+            }
             try self.indents.append(self.allocator, width);
             try self.emit(.indent, here);
         } else if (width < current) {
@@ -121,7 +365,7 @@ const Lexer = struct {
                 try self.emit(.dedent, here);
             }
             if (self.indents.items[self.indents.items.len - 1] != width) {
-                try self.diagnostics.add(
+                try self.report(
                     "luce.lex.indent",
                     here,
                     "indentation does not match any open block",
@@ -131,6 +375,10 @@ const Lexer = struct {
         }
         self.at_line_start = false;
     }
+
+    // -----------------------------------------------------------------
+    // The scanner
+    // -----------------------------------------------------------------
 
     fn next(self: *Lexer) Error!void {
         const character = self.source[self.offset];
@@ -143,15 +391,17 @@ const Lexer = struct {
         switch (character) {
             ' ' => self.offset += 1,
             '\t' => {
-                try self.diagnostics.add(
+                const begin = self.offset;
+                while (self.offset < self.source.len and self.source[self.offset] == '\t') {
+                    self.offset += 1;
+                }
+                try self.report(
                     "luce.lex.tab",
-                    .{ .start = self.offset, .end = self.offset + 1 },
+                    .{ .start = begin, .end = self.offset },
                     "tabs are not allowed",
                     .{},
                 );
-                self.offset += 1;
             },
-            '\r' => self.offset += 1,
             '\n' => {
                 self.offset += 1;
                 if (self.paren_depth == 0) {
@@ -159,7 +409,7 @@ const Lexer = struct {
                     self.at_line_start = true;
                 }
             },
-            '#' => self.skipComment(),
+            '#' => try self.skipComment(),
             '(' => {
                 self.paren_depth += 1;
                 try self.single(.left_paren);
@@ -178,10 +428,16 @@ const Lexer = struct {
             },
             ',' => try self.single(.comma),
             ':' => try self.single(.colon),
-            '.' => try self.single(.dot),
+            '.' => {
+                // A `.` is followed by a name (member access) or by
+                // nothing in particular; a digit here is only ever the
+                // `.5` mistake, so name it instead of handing the
+                // parser a dot it cannot use.
+                if (isDigit(self.peek(1))) try self.leadingPointNumber() else try self.single(.dot);
+            },
             '+' => try self.maybeAssign(.plus, .plus_assign),
             '*' => try self.maybeAssign(.star, .star_assign),
-            '/' => try self.maybeAssign(.slash, .slash_assign),
+            '/' => try self.foreignComment(),
             '%' => try self.maybeAssign(.percent, .percent_assign),
             '-' => {
                 if (self.peek(1) == '>') {
@@ -204,13 +460,7 @@ const Lexer = struct {
                     try self.emit(.not_equal, .{ .start = self.offset, .end = self.offset + 2 });
                     self.offset += 2;
                 } else {
-                    try self.diagnostics.add(
-                        "luce.lex.character",
-                        .{ .start = self.offset, .end = self.offset + 1 },
-                        "unexpected character '!' (use 'not')",
-                        .{},
-                    );
-                    self.offset += 1;
+                    try self.unexpectedCharacter();
                 }
             },
             '<' => {
@@ -230,20 +480,16 @@ const Lexer = struct {
                 }
             },
             '"' => try self.string(),
+            '\'' => try self.characterLiteral(),
             '0'...'9' => try self.number(),
             'a'...'z', 'A'...'Z', '_' => try self.word(),
-            else => {
-                try self.diagnostics.add(
-                    "luce.lex.character",
-                    .{ .start = self.offset, .end = self.offset + 1 },
-                    "unexpected character",
-                    .{},
-                );
-                self.offset += 1;
-            },
+            else => if (character >= 0x80) try self.foreignCharacter() else try self.unexpectedCharacter(),
         }
     }
 
+    /// The byte `ahead` past the cursor, or 0 at the end of input.
+    /// Zero is a safe sentinel because stage 1 refuses a NUL byte, so
+    /// it can never be a real character.
     fn peek(self: *const Lexer, ahead: usize) u8 {
         if (self.offset + ahead >= self.source.len) return 0;
         return self.source[self.offset + ahead];
@@ -269,38 +515,147 @@ const Lexer = struct {
         try self.tokens.append(self.allocator, .{ .kind = kind, .span = span });
     }
 
-    fn skipComment(self: *Lexer) void {
-        while (self.offset < self.source.len and self.source[self.offset] != '\n') {
-            self.offset += 1;
+    /// Advance to the newline that ends the line, leaving it in place.
+    /// A comment's *meaning* is never inspected, but the two things
+    /// that are wrong wherever they appear still are: a byte with no
+    /// glyph, and a control that reorders how the line renders.  A
+    /// comment is the classic hiding place for both.
+    fn skipComment(self: *Lexer) Error!void {
+        while (self.offset < self.source.len) : (self.offset += 1) {
+            const character = self.source[self.offset];
+            if (character == '\n') return;
+            if (character >= 0x20 and character < 0x7f) continue;
+            try self.checkTextByte(self.offset);
         }
     }
 
+    /// `//` and `/* ... */` are not Luce.  Both are habits from other
+    /// languages that would otherwise lex as arithmetic and fail three
+    /// tokens later, so each gets its own diagnostic and is skipped the
+    /// way its author meant it to be read.
+    fn foreignComment(self: *Lexer) Error!void {
+        const start = self.offset;
+        switch (self.peek(1)) {
+            '/' => {
+                try self.report(
+                    "luce.lex.comment",
+                    .{ .start = start, .end = start + 2 },
+                    "a comment starts with '#'; there is no '//' form",
+                    .{},
+                );
+                try self.skipComment();
+            },
+            '*' => {
+                try self.report(
+                    "luce.lex.comment",
+                    .{ .start = start, .end = start + 2 },
+                    "block comments are not in the language; a comment runs from '#' to the end of the line",
+                    .{},
+                );
+                // Skip what the author meant to comment out, so the
+                // mistake costs one message rather than one per line
+                // of prose inside it.
+                self.offset = if (std.mem.indexOfPos(u8, self.source, start + 2, "*/")) |found|
+                    found + 2
+                else
+                    self.source.len;
+            },
+            else => try self.maybeAssign(.slash, .slash_assign),
+        }
+    }
+
+    /// One byte of literal or comment text.  Two things are wrong
+    /// there no matter what the text says: a raw control byte, which
+    /// is invisible and has an escape if it was meant, and a
+    /// bidirectional control, which makes the line render in an order
+    /// it does not run in.
+    fn checkTextByte(self: *Lexer, at: usize) Error!void {
+        const character = self.source[at];
+        if (character < 0x80) {
+            if (character == '\t') {
+                try self.report(
+                    "luce.lex.tab",
+                    .{ .start = at, .end = at + 1 },
+                    "tabs are not allowed; write \\t for a tab in text",
+                    .{},
+                );
+            } else if (character < 0x20 or character == 0x7f) {
+                try self.report(
+                    "luce.lex.character",
+                    .{ .start = at, .end = at + 1 },
+                    "unexpected control byte 0x{X:0>2}",
+                    .{character},
+                );
+            }
+            return;
+        }
+        if (bidiControlAt(self.source, at)) |codepoint| try self.reportBidi(at, codepoint);
+    }
+
+    /// One `luce.lex.bidi`.  Every bidirectional control is two or
+    /// three bytes, and only U+061C is two.
+    fn reportBidi(self: *Lexer, at: usize, codepoint: u21) Error!void {
+        const length: usize = if (codepoint == 0x061C) 2 else 3;
+        try self.report(
+            "luce.lex.bidi",
+            .{ .start = at, .end = @min(at + length, self.source.len) },
+            "U+{X:0>4} is a bidirectional control: it changes how this line reads without changing what it does; build the character with chr({d}) if text really needs it",
+            .{ codepoint, codepoint },
+        );
+    }
+
+    /// Scan a name: ASCII letters, digits and `_`.
+    ///
+    /// While recovering it also swallows the non-ASCII characters glued
+    /// to them, so `café` is one misspelled name and one diagnostic
+    /// rather than `caf`, a stray character, and whatever the parser
+    /// makes of the pieces (rustc's `InvalidIdent`, for the same
+    /// reason).  The token is emitted either way — the parser should
+    /// see the declaration the author wrote.
     fn word(self: *Lexer) Error!void {
         const start = self.offset;
+        var foreign: ?usize = null;
         while (self.offset < self.source.len) {
             const character = self.source[self.offset];
-            const part = (character >= 'a' and character <= 'z') or
-                (character >= 'A' and character <= 'Z') or
-                (character >= '0' and character <= '9') or character == '_';
-            if (!part) break;
-            self.offset += 1;
+            if (isWordPart(character)) {
+                self.offset += 1;
+                continue;
+            }
+            if (character < 0x80) break; // the ordinary end of a name
+            const length = namePartLength(self.source, self.offset) orelse break;
+            if (foreign == null) foreign = self.offset;
+            self.offset += length;
         }
         const span: Span = .{ .start = start, .end = self.offset };
-        const text = span.slice(self.source);
-        for (token_mod.keywords) |keyword| {
-            if (std.mem.eql(u8, keyword.word, text)) {
-                try self.emit(keyword.kind, span);
-                return;
-            }
+        if (foreign) |at| {
+            const length = namePartLength(self.source, at).?;
+            try self.report(
+                "luce.lex.character",
+                .{ .start = at, .end = at + length },
+                "'{s}' cannot be part of a name; names are ASCII letters, digits and '_'",
+                .{self.source[at..][0..length]},
+            );
+            try self.emit(.identifier, span);
+            return;
         }
-        try self.emit(.identifier, span);
+        const kind = token_mod.keyword_map.get(span.slice(self.source)) orelse .identifier;
+        try self.emit(kind, span);
     }
 
+    // -----------------------------------------------------------------
+    // Numbers
+    // -----------------------------------------------------------------
+
+    /// Scan a decimal literal.  On a malformed one — a radix prefix, a
+    /// digit separator, letters glued to the digits — the whole run is
+    /// one diagnostic naming the reason, and the well-formed prefix is
+    /// still emitted so the parser has an operand.
     fn number(self: *Lexer) Error!void {
         const start = self.offset;
         while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
             self.offset += 1;
         }
+        const integer_end = self.offset;
         var is_float = false;
         if (self.offset < self.source.len and self.source[self.offset] == '.' and
             self.offset + 1 < self.source.len and isDigit(self.source[self.offset + 1]))
@@ -311,94 +666,134 @@ const Lexer = struct {
                 self.offset += 1;
             }
         }
-        if (self.offset < self.source.len and
-            (self.source[self.offset] == 'e' or self.source[self.offset] == 'E'))
-        {
-            var look = self.offset + 1;
-            if (look < self.source.len and
-                (self.source[look] == '+' or self.source[look] == '-'))
-            {
-                look += 1;
-            }
-            if (look < self.source.len and isDigit(self.source[look])) {
-                is_float = true;
-                self.offset = look;
-                while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
-                    self.offset += 1;
-                }
-            }
-        }
+        const before_exponent = self.offset;
+        self.scanExponent();
+        if (self.offset != before_exponent) is_float = true;
         const span: Span = .{ .start = start, .end = self.offset };
-        // A digit run immediately followed by identifier characters is
-        // one malformed literal, not two tokens.
-        if (self.offset < self.source.len) {
-            const following = self.source[self.offset];
-            if ((following >= 'a' and following <= 'z') or
-                (following >= 'A' and following <= 'Z') or following == '_')
-            {
-                while (self.offset < self.source.len and
-                    ((self.source[self.offset] >= 'a' and self.source[self.offset] <= 'z') or
-                        (self.source[self.offset] >= 'A' and self.source[self.offset] <= 'Z') or
-                        (self.source[self.offset] >= '0' and self.source[self.offset] <= '9') or
-                        self.source[self.offset] == '_'))
-                {
-                    self.offset += 1;
-                }
-                try self.diagnostics.add(
-                    "luce.lex.number",
-                    .{ .start = start, .end = self.offset },
-                    "malformed numeric literal",
-                    .{},
-                );
-                return;
+
+        // A literal glued to identifier characters is one malformed
+        // number, not a number and a word.
+        if (self.offset < self.source.len and isWordStart(self.source[self.offset])) {
+            while (self.offset < self.source.len and isWordPart(self.source[self.offset])) {
+                self.offset += 1;
             }
+            const whole: Span = .{ .start = start, .end = self.offset };
+            try self.report(
+                "luce.lex.number",
+                whole,
+                "malformed numeric literal: {s}",
+                .{numberProblem(whole.slice(self.source))},
+            );
+        } else if (!is_float and integer_end - start >= 2 and self.source[start] == '0') {
+            // `0755` means seven hundred and fifty-five here and four
+            // hundred and ninety-three in C.  Luce has no octal
+            // literals at all, so the only thing a leading zero can do
+            // is mislead — CPython refuses it for exactly this reason,
+            // and points at the zeros rather than the whole literal.
+            var zeros_end = start;
+            while (zeros_end < integer_end and self.source[zeros_end] == '0') zeros_end += 1;
+            try self.report(
+                "luce.lex.number",
+                .{ .start = start, .end = zeros_end },
+                "a decimal integer may not start with a zero; there are no octal literals in Luce, so write {s}",
+                .{self.source[zeros_end..integer_end]},
+            );
         }
         try self.emit(if (is_float) .float_literal else .int_literal, span);
     }
 
+    /// `.5` — a fraction with nothing in front of it.  Report the fix
+    /// and emit the float anyway, so the parser sees the operand the
+    /// author meant rather than a dot it has no rule for.
+    fn leadingPointNumber(self: *Lexer) Error!void {
+        const start = self.offset;
+        self.offset += 1; // the '.'
+        while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
+            self.offset += 1;
+        }
+        self.scanExponent();
+        const span: Span = .{ .start = start, .end = self.offset };
+        try self.report(
+            "luce.lex.number",
+            span,
+            "a float needs a digit before the point; write 0{s}",
+            .{span.slice(self.source)},
+        );
+        try self.emit(.float_literal, span);
+    }
+
+    /// Consume `e`/`E` with an optional sign and at least one digit,
+    /// leaving the cursor alone when there is no well-formed exponent.
+    fn scanExponent(self: *Lexer) void {
+        if (self.offset >= self.source.len) return;
+        if (self.source[self.offset] != 'e' and self.source[self.offset] != 'E') return;
+        var look = self.offset + 1;
+        if (look < self.source.len and (self.source[look] == '+' or self.source[look] == '-')) {
+            look += 1;
+        }
+        if (look >= self.source.len or !isDigit(self.source[look])) return;
+        self.offset = look;
+        while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
+            self.offset += 1;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Strings
+    // -----------------------------------------------------------------
+
+    /// Scan `"..."`.  A string never crosses a line ending — not even
+    /// behind a backslash — so a missing quote costs one line, not the
+    /// rest of the file.
     fn string(self: *Lexer) Error!void {
         const start = self.offset;
         self.offset += 1;
+        var escaped_quote = false;
         while (self.offset < self.source.len) {
             const character = self.source[self.offset];
             if (character == '"') {
                 self.offset += 1;
-                const span: Span = .{ .start = start, .end = self.offset };
-                if (!std.unicode.utf8ValidateSlice(span.slice(self.source))) {
-                    try self.diagnostics.add(
-                        "luce.lex.utf8",
-                        span,
-                        "string is not valid UTF-8",
-                        .{},
-                    );
-                    return;
-                }
-                try self.emit(.string_literal, span);
+                try self.emit(.string_literal, .{ .start = start, .end = self.offset });
                 return;
             }
             if (character == '\n') break;
             if (character == '\\') {
                 self.offset += 1;
-                if (self.offset < self.source.len) {
-                    switch (self.source[self.offset]) {
-                        'n', 't', '\\', '"' => {},
-                        else => try self.diagnostics.add(
-                            "luce.lex.escape",
-                            .{ .start = self.offset - 1, .end = self.offset + 1 },
-                            "unknown escape (use \\n, \\t, \\\\, or \\\")",
-                            .{},
-                        ),
-                    }
+                if (self.offset >= self.source.len) break;
+                if (self.source[self.offset] == '\n') break;
+                switch (self.source[self.offset]) {
+                    'n', 't', '\\' => {},
+                    '"' => escaped_quote = true,
+                    else => try self.report(
+                        "luce.lex.escape",
+                        .{ .start = self.offset - 1, .end = self.offset + 1 },
+                        "unknown escape (use \\n, \\t, \\\\, or \\\")",
+                        .{},
+                    ),
                 }
+                self.offset += 1;
+                continue;
             }
+            try self.checkTextByte(self.offset);
             self.offset += 1;
         }
-        try self.diagnostics.add(
-            "luce.lex.string",
-            .{ .start = start, .end = self.offset },
-            "unterminated string",
-            .{},
-        );
+        const span: Span = .{ .start = start, .end = self.offset };
+        // CPython's touch: when the run contains an escaped quote, the
+        // likeliest mistake is that the quote meant to close it.
+        if (escaped_quote) {
+            try self.report(
+                "luce.lex.string",
+                span,
+                "unterminated string; perhaps you escaped the closing quote?",
+                .{},
+            );
+        } else {
+            try self.report("luce.lex.string", span, "unterminated string", .{});
+        }
+        // Recovery: hand the parser a literal anyway.  It slices the
+        // quotes off, so this needs the opening quote plus one byte to
+        // stay in bounds; a file that ends on a bare `"` gets none.
+        if (span.end - span.start >= 2) try self.emit(.string_literal, span);
     }
 
     /// Scan an f-string to its closing quote and emit one `fstring`
@@ -411,19 +806,20 @@ const Lexer = struct {
         var depth: usize = 0;
         while (self.offset < self.source.len) {
             const character = self.source[self.offset];
+            // An f-string, like a string, lives on one line.
             if (character == '\n') break;
             if (depth == 0) {
                 if (character == '"') {
                     self.offset += 1;
-                    const span: Span = .{ .start = start, .end = self.offset };
-                    if (!std.unicode.utf8ValidateSlice(span.slice(self.source))) {
-                        try self.diagnostics.add("luce.lex.utf8", span, "string is not valid UTF-8", .{});
-                        return;
-                    }
-                    try self.emit(.fstring, span);
+                    try self.emit(.fstring, .{ .start = start, .end = self.offset });
                     return;
                 }
                 if (character == '\\') {
+                    // The escape set is the parser's business; here it
+                    // only matters that a backslash escapes neither the
+                    // end of the line nor the end of the file.
+                    if (self.offset + 1 >= self.source.len) break;
+                    if (self.source[self.offset + 1] == '\n') break;
                     self.offset += 2;
                     continue;
                 }
@@ -434,10 +830,12 @@ const Lexer = struct {
                     }
                     depth = 1;
                 }
+                try self.checkTextByte(self.offset);
                 self.offset += 1;
             } else {
                 // Inside a hole: skip nested strings whole, track brace
-                // nesting.
+                // nesting.  The hole is Luce code, and the parser
+                // re-lexes it, so its bytes are checked there.
                 switch (character) {
                     '"' => self.skipNestedString(),
                     '{' => {
@@ -452,23 +850,27 @@ const Lexer = struct {
                 }
             }
         }
-        try self.diagnostics.add(
-            "luce.lex.string",
-            .{ .start = start, .end = self.offset },
-            "unterminated f-string",
-            .{},
-        );
+        const span: Span = .{ .start = start, .end = self.offset };
+        try self.report("luce.lex.string", span, "unterminated f-string", .{});
+        // Recovery, as for `string()`: the parser slices off `f"` and
+        // the closing quote, so three bytes is the minimum it can hold.
+        if (span.end - span.start >= 3) try self.emit(.fstring, span);
     }
 
     /// Advance past a `"..."` nested inside an f-string hole, honoring
     /// escapes, so its closing quote is not mistaken for the
-    /// f-string's.  Stops at the end of input or a newline.
+    /// f-string's.  Stops at the end of input or of the line.
     fn skipNestedString(self: *Lexer) void {
         self.offset += 1; // opening "
         while (self.offset < self.source.len) {
             const character = self.source[self.offset];
             if (character == '\n') return;
             if (character == '\\') {
+                if (self.offset + 1 >= self.source.len) {
+                    self.offset += 1;
+                    return;
+                }
+                if (self.source[self.offset + 1] == '\n') return;
                 self.offset += 2;
                 continue;
             }
@@ -476,10 +878,264 @@ const Lexer = struct {
             if (character == '"') return;
         }
     }
+
+    // -----------------------------------------------------------------
+    // Rejections
+    // -----------------------------------------------------------------
+
+    /// `'x'` is not Luce, and neither is `'hello'` — the apostrophe
+    /// has no role at all, so a matched pair on one line is read as
+    /// the quoted run its author meant and reported once, with both
+    /// spellings to use instead (docs/MISSING.md tier 1, item 5;
+    /// should character literals ever arrive, this is where they
+    /// land).  The scan stops at anything that starts something else,
+    /// so one stray apostrophe cannot swallow the rest of the line —
+    /// rustc's `single_quoted_string` guards the same way.
+    fn characterLiteral(self: *Lexer) Error!void {
+        const start = self.offset;
+        var scan = self.offset + 1;
+        while (scan < self.source.len) : (scan += 1) {
+            const character = self.source[scan];
+            if (character == '\n' or character == '"' or character == '#') break;
+            if (character != '\'') continue;
+            self.offset = scan + 1;
+            const span: Span = .{ .start = start, .end = self.offset };
+            try self.report(
+                "luce.lex.character",
+                span,
+                "single quotes do not delimit anything in Luce; write \"...\" for text, or ord(\"x\") for a codepoint",
+                .{},
+            );
+            // Recovery: the parser strips the outer byte from each end
+            // and decodes what is between, which is exactly the text
+            // meant here.  A recovery token is only ever seen next to
+            // a diagnostic, so a `string_literal` spanning `'...'` is
+            // never observable in a compiled program.
+            try self.emit(.string_literal, span);
+            return;
+        }
+        try self.unexpectedCharacter();
+    }
+
+    /// Report one ASCII character the language has no use for, and step
+    /// past it.  A run of the *same* character is one mistake and one
+    /// diagnostic (rustc's `swallow_next_invalid`): a file of noise
+    /// should read as a file of noise, not as four thousand messages.
+    fn unexpectedCharacter(self: *Lexer) Error!void {
+        const first = self.source[self.offset];
+        const begin = self.offset;
+        while (self.offset < self.source.len and self.source[self.offset] == first) {
+            self.offset += 1;
+        }
+        const span: Span = .{ .start = begin, .end = self.offset };
+        var count_text: [40]u8 = undefined;
+        const repeated: []const u8 = if (self.offset - begin == 1) "" else std.fmt.bufPrint(
+            &count_text,
+            ", repeated {d} times",
+            .{self.offset - begin},
+        ) catch "";
+        if (first < 0x20 or first == 0x7f) {
+            try self.report(
+                "luce.lex.character",
+                span,
+                "unexpected control byte 0x{X:0>2}{s}",
+                .{ first, repeated },
+            );
+        } else if (hintFor(first)) |hint| {
+            try self.report(
+                "luce.lex.character",
+                span,
+                "unexpected character '{c}' ({s}){s}",
+                .{ first, hint, repeated },
+            );
+        } else {
+            try self.report(
+                "luce.lex.character",
+                span,
+                "unexpected character '{c}'{s}",
+                .{ first, repeated },
+            );
+        }
+    }
+
+    /// A non-ASCII character outside a name.  Three kinds turn up in
+    /// real files and each gets its own answer: a bidirectional
+    /// control, a look-alike that has an ASCII spelling, and a letter
+    /// that was meant as part of a name.
+    fn foreignCharacter(self: *Lexer) Error!void {
+        const at = self.offset;
+        if (bidiControlAt(self.source, at)) |codepoint| {
+            try self.reportBidi(at, codepoint);
+            self.offset += if (codepoint == 0x061C) 2 else 3;
+            return;
+        }
+        const length = codepointLength(self.source, at);
+        const sequence = self.source[at..][0..length];
+        const codepoint = std.unicode.utf8Decode(sequence) catch {
+            // Unreachable on prepared text; costs one branch to keep
+            // the scanner total rather than trusting the precondition
+            // with a pointer.
+            self.offset += 1;
+            return;
+        };
+        // A letter glued to ASCII name characters is a name, not a
+        // stray: let `word()` take the whole run and report once.
+        if (spellingFor(codepoint) == null and self.foreignRunIsName()) return self.word();
+        self.offset += length;
+        if (spellingFor(codepoint)) |spelling| {
+            try self.report(
+                "luce.lex.character",
+                .{ .start = at, .end = self.offset },
+                "unexpected character '{s}' (U+{X:0>4}): {s}",
+                .{ sequence, codepoint, spelling },
+            );
+        } else {
+            try self.report(
+                "luce.lex.character",
+                .{ .start = at, .end = self.offset },
+                "unexpected character '{s}' (U+{X:0>4}); names are ASCII letters, digits and '_'",
+                .{ sequence, codepoint },
+            );
+        }
+    }
+
+    /// Whether the name-shaped run starting at the cursor contains an
+    /// ASCII letter, digit or `_`.  That is what separates `étoile`,
+    /// which is a name someone tried to write, from a lone emoji.
+    fn foreignRunIsName(self: *const Lexer) bool {
+        var scan = self.offset;
+        while (scan < self.source.len) {
+            if (isWordPart(self.source[scan])) return true;
+            scan += namePartLength(self.source, scan) orelse return false;
+        }
+        return false;
+    }
 };
 
 fn isDigit(character: u8) bool {
     return character >= '0' and character <= '9';
+}
+
+fn isWordStart(character: u8) bool {
+    return (character >= 'a' and character <= 'z') or
+        (character >= 'A' and character <= 'Z') or character == '_';
+}
+
+fn isWordPart(character: u8) bool {
+    return isWordStart(character) or isDigit(character);
+}
+
+/// The length of the codepoint starting at `at`.  Prepared text is
+/// valid UTF-8, so the lead byte is enough; the `catch 1` keeps the
+/// scanner advancing if that precondition is ever broken in a build
+/// where it is not checked.
+fn codepointLength(source: []const u8, at: usize) usize {
+    const length = std.unicode.utf8ByteSequenceLength(source[at]) catch return 1;
+    return if (at + length <= source.len) length else 1;
+}
+
+/// The length of a non-ASCII character that may appear inside a name
+/// while recovering, or null when the character at `at` is not one.
+///
+/// Luce names are ASCII, full stop — this is not a Unicode identifier
+/// rule, it is the rule for how far a *mistake* extends.  Everything
+/// non-ASCII counts except what plainly belongs to some other part of
+/// the language: a bidirectional control, and a look-alike with an
+/// ASCII spelling (`é` continues a name; `—` does not).
+fn namePartLength(source: []const u8, at: usize) ?usize {
+    if (at >= source.len or source[at] < 0x80) return null;
+    if (bidiControlAt(source, at) != null) return null;
+    const length = codepointLength(source, at);
+    const codepoint = std.unicode.utf8Decode(source[at..][0..length]) catch return null;
+    if (spellingFor(codepoint) != null) return null;
+    return length;
+}
+
+/// The bidirectional formatting character starting at `at`, or null.
+///
+/// These are the Trojan Source characters (CVE-2021-42574): they
+/// reorder how a line renders without changing what it means, so a
+/// reviewer and a compiler can be shown two different programs.  Every
+/// one of them leads with 0xD8 or 0xE2, so scanning for them costs a
+/// single comparison per byte.
+fn bidiControlAt(source: []const u8, at: usize) ?u21 {
+    const first = source[at];
+    if (first != 0xD8 and first != 0xE2) return null;
+    const length: usize = if (first == 0xD8) 2 else 3;
+    if (at + length > source.len) return null;
+    const codepoint = std.unicode.utf8Decode(source[at..][0..length]) catch return null;
+    return switch (codepoint) {
+        0x061C, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069 => codepoint,
+        else => null,
+    };
+}
+
+/// What to write instead of a non-ASCII character people actually
+/// paste into source, or null when there is nothing useful to say.
+///
+/// Cut down from rustc's confusables table (which comes from
+/// unicode.org's `confusables.txt`) to what a Luce file plausibly
+/// contains: the quotes an editor curls, the dashes a word processor
+/// substitutes, the spaces a web page carries, the operators a
+/// mathematician writes, and the fullwidth forms an input method
+/// leaves behind.  Doubling as the "is this part of a name" test is
+/// deliberate — a character with an ASCII spelling is punctuation
+/// someone meant, not a letter.
+fn spellingFor(codepoint: u21) ?[]const u8 {
+    return switch (codepoint) {
+        0x00A0, 0x1680, 0x2000...0x200A, 0x202F, 0x205F, 0x3000 => "a Unicode space; write an ordinary space",
+        0x00AD, 0x034F, 0x200B...0x200D, 0x2060...0x2064, 0xFEFF => "an invisible character; delete it",
+        0x00AB, 0x00BB, 0x2018...0x201F => "a typographic quote; text is written \"like this\"",
+        0x2010...0x2015, 0x2212 => "write '-'",
+        0x00D7 => "write '*'",
+        0x00F7, 0x2215 => "write '/'",
+        0x2260 => "write '!='",
+        0x2264 => "write '<='",
+        0x2265 => "write '>='",
+        0x2192, 0x21D2, 0x27F6 => "write '->'",
+        0xFF08 => "write '('",
+        0xFF09 => "write ')'",
+        0xFF0B => "write '+'",
+        0xFF0C, 0x3001 => "write ','",
+        0xFF1A => "write ':'",
+        0xFF1D => "write '='",
+        0x3002 => "write '.'",
+        else => null,
+    };
+}
+
+/// Why a digit run followed by identifier characters is not a number.
+/// The reason is the whole value of the diagnostic: `0xFF` and `12ab`
+/// are different mistakes with different fixes.
+fn numberProblem(text: []const u8) []const u8 {
+    if (text.len >= 2 and text[0] == '0') {
+        switch (text[1]) {
+            'x', 'X' => return "hexadecimal literals are not in the language; write the value in decimal",
+            'b', 'B' => return "binary literals are not in the language; write the value in decimal",
+            'o', 'O' => return "octal literals are not in the language; write the value in decimal",
+            else => {},
+        }
+    }
+    if (std.mem.indexOfScalar(u8, text, '_') != null) {
+        return "digit separators are not in the language";
+    }
+    const last = text[text.len - 1];
+    if (last == 'e' or last == 'E') return "an exponent needs at least one digit";
+    return "a number cannot be followed by letters";
+}
+
+/// A short "here is the Luce way" note for the punctuation people
+/// reach for out of habit.  Null when there is nothing useful to add.
+fn hintFor(character: u8) ?[]const u8 {
+    return switch (character) {
+        '!' => "use 'not'; '!=' is inequality",
+        ';' => "a statement ends at the line, not at a ';'",
+        '{', '}' => "blocks are indentation; braces belong to f-strings",
+        '&', '|', '^', '~' => "there are no bitwise operators",
+        '\'' => "strings are written with double quotes",
+        '\\' => "a backslash only escapes inside a string",
+        else => null,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +1154,28 @@ fn lexKinds(allocator: Allocator, text: []const u8, expected: []const Kind) !voi
     defer kinds.deinit(allocator);
     for (tokens) |item| try kinds.append(allocator, item.kind);
     try testing.expectEqualSlices(Kind, expected, kinds.items);
+}
+
+/// Lex `text` and assert the kinds *and* that each listed diagnostic
+/// code appears, in order, with nothing else reported.
+fn lexWithDiagnostics(
+    allocator: Allocator,
+    text: []const u8,
+    expected: []const Kind,
+    codes: []const []const u8,
+) !void {
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, text, &diagnostics);
+    defer allocator.free(tokens);
+    var kinds: std.ArrayList(Kind) = .empty;
+    defer kinds.deinit(allocator);
+    for (tokens) |item| try kinds.append(allocator, item.kind);
+    try testing.expectEqualSlices(Kind, expected, kinds.items);
+    try testing.expectEqual(codes.len, diagnostics.count());
+    for (codes, 0..) |code, index| {
+        try testing.expectEqualStrings(code, diagnostics.at(index).?.code);
+    }
 }
 
 test "lexer produces layout tokens for indented blocks" {
@@ -558,6 +1236,419 @@ test "tabs, bad indentation, and unterminated strings diagnose" {
     try testing.expect(diagnostics.count() >= 2);
 }
 
+test "every keyword lexes as itself, and a word containing one does not" {
+    const allocator = testing.allocator;
+    for (token_mod.keywords) |keyword| {
+        try lexKinds(allocator, keyword.word, &.{ keyword.kind, .newline, .end_of_file });
+        var text: [64]u8 = undefined;
+        const glued = try std.fmt.bufPrint(&text, "{s}_x", .{keyword.word});
+        try lexKinds(allocator, glued, &.{ .identifier, .newline, .end_of_file });
+    }
+}
+
+// --- numbers ---------------------------------------------------------------
+
+test "every decimal literal shape lexes, and only a fraction makes a float" {
+    try lexKinds(testing.allocator, "a = 0\n", &.{ .identifier, .assign, .int_literal, .newline, .end_of_file });
+    try lexKinds(testing.allocator, "a = 1.5\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
+    try lexKinds(testing.allocator, "a = 1e10\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
+    try lexKinds(testing.allocator, "a = 1E+10\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
+    try lexKinds(testing.allocator, "a = 1.5e-3\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
+    // A dot with no digit after it is a dot, not a fraction.
+    try lexKinds(testing.allocator, "a = 1.b\n", &.{
+        .identifier, .assign, .int_literal, .dot, .identifier, .newline, .end_of_file,
+    });
+}
+
+test "an unsupported literal base names itself and still yields an operand" {
+    const allocator = testing.allocator;
+    const shapes = [_][]const u8{ "0xFF", "0b1010", "0o17", "1_000", "1e" };
+    for (shapes) |shape| {
+        var text: [32]u8 = undefined;
+        const source = try std.fmt.bufPrint(&text, "a = {s}\n", .{shape});
+        try lexWithDiagnostics(
+            allocator,
+            source,
+            &.{ .identifier, .assign, .int_literal, .newline, .end_of_file },
+            &.{"luce.lex.number"},
+        );
+    }
+}
+
+test "a malformed literal names the reason it is malformed" {
+    try testing.expectEqualStrings(
+        "hexadecimal literals are not in the language; write the value in decimal",
+        numberProblem("0xFF"),
+    );
+    try testing.expectEqualStrings("digit separators are not in the language", numberProblem("1_000"));
+    try testing.expectEqualStrings("an exponent needs at least one digit", numberProblem("1e"));
+    try testing.expectEqualStrings("a number cannot be followed by letters", numberProblem("12ab"));
+}
+
+test "a leading zero in a decimal integer is refused, and only there" {
+    // `0755` is 493 in C and 755 here; the gap between those is the
+    // whole reason for the rule.
+    for ([_][]const u8{ "007", "00", "0755" }) |shape| {
+        var text: [32]u8 = undefined;
+        const source = try std.fmt.bufPrint(&text, "a = {s}\n", .{shape});
+        try lexWithDiagnostics(
+            testing.allocator,
+            source,
+            &.{ .identifier, .assign, .int_literal, .newline, .end_of_file },
+            &.{"luce.lex.number"},
+        );
+    }
+    // Zero itself, and a zero that is only the start of a float, are
+    // exactly what people write.
+    try lexKinds(testing.allocator, "a = 0\n", &.{ .identifier, .assign, .int_literal, .newline, .end_of_file });
+    try lexKinds(testing.allocator, "a = 0.5\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
+    try lexKinds(testing.allocator, "a = 0e1\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
+    // The base prefixes keep their own, better message.
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, "a = 0xFF\n", &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "hexadecimal") != null);
+}
+
+test "a fraction with no integer part names the fix and still yields an operand" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = .5\n",
+        &.{ .identifier, .assign, .float_literal, .newline, .end_of_file },
+        &.{"luce.lex.number"},
+    );
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, "a = .5e2\n", &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "write 0.5e2") != null);
+    // Member access is untouched: a dot before a *name* is a dot.
+    try lexKinds(testing.allocator, "a = b.c\n", &.{
+        .identifier, .assign, .identifier, .dot, .identifier, .newline, .end_of_file,
+    });
+}
+
+test "a malformed float keeps its well-formed prefix as the operand" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = 1.5abc\n",
+        &.{ .identifier, .assign, .float_literal, .newline, .end_of_file },
+        &.{"luce.lex.number"},
+    );
+}
+
+// --- strings ---------------------------------------------------------------
+
+test "the four escapes are accepted and every other one is reported" {
+    try lexKinds(testing.allocator, "a = \"\\n\\t\\\\\\\"\"\n", &.{
+        .identifier, .assign, .string_literal, .newline, .end_of_file,
+    });
+    for ([_][]const u8{ "\\r", "\\0", "\\x41", "\\u{41}", "\\q" }) |escape| {
+        var text: [32]u8 = undefined;
+        const source = try std.fmt.bufPrint(&text, "a = \"{s}\"\n", .{escape});
+        var diagnostics = Diagnostics.init(testing.allocator);
+        defer diagnostics.deinit();
+        const tokens = try lex(testing.allocator, source, &diagnostics);
+        defer testing.allocator.free(tokens);
+        try testing.expect(diagnostics.count() >= 1);
+        try testing.expectEqualStrings("luce.lex.escape", diagnostics.at(0).?.code);
+    }
+}
+
+test "a string never crosses a line, not even behind a backslash" {
+    // The trailing backslash must not swallow the newline and let the
+    // literal run on into the next line's quote.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = \"one\\\nb = \"two\"\n",
+        &.{
+            .identifier,  .assign, .string_literal, .newline,
+            .identifier,  .assign, .string_literal, .newline,
+            .end_of_file,
+        },
+        &.{"luce.lex.string"},
+    );
+}
+
+test "an unterminated string reports once and still yields an operand" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = \"open\nb = 1\n",
+        &.{
+            .identifier, .assign,      .string_literal, .newline,     .identifier,
+            .assign,     .int_literal, .newline,        .end_of_file,
+        },
+        &.{"luce.lex.string"},
+    );
+}
+
+test "a lone opening quote at end of input yields no unsliceable token" {
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, "a = \"", &diagnostics);
+    defer allocator.free(tokens);
+    for (tokens) |item| {
+        if (item.kind == .string_literal) try testing.expect(item.span.end - item.span.start >= 2);
+        if (item.kind == .fstring) try testing.expect(item.span.end - item.span.start >= 3);
+    }
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+}
+
+test "f-strings scan holes, nested strings, and doubled braces whole" {
+    try lexKinds(testing.allocator, "a = f\"x{m[\"k\"]}y{{z}}\"\n", &.{
+        .identifier, .assign, .fstring, .newline, .end_of_file,
+    });
+}
+
+test "an unterminated f-string stops at the line and still yields an operand" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = f\"x{y\nb = 1\n",
+        &.{
+            .identifier, .assign,      .fstring, .newline,     .identifier,
+            .assign,     .int_literal, .newline, .end_of_file,
+        },
+        &.{"luce.lex.string"},
+    );
+}
+
+// --- layout ----------------------------------------------------------------
+
+test "a backslash at the very end of input cannot run a span past the source" {
+    const allocator = testing.allocator;
+    for ([_][]const u8{ "a = f\"x\\", "a = f\"{\"y\\", "a = \"x\\" }) |source| {
+        var diagnostics = Diagnostics.init(allocator);
+        defer diagnostics.deinit();
+        const tokens = try lex(allocator, source, &diagnostics);
+        defer allocator.free(tokens);
+        for (tokens) |item| try testing.expect(item.span.end <= source.len);
+        for (0..diagnostics.count()) |index| {
+            try testing.expect(diagnostics.at(index).?.span.end <= source.len);
+        }
+    }
+}
+
+test "a Windows file lexes exactly like a Unix one, because stage 1 prepared it" {
+    // The lexer has no CRLF path at all; this proves it needs none.
+    const allocator = testing.allocator;
+    for ([_][2][]const u8{
+        .{ "func f():\n    a = 1\n\n    b = 2\n", "func f():\r\n    a = 1\r\n\r\n    b = 2\r\n" },
+        .{
+            "func f():\n    a = 1\n    # note\n    b = 2\n",
+            "func f():\r\n    a = 1\r\n    # note\r\n    b = 2\r\n",
+        },
+    }) |pair| {
+        const prepared_crlf = switch (try source_mod.prepare(allocator, pair[1])) {
+            .text => |text| text,
+            .problem => return error.TestUnexpectedResult,
+        };
+        defer allocator.free(prepared_crlf);
+        try testing.expectEqualStrings(pair[0], prepared_crlf);
+
+        var with_lf = Diagnostics.init(allocator);
+        defer with_lf.deinit();
+        const lf = try lex(allocator, pair[0], &with_lf);
+        defer allocator.free(lf);
+
+        var with_crlf = Diagnostics.init(allocator);
+        defer with_crlf.deinit();
+        const crlf = try lex(allocator, prepared_crlf, &with_crlf);
+        defer allocator.free(crlf);
+
+        try testing.expectEqual(@as(usize, 0), with_lf.count());
+        try testing.expectEqual(@as(usize, 0), with_crlf.count());
+        try testing.expectEqual(lf.len, crlf.len);
+        for (lf, crlf) |left, right| try testing.expectEqual(left.kind, right.kind);
+    }
+}
+
+test "isPrepared states the precondition stage 1 guarantees" {
+    try testing.expect(isPrepared("func main():\n    return\n"));
+    try testing.expect(isPrepared(""));
+    try testing.expect(isPrepared("# h\u{00E9}llo \u{2014} ok\n"));
+    // Everything stage 1 refuses or folds.
+    try testing.expect(!isPrepared("a\r\nb"));
+    try testing.expect(!isPrepared("a\rb"));
+    try testing.expect(!isPrepared("a\x00b"));
+    try testing.expect(!isPrepared("\xEF\xBB\xBFa"));
+    try testing.expect(!isPrepared("a\xff\xfe"));
+    try testing.expect(!isPrepared("x\xE2\x82")); // truncated sequence
+}
+
+test "a tab-indented file reports once per line and keeps its block structure" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "func f():\n\t\ta = 1\n\t\tb = 2\n",
+        &.{
+            .keyword_func, .identifier,  .left_paren, .right_paren, .colon,
+            .newline,      .indent,      .identifier, .assign,      .int_literal,
+            .newline,      .identifier,  .assign,     .int_literal, .newline,
+            .dedent,       .end_of_file,
+        },
+        &.{ "luce.lex.tab", "luce.lex.tab" },
+    );
+}
+
+test "a dedent to a column that never opened reports and lands on the nearest" {
+    // Two mistakes here, and each is named: an eight-column step in,
+    // then a landing on a column no block ever opened.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "func f():\n        a = 1\n    b = 2\n",
+        &.{
+            .keyword_func, .identifier,  .left_paren, .right_paren, .colon,
+            .newline,      .indent,      .identifier, .assign,      .int_literal,
+            .newline,      .dedent,      .identifier, .assign,      .int_literal,
+            .newline,      .end_of_file,
+        },
+        &.{ "luce.lex.indent", "luce.lex.indent" },
+    );
+}
+
+test "a file that never dedents still closes every block at end of input" {
+    try lexKinds(testing.allocator, "func f():\n    if a:\n        b = 1", &.{
+        .keyword_func, .identifier, .left_paren, .right_paren, .colon,
+        .newline,      .indent,     .keyword_if, .identifier,  .colon,
+        .newline,      .indent,     .identifier, .assign,      .int_literal,
+        .newline,      .dedent,     .dedent,     .end_of_file,
+    });
+}
+
+test "indentation inside brackets is plain spacing" {
+    try lexKinds(testing.allocator, "a = [\n        1,\n  2,\n]\n", &.{
+        .identifier,  .assign, .left_bracket,  .int_literal, .comma,
+        .int_literal, .comma,  .right_bracket, .newline,     .end_of_file,
+    });
+}
+
+test "empty and whitespace-only inputs produce just end of file" {
+    try lexKinds(testing.allocator, "", &.{.end_of_file});
+    try lexKinds(testing.allocator, "\n\n\n", &.{.end_of_file});
+    try lexKinds(testing.allocator, "    ", &.{.end_of_file});
+    try lexKinds(testing.allocator, "# only a comment", &.{.end_of_file});
+}
+
+// --- rejections ------------------------------------------------------------
+
+test "a non-ASCII character is one diagnostic per codepoint, not per byte" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "let café = 1\n",
+        &.{ .keyword_let, .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.character"},
+    );
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, "a = \u{1F600}\n", &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "\u{1F600}") != null);
+}
+
+test "a quoted run in single quotes is one diagnostic and still an operand" {
+    // Both habits land here: `'x'` from C, `'hello'` from Python.
+    for ([_][]const u8{ "a = '('\n", "a = 'hello'\n", "a = ''\n" }) |source| {
+        try lexWithDiagnostics(
+            testing.allocator,
+            source,
+            &.{ .identifier, .assign, .string_literal, .newline, .end_of_file },
+            &.{"luce.lex.character"},
+        );
+    }
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, "a = '('\n", &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "ord(") != null);
+}
+
+test "a lone apostrophe does not swallow the rest of the line" {
+    // Without a stopping rule the scan would run to the next quote and
+    // take real code with it.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = 'x + \"b\"\n",
+        &.{
+            .identifier,     .assign,  .identifier,  .plus,
+            .string_literal, .newline, .end_of_file,
+        },
+        &.{"luce.lex.character"},
+    );
+}
+
+test "habitual punctuation gets a hint toward the Luce spelling" {
+    const allocator = testing.allocator;
+    for ([_][]const u8{ "a = 1;\n", "a = 1 & 2\n", "a = {1}\n", "a = ! b\n" }) |source| {
+        var diagnostics = Diagnostics.init(allocator);
+        defer diagnostics.deinit();
+        const tokens = try lex(allocator, source, &diagnostics);
+        defer allocator.free(tokens);
+        try testing.expect(diagnostics.count() >= 1);
+        try testing.expectEqualStrings("luce.lex.character", diagnostics.at(0).?.code);
+        try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "(") != null);
+    }
+}
+
+test "several malformed constructs on one line each get their own diagnostic" {
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, "a = 0xFF ; \"open\nb = 1_0 $ 2\nc = 3\n", &diagnostics);
+    defer allocator.free(tokens);
+    var codes: [8][]const u8 = undefined;
+    var found: usize = 0;
+    for (0..diagnostics.count()) |index| {
+        if (found < codes.len) {
+            codes[found] = diagnostics.at(index).?.code;
+            found += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 5), found);
+    try testing.expectEqualStrings("luce.lex.number", codes[0]);
+    try testing.expectEqualStrings("luce.lex.character", codes[1]);
+    try testing.expectEqualStrings("luce.lex.string", codes[2]);
+    try testing.expectEqualStrings("luce.lex.number", codes[3]);
+    try testing.expectEqualStrings("luce.lex.character", codes[4]);
+    // The last, well-formed line still lexes.
+    try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
+}
+
+test "a run of one stray character is one mistake, not four thousand" {
+    const allocator = testing.allocator;
+    var noise: [4096]u8 = undefined;
+    @memset(&noise, '$');
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, &noise, &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "4096 times") != null);
+    try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
+}
+
+test "reporting is capped so a file of noise cannot flood the diagnostics" {
+    const allocator = testing.allocator;
+    // Alternating characters defeat run-coalescing, so this is the
+    // shape the cap actually has to hold.
+    var noise: [4096]u8 = undefined;
+    for (&noise, 0..) |*byte, index| byte.* = if (index % 2 == 0) '$' else '`';
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, &noise, &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expectEqual(max_diagnostics + 1, diagnostics.count());
+    try testing.expectEqualStrings("luce.lex.limit", diagnostics.at(max_diagnostics).?.code);
+    // Lexing itself continued: the stream is still complete.
+    try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
+}
+
 test "arbitrary bytes never crash the lexer" {
     const allocator = testing.allocator;
     var noise: [512]u8 = undefined;
@@ -568,24 +1659,306 @@ test "arbitrary bytes never crash the lexer" {
     }
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, &noise, &diagnostics);
+    const tokens = try lex(allocator, prepareInPlace(&noise), &diagnostics);
     defer allocator.free(tokens);
     try testing.expect(tokens.len >= 1);
     try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
 }
 
-// Property fuzzing (Zig's tokenizer does exactly this in
-// std/zig/tokenizer.zig): on Smith-generated bytes, assert the
-// lexer's invariants rather than a fixed token list.  Under `zig
-// build test` this runs the corpus plus one empty input — cheap and
-// deterministic; `zig build test --fuzz` explores from the corpus.
-test "fuzz: the lexer upholds its span invariants on any bytes" {
+test "pathological inputs stay linear and terminate" {
+    const allocator = testing.allocator;
+    // One very long line, deep bracket nesting, and a staircase of
+    // ever-deeper indentation: each is a shape that a naive scanner
+    // or an unbounded indent stack turns quadratic.
+    var long_line: std.ArrayList(u8) = .empty;
+    defer long_line.deinit(allocator);
+    try long_line.appendNTimes(allocator, 'a', 200_000);
+    var brackets: std.ArrayList(u8) = .empty;
+    defer brackets.deinit(allocator);
+    try brackets.appendNTimes(allocator, '(', 50_000);
+    var staircase: std.ArrayList(u8) = .empty;
+    defer staircase.deinit(allocator);
+    for (0..2_000) |line| {
+        try staircase.appendNTimes(allocator, ' ', line);
+        try staircase.appendSlice(allocator, "a\n");
+    }
+    for ([_][]const u8{ long_line.items, brackets.items, staircase.items }) |source| {
+        var diagnostics = Diagnostics.init(allocator);
+        defer diagnostics.deinit();
+        const tokens = try lex(allocator, source, &diagnostics);
+        defer allocator.free(tokens);
+        try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
+        // At most one token per input byte, plus the closing layout.
+        try testing.expect(tokens.len <= source.len + 3);
+    }
+}
+
+// --- the four-space step ----------------------------------------------------
+
+test "a block is exactly four columns deeper, and anything else is named" {
+    // A consistent two-space file is *structurally* fine, so it keeps
+    // its blocks; it is still one diagnostic per block that opens.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "func f():\n  a = 1\n  b = 2\n",
+        &.{
+            .keyword_func, .identifier,  .left_paren, .right_paren, .colon,
+            .newline,      .indent,      .identifier, .assign,      .int_literal,
+            .newline,      .identifier,  .assign,     .int_literal, .newline,
+            .dedent,       .end_of_file,
+        },
+        &.{"luce.lex.indent"},
+    );
+    // Eight is as wrong as two.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "func f():\n        a = 1\n",
+        &.{
+            .keyword_func, .identifier, .left_paren,  .right_paren, .colon,
+            .newline,      .indent,     .identifier,  .assign,      .int_literal,
+            .newline,      .dedent,     .end_of_file,
+        },
+        &.{"luce.lex.indent"},
+    );
+    // Four, at every depth, is silent.
+    try lexKinds(testing.allocator, "func f():\n    if a:\n        b = 1\n", &.{
+        .keyword_func, .identifier, .left_paren, .right_paren, .colon,
+        .newline,      .indent,     .keyword_if, .identifier,  .colon,
+        .newline,      .indent,     .identifier, .assign,      .int_literal,
+        .newline,      .dedent,     .dedent,     .end_of_file,
+    });
+}
+
+test "a tab explains its own column, so the step is not reported twice" {
+    // `\t\t` is eight columns and would otherwise draw a second
+    // diagnostic on top of the one that matters.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "func f():\n\t\ta = 1\n",
+        &.{
+            .keyword_func, .identifier, .left_paren,  .right_paren, .colon,
+            .newline,      .indent,     .identifier,  .assign,      .int_literal,
+            .newline,      .dedent,     .end_of_file,
+        },
+        &.{"luce.lex.tab"},
+    );
+}
+
+test "nesting is bounded, and the token stream stays balanced past the bound" {
+    const allocator = testing.allocator;
+    var deep: std.ArrayList(u8) = .empty;
+    defer deep.deinit(allocator);
+    for (0..max_indent_depth + 20) |level| {
+        try deep.appendNTimes(allocator, ' ', level * indent_step);
+        try deep.appendSlice(allocator, "if a:\n");
+    }
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    const tokens = try lex(allocator, deep.items, &diagnostics);
+    defer allocator.free(tokens);
+    try testing.expect(diagnostics.count() >= 1);
+    try testing.expectEqualStrings("luce.lex.indent", diagnostics.at(0).?.code);
+    var depth: usize = 0;
+    var deepest: usize = 0;
+    for (tokens) |item| switch (item.kind) {
+        .indent => {
+            depth += 1;
+            deepest = @max(deepest, depth);
+        },
+        .dedent => depth -= 1,
+        else => {},
+    };
+    try testing.expectEqual(@as(usize, 0), depth);
+    try testing.expect(deepest < max_indent_depth);
+}
+
+// --- comments ---------------------------------------------------------------
+
+test "a shebang line is an ordinary comment" {
+    try lexKinds(testing.allocator, "#!/usr/bin/env loom\nfunc main():\n    return\n", &.{
+        .keyword_func, .identifier, .left_paren,     .right_paren, .colon,
+        .newline,      .indent,     .keyword_return, .newline,     .dedent,
+        .end_of_file,
+    });
+}
+
+test "the comment forms Luce does not have are named, not mis-lexed as arithmetic" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = 1 // two\n",
+        &.{ .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.comment"},
+    );
+    // A block comment is skipped to its terminator, so the prose
+    // inside costs one message and not one per line.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = /* one\n   two */ 1\n",
+        &.{ .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.comment"},
+    );
+    // An unterminated one takes the rest of the file, still once.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = /* one\n",
+        &.{ .identifier, .assign, .newline, .end_of_file },
+        &.{"luce.lex.comment"},
+    );
+    // Division still divides.
+    try lexKinds(testing.allocator, "a = 6 / 2\nb /= 2\n", &.{
+        .identifier,  .assign,     .int_literal,  .slash,       .int_literal,
+        .newline,     .identifier, .slash_assign, .int_literal, .newline,
+        .end_of_file,
+    });
+}
+
+// --- text that renders differently from how it runs -------------------------
+
+test "a bidirectional control is refused wherever it hides" {
+    const allocator = testing.allocator;
+    // In code, in a string, and in a comment: the Trojan Source
+    // positions.  U+202E is RIGHT-TO-LEFT OVERRIDE.
+    for ([_][]const u8{
+        "a = \u{202E}1\n",
+        "a = \"x\u{202E}y\"\n",
+        "# note \u{202E} here\n",
+        "a = f\"x\u{2066}y\"\n",
+    }) |source| {
+        var diagnostics = Diagnostics.init(allocator);
+        defer diagnostics.deinit();
+        const tokens = try lex(allocator, source, &diagnostics);
+        defer allocator.free(tokens);
+        try testing.expectEqual(@as(usize, 1), diagnostics.count());
+        try testing.expectEqualStrings("luce.lex.bidi", diagnostics.at(0).?.code);
+    }
+}
+
+test "a raw control byte inside a string is reported, not carried into the text" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = \"x\x1by\"\n",
+        &.{ .identifier, .assign, .string_literal, .newline, .end_of_file },
+        &.{"luce.lex.character"},
+    );
+    // A tab is a tab wherever it is; `\t` is how text spells one.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = \"x\ty\"\n",
+        &.{ .identifier, .assign, .string_literal, .newline, .end_of_file },
+        &.{"luce.lex.tab"},
+    );
+}
+
+test "a look-alike character is named with the ASCII to write instead" {
+    const allocator = testing.allocator;
+    const cases = [_]struct { source: []const u8, wanted: []const u8 }{
+        .{ .source = "a = \u{201C}x\u{201D}\n", .wanted = "\"like this\"" },
+        .{ .source = "a\u{00A0}= 1\n", .wanted = "ordinary space" },
+        .{ .source = "a = 1 \u{2260} 2\n", .wanted = "'!='" },
+        .{ .source = "a = 1 \u{2014} 2\n", .wanted = "'-'" },
+        .{ .source = "a\u{FEFF} = 1\n", .wanted = "invisible" },
+        .{ .source = "func f()\u{FF1A}\n    return\n", .wanted = "':'" },
+    };
+    for (cases) |case| {
+        var diagnostics = Diagnostics.init(allocator);
+        defer diagnostics.deinit();
+        const tokens = try lex(allocator, case.source, &diagnostics);
+        defer allocator.free(tokens);
+        try testing.expect(diagnostics.count() >= 1);
+        const message = diagnostics.at(0).?.message;
+        try testing.expectEqualStrings("luce.lex.character", diagnostics.at(0).?.code);
+        try testing.expect(std.mem.indexOf(u8, message, case.wanted) != null);
+        try testing.expect(std.mem.indexOf(u8, message, "U+") != null);
+    }
+}
+
+test "a name with a foreign letter in it stays one name" {
+    // `caf\u{00E9}` is a name someone tried to write; splitting it into
+    // `caf`, an error, and nothing else would cost a second diagnostic
+    // from the parser for a mistake it cannot help with.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "let caf\u{00E9} = 1\n",
+        &.{ .keyword_let, .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.character"},
+    );
+    try lexWithDiagnostics(
+        testing.allocator,
+        "let \u{00E9}toile = 1\n",
+        &.{ .keyword_let, .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.character"},
+    );
+    // A character that is nobody's letter stays a stray character.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = \u{1F600}\n",
+        &.{ .identifier, .assign, .newline, .end_of_file },
+        &.{"luce.lex.character"},
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Property fuzzing
+// ---------------------------------------------------------------------------
+//
+// Zig's own tokenizer fuzzes exactly this way: on Smith-generated
+// input, assert the *invariants* rather than a fixed token list.  Two
+// targets, because they find different bugs — random bytes reach the
+// error paths, and random *fragments* reach the states a scanner only
+// gets into after several correct decisions in a row (a hole inside an
+// f-string inside a bracket inside a block).  Under `zig build test`
+// each runs its corpus; `zig build test --fuzz` explores from there.
+//
+// Both feed the lexer *prepared* text, because that is its
+// precondition and therefore the only input worth proving anything
+// about — fuzzing bytes stage 1 rejects would be fuzzing dead code.
+
+/// Force a byte buffer to satisfy `isPrepared`, in place, changing as
+/// little as possible: this is the fuzzer's stand-in for stage 1.
+fn prepareInPlace(bytes: []u8) []u8 {
+    if (std.mem.startsWith(u8, bytes, "\xEF\xBB\xBF")) bytes[0] = ' ';
+    for (bytes) |*byte| {
+        if (byte.* == 0 or byte.* == '\r') byte.* = ' ';
+    }
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const first = bytes[offset];
+        if (first < 0x80) {
+            offset += 1;
+            continue;
+        }
+        const length = std.unicode.utf8ByteSequenceLength(first) catch {
+            bytes[offset] = ' ';
+            offset += 1;
+            continue;
+        };
+        if (offset + length > bytes.len) {
+            bytes[offset] = ' ';
+            offset += 1;
+            continue;
+        }
+        _ = std.unicode.utf8Decode(bytes[offset..][0..length]) catch {
+            bytes[offset] = ' ';
+            offset += 1;
+            continue;
+        };
+        offset += length;
+    }
+    std.debug.assert(isPrepared(bytes));
+    return bytes;
+}
+
+test "fuzz: the lexer upholds its invariants on any prepared bytes" {
     try testing.fuzz({}, lexAnything, .{ .corpus = &.{
         "func main():\n    let x = 1\n",
         "\tlet a = \"open\n",
-        "let s = \"\xff\xfe\"\n",
-        "0x 1.2e 99999999999999999999\n",
+        "0x 1.2e 99999999999999999999 007 .5\n",
         "let s = f\"a{x + 1}b{{c}}\"\n",
+        "a = 1\n\n    b = '\\'\n",
+        "a = \"one\\\nb = \"two\"\n",
+        "a = 1 /* b */ // c\n",
+        "let caf\u{00E9} = \u{201C}x\u{201D} \u{202E}\n",
+        "if a:\n  b = 1\n      c = 2\n",
     } });
 }
 
@@ -601,14 +1974,62 @@ fn lexAnything(_: void, smith: *testing.Smith) anyerror!void {
         .value(u8, '\n', 6),
         .value(u8, '\t', 3),
         .value(u8, '"', 3),
+        .value(u8, '\\', 2),
+        .value(u8, '\'', 2),
         .value(u8, '#', 2),
+        .value(u8, '{', 2),
+        .value(u8, '}', 2),
     });
-    const source = buffer[0..length];
+    try expectInvariants(prepareInPlace(buffer[0..length]));
+}
 
-    var diagnostics = Diagnostics.init(testing.allocator);
+/// The vocabulary the fragment fuzzer builds programs out of: whole
+/// constructs, so a random pick lands *inside* the grammar rather than
+/// next to it.  Every one is either legal Luce or a mistake this file
+/// has an opinion about.
+const fragments = [_][]const u8{
+    "func f():", "if a:",    "else:",    "while x:",    "for i in xs:",
+    "let a = ",  "var b ",   "return ",  "\n",          "    ",
+    "        ",  " ",        "\t",       "#note",       "//note",
+    "/*",        "*/",       "(",        ")",           "[",
+    "]",         ",",        ":",        ".",           "->",
+    "+=",        "==",       "!",        "$",           ";",
+    "0",         "007",      "1.5e-3",   "0xFF",        ".5",
+    "1_0",       "1e",       "\"",       "\"a b\"",     "f\"",
+    "f\"x{y}\"", "{",        "}",        "\\n",         "\\q",
+    "'",         "'x'",      "x",        "caf\u{00E9}", "\u{201C}",
+    "\u{00A0}",  "\u{202E}", "\u{FEFF}", "\u{1F600}",   "\x01",
+};
+
+test "fuzz: the lexer upholds its invariants on random Luce fragments" {
+    try testing.fuzz({}, lexFragments, .{ .corpus = &.{
+        "\x00\x08\x09\x01\x08\x09",
+        "\x27\x2a\x2b\x2c",
+        "\x25\x26\x27\x08\x09\x0a",
+    } });
+}
+
+fn lexFragments(_: void, smith: *testing.Smith) anyerror!void {
+    var picks: [64]u8 = undefined;
+    const count = smith.sliceWeightedBytes(&picks, &.{.rangeAtMost(u8, 0x00, 0xff, 1)});
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    for (picks[0..count]) |pick| {
+        try text.appendSlice(testing.allocator, fragments[pick % fragments.len]);
+    }
+    try expectInvariants(prepareInPlace(text.items));
+}
+
+/// Everything that must be true of a token stream, whatever the input.
+/// A fuzz target that only checks "it did not crash" proves almost
+/// nothing; these are the properties the parser and the diagnostics
+/// actually rely on.
+fn expectInvariants(source: []u8) !void {
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(testing.allocator, source, &diagnostics);
-    defer testing.allocator.free(tokens);
+    const tokens = try lex(allocator, source, &diagnostics);
+    defer allocator.free(tokens);
 
     // There is always at least the EOF token, and it is last.
     try testing.expect(tokens.len >= 1);
@@ -621,6 +2042,13 @@ fn lexAnything(_: void, smith: *testing.Smith) anyerror!void {
         try testing.expect(item.span.end <= source.len);
         try testing.expect(item.span.start >= previous_start);
         previous_start = item.span.start;
+
+        // Literal tokens must survive the parser's quote-stripping.
+        switch (item.kind) {
+            .string_literal => try testing.expect(item.span.end - item.span.start >= 2),
+            .fstring => try testing.expect(item.span.end - item.span.start >= 3),
+            else => {},
+        }
     }
 
     // The EOF token is empty and sits exactly at the end.
@@ -628,10 +2056,79 @@ fn lexAnything(_: void, smith: *testing.Smith) anyerror!void {
     try testing.expectEqual(source.len, last.start);
     try testing.expectEqual(source.len, last.end);
 
-    // Every diagnostic points inside the source too.
+    // Indent and dedent are balanced: every block the lexer opens it
+    // also closes, so the parser can never see a stray dedent.  Depth
+    // is bounded, so an adversarial file cannot grow the stack.
+    var depth: usize = 0;
+    var deepest: usize = 0;
+    for (tokens) |item| {
+        switch (item.kind) {
+            .indent => {
+                depth += 1;
+                deepest = @max(deepest, depth);
+            },
+            .dedent => {
+                try testing.expect(depth > 0);
+                depth -= 1;
+            },
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), depth);
+    try testing.expect(deepest < max_indent_depth);
+
+    // Output is linear in the input: one token per byte at worst, plus
+    // the layout each line and block can contribute.
+    try testing.expect(tokens.len <= 4 * source.len + max_indent_depth + 2);
+
+    // Every diagnostic points inside the source too, and there are
+    // never more than the cap allows.
+    try testing.expect(diagnostics.count() <= max_diagnostics + 1);
     for (0..diagnostics.count()) |index| {
         const item = diagnostics.at(index).?;
         try testing.expect(item.span.start <= item.span.end);
         try testing.expect(item.span.end <= source.len);
+    }
+
+    // Lexing is a pure function of the bytes.
+    var again = Diagnostics.init(allocator);
+    defer again.deinit();
+    const repeat = try lex(allocator, source, &again);
+    defer allocator.free(repeat);
+    try testing.expectEqual(tokens.len, repeat.len);
+    for (tokens, repeat) |left, right| {
+        try testing.expectEqual(left.kind, right.kind);
+        try testing.expectEqual(left.span.start, right.span.start);
+        try testing.expectEqual(left.span.end, right.span.end);
+    }
+
+    // The one that makes silence mean something: when nothing was
+    // reported, no byte was silently dropped.  Everything between two
+    // tokens has to be whitespace or a comment.
+    if (diagnostics.count() != 0) return;
+    var cursor: usize = 0;
+    for (tokens) |item| {
+        if (item.span.start > cursor) try expectSkippable(source, cursor, item.span.start);
+        cursor = @max(cursor, item.span.end);
+    }
+    try expectSkippable(source, cursor, source.len);
+}
+
+/// A region the scanner passed over must be spaces, line breaks, or
+/// comments — nothing a program could have meant.
+fn expectSkippable(source: []const u8, from: usize, to: usize) !void {
+    var offset = from;
+    while (offset < to) : (offset += 1) {
+        switch (source[offset]) {
+            ' ', '\n' => {},
+            '#' => offset = (std.mem.indexOfScalarPos(u8, source, offset, '\n') orelse to) - 1,
+            else => {
+                std.debug.print(
+                    "byte 0x{X:0>2} at {d} vanished with no diagnostic\n",
+                    .{ source[offset], offset },
+                );
+                return error.TestUnexpectedResult;
+            },
+        }
     }
 }

@@ -557,7 +557,7 @@ fn program(gpa: Allocator, source: []const u8) !mir.Program {
     switch (result) {
         .success => |compiled| return compiled,
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(gpa, source);
+            const rendered = try diagnostics.render(gpa);
             defer gpa.free(rendered);
             std.debug.print("unexpected compile failure:\n{s}", .{rendered});
             result.deinit();
@@ -794,13 +794,88 @@ test "the runtime library is called, not reimplemented" {
         "declare i32 @luce_rt_str",
         "declare i32 @luce_rt_free",
         "declare void @luce_rt_bind",
-        "declare ptr @luce_rt_open",
+        "declare noalias ptr @luce_rt_open",
     }) |wanted| {
         if (std.mem.indexOf(u8, rendered, wanted) == null) {
             std.debug.print("missing: {s}\n", .{wanted});
             return error.NotCalled;
         }
     }
+}
+
+test "every runtime declaration carries what the compiler knows about it" {
+    const gpa = std.testing.allocator;
+    // A bare `declare` is the most pessimistic thing LLVM can be told:
+    // reads and writes all memory, may unwind, may never come back.
+    // `effects.zig` says otherwise for every entry point, and this is
+    // what proves the saying reaches the module.
+    const rendered = (try render(gpa,
+        \\func main():
+        \\    let xs = new List(Int)
+        \\    xs.append(1)
+        \\    print(str(len(xs)) + str(xs[0]))
+        \\    free(xs)
+        \\
+    )).?;
+    defer gpa.free(rendered);
+
+    var line_start: usize = 0;
+    var checked: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, rendered, line_start, '\n')) |line_end| {
+        const line = rendered[line_start..line_end];
+        line_start = line_end + 1;
+        if (!std.mem.startsWith(u8, line, "declare ")) continue;
+        if (std.mem.indexOf(u8, line, "@luce_rt_") == null) continue;
+        checked += 1;
+        // `luce_rt_report` is the one that hands control to the host,
+        // so it is the one that promises nothing.
+        if (std.mem.indexOf(u8, line, "@luce_rt_report") != null) continue;
+        // Function attributes travel in a numbered group; the
+        // declaration names the group it belongs to.
+        const marker = std.mem.lastIndexOfScalar(u8, line, '#') orelse {
+            std.debug.print("bare declaration: {s}\n", .{line});
+            return error.Undescribed;
+        };
+        const group = try std.fmt.allocPrint(gpa, "attributes {s} = ", .{line[marker..]});
+        defer gpa.free(group);
+        const at = std.mem.indexOf(u8, rendered, group) orelse return error.Undescribed;
+        const end = std.mem.indexOfScalarPos(u8, rendered, at, '\n').?;
+        const described = rendered[at..end];
+        for ([_][]const u8{ "nounwind", "willreturn", "memory(" }) |wanted| {
+            if (std.mem.indexOf(u8, described, wanted) == null) {
+                std.debug.print("{s}\n  is {s}\n", .{ line, described });
+                return error.Undescribed;
+            }
+        }
+    }
+    try std.testing.expect(checked >= 8);
+
+    // `luce_rt_len(rt, target, out)` carries the whole vocabulary: a
+    // runtime pointer, a box it only borrows, a box it only fills.
+    const at_len = std.mem.indexOf(u8, rendered, "declare i32 @luce_rt_len(").?;
+    const len_line = rendered[at_len..std.mem.indexOfScalarPos(u8, rendered, at_len, '\n').?];
+    for ([_][]const u8{
+        "nocapture",
+        "readonly",
+        "writeonly",
+        "nonnull",
+        "noundef",
+        "dereferenceable(24)",
+        "align 8",
+    }) |wanted| {
+        if (std.mem.indexOf(u8, len_line, wanted) == null) {
+            std.debug.print("{s}\n  wants {s}\n", .{ len_line, wanted });
+            return error.Undescribed;
+        }
+    }
+    // A reader of the heap is not a writer of it.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "memory(argmem: readwrite, inaccessiblemem: read)",
+    ) != null);
+    // The trap machinery is off the straight-line path.
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "cold") != null);
 }
 
 // ---------------------------------------------------------------------------

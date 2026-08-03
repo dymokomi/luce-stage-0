@@ -72,9 +72,17 @@ pub fn runScript(
     path: []const u8,
     arguments: []const []const u8,
 ) !u8 {
-    const source = files.readWhole(gpa, io, path) catch {
-        try err.print("loom: cannot read {s}\n", .{path});
-        return 1;
+    const found = try files.readSource(gpa, io, path);
+    const source = switch (found) {
+        .text => |text| text.bytes,
+        .missing => {
+            try err.print("loom: cannot read {s}: no such file\n", .{path});
+            return 1;
+        },
+        .unreadable => |why| {
+            try err.print("loom: cannot read {s}: {s}\n", .{ path, why });
+            return 1;
+        },
     };
     defer gpa.free(source);
     var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
@@ -93,14 +101,16 @@ pub fn runSource(
     arguments: []const []const u8,
 ) !u8 {
     var options = compile_options;
-    options.source_name = std.fs.path.basename(name);
+    // The path as given, not its basename: a diagnostic or a trap that
+    // says `bad.luc:3:1` names a file the reader still has to find.
+    options.source_name = files.displayName(name);
     var result = try luce.compile.compileProject(gpa, source, loader, .{}, options);
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(gpa, source);
+            const rendered = try diagnostics.render(gpa);
             defer gpa.free(rendered);
-            try err.print("{s}: compile failed\n{s}", .{ name, rendered });
+            try err.print("loom: compile failed\n{s}", .{rendered});
             result.deinit();
             return 1;
         },

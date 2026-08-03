@@ -163,12 +163,17 @@ for raw byte *search* (the offset of the first `byte` at or after
 `start`, or -1; the byte must be 0..255 and `start` within the
 string, or it traps).  Search is a primitive for the same reason
 access is: the library builds substring matching on it, and the
-runtime is free to vectorize it.  Everything built on top of them
-lives in the standard library's `strings` module (docs/STD.md),
-written in ordinary Luce:
+runtime is free to vectorize it.
+
+A literal is written `"..."` and stays on one line; the escapes are
+`\n`, `\t`, `\\` and `\"`, and there are no others — `\r`, `\0`, hex
+and unicode escapes are all rejected by name (a codepoint goes in
+with `chr(...)`).  Everything built on top of the primitives lives in
+the standard library's `strings` module (docs/STD.md), written in
+ordinary Luce:
 
 ```luce
-import strings
+import std.strings
 
 s.find(sub)          # byte offset of first occurrence, -1 if absent
 s.find_from(sub, i)  # first occurrence at or after offset i
@@ -190,7 +195,7 @@ strings.format_float(x, 2)   # fixed-point Float display: "2.50"
 
 The method spelling is the same sugar as everywhere else:
 `s.find(x)` is `strings.find(s, x)` — a plain borrowed call with the
-receiver first — whenever `import strings` is in scope, and a compile
+receiver first — whenever `import std.strings` is in scope, and a compile
 error pointing at the missing import otherwise.  Only `byte_at` and
 `find_byte` are built in.
 
@@ -228,11 +233,46 @@ to one type is a method on it.
 
 ## Arithmetic and assignment
 
+Number literals are decimal: `12` is an Int, and a fraction or an
+exponent makes a Float (`1.5`, `1e10`, `1.5e-3`).  A `.` only starts
+a fraction when a digit follows it.  There are no hexadecimal,
+binary or octal literals and no `_` digit separators — writing one
+is a `luce.lex.number` error naming the reason, not a silent
+misreading (docs/MISSING.md tier 2, item 13).
+
 Binary operators are `+ - * / %` (Int truncates toward zero, `%`
 follows the dividend's sign; Float is IEEE), the comparisons
 `== != < <= > >=` (ordering on Int, Float, String), and `and or not`
 (short-circuit).  There is no implicit numeric conversion — mixing
 Int and Float is a compile error; convert with `Int(x)`/`Float(x)`.
+
+### Precedence, and the two places Luce refuses to guess
+
+Loosest to tightest: `or`, `and`, the comparisons, `+ -`, `* / %`,
+then the prefix operators `not` `-` `give` `copy`, then postfix
+`.field` `[index]` `(call)`.  Same-precedence binary operators
+associate to the left, and the prefix operators to the right.
+
+Two shapes are legal in a language Luce reads like and mean something
+different here, so rather than pick a winner the parser refuses them
+and names both readings.  Both are `luce.parse.*` diagnostics, and
+both are fixed by one pair of parentheses.
+
+**`not` in front of a comparison.**  `not` is a prefix operator, so it
+binds *tighter* than `==` — the C, Zig and Rust reading.  Python's
+`not` binds *looser* than comparison, so a Python reader reads
+`not a == b` as `not (a == b)` and gets the opposite answer whenever
+both operands are Bool.  Writing it bare is `luce.parse.precedence`;
+write `(not a) == b` or `not (a == b)`.
+
+**Chained comparison.**  `a < b < c` is one comparison in Python
+(`a < b and b < c`, with `b` evaluated once) and two in C
+(`(a < b) < c`, comparing a Bool with an Int).  Luce has neither: the
+comparisons are **non-associative**, and chaining them is
+`luce.parse.chain`.  Write `a < b and b < c`.  This costs nothing —
+`(a < b) < c` was always a type error one stage later, and comparing
+two Bools with `(a < b) == (c < d)` is still legal, because the
+parentheses start a new chain.
 
 Compound assignment applies an operator in place: `n += 1`, `n -= 1`,
 `n *= 2`, `n /= 2`, `n %= 3`, and `s += "!"` (String concat).  It is
@@ -315,16 +355,61 @@ A file is a module, like Zig.  `import name` binds the sibling file
 top level.  Scope stays per file — nothing is visible without an
 import, and using a namespace you didn't import is a compile error
 (`luce.sema.import`).  Modules may import each other; the graph loads
-each file once, so cross-file mutual recursion just works.  The
+each file once, so cross-file mutual recursion just works.  A module
+importing *itself* is a mistake rather than a cycle, and says so
+(`luce.import.self`).  The
 compiler loads imports through the host (the CLI and loom resolve
 them beside the root file), compiles the whole graph as one program,
-and writes one .lc module; errors inside an imported file render as
-`name.luc:line:column`.  Deliberately absent: package managers,
+and writes one .lc module; errors inside an imported file render at
+the path it was really opened from, with the source line and a caret.
+
+A sibling import must name the file **exactly**, including its case,
+and the file must be an ordinary one.  A case-insensitive filesystem would
+happily open `Geo.luc` for `import geo`, so the directory entry is
+checked rather than the open: a program that builds on a Mac builds
+on the machine that ships it.  Deliberately absent: package managers,
 search paths, conditional imports, re-exports.
 
-**The standard library** resolves before the file loader: `import
-math`, `import files` reach modules embedded in the compiler itself,
-so std names are reserved and work everywhere — see docs/STD.md.
+**The standard library lives under `std.`** — `import std.math`,
+`import std.strings`, `import std.files` reach modules embedded in the
+compiler itself, so they work everywhere with no install path (see
+docs/STD.md).  The import **binds the bare name**, so call sites read
+`math.sqrt(x)` and only the import line says where the module came
+from; this is Rust's shape (`use std::fs;` then `fs::read`).
+
+The two namespaces are disjoint, and that is the point: `std` is
+reserved, no *module name* is, so a `math.luc` beside your program is
+exactly what `import math` reaches.  Python's `random.py` problem — a
+neighbouring file silently taking the library's name — cannot be
+written here, and neither can its opposite, a file that is
+unreachable because the library got there first.
+
+Three rules keep the namespace honest:
+
+* `import std.nope` names a module the library does not have, and the
+  error lists the ones it does (`luce.import.standard`).
+* `import std` names the namespace, which is not a module, so a
+  `std.luc` beside the program can never be imported
+  (`luce.import.reserved`).
+* `import std.math` and `import math` both bind `math`, so a program
+  with both has one name for two modules and is refused
+  (`luce.import.collision`) — rename the file.  There is no `as`
+  clause to alias one of them.
+
+**A source file** is UTF-8 text.  Lines end with LF or CRLF (a file
+edited on Windows compiles identically, and reports the same line
+numbers), a leading byte-order mark is ignored, and a file may be up
+to 64 MiB.  What is *not* text is refused before anything is parsed,
+once, naming the file and the line and column inside it: invalid
+UTF-8 (`luce.source.utf8`, which prints the byte that broke it), a
+NUL byte (`luce.source.binary`), a carriage return that does not end
+a line (`luce.source.line_ending`), a UTF-16 or UTF-32 byte-order
+mark (`luce.source.encoding` — PowerShell's `>` writes these), an
+oversized file (`luce.source.too_large`).
+
+The program itself may also come from standard input: `luce check -`,
+or any pipe or process substitution.  Diagnostics then name it
+`<stdin>`, and imports resolve beside the current directory.
 
 ## Deliberately absent (for now)
 

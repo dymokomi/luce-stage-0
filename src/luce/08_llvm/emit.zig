@@ -24,7 +24,21 @@ pub const Options = struct {
     /// LLVM target triple.  Empty means the host, as LLVM reports it.
     triple: []const u8 = "",
     /// Target CPU and feature string; empty means the target's own
-    /// defaults.
+    /// defaults, which for AArch64 is the generic baseline rather than
+    /// the machine in front of us.  Clang, for the same triple, names
+    /// `apple-m1` and a page of features.
+    ///
+    /// **Deliberately left empty, and measured rather than assumed.**
+    /// Both `apple-m1` (clang's default here) and `apple-m4` (this
+    /// host) were tried across the whole `bench/` set: every program
+    /// landed inside ±1%, because the generated code's hot path is
+    /// opaque calls into `libluce_rt` rather than arithmetic an
+    /// instruction-selector can improve.  Naming a CPU would therefore
+    /// buy nothing today and cost the artifact its portability — an
+    /// object built here would refuse to run on an older Mac.  Revisit
+    /// when the container operations are generated inline: at that
+    /// point there is a vectorizable loop to tune for, and the knob is
+    /// already here.
     cpu: []const u8 = "",
     features: []const u8 = "",
     /// The pass pipeline, in the new pass manager's textual form.

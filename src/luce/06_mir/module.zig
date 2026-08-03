@@ -530,7 +530,7 @@ fn compileScript(source: []const u8) !mir.Program {
     switch (result) {
         .success => |program| return program,
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             result.deinit();

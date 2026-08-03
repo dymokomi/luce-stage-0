@@ -3,7 +3,7 @@
 # which is pure Luce over byte_at and slices.  The C twin is
 # bench/strings.c; both print the same numbers.
 
-import strings
+import std.strings
 
 func main():
     var b = new Builder()

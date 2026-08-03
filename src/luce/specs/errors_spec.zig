@@ -16,6 +16,7 @@ const std = @import("std");
 const compile_mod = @import("../compile.zig");
 const types = @import("../support/types.zig");
 const source_mod = @import("../01_source.zig");
+const semantics = @import("../04_semantics.zig");
 
 const testing = std.testing;
 
@@ -24,8 +25,8 @@ const evaluator: types.CompileOptions = .{ .entry_mode = .evaluator };
 
 const Diagnostics = @import("../support/diagnostics.zig").Diagnostics;
 
-fn printAll(diagnostics: *const Diagnostics, source: []const u8) void {
-    const rendered = diagnostics.render(testing.allocator, source) catch return;
+fn printAll(diagnostics: *const Diagnostics) void {
+    const rendered = diagnostics.render(testing.allocator) catch return;
     defer testing.allocator.free(rendered);
     std.debug.print("got:\n{s}", .{rendered});
 }
@@ -54,7 +55,7 @@ fn expectErrorOptions(
             for (0..diagnostics.count()) |index| {
                 if (std.mem.eql(u8, diagnostics.at(index).?.code, code)) return;
             }
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("wanted {s}, got:\n{s}", .{ code, rendered });
             return error.TestUnexpectedResult;
@@ -71,13 +72,64 @@ fn expectErrorAt(source: []const u8, code: []const u8, line: usize, column: usiz
         .success => return error.TestUnexpectedResult,
         .failure => |diagnostics| {
             const first = diagnostics.at(0) orelse return error.TestUnexpectedResult;
-            errdefer printAll(&diagnostics, source);
+            errdefer printAll(&diagnostics);
             try testing.expectEqualStrings(code, first.code);
             const at = source_mod.place(source, first.span.start);
             try testing.expectEqual(line, at.line);
             try testing.expectEqual(column, at.column);
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+//
+// What a *file* can be wrong about, decided before it is ever lexed
+// (01_source/encoding.zig).  These rejections name the file rather
+// than a line, because the file never became source.
+
+test "luce.source.utf8: a file that is not valid UTF-8 is refused" {
+    try expectError("func main():\n    let a = \"\xff\xfe\"\n", "luce.source.utf8");
+    // Anywhere, not only in a string.
+    try expectError("func m\xffain():\n    return\n", "luce.source.utf8");
+}
+
+test "luce.source.binary: a NUL byte means this is not a text file" {
+    try expectError("func main():\n    let a = 1\x00\n", "luce.source.binary");
+}
+
+test "luce.source.line_ending: a stray carriage return is refused" {
+    try expectError("func main():\r    return\n", "luce.source.line_ending");
+}
+
+test "CRLF line endings compile, and keep every line and column" {
+    // A Windows-edited file must behave exactly like any other,
+    // blank lines inside a block included — collapsing CRLF at load
+    // is what makes the layout rules see the same text.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\r\n    let a = 1\r\n\r\n    let b = a\r\n    let c: String = b\r\n",
+        .{},
+        script,
+    );
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    const first = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.sema.type", first.code);
+    const at = result.failure.sources.place(first.file, first.span.start);
+    try testing.expectEqual(@as(usize, 5), at.line);
+}
+
+test "a byte-order mark is not a syntax error" {
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "\xEF\xBB\xBFfunc main():\n    return\n",
+        .{},
+        script,
+    );
+    defer result.deinit();
+    try testing.expect(result == .success);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,11 +153,7 @@ test "luce.lex.escape: an unknown escape is rejected" {
 }
 
 test "luce.lex.character: a stray control byte is rejected" {
-    try expectError("func main():\n    let a = 1\x00\n", "luce.lex.character");
-}
-
-test "luce.lex.utf8: a string of invalid UTF-8 is rejected" {
-    try expectError("func main():\n    let a = \"\xff\xfe\"\n", "luce.lex.utf8");
+    try expectError("func main():\n    let a = 1\x01\n", "luce.lex.character");
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +198,51 @@ test "luce.parse.expression: a missing expression is reported" {
 
 test "luce.parse.expected: a malformed binding name is reported at the name" {
     try expectErrorAt("let 3 = 4\n", "luce.parse.expected", 1, 5);
+}
+
+test "luce.parse.precedence: 'not' in front of a comparison must be parenthesized" {
+    // Two languages Luce reads like disagree about what this means and
+    // both readings are legal Bool expressions, so the parser refuses
+    // to pick (docs/LANGUAGE.md).  Either pair of parentheses settles
+    // it, and each spelling then means what it says.
+    try expectErrorAt(
+        "func main():\n    let a = true\n    let b = false\n    let c = not a == b\n",
+        "luce.parse.precedence",
+        4,
+        13,
+    );
+    for ([_][]const u8{ "!=", "<", "<=", ">", ">=" }) |operator| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "func main():\n    let c = not a {s} b\n",
+            .{operator},
+        );
+        defer testing.allocator.free(source);
+        try expectError(source, "luce.parse.precedence");
+    }
+}
+
+test "luce.parse.chain: comparison operators do not chain" {
+    try expectErrorAt(
+        "func main():\n    let a = 1\n    let c = 0 < a < 10\n",
+        "luce.parse.chain",
+        3,
+        19,
+    );
+    // The whole precedence level is non-associative, not just a
+    // repeated operator.
+    try expectError("func main():\n    let c = 1 < 2 == 3\n", "luce.parse.chain");
+    // Parentheses start a new chain, so comparing two Bools is legal
+    // and reaches the type checker unharmed.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(str(c))\n",
+        .{},
+        .{ .entry_mode = .script, .allow_host = true },
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
 }
 
 test "luce.parse.nesting: pathological nesting is rejected, not overflowed" {
@@ -423,7 +516,12 @@ test "luce.lex.escape: an unknown escape is pinned to the backslash" {
 }
 
 test "luce.lex.character: '!' alone is rejected in favor of 'not'" {
-    try expectError("func main():\n    let a = 1\n    if not a == 1:\n        return\n", "luce.sema.type");
+    // `not` binds tighter than a comparison, so `not a == 1` is
+    // `(not a) == 1` and refused at the parser rather than left to
+    // become a type error (docs/LANGUAGE.md); parenthesized, the same
+    // spelling reaches the type checker it always did.
+    try expectError("func main():\n    let a = 1\n    if not a == 1:\n        return\n", "luce.parse.precedence");
+    try expectError("func main():\n    let a = 1\n    if (not a) == 1:\n        return\n", "luce.sema.type");
     try expectError("func main():\n    let a = 3 ! 4\n", "luce.lex.character");
 }
 
@@ -432,7 +530,7 @@ test "luce.lex.character: an unexpected symbol is rejected" {
 }
 
 test "luce.lex.character: a stray control byte is pinned" {
-    try expectErrorAt("func main():\n    let a = 1\x00\n", "luce.lex.character", 2, 14);
+    try expectErrorAt("func main():\n    let a = 1\x01\n", "luce.lex.character", 2, 14);
 }
 
 // ---------------------------------------------------------------------------
@@ -735,7 +833,7 @@ test "luce.sema.method: no method takes more than two arguments" {
 
 test "luce.sema.method: strings has no such function" {
     try expectError(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let s = "x"
@@ -759,7 +857,7 @@ test "luce.sema.import: join on List(String) needs import strings" {
 
 test "luce.sema.call: a routed strings call checks its arity" {
     try expectError(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let n = "abc".find("b", 1, 2)
@@ -769,7 +867,7 @@ test "luce.sema.call: a routed strings call checks its arity" {
 
 test "luce.sema.type: a routed strings call checks argument types" {
     try expectError(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    let n = "abc".find(7)
@@ -970,6 +1068,303 @@ test "luce.sema.literal: an over-large integer literal is rejected" {
     try expectError("func main():\n    let a = 99999999999999999999\n", "luce.sema.literal");
 }
 
+test "luce.sema.literal: a negated literal past Int's minimum is rejected too" {
+    try expectError("func main():\n    let a = -9223372036854775809\n", "luce.sema.literal");
+    try expectError("func main():\n    let a = 9223372036854775808\n", "luce.sema.literal");
+}
+
+test "luce.sema.literal: a float literal that is not finite is rejected" {
+    // parseFloat is happy to hand back infinity; a program that says
+    // 1e400 did not ask for infinity, it made a mistake.
+    try expectError("func main():\n    let a = 1e400\n", "luce.sema.literal");
+    try expectError("func main():\n    let a = -1e400\n", "luce.sema.literal");
+}
+
+test "luce.sema.const: a non-finite float constant is rejected as well" {
+    try expectError("let a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+}
+
+test "luce.sema.const: ord of an empty String has no codepoint to fold" {
+    try expectError("let a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+}
+
+// ---------------------------------------------------------------------------
+// luce.sema.nesting — this stage's own recursion bound
+// ---------------------------------------------------------------------------
+//
+// Stage 3 bounds recursive *descent*, which a left-leaning chain never
+// exercises: `1 + 1 + ... + 1` parses in a Pratt loop at depth one and
+// yields a tree as deep as the chain is long.  This stage walks that
+// tree recursively, so a long enough chain used to segfault the
+// compiler — an f-string with enough holes was enough, since it
+// desugars to exactly such a chain.
+
+fn longChain(allocator: std.mem.Allocator, prefix: []const u8, term: []const u8, count: usize, suffix: []const u8) ![]u8 {
+    var text: std.ArrayList(u8) = .empty;
+    errdefer text.deinit(allocator);
+    try text.appendSlice(allocator, prefix);
+    for (0..count) |index| {
+        if (index != 0) try text.appendSlice(allocator, " + ");
+        try text.appendSlice(allocator, term);
+    }
+    try text.appendSlice(allocator, suffix);
+    return text.toOwnedSlice(allocator);
+}
+
+test "luce.sema.nesting: a flat operator chain is bounded, not overflowed" {
+    const source = try longChain(testing.allocator, "func main():\n    let a = ", "1", 5000, "\n");
+    defer testing.allocator.free(source);
+    try expectError(source, "luce.sema.nesting");
+}
+
+test "luce.sema.nesting: a flat chain in a constant is bounded too" {
+    const source = try longChain(testing.allocator, "let a = ", "1", 5000, "\n\nfunc main():\n    let b = a\n");
+    defer testing.allocator.free(source);
+    try expectError(source, "luce.sema.nesting");
+}
+
+test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
+    // f"{x}{x}..." desugars to str(x) + str(x) + ..., which is the
+    // same flat chain wearing different clothes.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "func main():\n    let x = 1\n    let s = f\"");
+    for (0..4000) |_| try text.appendSlice(testing.allocator, "{x}");
+    try text.appendSlice(testing.allocator, "\"\n");
+    try expectError(text.items, "luce.sema.nesting");
+}
+
+test "an ordinary deep expression still compiles" {
+    // The bound must sit well above anything a person writes.
+    const source = try longChain(testing.allocator, "func main():\n    let a = ", "1", 200, "\n");
+    defer testing.allocator.free(source);
+    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+}
+
+// ---------------------------------------------------------------------------
+// luce.sema.limit — the reporting cap
+// ---------------------------------------------------------------------------
+
+test "luce.sema.limit: reporting is capped so one broken file cannot flood" {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "func main():\n");
+    for (0..5000) |index| {
+        var line: [64]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let a{d}: Int = \"x\"\n", .{index}));
+    }
+    var result = try compile_mod.compile(testing.allocator, text.items, .{}, script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    // The cap, plus the one diagnostic that says the cap was reached.
+    try testing.expect(result.failure.count() <= semantics.max_diagnostics + 1);
+    var capped = false;
+    for (0..result.failure.count()) |index| {
+        if (std.mem.eql(u8, result.failure.at(index).?.code, "luce.sema.limit")) capped = true;
+    }
+    try testing.expect(capped);
+}
+
+// ---------------------------------------------------------------------------
+// Recovery — one mistake should cost one message
+// ---------------------------------------------------------------------------
+
+test "every statement is checked, not just the first that fails" {
+    var result = try compile_mod.compile(testing.allocator,
+        \\func main():
+        \\    let a: Int = "x"
+        \\    let b: Float = 1
+        \\    let c = 1 < true
+        \\
+    , .{}, script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    try testing.expectEqual(@as(usize, 3), result.failure.count());
+}
+
+test "a binding whose initializer failed does not make every later use an error" {
+    // rustc gives the binding an error type so its uses stay quiet;
+    // this stage has no type to spare and remembers the name instead.
+    // Either way the reader gets the one mistake they made.
+    var result = try compile_mod.compile(testing.allocator,
+        \\func main():
+        \\    let total = nope
+        \\    assert(total == 1)
+        \\    assert(total + 1 == 2)
+        \\    let doubled = total * 2
+        \\    assert(doubled == 2)
+        \\
+    , .{}, script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    errdefer printAll(&result.failure);
+    try testing.expectEqual(@as(usize, 1), result.failure.count());
+    try testing.expectEqualStrings("luce.sema.name", result.failure.at(0).?.code);
+}
+
+// ---------------------------------------------------------------------------
+// Suggestions — the closest name the reader could have meant
+// ---------------------------------------------------------------------------
+
+/// Compile `source`, expect failure, and require the first message to
+/// contain `fragment`.  Used where the *advice* is the guarantee.
+fn expectMessage(source: []const u8, fragment: []const u8) !void {
+    var result = try compile_mod.compile(testing.allocator, source, .{}, script);
+    defer result.deinit();
+    switch (result) {
+        .success => return error.TestUnexpectedResult,
+        .failure => |diagnostics| {
+            errdefer printAll(&diagnostics);
+            const first = diagnostics.at(0) orelse return error.TestUnexpectedResult;
+            if (std.mem.indexOf(u8, first.message, fragment) == null) {
+                std.debug.print("wanted \"{s}\" in:\n{s}\n", .{ fragment, first.message });
+                return error.TestUnexpectedResult;
+            }
+        },
+    }
+}
+
+test "a misspelled local name suggests the one in scope" {
+    try expectMessage(
+        \\func main():
+        \\    let total = 1
+        \\    assert(totl == 1)
+        \\
+    , "did you mean total?");
+}
+
+test "a misspelled function, field, type, and method each suggest the real one" {
+    try expectMessage(
+        \\func compute(a: Int) -> Int:
+        \\    return a
+        \\
+        \\func main():
+        \\    assert(comptue(1) == 1)
+        \\
+    , "did you mean compute?");
+    try expectMessage(
+        \\struct Point:
+        \\    across: Int
+        \\    down: Int
+        \\
+        \\func main():
+        \\    let p = Point(across = 1, down = 2)
+        \\    assert(p.acros == 1)
+        \\
+    , "did you mean across?");
+    try expectMessage(
+        \\func main():
+        \\    let a: Strng = "x"
+        \\    assert(len(a) == 1)
+        \\
+    , "did you mean String?");
+    try expectMessage(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    xs.appnd(3)
+        \\
+    , "did you mean append?");
+}
+
+test "a name too short to guess from suggests nothing" {
+    // `z` is one edit from `x` and means nothing like it.
+    try expectMessage(
+        \\struct Point:
+        \\    x: Int
+        \\    y: Int
+        \\
+        \\func main():
+        \\    let p = Point(x = 1, y = 2)
+        \\    assert(p.z == 1)
+        \\
+    , "Point has no field z");
+}
+
+test "a function that can fall off the end names the type it owes" {
+    try expectMessage(
+        \\func pick(a: Int) -> Float:
+        \\    if a > 0:
+        \\        return 1.0
+        \\
+        \\func main():
+        \\    assert(pick(1) == 1.0)
+        \\
+    , "pick must return Float on every path");
+}
+
+test "storing a borrowed parameter is not told to give it" {
+    // give on a borrow is its own error (S12), so advising it would
+    // only earn the reader a second message one keystroke later.
+    try expectMessage(
+        \\func stash(index: Map(String, List(Int)), hits: List(Int)):
+        \\    index["latest"] = hits
+        \\
+        \\func main():
+        \\    var m = new Map(String, List(Int))
+        \\
+    , "borrowed parameter and can never be given away");
+}
+
+// ---------------------------------------------------------------------------
+// luce.sema.struct — a struct that cannot be built
+// ---------------------------------------------------------------------------
+
+test "luce.sema.struct: a struct that expands past the value limit is rejected" {
+    // Twenty layouts with two struct fields each is a million values
+    // from forty lines of source: every one costs an instruction to
+    // zero and a register to build.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    for (1..21) |level| {
+        var line: [64]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
+    }
+    try text.appendSlice(testing.allocator, "func main():\n    var g: S20\n");
+    try expectError(text.items, "luce.sema.struct");
+}
+
+test "a wide struct graph with no cycle compiles, and quickly" {
+    // The same shape, kept under the limit.  Answering "does this
+    // contain itself" or "does it carry an object" by walking every
+    // path is exponential here; both are settled once instead.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    for (1..11) |level| {
+        var line: [64]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
+    }
+    try text.appendSlice(testing.allocator, "func main():\n    var g: S10\n    assert(g.a.a.a.a.a.a.a.a.a.a.v == 0)\n");
+    var result = try compile_mod.compile(testing.allocator, text.items, .{}, script);
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+}
+
+test "luce.sema.struct: a cycle through a wide graph is still found" {
+    try expectError(
+        \\struct A:
+        \\    left: B
+        \\    right: B
+        \\
+        \\struct B:
+        \\    left: C
+        \\    right: C
+        \\
+        \\struct C:
+        \\    back: A
+        \\    value: Int
+        \\
+        \\func main():
+        \\    assert(true)
+        \\
+    , "luce.sema.struct");
+}
+
 // ---------------------------------------------------------------------------
 // luce.sema.host — each gated builtin
 // ---------------------------------------------------------------------------
@@ -1012,6 +1407,23 @@ test "luce.sema.import: an unknown module in a type is rejected" {
 test "luce.import.missing: a nonexistent module cannot be loaded" {
     try expectError("import ghost\n\nfunc main():\n    return\n", "luce.import.missing");
 }
+
+// ---------------------------------------------------------------------------
+// luce.import.standard / reserved — the std namespace
+// ---------------------------------------------------------------------------
+
+test "luce.import.standard: the library has no such module" {
+    try expectError("import std.ghost\n\nfunc main():\n    return\n", "luce.import.standard");
+}
+
+test "luce.import.reserved: std is a namespace, not a module" {
+    try expectError("import std\n\nfunc main():\n    return\n", "luce.import.reserved");
+}
+
+// NOTE: luce.import.collision — `import std.math` and `import math`
+// binding one name — needs a loader with a sibling module in it, so it
+// is proven in compile/test.zig rather than through this single-file
+// harness.
 
 // ---------------------------------------------------------------------------
 // Evaluator-mode ports: luce.sema.port / input / output

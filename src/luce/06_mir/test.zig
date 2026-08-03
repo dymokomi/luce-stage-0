@@ -13,6 +13,55 @@ const Register = defs.Register;
 const Block = defs.Block;
 const Local = defs.Local;
 
+test "a struct graph is checked for cycles in one pass, not one per path" {
+    // Forty layouts, each holding the next one twice: no cycle, but
+    // 2^39 distinct paths from the first to the last.  A per-path walk
+    // never returns; a per-node one is instant.  Stage 4 refuses
+    // cycles before a `.lc` exists, so this is the decoder's problem
+    // and only the decoder's — which is the point.
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const depth = 40;
+    const layouts = try arena.alloc(types.StructLayout, depth);
+    for (layouts, 0..) |*layout, index| {
+        const held: u32 = @intCast((index + 1) % depth);
+        const fields = try arena.alloc(types.StructField, if (index + 1 == depth) 0 else 2);
+        for (fields) |*field| field.* = .{ .name = "next", .field_type = .{ .strukt = held } };
+        layout.* = .{ .name = "Deep", .fields = fields };
+    }
+    program.structs = layouts;
+
+    const instructions = try arena.dupe(Instruction, &.{.{ .ret = null }});
+    const result_types = try arena.dupe(types.Type, &.{.none});
+    const blocks = try arena.alloc(Block, 1);
+    blocks[0] = .{ .items = try arena.dupe(Register, &.{0}) };
+    const functions = try arena.alloc(Function, 1);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = instructions,
+        .result_types = result_types,
+        .blocks = blocks,
+    };
+    program.functions = functions;
+    try verify_mod.verify(testing.allocator, &program);
+
+    // Close the chain: now every layout is on one cycle.
+    const closing = try arena.alloc(types.StructField, 1);
+    closing[0] = .{ .name = "next", .field_type = .{ .strukt = 0 } };
+    layouts[depth - 1].fields = closing;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+
+    // A layout holding itself directly is the same answer.
+    layouts[depth - 1].fields = &.{};
+    layouts[0].fields[0].field_type = .{ .strukt = 0 };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+}
+
 test "the verifier rejects structural damage a decoder could admit" {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();

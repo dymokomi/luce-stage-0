@@ -13,12 +13,23 @@
 //! yet" — anything without a lowering returns `.unsupported` naming
 //! the tag.  A gap is therefore always a message, never wrong code.
 //!
-//! What is not lowered today: Float in every position, struct values,
-//! Bytes, evaluator ports, the scalar math intrinsics, and every host
-//! service except `print`.  `lower.zig` is the authority on that list;
-//! docs/CODEGEN.md keeps the prose version.  Linking is still the
-//! caller's job — there is no shared-library or executable emit mode —
-//! so the interpreter, not this stage, is what `loom run` uses.
+//! What is not lowered today: `Bytes`, and the evaluator ports
+//! (`input_load`/`output_store`, plus an entry function with
+//! parameters).  That is the whole list, and every item on it is v1
+//! machinery on its way out — so this stage becomes total over the
+//! instruction set the day that goes.  Everything a script can say
+//! lowers: integers, floats, strings, structs, all four container
+//! kinds, ownership, the math builtins, and every host service.
+//!
+//! The other `fail` messages in `lower.zig` are not gaps.  They name
+//! invariants the front end already guarantees — a block without a
+//! terminator, arithmetic on a type that has none — and exist so a
+//! broken invariant reports itself instead of being `unreachable`.
+//! `lower.zig` is the authority; docs/CODEGEN.md keeps the prose.
+//!
+//! Linking is still the caller's job: this stage stops at a
+//! relocatable object, with no shared-library, executable, or wasm
+//! emit mode, so `loom run` still uses the interpreter.
 //!
 //! **The numeric prefix is load-bearing; do not drop it.**  Zig derives
 //! symbol names from the source path and LLVM claims every symbol
@@ -35,11 +46,19 @@
 //!                `LuceHost` service table.
 //!   lower.zig  — typed MIR to LLVM IR, built with the pure-Zig
 //!                `std.zig.llvm.Builder`.  No libLLVM, no `else` arms.
+//!   runtime_effects.zig
+//!             — what the artifact tells LLVM about `libluce_rt`:
+//!               one arm per entry point saying what it does to
+//!               memory, whether it unwinds, whether it comes back,
+//!               and what each argument is.  A declaration without
+//!               that is the most pessimistic thing LLVM can be
+//!               handed.
 //!   emit.zig   — libLLVM's stable C surface: bitcode to object code.
 //!   test.zig   — the end-to-end proof: Luce source through LLVM into
 //!                a shared library, loaded and run against a host.
 
 pub const abi = @import("08_llvm/abi.zig");
+pub const effects = @import("08_llvm/runtime_effects.zig");
 
 pub const Options = @import("08_llvm/lower.zig").Options;
 pub const Result = @import("08_llvm/lower.zig").Result;
@@ -55,5 +74,6 @@ pub const hostTriple = @import("08_llvm/emit.zig").hostTriple;
 
 test {
     _ = abi;
+    _ = effects;
     _ = @import("08_llvm/test.zig");
 }

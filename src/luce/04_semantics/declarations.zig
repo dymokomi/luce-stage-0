@@ -1,10 +1,11 @@
-//! Luce semantic analysis and IR lowering.
+//! Luce semantic analysis — pass one, and the drive of pass two.
 //!
-//! Two passes: declaration collection (struct layouts, function
-//! signatures, the selected entry) and a checked walk of every
-//! function body that emits verified-shape Luce IR as it goes.  The
-//! type checker knows Luce types and the Texel's Port schema; nothing
-//! about any backend appears here.
+//! Declaration collection first: struct layouts and their shapes,
+//! function signatures, file-scope constants folded, the selected
+//! entry.  Then `builder.zig` walks every function body, checking it
+//! and recording what it decides on stage 6's tape.  The type checker
+//! knows Luce types and the Texel's Port schema; nothing about any
+//! backend appears here.
 //!
 //! Rules enforced here, per docs/LANGUAGE.md: static types with no
 //! implicit numeric conversion, immutable let and parameters, no
@@ -33,6 +34,19 @@ const LocalId = mir.LocalId;
 
 pub const Error = error{OutOfMemory};
 
+/// Both passes reject a bad literal, and a reader who sees one
+/// message should not get a different one from the other pass.
+pub const integer_range_message =
+    "integer literal out of range; Int holds -9223372036854775808 to 9223372036854775807";
+pub const float_range_message =
+    "float literal is not a finite number; Float holds up to about 1.8e308";
+
+/// Reporting cap, matching stages 2 and 3.  One broken declaration
+/// can make every line after it wrong; a reader wants the first
+/// hundred, and an untrusted file must not be able to spend the
+/// host's memory on messages nobody will read.
+pub const max_diagnostics: u32 = 100;
+
 /// Names the language reserves; nothing user-declared may take them.
 pub const reserved_names = [_][]const u8{
     "input",       "output",    "Input",      "Output",      "range",
@@ -56,23 +70,23 @@ pub fn isReserved(name: []const u8) bool {
     return false;
 }
 
-/// The analyzed program parts, all allocated from the program arena.
-pub const Analyzed = struct {
-    structs: []StructLayout,
-    heap_types: []types.HeapType,
-    functions: []mir.Function,
-    constants: []const []const u8,
-    reads: []u32,
-    entry_function: u32,
-};
+/// What this stage hands to stage 6: struct layouts, heap-type shapes,
+/// the constant pool, the ports read, the entry, and one open
+/// `Lowering` per function.  All of it is arena-allocated and none of
+/// it points back here, so `mir.build` can close it on its own.
+///
+/// The shape is declared in `06_mir/build.zig` because it is made of
+/// MIR; naming it here keeps the stage's vocabulary its own.
+pub const Analyzed = mir.build.Lowered;
 
 /// One file in a project: the root ("" prefix) or an imported module
-/// whose declarations are namespaced by its import name.  The source
-/// text feeds debug info (span -> line:column origins).
+/// whose declarations are namespaced by its import name.  `file` is
+/// its entry in stage 1's registry — the text its spans index, the
+/// path debug info reports, and the line index origins are read from.
 pub const ModuleTree = struct {
     prefix: []const u8,
     tree: *const ast.Program,
-    source: []const u8,
+    file: source_mod.FileId,
 };
 
 /// Check the project against the schema and lower it to IR.  Returns
@@ -85,6 +99,11 @@ pub fn analyze(
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
 ) Error!?Analyzed {
+    // Arena-allocated because the lowerings this stage hands over
+    // point at it while they are being recorded, and they outlive the
+    // analyzer itself.
+    const pool = try arena.create(mir.build.ConstantPool);
+    pool.* = .{ .arena = arena, .scratch = temporary };
     var analyzer: Analyzer = .{
         .arena = arena,
         .temporary = temporary,
@@ -92,6 +111,7 @@ pub fn analyze(
         .schema = schema,
         .options = options,
         .diagnostics = diagnostics,
+        .pool = pool,
     };
     defer analyzer.deinitScratch();
     return analyzer.run();
@@ -112,6 +132,18 @@ pub const FunctionInfo = struct {
 pub const StructDeclInfo = struct {
     declaration: *const ast.StructDecl,
     module: usize,
+};
+
+/// What a struct layout costs and carries, computed once for all.
+pub const StructShape = struct {
+    /// The struct transitively holds a heap object, so the ownership
+    /// rules apply to it (S27's "object-carrying").
+    carries: bool = false,
+    /// How many values the struct flattens to — one per scalar or
+    /// object field, summed through nested structs.  Saturates just
+    /// past `helpers.max_struct_values`, which is all a limit check
+    /// needs and keeps the count from overflowing.
+    values: u32 = 0,
 };
 
 /// The folded value of a file-scope constant.  Constants are values
@@ -195,70 +227,63 @@ pub const Analyzer = struct {
     options: types.CompileOptions,
     diagnostics: *Diagnostics,
 
+    /// Diagnostics this analysis has added, for the report cap.
+    /// Counted here rather than read from `diagnostics`, which the
+    /// earlier stages have already written into.
+    reported: u32 = 0,
+
     structs: std.ArrayList(StructLayout) = .empty,
     struct_decls: std.ArrayList(StructDeclInfo) = .empty,
+    /// One entry per struct, filled once the layouts settle: whether
+    /// the struct transitively holds an object, and how many values it
+    /// expands to.  Both were recursive queries answered on demand,
+    /// and both are exponential that way — a struct with two struct
+    /// fields visits its children twice per level, so twenty levels
+    /// is a million walks of the same table.  Computed once, in
+    /// dependency order, they are array reads.
+    struct_shapes: std.ArrayList(StructShape) = .empty,
     heap_types: std.ArrayList(types.HeapType) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(FunctionInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
-    constants: std.ArrayList([]const u8) = .empty,
+    /// The program's string constants.  A `Program` field, so the
+    /// pool and its interning live in stage 6; this stage fills it as
+    /// literals type-check.
+    pool: *mir.build.ConstantPool,
     constant_infos: std.ArrayList(ConstantInfo) = .empty,
     constant_names: std.StringHashMapUnmanaged(u32) = .empty,
     reads: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    /// Lazy per-module debug caches: line-start offsets (temporary,
-    /// for span -> line:column) and display names (arena — they end
-    /// up in mir.Function.source).
-    line_tables: std.ArrayList(?[]u32) = .empty,
-    source_names: std.ArrayList(?[]const u8) = .empty,
 
     pub fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
+        self.struct_shapes.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
+        self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
         self.constant_names.deinit(self.temporary);
         self.reads.deinit(self.temporary);
-        for (self.line_tables.items) |starts| {
-            if (starts) |owned| self.temporary.free(owned);
-        }
-        self.line_tables.deinit(self.temporary);
-        self.source_names.deinit(self.temporary);
     }
 
-    pub fn moduleLineStarts(self: *Analyzer, module: usize) Error![]const u32 {
-        if (self.line_tables.items.len == 0) {
-            try self.line_tables.appendNTimes(self.temporary, null, self.modules.len);
-        }
-        if (self.line_tables.items[module]) |starts| return starts;
-        const source = self.modules[module].source;
-        var starts: std.ArrayList(u32) = .empty;
-        errdefer starts.deinit(self.temporary);
-        try starts.append(self.temporary, 0);
-        for (source, 0..) |character, offset| {
-            if (character == '\n') try starts.append(self.temporary, @intCast(offset + 1));
-        }
-        const owned = try starts.toOwnedSlice(self.temporary);
-        self.line_tables.items[module] = owned;
-        return owned;
-    }
-
-    pub fn moduleSourceName(self: *Analyzer, module: usize) Error![]const u8 {
-        if (self.source_names.items.len == 0) {
-            try self.source_names.appendNTimes(self.temporary, null, self.modules.len);
-        }
-        if (self.source_names.items[module]) |name| return name;
-        const prefix = self.modules[module].prefix;
-        const name: []const u8 = if (prefix.len != 0)
-            try std.fmt.allocPrint(self.arena, "{s}.luc", .{prefix})
-        else if (self.options.source_name.len != 0)
-            try self.arena.dupe(u8, std.fs.path.basename(self.options.source_name))
-        else
-            "main.luc";
-        self.source_names.items[module] = name;
-        return name;
-    }
-
+    /// Add one semantic diagnostic, honoring the report cap.  Every
+    /// diagnostic in this stage goes through here.  Checking keeps
+    /// running either way — callers already handle a failed check by
+    /// unwinding the expression, not the walk — so what a program is
+    /// accepted or rejected for never depends on how many errors came
+    /// before it.
     pub fn fail(self: *Analyzer, code: []const u8, span: Span, comptime format: []const u8, arguments: anytype) Error!void {
+        if (self.reported > max_diagnostics) return;
+        if (self.reported == max_diagnostics) {
+            self.reported += 1;
+            try self.diagnostics.add(
+                "luce.sema.limit",
+                span,
+                "too many semantic errors; only the first {d} are reported",
+                .{max_diagnostics},
+            );
+            return;
+        }
+        self.reported += 1;
         try self.diagnostics.add(code, span, format, arguments);
     }
 
@@ -268,7 +293,7 @@ pub const Analyzer = struct {
         try self.collectFunctions();
         if (self.diagnostics.hasErrors()) return null;
 
-        var lowered: std.ArrayList(mir.Function) = .empty;
+        var lowered: std.ArrayList(mir.build.Lowering) = .empty;
         defer lowered.deinit(self.arena);
         for (self.functions.items) |info| {
             try lowered.append(self.arena, try self.lowerFunction(info));
@@ -288,7 +313,7 @@ pub const Analyzer = struct {
             .structs = try self.structs.toOwnedSlice(self.arena),
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
-            .constants = try self.constants.toOwnedSlice(self.arena),
+            .constants = try self.pool.items.toOwnedSlice(self.arena),
             .reads = try reads.toOwnedSlice(self.arena),
             .entry_function = entry_index,
         };
@@ -309,6 +334,26 @@ pub const Analyzer = struct {
             if (std.mem.eql(u8, imported.name, name)) return true;
         }
         return false;
+    }
+
+    /// The import that would make `name` reachable, spelled the way
+    /// the author has to write it: `std.math` for the library,
+    /// `geo` for a file beside the program.
+    ///
+    /// A module already in the program answers for itself — a
+    /// sibling `math.luc` that another file imports is reached with
+    /// `import math`, even though `std.math` exists too.  Only when
+    /// nothing is loaded under the name does the library get to
+    /// claim it.
+    pub fn importSpelling(self: *Analyzer, name: []const u8) Error![]const u8 {
+        for (self.modules) |module| {
+            if (!std.mem.eql(u8, module.prefix, name)) continue;
+            const kind = self.diagnostics.sources.at(module.file).?.kind;
+            if (kind != .standard) return name;
+            return self.qualify(source_mod.standard_namespace, name);
+        }
+        if (!source_mod.isStandard(name)) return name;
+        return self.qualify(source_mod.standard_namespace, name);
     }
 
     pub fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
@@ -378,17 +423,45 @@ pub const Analyzer = struct {
         if (std.mem.indexOfScalar(u8, written.name, '.')) |dot| {
             const head = written.name[0..dot];
             if (!self.importsModule(module, head)) {
-                try self.fail("luce.sema.import", written.span, "unknown module {s}; import {s} to use its types", .{ head, head });
+                try self.fail("luce.sema.import", written.span, "unknown module {s}; import {s} to use its types", .{ head, try self.importSpelling(head) });
                 return null;
             }
             if (self.struct_names.get(written.name)) |index| return .{ .strukt = index };
-            try self.fail("luce.sema.type", written.span, "unknown type {s}", .{written.name});
+            try self.failUnknownType(module, written);
             return null;
         }
         const local = try self.qualify(self.modules[module].prefix, written.name);
         if (self.struct_names.get(local)) |index| return .{ .strukt = index };
-        try self.fail("luce.sema.type", written.span, "unknown type {s}", .{written.name});
+        try self.failUnknownType(module, written);
         return null;
+    }
+
+    /// Report a written type name that names nothing, offering the
+    /// closest of the builtin types and the structs this module can
+    /// see.  A misremembered `Str` or `Bolean` is the commonest of all
+    /// type errors and the cheapest to answer well.
+    fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!void {
+        const builtin_types = [_][]const u8{
+            "Bool", "Int", "Float", "String", "Bytes", "List", "Map", "Array", "Builder",
+        };
+        const prefix = self.modules[module].prefix;
+        var suggestion = helpers.Suggestion.init(written.name);
+        suggestion.offerAll(&builtin_types);
+        var keys = self.struct_names.keyIterator();
+        while (keys.next()) |key| {
+            if (prefix.len == 0) {
+                suggestion.offer(key.*);
+            } else if (key.len > prefix.len + 1 and
+                std.mem.startsWith(u8, key.*, prefix) and key.*[prefix.len] == '.')
+            {
+                suggestion.offer(key.*[prefix.len + 1 ..]);
+            }
+        }
+        if (suggestion.best()) |closest| {
+            try self.fail("luce.sema.type", written.span, "unknown type {s}; did you mean {s}?", .{ written.name, closest });
+            return;
+        }
+        try self.fail("luce.sema.type", written.span, "unknown type {s}", .{written.name});
     }
 
     /// Heap types are interned: one index per distinct shape, so type
@@ -408,24 +481,30 @@ pub const Analyzer = struct {
 
     /// True for types the ownership rules apply to: heap objects and
     /// structs transitively containing them (S27's "object-carrying").
-    /// Struct cycles are rejected before this is ever asked.
+    /// An array read: `collectStructs` settles every struct's shape
+    /// once the layouts are known, and struct cycles are rejected
+    /// before that.
     pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
         return switch (of) {
             .heap => true,
-            .strukt => |layout_index| blk: {
-                for (self.structs.items[layout_index].fields) |field| {
-                    if (self.carriesObjects(field.field_type)) break :blk true;
-                }
-                break :blk false;
-            },
+            .strukt => |layout_index| self.struct_shapes.items[layout_index].carries,
             else => false,
+        };
+    }
+
+    /// How many values a type flattens to: one, unless it is a struct
+    /// that nests others.
+    fn valueCount(self: *const Analyzer, of: Type) u32 {
+        return switch (of) {
+            .strukt => |layout_index| self.struct_shapes.items[layout_index].values,
+            else => 1,
         };
     }
 
     pub fn collectStructs(self: *Analyzer) Error!void {
         // Imports first: names must be usable and free of collisions.
         for (self.modules, 0..) |module, module_index| {
-            self.diagnostics.scope = module.prefix;
+            self.diagnostics.scope = module.file;
             for (module.tree.imports) |imported| {
                 if (isReserved(imported.name) or std.mem.eql(u8, imported.name, "evaluate")) {
                     try self.fail("luce.sema.reserved", imported.span, "{s} is a reserved name", .{imported.name});
@@ -441,7 +520,7 @@ pub const Analyzer = struct {
 
         // Names first so fields may reference structs in any order.
         for (self.modules, 0..) |module, module_index| {
-            self.diagnostics.scope = module.prefix;
+            self.diagnostics.scope = module.file;
             for (module.tree.structs) |*declaration| {
                 if (isReserved(declaration.name)) {
                     try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
@@ -467,7 +546,7 @@ pub const Analyzer = struct {
 
         for (self.struct_decls.items) |info| {
             const declaration = info.declaration;
-            self.diagnostics.scope = self.modules[info.module].prefix;
+            self.diagnostics.scope = self.modules[info.module].file;
             const qualified = try self.qualify(self.modules[info.module].prefix, declaration.name);
             const index = self.struct_names.get(qualified) orelse continue;
             var fields: std.ArrayList(types.StructField) = .empty;
@@ -506,20 +585,149 @@ pub const Analyzer = struct {
         }
 
         // A struct containing itself (directly or through another
-        // struct) would have no finite value.
-        for (self.structs.items, 0..) |_, index| {
-            if (self.structCycles(@intCast(index), @intCast(index), 0)) {
-                const info = self.struct_decls.items[index];
-                self.diagnostics.scope = self.modules[info.module].prefix;
+        // struct) would have no finite value; and what every struct
+        // carries and costs is settled in the same walk.
+        const cyclic = try self.temporary.alloc(bool, self.structs.items.len);
+        defer self.temporary.free(cyclic);
+        @memset(cyclic, false);
+        try self.settleStructGraph(cyclic);
+
+        for (self.structs.items, 0..) |layout, index| {
+            const info = self.struct_decls.items[index];
+            self.diagnostics.scope = self.modules[info.module].file;
+            if (cyclic[index]) {
                 try self.fail(
                     "luce.sema.struct",
                     info.declaration.span,
                     "struct {s} contains itself",
-                    .{self.structs.items[index].name},
+                    .{layout.name},
+                );
+            } else if (self.struct_shapes.items[index].values > helpers.max_struct_values) {
+                try self.fail(
+                    "luce.sema.struct",
+                    info.declaration.span,
+                    "struct {s} expands to more than {d} values once its nested structs are counted; bulk data belongs in a List, Map, or Array, which is one reference",
+                    .{ layout.name, helpers.max_struct_values },
                 );
             }
         }
-        self.diagnostics.scope = "";
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// One pass over the struct containment graph: mark every layout
+    /// that lies on a cycle, and fill in the shape of every layout
+    /// that does not.
+    ///
+    /// This is Tarjan's strongly connected components, written with an
+    /// explicit stack.  Both jobs were recursive one-question-at-a-time
+    /// walks before, and both were exponential: asking "does this
+    /// struct contain an object" or "does it contain itself" re-walked
+    /// every *path* through the graph, so a struct with two struct
+    /// fields doubled the work per level — twenty levels of that is a
+    /// million walks, from forty lines of source, per question.  A
+    /// component with more than one member (or a layout naming itself)
+    /// is a cycle; everything else closes after the layouts it
+    /// contains, which is exactly when its shape can be summed.
+    fn settleStructGraph(self: *Analyzer, cyclic: []bool) Error!void {
+        const count = self.structs.items.len;
+        try self.struct_shapes.appendNTimes(self.temporary, .{ .values = 1 }, count);
+        if (count == 0) return;
+
+        const unvisited = std.math.maxInt(u32);
+        const order = try self.temporary.alloc(u32, count);
+        defer self.temporary.free(order);
+        const lowest = try self.temporary.alloc(u32, count);
+        defer self.temporary.free(lowest);
+        const open = try self.temporary.alloc(bool, count);
+        defer self.temporary.free(open);
+        @memset(order, unvisited);
+        @memset(open, false);
+
+        // Tarjan's component stack, and the explicit depth-first one.
+        var pending: std.ArrayList(u32) = .empty;
+        defer pending.deinit(self.temporary);
+        const Step = struct { layout: u32, field: u32 };
+        var path: std.ArrayList(Step) = .empty;
+        defer path.deinit(self.temporary);
+
+        var next_order: u32 = 0;
+        for (0..count) |root| {
+            if (order[root] != unvisited) continue;
+            order[root] = next_order;
+            lowest[root] = next_order;
+            next_order += 1;
+            open[root] = true;
+            try pending.append(self.temporary, @intCast(root));
+            try path.append(self.temporary, .{ .layout = @intCast(root), .field = 0 });
+
+            while (path.items.len != 0) {
+                // `step` points into `path`, which the descent below
+                // may grow: everything read through it is read before
+                // that append, and nothing is read after.
+                const step = &path.items[path.items.len - 1];
+                const layout = step.layout;
+                const fields = self.structs.items[layout].fields;
+                if (step.field < fields.len) {
+                    const field_type = fields[step.field].field_type;
+                    step.field += 1;
+                    if (field_type != .strukt) continue;
+                    const held = field_type.strukt;
+                    if (held == layout) cyclic[layout] = true;
+                    if (order[held] == unvisited) {
+                        order[held] = next_order;
+                        lowest[held] = next_order;
+                        next_order += 1;
+                        open[held] = true;
+                        try pending.append(self.temporary, held);
+                        try path.append(self.temporary, .{ .layout = held, .field = 0 });
+                    } else if (open[held]) {
+                        lowest[layout] = @min(lowest[layout], order[held]);
+                    }
+                    continue;
+                }
+
+                // Every field visited: this layout closes.  Its
+                // struct fields are either closed (their shapes are
+                // final) or still open, which means a cycle the
+                // component check below is about to catch.
+                self.struct_shapes.items[layout] = self.sumShape(layout);
+                _ = path.pop();
+                if (path.items.len != 0) {
+                    const parent = path.items[path.items.len - 1].layout;
+                    lowest[parent] = @min(lowest[parent], lowest[layout]);
+                }
+                if (lowest[layout] != order[layout]) continue;
+
+                // The root of a component: everything pushed at or
+                // after it is a member.  More than one member means
+                // they hold each other, so none has a finite value.
+                var first = pending.items.len;
+                while (pending.items[first - 1] != layout) first -= 1;
+                first -= 1;
+                const members = pending.items[first..];
+                for (members) |member| open[member] = false;
+                if (members.len > 1) {
+                    for (members) |member| cyclic[member] = true;
+                }
+                pending.shrinkRetainingCapacity(first);
+            }
+        }
+        for (cyclic, 0..) |on_cycle, index| {
+            if (on_cycle) self.struct_shapes.items[index] = .{ .values = 1 };
+        }
+    }
+
+    /// Sum one layout's shape from its fields' — valid only once every
+    /// struct field's own shape is final, which is what the closing
+    /// order above guarantees.
+    fn sumShape(self: *const Analyzer, layout: u32) StructShape {
+        var shape: StructShape = .{};
+        for (self.structs.items[layout].fields) |field| {
+            if (self.carriesObjects(field.field_type)) shape.carries = true;
+            shape.values +|= self.valueCount(field.field_type);
+        }
+        shape.values = @min(shape.values, helpers.max_struct_values + 1);
+        return shape;
     }
 
     // File-scope constants --------------------------------------------------
@@ -528,7 +736,7 @@ pub const Analyzer = struct {
     /// each one so every error reports even when nothing uses it.
     pub fn collectConstants(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
-            self.diagnostics.scope = module.prefix;
+            self.diagnostics.scope = module.file;
             for (module.tree.constants) |*declaration| {
                 if (isReserved(declaration.name)) {
                     try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
@@ -549,10 +757,10 @@ pub const Analyzer = struct {
         }
         for (0..self.constant_infos.items.len) |index| {
             const module = self.constant_infos.items[index].module;
-            self.diagnostics.scope = self.modules[module].prefix;
+            self.diagnostics.scope = self.modules[module].file;
             _ = try self.evaluateConstant(@intCast(index));
         }
-        self.diagnostics.scope = "";
+        self.diagnostics.scope = source_mod.root_file;
     }
 
     /// Fold one constant, lazily and cycle-checked.  Null after a
@@ -577,6 +785,16 @@ pub const Analyzer = struct {
         info.state = .evaluating;
         const declaration = info.declaration;
         const module = info.module;
+        if (helpers.deeperThan(declaration.value, helpers.max_expression_depth)) {
+            try self.fail(
+                "luce.sema.nesting",
+                declaration.span,
+                "expression nested too deeply (limit {d})",
+                .{helpers.max_expression_depth},
+            );
+            self.constant_infos.items[index].state = .failed;
+            return null;
+        }
         const folded = try self.foldConstant(module, declaration.value);
         // The map may have grown while folding dependencies; re-find.
         const settled = &self.constant_infos.items[index];
@@ -618,14 +836,14 @@ pub const Analyzer = struct {
     pub fn foldConstant(self: *Analyzer, module: usize, expression: *const ast.Expression) Error!?TypedConstant {
         switch (expression.*) {
             .int_literal => |literal| {
-                const parsed = std.fmt.parseInt(i64, literal.text, 10) catch {
-                    return self.constantError(literal.span, "integer literal out of range", .{});
+                const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
+                    return self.constantError(literal.span, "{s}", .{integer_range_message});
                 };
                 return .{ .value = .{ .int = parsed }, .value_type = .int };
             },
             .float_literal => |literal| {
-                const parsed = std.fmt.parseFloat(f64, literal.text) catch {
-                    return self.constantError(literal.span, "malformed float literal", .{});
+                const parsed = helpers.parseFloatLiteral(literal.text) orelse {
+                    return self.constantError(literal.span, "{s}", .{float_range_message});
                 };
                 return .{ .value = .{ .float = parsed }, .value_type = .float };
             },
@@ -669,6 +887,15 @@ pub const Analyzer = struct {
                 };
             },
             .unary => |unary| {
+                // -9223372036854775808 is one literal, not a negated
+                // one: the sign folds in before the range is checked.
+                if (unary.op == .negate and unary.operand.* == .int_literal) {
+                    const literal = unary.operand.int_literal;
+                    const parsed = helpers.parseIntLiteral(literal.text, true) orelse {
+                        return self.constantError(unary.span, "{s}", .{integer_range_message});
+                    };
+                    return .{ .value = .{ .int = parsed }, .value_type = .int };
+                }
                 const operand = (try self.foldConstant(module, unary.operand)) orelse return null;
                 switch (unary.op) {
                     .negate => switch (operand.value) {
@@ -695,6 +922,24 @@ pub const Analyzer = struct {
                     }
                     const operand = (try self.foldConstant(module, call.arguments[0].value)) orelse return null;
                     return self.foldConvert(call, operand);
+                }
+                // ord is the one builtin that folds, so a character
+                // can be written as one: `ord("(")` where another
+                // language would need character literal syntax.
+                if (std.mem.eql(u8, call.callee, "ord")) {
+                    if (call.arguments.len != 1 or call.arguments[0].name != null) {
+                        return self.constantError(call.span, "ord(text) takes one argument", .{});
+                    }
+                    const operand = (try self.foldConstant(module, call.arguments[0].value)) orelse return null;
+                    if (operand.value != .string) {
+                        return self.constantError(call.span, "ord takes a String, not {s}", .{
+                            try self.typeName(operand.value_type),
+                        });
+                    }
+                    const codepoint = helpers.ordOfLiteral(operand.value.string) orelse {
+                        return self.constantError(call.span, "ord has no codepoint to read from an empty String", .{});
+                    };
+                    return .{ .value = .{ .int = codepoint }, .value_type = .int };
                 }
                 const qualified = try self.qualify(self.modules[module].prefix, call.callee);
                 if (self.struct_names.get(qualified)) |layout_index| {
@@ -909,20 +1154,9 @@ pub const Analyzer = struct {
         }
     }
 
-    pub fn structCycles(self: *const Analyzer, origin: u32, current: u32, depth: usize) bool {
-        if (depth > self.structs.items.len) return true;
-        for (self.structs.items[current].fields) |field| {
-            if (field.field_type == .strukt) {
-                if (field.field_type.strukt == origin) return true;
-                if (self.structCycles(origin, field.field_type.strukt, depth + 1)) return true;
-            }
-        }
-        return false;
-    }
-
     pub fn collectFunctions(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
-            self.diagnostics.scope = module.prefix;
+            self.diagnostics.scope = module.file;
             for (module.tree.functions) |*declaration| {
                 const qualified = try self.qualify(module.prefix, declaration.name);
                 try self.collectFunction(declaration, qualified, module_index, true);
@@ -938,7 +1172,7 @@ pub const Analyzer = struct {
                 }
             }
         }
-        self.diagnostics.scope = "";
+        self.diagnostics.scope = source_mod.root_file;
         try self.checkEntry();
     }
 
@@ -1038,31 +1272,30 @@ pub const Analyzer = struct {
         return types.typeName(self.arena, self.structs.items, self.heap_types.items, of);
     }
 
-    pub fn internConstant(self: *Analyzer, bytes: []const u8) Error!u32 {
-        for (self.constants.items, 0..) |existing, index| {
-            if (std.mem.eql(u8, existing, bytes)) return @intCast(index);
-        }
-        const owned = try self.arena.dupe(u8, bytes);
-        try self.constants.append(self.arena, owned);
-        return @intCast(self.constants.items.len - 1);
-    }
+    // Function bodies ------------------------------------------------------
 
-    // Function lowering ----------------------------------------------------
-
-    pub fn lowerFunction(self: *Analyzer, info: FunctionInfo) Error!mir.Function {
-        self.diagnostics.scope = self.modules[info.module].prefix;
-        defer self.diagnostics.scope = "";
+    pub fn lowerFunction(self: *Analyzer, info: FunctionInfo) Error!mir.build.Lowering {
+        self.diagnostics.scope = self.modules[info.module].file;
+        defer self.diagnostics.scope = source_mod.root_file;
         var builder: builder_mod.FunctionBuilder = .{
             .analyzer = self,
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
-            .return_type = info.return_type,
             .has_frames = info.is_entry and self.options.entry_mode == .evaluator,
+            .code = .{
+                .arena = self.arena,
+                .pool = self.pool,
+                .structs = self.structs.items,
+                .name = info.name,
+                .parameter_count = @intCast(info.parameter_types.len),
+                .return_type = info.return_type,
+                .file = self.modules[info.module].file,
+                .origin = @intCast(info.declaration.span.start),
+            },
         };
         defer builder.deinitScratch();
-        builder.origin = @intCast(info.declaration.span.start);
 
-        try builder.openBlock();
+        try builder.code.openBlock();
         try builder.pushScope();
 
         if (!info.is_entry) {
@@ -1081,8 +1314,8 @@ pub const Analyzer = struct {
                 // A give parameter is an owned binding like any other
                 // (S15): take the object over from the caller on entry.
                 if (gives) {
-                    const value = try builder.emit(.{ .local_get = local }, parameter_type);
-                    _ = try builder.emit(.{ .object_bind = .{ .local = local, .value = value } }, .none);
+                    const value = try builder.code.load(local);
+                    try builder.code.bind(local, value);
                 }
             }
         }
@@ -1091,33 +1324,23 @@ pub const Analyzer = struct {
         try builder.emitScopeEnd();
         builder.popScope();
 
-        // A typed function must return on every path.
+        // A typed function must return on every path.  The span is the
+        // written return type rather than the `func` line: in a long
+        // function that is the claim being broken, and it is what the
+        // reader has to change if they meant something else.
         if (info.return_type != .none and !helpers.returnsOnAllPaths(info.declaration.body)) {
+            const at = if (info.declaration.return_type) |written| written.span else info.declaration.span;
             try self.fail(
                 "luce.sema.return",
-                info.declaration.span,
-                "{s} does not return a value on every path",
-                .{info.declaration.name},
+                at,
+                "{s} must return {s} on every path, and some path reaches the end of its body without returning",
+                .{ info.declaration.name, try self.typeName(info.return_type) },
             );
         }
-        try builder.sealOpenBlocks();
-
-        const line_starts = try self.moduleLineStarts(info.module);
-        const origins = try self.arena.alloc(mir.Origin, builder.origin_offsets.items.len);
-        for (builder.origin_offsets.items, origins) |offset, *slot| {
-            slot.* = helpers.placeOf(line_starts, offset);
-        }
-
-        return .{
-            .name = info.name,
-            .parameter_count = @intCast(info.parameter_types.len),
-            .return_type = info.return_type,
-            .locals = try builder.locals.toOwnedSlice(self.arena),
-            .instructions = try builder.instructions.toOwnedSlice(self.arena),
-            .result_types = try builder.result_types.toOwnedSlice(self.arena),
-            .blocks = try builder.finishBlocks(),
-            .origins = origins,
-            .source = try self.moduleSourceName(info.module),
-        };
+        // Everything from here — sealing the open blocks, freezing the
+        // block lists, turning the recorded source offsets into lines
+        // and columns, naming the file — is stage 6's, and runs when
+        // `mir.build` closes the tape.
+        return builder.code;
     }
 };

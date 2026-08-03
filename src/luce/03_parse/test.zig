@@ -1,21 +1,30 @@
-//! Parser tests — coverage for declarations, statements, and expressions.
+//! Parser tests.
+//!
+//! Three things get proved here, in order: that the grammar accepts
+//! exactly what docs/LANGUAGE.md describes and builds the right tree
+//! for it; that a broken file yields one useful diagnostic per
+//! mistake, at the offending token, instead of a cascade; and that
+//! hostile input reports rather than crashing, hanging, or flooding.
 
 const std = @import("std");
 const parser_mod = @import("../03_parse.zig");
+const source_mod = @import("../01_source.zig");
 const ast = @import("ast.zig");
+const grammar = @import("grammar.zig");
 const diagnostics_mod = @import("../support/diagnostics.zig");
 
 const testing = std.testing;
 const Diagnostics = diagnostics_mod.Diagnostics;
 
 // ---------------------------------------------------------------------------
-// Tests
+// Harness
 // ---------------------------------------------------------------------------
 
 const Parsed = struct {
     arena: std.heap.ArenaAllocator,
     diagnostics: Diagnostics,
     program: ast.Program,
+    source: []const u8,
 
     fn deinit(self: *Parsed) void {
         self.diagnostics.deinit();
@@ -29,11 +38,88 @@ fn parseText(text: []const u8) !Parsed {
     var diagnostics = Diagnostics.init(testing.allocator);
     errdefer diagnostics.deinit();
     const program = try parser_mod.parse(arena.allocator(), testing.allocator, text, &diagnostics);
-    return .{ .arena = arena, .diagnostics = diagnostics, .program = program };
+    return .{ .arena = arena, .diagnostics = diagnostics, .program = program, .source = text };
 }
 
+fn dump(parsed: *const Parsed) void {
+    for (0..parsed.diagnostics.count()) |index| {
+        const item = parsed.diagnostics.at(index).?;
+        const at = source_mod.place(parsed.source, item.span.start);
+        std.debug.print("  {d}:{d}: {s} [{s}]\n", .{ at.line, at.column, item.message, item.code });
+    }
+}
+
+/// Parse `text` and require it to be accepted without complaint.
+fn expectClean(text: []const u8) !Parsed {
+    var parsed = try parseText(text);
+    errdefer parsed.deinit();
+    if (parsed.diagnostics.count() != 0) {
+        std.debug.print("expected a clean parse of:\n{s}got:\n", .{text});
+        dump(&parsed);
+        return error.TestUnexpectedResult;
+    }
+    return parsed;
+}
+
+const Wanted = struct {
+    code: []const u8,
+    line: usize,
+    column: usize,
+    /// A fragment the message must contain — the wording that makes
+    /// the diagnostic actionable, not the whole sentence.
+    contains: []const u8 = "",
+};
+
+/// Parse `text` and require exactly `wanted`, in order: the count is
+/// part of the assertion, because "one mistake, one diagnostic" is
+/// the property most of these tests exist to hold.
+fn expectDiagnostics(text: []const u8, wanted: []const Wanted) !void {
+    var parsed = try parseText(text);
+    defer parsed.deinit();
+    errdefer {
+        std.debug.print("for:\n{s}got:\n", .{text});
+        dump(&parsed);
+    }
+    try testing.expectEqual(wanted.len, parsed.diagnostics.count());
+    for (wanted, 0..) |want, index| {
+        const item = parsed.diagnostics.at(index).?;
+        try testing.expectEqualStrings(want.code, item.code);
+        const at = source_mod.place(text, item.span.start);
+        try testing.expectEqual(want.line, at.line);
+        try testing.expectEqual(want.column, at.column);
+        if (want.contains.len != 0) {
+            if (std.mem.indexOf(u8, item.message, want.contains) == null) {
+                std.debug.print("message '{s}' lacks '{s}'\n", .{ item.message, want.contains });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+/// A source built by repeating `unit` `count` times between `head` and
+/// `tail` — the shape every pathological-input test needs.
+fn repeated(head: []const u8, unit: []const u8, count: usize, tail: []const u8) ![]u8 {
+    var text: std.ArrayList(u8) = .empty;
+    errdefer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, head);
+    for (0..count) |_| try text.appendSlice(testing.allocator, unit);
+    try text.appendSlice(testing.allocator, tail);
+    return text.toOwnedSlice(testing.allocator);
+}
+
+fn hasCode(parsed: *const Parsed, code: []const u8) bool {
+    for (0..parsed.diagnostics.count()) |index| {
+        if (std.mem.eql(u8, parsed.diagnostics.at(index).?.code, code)) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Declarations
+// ---------------------------------------------------------------------------
+
 test "the plan's scale example parses" {
-    var parsed = try parseText(
+    var parsed = try expectClean(
         \\struct Point:
         \\    x: Float
         \\    y: Float
@@ -51,7 +137,6 @@ test "the plan's scale example parses" {
         \\
     );
     defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
     try testing.expectEqual(@as(usize, 1), parsed.program.structs.len);
     try testing.expectEqual(@as(usize, 2), parsed.program.functions.len);
     try testing.expectEqualStrings("Point", parsed.program.structs[0].name);
@@ -68,8 +153,492 @@ test "the plan's scale example parses" {
     try testing.expectEqualStrings("position", assign.target.field.field);
 }
 
+test "every declaration form at file scope parses into its own list" {
+    var parsed = try expectClean(
+        \\import std.math
+        \\import geo
+        \\
+        \\let width = 80
+        \\let banner: String = "loom"
+        \\
+        \\struct Theme:
+        \\    keyword: Int
+        \\    comment: Int
+        \\
+        \\    func default() -> Int:
+        \\        return 176
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 2), parsed.program.imports.len);
+    // Both spellings bind the bare name; only the origin differs.
+    try testing.expectEqualStrings("math", parsed.program.imports[0].name);
+    try testing.expectEqual(source_mod.Origin.standard, parsed.program.imports[0].origin);
+    try testing.expectEqualStrings("geo", parsed.program.imports[1].name);
+    try testing.expectEqual(source_mod.Origin.sibling, parsed.program.imports[1].origin);
+    try testing.expectEqual(@as(usize, 2), parsed.program.constants.len);
+    try testing.expect(parsed.program.constants[0].annotation == null);
+    try testing.expectEqualStrings("String", parsed.program.constants[1].annotation.?.name);
+    try testing.expectEqual(@as(usize, 2), parsed.program.structs[0].fields.len);
+    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
+    try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
+}
+
+test "parameter modes, return types, and dotted type names parse" {
+    var parsed = try expectClean(
+        \\func stash(index: Map(String, List(Int)), hits: give List(Int), origin: shapes.Point) -> List(Int):
+        \\    return give hits
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    const stash = parsed.program.functions[0];
+    try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
+    try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
+    try testing.expectEqualStrings("shapes.Point", stash.parameters[2].type_name.name);
+    try testing.expectEqualStrings("List", stash.return_type.?.name);
+    try testing.expectEqualStrings("Int", stash.return_type.?.arguments[0].name);
+}
+
+test "struct bodies parse fields and namespaced functions" {
+    var parsed = try expectClean(
+        \\struct Helpers:
+        \\    value: Int
+        \\    func double(value: Int) -> Int:
+        \\        return value * 2
+        \\
+        \\func evaluate(input: Input, output: Output):
+        \\    output.value = Helpers.double(input.value)
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].fields.len);
+    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
+    // Dotted calls parse as method nodes; the analyzer decides whether
+    // the chain names a namespace or a value.
+    const dotted = parsed.program.functions[0].body.statements[0].assign.value.method;
+    try testing.expectEqualStrings("double", dotted.name);
+    try testing.expectEqualStrings("Helpers", dotted.target.name.text);
+}
+
+test "top-level let constants parse; top-level var is refused" {
+    var parsed = try expectClean(
+        \\let width = 80
+        \\let banner: String = "loom " + version
+        \\let version = "2.0"
+        \\
+        \\func main():
+        \\    let unused = width
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 3), parsed.program.constants.len);
+    try testing.expectEqualStrings("width", parsed.program.constants[0].name);
+    try testing.expect(parsed.program.constants[0].annotation == null);
+    try testing.expectEqualStrings("String", parsed.program.constants[1].annotation.?.name);
+    try testing.expect(parsed.program.constants[1].value.* == .binary);
+
+    try expectDiagnostics("var counter = 0\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "var lives inside functions" },
+    });
+}
+
+test "array shape wildcards parse in annotations" {
+    var parsed = try expectClean(
+        \\func total(grid: Array(Int, _, _)) -> Int:
+        \\    return dim(grid, 0)
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    const parameter = parsed.program.functions[0].parameters[0];
+    try testing.expectEqualStrings("Array", parameter.type_name.name);
+    try testing.expectEqual(@as(u8, 2), parameter.type_name.wildcards);
+}
+
+// ---------------------------------------------------------------------------
+// Statements
+// ---------------------------------------------------------------------------
+
+test "late declarations parse: var with annotation only" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    var report: Builder
+        \\    var grid: Array(Int, _, _)
+        \\    var count: Int
+        \\    report = new Builder()
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    try testing.expect(body.statements[0].variable.value == null);
+    try testing.expectEqualStrings("Builder", body.statements[0].variable.annotation.?.name);
+    try testing.expect(body.statements[1].variable.value == null);
+    try testing.expect(body.statements[2].variable.value == null);
+
+    // let never late-declares, and var needs a type or a value.
+    try expectDiagnostics("func main():\n    let frozen: Int\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "let always initializes" },
+    });
+    try expectDiagnostics("func main():\n    var untyped\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 16, .contains = "'=' with an initial value" },
+    });
+}
+
+test "every assignment place parses, nested and compound" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    var n = 0
+        \\    var p = Point(x = 1)
+        \\    var grid = new Array(Int, 2, 2)
+        \\    var cells = [Point(x = 1)]
+        \\    n = 1
+        \\    p.x = 2
+        \\    grid[0, 1] = 3
+        \\    p.inner.n = 4
+        \\    cells[0].value = 5
+        \\    grid[0, 1] += 1
+        \\    n -= 1
+        \\    n *= 2
+        \\    n /= 2
+        \\    n %= 3
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    try testing.expect(body.statements[4].assign.target == .name);
+    try testing.expect(body.statements[5].assign.target == .field);
+    try testing.expectEqual(@as(usize, 2), body.statements[6].assign.target.index.indices.len);
+    // p.inner.n and cells[0].value are nested places: a chain the
+    // analyzer reads once and rebuilds.
+    try testing.expect(body.statements[7].assign.target == .chain);
+    try testing.expect(body.statements[8].assign.target == .chain);
+    try testing.expectEqual(ast.BinaryOp.add, body.statements[9].assign.compound.?);
+    try testing.expectEqual(ast.BinaryOp.subtract, body.statements[10].assign.compound.?);
+    try testing.expectEqual(ast.BinaryOp.multiply, body.statements[11].assign.compound.?);
+    try testing.expectEqual(ast.BinaryOp.divide, body.statements[12].assign.compound.?);
+    try testing.expectEqual(ast.BinaryOp.remainder, body.statements[13].assign.compound.?);
+    // The compound form is still one assignment, never a read plus a
+    // write in the tree.
+    try testing.expect(body.statements[9].assign.value.* == .int_literal);
+}
+
+test "every for form parses into the node its lowering needs" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    var xs = [1]
+        \\    var m = new Map(String, Int)
+        \\    for i in range(0, 10):
+        \\        print(i)
+        \\    for x in xs:
+        \\        print(x)
+        \\    for key in m:
+        \\        print(key)
+        \\    for i, x in xs:
+        \\        print(x)
+        \\    for key, value in m:
+        \\        print(value)
+        \\    for i in range(0, 10,):
+        \\        print(i)
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    try testing.expect(body.statements[2] == .for_range);
+    try testing.expectEqualStrings("i", body.statements[2].for_range.name);
+    try testing.expect(body.statements[3] == .for_each);
+    try testing.expect(body.statements[3].for_each.value_name == null);
+    try testing.expect(body.statements[4] == .for_each);
+    try testing.expectEqualStrings("i", body.statements[5].for_each.name);
+    try testing.expectEqualStrings("x", body.statements[5].for_each.value_name.?);
+    try testing.expectEqualStrings("value", body.statements[6].for_each.value_name.?);
+    // A trailing comma inside range() is still a range loop.
+    try testing.expect(body.statements[7] == .for_range);
+
+    // `range` only means the loop form in a for header with one name.
+    var general = try expectClean(
+        \\func main():
+        \\    for i, x in range(0, 3):
+        \\        print(x)
+        \\
+    );
+    defer general.deinit();
+    try testing.expect(general.program.functions[0].body.statements[0] == .for_each);
+}
+
+test "control flow, precedence, and elif chains parse" {
+    var parsed = try expectClean(
+        \\func evaluate(input: Input, output: Output):
+        \\    var total = 0
+        \\    for index in range(0, 10):
+        \\        if index % 2 == 0 and index != 4:
+        \\            total = total + index * 2
+        \\        elif index == 5:
+        \\            continue
+        \\        else:
+        \\            break
+        \\    while total > 100:
+        \\        total = total - 1
+        \\    output.total = total
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    try testing.expectEqual(@as(usize, 4), body.statements.len);
+
+    // Precedence: total + index * 2 parses as total + (index * 2).
+    const loop = body.statements[1].for_range;
+    const conditional = loop.body.statements[0].conditional;
+    const sum = conditional.then_block.statements[0].assign.value.binary;
+    try testing.expectEqual(ast.BinaryOp.add, sum.op);
+    try testing.expectEqual(ast.BinaryOp.multiply, sum.right.binary.op);
+    // The elif chain nests inside the else block.
+    try testing.expect(conditional.else_block != null);
+    const chained = conditional.else_block.?.statements[0].conditional;
+    try testing.expect(chained.else_block != null);
+    try testing.expect(chained.else_block.?.statements[0] == .break_statement);
+}
+
+test "return, break, and continue parse with and without a value" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    while true:
+        \\        if true:
+        \\            break
+        \\        continue
+        \\    return
+        \\
+        \\func value() -> Int:
+        \\    return 1 + 2
+        \\
+    );
+    defer parsed.deinit();
+    const loop = parsed.program.functions[0].body.statements[0].while_loop;
+    try testing.expect(loop.body.statements[0].conditional.then_block.statements[0] == .break_statement);
+    try testing.expect(loop.body.statements[1] == .continue_statement);
+    try testing.expect(parsed.program.functions[0].body.statements[1].return_statement.value == null);
+    try testing.expect(parsed.program.functions[1].body.statements[0].return_statement.value.?.* == .binary);
+}
+
+test "ownership verbs parse: give/copy expressions, free calls, give parameters" {
+    var parsed = try expectClean(
+        \\func stash(index: Map(String, List(Int)), hits: give List(Int)):
+        \\    index["latest"] = give hits
+        \\
+        \\func main():
+        \\    var mine = [1, 2]
+        \\    let moved = give mine
+        \\    let doubled = copy moved
+        \\    var index = new Map(String, List(Int))
+        \\    stash(index, give doubled)
+        \\    free(index)
+        \\
+    );
+    defer parsed.deinit();
+
+    const stash = parsed.program.functions[0];
+    try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
+    try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
+    try testing.expect(stash.body.statements[0].assign.value.* == .give);
+
+    const body = parsed.program.functions[1].body;
+    const moved = body.statements[1].let.value;
+    try testing.expect(moved.* == .give);
+    try testing.expectEqualStrings("mine", moved.give.operand.name.text);
+    try testing.expect(body.statements[2].let.value.* == .copy);
+    const call_arguments = body.statements[4].expression.value.call.arguments;
+    try testing.expect(call_arguments[1].value.* == .give);
+    // free is an ordinary builtin call, not a keyword.
+    try testing.expectEqualStrings("free", body.statements[5].expression.value.call.callee);
+}
+
+// ---------------------------------------------------------------------------
+// Expressions
+// ---------------------------------------------------------------------------
+
+test "the precedence table binds exactly as docs/LANGUAGE.md states" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    let a = 1 or 2 and 3
+        \\    let b = 1 and 2 == 3
+        \\    let c = 1 == 2 + 3
+        \\    let d = 1 + 2 * 3
+        \\    let e = 1 - 2 - 3
+        \\    let f = 2 * 3 % 4
+        \\    let g = (1 + 2) * 3
+        \\    let h = -x * y
+        \\    let i = (not a) == b
+        \\    let j = not a
+        \\    let k = (a < b) == (c < d)
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+
+    // or is loosest: 1 or (2 and 3)
+    const a = body.statements[0].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.logic_or, a.op);
+    try testing.expectEqual(ast.BinaryOp.logic_and, a.right.binary.op);
+    // and binds looser than comparison: 1 and (2 == 3)
+    const b = body.statements[1].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.logic_and, b.op);
+    try testing.expectEqual(ast.BinaryOp.equal, b.right.binary.op);
+    // comparison binds looser than +: 1 == (2 + 3)
+    const c = body.statements[2].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.equal, c.op);
+    try testing.expectEqual(ast.BinaryOp.add, c.right.binary.op);
+    // + binds looser than *: 1 + (2 * 3)
+    const d = body.statements[3].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.add, d.op);
+    try testing.expectEqual(ast.BinaryOp.multiply, d.right.binary.op);
+    // Same-precedence operators associate left: (1 - 2) - 3
+    const e = body.statements[4].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.subtract, e.op);
+    try testing.expectEqual(ast.BinaryOp.subtract, e.left.binary.op);
+    const f = body.statements[5].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.remainder, f.op);
+    try testing.expectEqual(ast.BinaryOp.multiply, f.left.binary.op);
+    // Parentheses override: (1 + 2) * 3
+    const g = body.statements[6].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.multiply, g.op);
+    try testing.expectEqual(ast.BinaryOp.add, g.left.binary.op);
+    // Prefix binds tighter than any binary operator: (-x) * y
+    const h = body.statements[7].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.multiply, h.op);
+    try testing.expectEqual(ast.UnaryOp.negate, h.left.unary.op);
+    // Parenthesized, `not` in front of a comparison is legal and
+    // means what it says; bare, it is refused — see the two tests
+    // below.
+    const i = body.statements[8].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.equal, i.op);
+    try testing.expectEqual(ast.UnaryOp.logic_not, i.left.unary.op);
+    try testing.expectEqual(ast.UnaryOp.logic_not, body.statements[9].let.value.unary.op);
+    // Two comparisons compared: legal, because each pair of
+    // parentheses starts its own chain.
+    const k = body.statements[10].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.equal, k.op);
+    try testing.expectEqual(ast.BinaryOp.less, k.left.binary.op);
+    try testing.expectEqual(ast.BinaryOp.less, k.right.binary.op);
+}
+
+test "'not' in front of a comparison is refused, naming both readings" {
+    // docs/LANGUAGE.md: `not` is a prefix operator, so `not a == b` is
+    // `(not a) == b` here and `not (a == b)` in Python.  With Bool
+    // operands both parse and disagree, so the parser will not pick.
+    for ([_][]const u8{ "==", "!=", "<", "<=", ">", ">=" }) |operator| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "func main():\n    let x = not a {s} b\n",
+            .{operator},
+        );
+        defer testing.allocator.free(source);
+        try expectDiagnostics(source, &.{
+            .{ .code = "luce.parse.precedence", .line = 2, .column = 13, .contains = "for Python's" },
+        });
+    }
+    // The message quotes the operand back, so the two readings are
+    // spelled in the reader's own words.
+    try expectDiagnostics("func main():\n    if not ready == other:\n        return\n", &.{
+        .{
+            .code = "luce.parse.precedence",
+            .line = 2,
+            .column = 8,
+            .contains = "write '(not ready) == …' for this reading, or 'not (ready == …)' for Python's",
+        },
+    });
+    // Either pair of parentheses settles it, and `not` in front of
+    // anything that is not a comparison is untouched.
+    var fine = try expectClean(
+        \\func main():
+        \\    let a = (not p) == q
+        \\    let b = not (p == q)
+        \\    let c = not p and q
+        \\    let d = not p
+        \\    let e = not not p
+        \\
+    );
+    fine.deinit();
+}
+
+test "comparison does not chain, and the fix is written out" {
+    // docs/LANGUAGE.md: `a < b < c` is one comparison in Python and a
+    // Bool-versus-Int type error here.  Refuse it in the parser, where
+    // the operators are still in hand.
+    try expectDiagnostics("func main():\n    let x = a < b < c\n", &.{
+        .{ .code = "luce.parse.chain", .line = 2, .column = 19, .contains = "write 'a < b and b < c'" },
+    });
+    // The whole level is non-associative, not just a repeated
+    // operator: mixed comparisons chain no better than matched ones.
+    try expectDiagnostics("func main():\n    let x = a < b == c\n", &.{
+        .{ .code = "luce.parse.chain", .line = 2, .column = 19, .contains = "write 'a < b and b == c'" },
+    });
+    try expectDiagnostics("func main():\n    if 0 <= i < len(xs):\n        return\n", &.{
+        .{ .code = "luce.parse.chain", .line = 2, .column = 15, .contains = "write '0 <= i and i < len(xs)'" },
+    });
+    // Too long to quote back, so the fix is spelled with placeholders
+    // rather than half a screen of the reader's source.
+    try expectDiagnostics(
+        "func main():\n    let x = alpha_value_number < beta_value_here < gamma\n",
+        &.{.{ .code = "luce.parse.chain", .line = 2, .column = 50, .contains = "does not chain" }},
+    );
+    // Comparisons that are not chained stay legal, parenthesized or
+    // separated by `and`.
+    var fine = try expectClean(
+        \\func main():
+        \\    let a = x < y and y < z
+        \\    let b = (x < y) == (y < z)
+        \\    let c = x + 1 < y + 2
+        \\
+    );
+    fine.deinit();
+}
+
+test "every literal form parses" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    let a = 42
+        \\    let b = 2.5
+        \\    let c = 1.5e2
+        \\    let d = 1e3
+        \\    let e = true
+        \\    let f = false
+        \\    let g = "text"
+        \\    let h = [1, 2, 3]
+        \\    let i = []
+        \\    let j = new Builder()
+        \\    let k = new Builder
+        \\    let l = new List(Int)
+        \\    let m = new Map(String, Int)
+        \\    let n = new Array(Float, 4, 8)
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    try testing.expect(body.statements[0].let.value.* == .int_literal);
+    try testing.expect(body.statements[1].let.value.* == .float_literal);
+    try testing.expect(body.statements[2].let.value.* == .float_literal);
+    try testing.expect(body.statements[3].let.value.* == .float_literal);
+    try testing.expect(body.statements[4].let.value.bool_literal.value);
+    try testing.expect(!body.statements[5].let.value.bool_literal.value);
+    try testing.expectEqualStrings("text", body.statements[6].let.value.string_literal.decoded);
+    try testing.expectEqual(@as(usize, 3), body.statements[7].let.value.list_literal.elements.len);
+    try testing.expectEqual(@as(usize, 0), body.statements[8].let.value.list_literal.elements.len);
+    try testing.expectEqualStrings("Builder", body.statements[9].let.value.new_object.type_name.name);
+    try testing.expectEqualStrings("Builder", body.statements[10].let.value.new_object.type_name.name);
+    try testing.expectEqualStrings("Int", body.statements[11].let.value.new_object.type_name.arguments[0].name);
+    try testing.expectEqualStrings("Map", body.statements[12].let.value.new_object.type_name.name);
+    try testing.expectEqual(@as(usize, 2), body.statements[13].let.value.new_object.dims.len);
+}
+
 test "collections parse: types, new, literals, indexing, slices, for-in" {
-    var parsed = try parseText(
+    var parsed = try expectClean(
         \\func main():
         \\    var xs: List(Int) = [1, 2, 3]
         \\    var m = new Map(String, List(Int))
@@ -81,12 +650,12 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
         \\    let mid = xs[1:2]
         \\    let head = xs[:1]
         \\    let tail = xs[1:]
+        \\    let whole = xs[:]
         \\    for x in xs:
         \\        append(b, str(x))
         \\
     );
     defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
     const body = parsed.program.functions[0].body;
 
     const annotated = body.statements[0].variable;
@@ -104,123 +673,738 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
 
     try testing.expectEqual(@as(usize, 1), body.statements[4].assign.target.index.indices.len);
     try testing.expectEqual(@as(usize, 2), body.statements[5].assign.target.index.indices.len);
-    try testing.expect(body.statements[7].let.value.* == .slice_range);
+    const mid = body.statements[7].let.value.slice_range;
+    try testing.expect(mid.start != null and mid.end != null);
     try testing.expect(body.statements[8].let.value.slice_range.start == null);
     try testing.expect(body.statements[9].let.value.slice_range.end == null);
-    try testing.expectEqualStrings("x", body.statements[10].for_each.name);
-}
-
-test "late declarations parse: var with annotation only" {
-    var parsed = try parseText(
-        \\func main():
-        \\    var report: Builder
-        \\    var grid: Array(Int, _, _)
-        \\    var count: Int
-        \\    report = new Builder()
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
-    const body = parsed.program.functions[0].body;
-    try testing.expect(body.statements[0].variable.value == null);
-    try testing.expectEqualStrings("Builder", body.statements[0].variable.annotation.?.name);
-    try testing.expect(body.statements[1].variable.value == null);
-    try testing.expect(body.statements[2].variable.value == null);
-
-    // let never late-declares, and var needs a type or a value.
-    var bad_let = try parseText(
-        \\func main():
-        \\    let frozen: Int
-        \\
-    );
-    defer bad_let.deinit();
-    try testing.expect(bad_let.diagnostics.count() > 0);
-    var bad_var = try parseText(
-        \\func main():
-        \\    var untyped
-        \\
-    );
-    defer bad_var.deinit();
-    try testing.expect(bad_var.diagnostics.count() > 0);
-}
-
-test "array shape wildcards parse in annotations" {
-    var parsed = try parseText(
-        \\func total(grid: Array(Int, _, _)) -> Int:
-        \\    return dim(grid, 0)
-        \\
-        \\func main():
-        \\    return
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
-    const parameter = parsed.program.functions[0].parameters[0];
-    try testing.expectEqualStrings("Array", parameter.type_name.name);
-    try testing.expectEqual(@as(u8, 2), parameter.type_name.wildcards);
-}
-
-test "struct bodies parse fields and namespaced functions" {
-    var parsed = try parseText(
-        \\struct Helpers:
-        \\    value: Int
-        \\    func double(value: Int) -> Int:
-        \\        return value * 2
-        \\
-        \\func evaluate(input: Input, output: Output):
-        \\    output.value = Helpers.double(input.value)
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
-    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].fields.len);
-    try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
-    // Dotted calls parse as method nodes; the analyzer decides whether
-    // the chain names a namespace or a value.
-    const dotted = parsed.program.functions[0].body.statements[0].assign.value.method;
-    try testing.expectEqualStrings("double", dotted.name);
-    try testing.expectEqualStrings("Helpers", dotted.target.name.text);
+    const whole = body.statements[10].let.value.slice_range;
+    try testing.expect(whole.start == null and whole.end == null);
+    try testing.expectEqualStrings("x", body.statements[11].for_each.name);
 }
 
 test "method calls parse on any postfix expression" {
-    var parsed = try parseText(
+    var parsed = try expectClean(
         \\func main():
         \\    var xs = [3, 1]
         \\    xs.append(2)
         \\    xs.sort()
         \\    let n = xs[0:2].find(3)
         \\    let word = "Hello".lower()
+        \\    let deep = shapes.Point.origin().x
         \\
     );
     defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
     const body = parsed.program.functions[0].body;
     const call = body.statements[1].expression.value.method;
     try testing.expectEqualStrings("append", call.name);
     try testing.expect(body.statements[3].let.value.method.target.* == .slice_range);
     try testing.expect(body.statements[4].let.value.method.target.* == .string_literal);
+    // module.Struct.member() is a method node whose target is the
+    // dotted chain; the analyzer resolves the namespace.
+    const deep = body.statements[5].let.value.field;
+    try testing.expectEqualStrings("x", deep.name);
+    try testing.expectEqualStrings("origin", deep.target.method.name);
 }
 
-test "deeply nested expressions report instead of overflowing the stack" {
-    const allocator = testing.allocator;
-    var opens: std.ArrayList(u8) = .empty;
-    defer opens.deinit(allocator);
-    try opens.appendSlice(allocator, "func main():\n    let x = ");
-    for (0..5000) |_| try opens.append(allocator, '(');
-    try opens.append(allocator, '1');
-    for (0..5000) |_| try opens.append(allocator, ')');
-    try opens.append(allocator, '\n');
-
-    var parsed = try parseText(opens.items);
+test "calls parse positional, named, and trailing-comma argument lists" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    f()
+        \\    f(1, 2)
+        \\    f(1, 2,)
+        \\    let p = Point(x = 1, y = 2)
+        \\    let q = Point(x = 1,)
+        \\    let xs = [1, 2,]
+        \\    g(a = 1 == 2)
+        \\
+    );
     defer parsed.deinit();
-    // The point is that this returns at all (no crash); it must also
-    // have reported the nesting limit.
-    var saw_nesting = false;
-    for (0..parsed.diagnostics.count()) |index| {
-        if (std.mem.eql(u8, parsed.diagnostics.at(index).?.code, "luce.parse.nesting")) saw_nesting = true;
-    }
-    try testing.expect(saw_nesting);
+    const body = parsed.program.functions[0].body;
+    try testing.expectEqual(@as(usize, 0), body.statements[0].expression.value.call.arguments.len);
+    try testing.expectEqual(@as(usize, 2), body.statements[1].expression.value.call.arguments.len);
+    try testing.expectEqual(@as(usize, 2), body.statements[2].expression.value.call.arguments.len);
+    const named = body.statements[3].let.value.call.arguments;
+    try testing.expectEqualStrings("x", named[0].name.?);
+    try testing.expectEqualStrings("y", named[1].name.?);
+    try testing.expectEqual(@as(usize, 1), body.statements[4].let.value.call.arguments.len);
+    try testing.expectEqual(@as(usize, 2), body.statements[5].let.value.list_literal.elements.len);
+    // `a = 1 == 2` is one named argument, not a comparison of names.
+    const compared = body.statements[6].expression.value.call.arguments[0];
+    try testing.expectEqualStrings("a", compared.name.?);
+    try testing.expect(compared.value.* == .binary);
 }
+
+test "strings decode escapes" {
+    var parsed = try expectClean(
+        \\func evaluate(input: Input, output: Output):
+        \\    output.text = "line\none\ttab \"quoted\""
+        \\
+    );
+    defer parsed.deinit();
+    const value = parsed.program.functions[0].body.statements[0].assign.value;
+    try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
+}
+
+test "f-strings expand to str()-wrapped concatenation" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    let a = f"x = {x}, y = {y}"
+        \\    let b = f"{{literal}}"
+        \\    let c = f""
+        \\    let d = f"{a + b}"
+        \\    let e = f"{m["key"]}"
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    // "x = " + str(x) + ", y = " + str(y), left-associated.
+    const a = body.statements[0].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.add, a.op);
+    try testing.expectEqualStrings("str", a.right.call.callee);
+    try testing.expectEqualStrings("y", a.right.call.arguments[0].value.name.text);
+    // Doubled braces are literal text, with no interpolation at all.
+    try testing.expectEqualStrings("{literal}", body.statements[1].let.value.string_literal.decoded);
+    try testing.expectEqualStrings("", body.statements[2].let.value.string_literal.decoded);
+    // A hole is a whole expression, and may contain a nested string.
+    try testing.expect(body.statements[3].let.value.call.arguments[0].value.* == .binary);
+    try testing.expect(body.statements[4].let.value.call.arguments[0].value.* == .index);
+}
+
+test "spans point at the source the node came from" {
+    const text =
+        \\func main():
+        \\    let total = alpha + beta
+        \\
+    ;
+    var parsed = try expectClean(text);
+    defer parsed.deinit();
+    const value = parsed.program.functions[0].body.statements[0].let.value;
+    try testing.expectEqualStrings("alpha + beta", value.span().slice(text));
+    try testing.expectEqualStrings("alpha", value.binary.left.span().slice(text));
+    try testing.expectEqualStrings("beta", value.binary.right.span().slice(text));
+}
+
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
+test "five unrelated mistakes yield five diagnostics, one each" {
+    // The property that separates a finished parser from a started
+    // one: no mistake swallows the next, and none invents an error
+    // out of its own wreckage.
+    try expectDiagnostics(
+        \\func a():
+        \\    let x =
+        \\
+        \\func b()
+        \\    return 1
+        \\
+        \\func c():
+        \\    let 3 = 4
+        \\
+        \\struct D
+        \\    x: Int
+        \\
+        \\func e():
+        \\    if q = 2:
+        \\        return
+        \\
+    , &.{
+        .{ .code = "luce.parse.expression", .line = 2, .column = 12 },
+        .{ .code = "luce.parse.expected", .line = 4, .column = 9, .contains = "':' to open the block" },
+        .{ .code = "luce.parse.expected", .line = 8, .column = 9, .contains = "a binding name" },
+        .{ .code = "luce.parse.expected", .line = 10, .column = 9, .contains = "':' after the struct name" },
+        .{ .code = "luce.parse.expected", .line = 14, .column = 10, .contains = "write '=='" },
+    });
+}
+
+test "a header that fails takes its orphaned body with it" {
+    // Without this, one missing ':' reports once for the header and
+    // then once per statement of the body it left stranded.
+    try expectDiagnostics("func main()\n    let x = 1\n    let y = 2\n    print(x)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 12 },
+    });
+    try expectDiagnostics("func main():\n    if x > 1\n        y = 2\n        z = 3\n    print(4)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 13 },
+    });
+    try expectDiagnostics("struct D\n    x: Int\n    y: Int\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 9 },
+    });
+    // A header whose ':' is the *only* thing wrong is read on anyway:
+    // the layout says a block was meant, so the body is parsed and its
+    // tree is the one the reader wrote.
+    var recovered = try parseText("func main()\n    let x = 1\n    print(x)\n");
+    defer recovered.deinit();
+    try testing.expectEqual(@as(usize, 1), recovered.diagnostics.count());
+    try testing.expectEqual(@as(usize, 1), recovered.program.functions.len);
+    try testing.expectEqual(@as(usize, 2), recovered.program.functions[0].body.statements.len);
+    // And a real mistake inside that body is still found, rather than
+    // being swallowed with the header.
+    try expectDiagnostics("func main()\n    let x = 1\n    let y =\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "':' to open the block" },
+        .{ .code = "luce.parse.expression", .line = 3, .column = 12, .contains = "found end of line" },
+    });
+    try expectDiagnostics("struct D\n    x: Int\n    y:\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "':' after the struct name" },
+        .{ .code = "luce.parse.expected", .line = 3, .column = 7, .contains = "a type name" },
+    });
+    // With no body to read on into there is nothing to recover, and
+    // the header's own diagnostic stands alone.
+    try expectDiagnostics("func main()\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 12 },
+    });
+}
+
+test "recovery resumes at the next declaration, not inside the last one" {
+    var parsed = try parseText(
+        \\func evaluate(input: Input, output: Output):
+        \\    let = 3
+        \\    let ok = 1
+        \\    output.value = ok +
+        \\
+        \\func helper() -> Int:
+        \\    return 2
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expect(parsed.diagnostics.count() >= 2);
+    // Recovery still sees both functions, and the good statement
+    // between the two broken ones.
+    try testing.expectEqual(@as(usize, 2), parsed.program.functions.len);
+    try testing.expectEqualStrings("helper", parsed.program.functions[1].name);
+}
+
+test "a statement that runs past its newline reports once and stops" {
+    // `in` is not an operator; the old parser reported the missing
+    // newline and then "expected an expression" on the leftovers.
+    try expectDiagnostics("func main():\n    let b = x in xs\n    print(1)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 15 },
+    });
+    try expectDiagnostics("func main():\n    let a = 1 let b = 2\n    print(1)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 15, .contains = "end of line" },
+    });
+}
+
+test "a file that starts indented reports the indentation, not the statement" {
+    try expectDiagnostics("    let x = 1\nlet y = 2\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "left margin" },
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic quality
+// ---------------------------------------------------------------------------
+
+test "the ordinary mistakes name themselves and point at the offending token" {
+    const Case = struct { source: []const u8, wanted: Wanted };
+    const cases = [_]Case{
+        // `=` where `==` was meant, in both condition positions.
+        .{
+            .source = "func main():\n    if x = 1:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 10, .contains = "write '==' to compare" },
+        },
+        .{
+            .source = "func main():\n    while x = 1:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 13, .contains = "write '==' to compare" },
+        },
+        // A keyword used as a name says so, rather than "expected a name".
+        .{
+            .source = "func main():\n    let for = 1\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = "'for' is a keyword" },
+        },
+        .{
+            .source = "func while():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 6, .contains = "'while' is a keyword" },
+        },
+        // elif/else without an if, and declarations inside a function.
+        .{
+            .source = "func main():\n    elif x:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "'elif' has no matching 'if'" },
+        },
+        .{
+            .source = "func main():\n    else:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "'else' has no matching 'if'" },
+        },
+        .{
+            .source = "func main():\n    struct S:\n        x: Int\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "belong at file scope" },
+        },
+        // A missing expression names what it found instead.
+        .{
+            .source = "func main():\n    let x = 1 +\n",
+            .wanted = .{ .code = "luce.parse.expression", .line = 2, .column = 16, .contains = "found end of line" },
+        },
+        .{
+            .source = "func main():\n    f(1, , 2)\n",
+            .wanted = .{ .code = "luce.parse.expression", .line = 2, .column = 10, .contains = "found ','" },
+        },
+        // Imports name one module, not a path: `std.` is the one
+        // namespace, and it is one level deep.
+        .{
+            .source = "import a.b\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "no import paths" },
+        },
+        .{
+            .source = "import std.math.pi\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 16, .contains = "no deeper paths" },
+        },
+        .{
+            .source = "import std.\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "after std." },
+        },
+        // range is two bounds, and says so instead of "expected ')'".
+        .{
+            .source = "func main():\n    for i in range(0, 10, 2):\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 27, .contains = "exactly two bounds" },
+        },
+        // Assignment to something that is not a place.
+        .{
+            .source = "func main():\n    f() = 1\n",
+            .wanted = .{ .code = "luce.parse.assign", .line = 2, .column = 5, .contains = "cannot assign" },
+        },
+        .{
+            .source = "func main():\n    var xs = [1]\n    xs[0:1] = 2\n",
+            .wanted = .{ .code = "luce.parse.assign", .line = 3, .column = 5, .contains = "a slice copies" },
+        },
+        // new builds the four heap types; a struct is a value.
+        .{
+            .source = "func main():\n    let a = new Point()\n",
+            .wanted = .{ .code = "luce.parse.new", .line = 2, .column = 17, .contains = "structs are values" },
+        },
+    };
+    for (cases) |case| try expectDiagnostics(case.source, &.{case.wanted});
+}
+
+test "the mistakes a beginner actually makes name the Luce spelling" {
+    // Read what comes out of a genuinely broken program, not a
+    // synthetic one: these are the shapes people arrive with from
+    // Python, C, Rust and JavaScript.
+    const Case = struct { source: []const u8, wanted: Wanted };
+    const cases = [_]Case{
+        // `else if` is `elif` here, and without this the reader is
+        // told the block wanted a ':' and found 'if'.
+        .{
+            .source = "func main():\n    if a:\n        return\n    else if b:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 4, .column = 5, .contains = "write 'elif'" },
+        },
+        // A call written without its parentheses — the Python 2 and
+        // shell reflex.
+        .{
+            .source = "func main():\n    print \"hello\"\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 11, .contains = "write 'print(...)'" },
+        },
+        .{
+            .source = "func main():\n    f x\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 7, .contains = "write 'f(...)'" },
+        },
+        // The same shape, but the name is a keyword somewhere else:
+        // the word is the better answer than the parentheses.
+        .{
+            .source = "func main():\n    if a:\n        return\n    elseif b:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 4, .column = 5, .contains = "write 'elif'" },
+        },
+        .{
+            .source = "func main():\n    foreach x in xs:\n        print(x)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "'for x in xs:'" },
+        },
+        .{
+            .source = "func main():\n    switch x:\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "no switch" },
+        },
+        // Declaration keywords from the languages next door.
+        .{
+            .source = "def main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'func'" },
+        },
+        .{
+            .source = "class Point:\n    x: Int\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "no classes" },
+        },
+        .{
+            .source = "const width = 80\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'let'" },
+        },
+        .{
+            .source = "from math import sqrt\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "for the standard library" },
+        },
+        // A keyword in the wrong case is the same mistake, answered
+        // from the lexer's own table.
+        .{
+            .source = "Func main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'func', not 'Func'" },
+        },
+        .{
+            .source = "STRUCT Point:\n    x: Int\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'struct'" },
+        },
+        // Tuples do not exist, and "expected ')' , found ','" does not
+        // say so.
+        .{
+            .source = "func main():\n    let t = (1, 2)\n",
+            .wanted = .{ .code = "luce.parse.expression", .line = 2, .column = 15, .contains = "no tuples" },
+        },
+        // A block with nothing in it names the header that is waiting.
+        .{
+            .source = "func main():\n    while true:\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 3, .column = 1, .contains = "'while' block is empty" },
+        },
+        .{
+            .source = "func main():\n    if a:\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 3, .column = 1, .contains = "'if' block is empty" },
+        },
+        .{
+            .source = "struct Point:\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 1, .contains = "'struct' block is empty" },
+        },
+        .{
+            .source = "func main():\n    if a:\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 3, .column = 5, .contains = "indented block under 'if'" },
+        },
+        // A line indented further than its block, with no header above
+        // it to justify the step.
+        .{
+            .source = "func main():\n    let x = 1\n        let y = 2\n    print(x)\n",
+            .wanted = .{ .code = "luce.parse.indent", .line = 3, .column = 1, .contains = "nothing above this line opens a block" },
+        },
+    };
+    for (cases) |case| try expectDiagnostics(case.source, &.{case.wanted});
+}
+
+test "a missing comma is reported as a missing comma, in every list there is" {
+    // "expected ')' to close '(', found 'y'" describes the parser;
+    // "missing ',' before 'y'" describes the fix.
+    const Case = struct { source: []const u8, wanted: Wanted };
+    const cases = [_]Case{
+        .{
+            .source = "func main():\n    f(1 2)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = "missing ',' before a number" },
+        },
+        .{
+            .source = "func main():\n    let p = Point(x = 1 y = 2)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 25, .contains = "missing ',' before 'y'" },
+        },
+        .{
+            .source = "func main():\n    let xs = [1 2 3]\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 17, .contains = "missing ','" },
+        },
+        .{
+            .source = "func main():\n    let m = new Map(String Int)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 28, .contains = "missing ',' before 'Int'" },
+        },
+        .{
+            .source = "func main():\n    let v = grid[1 2]\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "missing ','" },
+        },
+        .{
+            .source = "func main():\n    let g = new Array(Int 2 3)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 27, .contains = "missing ','" },
+        },
+        .{
+            .source = "func f(a: Int b: Int):\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "missing ',' before 'b'" },
+        },
+        .{
+            .source = "func main():\n    var x: Map(String Int) = new Map(String, Int)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 23, .contains = "missing ',' before 'Int'" },
+        },
+    };
+    for (cases) |case| try expectDiagnostics(case.source, &.{case.wanted});
+
+    // Across a line break the honest answer is the unclosed bracket,
+    // not a missing separator: the next line is a statement, not an
+    // element.
+    try expectDiagnostics("func main():\n    let xs = [1, 2\n    print(3)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 14, .contains = "unclosed '['" },
+    });
+}
+
+test "a list that runs out of input blames the bracket, not the element that never came" {
+    // Every one of these used to report "expected an expression, found
+    // end of line" at end of file — a lie about a line the reader
+    // never wrote.  The bracket is the only actionable place.
+    const cases = [_][]const u8{
+        "func main():\n    let xs = [1, 2,\n",
+        "func main():\n    let x = xs[0,\n",
+        "func main():\n    var x: List(Int,\n",
+        "func main():\n    let g = new Array(Int, 2,\n",
+        "func main():\n    f(a,\n",
+        "func f(a: Int,\n",
+        "func main():\n    let p = Point(x = 1,\n",
+    };
+    for (cases) |source| {
+        var parsed = try parseText(source);
+        defer parsed.deinit();
+        errdefer {
+            std.debug.print("for:\n{s}got:\n", .{source});
+            dump(&parsed);
+        }
+        try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
+        const item = parsed.diagnostics.at(0).?;
+        try testing.expectEqualStrings("luce.parse.expected", item.code);
+        if (std.mem.indexOf(u8, item.message, "unclosed") == null) {
+            std.debug.print("for:\n{s}got: {s}\n", .{ source, item.message });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "a truncated string literal is stage 2's error, and only stage 2's" {
+    // Stage 2 emits a recovery token for an unterminated literal so the
+    // line still has an operand.  The parser must not read the
+    // truncated bytes as if they were closed and report a second time
+    // about a brace that was never really open.
+    const cases = [_][]const u8{
+        "func main():\n    let s = f\"{x\n    print(s)\n",
+        "func main():\n    let s = \"abc\n    print(s)\n",
+        "func main():\n    let s = f\"value: {\n",
+        "func main():\n    let s = f\"a}\n",
+    };
+    for (cases) |source| {
+        var parsed = try parseText(source);
+        defer parsed.deinit();
+        errdefer {
+            std.debug.print("for:\n{s}got:\n", .{source});
+            dump(&parsed);
+        }
+        try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
+        try testing.expectEqualStrings("luce.lex.string", parsed.diagnostics.at(0).?.code);
+    }
+}
+
+test "'=' where '==' was meant reads on as the comparison, so the body is still checked" {
+    // Zig's `wrong_equal_var_decl` move: report the habit once, then
+    // parse what was plainly meant, so a second mistake inside the
+    // block is still found instead of being swallowed with it.
+    try expectDiagnostics(
+        \\func main():
+        \\    if x = 1:
+        \\        let y =
+        \\    return
+        \\
+    , &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 10, .contains = "write '==' to compare" },
+        .{ .code = "luce.parse.expression", .line = 3, .column = 16, .contains = "found end of line" },
+    });
+    // The recovered condition really is the comparison, not a
+    // half-parsed fragment.
+    var parsed = try parseText("func main():\n    while count = 0:\n        return\n");
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
+    const condition = parsed.program.functions[0].body.statements[0].while_loop.condition;
+    try testing.expectEqual(ast.BinaryOp.equal, condition.binary.op);
+    try testing.expectEqualStrings("count", condition.binary.left.name.text);
+}
+
+test "an unclosed bracket is reported at the bracket once it has run past its line" {
+    // The lexer suspends newlines inside brackets, so an unclosed one
+    // eats the rest of the file; the only actionable place to point
+    // is the opener.
+    try expectDiagnostics("func main():\n    let x = (1 + 2\n    let y = 3\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 13, .contains = "unclosed '(' — no matching ')'" },
+    });
+    try expectDiagnostics("func main():\n    let x = [1, 2\n    let y = 3\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 13, .contains = "unclosed '['" },
+    });
+    try expectDiagnostics("func main():\n    let x = xs[0\n    let y = 3\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 15, .contains = "unclosed '['" },
+    });
+    // On its own line the offending token is the better place: the
+    // group is short enough to see whole, and a token that could have
+    // been the next element names the separator instead.
+    try expectDiagnostics("func main():\n    f(1 + )\n", &.{
+        .{ .code = "luce.parse.expression", .line = 2, .column = 11, .contains = "found ')'" },
+    });
+    try expectDiagnostics("func main():\n    f(1 2)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = "missing ','" },
+    });
+}
+
+test "f-string holes report their own mistakes, in f-string terms" {
+    try expectDiagnostics("func main():\n    let s = f\"{x:.2f}\"\n", &.{
+        .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "no format specifiers" },
+    });
+    try expectDiagnostics("func main():\n    let s = f\"a{}b\"\n", &.{
+        .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "empty interpolation" },
+    });
+    try expectDiagnostics("func main():\n    let s = f\"{1 2}\"\n", &.{
+        .{ .code = "luce.parse.fstring", .line = 2, .column = 16, .contains = "single expression" },
+    });
+    try expectDiagnostics("func main():\n    let s = f\"lone }\"\n", &.{
+        .{ .code = "luce.parse.fstring", .line = 2, .column = 13, .contains = "unmatched close brace" },
+    });
+    // A hole's own sub-parse errors carry the sub-parse's code and
+    // point into the real source, not into a copy of the hole.
+    try expectDiagnostics("func main():\n    let s = f\"{1 +}\"\n", &.{
+        .{ .code = "luce.parse.expression", .line = 2, .column = 19 },
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Robustness
+// ---------------------------------------------------------------------------
+
+test "every recursive construct is bounded, and hitting the bound is one clean diagnostic" {
+    // Each of these once walked off the native stack; the guard is
+    // shared, so each one has to be proved through its own path.
+    const Case = struct {
+        name: []const u8,
+        head: []const u8,
+        unit: []const u8,
+        tail: []const u8,
+        code: []const u8 = "luce.parse.nesting",
+    };
+    const cases = [_]Case{
+        .{ .name = "unary minus", .head = "func main():\n    let x = ", .unit = "-", .tail = "1\n" },
+        .{ .name = "not", .head = "func main():\n    let x = ", .unit = "not ", .tail = "true\n" },
+        .{ .name = "give", .head = "func main():\n    let x = ", .unit = "give ", .tail = "y\n" },
+        .{ .name = "copy", .head = "func main():\n    let x = ", .unit = "copy ", .tail = "y\n" },
+        .{ .name = "parentheses", .head = "func main():\n    let x = ", .unit = "(", .tail = "1\n" },
+        .{ .name = "list literals", .head = "func main():\n    let x = ", .unit = "[", .tail = "1\n" },
+        .{ .name = "calls", .head = "func main():\n    let x = ", .unit = "f(", .tail = "1\n" },
+        .{ .name = "type arguments", .head = "func main():\n    var x: ", .unit = "List(", .tail = "Int\n" },
+    };
+    for (cases) |case| {
+        const text = try repeated(case.head, case.unit, 4000, case.tail);
+        defer testing.allocator.free(text);
+        var parsed = try parseText(text);
+        defer parsed.deinit();
+        if (!hasCode(&parsed, case.code)) {
+            std.debug.print("{s}: no {s} diagnostic\n", .{ case.name, case.code });
+            dump(&parsed);
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    // Nested blocks and elif chains recurse through the statement
+    // grammar rather than the expression grammar.
+    var nested: std.ArrayList(u8) = .empty;
+    defer nested.deinit(testing.allocator);
+    try nested.appendSlice(testing.allocator, "func main():\n");
+    for (0..1500) |level| {
+        for (0..level + 1) |_| try nested.appendSlice(testing.allocator, "    ");
+        try nested.appendSlice(testing.allocator, "if x:\n");
+    }
+    for (0..1501) |_| try nested.appendSlice(testing.allocator, "    ");
+    try nested.appendSlice(testing.allocator, "return\n");
+    var blocks = try parseText(nested.items);
+    defer blocks.deinit();
+    // A tower of *indented* blocks is stage 2's answer now — it caps
+    // indentation nesting well below the depth this stage would reach,
+    // and the earlier stage rightly wins.  What stage 3 owes here is
+    // that it still reports and still returns.
+    try testing.expect(blocks.diagnostics.count() != 0);
+    try testing.expect(hasCode(&blocks, "luce.lex.indent") or hasCode(&blocks, "luce.parse.nesting"));
+
+    const elifs = try repeated(
+        "func main():\n    if a:\n        return\n",
+        "    elif b:\n        return\n",
+        4000,
+        "",
+    );
+    defer testing.allocator.free(elifs);
+    var chain = try parseText(elifs);
+    defer chain.deinit();
+    try testing.expect(hasCode(&chain, "luce.parse.nesting"));
+}
+
+test "wide input is linear, not recursive: a ten-thousand element list parses" {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "func main():\n    let xs = [");
+    var number: [16]u8 = undefined;
+    for (0..10000) |value| {
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&number, "{d}, ", .{value}));
+    }
+    try text.appendSlice(testing.allocator, "]\n");
+
+    var parsed = try expectClean(text.items);
+    defer parsed.deinit();
+    const elements = parsed.program.functions[0].body.statements[0].let.value.list_literal.elements;
+    try testing.expectEqual(@as(usize, 10000), elements.len);
+
+    // Long flat chains are loops, not recursion, in every postfix and
+    // binary form.
+    for ([_][]const u8{ "[0]", ".b", ".b()", " + 1" }) |unit| {
+        const chained = try repeated("func main():\n    let x = a", unit, 20000, "\n");
+        defer testing.allocator.free(chained);
+        var flat = try parseText(chained);
+        defer flat.deinit();
+        try testing.expectEqual(@as(usize, 0), flat.diagnostics.count());
+    }
+}
+
+test "reporting is capped so a file of noise cannot flood the diagnostics" {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    var line: [48]u8 = undefined;
+    for (0..5000) |index| {
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "let {d} = = )\n", .{index}));
+    }
+    var parsed = try parseText(text.items);
+    defer parsed.deinit();
+    try testing.expect(parsed.diagnostics.count() <= 102);
+    try testing.expect(hasCode(&parsed, "luce.parse.limit"));
+}
+
+test "truncated input at every prefix terminates and stays inside the source" {
+    // Cutting a well-formed program at each byte is the cheapest
+    // exhaustive source of half-finished constructs there is.
+    const whole =
+        \\import math
+        \\
+        \\let width = 80
+        \\
+        \\struct Point:
+        \\    x: Float
+        \\
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    var m = new Map(String, Int)
+        \\    for i, x in xs:
+        \\        if x % 2 == 0 and x > width:
+        \\            m[f"k{i}"] += x
+        \\        elif not x:
+        \\            xs.append(copy x)
+        \\        else:
+        \\            return
+        \\    while len(xs) > 0:
+        \\        xs[0:1] = give m
+        \\
+    ;
+    for (0..whole.len + 1) |cut| {
+        var parsed = try parseText(whole[0..cut]);
+        defer parsed.deinit();
+        for (0..parsed.diagnostics.count()) |index| {
+            const item = parsed.diagnostics.at(index).?;
+            try testing.expect(item.span.start <= item.span.end);
+            try testing.expect(item.span.end <= cut);
+        }
+    }
+}
+
+/// The vocabulary the structure-aware fuzzer draws from: whole tokens
+/// and whole lines of real Luce, so that what it generates is a
+/// *nearly* valid program rather than noise.  Random bytes exercise
+/// the lexer and the outermost recovery; this exercises the grammar
+/// itself, which is where the recovery bugs live.
+const fragments = [_][]const u8{
+    "func main():", "func f(a: Int) -> Int:", "struct P:",    "import math",
+    "let x = ",     "var y: Int",             "return ",      "if ",
+    "elif ",        "else:",                  "while ",       "for i in range(0, 3):",
+    "for x in xs:", "break",                  "continue",     "print(x)",
+    "xs.append(",   "new Map(String, Int)",   "new List(",    "new Array(Int, 2, 2)",
+    "give ",        "copy ",                  "not ",         "and ",
+    "or ",          "==",                     "<",            "+",
+    "(",            ")",                      "[",            "]",
+    ",",            ":",                      ".",            "=",
+    "f\"{x}\"",     "\"text\"",               "1",            "2.5",
+    "true",         "xs",                     "Point(x = 1)",
+};
+
+/// The indentation a generated line may carry — the layout dimension
+/// a token-only fuzzer never reaches.
+const indents = [_][]const u8{ "", "    ", "        ", "            ", "  " };
 
 test "fuzz: parsing any bytes terminates with spans inside the source" {
     try testing.fuzz({}, parseAnything, .{ .corpus = &.{
@@ -228,6 +1412,8 @@ test "fuzz: parsing any bytes terminates with spans inside the source" {
         "func f(a: give List(Int)) -> Int:\n    return len(a)\n",
         "struct P:\n    x: Float\n",
         "let k = 3\n",
+        "func main():\n    if x = 1:\n        for i in range(0, 2):\n            m[f\"{i}\"] += 1\n",
+        "func main()\n    let y = (1 + [2, 3\n",
     } });
 }
 
@@ -240,9 +1426,23 @@ fn parseAnything(_: void, smith: *testing.Smith) anyerror!void {
         .value(u8, '\n', 5),
         .value(u8, '(', 3),
         .value(u8, ')', 3),
+        .value(u8, '[', 2),
+        .value(u8, ']', 2),
         .value(u8, ':', 2),
+        .value(u8, '"', 2),
+        .value(u8, '{', 2),
+        .value(u8, '}', 2),
     });
-    const source = buffer[0..length];
+    // Stage 1 is the gate every byte passes through, and stages 2 and
+    // 3 are written to its guarantees; feeding raw bytes past it would
+    // test a program that cannot happen.  Bytes it refuses are stage
+    // 1's answer, not this stage's.
+    const prepared = try source_mod.prepare(testing.allocator, buffer[0..length]);
+    const source = switch (prepared) {
+        .problem => return,
+        .text => |text| text,
+    };
+    defer testing.allocator.free(source);
 
     var parsed = try parseText(source);
     defer parsed.deinit();
@@ -257,124 +1457,67 @@ fn parseAnything(_: void, smith: *testing.Smith) anyerror!void {
     }
 }
 
-test "ownership verbs parse: give/copy expressions and give parameters" {
-    var parsed = try parseText(
-        \\func stash(index: Map(String, List(Int)), hits: give List(Int)):
-        \\    index["latest"] = give hits
-        \\
-        \\func main():
-        \\    var mine = [1, 2]
-        \\    let moved = give mine
-        \\    let doubled = copy moved
-        \\    var index = new Map(String, List(Int))
-        \\    stash(index, give doubled)
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
+test "near-miss programs report, terminate, and never lie about where" {
+    // Random bytes mostly die in the lexer; the recovery bugs live
+    // behind programs that are *nearly* valid — real fragments and
+    // real indentation in an order the grammar does not allow.  A
+    // fixed seed, so a failure reproduces exactly.
+    var prng = std.Random.DefaultPrng.init(0x03_9a_11_5e);
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
 
-    const stash = parsed.program.functions[0];
-    try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
-    try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
-    try testing.expect(stash.body.statements[0].assign.value.* == .give);
-
-    const body = parsed.program.functions[1].body;
-    const moved = body.statements[1].let.value;
-    try testing.expect(moved.* == .give);
-    try testing.expectEqualStrings("mine", moved.give.operand.name.text);
-    try testing.expect(body.statements[2].let.value.* == .copy);
-    const call_arguments = body.statements[4].expression.value.call.arguments;
-    try testing.expect(call_arguments[1].value.* == .give);
+    for (0..20000) |_| {
+        text.clearRetainingCapacity();
+        try writeNearMiss(prng.random(), &text);
+        var parsed = try parseText(text.items);
+        defer parsed.deinit();
+        errdefer {
+            std.debug.print("for:\n{s}got:\n", .{text.items});
+            dump(&parsed);
+        }
+        // The report cap is 100 parse diagnostics plus its own
+        // `luce.parse.limit`, on top of whatever stage 2 said.
+        try testing.expect(parsed.diagnostics.count() <= 202);
+        for (0..parsed.diagnostics.count()) |index| {
+            const item = parsed.diagnostics.at(index).?;
+            try testing.expect(item.span.start <= item.span.end);
+            try testing.expect(item.span.end <= text.items.len);
+            try testing.expect(item.message.len != 0);
+            try testing.expect(std.mem.startsWith(u8, item.code, "luce."));
+        }
+    }
 }
 
-test "top-level let constants parse; top-level var is refused" {
-    var parsed = try parseText(
-        \\let width = 80
-        \\let banner: String = "loom " + version
-        \\let version = "2.0"
-        \\
-        \\func main():
-        \\    let unused = width
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
-    try testing.expectEqual(@as(usize, 3), parsed.program.constants.len);
-    try testing.expectEqualStrings("width", parsed.program.constants[0].name);
-    try testing.expect(parsed.program.constants[0].annotation == null);
-    try testing.expectEqualStrings("String", parsed.program.constants[1].annotation.?.name);
-    try testing.expect(parsed.program.constants[1].value.* == .binary);
-
-    var refused = try parseText(
-        \\var counter = 0
-        \\
-        \\func main():
-        \\    return
-        \\
-    );
-    defer refused.deinit();
-    try testing.expect(refused.diagnostics.count() > 0);
-    try testing.expectEqualStrings("luce.parse.top", refused.diagnostics.at(0).?.code);
+/// Assemble one near-miss program: a handful of lines, each an
+/// indentation followed by a few whole fragments of real Luce.
+fn writeNearMiss(random: std.Random, text: *std.ArrayList(u8)) !void {
+    const lines = random.intRangeAtMost(usize, 1, 12);
+    for (0..lines) |_| {
+        try text.appendSlice(testing.allocator, indents[random.uintLessThan(usize, indents.len)]);
+        const pieces = random.intRangeAtMost(usize, 1, 6);
+        for (0..pieces) |_| {
+            try text.appendSlice(
+                testing.allocator,
+                fragments[random.uintLessThan(usize, fragments.len)],
+            );
+            if (random.boolean()) try text.append(testing.allocator, ' ');
+        }
+        try text.append(testing.allocator, '\n');
+    }
 }
 
-test "control flow, precedence, and elif chains parse" {
-    var parsed = try parseText(
-        \\func evaluate(input: Input, output: Output):
-        \\    var total = 0
-        \\    for index in range(0, 10):
-        \\        if index % 2 == 0 and index != 4:
-        \\            total = total + index * 2
-        \\        elif index == 5:
-        \\            continue
-        \\        else:
-        \\            break
-        \\    while total > 100:
-        \\        total = total - 1
-        \\    output.total = total
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
-    const body = parsed.program.functions[0].body;
-    try testing.expectEqual(@as(usize, 4), body.statements.len);
+// ---------------------------------------------------------------------------
+// The token vocabulary these messages are written in
+// ---------------------------------------------------------------------------
 
-    // Precedence: total + index * 2 parses as total + (index * 2).
-    const loop = body.statements[1].for_range;
-    const conditional = loop.body.statements[0].conditional;
-    const sum = conditional.then_block.statements[0].assign.value.binary;
-    try testing.expectEqual(ast.BinaryOp.add, sum.op);
-    try testing.expectEqual(ast.BinaryOp.multiply, sum.right.binary.op);
-    // The elif chain nests inside the else block.
-    try testing.expect(conditional.else_block != null);
-    const chained = conditional.else_block.?.statements[0].conditional;
-    try testing.expect(chained.else_block != null);
-}
-
-test "malformed statements recover and keep reporting" {
-    var parsed = try parseText(
-        \\func evaluate(input: Input, output: Output):
-        \\    let = 3
-        \\    let ok = 1
-        \\    output.value = ok +
-        \\
-        \\func helper() -> Int:
-        \\    return 2
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expect(parsed.diagnostics.count() >= 2);
-    // Recovery still sees both functions.
-    try testing.expectEqual(@as(usize, 2), parsed.program.functions.len);
-}
-
-test "strings decode escapes" {
-    var parsed = try parseText(
-        \\func evaluate(input: Input, output: Output):
-        \\    output.text = "line\none\ttab \"quoted\""
-        \\
-    );
-    defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.count());
-    const value = parsed.program.functions[0].body.statements[0].assign.value;
-    try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
+test "every token kind has a name a diagnostic can print" {
+    // describe() is exhaustive by construction (no else arm), so this
+    // guards the other half: that no name is empty, and that keyword
+    // names agree with the lexer's own table.
+    for (std.enums.values(@import("../02_lex.zig").Kind)) |kind| {
+        try testing.expect(grammar.describe(kind).len != 0);
+        if (grammar.keywordWord(kind)) |word| {
+            try testing.expect(std.mem.indexOf(u8, grammar.describe(kind), word) != null);
+        }
+    }
 }

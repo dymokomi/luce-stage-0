@@ -6,7 +6,7 @@
 # SIMD datapoint: C vectorizes every one of these loops.  The C twin
 # is bench/stats.c.
 
-import math
+import std.math
 
 func main():
     let n = 2000000

@@ -3,17 +3,33 @@
 Std modules are ordinary Luce source **embedded in the compiler** —
 the way Zig ships `lib/std` with its compiler, minus the install
 path.  Wherever the compiler runs (the `luce` CLI, loom, a test),
-`import math` just works.  Std names are a **reserved namespace**:
-they resolve before the file loader, so a sibling `math.luc` is never
-consulted.
+`import std.math` just works.
+
+**`std.` is the reserved namespace, and nothing else is.**
+`import std.math` reaches the library; `import math` reaches
+`math.luc` beside your program and never the library.  Because the
+two namespaces are disjoint, a std module cannot be shadowed *and* a
+file of your own cannot be made unreachable — the two halves of
+Python's `random.py` problem, both gone.
+
+The import **binds the bare name**: after `import std.math` the call
+sites are `math.sqrt(x)`, exactly as before, and only the import line
+records where the module came from (Rust's `use std::fs;` then
+`fs::read`).  A program that writes both `import std.math` and
+`import math` therefore has two modules under one binding and is
+refused (`luce.import.collision`); rename the file, since there is no
+`as` clause.  `import std.nope` lists the modules that do exist
+(`luce.import.standard`), and `import std` is refused because the
+namespace is not a module — no `std.luc` can be imported
+(`luce.import.reserved`).
 
 Being ordinary modules, std code obeys every language rule — the
 ownership model, the checked arithmetic, and the host gate:
-`import files` inside a host-less evaluator is a compile error,
+`import std.files` inside a host-less evaluator is a compile error,
 because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
-in `src/luce/compile.zig`; the suite proving them is
+in `src/luce/01_source/load.zig`; the suite proving them is
 `src/luce/specs/std_spec.zig` (math, strings) plus a hosted test beside
 `TestHost` in `src/luce/interpreter/test.zig` (files).
 
@@ -32,7 +48,7 @@ range-reduced: `exp`/`ln` hold to ~1e-14 relative, trig to ~1e-12
 absolute.
 
 ```luce
-import math
+import std.math
 
 math.pi   math.tau   math.e            # constants (folded)
 
@@ -55,7 +71,7 @@ right (bit-reproducible, and against the benchmark C twins); operations with no 
 shape mismatches trap.
 
 ```luce
-import math
+import std.math
 
 math.sum(xs)            math.mean(xs)
 math.vmin(xs)           math.vmax(xs)      # extrema (min/max are
@@ -86,7 +102,7 @@ The language keeps the String **primitives**: literals and f-strings,
 `s.byte_at(i)`, and `s.find_byte(byte, start)`.  Everything built on
 top of them is ordinary Luce in this module — and the familiar
 method spelling is sugar for it:
-with `import strings` in scope, `s.find(x)` *is* `strings.find(s, x)`
+with `import std.strings` in scope, `s.find(x)` *is* `strings.find(s, x)`
 (and `parts.join(sep)` is `strings.join(parts, sep)`).  Using a
 String method without the import is a compile error that says so.
 
@@ -103,7 +119,7 @@ the module is fast enough to stay written in Luce (docs/CODEGEN.md
 §10).
 
 ```luce
-import strings
+import std.strings
 
 strings.find(s, needle)          # first byte offset, or -1
 strings.find_from(s, needle, start)
@@ -131,7 +147,7 @@ A thin, honest layer over the host's file builtins (host-gated; loom
 resolves paths relative to the current directory):
 
 ```luce
-import files
+import std.files
 
 files.exists(path)               # Bool
 files.read(path)                 # String; missing file traps
@@ -150,7 +166,8 @@ files.write_lines(path, lines)   # joined with newlines, ends with one;
 
 1. Write `src/luce/std/NAME.luc` — ordinary Luce, documented with
    `#` comments in the header.
-2. Add one row to `std_modules` in `src/luce/compile.zig`.
+2. Add one row to `standard_modules` in `src/luce/01_source/load.zig`
+   — the one place that answers "what are the bytes of module X".
 3. Prove it in `std_spec.zig` (pure) or beside `TestHost` (hosted),
    the way math and files are.
 4. Document it here.

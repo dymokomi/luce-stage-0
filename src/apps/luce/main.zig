@@ -62,6 +62,12 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
                 return usage(err);
             }
         }
+        // A stream has no name to derive an output path from, so say
+        // so rather than write a file called "-.lc".
+        if (std.mem.eql(u8, path, files.standard_input) and output_path.len == 0) {
+            try err.print("luce: reading from {s} needs -o to say where to write\n", .{files.standard_input});
+            return 1;
+        }
         return switch (backend) {
             .interpreter => build(gpa, io, err, out, path, output_path, release),
             .llvm => buildObject(gpa, io, err, out, path, output_path, release),
@@ -71,7 +77,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         if (arguments.len != 3) return usage(err);
         var program = (try compilePath(gpa, io, err, path)) orelse return 1;
         defer program.deinit();
-        try out.print("{s}: ok\n", .{path});
+        try out.print("{s}: ok\n", .{files.displayName(path)});
         try out.flush();
         return 0;
     }
@@ -106,6 +112,10 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce build FILE.luc [-o FILE.lc] [--release] [--backend=llvm]\n" ++
             "  luce check FILE.luc\n" ++
             "  luce ir FILE.luc [--full]\n" ++
+            "\n" ++
+            "FILE may be - to read the program from standard input;\n" ++
+            "imports then resolve beside the current directory, and\n" ++
+            "build needs -o to say where to write.\n" ++
             "\n" ++
             "build is a debug build unless --release: the module\n" ++
             "carries source locations, so traps report file:line\n" ++
@@ -150,7 +160,7 @@ fn build(
         try err.print("luce: cannot write {s}\n", .{target});
         return 1;
     };
-    try out.print("{s} -> {s}\n", .{ path, target });
+    try out.print("{s} -> {s}\n", .{ files.displayName(path), target });
     try out.flush();
     return 0;
 }
@@ -256,25 +266,39 @@ fn compilePathPruned(
     path: []const u8,
     prune: bool,
 ) !?luce.mir.Program {
-    const source = files.readWhole(gpa, io, path) catch {
-        try err.print("luce: cannot read {s}\n", .{path});
-        return null;
+    // The root file goes through the same door as every import, so a
+    // directory, a permission, or an oversized file reads the same
+    // whether it is the program or something the program imports.
+    const found = try files.readSource(gpa, io, path);
+    const source = switch (found) {
+        .text => |text| text.bytes,
+        .missing => {
+            try err.print("luce: cannot read {s}: no such file\n", .{path});
+            return null;
+        },
+        .unreadable => |why| {
+            try err.print("luce: cannot read {s}: {s}\n", .{ path, why });
+            return null;
+        },
     };
     defer gpa.free(source);
 
+    // The path as the user wrote it, not its basename: `luce check
+    // sub/bad.luc` that answers `bad.luc:1:1` is a location nothing
+    // can jump to, and there may be a bad.luc in three directories.
     var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
     var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{}, .{
         .entry_mode = .script,
         .allow_host = true,
-        .source_name = std.fs.path.basename(path),
+        .source_name = files.displayName(path),
         .prune = prune,
     });
     switch (result) {
         .success => |program| return program,
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(gpa, source);
+            const rendered = try diagnostics.render(gpa);
             defer gpa.free(rendered);
-            try err.print("{s}: compile failed\n{s}", .{ path, rendered });
+            try err.print("luce: compile failed\n{s}", .{rendered});
             result.deinit();
             return null;
         },

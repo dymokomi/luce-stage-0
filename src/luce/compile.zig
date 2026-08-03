@@ -12,25 +12,28 @@
 //!   04_semantics/  resolve, type-check, validate
 //!                              AST              -> validated program
 //!   05_hir/        (nothing yet — a named seam, see its header)
-//!   06_mir/        the typed MIR, its verifier, and the .lc format
+//!   06_mir/        build       validated        -> verified MIR
 //!   07_optimize/   optimize    MIR              -> smaller MIR
 //!   08_llvm/       lower       MIR              -> LLVM IR -> object
 //!
-//! Two honest irregularities, both visible in the walk below:
-//! **04_semantics still emits the MIR** as it type-checks, so there is
-//! no separate lowering call, and **05_hir does nothing**, so there is
-//! no call at all.  docs/PIPELINE.md is the status table.
+//! One honest irregularity, visible in the walk below: **05_hir does
+//! nothing**, so there is no call for it at all.  docs/PIPELINE.md is
+//! the status table.
 //!
 //! Stage 8 is not on this path: `compileProject` stops at verified,
 //! optimized MIR, which is what `luce build` writes as a `.lc` and
 //! what the interpreter runs.  `luce build --backend=llvm` takes that
 //! same program on to `08_llvm`.
 //!
-//! The compiler accepts a byte slice, never a path; diagnostics carry
-//! spans into that buffer.  Every successful compile passes the MIR
-//! verifier before it is returned.
+//! The compiler accepts the root's bytes plus a `Loader`, never a
+//! path: opening files is the host's, and which name resolves to what
+//! is stage 1's (`01_source`).  Stage 1 registers every module it
+//! loads, so a diagnostic knows which file its span indexes and a
+//! failure renders with a path, a line, and a column.  Every
+//! successful compile passes the MIR verifier before it is returned.
 
 const std = @import("std");
+const source_mod = @import("01_source.zig");
 const semantics = @import("04_semantics.zig");
 const mir = @import("06_mir.zig");
 const optimize = @import("07_optimize.zig");
@@ -44,9 +47,11 @@ const Diagnostics = diagnostics_mod.Diagnostics;
 
 pub const Error = error{OutOfMemory};
 
-/// How a module reaches the source of what it imports; stages 1-3 run
-/// through it for every name in the graph (`compile/modules.zig`).
-pub const Loader = module_graph.Loader;
+/// How a host reaches the source of what a program imports.  The seam
+/// belongs to stage 1 — `01_source/load.zig` decides what is asked of
+/// it and in what order — and is re-exported here because filling it
+/// in is part of calling the compiler.
+pub const Loader = source_mod.Loader;
 
 pub const CompileResult = union(enum) {
     /// A verified program; caller owns it (deinit).
@@ -99,16 +104,18 @@ pub fn compileProject(
 
     // Stages 1-3 — load, lex, parse.  Once for the root source and
     // once for every module it imports, breadth-first, std first.
-    const modules = (try module_graph.loadAll(gpa, scaffold, source, loader, &diagnostics)) orelse {
+    // Every module's text lands in `diagnostics.sources`, which owns
+    // it for as long as the diagnostics live.
+    const modules = (try module_graph.loadAll(gpa, scaffold, source, loader, options, &diagnostics)) orelse {
         program.deinit();
         return .{ .failure = diagnostics };
     };
     defer gpa.free(modules);
 
-    // Stage 4 — resolve names, check types, validate.  And, for now,
-    // stage 6's lowering too: `analyze` hands back MIR because the
-    // checked walk emits it as it goes (see 04_semantics.zig's header
-    // for the seam that separates them).
+    // Stage 4 — resolve names, check types, validate.  What comes back
+    // is a validated program plus, per function, the operations its
+    // walk decided on: a value, with nothing pointing back into the
+    // checker.
     const analyzed = (try semantics.analyze(arena, gpa, modules, schema, options, &diagnostics)) orelse {
         program.deinit();
         return .{ .failure = diagnostics };
@@ -117,16 +124,11 @@ pub fn compileProject(
     // Stage 5 — HIR.  Nothing happens here: 05_hir.zig is an empty
     // seam, named so the absence is visible rather than invisible.
 
-    // Stage 6 — MIR.  Assembling the program is all that is left,
-    // since the lowering already ran inside stage 4.
-    program.structs = analyzed.structs;
-    program.heap_types = analyzed.heap_types;
-    program.functions = analyzed.functions;
-    program.constants = analyzed.constants;
-    program.reads = analyzed.reads;
-    program.entry_function = analyzed.entry_function;
-    program.inputs = try copyPorts(arena, schema.inputs);
-    program.outputs = try copyPorts(arena, schema.outputs);
+    // Stage 6 — MIR.  Close every function stage 4 recorded: seal the
+    // open blocks, freeze the block lists, turn each instruction's
+    // source offset into a line and a column, and assemble the
+    // program.
+    try mir.build.build(arena, gpa, &diagnostics.sources, schema, analyzed, &program);
 
     // The verifier is a compiler invariant, not a user diagnostic: a
     // verification failure here is a compiler bug surfaced loudly.
@@ -135,14 +137,16 @@ pub fn compileProject(
     // renumbering).
     if (try verifyStage(gpa, &program, &diagnostics, "generated")) |failed| return failed;
 
-    // Stage 7 — optimize.  Dead-code elimination before the artifact
-    // is written: a std import brings its whole module, and what a
-    // program never calls should not reach the .lc, the decoder, or
-    // an engine.  `luce ir --full` turns it off to show the unpruned
-    // lowering.
+    // Stage 7 — optimize.  Shrink the program before the artifact is
+    // written: a std import brings its whole module, the lowering
+    // leaves forwarding blocks and re-read locals behind, and the
+    // ownership temporaries it parks around every fresh object are
+    // mostly dead by the time the statement ends.  What a program
+    // never does should not reach the .lc, the decoder, or an engine.
+    // `luce ir --full` turns the stage off to show the raw lowering.
     if (options.prune) {
-        try optimize.prune(arena, &program);
-        if (try verifyStage(gpa, &program, &diagnostics, "pruned")) |failed| return failed;
+        try optimize.run(arena, &program, .all);
+        if (try verifyStage(gpa, &program, &diagnostics, "optimized")) |failed| return failed;
     }
 
     // Stage 8 is the caller's to ask for: `luce build --backend=llvm`
@@ -173,14 +177,6 @@ fn verifyStage(
         },
     };
     return null;
-}
-
-fn copyPorts(arena: Allocator, ports: []const types.Port) Error![]types.Port {
-    const copied = try arena.alloc(types.Port, ports.len);
-    for (ports, copied) |port, *slot| {
-        slot.* = .{ .name = try arena.dupe(u8, port.name), .declared = port.declared };
-    }
-    return copied;
 }
 
 test {

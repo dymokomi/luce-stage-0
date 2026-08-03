@@ -28,7 +28,7 @@ fn run(source: []const u8) !Outcome {
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             return error.TestUnexpectedResult;
@@ -129,7 +129,7 @@ test "S2: an object given out of the block survives it" {
 
 test "S3: unbound temporaries die at the end of their statement" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var seen = 0
@@ -208,7 +208,7 @@ test "S5: assigning a bare name into an owning var is a compile error" {
 
 test "S6: free is early release and poisons the name" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var big = "a b c d".split(" ")
@@ -246,7 +246,7 @@ test "S6: free applies to owned names only" {
 
 test "S7: a fresh object inside a loop dies every iteration" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    for i in range(0, 1000):
@@ -551,7 +551,7 @@ test "S19: an ignored returned object is a temporary and frees itself" {
 
 test "S20: containers adopt fresh values silently and free them recursively" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var index = new Map(String, List(Int))
@@ -1043,7 +1043,7 @@ test "S36: ownership follows the binding, which lives where it was declared" {
 
 test "S37: values into containers need no ownership, ever" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var x: List(Int) = []
@@ -1103,7 +1103,7 @@ test "S33: a busy program ends with zero live objects" {
         \\    word: String
         \\    hits: List(Int)
         \\
-        \\import strings
+        \\import std.strings
         \\
         \\func collect(text: String) -> List(Entry):
         \\    var entries = new List(Entry)
@@ -1174,7 +1174,7 @@ test "mechanics: deep recursion moves objects out without confusion" {
 
 test "mechanics: loop conditions that allocate flush every iteration" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    var i = 0
@@ -1187,7 +1187,7 @@ test "mechanics: loop conditions that allocate flush every iteration" {
 
 test "mechanics: returning from inside a for over a fresh iterable frees it" {
     try expectClean(
-        \\import strings
+        \\import std.strings
         \\
         \\func hunt(text: String) -> String:
         \\    for word in text.split(" "):
@@ -1513,4 +1513,64 @@ test "audit: reassigning the iterated name mid-loop is a compile error" {
         \\    assert(xs[0] == 9)
         \\
     );
+}
+
+test "audit: a routed String method hands its object to the caller (S16, S22)" {
+    // `s.split(",")` is `strings.split(s, ",")` — a call, and a call's
+    // result belongs to whoever receives it.  The classifier asks the
+    // declaration's return type rather than a hand-kept list of method
+    // names, so a new object-returning std function cannot arrive
+    // without an owner: `expectClean` fails on a leak.
+    try expectClean(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let text = "a,b,c"
+        \\    var parts = text.split(",")
+        \\    assert(len(parts) == 3)
+        \\    assert(parts[1] == "b")
+        \\
+    );
+    // Unnamed, it is a statement temporary (S3, S19) and still dies.
+    try expectClean(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    assert(len("a,b,c".split(",")) == 3)
+        \\
+    );
+    // Kept in a container it is a store like any other (S20).
+    try expectClean(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var rows = new List(List(String))
+        \\    rows.append("a,b".split(","))
+        \\    assert(len(rows[0]) == 2)
+        \\
+    );
+}
+
+test "audit: give and free of an outer name are refused in every loop shape (S30)" {
+    // The guard has to sit on the loop frame, not on the statement:
+    // the second iteration is the one that would use the dead name.
+    for ([_][]const u8{
+        "    for i in range(0, 3):\n        sink.append(give xs)\n",
+        "    for v in probe:\n        sink.append(give xs)\n",
+        "    while len(probe) > 0:\n        sink.append(give xs)\n",
+        "    for i in range(0, 3):\n        free(xs)\n",
+        "    while len(probe) > 0:\n        free(xs)\n",
+    }) |body| {
+        var source: std.ArrayList(u8) = .empty;
+        defer source.deinit(testing.allocator);
+        try source.appendSlice(testing.allocator,
+            \\func main():
+            \\    var xs = [1]
+            \\    var probe = [1]
+            \\    var sink = new List(List(Int))
+            \\
+        );
+        try source.appendSlice(testing.allocator, body);
+        try expectOwnError(source.items);
+    }
 }

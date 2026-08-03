@@ -5,6 +5,7 @@ const std = @import("std");
 const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 const compile_mod = @import("../compile.zig");
+const luce_source = @import("../01_source.zig");
 
 const testing = std.testing;
 const PortSchema = types.PortSchema;
@@ -30,7 +31,7 @@ fn expectCompilesOptions(source: []const u8, schema: PortSchema, options: types.
     switch (result) {
         .success => |program| return program,
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             result.deinit();
@@ -57,7 +58,7 @@ fn expectFailsOptions(
             for (0..diagnostics.count()) |index| {
                 if (std.mem.eql(u8, diagnostics.at(index).?.code, expected_code)) return;
             }
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("wanted {s}, got:\n{s}", .{ expected_code, rendered });
             return error.TestUnexpectedResult;
@@ -67,9 +68,9 @@ fn expectFailsOptions(
 
 const source_mod = @import("../01_source.zig");
 
-fn printDiagnostics(diagnostics: *const compile_mod.CompileResult, source: []const u8) void {
+fn printDiagnostics(diagnostics: *const compile_mod.CompileResult) void {
     if (diagnostics.* == .success) return;
-    const rendered = diagnostics.failure.render(testing.allocator, source) catch return;
+    const rendered = diagnostics.failure.render(testing.allocator) catch return;
     defer testing.allocator.free(rendered);
     std.debug.print("actual diagnostics:\n{s}", .{rendered});
 }
@@ -91,7 +92,7 @@ fn expectDiagnostics(source: []const u8, schema: PortSchema, options: types.Comp
         return error.TestUnexpectedResult;
     }
     const diagnostics = &result.failure;
-    errdefer printDiagnostics(&result, source);
+    errdefer printDiagnostics(&result);
     try testing.expectEqual(wanted.len, diagnostics.count());
     for (wanted, 0..) |want, index| {
         const item = diagnostics.at(index).?;
@@ -110,35 +111,29 @@ test "func is strict and fn is an ordinary identifier" {
     , .{}, "luce.parse.top");
 }
 
-test "lexer diagnostics carry the right code and location" {
-    // A tab indent, then a number with a doubled dot, then an
-    // unterminated string: three lexer codes at known places.
+test "lexer diagnostics carry the right code and location, and do not cascade" {
+    // A tab indent, a number glued to letters, an unterminated string:
+    // each is one lexer diagnostic at a known place and *nothing else*.
+    // Stage 2 recovers — the tab still opens the block, the bad number
+    // still yields its digits, the broken string still yields a
+    // literal — so the parser has no second complaint to make.
     try expectDiagnostics(
         "func main():\n\tlet a = 1\n",
         .{},
         .{ .entry_mode = .script },
-        &.{
-            .{ .code = "luce.lex.tab", .line = 2, .column = 1 },
-            .{ .code = "luce.parse.expected", .line = 2, .column = 2 },
-        },
+        &.{.{ .code = "luce.lex.tab", .line = 2, .column = 1 }},
     );
     try expectDiagnostics(
         "func main():\n    let a = 12ab\n",
         .{},
         .{ .entry_mode = .script },
-        &.{
-            .{ .code = "luce.lex.number", .line = 2, .column = 13 },
-            .{ .code = "luce.parse.expression", .line = 2, .column = 17 },
-        },
+        &.{.{ .code = "luce.lex.number", .line = 2, .column = 13 }},
     );
     try expectDiagnostics(
         "func main():\n    let a = \"open\n",
         .{},
         .{ .entry_mode = .script },
-        &.{
-            .{ .code = "luce.lex.string", .line = 2, .column = 13 },
-            .{ .code = "luce.parse.expression", .line = 2, .column = 18 },
-        },
+        &.{.{ .code = "luce.lex.string", .line = 2, .column = 13 }},
     );
 }
 
@@ -181,7 +176,9 @@ test "the previously-unasserted diagnostic codes fire" {
     // so each stays reachable and keeps its stable name.
     const Case = struct { source: []const u8, code: []const u8 };
     const cases = [_]Case{
-        .{ .source = "func main():\n    let a = 1\x00\n", .code = "luce.lex.character" },
+        // A control character the lexer has no use for.  (A NUL byte
+        // never gets this far: stage 1 refuses the file.)
+        .{ .source = "func main():\n    let a = 1\x01\n", .code = "luce.lex.character" },
         .{ .source = "func main():\n    let a = \"\\q\"\n", .code = "luce.lex.escape" },
         .{ .source = "func main():\n    let a = @\n", .code = "luce.parse.expression" },
         .{ .source = "func main():\n    let a: List = []\n", .code = "luce.sema.type" },
@@ -408,7 +405,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
     // A std import brings its whole module; what is never called must
     // not reach the .lc, the decoder, or an engine (docs/SPEED.md §12).
     var unused = try expectCompilesOptions(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    print("hi")
@@ -421,7 +418,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
     // still drops the rest of the module — asserted by name, not by
     // count, so an innocent std refactor cannot break this test.
     var used = try expectCompilesOptions(
-        \\import strings
+        \\import std.strings
         \\
         \\func main():
         \\    print(str("abc".find("b")))
@@ -498,6 +495,16 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     // tests can't see block ordering or a lost temp release; this
     // does, and it documents the IR for a reader.  Regenerate
     // deliberately when lowering changes on purpose.
+    //
+    // This is the *optimized* program — what `luce build` writes and
+    // what an engine runs.  Stage 7 has already been over it: the
+    // hidden temporary's bind and its inert release are gone
+    // (07_optimize/ownership.zig), and the reads of `xs` inside the
+    // first block are the register the list was stored from
+    // (07_optimize/values.zig).  `luce ir --full` prints the raw
+    // lowering instead.  The temporary is still in the local table:
+    // `give`/`free` carry a local id as an integer value, so nothing
+    // may renumber locals yet (07_optimize/dead.zig).
     var program = try expectCompilesOptions(
         \\func main():
         \\    var xs = [1, 2]
@@ -519,37 +526,32 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\    r2 = heap_new List(Int)
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
-        \\    local_set %0, r2
-        \\    object_bind %0, r2
         \\    local_set %1, r2
         \\    object_bind %1, r2
-        \\    r9 = local_get %0
-        \\    object_unbind %0, r9
-        \\    r11 = local_get %1
-        \\    r12 = intrinsic len, r11
-        \\    r13 = const 0
-        \\    r14 = greater.Int r12, r13
-        \\    local_set %2, r14
-        \\    branch r14, b1, b2
+        \\    r7 = intrinsic len, r2
+        \\    r8 = const 0
+        \\    r9 = greater.Int r7, r8
+        \\    local_set %2, r9
+        \\    branch r9, b1, b2
         \\  b1:
-        \\    r17 = local_get %1
-        \\    r18 = const 0
-        \\    r19 = intrinsic index_get, r17, r18
-        \\    r20 = const 1
-        \\    r21 = equal.Int r19, r20
-        \\    local_set %2, r21
+        \\    r12 = local_get %1
+        \\    r13 = const 0
+        \\    r14 = intrinsic index_get, r12, r13
+        \\    r15 = const 1
+        \\    r16 = equal.Int r14, r15
+        \\    local_set %2, r16
         \\    jump b2
         \\  b2:
-        \\    r24 = local_get %2
-        \\    branch r24, b3, b4
+        \\    r19 = local_get %2
+        \\    branch r19, b3, b4
         \\  b3:
-        \\    r26 = local_get %1
-        \\    r27 = const 3
-        \\    intrinsic append_value, r26, r27
+        \\    r21 = local_get %1
+        \\    r22 = const 3
+        \\    intrinsic append_value, r21, r22
         \\    jump b4
         \\  b4:
-        \\    r30 = local_get %1
-        \\    object_unbind %1, r30
+        \\    r25 = local_get %1
+        \\    object_unbind %1, r25
         \\    ret
         \\
     , dump);
@@ -862,15 +864,21 @@ const TestModule = struct { name: []const u8, source: []const u8 };
 
 const TestLoader = struct {
     modules: []const TestModule,
+    /// Names that exist but cannot be read — a directory, a
+    /// permission: the host's other answer.
+    locked: []const []const u8 = &.{},
 
-    fn load(context: *anyopaque, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
+    fn load(context: *anyopaque, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!luce_source.Found {
         const self: *TestLoader = @ptrCast(@alignCast(context));
+        for (self.locked) |locked| {
+            if (std.mem.eql(u8, locked, name)) return .{ .unreadable = "permission denied" };
+        }
         for (self.modules) |module| {
             if (std.mem.eql(u8, module.name, name)) {
-                return try arena.dupe(u8, module.source);
+                return .{ .text = .{ .bytes = try arena.dupe(u8, module.source) } };
             }
         }
-        return null;
+        return .missing;
     }
 
     fn loader(self: *TestLoader) compile_mod.Loader {
@@ -920,7 +928,7 @@ test "a file is a module: imports, qualified names, and shared types" {
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, "");
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             result.deinit();
@@ -1003,9 +1011,241 @@ test "imports are explicit, checked, and reported per file" {
     , broken_files.loader(), .{}, script);
     defer imported_error.deinit();
     try testing.expect(imported_error == .failure);
-    const rendered = try imported_error.failure.render(testing.allocator, "");
+    const rendered = try imported_error.failure.render(testing.allocator);
     defer testing.allocator.free(rendered);
     try testing.expect(std.mem.indexOf(u8, rendered, "broken.luc:2:") != null);
+}
+
+test "every way an import can fail is a diagnostic, not a crash or an empty module" {
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    const uses_geo =
+        \\import geo
+        \\
+        \\func main():
+        \\    let bad = geo.area()
+        \\
+    ;
+
+    // Present but unreadable is not the same as absent: the message
+    // says why, so the fix is different.
+    var locked: TestLoader = .{ .modules = &.{}, .locked = &.{"geo"} };
+    var unreadable = try compile_mod.compileProject(testing.allocator, uses_geo, locked.loader(), .{}, script);
+    defer unreadable.deinit();
+    try testing.expect(unreadable == .failure);
+    try testing.expectEqualStrings("luce.import.unreadable", unreadable.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, unreadable.failure.at(0).?.message, "permission denied") != null);
+
+    // A module whose bytes are not text is refused at the import that
+    // asked for it, naming the file it could not become.
+    var binary: TestLoader = .{ .modules = &.{
+        .{ .name = "geo", .source = "func area() -> Int:\n    return \x00\n" },
+    } };
+    var not_text = try compile_mod.compileProject(testing.allocator, uses_geo, binary.loader(), .{}, script);
+    defer not_text.deinit();
+    try testing.expect(not_text == .failure);
+    try testing.expectEqualStrings("luce.source.binary", not_text.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, not_text.failure.at(0).?.message, "geo.luc") != null);
+    // Attributed to the file that wrote the import, at line 1.
+    const at = not_text.failure.sources.place(
+        not_text.failure.at(0).?.file,
+        not_text.failure.at(0).?.span.start,
+    );
+    try testing.expectEqual(@as(usize, 1), at.line);
+
+    // A module that imports itself says so, instead of quietly
+    // resolving to the module already being loaded.
+    var recursive: TestLoader = .{ .modules = &.{
+        .{ .name = "geo", .source = "import geo\n\nfunc area() -> Int:\n    return 4\n" },
+    } };
+    var itself = try compile_mod.compileProject(testing.allocator, uses_geo, recursive.loader(), .{}, script);
+    defer itself.deinit();
+    try testing.expect(itself == .failure);
+    try testing.expectEqualStrings("luce.import.self", itself.failure.at(0).?.code);
+    try testing.expectEqualStrings("geo.luc", itself.failure.sources.pathOf(itself.failure.at(0).?.file));
+}
+
+test "std is a namespace, not a reserved name: a sibling module may be called math" {
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "math", .source = "func answer() -> Int:\n    return 42\n" },
+    } };
+
+    // `import math` is the file beside the program.  The library takes
+    // nothing away from it — `answer` exists nowhere else, so compiling
+    // at all proves which module was reached.
+    var sibling = try compile_mod.compileProject(testing.allocator,
+        \\import math
+        \\
+        \\func main():
+        \\    assert(math.answer() == 42)
+        \\
+    , files.loader(), .{}, script);
+    defer sibling.deinit();
+    if (sibling == .failure) {
+        printDiagnostics(&sibling);
+        return error.TestUnexpectedResult;
+    }
+
+    // `import std.math` is the library, with no loader at all.
+    var library = try compile_mod.compile(testing.allocator,
+        \\import std.math
+        \\
+        \\func main():
+        \\    assert(math.ipow(2, 5) == 32)
+        \\
+    , .{}, script);
+    defer library.deinit();
+    if (library == .failure) {
+        printDiagnostics(&library);
+        return error.TestUnexpectedResult;
+    }
+
+    // Both at once is one binding for two modules, and there is no
+    // `as` to tell them apart: the message names the file to rename.
+    var collision = try compile_mod.compileProject(testing.allocator,
+        \\import std.math
+        \\import math
+        \\
+        \\func main():
+        \\    assert(math.answer() == 42)
+        \\
+    , files.loader(), .{}, script);
+    defer collision.deinit();
+    try testing.expect(collision == .failure);
+    try testing.expectEqualStrings("luce.import.collision", collision.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "std.math") != null);
+    try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "math.luc") != null);
+}
+
+test "a missing import is spelled the way the author would have to write it" {
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "math", .source = "func answer() -> Int:\n    return 42\n" },
+        .{ .name = "user", .source = "import math\n\nfunc go() -> Int:\n    return math.answer()\n" },
+    } };
+
+    // A sibling math.luc is in the program, so the fix is `import
+    // math` — the library must not claim a name it does not hold here.
+    var sibling = try compile_mod.compileProject(testing.allocator,
+        \\import user
+        \\
+        \\func main():
+        \\    assert(math.answer() == user.go())
+        \\
+    , files.loader(), .{}, script);
+    defer sibling.deinit();
+    try testing.expect(sibling == .failure);
+    try testing.expectEqualStrings("luce.sema.import", sibling.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, sibling.failure.at(0).?.message, "import math to use it") != null);
+
+    // Nothing is loaded under the name, and the library does hold it:
+    // the hint carries the namespace.
+    var library = try compile_mod.compileProject(testing.allocator,
+        \\func main():
+        \\    let p: math.Angle = 1
+        \\
+    , files.loader(), .{}, script);
+    defer library.deinit();
+    try testing.expect(library == .failure);
+    try testing.expectEqualStrings("luce.sema.import", library.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, library.failure.at(0).?.message, "import std.math") != null);
+}
+
+test "the std namespace holds the library and nothing else" {
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    // A file really named std.luc, which the namespace makes
+    // unreachable — said plainly rather than resolved behind the
+    // author's back.
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "std", .source = "func nothing():\n    return\n" },
+    } };
+
+    var absent = try compile_mod.compileProject(testing.allocator,
+        \\import std.nope
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), .{}, script);
+    defer absent.deinit();
+    try testing.expect(absent == .failure);
+    try testing.expectEqualStrings("luce.import.standard", absent.failure.at(0).?.code);
+    // Naming what does exist is the whole value of the message.
+    try testing.expect(std.mem.indexOf(u8, absent.failure.at(0).?.message, "std.strings") != null);
+
+    var bare = try compile_mod.compileProject(testing.allocator,
+        \\import std
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), .{}, script);
+    defer bare.deinit();
+    try testing.expect(bare == .failure);
+    try testing.expectEqualStrings("luce.import.reserved", bare.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, bare.failure.at(0).?.message, "std.luc") != null);
+}
+
+test "a project's diagnostics name every file they come from" {
+    // Three files, three problems, one rendering: the root, a sibling
+    // module, and the standard library.  Without a per-diagnostic
+    // file this could only ever print one file's line numbers.
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "geo", .source =
+        \\func area() -> Int:
+        \\    return "not an int"
+        \\
+        },
+    } };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import geo
+        \\import std.math
+        \\
+        \\func main():
+        \\    let bad: Int = geo.area()
+        \\    let worse: Int = math.pi
+        \\
+    , files.loader(), .{}, .{ .entry_mode = .script, .source_name = "program.luc" });
+    defer result.deinit();
+    try testing.expect(result == .failure);
+
+    const rendered = try result.failure.render(testing.allocator);
+    defer testing.allocator.free(rendered);
+    try testing.expect(std.mem.indexOf(u8, rendered, "geo.luc:2:") != null);
+    try testing.expect(std.mem.indexOf(u8, rendered, "program.luc:6:") != null);
+    // The root is named too, not left as a bare line:column.
+    try testing.expect(std.mem.indexOf(u8, rendered, "program.luc:") != null);
+}
+
+test "an imported module compiles the same with CRLF line endings" {
+    // The layout rules run on the loaded text, so a module edited on
+    // Windows blocks and dedents exactly like any other file.
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "geo", .source = "func area() -> Int:\r\n    var total = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" },
+    } };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import geo
+        \\
+        \\func main():
+        \\    assert(geo.area() == 3)
+        \\
+    , files.loader(), .{}, .{ .entry_mode = .script });
+    defer result.deinit();
+    if (result == .failure) {
+        printDiagnostics(&result);
+        return error.TestUnexpectedResult;
+    }
+    const backend = @import("../backend.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const ran = try backend.evaluate(
+        .{ .arena = arena.allocator(), .objects = testing.allocator },
+        &result.success,
+        &.{},
+        &.{},
+        .{},
+    );
+    try testing.expect(ran == .success);
 }
 
 test "modules may import each other; mutual recursion crosses files" {
@@ -1046,6 +1286,53 @@ test "modules may import each other; mutual recursion crosses files" {
     try testing.expect(ran == .success);
 }
 
+test "an import cycle is allowed; what may not be circular is checked finer" {
+    // The policy, written down (compile/modules.zig): a Luce module
+    // has no initialization phase, so there is nothing to catch half
+    // done and no reason to inherit Python's partially initialized
+    // module.  A three-file ring loads, compiles, and runs.
+    const script: types.CompileOptions = .{ .entry_mode = .script };
+    var ring: TestLoader = .{ .modules = &.{
+        .{ .name = "a", .source = "import b\n\nfunc step(v: Int) -> Int:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
+        .{ .name = "b", .source = "import c\n\nfunc step(v: Int) -> Int:\n    return c.step(v)\n" },
+        .{ .name = "c", .source = "import a\n\nfunc step(v: Int) -> Int:\n    return a.step(v)\n" },
+    } };
+    var looped = try compile_mod.compileProject(testing.allocator,
+        \\import a
+        \\
+        \\func main():
+        \\    assert(a.step(9) == 0)
+        \\
+    , ring.loader(), .{}, script);
+    defer looped.deinit();
+    printDiagnostics(&looped);
+    try testing.expect(looped == .success);
+
+    const backend = @import("../backend.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const ran = try backend.evaluate(.{ .arena = arena.allocator(), .objects = testing.allocator }, &looped.success, &.{}, &.{}, .{});
+    try testing.expect(ran == .success);
+
+    // The circularity that *does* mean something is caught where it
+    // means it: a constant that depends on itself through two files
+    // terminates with a diagnostic rather than folding forever.
+    var constants: TestLoader = .{ .modules = &.{
+        .{ .name = "a", .source = "import b\n\nlet width = b.height + 1\n" },
+        .{ .name = "b", .source = "import a\n\nlet height = a.width + 1\n" },
+    } };
+    var knotted = try compile_mod.compileProject(testing.allocator,
+        \\import a
+        \\
+        \\func main():
+        \\    print(str(a.width))
+        \\
+    , constants.loader(), .{}, script);
+    defer knotted.deinit();
+    try testing.expect(knotted == .failure);
+    try testing.expectEqualStrings("luce.sema.const", knotted.failure.at(0).?.code);
+}
+
 test "short-circuit operands survive block splits everywhere" {
     // Every multi-operand construct with a splitting (and/or) operand
     // once emitted registers across block boundaries; the verifier
@@ -1081,7 +1368,7 @@ test "short-circuit operands survive block splits everywhere" {
     switch (featured) {
         .success => {},
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, "");
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             return error.TestUnexpectedResult;
@@ -1107,7 +1394,7 @@ fn runsClean(source: []const u8) !void {
     defer result.deinit();
     switch (result) {
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, source);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             return error.TestUnexpectedResult;
@@ -1132,7 +1419,7 @@ fn failsWith(source: []const u8, code: []const u8) !void {
 
 test "file-scope constants fold every value kind" {
     try runsClean(
-        \\import strings
+        \\import std.strings
         \\
         \\let width = 80
         \\let tau = 2.0 * pi
@@ -1195,7 +1482,7 @@ test "constants reach across modules through imports" {
     }} };
     var result = try compile_mod.compileProject(testing.allocator,
         \\import config
-        \\import strings
+        \\import std.strings
         \\
         \\let banner = "loom " + config.version
         \\
@@ -1209,7 +1496,7 @@ test "constants reach across modules through imports" {
     , files.loader(), .{}, script_options);
     switch (result) {
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, "");
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
             result.deinit();

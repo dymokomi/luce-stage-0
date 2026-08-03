@@ -193,7 +193,7 @@ test "the embedded editor source compiles as a hosted script" {
     switch (result) {
         .success => {},
         .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator, embedded_editor);
+            const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
             std.debug.print("editor diagnostics:\n{s}", .{rendered});
             return error.TestUnexpectedResult;

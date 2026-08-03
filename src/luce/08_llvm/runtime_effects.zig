@@ -1,0 +1,620 @@
+//! What a compiled artifact tells LLVM about `libluce_rt`.
+//!
+//! Generated code calls fifty-eight runtime entry points, and until
+//! this file existed it declared every one of them bare:
+//!
+//! ```llvm
+//! declare i32 @luce_rt_len(ptr, ptr, ptr)
+//! ```
+//!
+//! A bare declaration is the most pessimistic thing LLVM can be told.
+//! It must assume the call reads and writes *all* memory, may not
+//! return, and may unwind — so `len(xs)` cannot leave a loop even when
+//! nothing in the loop touches the list, the boxes handed to it must be
+//! refilled every iteration because the call might have scribbled on
+//! them, and every trap edge looks as likely as the path through.  None
+//! of that is true of any function in `runtime/exports.zig`, and this
+//! file is where the truth is written down.
+//!
+//! ## The three claims, and why each holds
+//!
+//! **`nounwind`.**  `libluce_rt` is Zig with `link_libc`; nothing in it
+//! raises an exception.  A Luce trap is a *value* — `1` returned
+//! through the `i32` every fallible export answers with — not an
+//! unwind, which is the whole reason the C surface has that convention
+//! (docs/CODEGEN.md).  The one exception is `luce_rt_report`, which
+//! calls back into the host, and a host is anybody's code.
+//!
+//! **`willreturn`.**  Every export terminates: the container algorithms
+//! are bounded by the container, the text ones by the string, and
+//! nothing loops on an external condition.  A trap does not `longjmp`,
+//! it returns.  `luce_rt_report` is again the exception — it hands
+//! control to the host, which is free to `exit`.
+//!
+//! **`memory(...)`.**  This is the claim with teeth, so it is made per
+//! function from what the body actually does.  Three locations matter:
+//!
+//!   * **argmem** — everything reachable *based on* a pointer argument:
+//!     the `*Runtime` itself (its trap slot, its serial counter, its
+//!     leak count), a borrowed `*const Value`, an out-parameter.  Every
+//!     export that can trap writes `runtime.pending`, so every one of
+//!     them is at least `argmem: readwrite`.
+//!   * **inaccessiblemem** — the object table, container storage, and
+//!     the value arena.  Generated code cannot reach any of it: it
+//!     holds objects as `i32` handles and Strings as `{ptr, len}` pairs
+//!     it never loads through, and the only memory it ever *writes* is
+//!     its own `alloca`s.  So this memory is exactly what LangRef calls
+//!     inaccessible — "not accessible by the current module" — and
+//!     naming it separately is what lets a reader (`luce_rt_len`) be
+//!     distinguished from a mutator (`luce_rt_append`).
+//!   * **the default** — globals and captured pointers.  No export
+//!     touches either, with one licensed exception: `luce_rt_unwound`
+//!     reads the `luce.functions` table, and reading a *constant*
+//!     global is always permitted, whatever the memory attribute says.
+//!
+//! ## Parameters
+//!
+//! `Parameter` names the handful of shapes a runtime argument comes in,
+//! and each shape carries the promises that are true of it at **every**
+//! call site — that is the bar, because these attributes sit on one
+//! shared declaration.  Two consequences worth naming:
+//!
+//!   * A pointer the runtime *keeps* is not `nocapture`.  There are
+//!     exactly two: `luce_rt_raise`'s message, which is stored in the
+//!     pending trap, and `luce_rt_open`'s function table, which the run
+//!     reads back when it unwinds.
+//!   * A pointer that came from a *host* service gets no `nonnull`, no
+//!     `dereferenceable`, and no `noundef`.  The host fills those slots,
+//!     and a host is not ours to promise for.
+//!
+//! Nothing here is a hint.  A wrong attribute is a miscompile, not a
+//! slowdown, so anything this file cannot justify from the body of the
+//! function it describes is simply left unsaid.
+
+const std = @import("std");
+const runtime = @import("../runtime.zig");
+
+const Builder = std.zig.llvm.Builder;
+const Memory = Builder.Attribute.Memory;
+
+/// Every `libluce_rt` entry point generated code calls.  The tag is the
+/// C symbol, so `@tagName` is the name that reaches the object file and
+/// there is no second spelling to keep in step.
+pub const Service = enum {
+    // -- the run ------------------------------------------------------
+    luce_rt_open,
+    luce_rt_close,
+    luce_rt_leaked,
+    luce_rt_status,
+    luce_rt_serial,
+    luce_rt_exhaust,
+
+    // -- traps and the trace they carry -------------------------------
+    luce_rt_raise,
+    luce_rt_unwound,
+    luce_rt_report,
+
+    // -- host text ----------------------------------------------------
+    luce_rt_intern_text,
+    luce_rt_set_key_text,
+    luce_rt_key_text,
+
+    // -- objects and ownership ----------------------------------------
+    luce_rt_new_list,
+    luce_rt_new_map,
+    luce_rt_new_builder,
+    luce_rt_new_array,
+    luce_rt_bind,
+    luce_rt_unbind,
+    luce_rt_loosen_from_frame,
+    luce_rt_free,
+    luce_rt_give,
+    luce_rt_copy,
+
+    // -- struct values ------------------------------------------------
+    luce_rt_struct_make,
+    luce_rt_struct_set,
+
+    // -- containers ---------------------------------------------------
+    luce_rt_len,
+    luce_rt_index_get,
+    luce_rt_index_set,
+    luce_rt_list_slice,
+    luce_rt_append,
+    luce_rt_append_ascii,
+    luce_rt_pop,
+    luce_rt_insert,
+    luce_rt_remove,
+    luce_rt_has_key,
+    luce_rt_key_at,
+    luce_rt_value_at,
+    luce_rt_dim_size,
+    luce_rt_sort,
+    luce_rt_reverse,
+    luce_rt_find,
+    luce_rt_contains,
+    luce_rt_clear,
+    luce_rt_map_keys,
+    luce_rt_map_values,
+    luce_rt_map_get,
+    luce_rt_array_fill,
+
+    // -- strings and conversions --------------------------------------
+    luce_rt_concat,
+    luce_rt_string_slice,
+    luce_rt_string_byte,
+    luce_rt_string_find_byte,
+    luce_rt_str,
+    luce_rt_parse_int,
+    luce_rt_parse_float,
+    luce_rt_chr,
+    luce_rt_ord,
+
+    // -- operators ----------------------------------------------------
+    luce_rt_float_extremum,
+    luce_rt_float_clamp,
+    luce_rt_compare,
+
+    /// The C symbol this service is declared under.
+    pub fn symbol(self: Service) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// The shape of one runtime argument, and with it the promises that
+/// hold at every call site that passes one.
+pub const Parameter = enum {
+    /// A scalar — an index, a length, a trap code, a serial.  Nothing
+    /// to promise: some of them are answers a host handed back, and a
+    /// host's answers are not ours to describe.
+    plain,
+    /// The `*Runtime` this run belongs to.  Never null (generated code
+    /// checks `luce_rt_open` before it calls anything else), never
+    /// kept: no export stores the runtime pointer anywhere.
+    run,
+    /// A borrowed `*const Value` — read for the duration of the call
+    /// and not kept.  Always an entry-block `alloca` in generated code.
+    value_in,
+    /// A run of borrowed `Value`s (`[*]const Value`): subscripts,
+    /// struct fields.  Always an `alloca`, but possibly an empty one,
+    /// so it promises no size.
+    values_in,
+    /// A run of borrowed `i64`s — an array's dimensions.
+    numbers_in,
+    /// Where the answer goes: a `*Value` the callee writes and never
+    /// reads.
+    value_out,
+    /// Borrowed bytes — a String's, or a buffer a host service filled
+    /// in.  Read, not kept, and nothing else is promised, because the
+    /// host end of the pair is not ours to promise for.
+    bytes_in,
+    /// Borrowed bytes the run *keeps*: a trap's words, the function
+    /// table.  Read but not `nocapture`.
+    bytes_kept,
+    /// A pointer with nothing to promise — a host context, a host
+    /// callback.
+    unknown,
+
+    /// Whether this shape describes a pointer.  Every shape but
+    /// `plain` does, and the lowering checks that against the type the
+    /// call site actually passes: a pointer attribute on an integer is
+    /// invalid IR, and a `plain` where a pointer travels is a promise
+    /// silently not made.
+    pub fn isPointer(self: Parameter) bool {
+        return switch (self) {
+            .plain => false,
+            .run,
+            .value_in,
+            .values_in,
+            .numbers_in,
+            .value_out,
+            .bytes_in,
+            .bytes_kept,
+            .unknown,
+            => true,
+        };
+    }
+};
+
+/// What one entry point does, as LLVM needs to hear it.
+pub const Effect = struct {
+    /// The memory summary, or null when the call reaches code this
+    /// compiler knows nothing about and every effect must be assumed.
+    memory: ?Memory,
+    /// One entry per parameter, in declaration order.
+    parameters: []const Parameter,
+    /// Whether the callee can raise an exception through this frame.
+    /// True for everything but the one export that calls the host.
+    nounwind: bool = true,
+    /// Whether the call comes back.  Same exception, same reason.
+    willreturn: bool = true,
+    /// Only reached while the program is failing.  LLVM sinks the
+    /// blocks that call these out of the straight-line path, which is
+    /// the whole point of putting the trap machinery behind a call.
+    cold: bool = false,
+    /// The result is freshly allocated storage nothing else points at.
+    returns_noalias: bool = false,
+};
+
+// The five summaries the table below is written in terms of.  Naming
+// them once keeps the table readable and keeps a reader from having to
+// re-derive what `argmem: readwrite, inaccessiblemem: read` means
+// fifteen times.
+
+/// Touches nothing at all.
+const pure: Memory = .{};
+/// Reads through its arguments and nothing else.
+const reads_run: Memory = .{ .argmem = .read };
+/// Reads its arguments and the runtime's own storage; writes neither.
+const reads_only: Memory = .{ .argmem = .read, .inaccessiblemem = .read };
+/// Reads the runtime's storage, and writes only through its arguments
+/// — an out-parameter, and the trap slot when it fails.
+const reads_heap: Memory = .{ .argmem = .readwrite, .inaccessiblemem = .read };
+/// Writes only through its arguments.
+const touches_run: Memory = .{ .argmem = .readwrite };
+/// The general case: reads and writes its arguments and the runtime's
+/// own storage, and nothing else.
+const touches_heap: Memory = .{ .argmem = .readwrite, .inaccessiblemem = .readwrite };
+
+/// What each entry point does.  One arm per service, no `else`: a new
+/// runtime call is a compile error here, which is the only way a
+/// declaration can never go out again bare or, worse, wrong.
+///
+/// The justification for each summary is the body of the corresponding
+/// export in `runtime/exports.zig`; where that body only reads, the
+/// summary says `read`, and where it allocates, frees, or mutates a
+/// container it says `readwrite`.
+pub fn describe(service: Service) Effect {
+    return switch (service) {
+        // -- the run --------------------------------------------------
+        //
+        // `open` allocates the runtime and its arena and reads the
+        // function table it is handed; the storage it returns is fresh,
+        // which is what `noalias` says.  `close` gives all of it back.
+        .luce_rt_open => .{
+            .memory = .{ .argmem = .read, .inaccessiblemem = .readwrite },
+            .parameters = &.{ .bytes_kept, .plain },
+            .returns_noalias = true,
+        },
+        .luce_rt_close => .{ .memory = touches_heap, .parameters = &.{.run} },
+        .luce_rt_leaked => .{ .memory = reads_run, .parameters = &.{.run} },
+        .luce_rt_status => .{ .memory = reads_run, .parameters = &.{ .run, .plain } },
+        // Reads the counter and bumps it.
+        .luce_rt_serial => .{ .memory = touches_run, .parameters = &.{.run} },
+        // One store into the runtime, on the way out of a run that ran
+        // out of memory.
+        .luce_rt_exhaust => .{
+            .memory = .{ .argmem = .write },
+            .parameters = &.{.run},
+            .cold = true,
+        },
+
+        // -- traps and the trace they carry ---------------------------
+        //
+        // `raise` records the pending trap and keeps the words: the
+        // message outlives the call, so it is read but not `nocapture`.
+        .luce_rt_raise => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .plain, .bytes_kept, .plain },
+            .cold = true,
+        },
+        // Appends one frame to the trace, which allocates.  It reads
+        // the `luce.functions` table too — a constant global, which any
+        // memory summary permits.
+        .luce_rt_unwound => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .plain },
+            .cold = true,
+        },
+        // Calls the host's trap callback.  Everything below this line
+        // is the host's, so nothing is promised: not the memory it
+        // touches, not that it comes back, not that it does not unwind.
+        .luce_rt_report => .{
+            .memory = null,
+            .parameters = &.{ .run, .unknown, .unknown },
+            .nounwind = false,
+            .willreturn = false,
+            .cold = true,
+        },
+
+        // -- host text ------------------------------------------------
+        //
+        // Both copy borrowed bytes into the run's arena, which
+        // allocates; `key_text` only hands back the copy already made.
+        .luce_rt_intern_text => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .bytes_in, .plain, .value_out },
+        },
+        .luce_rt_set_key_text => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .bytes_in, .plain },
+        },
+        .luce_rt_key_text => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .value_out },
+        },
+
+        // -- objects and ownership ------------------------------------
+        //
+        // Every one of these allocates, frees, or moves ownership in the
+        // object table, so every one of them writes the runtime's
+        // storage as well as its arguments.
+        .luce_rt_new_list,
+        .luce_rt_new_map,
+        .luce_rt_new_builder,
+        => .{ .memory = touches_heap, .parameters = &.{ .run, .value_out } },
+        .luce_rt_new_array => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .numbers_in, .plain, .value_in, .value_out },
+        },
+        .luce_rt_bind, .luce_rt_unbind => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain },
+        },
+        .luce_rt_loosen_from_frame => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain },
+        },
+        .luce_rt_free => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .plain },
+        },
+        .luce_rt_give => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .plain, .value_out },
+        },
+        .luce_rt_copy => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+
+        // -- struct values --------------------------------------------
+        //
+        // Both allocate a fresh run of fields in the arena.
+        .luce_rt_struct_make => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .values_in, .plain, .value_out },
+        },
+        .luce_rt_struct_set => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .value_in, .value_out },
+        },
+
+        // -- containers that only look --------------------------------
+        //
+        // These resolve the handle, read the container, and write the
+        // answer into the out-parameter — plus the trap slot when the
+        // index is out of range.  Saying so is what lets `len(xs)` leave
+        // a loop that never touches `xs`.
+        .luce_rt_len => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_index_get => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .values_in, .plain, .value_out },
+        },
+        .luce_rt_has_key, .luce_rt_find, .luce_rt_contains => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .value_in, .value_out },
+        },
+        .luce_rt_key_at, .luce_rt_value_at, .luce_rt_dim_size => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .plain, .value_out },
+        },
+        .luce_rt_map_get => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .value_in, .value_in, .value_out },
+        },
+
+        // -- containers that change something -------------------------
+        .luce_rt_index_set => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .values_in, .plain, .value_in },
+        },
+        .luce_rt_list_slice => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
+        },
+        .luce_rt_append, .luce_rt_remove, .luce_rt_array_fill => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_in },
+        },
+        .luce_rt_append_ascii => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain },
+        },
+        .luce_rt_pop => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_insert => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .value_in },
+        },
+        .luce_rt_sort, .luce_rt_reverse, .luce_rt_clear => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in },
+        },
+        .luce_rt_map_keys, .luce_rt_map_values => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+
+        // -- strings and conversions ----------------------------------
+        //
+        // The ones that allocate arena storage write the runtime's
+        // memory; the ones that only look at the bytes they were given
+        // do not.  `slice` is a borrow of the original bytes, which is
+        // why it is on the reading side.
+        .luce_rt_concat => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_in, .value_out },
+        },
+        .luce_rt_string_slice => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
+        },
+        .luce_rt_parse_int, .luce_rt_parse_float, .luce_rt_ord => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        .luce_rt_string_byte => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .plain, .value_out },
+        },
+        .luce_rt_string_find_byte => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
+        },
+        .luce_rt_str => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        // `chr` takes the codepoint itself, not a boxed value.
+        .luce_rt_chr => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .value_out },
+        },
+
+        // -- operators ------------------------------------------------
+        //
+        // The two float helpers are arithmetic and nothing else.
+        // `compare` reads both values, and the String and struct storage
+        // behind them, and cannot fail — it takes no runtime at all.
+        .luce_rt_float_extremum => .{
+            .memory = pure,
+            .parameters = &.{ .plain, .plain, .plain },
+        },
+        .luce_rt_float_clamp => .{
+            .memory = pure,
+            .parameters = &.{ .plain, .plain, .plain },
+        },
+        .luce_rt_compare => .{
+            .memory = reads_only,
+            .parameters = &.{ .plain, .value_in, .value_in },
+        },
+    };
+}
+
+/// How big a `runtime.Value` is, which is what makes a boxed argument
+/// `dereferenceable`.  Read from the Zig struct so the promise cannot
+/// drift from the layout generated code writes.
+pub const value_size: u32 = @sizeOf(runtime.Value);
+
+/// The alignment every boxed `Value` is allocated at (`lower.zig`'s
+/// `value_alignment`), and therefore the alignment a pointer to one
+/// carries.
+pub const value_align: u32 = @alignOf(runtime.Value);
+
+/// The attributes one parameter shape carries, appended to `into`.
+pub fn describeParameter(
+    into: *Builder.FunctionAttributes.Wip,
+    at: usize,
+    shape: Parameter,
+    builder: *Builder,
+) std.mem.Allocator.Error!void {
+    const word: Builder.Alignment.Lazy = .wrap(.fromByteUnits(value_align));
+    switch (shape) {
+        .plain => {},
+        .run => {
+            try into.addParamAttr(at, .nocapture, builder);
+            try into.addParamAttr(at, .nonnull, builder);
+            try into.addParamAttr(at, .noundef, builder);
+        },
+        .value_in => {
+            try into.addParamAttr(at, .nocapture, builder);
+            try into.addParamAttr(at, .readonly, builder);
+            try into.addParamAttr(at, .nonnull, builder);
+            try into.addParamAttr(at, .noundef, builder);
+            try into.addParamAttr(at, .{ .dereferenceable = value_size }, builder);
+            try into.addParamAttr(at, .{ .@"align" = word }, builder);
+        },
+        // A run may be empty — a struct with no fields — so it promises
+        // its alignment and that it is a real address, but no size.
+        .values_in, .numbers_in => {
+            try into.addParamAttr(at, .nocapture, builder);
+            try into.addParamAttr(at, .readonly, builder);
+            try into.addParamAttr(at, .nonnull, builder);
+            try into.addParamAttr(at, .noundef, builder);
+            try into.addParamAttr(at, .{ .@"align" = word }, builder);
+        },
+        .value_out => {
+            try into.addParamAttr(at, .nocapture, builder);
+            try into.addParamAttr(at, .writeonly, builder);
+            try into.addParamAttr(at, .nonnull, builder);
+            try into.addParamAttr(at, .noundef, builder);
+            try into.addParamAttr(at, .{ .dereferenceable = value_size }, builder);
+            try into.addParamAttr(at, .{ .@"align" = word }, builder);
+        },
+        .bytes_in => {
+            try into.addParamAttr(at, .nocapture, builder);
+            try into.addParamAttr(at, .readonly, builder);
+        },
+        .bytes_kept => {
+            try into.addParamAttr(at, .readonly, builder);
+        },
+        .unknown => {},
+    }
+}
+
+/// Every function-level attribute one service carries, as a finished
+/// `FunctionAttributes` ready to hang on the declaration.
+pub fn attributes(
+    service: Service,
+    parameters: []const Builder.Type,
+    builder: *Builder,
+) std.mem.Allocator.Error!Builder.FunctionAttributes {
+    const effect = describe(service);
+    // The table and the call site have to agree about the shape of
+    // every argument, because a pointer promise made about an integer
+    // is invalid IR and a pointer described as a scalar is a promise
+    // quietly dropped.  Both are compiler bugs, so both assert here
+    // rather than reaching LLVM.
+    std.debug.assert(effect.parameters.len == parameters.len);
+    for (effect.parameters, parameters) |shape, passed| {
+        std.debug.assert(shape.isPointer() == (passed == .ptr));
+    }
+
+    var wip: Builder.FunctionAttributes.Wip = .{};
+    defer wip.deinit(builder);
+
+    if (effect.nounwind) try wip.addFnAttr(.nounwind, builder);
+    if (effect.willreturn) try wip.addFnAttr(.willreturn, builder);
+    if (effect.cold) try wip.addFnAttr(.cold, builder);
+    if (effect.memory) |summary| try wip.addFnAttr(.{ .memory = summary }, builder);
+    if (effect.returns_noalias) try wip.addRetAttr(.@"noalias", builder);
+    for (effect.parameters, 0..) |shape, at| {
+        try describeParameter(&wip, at, shape, builder);
+    }
+    return wip.finish(builder);
+}
+
+test "every service describes exactly the arguments it is called with" {
+    // `describe` is total over the enum by construction — the switch has
+    // no `else` arm — so what is left to check is that each arm names a
+    // plausible parameter list: a runtime-taking export always takes it
+    // first, and nothing claims a shape it has no parameter for.
+    for (std.enums.values(Service)) |service| {
+        const effect = describe(service);
+        try std.testing.expect(effect.parameters.len > 0);
+        for (effect.parameters[1..]) |shape| {
+            try std.testing.expect(shape != .run);
+        }
+    }
+}
+
+test "the boxed-value promises match the layout generated code writes" {
+    try std.testing.expectEqual(@as(u32, 24), value_size);
+    try std.testing.expectEqual(@as(u32, 8), value_align);
+}
+
+test "only the host-calling export withholds nounwind and willreturn" {
+    for (std.enums.values(Service)) |service| {
+        const effect = describe(service);
+        const opaque_to_us = service == .luce_rt_report;
+        try std.testing.expectEqual(!opaque_to_us, effect.nounwind);
+        try std.testing.expectEqual(!opaque_to_us, effect.willreturn);
+        try std.testing.expectEqual(opaque_to_us, effect.memory == null);
+    }
+}

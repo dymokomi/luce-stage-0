@@ -67,8 +67,10 @@ pub const CompileOptions = struct {
     /// what a runtime trap location reports.  "" falls back to
     /// "main.luc".  Imported modules always report "PREFIX.luc".
     source_name: []const u8 = "",
-    /// Dead-code elimination (07_optimize/prune.zig): on for every artifact;
-    /// `luce ir --full` clears it to show unreached functions.
+    /// Stage 7, the whole of it (`07_optimize`): on for every artifact;
+    /// `luce ir --full` clears it to show the raw lowering, unreached
+    /// functions and all.  The name is older than the stage — it was
+    /// one pass, dead-code elimination, when the flag was added.
     prune: bool = true,
 };
 

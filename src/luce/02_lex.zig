@@ -5,12 +5,42 @@
 //! `indent`/`dedent`/`newline` layout tokens, so the parser never
 //! counts columns.
 //!
-//! **Complete.**  Four-space steps are canonical, tabs are rejected,
-//! blank and comment-only lines produce no layout, and inside
+//! **Locked.**  Complete for the lexical surface Luce has, with every
+//! open question closed rather than left to taste:
+//!
+//! * **Its input is stage 1's prepared text** — valid UTF-8, LF only,
+//!   no NUL, no BOM — and that is a documented precondition, asserted
+//!   in Debug, not re-checked.  Encoding is loading's to decide; this
+//!   stage has no CRLF path and no UTF-8 validation of its own.
+//! * **The four-space step is enforced**, not merely canonical: a
+//!   block opens exactly four columns deeper than the one containing
+//!   it, tabs are rejected outright (and recovered as four-column
+//!   stops), and nesting is bounded.  A language whose blocks *are*
+//!   their indentation cannot leave the size of a step to taste.
+//! * **A source file must read the way it runs**: bidirectional
+//!   controls are refused everywhere including strings and comments
+//!   (CVE-2021-42574), raw control bytes are refused inside text, and
+//!   a Unicode look-alike is named with the ASCII to write instead.
+//!
+//! Blank and comment-only lines produce no layout, and inside
 //! parentheses newlines are plain spacing.  The lexer never fails
 //! hard: malformed input becomes a `luce.lex.*` diagnostic plus the
-//! closest reasonable token stream, so one bad line does not silence
-//! the rest of the file.
+//! closest reasonable token stream — including a recovery token where
+//! a value was clearly meant — so one bad construct does not silence
+//! the rest of the file.  Reporting is bounded twice (identical runs
+//! collapse, then a hard cap), so untrusted bytes cannot turn into
+//! unbounded error text.  `lexer.zig`'s header is the full statement
+//! of the surface and the recovery contract.
+//!
+//! **What is deliberately not here**, because each is a language
+//! decision and not a lexer one (docs/MISSING.md): hex, binary and
+//! octal literals, digit separators, escapes beyond `\n \t \\ \"`,
+//! non-ASCII identifiers, block comments, and character literals.
+//! Every one of them is *diagnosed by name* rather than silently
+//! mis-lexed, so the day one is adopted, this is the only file that
+//! changes — except the escape set, whose other half (decoding) is
+//! stage 3's, and which therefore moves as one change across two
+//! stages or not at all.
 //!
 //! Flat pieces beside this file:
 //!
