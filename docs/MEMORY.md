@@ -140,9 +140,10 @@ should have a sensible default with explicit verbs underneath.
 - `give x` — transfer ownership (into a call or container); free.
 - `copy x` — deep clone; independence made visible and O(n).
 - `free x` — early release; rare.
-- later, maybe: `share x` — an opt-in refcounted island for genuine
-  shared ownership; cost confined to objects that ask for it.
-  Explicitly not in the first version.
+- `share x` — an opt-in refcounted island for genuine shared
+  ownership.  Considered here, and **refused permanently**: reference
+  counting is out at every layer of Luce, so there is no version of
+  this that ships.
 
 **The one rule replacing the borrow checker:** *keeping* a named
 object — storing a bare variable into a container or an outliving
