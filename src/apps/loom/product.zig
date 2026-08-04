@@ -39,259 +39,124 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const harness = @import("harness");
 const luce = @import("luce");
 
 const testing = std.testing;
 const io = std.testing.io;
 const Allocator = std.mem.Allocator;
+const Install = harness.Install;
+const Ran = harness.Ran;
+const environmentWith = harness.environmentWith;
 
-/// A miniature install tree: `loom` and `luce` at the root, the runtime
-/// library under `lib/`, which is the layout `zig build --prefix`
-/// produces and the one `native.discover` looks for.
-const Install = struct {
-    scratch: testing.TmpDir,
-    root: []const u8,
-    loom: []const u8,
-    /// The compiler's path in the tree, whether or not one was put
-    /// there — a test that plants a stand-in writes to this name too.
-    luce: []const u8,
+// ---------------------------------------------------------------------------
+// A miniature install tree
+// ---------------------------------------------------------------------------
 
-    fn make(gpa: Allocator, with_compiler: bool) !Install {
-        var scratch = testing.tmpDir(.{});
-        errdefer scratch.cleanup();
-
-        var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-        const root = try gpa.dupe(u8, path_storage[0..try scratch.dir.realPath(io, &path_storage)]);
-        errdefer gpa.free(root);
-
-        // `copyFile` carries the mode across, so the executable bit
-        // comes along with the bytes.
-        try std.Io.Dir.cwd().copyFile(build_options.loom_binary, scratch.dir, "loom", io, .{});
-        if (with_compiler) {
-            try std.Io.Dir.cwd().copyFile(build_options.luce_binary, scratch.dir, "luce", io, .{});
-            try std.Io.Dir.cwd().copyFile(
-                build_options.luce_rt_library,
-                scratch.dir,
-                "lib/libluce_rt.a",
-                io,
-                .{ .make_path = true },
-            );
-        }
-
-        const loom = try std.fs.path.join(gpa, &.{ root, "loom" });
-        errdefer gpa.free(loom);
-        return .{
-            .scratch = scratch,
-            .root = root,
-            .loom = loom,
-            .luce = try std.fs.path.join(gpa, &.{ root, "luce" }),
-        };
+/// `loom` and `luce` at the root, the runtime library under `lib/`,
+/// which is the layout `zig build --prefix` produces and the one
+/// `native.discover` looks for.  The tree itself and the way to run
+/// what is in it are `apps/harness.zig`'s, shared with the compiler's
+/// suite; what goes into this one is this suite's — and half these
+/// tests are about a loom with no compiler beside it, which is what
+/// `with_compiler` withholds.
+fn installTree(gpa: Allocator, with_compiler: bool) !Install {
+    var tree = try Install.make(gpa);
+    errdefer tree.deinit(gpa);
+    try tree.place(build_options.loom_binary, "loom");
+    if (with_compiler) {
+        try tree.place(build_options.luce_binary, "luce");
+        try tree.place(build_options.luce_rt_library, "lib/libluce_rt.a");
     }
-
-    fn deinit(self: *Install, gpa: Allocator) void {
-        gpa.free(self.luce);
-        gpa.free(self.loom);
-        gpa.free(self.root);
-        self.scratch.cleanup();
-        self.* = undefined;
-    }
-
-    /// A path inside the tree; the caller owns it.
-    fn at(self: *const Install, gpa: Allocator, name: []const u8) ![]u8 {
-        return std.fs.path.join(gpa, &.{ self.root, name });
-    }
-
-    fn exists(self: *const Install, name: []const u8) bool {
-        const file = self.scratch.dir.openFile(io, name, .{}) catch return false;
-        file.close(io);
-        return true;
-    }
-
-    fn write(self: *const Install, name: []const u8, text: []const u8) !void {
-        try self.scratch.dir.writeFile(io, .{ .sub_path = name, .data = text });
-    }
-
-    /// Whether any entry in the tree's root ends in `suffix`.  What
-    /// this is for is the temporary module: nothing may be left with
-    /// that extension once a build is over, however the build ended.
-    fn holdsAnything(self: *const Install, suffix: []const u8) !bool {
-        var directory = try self.scratch.dir.openDir(io, ".", .{ .iterate = true });
-        defer directory.close(io);
-        var walk = directory.iterate();
-        while (try walk.next(io)) |entry| {
-            if (std.mem.endsWith(u8, entry.name, suffix)) return true;
-        }
-        return false;
-    }
-
-    fn read(self: *const Install, gpa: Allocator, name: []const u8) ![]u8 {
-        return self.scratch.dir.readFileAlloc(io, name, gpa, .unlimited);
-    }
-
-    /// Put a stand-in where the compiler goes: a script that records
-    /// having been called, says something, and exits with `status`.
-    ///
-    /// The real compiler cannot be made to fail on demand — every
-    /// program a script can express lowers — so the exit-code contract
-    /// between the two binaries is proved against a stand-in that can.
-    fn plantCompiler(self: *const Install, gpa: Allocator, status: u8, says: []const u8) !void {
-        // `echo` and the redirect are shell builtins; nothing here runs
-        // a program, because the PATH these tests hand loom holds only
-        // the install tree and there is no `dirname` on it.
-        const script = try std.fmt.allocPrint(gpa,
-            \\#!/bin/sh
-            \\echo call >> "{s}/calls"
-            \\echo "{s}" >&2
-            \\exit {d}
-            \\
-        , .{ self.root, says, status });
-        defer gpa.free(script);
-        try self.installScript(gpa, script);
-    }
-
-    /// Write `script` where the compiler goes, runnable.
-    fn installScript(self: *const Install, gpa: Allocator, script: []const u8) !void {
-        const path = try self.at(gpa, "luce");
-        defer gpa.free(path);
-        const file = try std.Io.Dir.cwd().createFile(io, path, .{
-            .truncate = true,
-            .permissions = .executable_file,
-        });
-        defer file.close(io);
-        try file.writePositionalAll(io, script, 0);
-    }
-
-    /// Put a stand-in where the compiler goes that *succeeds* and
-    /// hands back an artifact for a different program.
-    ///
-    /// Not a contrivance: a build rule with a stale `-o`, a cache that
-    /// answered the wrong key, a copy that raced — every one of them
-    /// looks exactly like this from where loom stands, and the loader
-    /// is the only thing that can tell.  It is the one way to reach
-    /// the `source` refusal from outside, because the real compiler
-    /// cannot be made to build the wrong program.
-    fn plantCopyingCompiler(self: *const Install, gpa: Allocator, artifact: []const u8) !void {
-        // `luce build MODULE -o OUTPUT`: the fourth word is where the
-        // artifact was asked for.
-        const script = try std.fmt.allocPrint(gpa,
-            \\#!/bin/sh
-            \\echo call >> "{s}/calls"
-            \\cp "{s}" "$4"
-            \\exit 0
-            \\
-        , .{ self.root, artifact });
-        defer gpa.free(script);
-        try self.installScript(gpa, script);
-    }
-
-    /// How many times the stand-in was called.
-    fn calls(self: *const Install, gpa: Allocator) !usize {
-        const text = self.read(gpa, "calls") catch return 0;
-        defer gpa.free(text);
-        return std.mem.count(u8, text, "\n");
-    }
-};
-
-/// This process's environment with `additions` laid over it.
-///
-/// A map handed to a child *replaces* its environment rather than
-/// adding to it, and a cold run is a link: taking `PATH` away takes
-/// `cc` away with it, and the build fails for a reason the test was
-/// not asking about.  So setting one variable means copying the lot.
-/// (`Install.plantCompiler` is the opposite case and takes the bare
-/// map on purpose — it wants a world with nothing in it.)
-fn environmentWith(gpa: Allocator, additions: []const [2][]const u8) !std.process.Environ.Map {
-    var count: usize = 0;
-    while (std.c.environ[count] != null) : (count += 1) {}
-    const inherited: std.process.Environ = .{ .block = .{ .slice = std.c.environ[0..count :null] } };
-    var map = try inherited.createMap(gpa);
-    errdefer map.deinit();
-    for (additions) |pair| try map.put(pair[0], pair[1]);
-    return map;
+    return tree;
 }
 
-/// What one run of a real binary did.
-const Ran = struct {
-    status: u8,
-    out: []u8,
-    err: []u8,
-
-    fn deinit(self: *Ran, gpa: Allocator) void {
-        gpa.free(self.out);
-        gpa.free(self.err);
-        self.* = undefined;
-    }
-
-    fn saysOut(self: *const Ran, words: []const u8) bool {
-        return std.mem.indexOf(u8, self.out, words) != null;
-    }
-
-    fn saysErr(self: *const Ran, words: []const u8) bool {
-        return std.mem.indexOf(u8, self.err, words) != null;
-    }
-};
-
-/// Run the installed loom.  `environment` null inherits this process's,
-/// which is what gives the compiler a `cc` to link with.
+/// Run the installed loom, optionally with `script` on its standard
+/// input — which is what turns the interactive shell into the
+/// non-interactive one, and is the only way to reach the status a piped
+/// loom exits with.  `environment` null inherits this process's, which
+/// is what gives the compiler a `cc` to link with.
 fn runLoom(
     gpa: Allocator,
     install: *const Install,
     arguments: []const []const u8,
     environment: ?*const std.process.Environ.Map,
-) !Ran {
-    return runLoomReading(gpa, install, arguments, environment, null);
-}
-
-/// The same, with `script` on loom's standard input — which is what
-/// turns the interactive shell into the non-interactive one, and is
-/// the only way to reach the status a piped loom exits with.
-fn runLoomReading(
-    gpa: Allocator,
-    install: *const Install,
-    arguments: []const []const u8,
-    environment: ?*const std.process.Environ.Map,
     script: ?[]const u8,
 ) !Ran {
+    const loom = try install.at(gpa, "loom");
+    defer gpa.free(loom);
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.append(gpa, install.loom);
+    try argv.append(gpa, loom);
     try argv.appendSlice(gpa, arguments);
-    return spawn(gpa, install, argv.items, environment, script);
+    return install.spawn(gpa, argv.items, .{ .environment = environment, .input = script });
 }
 
-/// Run anything, with the three streams on files inside the tree.
-fn spawn(
-    gpa: Allocator,
-    install: *const Install,
-    argv: []const []const u8,
-    environment: ?*const std.process.Environ.Map,
-    script: ?[]const u8,
-) !Ran {
-    const input: std.process.SpawnOptions.StdIo = if (script) |text| stream: {
-        try install.scratch.dir.writeFile(io, .{ .sub_path = ".stdin", .data = text });
-        break :stream .{ .file = try install.scratch.dir.openFile(io, ".stdin", .{}) };
-    } else .ignore;
-    defer if (input == .file) input.file.close(io);
+/// Run the compiler in the tree — for the tests that need a real
+/// artifact before they can break one.
+fn runLuce(gpa: Allocator, install: *const Install, arguments: []const []const u8) !Ran {
+    const compiler = try install.at(gpa, "luce");
+    defer gpa.free(compiler);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, compiler);
+    try argv.appendSlice(gpa, arguments);
+    return install.spawn(gpa, argv.items, .{});
+}
 
-    const out_file = try install.scratch.dir.createFile(io, ".stdout", .{ .truncate = true });
-    defer out_file.close(io);
-    const err_file = try install.scratch.dir.createFile(io, ".stderr", .{ .truncate = true });
-    defer err_file.close(io);
+// ---------------------------------------------------------------------------
+// Stand-ins for the compiler
+// ---------------------------------------------------------------------------
 
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .environ_map = environment,
-        .stdin = input,
-        .stdout = .{ .file = out_file },
-        .stderr = .{ .file = err_file },
-    });
-    const term = try child.wait(io);
+/// Put a stand-in where the compiler goes: a script that records having
+/// been called, says something, and exits with `status`.
+///
+/// The real compiler cannot be made to fail on demand — every program a
+/// script can express lowers — so the exit-code contract between the
+/// two binaries is proved against a stand-in that can.
+fn plantCompiler(install: *const Install, gpa: Allocator, status: u8, says: []const u8) !void {
+    // `echo` and the redirect are shell builtins; nothing here runs a
+    // program, because the PATH these tests hand loom holds only the
+    // install tree and there is no `dirname` on it.
+    const script = try std.fmt.allocPrint(gpa,
+        \\#!/bin/sh
+        \\echo call >> "{s}/calls"
+        \\echo "{s}" >&2
+        \\exit {d}
+        \\
+    , .{ install.root, says, status });
+    defer gpa.free(script);
+    try install.writeScript(gpa, "luce", script);
+}
 
-    return .{
-        .status = if (term == .exited) term.exited else 255,
-        .out = try install.scratch.dir.readFileAlloc(io, ".stdout", gpa, .unlimited),
-        .err = try install.scratch.dir.readFileAlloc(io, ".stderr", gpa, .unlimited),
-    };
+/// Put a stand-in where the compiler goes that *succeeds* and hands
+/// back an artifact for a different program.
+///
+/// Not a contrivance: a build rule with a stale `-o`, a cache that
+/// answered the wrong key, a copy that raced — every one of them looks
+/// exactly like this from where loom stands, and the loader is the only
+/// thing that can tell.  It is the one way to reach the `source`
+/// refusal from outside, because the real compiler cannot be made to
+/// build the wrong program.
+fn plantCopyingCompiler(install: *const Install, gpa: Allocator, artifact: []const u8) !void {
+    // `luce build MODULE -o OUTPUT`: the fourth word is where the
+    // artifact was asked for.
+    const script = try std.fmt.allocPrint(gpa,
+        \\#!/bin/sh
+        \\echo call >> "{s}/calls"
+        \\cp "{s}" "$4"
+        \\exit 0
+        \\
+    , .{ install.root, artifact });
+    defer gpa.free(script);
+    try install.writeScript(gpa, "luce", script);
+}
+
+/// How many times a stand-in was called.
+fn calls(install: *const Install, gpa: Allocator) !usize {
+    const text = install.read(gpa, "calls") catch return 0;
+    defer gpa.free(text);
+    return std.mem.count(u8, text, "\n");
 }
 
 const greeting =
@@ -307,7 +172,7 @@ const expected = "total 30\n";
 
 test "a .luc with no artifact is compiled by luce and runs, warm the next time" {
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
 
@@ -315,7 +180,7 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     defer gpa.free(program);
 
     try testing.expect(!install.exists("sums.lc"));
-    var cold = try runLoom(gpa, &install, &.{program}, null);
+    var cold = try runLoom(gpa, &install, &.{program}, null, null);
     defer cold.deinit(gpa);
     try testing.expectEqualStrings("", cold.err);
     try testing.expectEqualStrings(expected, cold.out);
@@ -328,7 +193,7 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     // in somebody's source directory is litter they did not make.
     try testing.expect(!try install.holdsAnything(luce.mir.module.extension));
 
-    var warm = try runLoom(gpa, &install, &.{program}, null);
+    var warm = try runLoom(gpa, &install, &.{program}, null, null);
     defer warm.deinit(gpa);
     try testing.expectEqualStrings("", warm.err);
     try testing.expectEqualStrings(expected, warm.out);
@@ -337,7 +202,7 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
 
 test "the .lc luce writes runs on a loom with no compiler at all" {
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
 
@@ -360,14 +225,14 @@ test "the .lc luce writes runs on a loom with no compiler at all" {
 
     const artifact = try install.at(gpa, "sums.lc");
     defer gpa.free(artifact);
-    var ran = try runLoom(gpa, &install, &.{ "run", artifact }, &bare);
+    var ran = try runLoom(gpa, &install, &.{ "run", artifact }, &bare, null);
     defer ran.deinit(gpa);
     try testing.expectEqualStrings("", ran.err);
     try testing.expectEqualStrings(expected, ran.out);
     try testing.expectEqual(@as(u8, 0), ran.status);
 
     // The bare path is the same command with the word left off.
-    var sugared = try runLoom(gpa, &install, &.{artifact}, &bare);
+    var sugared = try runLoom(gpa, &install, &.{artifact}, &bare, null);
     defer sugared.deinit(gpa);
     try testing.expectEqualStrings("", sugared.err);
     try testing.expectEqualStrings(expected, sugared.out);
@@ -376,7 +241,7 @@ test "the .lc luce writes runs on a loom with no compiler at all" {
 
 test "a .luc with no luce to compile it says which binary is missing and where it looked" {
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, false);
+    var install = try installTree(gpa, false);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
 
@@ -389,7 +254,7 @@ test "a .luc with no luce to compile it says which binary is missing and where i
     defer bare.deinit();
     try bare.put("PATH", install.root);
 
-    var ran = try runLoom(gpa, &install, &.{program}, &bare);
+    var ran = try runLoom(gpa, &install, &.{program}, &bare, null);
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), ran.status);
     try testing.expectEqualStrings("", ran.out);
@@ -406,7 +271,7 @@ test "a .luc with no luce to compile it says which binary is missing and where i
     // program like any other and there is nothing here to build it
     // with.  This is also the whole of what `edit` does without a
     // terminal to draw on: it says why, and stops.
-    var edited = try runLoom(gpa, &install, &.{ "edit", program }, &bare);
+    var edited = try runLoom(gpa, &install, &.{ "edit", program }, &bare, null);
     defer edited.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), edited.status);
     try testing.expect(edited.saysErr("`luce`"));
@@ -418,10 +283,10 @@ test "a compiler that refuses the program is asked once; one that fails a place 
     // Exit 1 is about *this attempt*, so the other place is tried: two
     // calls, one beside the program and one in the temp directory.
     {
-        var install = try Install.make(gpa, false);
+        var install = try installTree(gpa, false);
         defer install.deinit(gpa);
         try install.write("sums.luc", greeting);
-        try install.plantCompiler(gpa, 1, "luce: cannot write it");
+        try plantCompiler(&install, gpa, 1, "luce: cannot write it");
 
         const program = try install.at(gpa, "sums.luc");
         defer gpa.free(program);
@@ -430,12 +295,12 @@ test "a compiler that refuses the program is asked once; one that fails a place 
         try environment.put("PATH", install.root);
         try environment.put("TMPDIR", install.root);
 
-        var ran = try runLoom(gpa, &install, &.{program}, &environment);
+        var ran = try runLoom(gpa, &install, &.{program}, &environment, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         // Whatever the compiler said is what the reader is told.
         try testing.expect(ran.saysErr("cannot write it"));
-        try testing.expectEqual(@as(usize, 2), try install.calls(gpa));
+        try testing.expectEqual(@as(usize, 2), try calls(&install, gpa));
         // Both attempts took their hand-over back: a build that failed
         // leaves no more behind than one that worked.
         try testing.expect(!try install.holdsAnything(luce.mir.module.extension));
@@ -443,10 +308,10 @@ test "a compiler that refuses the program is asked once; one that fails a place 
 
     // Exit 2 is about the *program*, and no directory changes that.
     {
-        var install = try Install.make(gpa, false);
+        var install = try installTree(gpa, false);
         defer install.deinit(gpa);
         try install.write("sums.luc", greeting);
-        try install.plantCompiler(gpa, 2, "sums.lc: linking failed: no C toolchain");
+        try plantCompiler(&install, gpa, 2, "sums.lc: linking failed: no C toolchain");
 
         const program = try install.at(gpa, "sums.luc");
         defer gpa.free(program);
@@ -455,11 +320,11 @@ test "a compiler that refuses the program is asked once; one that fails a place 
         try environment.put("PATH", install.root);
         try environment.put("TMPDIR", install.root);
 
-        var ran = try runLoom(gpa, &install, &.{program}, &environment);
+        var ran = try runLoom(gpa, &install, &.{program}, &environment, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expect(ran.saysErr("no C toolchain"));
-        try testing.expectEqual(@as(usize, 1), try install.calls(gpa));
+        try testing.expectEqual(@as(usize, 1), try calls(&install, gpa));
         try testing.expect(!try install.holdsAnything(luce.mir.module.extension));
     }
 }
@@ -470,7 +335,7 @@ test "a compiler that refuses the program is asked once; one that fails a place 
 
 test "every form loom does not have answers with usage, and every usage names them all" {
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, false);
+    var install = try installTree(gpa, false);
     defer install.deinit(gpa);
 
     // A command nobody has; a path that is neither of the two
@@ -486,7 +351,7 @@ test "every form loom does not have answers with usage, and every usage names th
         &.{ "edit", "one.txt", "two.txt" },
     };
     for (wrong) |arguments| {
-        var ran = try runLoom(gpa, &install, arguments, null);
+        var ran = try runLoom(gpa, &install, arguments, null, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expectEqualStrings("", ran.out);
@@ -507,14 +372,14 @@ test "a file that is not there and a file that is not a program are different mi
     // does not exist is theirs to fix, and a file that exists and is
     // not a Luce program is a different problem entirely.
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, false);
+    var install = try installTree(gpa, false);
     defer install.deinit(gpa);
     try install.write("notes.lc", "this is not a shared library\n");
     try install.write("empty.lc", "");
 
     const absent = try install.at(gpa, "nowhere.lc");
     defer gpa.free(absent);
-    var missing = try runLoom(gpa, &install, &.{ "run", absent }, null);
+    var missing = try runLoom(gpa, &install, &.{ "run", absent }, null, null);
     defer missing.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), missing.status);
     try testing.expectEqualStrings("", missing.out);
@@ -524,7 +389,7 @@ test "a file that is not there and a file that is not a program are different mi
     for ([_][]const u8{ "notes.lc", "empty.lc" }) |name| {
         const path = try install.at(gpa, name);
         defer gpa.free(path);
-        var ran = try runLoom(gpa, &install, &.{ "run", path }, null);
+        var ran = try runLoom(gpa, &install, &.{ "run", path }, null, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expectEqualStrings("", ran.out);
@@ -537,7 +402,7 @@ test "a file that is not there and a file that is not a program are different mi
     // itself, before any compiler is looked for.
     const no_source = try install.at(gpa, "nowhere.luc");
     defer gpa.free(no_source);
-    var unwritten = try runLoom(gpa, &install, &.{ "luce", no_source }, null);
+    var unwritten = try runLoom(gpa, &install, &.{ "luce", no_source }, null, null);
     defer unwritten.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), unwritten.status);
     try testing.expect(unwritten.saysErr("no such file"));
@@ -549,7 +414,7 @@ test "how a program ended is the number a shell reads, whoever started it" {
     // error.  A trap and an error are two different sentences about a
     // program, so a script can tell them apart without parsing stderr.
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
 
     const endings = [_]struct {
@@ -594,7 +459,7 @@ test "how a program ended is the number a shell reads, whoever started it" {
         const program = try install.at(gpa, source_name);
         defer gpa.free(program);
 
-        var ran = try runLoom(gpa, &install, &.{ "luce", program }, null);
+        var ran = try runLoom(gpa, &install, &.{ "luce", program }, null, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(ending.status, ran.status);
         try testing.expectEqualStrings(ending.out, ran.out);
@@ -609,7 +474,7 @@ test "how a program ended is the number a shell reads, whoever started it" {
 
 test "the words after a program are the program's, not loom's" {
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("echo.luc",
         \\func main():
@@ -626,22 +491,22 @@ test "the words after a program are the program's, not loom's" {
     // Through `luce`, through `run` on what that left behind, and
     // through the bare path — a program's behaviour must not depend on
     // which of the three the person typed.
-    var compiled = try runLoom(gpa, &install, &.{ "luce", program, "alpha", "beta" }, null);
+    var compiled = try runLoom(gpa, &install, &.{ "luce", program, "alpha", "beta" }, null, null);
     defer compiled.deinit(gpa);
     try testing.expectEqualStrings("2\nalpha\nbeta\n", compiled.out);
 
     const artifact = try install.at(gpa, "echo.lc");
     defer gpa.free(artifact);
-    var run_form = try runLoom(gpa, &install, &.{ "run", artifact, "alpha", "beta" }, null);
+    var run_form = try runLoom(gpa, &install, &.{ "run", artifact, "alpha", "beta" }, null, null);
     defer run_form.deinit(gpa);
     try testing.expectEqualStrings("2\nalpha\nbeta\n", run_form.out);
 
-    var bare = try runLoom(gpa, &install, &.{ artifact, "alpha", "beta" }, null);
+    var bare = try runLoom(gpa, &install, &.{ artifact, "alpha", "beta" }, null, null);
     defer bare.deinit(gpa);
     try testing.expectEqualStrings("2\nalpha\nbeta\n", bare.out);
 
     // And loom's own words are not among them.
-    var none = try runLoom(gpa, &install, &.{ "run", artifact }, null);
+    var none = try runLoom(gpa, &install, &.{ "run", artifact }, null, null);
     defer none.deinit(gpa);
     try testing.expectEqualStrings("0\n", none.out);
 }
@@ -658,7 +523,7 @@ test "a script piped into loom ends on the worst thing any line did" {
     // that the pipe really makes loom non-interactive, and that the
     // number reaches the shell.
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
     const program = try install.at(gpa, "sums.luc");
@@ -666,7 +531,7 @@ test "a script piped into loom ends on the worst thing any line did" {
 
     const good = try std.fmt.allocPrint(gpa, "help\nluce {s}\nexit\n", .{program});
     defer gpa.free(good);
-    var clean = try runLoomReading(gpa, &install, &.{}, null, good);
+    var clean = try runLoom(gpa, &install, &.{}, null, good);
     defer clean.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), clean.status);
     try testing.expect(clean.saysOut(expected));
@@ -682,7 +547,7 @@ test "a script piped into loom ends on the worst thing any line did" {
         .{ program, program },
     );
     defer gpa.free(mixed);
-    var worst = try runLoomReading(gpa, &install, &.{}, null, mixed);
+    var worst = try runLoom(gpa, &install, &.{}, null, mixed);
     defer worst.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), worst.status);
     try testing.expect(worst.saysErr("no such file"));
@@ -700,7 +565,7 @@ test "a script piped into loom ends on the worst thing any line did" {
         .{refusing},
     );
     defer gpa.free(raising);
-    var raised = try runLoomReading(gpa, &install, &.{}, null, raising);
+    var raised = try runLoom(gpa, &install, &.{}, null, raising);
     defer raised.deinit(gpa);
     try testing.expectEqual(@as(u8, 3), raised.status);
 }
@@ -710,7 +575,7 @@ test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
     // is the one thing about `edit` that can be proved without a
     // terminal to draw on.
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("mine.luc",
         \\func main():
@@ -723,14 +588,14 @@ test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
     var environment = try environmentWith(gpa, &.{.{ "LOOM_EDITOR", editor }});
     defer environment.deinit();
 
-    var ran = try runLoom(gpa, &install, &.{ "edit", "notes.txt" }, &environment);
+    var ran = try runLoom(gpa, &install, &.{ "edit", "notes.txt" }, &environment, null);
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), ran.status);
     try testing.expectEqualStrings("editing notes.txt\n", ran.out);
 
     // And through the shell, where `edit` is a command rather than a
     // command line.
-    var piped = try runLoomReading(gpa, &install, &.{}, &environment, "edit other.txt\nexit\n");
+    var piped = try runLoom(gpa, &install, &.{}, &environment, "edit other.txt\nexit\n");
     defer piped.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), piped.status);
     try testing.expect(piped.saysOut("editing other.txt\n"));
@@ -800,14 +665,14 @@ fn resign(gpa: Allocator, install: *const Install, name: []const u8) !void {
     if (!@import("builtin").os.tag.isDarwin()) return;
     const path = try install.at(gpa, name);
     defer gpa.free(path);
-    var ran = try spawn(gpa, install, &.{ "codesign", "-f", "-s", "-", path }, null, null);
+    var ran = try install.spawn(gpa, &.{ "codesign", "-f", "-s", "-", path }, .{});
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), ran.status);
 }
 
 test "an artifact whose tag is wrong in one field is refused by naming that field" {
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
 
@@ -815,13 +680,13 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
     defer gpa.free(source);
     const artifact = try install.at(gpa, "sums.lc");
     defer gpa.free(artifact);
-    var built = try spawn(gpa, &install, &.{ install.luce, "build", source }, null, null);
+    var built = try runLuce(gpa, &install, &.{ "build", source });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
     // The control: untouched, it runs.  Without this every case below
     // could be passing for the wrong reason.
-    var whole = try runLoom(gpa, &install, &.{ "run", artifact }, null);
+    var whole = try runLoom(gpa, &install, &.{ "run", artifact }, null, null);
     defer whole.deinit(gpa);
     try testing.expectEqualStrings(expected, whole.out);
 
@@ -863,7 +728,7 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
         try resign(gpa, &install, "sums.lc");
         try corrupt(gpa, &install, "sums.lc", refusal.offset, refusal.value);
 
-        var ran = try runLoom(gpa, &install, &.{ "run", artifact }, null);
+        var ran = try runLoom(gpa, &install, &.{ "run", artifact }, null, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         // Nothing of the program ran: the tag is read first, and a
@@ -892,7 +757,7 @@ test "an artifact with a tag and no entry point is not an artifact" {
     // to be the one this loader accepts, and the entry has to be
     // absent, and no Luce program compiles to that.
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, false);
+    var install = try installTree(gpa, false);
     defer install.deinit(gpa);
 
     const abi = luce.llvm.abi;
@@ -934,11 +799,11 @@ test "an artifact with a tag and no entry point is not an artifact" {
     defer gpa.free(c_path);
     const hollow = try install.at(gpa, "hollow.lc");
     defer gpa.free(hollow);
-    var compiled = try spawn(gpa, &install, &.{ "cc", "-shared", "-o", hollow, c_path }, null, null);
+    var compiled = try install.spawn(gpa, &.{ "cc", "-shared", "-o", hollow, c_path }, .{});
     defer compiled.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), compiled.status);
 
-    var ran = try runLoom(gpa, &install, &.{ "run", hollow }, null);
+    var ran = try runLoom(gpa, &install, &.{ "run", hollow }, null, null);
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), ran.status);
     try testing.expectEqualStrings("", ran.out);
@@ -959,13 +824,13 @@ test "a truncated artifact is refused by the platform, not read half-way" {
     // other sentence — the one about a file that exists and is not a
     // program this machine can run.
     const gpa = testing.allocator;
-    var install = try Install.make(gpa, true);
+    var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("sums.luc", greeting);
 
     const source = try install.at(gpa, "sums.luc");
     defer gpa.free(source);
-    var built = try spawn(gpa, &install, &.{ install.luce, "build", source }, null, null);
+    var built = try runLuce(gpa, &install, &.{ "build", source });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -979,7 +844,7 @@ test "a truncated artifact is refused by the platform, not read half-way" {
 
     const cut = try install.at(gpa, "cut.lc");
     defer gpa.free(cut);
-    var ran = try runLoom(gpa, &install, &.{ "run", cut }, null);
+    var ran = try runLoom(gpa, &install, &.{ "run", cut }, null, null);
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), ran.status);
     try testing.expectEqualStrings("", ran.out);
@@ -1004,42 +869,42 @@ test "an artifact built from another program is rebuilt, and said so when it can
 
     // First: a stale artifact beside a source is quietly rebuilt.
     {
-        var install = try Install.make(gpa, true);
+        var install = try installTree(gpa, true);
         defer install.deinit(gpa);
         try install.write("sums.luc", greeting);
         const source = try install.at(gpa, "sums.luc");
         defer gpa.free(source);
-        var built = try spawn(gpa, &install, &.{ install.luce, "build", source }, null, null);
+        var built = try runLuce(gpa, &install, &.{ "build", source });
         defer built.deinit(gpa);
         try testing.expectEqual(@as(u8, 0), built.status);
 
         try corrupt(gpa, &install, "sums.lc", tag.source_hash, 0xdeadbeef);
-        var ran = try runLoom(gpa, &install, &.{ "luce", source }, null);
+        var ran = try runLoom(gpa, &install, &.{ "luce", source }, null, null);
         defer ran.deinit(gpa);
         try testing.expectEqualStrings("", ran.err);
         try testing.expectEqualStrings(expected, ran.out);
         try testing.expectEqual(@as(u8, 0), ran.status);
         // And what is beside the program now is this program's.
-        var warm = try runLoom(gpa, &install, &.{ "luce", source }, null);
+        var warm = try runLoom(gpa, &install, &.{ "luce", source }, null, null);
         defer warm.deinit(gpa);
         try testing.expectEqualStrings(expected, warm.out);
     }
 
     // Then: a compiler that succeeds and produces the wrong artifact.
     {
-        var install = try Install.make(gpa, true);
+        var install = try installTree(gpa, true);
         defer install.deinit(gpa);
         try install.write("other.luc", "func main():\n    print(\"other\")\n");
         const other_source = try install.at(gpa, "other.luc");
         defer gpa.free(other_source);
-        var built = try spawn(gpa, &install, &.{ install.luce, "build", other_source }, null, null);
+        var built = try runLuce(gpa, &install, &.{ "build", other_source });
         defer built.deinit(gpa);
         try testing.expectEqual(@as(u8, 0), built.status);
 
         try install.write("sums.luc", greeting);
         const other = try install.at(gpa, "other.lc");
         defer gpa.free(other);
-        try install.plantCopyingCompiler(gpa, other);
+        try plantCopyingCompiler(&install, gpa, other);
 
         const source = try install.at(gpa, "sums.luc");
         defer gpa.free(source);
@@ -1049,7 +914,7 @@ test "an artifact built from another program is rebuilt, and said so when it can
         var environment = try environmentWith(gpa, &.{.{ "TMPDIR", install.root }});
         defer environment.deinit();
 
-        var ran = try runLoom(gpa, &install, &.{ "luce", source }, &environment);
+        var ran = try runLoom(gpa, &install, &.{ "luce", source }, &environment, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expectEqualStrings("", ran.out);
