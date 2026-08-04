@@ -720,6 +720,17 @@ pub const FunctionBuilder = struct {
             // f-string hole.  The rule is the same one — a format spec
             // is a String service like any other — but it has to be
             // said about the syntax that is actually there.
+            //
+            // **`.written` cannot be reached from here today**, and is
+            // the safe default rather than live behavior: a dotted
+            // callee only ever arrives on a `.call` node the compiler
+            // synthesized, because `namedCallExpression` builds one
+            // only from a bare identifier, which holds no dot.  A
+            // written `mod.func()` parses as a method and is answered
+            // by `methodNamespace` below, which carries its own copy
+            // of these words.  Kept, and kept exhaustive, so that the
+            // next synthesized callee has to choose rather than
+            // inherit a sentence about format specs.
             switch (origin) {
                 .written => try self.fail(
                     "luce.sema.import",

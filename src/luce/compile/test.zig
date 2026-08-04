@@ -1120,10 +1120,11 @@ test "imports are explicit, checked, and reported per file" {
     try testing.expect(unimported == .failure);
     try testing.expectEqualStrings("luce.sema.import", unimported.failure.at(0).?.code);
     // Pinned in full: this is the wording a *written* namespace gets,
-    // and the control for the one the compiler's own f-string
-    // lowering gets instead (`specs/errors_spec.zig`, the format-spec
-    // case).  A tailored message that leaked onto calls the reader
-    // actually typed would show up right here.
+    // and it comes from `methodNamespace` — `mod.func()` parses as a
+    // method, so it never reaches the `resolveDeclared` site that the
+    // f-string lowering does (`specs/errors_spec.zig`, the format-spec
+    // case).  The two sentences live in two places for that reason,
+    // and this is what holds the reader-facing one still.
     try testing.expectEqualStrings(
         "unknown namespace util; import util to use it",
         unimported.failure.at(0).?.message,
