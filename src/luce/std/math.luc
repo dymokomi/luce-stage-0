@@ -2,8 +2,13 @@
 #
 # Pure Luce over the checked builtins (sqrt, floor, ceil, abs, min,
 # max, clamp live there; this module adds what they lack).  Series
-# are range-reduced first, so accuracy holds across the Float range:
-# exp/ln to ~1e-14 relative, sin/cos to ~1e-12 absolute.
+# are range-reduced first.  exp/ln hold ~1e-14 relative across their
+# domains; sin/cos hold ~1e-12 absolute only while |x| stays below
+# about 1e4 — the pi used for reduction carries ~20 digits, so each
+# decade of magnitude past that costs a digit (measured against libm:
+# 1e-14 at 1e3 through 8e-3 at 1e15), and nothing traps: a huge angle
+# answers a plausible number that is simply wrong.  Reduce angles to
+# a revolution before calling if magnitudes run large.
 #
 # Randomness is a Lehmer generator whose state lives in a List(Int)
 # the caller owns: `var rng = math.seed(42)` then `math.random(rng)`.

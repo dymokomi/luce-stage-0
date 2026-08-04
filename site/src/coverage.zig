@@ -452,11 +452,14 @@ test "the reference names every trap code and every error code" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    var traps = try enumMembers(repository, "src/luce/06_mir/defs.zig", "TrapCode");
+    // The codes live in the shared vocabulary — the one layer both the
+    // compiler and the runtime read (support/vocabulary.zig); defs.zig
+    // only re-exports them.
+    var traps = try enumMembers(repository, "src/luce/support/vocabulary.zig", "TrapCode");
     defer traps.deinit();
     try expectDocumented(repository, "ref/failure.md", traps, &.{});
 
-    var errors = try enumMembers(repository, "src/luce/06_mir/defs.zig", "ErrorCode");
+    var errors = try enumMembers(repository, "src/luce/support/vocabulary.zig", "ErrorCode");
     defer errors.deinit();
     try expectDocumented(repository, "ref/failure.md", errors, &.{});
 }
