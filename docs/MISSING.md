@@ -181,6 +181,20 @@ The corpus that argued for it, item by item:
 
 ## Tier 2 — sum types: the absence that keeps bending other designs
 
+**Owner direction, 2026-08-04 — the endgame is set.**  After the
+ratified roadmap (named args, visibility, bitwise/hex) come **enums**,
+then **union**, "and I think we're good."  Enums lean C: explicit
+member values (bytes or numbers) when written, sequential defaults
+when not; the design memo brings the backing-type, conversion, and
+exhaustive-dispatch questions.  Union's one deciding question is
+**tagged vs raw**, flagged now with the safety argument — a raw
+overlay is an unchecked cast in a language whose every guarantee
+assumes values are what they say, while a tagged union is what
+FAILURE.md was missing when it refused `Result<T, E>` — and with the
+bits-reinterpretation view (TYPES.md D4) as the principled home for
+genuine raw-overlay needs.
+
+
 No enums, no tagged unions, no `match`.  This is the second-order
 blocker: `docs/FAILURE.md` refuses `Result<T, E>` *because* there are no
 tagged unions, which is what forced `T!` to be a function attribute.
