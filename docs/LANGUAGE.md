@@ -504,6 +504,40 @@ standard output is the program's own channel and may be a pipe or a
 file, where an escape sequence is simply bytes; standard error and the
 terminal are shared with whoever ran the program.
 
+### Paths are not confined, deliberately
+
+**A program may name any path the process itself can.**  There is no
+root it is chrooted to, no prefix its paths are checked against, and
+no difference between `notes.txt`, `../notes.txt` and
+`/etc/hosts` — relative paths resolve against the working directory
+the program was started in, and that is the whole of the rule.
+
+This is the unix-tool model and it is a decision, not an omission.
+`loom` runs programs the way a shell runs processes: a Luce program
+started by a person has that person's user, that person's working
+directory and that person's permissions, exactly as `grep` does.
+`allow_host` is the gate — it decides whether a program may reach the
+world *at all*, and a program compiled without it cannot name a file,
+open a terminal or read an argument — and the operating system is the
+sandbox that decides which files.  Two mechanisms, each doing one
+thing, both of them things a reader can check.
+
+The alternative — a path prefix the host enforces — would be a third
+mechanism that looks like security and is not: it has to canonicalize,
+it has to follow symbolic links, it has to survive a rename between
+the check and the open, and every one of those is a hole in something
+the operating system already gets right.  A program that must not
+touch a file should be run by a user that cannot, in a container that
+does not have it, or under whatever the host system offers; nothing
+Luce could add on top of that would make it safer, and a half-measure
+would make people think it had.
+
+The size cap on `file_read` is not a confinement and is not about
+trust: it is a host policy that stops one call from asking for the
+machine's memory (64 MiB; a larger file answers the same failure as an
+unreadable one).  Streaming reads are the answer to wanting more, and
+they are a service the host does not offer yet.
+
 ## Arithmetic and assignment
 
 Number literals are decimal: `12` is an Int, and a fraction or an

@@ -573,3 +573,108 @@ test "trailing blank lines do not count as a mismatch, but content does" {
     try std.testing.expect(!sameOutput("hello\n", "hell\n"));
     try std.testing.expect(!sameOutput("a\nb\n", "a\n\nb\n"));
 }
+
+/// Put one fence through the sink and hold it to what it should have
+/// complained about — `wanted` null meaning it should not have.
+///
+/// Only fences that are refused *before* anything is run can go
+/// through this, and the ones below all are: they are refused by the
+/// info string alone, which is the point.  The rule that there is no
+/// unverified Luce on this site is a rule about what a fence is
+/// allowed to *say*, and it has to hold whether or not any page
+/// currently breaks it.
+///
+/// Without this, the rule was only ever exercised by the corpus — and
+/// a corpus with no bad fences in it, which is exactly what the rule
+/// produces, proves a check that has been deleted just as happily as
+/// one that is there.
+fn expectComplaint(
+    fence: markdown.Fence,
+    follower: ?markdown.Fence,
+    wanted: ?[]const u8,
+) !void {
+    const gpa = std.testing.allocator;
+    var verifier: Verifier = .{
+        .gpa = gpa,
+        .io = std.testing.io,
+        .toolchain = "/nowhere",
+        .work = "/nowhere",
+        .repository = "/nowhere",
+        .page = "test.md",
+    };
+    defer verifier.deinit();
+
+    var out: Buffer = .init(gpa);
+    defer out.deinit();
+    var took_follower = false;
+    try renderFence(&verifier, &out, fence, follower, &took_follower);
+
+    const said = wanted orelse {
+        try std.testing.expectEqual(@as(usize, 0), verifier.failures.items.len);
+        return;
+    };
+    // The first complaint, not the only one: a fence can be wrong in
+    // two ways at once (a misspelled `file=` leaves a module unnamed
+    // as well), and saying both is better than stopping at one.
+    try std.testing.expect(verifier.failures.items.len != 0);
+    const complaint = verifier.failures.items[0];
+    try std.testing.expectEqualStrings("test.md", complaint.page);
+    try std.testing.expectEqual(fence.line, complaint.line);
+    try std.testing.expect(std.mem.indexOf(u8, complaint.reason, said) != null);
+}
+
+test "a luce fence that does not say what becomes of it is a build error" {
+    const body = "func main():\n    print(\"hi\")\n";
+    const output: markdown.Fence = .{ .info = "output", .code = "hi\n", .line = 9 };
+
+    // A bare ```luce: the whole rule, and the one a new page is most
+    // likely to break.
+    try expectComplaint(
+        .{ .info = "luce", .code = body, .line = 3 },
+        output,
+        "must say run, trap, raise, fail or module",
+    );
+
+    // A word that is not one of the modes, named back so a typo reads
+    // as a typo.
+    try expectComplaint(
+        .{ .info = "luce runs", .code = body, .line = 3 },
+        output,
+        "unknown luce fence mode 'runs'",
+    );
+
+    // An attribute nobody has: a misspelled `file=` would otherwise
+    // silently write `main.luc`, and the page would claim the wrong
+    // program's output.
+    try expectComplaint(
+        .{ .info = "luce module fil=other.luc", .code = body, .line = 3 },
+        null,
+        "unknown attribute 'fil=other.luc'",
+    );
+
+    // A module with nothing to be called: the program after it would
+    // import a file that is not there.
+    try expectComplaint(
+        .{ .info = "luce module", .code = body, .line = 3 },
+        null,
+        "needs file=NAME.luc",
+    );
+
+    // And a program with no claimed output is a program nothing is
+    // checked against, which is the same hole from the other side.
+    try expectComplaint(
+        .{ .info = "luce run", .code = body, .line = 3 },
+        null,
+        "needs a ```output fence after it",
+    );
+    try expectComplaint(
+        .{ .info = "luce run", .code = body, .line = 3 },
+        .{ .info = "text", .code = "hi\n", .line = 9 },
+        "must be ```output",
+    );
+
+    // A fence in another language is not this rule's business and is
+    // rendered as it stands — shell snippets, IR dumps, diagnostics
+    // quoted from the repository.
+    try expectComplaint(.{ .info = "zig", .code = "const x = 1;\n", .line = 3 }, null, null);
+}

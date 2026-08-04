@@ -16,7 +16,7 @@ Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS. **LL
 
 ```sh
 ./build.sh         # zig build --prefix build -Doptimize=ReleaseSafe: installs build/luce, build/loom, build/lib/libluce_rt.a, build/programs/*.lc
-zig build test     # 832 tests in ~4 min: the executable specification (every program run on both engines and compared) + the Luce language suite + compiler CLI suite + loom terminal suite, plus a compile of every bundled program and benchmark
+zig build test     # 892 tests in ~5 min: the executable specification (every program run on both engines and compared) + the Luce language suite + compiler CLI suite + loom terminal suite, plus a compile of every bundled program and benchmark
 zig fmt src/ build.zig site/src/
 ```
 
@@ -28,7 +28,7 @@ LuciaOS **v2** is language-first: **Luce**, the small statically typed language,
 
 Two binaries from one language module:
 
-- `luce` (src/apps/luce/) — the compiler: `luce build FILE [-o OUT] [--release] [--emit=WHAT]`, `luce check`, `luce ir [--full]`. `build` writes **machine code**: the default `--emit=library` is the `.lc` loom runs, `object` a relocatable `.o`, `exe` a standalone binary (`docs/CODEGEN.md`). `FILE` is a `.luc` or a `.lcm` — the serialized module, the front end's hand-over to the back end and not a distribution format. Debug builds (default) embed trap locations; `--release` strips them, changing nothing else (`docs/MODES.md`).
+- `luce` (src/apps/luce/) — the compiler: `luce build FILE [-o OUT] [--release] [--emit=WHAT]`, `luce check`, `luce ir [--full]`. `build` writes **machine code**: the default `--emit=library` is the `.lc` loom runs, `object` a relocatable `.o`, `exe` a standalone binary (`docs/CODEGEN.md`). `FILE` is a `.luc` or a `.lcm` — the serialized module, the front end's hand-over to the back end and not a distribution format — or `-` for standard input, which `build` then needs `-o` for. Debug builds (default) embed trap locations; `--release` strips them, changing nothing else (`docs/MODES.md`). **Each option may be given once**: a repeated `-o` or `--emit` is refused rather than resolved, because taking the last one writes a file of the wrong shape, or in the wrong place, and reports success — which is the one kind of failure a build system cannot see.
 - `loom` (src/apps/loom/) — the environment: an interactive colored shell (`run`, `luce`, `edit`, `clear`, `exit`, bare `.lc`/`.luc` paths), plus direct CLI forms (`loom run FILE.lc [args]`, `loom luce FILE.luc`, `loom edit FILE`). `loom run FILE.lc` is one `dlopen`, one symbol lookup, one call — no compiler, no LLVM, no C toolchain.
 
 ## Architecture

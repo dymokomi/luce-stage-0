@@ -92,8 +92,9 @@ pub const Policy = struct {
     /// not tidiness: a shared `/tmp` is a directory anyone can create
     /// a file in, and this one gets `dlopen`ed.  macOS gives every
     /// user a private `TMPDIR` and most Linux sessions do too; where
-    /// there is none the fallback is still `/tmp`, whose sticky bit is
-    /// what is left to rely on.
+    /// there is none the fallback is `/tmp`, and `Places` makes its
+    /// own private directory inside whichever it is rather than trust
+    /// the sticky bit (see there).
     temporary_directory: []const u8 = default_temporary_directory,
 
     pub fn read(environment: *const std.process.Environ.Map) Policy {
@@ -275,8 +276,17 @@ fn artifactFor(
     refusal: *?[]const u8,
 ) !?native.Loaded {
     const source_hash = abi.sourceHash(encoded);
-    var places = try Places.of(gpa, policy.temporary_directory, name, source_hash);
+    var places = try Places.of(gpa, io, policy.temporary_directory, name, source_hash);
     defer places.deinit(gpa);
+    if (places.paths().len == 0) {
+        refusal.* = try std.fmt.allocPrint(
+            gpa,
+            "there is nowhere to put the artifact: it cannot go beside the program, " ++
+                "and {s} holds no private directory this user can make one in",
+            .{policy.temporary_directory},
+        );
+        return null;
+    }
 
     // A hit is the whole point: nothing compiled, nothing linked,
     // nothing external invoked.
@@ -341,9 +351,12 @@ const Attempt = union(enum) {
 /// The input is the serialized module loom's own front end just made,
 /// because that is the program that is about to run — not the source
 /// file, which a second compile might read differently.  It is written
-/// beside the artifact and removed again, which is also the only way a
-/// program with no file of its own (the embedded editor) can be
-/// compiled at all.
+/// beside the artifact and removed again — on the failing path as much
+/// as the succeeding one, which is what the `defer` below is for: a
+/// `.lcm` is a hand-over, never a deliverable, and one left in a
+/// user's directory after a failed build is litter they did not make.
+/// It is also the only way a program with no file of its own (the
+/// embedded editor) can be compiled at all.
 fn compileTo(
     gpa: Allocator,
     io: std.Io,
@@ -351,11 +364,13 @@ fn compileTo(
     encoded: []const u8,
     output: []const u8,
 ) !Attempt {
-    // A distinct name per process, so two looms warming the same cache
-    // cannot write each other's half-written module.
-    const module_path = try std.fmt.allocPrint(gpa, "{s}.{d}{s}", .{
+    // A distinct name per writer, so two looms warming the same cache
+    // cannot write each other's half-written module (`native.writerTag`
+    // says why it is the process and not only the thread).
+    var tag_storage: [native.writer_tag_bytes]u8 = undefined;
+    const module_path = try std.fmt.allocPrint(gpa, "{s}.{s}{s}", .{
         output,
-        std.Thread.getCurrentId(),
+        native.writerTag(&tag_storage),
         luce.mir.module.extension,
     });
     defer gpa.free(module_path);
@@ -398,42 +413,122 @@ fn compileTo(
 /// artifact can be shipped rather than earned.  The temp directory is
 /// the fallback for a read-only directory or a program with no path at
 /// all, and keys on the hash because there is no name to key on.
+///
+/// ## The spare place is a directory of this user's own
+///
+/// **A cached artifact is a file loom `dlopen`s, and its name is the
+/// program's content hash** — which is to say, a name anyone holding
+/// the same program can compute.  Where `TMPDIR` is a per-session
+/// directory (macOS always, most Linux desktops) that is nobody's
+/// business but the user's.  Where it is not — a bare `/tmp`, a
+/// container, a daemon — it is a directory every account on the
+/// machine may create files in, and the sticky bit does not help: it
+/// stops one user *replacing* another's file and stops nobody from
+/// creating it first.  The next loom to want that program would then
+/// open a stranger's shared library and call it.
+///
+/// So the spare place is `luce-artifacts` inside the temp directory,
+/// made `rwx------`, and used only when what is really there is a
+/// directory with no group or other permissions at all.  A symbolic
+/// link is refused rather than followed.  Anything else means there is
+/// no spare place: a loom that recompiles every run is slow, and a
+/// loom that runs somebody else's code is not loom.
+///
+/// **Nothing is ever swept from it**, deliberately.  The entries are
+/// content-keyed, so a stale one is never loaded — a changed program
+/// or a changed code generator is refused by the tag and rebuilt over
+/// the same name — and a sweep would need an age policy, a lock, and a
+/// way to know that no other loom is about to `dlopen` the file it is
+/// deleting.  Reaping a temp directory is the operating system's job
+/// and every system that has one does it; `rm -rf` on this directory
+/// is always safe and costs one recompile.
 const Places = struct {
     beside: ?[:0]u8 = null,
-    temporary: [:0]u8,
+    /// Null when there is no private directory to be had.
+    temporary: ?[:0]u8 = null,
     /// Scratch for `paths`, which answers a borrowed slice rather than
     /// allocating one per call.
     storage: [2][:0]const u8 = undefined,
 
-    fn of(gpa: Allocator, temporary: []const u8, name: []const u8, source_hash: u64) !Places {
-        var made: Places = .{ .temporary = undefined };
+    /// The name of the private directory made inside `TMPDIR`.
+    const spare_directory = "luce-artifacts";
+
+    fn of(
+        gpa: Allocator,
+        io: std.Io,
+        temporary: []const u8,
+        name: []const u8,
+        source_hash: u64,
+    ) !Places {
+        var made: Places = .{};
         if (stemOf(name)) |stem| {
             made.beside = try std.fmt.allocPrintSentinel(gpa, "{s}.lc", .{stem}, 0);
         }
         errdefer if (made.beside) |path| gpa.free(path);
-        made.temporary = try std.fmt.allocPrintSentinel(
+
+        const directory = try std.fmt.allocPrint(
             gpa,
-            "{s}{c}luce-{x:0>16}.lc",
-            .{ temporary, std.fs.path.sep, source_hash },
-            0,
+            "{s}{c}{s}",
+            .{ temporary, std.fs.path.sep, spare_directory },
         );
+        defer gpa.free(directory);
+        if (isPrivate(io, directory)) {
+            made.temporary = try std.fmt.allocPrintSentinel(
+                gpa,
+                "{s}{c}luce-{x:0>16}.lc",
+                .{ directory, std.fs.path.sep, source_hash },
+                0,
+            );
+        }
         return made;
+    }
+
+    /// Make the spare directory if it is not there, and answer whether
+    /// what is there now may be used.
+    ///
+    /// The two questions are one call because they are one decision:
+    /// creating it is how it comes to be private, and checking it is
+    /// how a directory somebody else created is refused.  A `create`
+    /// that succeeded made it with the permissions asked for; a
+    /// `create` that failed because something is already there has to
+    /// be followed by a look at what that something is.
+    fn isPrivate(io: std.Io, directory: []const u8) bool {
+        const cwd = std.Io.Dir.cwd();
+        if (cwd.createDir(io, directory, .fromMode(0o700))) |_| {
+            // Made by this call, with these permissions.  A umask can
+            // only take bits away.
+            return true;
+        } else |mistake| switch (mistake) {
+            error.PathAlreadyExists => {},
+            else => return false,
+        }
+        // Windows has no mode to read and no world-writable /tmp to
+        // defend against; a per-user temp directory is what it gives.
+        if (!std.Io.File.Permissions.has_executable_bit) return true;
+        // The link is deliberately not followed: one planted where
+        // this directory goes is exactly the trick being refused.
+        const found = cwd.statFile(io, directory, .{ .follow_symlinks = false }) catch return false;
+        if (found.kind != .directory) return false;
+        return found.permissions.toMode() & 0o077 == 0;
     }
 
     fn deinit(self: *Places, gpa: Allocator) void {
         if (self.beside) |path| gpa.free(path);
-        gpa.free(self.temporary);
+        if (self.temporary) |path| gpa.free(path);
         self.* = undefined;
     }
 
     fn paths(self: *Places) []const [:0]const u8 {
+        var count: usize = 0;
         if (self.beside) |path| {
-            self.storage[0] = path;
-            self.storage[1] = self.temporary;
-            return self.storage[0..2];
+            self.storage[count] = path;
+            count += 1;
         }
-        self.storage[0] = self.temporary;
-        return self.storage[0..1];
+        if (self.temporary) |path| {
+            self.storage[count] = path;
+            count += 1;
+        }
+        return self.storage[0..count];
     }
 };
 
@@ -544,20 +639,94 @@ test "the spare artifact directory is the session's own, not a shared one" {
     );
 }
 
+/// The absolute path of a fresh temporary directory, for the tests
+/// that need a `TMPDIR` of their own.  The caller owns it.
+fn scratchDirectory(scratch: *testing.TmpDir, storage: *[std.fs.max_path_bytes]u8) ![]const u8 {
+    return storage[0..try scratch.dir.realPath(testing.io, storage)];
+}
+
 test "an artifact is named beside the source it came from" {
+    const gpa = testing.allocator;
     try testing.expectEqualStrings("programs/editor", stemOf("programs/editor.luc").?);
     // Nothing to sit beside: the embedded editor, or a stream.
     try testing.expectEqual(@as(?[]const u8, null), stemOf("editor"));
 
-    var beside = try Places.of(testing.allocator, "/scratch", "programs/editor.luc", 0x1234);
-    defer beside.deinit(testing.allocator);
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const temporary = try scratchDirectory(&scratch, &path_storage);
+
+    var beside = try Places.of(gpa, testing.io, temporary, "programs/editor.luc", 0x1234);
+    defer beside.deinit(gpa);
     try testing.expectEqualStrings("programs/editor.lc", beside.beside.?);
     try testing.expectEqual(@as(usize, 2), beside.paths().len);
     try testing.expectEqualStrings("programs/editor.lc", beside.paths()[0]);
 
-    var anonymous = try Places.of(testing.allocator, "/scratch", "editor", 0x1234);
-    defer anonymous.deinit(testing.allocator);
+    var anonymous = try Places.of(gpa, testing.io, temporary, "editor", 0x1234);
+    defer anonymous.deinit(gpa);
     try testing.expect(anonymous.beside == null);
     try testing.expectEqual(@as(usize, 1), anonymous.paths().len);
-    try testing.expectEqualStrings("/scratch/luce-0000000000001234.lc", anonymous.temporary);
+    const expected = try std.fmt.allocPrint(
+        gpa,
+        "{s}/{s}/luce-0000000000001234.lc",
+        .{ temporary, Places.spare_directory },
+    );
+    defer gpa.free(expected);
+    try testing.expectEqualStrings(expected, anonymous.temporary.?);
+}
+
+test "the spare artifact directory is made private, and one that is not is not used" {
+    // What goes in this directory is `dlopen`ed and named by a hash
+    // anyone holding the program can compute, so on a shared /tmp the
+    // file it will open can be planted before loom ever looks.  The
+    // answer is a directory of this user's own; the check is what
+    // makes a directory somebody else left there unusable rather than
+    // trusted.
+    if (!std.Io.File.Permissions.has_executable_bit) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    const io = testing.io;
+
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const temporary = try scratchDirectory(&scratch, &path_storage);
+
+    // Made on first use, and private whatever the umask says.
+    var fresh = try Places.of(gpa, io, temporary, "editor", 7);
+    defer fresh.deinit(gpa);
+    try testing.expect(fresh.temporary != null);
+    const found = try scratch.dir.statFile(io, Places.spare_directory, .{});
+    try testing.expectEqual(std.Io.File.Kind.directory, found.kind);
+    try testing.expectEqual(@as(std.posix.mode_t, 0), found.permissions.toMode() & 0o077);
+
+    // Found again on the next run, without being remade.
+    var again = try Places.of(gpa, io, temporary, "editor", 7);
+    defer again.deinit(gpa);
+    try testing.expectEqualStrings(fresh.temporary.?, again.temporary.?);
+
+    // A directory anyone may write to is refused: that is the shared
+    // /tmp this whole rule exists for, one level down.
+    var open = testing.tmpDir(.{});
+    defer open.cleanup();
+    var open_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const open_root = try scratchDirectory(&open, &open_storage);
+    try open.dir.createDir(io, Places.spare_directory, .fromMode(0o777));
+    var shared = try Places.of(gpa, io, open_root, "editor", 7);
+    defer shared.deinit(gpa);
+    try testing.expect(shared.temporary == null);
+    // And with nowhere else to go, there is no place at all.
+    try testing.expectEqual(@as(usize, 0), shared.paths().len);
+
+    // A symbolic link where the directory should be is refused rather
+    // than followed, however private its target is.
+    var linked = testing.tmpDir(.{});
+    defer linked.cleanup();
+    var linked_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const linked_root = try scratchDirectory(&linked, &linked_storage);
+    const target = try std.fs.path.join(gpa, &.{ temporary, Places.spare_directory });
+    defer gpa.free(target);
+    try linked.dir.symLink(io, target, Places.spare_directory, .{});
+    var redirected = try Places.of(gpa, io, linked_root, "editor", 7);
+    defer redirected.deinit(gpa);
+    try testing.expect(redirected.temporary == null);
 }

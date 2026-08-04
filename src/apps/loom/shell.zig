@@ -303,6 +303,178 @@ test "a non-interactive loom exits with the worst status any line produced" {
     );
 }
 
+/// One line, put through `dispatch` with both channels captured and
+/// the shell told what to use for an editor.
+///
+/// Every command the shell has goes through that one function, and
+/// until this existed nothing had ever called it: the two tests above
+/// reach it through `run`, which can only see the status a whole
+/// script ended with.  What a *line* did — whether the shell keeps
+/// reading, what it printed, what it printed it on — is what a person
+/// at a prompt actually meets.
+const Dispatched = struct {
+    outcome: Shell.Outcome,
+    out: std.Io.Writer.Allocating,
+    err: std.Io.Writer.Allocating,
+
+    fn of(self: *Dispatched, line: []const u8, colored: bool, editor: ?[]const u8) !void {
+        self.out = .init(testing.allocator);
+        errdefer self.out.deinit();
+        self.err = .init(testing.allocator);
+        errdefer self.err.deinit();
+        var shell: Shell = .{
+            .gpa = testing.allocator,
+            .io = testing.io,
+            .out = &self.out.writer,
+            .err = &self.err.writer,
+            .palette = .{ .enabled = colored },
+            .editor_override = editor,
+        };
+        self.outcome = try shell.dispatch(line);
+    }
+
+    fn deinit(self: *Dispatched) void {
+        self.out.deinit();
+        self.err.deinit();
+    }
+};
+
+/// A line that should be accepted, keep the shell reading, and say
+/// nothing on standard error.
+fn expectQuiet(line: []const u8) !void {
+    var ran: Dispatched = undefined;
+    try ran.of(line, false, null);
+    defer ran.deinit();
+    try testing.expect(ran.outcome.keep_going);
+    try testing.expectEqual(@as(u8, host_mod.exit_ok), ran.outcome.status);
+    try testing.expectEqualStrings("", ran.err.written());
+}
+
+/// A line the shell refuses: it keeps reading, says something on
+/// standard error, and scores the line as failed.
+fn expectRefused(line: []const u8, mentioning: []const u8) !void {
+    var ran: Dispatched = undefined;
+    try ran.of(line, false, null);
+    defer ran.deinit();
+    try testing.expect(ran.outcome.keep_going);
+    try testing.expectEqual(@as(u8, host_mod.exit_trapped), ran.outcome.status);
+    try testing.expect(std.mem.indexOf(u8, ran.err.written(), mentioning) != null);
+    // A refusal is a refusal wherever it is read: nothing about it
+    // goes to the program's own channel.
+    try testing.expectEqualStrings("", ran.out.written());
+}
+
+test "a blank line is not a command, and too many words is not one either" {
+    try expectQuiet("");
+    try expectQuiet("   ");
+    try expectQuiet("\t \r");
+
+    // The word buffer is a fixed size, and a line that filled it may
+    // have had more words after it — running the part that fits would
+    // be running a different command from the one that was typed.
+    const gpa = testing.allocator;
+    var crowded: std.ArrayList(u8) = .empty;
+    defer crowded.deinit(gpa);
+    try crowded.appendSlice(gpa, "run x.lc");
+    for (0..max_words) |index| try crowded.print(gpa, " a{d}", .{index});
+    try expectRefused(crowded.items, "too many arguments");
+}
+
+test "leaving is spelled two ways and both stop the shell without a word" {
+    for ([_][]const u8{ "exit", "quit" }) |word| {
+        var ran: Dispatched = undefined;
+        try ran.of(word, false, null);
+        defer ran.deinit();
+        try testing.expect(!ran.outcome.keep_going);
+        try testing.expectEqual(@as(u8, host_mod.exit_ok), ran.outcome.status);
+        try testing.expectEqualStrings("", ran.err.written());
+        try testing.expectEqualStrings("", ran.out.written());
+    }
+    // Arguments after it are not an error: `exit 0` is what a hand
+    // types, and there is nothing for the number to mean here.
+    var with_argument: Dispatched = undefined;
+    try with_argument.of("exit 0", false, null);
+    defer with_argument.deinit();
+    try testing.expect(!with_argument.outcome.keep_going);
+}
+
+test "help names every command the shell has" {
+    var ran: Dispatched = undefined;
+    try ran.of("help", false, null);
+    defer ran.deinit();
+    try testing.expect(ran.outcome.keep_going);
+    try testing.expectEqualStrings("", ran.err.written());
+    // Help that does not list a command is help that hides one.
+    for ([_][]const u8{ "run", "luce", "edit", "clear", "exit" }) |command| {
+        try testing.expect(std.mem.indexOf(u8, ran.out.written(), command) != null);
+    }
+}
+
+test "clear writes the escape sequence only where escapes are read" {
+    var colored: Dispatched = undefined;
+    try colored.of("clear", true, null);
+    defer colored.deinit();
+    try testing.expectEqualStrings("\x1b[2J\x1b[H", colored.out.written());
+
+    // Not a terminal, or NO_COLOR: the same rule the palette follows,
+    // because a `clear` in a piped script would otherwise put an
+    // escape sequence in somebody's log file.
+    var plain: Dispatched = undefined;
+    try plain.of("clear", false, null);
+    defer plain.deinit();
+    try testing.expectEqualStrings("", plain.out.written());
+}
+
+test "every command that takes a file says so when it is given none" {
+    try expectRefused("run", "run PROGRAM.lc [ARGS]");
+    try expectRefused("luce", "luce PROGRAM.luc [ARGS]");
+    try expectRefused("edit", "edit FILE");
+    // `edit` takes exactly one, so a second is refused rather than
+    // ignored: an editor opening the wrong file is worse than one that
+    // does not open.
+    try expectRefused("edit one.txt two.txt", "edit FILE");
+}
+
+test "a command nobody has is named back, and counts as a line that failed" {
+    var ran: Dispatched = undefined;
+    try ran.of("rnu hello.lc", false, null);
+    defer ran.deinit();
+    try testing.expect(ran.outcome.keep_going);
+    try testing.expectEqual(@as(u8, host_mod.exit_trapped), ran.outcome.status);
+    // The word that was typed, so a typo is visible as a typo, and the
+    // one command that lists the rest.
+    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "rnu") != null);
+    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "help") != null);
+}
+
+test "a bare path runs, and reaches the same refusals the named commands do" {
+    // The sugar: `hello.lc` is `run hello.lc` and `tools/fmt.luc` is
+    // `luce tools/fmt.luc`.  Neither file is there, so what is proved
+    // is that the line reached the runner at all — a bare path that
+    // fell through to "unknown command" would say something else.
+    for ([_][]const u8{ "no/such/program.lc", "run no/such/program.lc" }) |line| {
+        try expectRefused(line, "no such file");
+    }
+    for ([_][]const u8{ "no/such/program.luc", "luce no/such/program.luc" }) |line| {
+        try expectRefused(line, "no such file");
+    }
+    // Arguments after the path are the program's, not the shell's.
+    try expectRefused("no/such/program.lc alpha beta", "no such file");
+}
+
+test "edit runs the editor LOOM_EDITOR names, in place of the embedded one" {
+    // The override is what lets a person use their own editor, and
+    // what keeps the embedded one out of a test that has no compiler
+    // to build it with.  A file that is not there proves the override
+    // was taken: the message names *that* path, not `editor`.
+    var ran: Dispatched = undefined;
+    try ran.of("edit notes.txt", false, "no/such/editor.luc");
+    defer ran.deinit();
+    try testing.expectEqual(@as(u8, 1), ran.outcome.status);
+    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "no/such/editor.luc") != null);
+    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "no such file") != null);
+}
+
 test "an interactive loom always leaves cleanly" {
     // The other half of the rule: a person at a prompt has already
     // been shown every failure, and a shell that exited nonzero

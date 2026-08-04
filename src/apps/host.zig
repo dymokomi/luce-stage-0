@@ -213,7 +213,7 @@ pub const Host = struct {
         self.screen.active = false;
         self.out.writeAll("\x1b[0m\x1b[?25h\x1b[?1049l") catch {};
         self.out.flush() catch {};
-        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.screen.saved) catch {};
+        std.posix.tcsetattr(self.screen.handle, .FLUSH, self.screen.saved) catch {};
     }
 
     // -- console, arguments, files ------------------------------------
@@ -369,7 +369,7 @@ pub const Host = struct {
             if (self.screen.pending_used == self.screen.pending_len) {
                 self.screen.pending_used = 0;
                 self.screen.pending_len = std.posix.read(
-                    std.posix.STDIN_FILENO,
+                    self.screen.handle,
                     &self.screen.pending,
                 ) catch 0;
                 if (self.screen.pending_len == 0) {
@@ -450,7 +450,7 @@ pub const Host = struct {
 
     fn ensureScreen(self: *Host) error{OutOfMemory}!void {
         if (self.screen.active) return;
-        const saved = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return;
+        const saved = std.posix.tcgetattr(self.screen.handle) catch return;
         var raw = saved;
         raw.lflag.ICANON = false;
         raw.lflag.ECHO = false;
@@ -459,7 +459,7 @@ pub const Host = struct {
         raw.iflag.ICRNL = false;
         raw.cc[@intFromEnum(std.posix.V.MIN)] = 0;
         raw.cc[@intFromEnum(std.posix.V.TIME)] = 1;
-        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw) catch return;
+        std.posix.tcsetattr(self.screen.handle, .FLUSH, raw) catch return;
         self.screen.saved = saved;
         self.screen.active = true;
         self.out.writeAll("\x1b[?1049h\x1b[0m\x1b[2J\x1b[H") catch {};
@@ -532,7 +532,7 @@ pub const Host = struct {
                 continue;
             }
             const count = std.posix.read(
-                std.posix.STDIN_FILENO,
+                self.screen.handle,
                 self.screen.pending[self.screen.pending_len..],
             ) catch 0;
             self.screen.pending_len += count;
@@ -541,6 +541,21 @@ pub const Host = struct {
 
     const Screen = struct {
         active: bool = false,
+        /// Which descriptor *is* the terminal: raw mode is set on it,
+        /// and both `key_read` and `read_line` take their bytes from
+        /// it.  Standard input, always, in every shipped binary.
+        ///
+        /// It is a field rather than the constant it was because a
+        /// terminal is the one host service a test cannot simply call:
+        /// the rules worth proving here — that a prompt is sanitized
+        /// on its way out, that a `\r\n` follows a diagnostic while a
+        /// frame is up, that a descriptor which is not a terminal
+        /// leaves raw mode alone — are all about what happens *around*
+        /// a read, and there is no way to reach them without owning
+        /// the descriptor being read.  Nothing sets it but the tests
+        /// below, and they set it to a real pipe rather than to a
+        /// stand-in, so what they exercise is the shipped path.
+        handle: std.posix.fd_t = std.posix.STDIN_FILENO,
         saved: std.posix.termios = undefined,
         buffer: std.ArrayList(u8) = .empty,
         /// Bytes read from standard input and not yet consumed — one
@@ -1166,6 +1181,48 @@ test "program text cannot inject terminal controls" {
     try testing.expectEqualStrings("safe?[2J?? λ ? tail?\r\nnext", buffer.items);
 }
 
+test "every shape a byte sequence can be broken in becomes one question mark" {
+    // The rule has four exits and the test above walks two of them.
+    // These are the rest, said as `sanitizeStep` answers them — how
+    // many bytes are emitted *and* how many the step stands for, which
+    // is what decides whether the text after a broken sequence is read
+    // as text or as more rubbish.
+    const cases = [_]struct { text: []const u8, emit: []const u8, consumed: usize }{
+        // A sequence the end of the text cuts off: nothing is left to
+        // decode it against, so the whole remainder is one `?`.
+        .{ .text = "\xe2\x82", .emit = "?", .consumed = 2 },
+        .{ .text = "\xf0\x9f\x92", .emit = "?", .consumed = 3 },
+        // A lead byte whose continuation bytes are not continuations:
+        // the length is believable and the decode is not, so exactly
+        // one byte is consumed and the `(` after it is read as text.
+        .{ .text = "\xe2\x28\xa1", .emit = "?", .consumed = 1 },
+        // DEL, which is not a C0 control and is not printable either.
+        .{ .text = "\x7f", .emit = "?", .consumed = 1 },
+        // The far end of the C1 block, three bytes wide in UTF-8's
+        // two-byte form.
+        .{ .text = "\xc2\x9f", .emit = "?", .consumed = 2 },
+        // And the first codepoint past it, which is text.
+        .{ .text = "\xc2\xa0", .emit = "\xc2\xa0", .consumed = 2 },
+    };
+    for (cases) |case| {
+        const step = sanitizeStep(case.text);
+        try testing.expectEqualStrings(case.emit, step.emit);
+        try testing.expectEqual(case.consumed, step.consumed);
+    }
+
+    // End to end, so the two callers of the rule agree: a truncated
+    // sequence, a bad one, and a DEL in one run of text.
+    var buffer: std.ArrayList(u8) = .empty;
+    defer buffer.deinit(testing.allocator);
+    try appendSanitized(&buffer, testing.allocator, "a\x7fb\xe2\x28\xa1c\xe2\x82");
+    try testing.expectEqualStrings("a?b?(?c?", buffer.items);
+
+    var streamed: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer streamed.deinit();
+    writeSanitized(&streamed.writer, "a\x7fb\xe2\x28\xa1c\xe2\x82");
+    try testing.expectEqualStrings(buffer.items, streamed.written());
+}
+
 test "styles render 256-color SGR runs and clamp to defaults" {
     var buffer: std.ArrayList(u8) = .empty;
     defer buffer.deinit(testing.allocator);
@@ -1226,6 +1283,145 @@ test "file_read refuses bytes that cannot be a String, and normalizes nothing" {
     }
 }
 
+test "file_read stops exactly at the ceiling it documents" {
+    // The cap is what stops a program from being handed the machine's
+    // memory by naming a path, so both sides of it have to be the
+    // documented number: a file of exactly 64 MiB is a file, and one
+    // byte more is refused the way any unreadable file is.
+    //
+    // The bytes are never written.  A single byte at the last offset
+    // gives the file its length and the filesystem stores a hole, so
+    // this costs a `resize` and a read of zeros — which are, as it
+    // happens, perfectly good UTF-8.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
+
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &out.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    const cases = [_]struct { name: []const u8, length: u64, readable: bool }{
+        .{ .name = "brim.bin", .length = max_file_size, .readable = true },
+        .{ .name = "over.bin", .length = max_file_size + 1, .readable = false },
+    };
+    for (cases) |case| {
+        const path = try std.fs.path.join(testing.allocator, &.{ directory, case.name });
+        defer testing.allocator.free(path);
+        const file = try std.Io.Dir.cwd().createFile(testing.io, path, .{ .truncate = true });
+        try file.writePositionalAll(testing.io, "\x00", case.length - 1);
+        file.close(testing.io);
+
+        const found = try host.loadFile(path);
+        if (!case.readable) {
+            try testing.expect(found == null);
+            continue;
+        }
+        try testing.expectEqual(@as(usize, max_file_size), found.?.len);
+    }
+}
+
+test "a program may name any path the process itself can" {
+    // **The deliberate non-rule** (docs/LANGUAGE.md, "The host").  Loom
+    // runs programs the way a shell runs processes: `allow_host` is the
+    // gate that decides whether a program may touch files at all, and
+    // the operating system is what decides *which* files — the same
+    // user, the same working directory, the same permissions as the
+    // `luce` and `loom` that started it.  There is no sandbox here and
+    // no path prefix a program is confined to.
+    //
+    // It is tested in both directions so that changing it can never be
+    // quiet: a build that starts refusing an absolute path or a `..`
+    // fails here, and whoever wrote that refusal has to come and say
+    // what the new rule is.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
+
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &out.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    // An absolute path, anywhere the process can reach.
+    const absolute = try std.fs.path.join(testing.allocator, &.{ directory, "notes.txt" });
+    defer testing.allocator.free(absolute);
+    try testing.expect(host.writeFile(absolute, "kept"));
+    try testing.expectEqualStrings("kept", (try host.loadFile(absolute)).?);
+
+    // And a relative one that climbs out of where it started: the
+    // directory's own name, reached through its parent.
+    const climbing = try std.fs.path.join(testing.allocator, &.{
+        directory,
+        "..",
+        std.fs.path.basename(directory),
+        "notes.txt",
+    });
+    defer testing.allocator.free(climbing);
+    try testing.expect(host.fileExists(climbing));
+    try testing.expectEqualStrings("kept", (try host.loadFile(climbing)).?);
+}
+
+test "how a run ended is one table, and every ending has its own number" {
+    // A program's behaviour must not depend on who started it, and
+    // that includes the number a shell reads afterwards: `loom run`
+    // and the standalone binary both answer from here.  A trap and an
+    // uncaught error are different sentences about a program, so
+    // collapsing their two numbers into one would leave a script
+    // parsing stderr to tell them apart.
+    const table = [_]u8{ exit_ok, exit_trapped, exit_errored, exit_exhausted, exit_broken };
+    try testing.expectEqualSlices(u8, &.{ 0, 1, 3, 70, 71 }, &table);
+    for (table, 0..) |code, index| {
+        for (table[index + 1 ..]) |other| try testing.expect(code != other);
+    }
+
+    // The two the ABI hands over are the ABI's own numbers.
+    try testing.expectEqual(@as(i32, exit_ok), @intFromEnum(abi.Status.ok));
+    try testing.expectEqual(@as(i32, exit_trapped), @intFromEnum(abi.Status.trapped));
+    try testing.expectEqual(@as(i32, exit_errored), @intFromEnum(abi.Status.errored));
+}
+
+test "a run that leaked says so, and one that did not says nothing" {
+    // Scope ownership frees everything (OWNERSHIP.md S33), so a nonzero
+    // census is an engine bug rather than a program's — which is why it
+    // is reported as one, in words that ask for it to be reported on.
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+
+    printLeaks(&reported.writer, "loom", 0);
+    try testing.expectEqualStrings("", reported.written());
+
+    printLeaks(&reported.writer, "loom", 1);
+    try testing.expectEqualStrings(
+        "loom: internal error: 1 object escaped ownership — please report this\n",
+        reported.written(),
+    );
+
+    reported.clearRetainingCapacity();
+    printLeaks(&reported.writer, "luce", 4);
+    try testing.expectEqualStrings(
+        "luce: internal error: 4 objects escaped ownership — please report this\n",
+        reported.written(),
+    );
+
+    // A negative count is the same bug seen from the other side, and
+    // is not silently a success.
+    reported.clearRetainingCapacity();
+    printLeaks(&reported.writer, "loom", -2);
+    try testing.expect(std.mem.indexOf(u8, reported.written(), "-2 objects") != null);
+}
+
 test "a program cannot smuggle terminal controls onto stderr or into a prompt" {
     // `term_write` has always been sanitized; standard error and a
     // `read_line` prompt are the two new ways program text reaches a
@@ -1255,6 +1451,122 @@ test "a program cannot smuggle terminal controls onto stderr or into a prompt" {
     host.sanitized.clearRetainingCapacity();
     try appendSanitized(&host.sanitized, host.gpa, hostile);
     try testing.expectEqualStrings("clear?[2Jbell? done", host.sanitized.items);
+}
+
+/// A host reading a terminal this test owns.
+///
+/// The descriptor is a real file holding what the person at the
+/// keyboard typed, standing where standard input stands in a shipped
+/// binary.  A file rather than a pipe because it is the same thing to
+/// everything under test — `tcgetattr` refuses both, `read` drains both
+/// and then answers zero — and because a file has no writer that has to
+/// stay ahead of the reader for the test not to hang.
+const Scripted = struct {
+    host: Host,
+    scratch: testing.TmpDir,
+    input: std.Io.File,
+    out: std.Io.Writer.Allocating,
+    err: std.Io.Writer.Allocating,
+
+    fn setup(self: *Scripted, script: []const u8) !void {
+        self.out = .init(testing.allocator);
+        errdefer self.out.deinit();
+        self.err = .init(testing.allocator);
+        errdefer self.err.deinit();
+
+        self.scratch = testing.tmpDir(.{});
+        errdefer self.scratch.cleanup();
+        try self.scratch.dir.writeFile(testing.io, .{ .sub_path = "typed", .data = script });
+        self.input = try self.scratch.dir.openFile(testing.io, "typed", .{});
+
+        self.host.setup(testing.allocator, testing.io, &self.out.writer, &self.err.writer, &.{});
+        self.host.screen.handle = self.input.handle;
+    }
+
+    fn deinit(self: *Scripted) void {
+        self.host.deinit();
+        self.input.close(testing.io);
+        self.scratch.cleanup();
+        self.out.deinit();
+        self.err.deinit();
+    }
+};
+
+test "a prompt is written through the sanitizer before the line is read" {
+    // The reading half of `read_line`, which nothing could reach while
+    // the descriptor was a constant: the prompt goes out rewritten and
+    // flushed *before* the read, a CRLF line comes back without its
+    // carriage return, and the end of input is a `none` rather than an
+    // empty String.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var scripted: Scripted = undefined;
+    try scripted.setup("first\r\nsecond\nlast");
+    defer scripted.deinit();
+
+    const first = (try scripted.host.nextLine("name\x1b[2J? ")).?;
+    try testing.expectEqualStrings("first", first);
+    // Rewritten, and on the writer before the read — a prompt nobody
+    // can see is a program that looks hung.
+    try testing.expectEqualStrings("name?[2J? ", scripted.out.written());
+
+    // No prompt writes nothing at all.
+    try testing.expectEqualStrings("second", (try scripted.host.nextLine("")).?);
+    try testing.expectEqualStrings("name?[2J? ", scripted.out.written());
+
+    // A final line with no newline is still a line; the empty tail
+    // after it is not.
+    try testing.expectEqualStrings("last", (try scripted.host.nextLine("")).?);
+    try testing.expectEqual(@as(?[]const u8, null), try scripted.host.nextLine(""));
+}
+
+test "a descriptor that is not a terminal is drawn on without raw mode" {
+    // The tty gate.  `ensureScreen` asks the descriptor for its termios
+    // and gives up when there is none — a pipe, a file, a program run
+    // from a build step.  What must *not* happen is either half of the
+    // pair going ahead alone: no alternate screen without raw mode, and
+    // above all no `restoreScreen` writing an escape sequence into
+    // somebody's output file at the end of a run that never drew.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var scripted: Scripted = undefined;
+    try scripted.setup("");
+    defer scripted.deinit();
+
+    try scripted.host.clear();
+    try scripted.host.write("frame");
+    try scripted.host.flush();
+    // Drawn, and the frame reached the writer.
+    try testing.expect(std.mem.indexOf(u8, scripted.out.written(), "frame") != null);
+    // But the screen was never taken: nothing was switched, so there
+    // is nothing to switch back.
+    try testing.expect(!scripted.host.screen.active);
+    const drawn = scripted.out.written().len;
+    scripted.host.restoreScreen();
+    try testing.expectEqual(drawn, scripted.out.written().len);
+}
+
+test "a diagnostic ends its line the way the screen it lands on needs" {
+    // `print_error` while a frame is up shares the terminal with the
+    // drawing, and raw mode has turned the newline into a line feed
+    // that does not return the carriage.  The next line would start
+    // wherever the last one ended.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &out.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    try host.printDiagnostic("ordinary");
+    try testing.expectEqualStrings("ordinary\n", reported.written());
+
+    reported.clearRetainingCapacity();
+    host.screen.active = true;
+    try host.printDiagnostic("during a frame");
+    try testing.expectEqualStrings("during a frame\r\n", reported.written());
+    // Nothing here took the screen, so nothing may hand it back.
+    host.screen.active = false;
 }
 
 test "a trap report cannot smuggle terminal controls either" {

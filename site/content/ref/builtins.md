@@ -78,6 +78,17 @@ does not implement traps `host_unavailable` rather than doing nothing.
 `std.files` is the layer you should normally use over the three file
 builtins.
 
+**Paths are not confined.** A program may name any path the process
+itself can — relative paths resolve against the working directory it
+was started in, and `../` and absolute paths mean what they mean
+everywhere else. That is deliberate: loom runs programs the way a
+shell runs processes, the gate above decides whether a program may
+reach the world at all, and the operating system decides which files.
+A path prefix enforced in the host would be a third mechanism that
+looks like security and is not. `file_read` does have a size ceiling —
+64 MiB, a host policy so one call cannot ask for the machine's memory —
+and a larger file answers the same failure as an unreadable one.
+
 ## List(T)
 
 | Method | Notes |

@@ -250,6 +250,40 @@ fn runnableIn(
 const path_separator: u8 = if (@import("builtin").os.tag == .windows) ';' else ':';
 
 // ---------------------------------------------------------------------------
+// Naming a temporary
+// ---------------------------------------------------------------------------
+
+/// Room for what `writerTag` writes.
+pub const writer_tag_bytes = 48;
+
+/// Who is writing, as the text that makes a temporary file's name one
+/// nobody else will pick.  Written into `buffer`, which the caller owns.
+///
+/// **The process id first, and the thread id after it.**  What these
+/// names have to survive is two *processes* warming the same cache at
+/// once — `zig build` runs a dozen — and a thread id is no help there:
+/// it is unique only within a process, and the operating system hands
+/// the same number out again as soon as the thread it named has ended.
+/// So two `luce` runs would happily pick `foo.lc.1.o` and write each
+/// other's object, which is exactly what the name exists to prevent.
+/// The thread id stays because one process really can drive several
+/// builds at once, and then it is the half that tells them apart.
+pub fn writerTag(buffer: *[writer_tag_bytes]u8) []const u8 {
+    return std.fmt.bufPrint(buffer, "{d}-{d}", .{
+        currentProcessId(),
+        std.Thread.getCurrentId(),
+    }) catch unreachable;
+}
+
+fn currentProcessId() u64 {
+    return switch (@import("builtin").os.tag) {
+        .windows => std.os.windows.GetCurrentProcessId(),
+        .linux => @intCast(std.os.linux.getpid()),
+        else => @intCast(std.c.getpid()),
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Linking
 // ---------------------------------------------------------------------------
 
@@ -284,12 +318,13 @@ pub fn write(
         return .written;
     }
 
-    // A distinct name per process, so two runs warming the same cache
+    // A distinct name per writer, so two runs warming the same cache
     // cannot write each other's half-finished object.
+    var tag_storage: [writer_tag_bytes]u8 = undefined;
     const object_path = try std.fmt.allocPrint(
         gpa,
-        "{s}.{d}.o",
-        .{ output, std.Thread.getCurrentId() },
+        "{s}.{s}.o",
+        .{ output, writerTag(&tag_storage) },
     );
     defer gpa.free(object_path);
     defer std.Io.Dir.cwd().deleteFile(io, object_path) catch {};
@@ -322,10 +357,11 @@ pub fn link(
         .{if (tools.searched.len != 0) tools.searched else "nowhere"},
     ) };
 
+    var tag_storage: [writer_tag_bytes]u8 = undefined;
     const pending = try std.fmt.allocPrint(
         gpa,
-        "{s}.{d}.pending",
-        .{ output, std.Thread.getCurrentId() },
+        "{s}.{s}.pending",
+        .{ output, writerTag(&tag_storage) },
     );
     defer gpa.free(pending);
     defer std.Io.Dir.cwd().deleteFile(io, pending) catch {};
@@ -571,8 +607,46 @@ test "the compiler is found beside the binary first, then on PATH, or not at all
     }
 }
 
-test "every refusal has a sentence" {
-    inline for (@typeInfo(abi.Mismatch).@"enum".fields) |field| {
-        try testing.expect(explain(@field(abi.Mismatch, field.name)).len != 0);
+test "every refusal has a sentence, and each says which way the artifact is wrong" {
+    // Not `len != 0`: six distinct refusals whose sentences were all
+    // "no" would pass that and tell a reader nothing.  What a person
+    // needs is *which* way the file is wrong, so the sentences have to
+    // differ from each other — and they have to be the ones the loom
+    // tests below expect to read on stderr.
+    const sentences = [_][]const u8{
+        "it is not a compiled Luce artifact",
+        "its tag is a layout this loader cannot read",
+        "it was built against a different host ABI",
+        "it was built for a different machine",
+        "it was built by a different code generator",
+        "the program it was built from has changed",
+    };
+    const fields = @typeInfo(abi.Mismatch).@"enum".fields;
+    try testing.expectEqual(sentences.len, fields.len);
+    inline for (fields, sentences) |field, sentence| {
+        try testing.expectEqualStrings(sentence, explain(@field(abi.Mismatch, field.name)));
     }
+    for (sentences, 0..) |sentence, index| {
+        for (sentences[index + 1 ..]) |other| {
+            try testing.expect(!std.mem.eql(u8, sentence, other));
+        }
+    }
+}
+
+test "a temporary is named after the process that writes it, not only its thread" {
+    // The name has to survive two *processes* warming one cache, which
+    // is what `zig build` does a dozen times over.  A thread id alone
+    // is unique only inside a process and is handed out again once its
+    // thread ends, so two runs would pick the same name and write each
+    // other's half-finished object.
+    var mine: [writer_tag_bytes]u8 = undefined;
+    const tag = writerTag(&mine);
+    try testing.expect(tag.len != 0);
+    // Two numbers, and the first is this process's.
+    const divider = std.mem.indexOfScalar(u8, tag, '-') orelse return error.NoProcessInTag;
+    try testing.expectEqual(currentProcessId(), try std.fmt.parseInt(u64, tag[0..divider], 10));
+    try testing.expect(tag[divider + 1 ..].len != 0);
+    // Stable within a run: it names the writer, not the moment.
+    var again: [writer_tag_bytes]u8 = undefined;
+    try testing.expectEqualStrings(tag, writerTag(&again));
 }

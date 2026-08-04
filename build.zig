@@ -241,6 +241,26 @@ pub fn build(b: *std.Build) void {
     const compiler_tests = b.addTest(.{ .root_module = compiler_module });
     test_step.dependOn(&b.addRunArtifact(compiler_tests).step);
 
+    // The compiler at its command line, and the standalone binary it
+    // writes (`src/apps/luce/product.zig`).
+    //
+    // Its own module for the reason the pair's is: it names the `luce`
+    // binary, and a module that named the binary built from it would
+    // be a cycle in the build graph.  What it needs is that binary and
+    // the two static libraries an install tree carries, because it
+    // builds one and uses it exactly as a person would.
+    const compiler_product = b.createModule(.{
+        .root_source_file = b.path("src/apps/luce/product.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const compiler_pieces = b.addOptions();
+    compiler_pieces.addOptionPath("luce_binary", compiler.getEmittedBin());
+    compiler_pieces.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    compiler_pieces.addOptionPath("luce_start_library", start_library.getEmittedBin());
+    compiler_product.addOptions("build_options", compiler_pieces);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = compiler_product })).step);
+
     // The loom terminal, with the editor source embedded.
     const terminal_module = b.createModule(.{
         .root_source_file = b.path("src/apps/loom/main.zig"),
@@ -275,6 +295,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/apps/loom/product.zig"),
         .target = target,
         .optimize = optimize,
+        // For the two facts a test of the *outside* still has to know
+        // exactly: what a serialized module is called, and what an
+        // artifact's tag says about itself.
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
     });
     const binaries = b.addOptions();
     binaries.addOptionPath("loom_binary", terminal.getEmittedBin());
