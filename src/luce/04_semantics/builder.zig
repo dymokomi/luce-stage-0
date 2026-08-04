@@ -45,6 +45,74 @@ const BlockId = mir.BlockId;
 const LocalId = mir.LocalId;
 
 // ---------------------------------------------------------------------------
+// The free builtins
+// ---------------------------------------------------------------------------
+
+/// One free builtin: what it is called, what it lowers to, how many
+/// arguments it takes, whether it needs the host gate, and whether a
+/// call to it can leave a container different from how it found it.
+const Builtin = struct {
+    name: []const u8,
+    kind: mir.Intrinsic,
+    arity: usize,
+    host: bool = false,
+    /// False for the two calls that are not a pure walk over their
+    /// arguments: `free` ends an object's life, and `error` leaves by
+    /// unwinding.  `isPureBuiltin` reads it, which is what decides
+    /// whether a container resolution may be lifted out of a loop.
+    pure: bool = true,
+};
+
+/// **The one table.**  `lowerIntrinsic` resolves a call through it and
+/// `isPureBuiltin` asks it what a call costs.  Those were two lists of
+/// the same thirty-nine names, 3,375 lines apart in this file, with
+/// nothing checking they agreed — so a builtin added to one and not the
+/// other silently changed the ownership analysis.
+const builtins = [_]Builtin{
+    .{ .name = "abs", .kind = .abs, .arity = 1 },
+    .{ .name = "min", .kind = .min, .arity = 2 },
+    .{ .name = "max", .kind = .max, .arity = 2 },
+    .{ .name = "clamp", .kind = .clamp, .arity = 3 },
+    .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
+    .{ .name = "floor", .kind = .floor, .arity = 1 },
+    .{ .name = "ceil", .kind = .ceil, .arity = 1 },
+    .{ .name = "len", .kind = .len, .arity = 1 },
+    .{ .name = "assert", .kind = .assert_true, .arity = 1 },
+    .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+    .{ .name = "error", .kind = .raise_error, .arity = 1, .pure = false },
+    .{ .name = "free", .kind = .free_object, .arity = 1, .pure = false },
+    .{ .name = "str", .kind = .str_value, .arity = 1 },
+    .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
+    .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
+    .{ .name = "chr", .kind = .chr_code, .arity = 1 },
+    .{ .name = "ord", .kind = .ord_text, .arity = 1 },
+    .{ .name = "print", .kind = .print, .arity = 1, .host = true },
+    .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
+    .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
+    .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
+    .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
+    .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
+    .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
+    .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
+    .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
+    .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
+    .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
+    .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
+    .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
+    .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
+    .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
+    .{ .name = "read_line", .kind = .read_line, .arity = 1, .host = true },
+    .{ .name = "print_error", .kind = .print_error, .arity = 1, .host = true },
+    .{ .name = "clock_ms", .kind = .clock_ms, .arity = 0, .host = true },
+    .{ .name = "sleep_ms", .kind = .sleep_ms, .arity = 1, .host = true },
+    .{ .name = "env", .kind = .env_get, .arity = 1, .host = true },
+    .{ .name = "file_append", .kind = .file_append, .arity = 2, .host = true },
+    .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
+    .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
+    .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
+};
+
+// ---------------------------------------------------------------------------
 // FunctionBuilder
 // ---------------------------------------------------------------------------
 
@@ -844,22 +912,16 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// The builtins that move no ownership: everything but `free`.
+    /// Whether a call to this builtin can leave a container different
+    /// from how it found it.  False for anything not named here,
+    /// including every user function, which is the conservative answer
+    /// `mayMutateContainers` needs.
     fn isPureBuiltin(callee: []const u8) bool {
-        if (std.mem.eql(u8, callee, "free")) return false;
-        const named = [_][]const u8{
-            "abs",         "min",         "max",         "clamp",       "sqrt",
-            "floor",       "ceil",        "len",         "assert",      "trap",
-            "str",         "parse_int",   "parse_float", "chr",         "ord",
-            "print",       "file_read",   "file_write",  "file_exists", "arg_count",
-            "arg",         "term_rows",   "term_cols",   "term_clear",  "term_move",
-            "term_style",  "term_write",  "term_flush",  "key_read",    "key_text",
-            "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
-            "file_append", "file_delete", "file_rename", "dir_list",    "Int",
-            "Float",
-        };
-        for (named) |name| {
-            if (std.mem.eql(u8, callee, name)) return true;
+        // `Int(...)` and `Float(...)` are conversions rather than
+        // intrinsics, so they are not in the table above; both are pure.
+        if (std.mem.eql(u8, callee, "Int") or std.mem.eql(u8, callee, "Float")) return true;
+        for (builtins) |builtin| {
+            if (std.mem.eql(u8, callee, builtin.name)) return builtin.pure;
         }
         return false;
     }
@@ -3136,7 +3198,7 @@ pub const FunctionBuilder = struct {
         if (!left.value_type.eql(right.value_type)) {
             const absent = if (left.value_type == .optional) left else right;
             const written = if (left.value_type == .optional) binary.left else binary.right;
-            try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit){s}", .{
+            try self.fail("luce.sema.type", binary.span, context.mismatched_operands_message ++ "{s}", .{
                 try self.analyzer.typeName(left.value_type),
                 try self.analyzer.typeName(right.value_type),
                 try self.absenceAdvice(absent.value_type, written),
@@ -4083,7 +4145,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.construct",
                 span,
-                "{s} is a function namespace and has no value fields",
+                context.namespace_has_no_fields_message,
                 .{layout.name},
             );
             return null;
@@ -4109,7 +4171,7 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             if (seen[field_index]) {
-                try self.fail("luce.sema.construct", argument.span, "field {s} given twice", .{name});
+                try self.fail("luce.sema.construct", argument.span, context.duplicate_field_message, .{name});
                 return null;
             }
             seen[field_index] = true;
@@ -4151,7 +4213,7 @@ pub const FunctionBuilder = struct {
         }
         for (seen, 0..) |given, index| {
             if (!given) {
-                try self.fail("luce.sema.construct", span, "{s} is missing field {s}", .{
+                try self.fail("luce.sema.construct", span, context.missing_field_message, .{
                     layout.name,
                     layout.fields[index].name,
                 });
@@ -4214,55 +4276,6 @@ pub const FunctionBuilder = struct {
         as_statement: bool,
         fallible_allowed: bool,
     ) Error!IntrinsicResult {
-        const Builtin = struct {
-            name: []const u8,
-            kind: mir.Intrinsic,
-            arity: usize,
-            host: bool = false,
-        };
-        const builtins = [_]Builtin{
-            .{ .name = "abs", .kind = .abs, .arity = 1 },
-            .{ .name = "min", .kind = .min, .arity = 2 },
-            .{ .name = "max", .kind = .max, .arity = 2 },
-            .{ .name = "clamp", .kind = .clamp, .arity = 3 },
-            .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
-            .{ .name = "floor", .kind = .floor, .arity = 1 },
-            .{ .name = "ceil", .kind = .ceil, .arity = 1 },
-            .{ .name = "len", .kind = .len, .arity = 1 },
-            .{ .name = "assert", .kind = .assert_true, .arity = 1 },
-            .{ .name = "trap", .kind = .trap_message, .arity = 1 },
-            .{ .name = "error", .kind = .raise_error, .arity = 1 },
-            .{ .name = "free", .kind = .free_object, .arity = 1 },
-            .{ .name = "str", .kind = .str_value, .arity = 1 },
-            .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
-            .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
-            .{ .name = "chr", .kind = .chr_code, .arity = 1 },
-            .{ .name = "ord", .kind = .ord_text, .arity = 1 },
-            .{ .name = "print", .kind = .print, .arity = 1, .host = true },
-            .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
-            .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
-            .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
-            .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
-            .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
-            .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
-            .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
-            .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
-            .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
-            .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
-            .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
-            .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
-            .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
-            .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
-            .{ .name = "read_line", .kind = .read_line, .arity = 1, .host = true },
-            .{ .name = "print_error", .kind = .print_error, .arity = 1, .host = true },
-            .{ .name = "clock_ms", .kind = .clock_ms, .arity = 0, .host = true },
-            .{ .name = "sleep_ms", .kind = .sleep_ms, .arity = 1, .host = true },
-            .{ .name = "env", .kind = .env_get, .arity = 1, .host = true },
-            .{ .name = "file_append", .kind = .file_append, .arity = 2, .host = true },
-            .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
-            .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
-            .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
-        };
         const matched = for (builtins) |builtin| {
             if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
         } else return .not_builtin;

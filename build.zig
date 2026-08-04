@@ -168,6 +168,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "luce", .module = luce },
+            // For the one durable whole-file write there is: an object
+            // a caller will see is published atomically and synced,
+            // like everything else that reaches a name a loader reads.
+            .{ .name = "files", .module = app_files },
         },
     });
     const native_tests = b.addTest(.{ .root_module = app_native });

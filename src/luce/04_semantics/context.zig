@@ -31,12 +31,31 @@ const LocalId = mir.LocalId;
 /// is a diagnostic — so the only way out is running out of memory.
 pub const Error = error{OutOfMemory};
 
-/// Both passes reject a bad literal, and a reader who sees one
-/// message should not get a different one from the other pass.
+// ---------------------------------------------------------------------------
+// Messages both passes say
+// ---------------------------------------------------------------------------
+//
+// A constant folder and a lowering walk legitimately differ in what
+// they do with an answer; they must not differ in the answer, and a
+// reader who meets one of these in a `let` at file scope must not meet
+// different words for the same mistake inside a function.  So the
+// wording lives here and each pass formats it.
+
 pub const integer_range_message =
     "integer literal out of range; Int holds -9223372036854775808 to 9223372036854775807";
 pub const float_range_message =
     "float literal is not a finite number; Float holds up to about 1.8e308";
+
+/// Binary operand typing.  Pass two appends one more `{s}` of advice
+/// when one side is an optional; the sentence up to there is the same.
+pub const mismatched_operands_message =
+    "operands are {s} and {s} (conversions are explicit)";
+
+/// Struct construction, the three ways it goes wrong.
+pub const namespace_has_no_fields_message =
+    "{s} is a function namespace and has no value fields";
+pub const duplicate_field_message = "field {s} given twice";
+pub const missing_field_message = "{s} is missing field {s}";
 
 // ---------------------------------------------------------------------------
 // Reserved names

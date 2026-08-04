@@ -51,6 +51,10 @@ const OwnershipClass = context.OwnershipClass;
 const isReserved = context.isReserved;
 const integer_range_message = context.integer_range_message;
 const float_range_message = context.float_range_message;
+const mismatched_operands_message = context.mismatched_operands_message;
+const namespace_has_no_fields_message = context.namespace_has_no_fields_message;
+const duplicate_field_message = context.duplicate_field_message;
+const missing_field_message = context.missing_field_message;
 
 /// Reporting cap, matching stages 2 and 3.  One broken declaration
 /// can make every line after it wrong; a reader wants the first
@@ -936,7 +940,7 @@ pub const Analyzer = struct {
             return self.constantError(span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
         }
         if (layout.fields.len == 0) {
-            return self.constantError(span, "{s} is a function namespace and has no value fields", .{layout.name});
+            return self.constantError(span, namespace_has_no_fields_message, .{layout.name});
         }
         const fields = try self.arena.alloc(ConstantValue, layout.fields.len);
         const seen = try self.temporary.alloc(bool, layout.fields.len);
@@ -950,7 +954,7 @@ pub const Analyzer = struct {
                 return self.constantError(argument.span, "{s} has no field {s}", .{ layout.name, name });
             };
             if (seen[field_index]) {
-                return self.constantError(argument.span, "field {s} given twice", .{name});
+                return self.constantError(argument.span, duplicate_field_message, .{name});
             }
             const value = (try self.foldConstant(module, argument.value)) orelse return null;
             if (!value.value_type.eql(layout.fields[field_index].field_type)) {
@@ -966,7 +970,7 @@ pub const Analyzer = struct {
         }
         for (seen, 0..) |given, field_index| {
             if (!given) {
-                return self.constantError(span, "{s} is missing field {s}", .{ layout.name, layout.fields[field_index].name });
+                return self.constantError(span, missing_field_message, .{ layout.name, layout.fields[field_index].name });
             }
         }
         return .{
@@ -991,7 +995,7 @@ pub const Analyzer = struct {
         // side effects — there are none, so plain evaluation is fine.
         const right = (try self.foldConstant(module, binary.right)) orelse return null;
         if (!left.value_type.eql(right.value_type)) {
-            return self.constantError(binary.span, "operands are {s} and {s} (conversions are explicit)", .{
+            return self.constantError(binary.span, mismatched_operands_message, .{
                 try self.typeName(left.value_type),
                 try self.typeName(right.value_type),
             });

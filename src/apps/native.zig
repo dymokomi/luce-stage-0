@@ -31,6 +31,7 @@
 
 const std = @import("std");
 const luce = @import("luce");
+const files = @import("files");
 
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
@@ -313,7 +314,10 @@ pub fn write(
     output: []const u8,
 ) LinkError!LinkResult {
     if (kind == .object) {
-        writeWhole(io, output, object) catch {
+        // Atomic like the linked kinds below: a half-written object
+        // must not appear under the name the caller asked for, and the
+        // promise above is the same one for all three kinds.
+        files.writeWhole(io, output, object) catch {
             return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{output}) };
         };
         return .written;
@@ -329,7 +333,7 @@ pub fn write(
     );
     defer gpa.free(object_path);
     defer std.Io.Dir.cwd().deleteFile(io, object_path) catch {};
-    writeWhole(io, object_path, object) catch {
+    writeScratch(io, object_path, object) catch {
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{object_path}) };
     };
 
@@ -411,7 +415,16 @@ pub fn link(
     return .written;
 }
 
-fn writeWhole(io: std.Io, path: []const u8, bytes: []const u8) !void {
+/// Write a scratch file: **not atomic and not synced**, deliberately.
+///
+/// The only thing written this way is the object handed to `cc` a line
+/// later and deleted before this function returns — it is never
+/// published, never read by a loader, and never survives a crash worth
+/// surviving.  Anything a caller will *see* goes through
+/// `files.writeWhole`, which replaces atomically and syncs; the two are
+/// two names because they are two durability contracts, and the one
+/// thing a file write must not do is hide which one it is.
+fn writeScratch(io: std.Io, path: []const u8, bytes: []const u8) !void {
     const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
     try file.writePositionalAll(io, bytes, 0);
