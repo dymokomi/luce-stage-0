@@ -116,48 +116,57 @@ pub const Budget = struct {
 /// service fails closed — a run given none computes and touches
 /// nothing, which is what makes the same program's effects comparable
 /// against the compiled arm's `abi.Host` table.
+///
+/// **One naming rule, and it is the ABI's:** every slot below is named
+/// for the Luce builtin it stands behind, spelled exactly as
+/// `08_llvm/abi.zig`'s `LuceHost` spells it — `file_read`, `dir_list`,
+/// `clock_ms`, `term_write`.  The two tables are the one seam the
+/// executable specification exists to compare frame for frame
+/// (docs/ENGINE.md), so they line up row for row and a reader who has
+/// learned one has learned the other.  No `Fn` suffix: the field's type
+/// already says it is a function.
 pub const Host = struct {
     context: *anyopaque,
     /// Console line output for `print`.
-    printFn: ?*const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void = null,
-    /// Program arguments for `arg_count` / `arg`.  `argFn` returns null
+    print: ?*const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void = null,
+    /// Program arguments for `arg_count` / `arg`.  `arg` returns null
     /// when the index is out of range.
-    argCountFn: ?*const fn (context: *anyopaque) u32 = null,
-    argFn: ?*const fn (
+    arg_count: ?*const fn (context: *anyopaque) u32 = null,
+    arg: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
         index: u32,
     ) error{OutOfMemory}!?[]const u8 = null,
     /// Plain files for `file_read` / `file_write` / `file_exists`.
-    readFileFn: ?*const fn (
+    file_read: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
         path: []const u8,
     ) error{OutOfMemory}!FileRead = null,
-    writeFileFn: ?*const fn (
+    file_write: ?*const fn (
         context: *anyopaque,
         path: []const u8,
         content: []const u8,
     ) bool = null,
-    fileExistsFn: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    file_exists: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
     /// The four file operations beside read, write and exists.  Each
     /// answers whether it happened; a `false` becomes the `io_failed`
     /// error the program meets, because the world decided and no
     /// non-racy check stands in for the result (docs/FAILURE.md).
-    appendFileFn: ?*const fn (
+    file_append: ?*const fn (
         context: *anyopaque,
         path: []const u8,
         content: []const u8,
     ) bool = null,
-    deleteFileFn: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
-    renameFileFn: ?*const fn (
+    file_delete: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    file_rename: ?*const fn (
         context: *anyopaque,
         from: []const u8,
         to: []const u8,
     ) bool = null,
     /// The names in a directory, without `.` and `..`, or null when it
     /// could not be listed.  The slices may come from `arena`.
-    listDirectoryFn: ?*const fn (
+    dir_list: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
         path: []const u8,
@@ -165,20 +174,20 @@ pub const Host = struct {
     /// One line of standard input, the prompt written and flushed
     /// first.  Null means end of input, which the program meets as
     /// `none` — nothing there, and no reason worth carrying.
-    readLineFn: ?*const fn (
+    read_line: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
         prompt: []const u8,
     ) error{OutOfMemory}!?[]const u8 = null,
     /// A line of standard error, for what a program says to a person
     /// while its output belongs to a pipe.
-    printErrorFn: ?*const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void = null,
+    print_error: ?*const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void = null,
     /// Milliseconds on a monotonic clock of unspecified origin, and a
     /// wait of at least that long.  Neither can fail.
-    clockFn: ?*const fn (context: *anyopaque) i64 = null,
-    sleepFn: ?*const fn (context: *anyopaque, milliseconds: i64) void = null,
+    clock_ms: ?*const fn (context: *anyopaque) i64 = null,
+    sleep_ms: ?*const fn (context: *anyopaque, milliseconds: i64) void = null,
     /// One environment variable, or null when it is unset.
-    envFn: ?*const fn (
+    env: ?*const fn (
         context: *anyopaque,
         arena: Allocator,
         name: []const u8,
@@ -195,23 +204,27 @@ pub const FileRead = union(enum) {
 /// The trusted screen behind the terminal builtins.  The host owns raw
 /// mode, buffering, and escape sequences; programs only ever describe
 /// what to draw and receive decoded keys.
+///
+/// Its slots keep the builtin's whole name, `term_` and all, because
+/// `abi.Host` is one flat table and the rule above is that the two line
+/// up: `terminal.term_write` and `abi.Host.term_write` are the same row.
 pub const Terminal = struct {
     context: *anyopaque,
-    rowsFn: *const fn (context: *anyopaque) i64,
-    colsFn: *const fn (context: *anyopaque) i64,
-    clearFn: *const fn (context: *anyopaque) error{OutOfMemory}!void,
-    moveFn: *const fn (context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void,
-    styleFn: *const fn (
+    term_rows: *const fn (context: *anyopaque) i64,
+    term_cols: *const fn (context: *anyopaque) i64,
+    term_clear: *const fn (context: *anyopaque) error{OutOfMemory}!void,
+    term_move: *const fn (context: *anyopaque, row: i64, col: i64) error{OutOfMemory}!void,
+    term_style: *const fn (
         context: *anyopaque,
         foreground: i64,
         background: i64,
         bold: bool,
     ) error{OutOfMemory}!void,
-    writeFn: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
-    flushFn: *const fn (context: *anyopaque) error{OutOfMemory}!void,
+    term_write: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
+    term_flush: *const fn (context: *anyopaque) error{OutOfMemory}!void,
     /// Blocks until one key arrives.  Slices must stay valid for the
     /// evaluation; the host may allocate them from `arena`.
-    keyFn: *const fn (context: *anyopaque, arena: Allocator) error{OutOfMemory}!KeyEvent,
+    key_read: *const fn (context: *anyopaque, arena: Allocator) error{OutOfMemory}!KeyEvent,
 };
 
 /// One decoded key: a stable name ("text", "enter", "up", "ctrl_s",

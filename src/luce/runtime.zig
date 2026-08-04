@@ -33,6 +33,15 @@
 //!                    as it unwinds, and the tables that name it.
 //!   exports.zig    — the `luce_rt_*` C entry points.
 //!   test.zig       — the library proved on its own, before any engine.
+//!
+//! **It stands alone.**  Nothing under `runtime/` imports a compiler
+//! stage: the four enums both sides have to spell the same way — trap
+//! codes, error codes, binary operators, and which file service failed
+//! — are `support/vocabulary.zig`'s, below both, and `06_mir.zig`
+//! re-exports them so the compiler still says `mir.TrapCode`.  A
+//! library that is linked into every artifact must not have a source
+//! dependency on the front end, or a reader cannot tell from the import
+//! graph where the library ends.
 
 pub const Error = @import("runtime/heap.zig").Error;
 pub const Trap = @import("runtime/heap.zig").Trap;

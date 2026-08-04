@@ -371,6 +371,12 @@ pub const Capture = struct {
     /// What this host answers when asked how deep calls may go.
     call_depth: i64 = abi.default_call_depth,
 
+    // What this run said, each borrowed from a fixed buffer inside
+    // this Capture.  **The next run overwrites all five**: a Capture is
+    // reused across the two engines on purpose (the header says why the
+    // buffers are fixed), so anything a caller needs after the second
+    // run has to be copied out before it starts.
+
     pub fn printed(self: *const Capture) []const u8 {
         return self.printed_storage[0..self.printed_length];
     }
@@ -758,31 +764,31 @@ pub const Reference = struct {
     fn host(self: *Reference) interpreter.Host {
         return .{
             .context = self,
-            .printFn = if (self.provided.print) take else null,
-            .readFileFn = if (self.provided.files) readFile else null,
-            .writeFileFn = if (self.provided.files) writeFile else null,
-            .fileExistsFn = if (self.provided.files) fileExists else null,
-            .appendFileFn = if (self.provided.files) appendFile else null,
-            .deleteFileFn = if (self.provided.files) deleteFile else null,
-            .renameFileFn = if (self.provided.files) renameFile else null,
-            .listDirectoryFn = if (self.provided.files) listDirectory else null,
-            .readLineFn = if (self.provided.input) readLine else null,
-            .printErrorFn = if (self.provided.diagnostics) printError else null,
-            .clockFn = if (self.provided.clock) clockMilliseconds else null,
-            .sleepFn = if (self.provided.clock) sleepMilliseconds else null,
-            .envFn = if (self.provided.environment) environmentValue else null,
-            .argCountFn = if (self.provided.arguments) argCount else null,
-            .argFn = if (self.provided.arguments) argAt else null,
+            .print = if (self.provided.print) take else null,
+            .file_read = if (self.provided.files) readFile else null,
+            .file_write = if (self.provided.files) writeFile else null,
+            .file_exists = if (self.provided.files) fileExists else null,
+            .file_append = if (self.provided.files) appendFile else null,
+            .file_delete = if (self.provided.files) deleteFile else null,
+            .file_rename = if (self.provided.files) renameFile else null,
+            .dir_list = if (self.provided.files) listDirectory else null,
+            .read_line = if (self.provided.input) readLine else null,
+            .print_error = if (self.provided.diagnostics) printError else null,
+            .clock_ms = if (self.provided.clock) clockMilliseconds else null,
+            .sleep_ms = if (self.provided.clock) sleepMilliseconds else null,
+            .env = if (self.provided.environment) environmentValue else null,
+            .arg_count = if (self.provided.arguments) argCount else null,
+            .arg = if (self.provided.arguments) argAt else null,
             .terminal = if (self.provided.terminal) .{
                 .context = self,
-                .rowsFn = termRows,
-                .colsFn = termCols,
-                .clearFn = termClear,
-                .moveFn = termMove,
-                .styleFn = termStyle,
-                .writeFn = termWrite,
-                .flushFn = termFlush,
-                .keyFn = keyRead,
+                .term_rows = termRows,
+                .term_cols = termCols,
+                .term_clear = termClear,
+                .term_move = termMove,
+                .term_style = termStyle,
+                .term_write = termWrite,
+                .term_flush = termFlush,
+                .key_read = keyRead,
             } else null,
         };
     }
@@ -1032,7 +1038,7 @@ pub fn project(root: []const u8, files: []const File) !mir.Program {
     var result = try compile.compileProject(
         testing.allocator,
         root,
-        .{ .context = &found, .loadFn = Files.find },
+        .{ .context = &found, .load = Files.find },
         hosted,
     );
     switch (result) {

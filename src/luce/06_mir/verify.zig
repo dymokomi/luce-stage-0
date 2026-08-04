@@ -33,6 +33,10 @@ pub const VerifyError = error{
     NotFallible,
 };
 
+// ---------------------------------------------------------------------------
+// The whole program
+// ---------------------------------------------------------------------------
+
 /// Check every structural and type invariant of a program.
 pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.heap_types) |descriptor| switch (descriptor) {
@@ -83,6 +87,10 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         else => {},
     }
 }
+
+// ---------------------------------------------------------------------------
+// Struct layouts, and the one question that can hang a decoder
+// ---------------------------------------------------------------------------
 
 /// Does any struct contain itself, directly or through another?  Such
 /// a layout has no finite value and nothing downstream may assume one
@@ -179,6 +187,10 @@ fn anyStructContainsItself(allocator: Allocator, program: *const Program) Verify
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// One function: its blocks, its registers, its terminators
+// ---------------------------------------------------------------------------
+
 fn verifyFunction(allocator: Allocator, program: *const Program, function: *const Function) VerifyError!void {
     if (function.blocks.len == 0) return error.EmptyFunction;
     if (function.parameter_count > function.locals.len) return error.BadLocal;
@@ -224,6 +236,10 @@ fn operandType(function: *const Function, defined: *const std.AutoHashMapUnmanag
 fn expectType(actual: Type, expected: Type) VerifyError!void {
     if (!actual.eql(expected)) return error.TypeMismatch;
 }
+
+// ---------------------------------------------------------------------------
+// One instruction
+// ---------------------------------------------------------------------------
 
 fn verifyInstruction(
     program: *const Program,
@@ -399,6 +415,10 @@ fn raisesError(program: *const Program, function: *const Function, register: Reg
         else => false,
     };
 }
+
+// ---------------------------------------------------------------------------
+// One intrinsic call, argument by argument
+// ---------------------------------------------------------------------------
 
 fn verifyIntrinsic(
     program: *const Program,
@@ -844,6 +864,10 @@ fn verifyIntrinsic(
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Small shared checks
+// ---------------------------------------------------------------------------
 
 fn exactly(arguments: []const Type, count: usize) VerifyError!void {
     if (arguments.len != count) return error.BadIntrinsic;

@@ -25,148 +25,48 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const harness = @import("harness");
 
 const testing = std.testing;
 const io = std.testing.io;
 const Allocator = std.mem.Allocator;
+const Install = harness.Install;
+const Ran = harness.Ran;
 
 // ---------------------------------------------------------------------------
 // A miniature install tree
 // ---------------------------------------------------------------------------
 
-const Tree = struct {
-    scratch: testing.TmpDir,
-    root: []const u8,
-    compiler: []const u8,
+/// `luce` at the root and the two static libraries under `lib/`, which
+/// is the layout `zig build --prefix` produces and the one
+/// `native.discover` looks for.  The tree itself and the way to run
+/// what is in it are `apps/harness.zig`'s, shared with the pair's
+/// suite; what goes into this one is this suite's.
+fn installTree(gpa: Allocator) !Install {
+    var tree = try Install.make(gpa);
+    errdefer tree.deinit(gpa);
+    try tree.place(build_options.luce_binary, "luce");
+    try tree.place(build_options.luce_rt_library, "lib/libluce_rt.a");
+    try tree.place(build_options.luce_start_library, "lib/libluce_start.a");
+    return tree;
+}
 
-    fn make(gpa: Allocator) !Tree {
-        var scratch = testing.tmpDir(.{});
-        errdefer scratch.cleanup();
-
-        var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-        const root = try gpa.dupe(u8, path_storage[0..try scratch.dir.realPath(io, &path_storage)]);
-        errdefer gpa.free(root);
-
-        const cwd = std.Io.Dir.cwd();
-        // `copyFile` carries the mode across, so the executable bit
-        // comes along with the bytes.
-        try cwd.copyFile(build_options.luce_binary, scratch.dir, "luce", io, .{});
-        try cwd.copyFile(build_options.luce_rt_library, scratch.dir, "lib/libluce_rt.a", io, .{
-            .make_path = true,
-        });
-        try cwd.copyFile(build_options.luce_start_library, scratch.dir, "lib/libluce_start.a", io, .{
-            .make_path = true,
-        });
-
-        return .{
-            .scratch = scratch,
-            .root = root,
-            .compiler = try std.fs.path.join(gpa, &.{ root, "luce" }),
-        };
-    }
-
-    fn deinit(self: *Tree, gpa: Allocator) void {
-        gpa.free(self.compiler);
-        gpa.free(self.root);
-        self.scratch.cleanup();
-        self.* = undefined;
-    }
-
-    /// A path inside the tree; the caller owns it.
-    fn at(self: *const Tree, gpa: Allocator, name: []const u8) ![]u8 {
-        return std.fs.path.join(gpa, &.{ self.root, name });
-    }
-
-    fn write(self: *const Tree, name: []const u8, text: []const u8) !void {
-        if (std.fs.path.dirname(name)) |directory| {
-            try self.scratch.dir.createDirPath(io, directory);
-        }
-        try self.scratch.dir.writeFile(io, .{ .sub_path = name, .data = text });
-    }
-
-    fn exists(self: *const Tree, name: []const u8) bool {
-        const file = self.scratch.dir.openFile(io, name, .{}) catch return false;
-        file.close(io);
-        return true;
-    }
-
-    /// Run the installed compiler.
-    fn luce(self: *const Tree, gpa: Allocator, arguments: []const []const u8) !Ran {
-        var argv: std.ArrayList([]const u8) = .empty;
-        defer argv.deinit(gpa);
-        try argv.append(gpa, self.compiler);
-        try argv.appendSlice(gpa, arguments);
-        return self.spawn(gpa, argv.items, null);
-    }
-
-    /// Run the installed compiler with `input` on its standard input.
-    fn luceReading(
-        self: *const Tree,
-        gpa: Allocator,
-        arguments: []const []const u8,
-        input: []const u8,
-    ) !Ran {
-        try self.write("stdin", input);
-        var argv: std.ArrayList([]const u8) = .empty;
-        defer argv.deinit(gpa);
-        try argv.append(gpa, self.compiler);
-        try argv.appendSlice(gpa, arguments);
-        return self.spawn(gpa, argv.items, "stdin");
-    }
-
-    /// Run anything, with the three streams on files inside the tree.
-    fn spawn(
-        self: *const Tree,
-        gpa: Allocator,
-        argv: []const []const u8,
-        input_name: ?[]const u8,
-    ) !Ran {
-        const input: std.process.SpawnOptions.StdIo = if (input_name) |name| .{
-            .file = try self.scratch.dir.openFile(io, name, .{}),
-        } else .ignore;
-        defer if (input == .file) input.file.close(io);
-
-        const out_file = try self.scratch.dir.createFile(io, "stdout", .{ .truncate = true });
-        defer out_file.close(io);
-        const err_file = try self.scratch.dir.createFile(io, "stderr", .{ .truncate = true });
-        defer err_file.close(io);
-
-        var child = try std.process.spawn(io, .{
-            .argv = argv,
-            .stdin = input,
-            .stdout = .{ .file = out_file },
-            .stderr = .{ .file = err_file },
-        });
-        const term = try child.wait(io);
-
-        return .{
-            .status = if (term == .exited) term.exited else 255,
-            .out = try self.scratch.dir.readFileAlloc(io, "stdout", gpa, .unlimited),
-            .err = try self.scratch.dir.readFileAlloc(io, "stderr", gpa, .unlimited),
-        };
-    }
-};
-
-/// What one run of a real binary did.
-const Ran = struct {
-    status: u8,
-    out: []u8,
-    err: []u8,
-
-    fn deinit(self: *Ran, gpa: Allocator) void {
-        gpa.free(self.out);
-        gpa.free(self.err);
-        self.* = undefined;
-    }
-
-    fn saysOut(self: *const Ran, words: []const u8) bool {
-        return std.mem.indexOf(u8, self.out, words) != null;
-    }
-
-    fn saysErr(self: *const Ran, words: []const u8) bool {
-        return std.mem.indexOf(u8, self.err, words) != null;
-    }
-};
+/// Run the installed compiler, optionally with `input` on its standard
+/// input.
+fn runLuce(
+    gpa: Allocator,
+    tree: *const Install,
+    arguments: []const []const u8,
+    input: ?[]const u8,
+) !Ran {
+    const compiler = try tree.at(gpa, "luce");
+    defer gpa.free(compiler);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, compiler);
+    try argv.appendSlice(gpa, arguments);
+    return tree.spawn(gpa, argv.items, .{ .input = input });
+}
 
 const greeting =
     \\func main():
@@ -180,7 +80,7 @@ const greeting =
 
 test "a command line with nothing to do prints usage and fails" {
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
 
     // No arguments at all, a command that does not exist, and a
@@ -194,7 +94,7 @@ test "a command line with nothing to do prints usage and fails" {
         &.{"ir"},
     };
     for (empty_handed) |arguments| {
-        var ran = try tree.luce(gpa, arguments);
+        var ran = try runLuce(gpa, &tree, arguments, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expectEqualStrings("", ran.out);
@@ -213,7 +113,7 @@ test "an option written twice, or one nobody has, is refused rather than resolve
     // success.  Both are failures a build system cannot see, so
     // neither is resolved.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("sums.luc", greeting);
     const program = try tree.at(gpa, "sums.luc");
@@ -245,7 +145,7 @@ test "an option written twice, or one nobody has, is refused rather than resolve
         try arguments.appendSlice(gpa, &.{ "build", program });
         try arguments.appendSlice(gpa, refusal.arguments);
 
-        var ran = try tree.luce(gpa, arguments.items);
+        var ran = try runLuce(gpa, &tree, arguments.items, null);
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expectEqualStrings("", ran.out);
@@ -257,12 +157,12 @@ test "an option written twice, or one nobody has, is refused rather than resolve
     }
 
     // The other two commands take no options at all, and say so.
-    var checked = try tree.luce(gpa, &.{ "check", program, "--full" });
+    var checked = try runLuce(gpa, &tree, &.{ "check", program, "--full" }, null);
     defer checked.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), checked.status);
     try testing.expect(checked.saysErr("check takes one file"));
 
-    var dumped = try tree.luce(gpa, &.{ "ir", program, "--half" });
+    var dumped = try runLuce(gpa, &tree, &.{ "ir", program, "--half" }, null);
     defer dumped.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), dumped.status);
     try testing.expect(dumped.saysErr("ir takes one file"));
@@ -274,7 +174,7 @@ test "an option written twice, or one nobody has, is refused rather than resolve
 
 test "check compiles, reports, and writes nothing" {
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("sums.luc", greeting);
     // A path with a directory in it, because a diagnostic that says
@@ -289,7 +189,7 @@ test "check compiles, reports, and writes nothing" {
 
     const program = try tree.at(gpa, "sums.luc");
     defer gpa.free(program);
-    var good = try tree.luce(gpa, &.{ "check", program });
+    var good = try runLuce(gpa, &tree, &.{ "check", program }, null);
     defer good.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), good.status);
     try testing.expectEqualStrings("", good.err);
@@ -300,7 +200,7 @@ test "check compiles, reports, and writes nothing" {
 
     const broken = try tree.at(gpa, "sub/broken.luc");
     defer gpa.free(broken);
-    var refused = try tree.luce(gpa, &.{ "check", broken });
+    var refused = try runLuce(gpa, &tree, &.{ "check", broken }, null);
     defer refused.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), refused.status);
     try testing.expectEqualStrings("", refused.out);
@@ -313,7 +213,7 @@ test "check compiles, reports, and writes nothing" {
 
     const absent = try tree.at(gpa, "nowhere.luc");
     defer gpa.free(absent);
-    var missing = try tree.luce(gpa, &.{ "check", absent });
+    var missing = try runLuce(gpa, &tree, &.{ "check", absent }, null);
     defer missing.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), missing.status);
     try testing.expect(missing.saysErr("no such file"));
@@ -326,7 +226,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     // is the other question — what does this *file* say — and is how a
     // module under inspection gets looked at at all.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("shape.luc",
         \\func unreached() -> Int:
@@ -339,14 +239,14 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     const program = try tree.at(gpa, "shape.luc");
     defer gpa.free(program);
 
-    var pruned = try tree.luce(gpa, &.{ "ir", program });
+    var pruned = try runLuce(gpa, &tree, &.{ "ir", program }, null);
     defer pruned.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), pruned.status);
     try testing.expectEqualStrings("", pruned.err);
     try testing.expect(pruned.saysOut("func main()"));
     try testing.expect(!pruned.saysOut("unreached"));
 
-    var whole = try tree.luce(gpa, &.{ "ir", program, "--full" });
+    var whole = try runLuce(gpa, &tree, &.{ "ir", program, "--full" }, null);
     defer whole.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), whole.status);
     try testing.expect(whole.saysOut("func main()"));
@@ -359,7 +259,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     try tree.write("broken.luc", "func main():\n    let x: Int = \"s\"\n    print(str(x))\n");
     const broken = try tree.at(gpa, "broken.luc");
     defer gpa.free(broken);
-    var failed = try tree.luce(gpa, &.{ "ir", broken });
+    var failed = try runLuce(gpa, &tree, &.{ "ir", broken }, null);
     defer failed.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), failed.status);
     try testing.expectEqualStrings("", failed.out);
@@ -371,21 +271,22 @@ test "a program may arrive on standard input, and is named for what it is" {
     // an editor, and a stream has no name to put in a diagnostic — so
     // it gets one, and it is not a dash.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
 
-    var checked = try tree.luceReading(gpa, &.{ "check", "-" }, greeting);
+    var checked = try runLuce(gpa, &tree, &.{ "check", "-" }, greeting);
     defer checked.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), checked.status);
     try testing.expectEqualStrings("<stdin>: ok\n", checked.out);
 
-    var dumped = try tree.luceReading(gpa, &.{ "ir", "-" }, greeting);
+    var dumped = try runLuce(gpa, &tree, &.{ "ir", "-" }, greeting);
     defer dumped.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), dumped.status);
     try testing.expect(dumped.saysOut("func main()"));
 
-    var complained = try tree.luceReading(
+    var complained = try runLuce(
         gpa,
+        &tree,
         &.{ "check", "-" },
         "func main():\n    let x: Int = \"s\"\n    print(str(x))\n",
     );
@@ -395,7 +296,7 @@ test "a program may arrive on standard input, and is named for what it is" {
 
     // A stream has no name to derive an output path from, so building
     // one says so rather than writing a file called `-.lc`.
-    var nameless = try tree.luceReading(gpa, &.{ "build", "-" }, greeting);
+    var nameless = try runLuce(gpa, &tree, &.{ "build", "-" }, greeting);
     defer nameless.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), nameless.status);
     try testing.expect(nameless.saysErr("needs -o to say where to write"));
@@ -403,7 +304,7 @@ test "a program may arrive on standard input, and is named for what it is" {
 
     const target = try tree.at(gpa, "streamed.lc");
     defer gpa.free(target);
-    var built = try tree.luceReading(gpa, &.{ "build", "-", "-o", target }, greeting);
+    var built = try runLuce(gpa, &tree, &.{ "build", "-", "-o", target }, greeting);
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
     try testing.expect(built.saysOut("<stdin> -> "));
@@ -423,14 +324,14 @@ test "each --emit shape writes what it says, and the object links into a program
     // is exactly what `--emit=exe` does internally and exactly what an
     // embedder would type.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("sums.luc", greeting);
     const program = try tree.at(gpa, "sums.luc");
     defer gpa.free(program);
 
     // The default: FILE.luc -> FILE.lc, and one line saying so.
-    var implied = try tree.luce(gpa, &.{ "build", program });
+    var implied = try runLuce(gpa, &tree, &.{ "build", program }, null);
     defer implied.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), implied.status);
     try testing.expectEqualStrings("", implied.err);
@@ -440,13 +341,13 @@ test "each --emit shape writes what it says, and the object links into a program
 
     // Said out loud, it is the same request.
     try tree.scratch.dir.deleteFile(io, "sums.lc");
-    var named = try tree.luce(gpa, &.{ "build", program, "--emit=library" });
+    var named = try runLuce(gpa, &tree, &.{ "build", program, "--emit=library" }, null);
     defer named.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), named.status);
     try testing.expect(tree.exists("sums.lc"));
 
     // An object: FILE.luc -> FILE.o, and nothing that runs yet.
-    var relocatable = try tree.luce(gpa, &.{ "build", program, "--emit=object" });
+    var relocatable = try runLuce(gpa, &tree, &.{ "build", program, "--emit=object" }, null);
     defer relocatable.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), relocatable.status);
     try testing.expect(relocatable.saysOut("sums.o"));
@@ -462,18 +363,18 @@ test "each --emit shape writes what it says, and the object links into a program
     defer gpa.free(runtime);
     const linked = try tree.at(gpa, "byhand");
     defer gpa.free(linked);
-    var link = try tree.spawn(gpa, &.{ "cc", "-o", linked, object, start, runtime }, null);
+    var link = try tree.spawn(gpa, &.{ "cc", "-o", linked, object, start, runtime }, .{});
     defer link.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), link.status);
 
-    var byhand = try tree.spawn(gpa, &.{linked}, null);
+    var byhand = try tree.spawn(gpa, &.{linked}, .{});
     defer byhand.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), byhand.status);
     try testing.expectEqualStrings("total 30\n", byhand.out);
 
     // And the shape that does that linking itself: a bare name, and a
     // file a shell runs.
-    var executable = try tree.luce(gpa, &.{ "build", program, "--emit=exe" });
+    var executable = try runLuce(gpa, &tree, &.{ "build", program, "--emit=exe" }, null);
     defer executable.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), executable.status);
     try testing.expect(executable.saysOut("sums.luc -> "));
@@ -481,7 +382,7 @@ test "each --emit shape writes what it says, and the object links into a program
 
     const standalone = try tree.at(gpa, "sums");
     defer gpa.free(standalone);
-    var ran = try tree.spawn(gpa, &.{standalone}, null);
+    var ran = try tree.spawn(gpa, &.{standalone}, .{});
     defer ran.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), ran.status);
     try testing.expectEqualStrings("total 30\n", ran.out);
@@ -491,7 +392,7 @@ test "each --emit shape writes what it says, and the object links into a program
     // does not get a say.
     const elsewhere = try tree.at(gpa, "chosen.bin");
     defer gpa.free(elsewhere);
-    var placed = try tree.luce(gpa, &.{ "build", program, "-o", elsewhere, "--emit=exe" });
+    var placed = try runLuce(gpa, &tree, &.{ "build", program, "-o", elsewhere, "--emit=exe" }, null);
     defer placed.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), placed.status);
     try testing.expect(tree.exists("chosen.bin"));
@@ -521,7 +422,7 @@ test "a debug artifact says where it trapped; a release one says what trapped" {
     // same number, because the mode is not allowed to change the
     // program.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("stumble.luc", stumbles);
     const program = try tree.at(gpa, "stumble.luc");
@@ -529,22 +430,24 @@ test "a debug artifact says where it trapped; a release one says what trapped" {
 
     const debug_path = try tree.at(gpa, "debug");
     defer gpa.free(debug_path);
-    var debug_build = try tree.luce(gpa, &.{ "build", program, "--emit=exe", "-o", debug_path });
+    var debug_build = try runLuce(gpa, &tree, &.{ "build", program, "--emit=exe", "-o", debug_path }, null);
     defer debug_build.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), debug_build.status);
 
     const release_path = try tree.at(gpa, "release");
     defer gpa.free(release_path);
-    var release_build = try tree.luce(
+    var release_build = try runLuce(
         gpa,
+        &tree,
         &.{ "build", program, "--emit=exe", "-o", release_path, "--release" },
+        null,
     );
     defer release_build.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), release_build.status);
 
-    var debug_ran = try tree.spawn(gpa, &.{debug_path}, null);
+    var debug_ran = try tree.spawn(gpa, &.{debug_path}, .{});
     defer debug_ran.deinit(gpa);
-    var release_ran = try tree.spawn(gpa, &.{release_path}, null);
+    var release_ran = try tree.spawn(gpa, &.{release_path}, .{});
     defer release_ran.deinit(gpa);
 
     // Same program, so: same output, same trap, same status.
@@ -589,7 +492,7 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
     // program (docs/FAILURE.md), so they are two different numbers,
     // and a script can tell them apart without parsing stderr.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
 
     const endings = [_]struct {
@@ -639,13 +542,13 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
         const program = try tree.at(gpa, source_name);
         defer gpa.free(program);
 
-        var built = try tree.luce(gpa, &.{ "build", program, "--emit=exe" });
+        var built = try runLuce(gpa, &tree, &.{ "build", program, "--emit=exe" }, null);
         defer built.deinit(gpa);
         try testing.expectEqual(@as(u8, 0), built.status);
 
         const binary = try tree.at(gpa, ending.name);
         defer gpa.free(binary);
-        var ran = try tree.spawn(gpa, &.{binary}, null);
+        var ran = try tree.spawn(gpa, &.{binary}, .{});
         defer ran.deinit(gpa);
         try testing.expectEqual(ending.status, ran.status);
         try testing.expectEqualStrings(ending.out, ran.out);
@@ -665,7 +568,7 @@ test "a standalone binary reads the arguments it was given, past its own name" {
     // which is what `loom run PROGRAM a b` gives too — a program's
     // behaviour must not depend on who started it.
     const gpa = testing.allocator;
-    var tree = try Tree.make(gpa);
+    var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("echo.luc",
         \\func main():
@@ -678,17 +581,17 @@ test "a standalone binary reads the arguments it was given, past its own name" {
     );
     const program = try tree.at(gpa, "echo.luc");
     defer gpa.free(program);
-    var built = try tree.luce(gpa, &.{ "build", program, "--emit=exe" });
+    var built = try runLuce(gpa, &tree, &.{ "build", program, "--emit=exe" }, null);
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
     const binary = try tree.at(gpa, "echo");
     defer gpa.free(binary);
-    var bare = try tree.spawn(gpa, &.{binary}, null);
+    var bare = try tree.spawn(gpa, &.{binary}, .{});
     defer bare.deinit(gpa);
     try testing.expectEqualStrings("0\n", bare.out);
 
-    var given = try tree.spawn(gpa, &.{ binary, "alpha", "beta" }, null);
+    var given = try tree.spawn(gpa, &.{ binary, "alpha", "beta" }, .{});
     defer given.deinit(gpa);
     try testing.expectEqualStrings("2\nalpha\nbeta\n", given.out);
 }

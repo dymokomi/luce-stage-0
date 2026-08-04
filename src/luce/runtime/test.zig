@@ -7,7 +7,7 @@
 //! the C surface's calling convention.
 
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
@@ -49,14 +49,14 @@ const Bench = struct {
     }
 
     fn deinit(self: *Bench) void {
-        for (self.loose.items) |held| self.runtime.releaseStorage(held);
+        for (self.loose.items) |held| self.runtime.dropStorage(held);
         self.loose.deinit(testing.allocator);
         self.runtime.deinit();
         self.arena.deinit();
     }
 };
 
-fn expectTrap(code: mir.TrapCode, runtime: *Runtime, mistake: anytype) !void {
+fn expectTrap(code: vocabulary.TrapCode, runtime: *Runtime, mistake: anytype) !void {
     try testing.expectError(error.Trap, mistake);
     try testing.expectEqual(code, runtime.pending.?.code);
     try testing.expectEqualStrings(code.message(), runtime.pending.?.message);
@@ -123,7 +123,7 @@ test "a directory listing splits the same list out of both shapes" {
     const joined = "alpha.txt\x00b\x00a name with spaces\x00";
 
     const from_slices = try containers.listOfText(runtime, &names);
-    const from_bytes = try containers.namesList(runtime, joined);
+    const from_bytes = try containers.listOfJoinedText(runtime, joined);
     try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_slices)).asInt());
     try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_bytes)).asInt());
     for (names, 0..) |wanted, at| {
@@ -141,9 +141,9 @@ test "a directory listing splits the same list out of both shapes" {
     // An empty directory is an empty list, not a list holding one
     // empty name — and a buffer with no trailing separator is still
     // read whole, because a host is not ours to promise for.
-    const empty = try containers.namesList(runtime, "");
+    const empty = try containers.listOfJoinedText(runtime, "");
     try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asInt());
-    const unterminated = try containers.namesList(runtime, "one\x00two");
+    const unterminated = try containers.listOfJoinedText(runtime, "one\x00two");
     try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, unterminated)).asInt());
 
     runtime.freeObject(from_slices.asObject());
@@ -678,7 +678,7 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
     );
 
     try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 20, 1 << 20 }, Value.none));
-    try testing.expectEqual(mir.TrapCode.index_bounds, runtime.pending.?.code);
+    try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
 }
 
 test "compiled code's byte offsets find the fields they name" {
@@ -771,12 +771,12 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
         if (!Value.fitsInline(length)) {
             try testing.expectEqual(owned.bits, handed.bits);
         }
-        runtime.releaseStorage(handed);
+        runtime.dropStorage(handed);
 
         // And releasing a place twice frees nothing the second time.
         const emptied = heap.Runtime.emptied(handed);
         try testing.expectEqualStrings("", emptied.asString());
-        runtime.releaseStorage(emptied);
+        runtime.dropStorage(emptied);
     }
 
     // A store keeps what it is given, in whichever form fits, and the
@@ -825,7 +825,7 @@ test "str and chr answer text that needs no allocation at all" {
     // like any other owned storage.
     const long = try text.str(runtime, Value.ofString("a" ** 40));
     try testing.expect(long.ownsStorage());
-    runtime.releaseStorage(long);
+    runtime.dropStorage(long);
 }
 
 test "a builder collects bytes and str takes a snapshot of them" {
@@ -1084,7 +1084,7 @@ test "the C surface opens a run, carries values, and reports its own traps" {
     luce_rt_unwound(runtime, 1, 0);
     luce_rt_report(runtime, &reported, Reported.take);
 
-    try testing.expectEqual(@intFromEnum(mir.TrapCode.index_bounds), reported.code);
+    try testing.expectEqual(@intFromEnum(vocabulary.TrapCode.index_bounds), reported.code);
     try testing.expectEqualStrings("index out of bounds", reported.message());
     try testing.expectEqual(@as(usize, 2), reported.frame_count);
     try testing.expectEqual(@as(i64, 0), reported.dropped);

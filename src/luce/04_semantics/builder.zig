@@ -17,20 +17,24 @@ const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 const helpers = @import("helpers.zig");
 
-const declarations = @import("declarations.zig");
-const Analyzed = declarations.Analyzed;
-const ModuleTree = declarations.ModuleTree;
-const FunctionInfo = declarations.FunctionInfo;
-const ConstantValue = declarations.ConstantValue;
-const Analyzer = declarations.Analyzer;
-const OwnershipClass = declarations.OwnershipClass;
-const Poison = declarations.Poison;
-const LocalInfo = declarations.LocalInfo;
-const Scope = declarations.Scope;
-const FoundLocal = declarations.FoundLocal;
-const LoopFrame = declarations.LoopFrame;
-const isReserved = declarations.isReserved;
-const Error = declarations.Error;
+// Pass one, for the one thing this walk needs from it: the collected
+// project it runs against.
+const Analyzer = @import("declarations.zig").Analyzer;
+
+// The stage's shared vocabulary (`04_semantics/context.zig`).
+const context = @import("context.zig");
+const Analyzed = context.Analyzed;
+const ModuleTree = context.ModuleTree;
+const FunctionDeclInfo = context.FunctionDeclInfo;
+const ConstantValue = context.ConstantValue;
+const OwnershipClass = context.OwnershipClass;
+const Poison = context.Poison;
+const LocalInfo = context.LocalInfo;
+const Scope = context.Scope;
+const FoundLocal = context.FoundLocal;
+const LoopFrame = context.LoopFrame;
+const isReserved = context.isReserved;
+const Error = context.Error;
 
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
@@ -41,10 +45,81 @@ const BlockId = mir.BlockId;
 const LocalId = mir.LocalId;
 
 // ---------------------------------------------------------------------------
+// The free builtins
+// ---------------------------------------------------------------------------
+
+/// One free builtin: what it is called, what it lowers to, how many
+/// arguments it takes, whether it needs the host gate, and whether a
+/// call to it can leave a container different from how it found it.
+const Builtin = struct {
+    name: []const u8,
+    kind: mir.Intrinsic,
+    arity: usize,
+    host: bool = false,
+    /// False for the two calls that are not a pure walk over their
+    /// arguments: `free` ends an object's life, and `error` leaves by
+    /// unwinding.  `isPureBuiltin` reads it, which is what decides
+    /// whether a container resolution may be lifted out of a loop.
+    pure: bool = true,
+};
+
+/// **The one table.**  `lowerIntrinsic` resolves a call through it and
+/// `isPureBuiltin` asks it what a call costs.  Those were two lists of
+/// the same thirty-nine names, 3,375 lines apart in this file, with
+/// nothing checking they agreed — so a builtin added to one and not the
+/// other silently changed the ownership analysis.
+const builtins = [_]Builtin{
+    .{ .name = "abs", .kind = .abs, .arity = 1 },
+    .{ .name = "min", .kind = .min, .arity = 2 },
+    .{ .name = "max", .kind = .max, .arity = 2 },
+    .{ .name = "clamp", .kind = .clamp, .arity = 3 },
+    .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
+    .{ .name = "floor", .kind = .floor, .arity = 1 },
+    .{ .name = "ceil", .kind = .ceil, .arity = 1 },
+    .{ .name = "len", .kind = .len, .arity = 1 },
+    .{ .name = "assert", .kind = .assert_true, .arity = 1 },
+    .{ .name = "trap", .kind = .trap_message, .arity = 1 },
+    .{ .name = "error", .kind = .raise_error, .arity = 1, .pure = false },
+    .{ .name = "free", .kind = .free_object, .arity = 1, .pure = false },
+    .{ .name = "str", .kind = .str_value, .arity = 1 },
+    .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
+    .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
+    .{ .name = "chr", .kind = .chr_code, .arity = 1 },
+    .{ .name = "ord", .kind = .ord_text, .arity = 1 },
+    .{ .name = "print", .kind = .print, .arity = 1, .host = true },
+    .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
+    .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
+    .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
+    .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
+    .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
+    .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
+    .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
+    .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
+    .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
+    .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
+    .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
+    .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
+    .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
+    .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
+    .{ .name = "read_line", .kind = .read_line, .arity = 1, .host = true },
+    .{ .name = "print_error", .kind = .print_error, .arity = 1, .host = true },
+    .{ .name = "clock_ms", .kind = .clock_ms, .arity = 0, .host = true },
+    .{ .name = "sleep_ms", .kind = .sleep_ms, .arity = 1, .host = true },
+    .{ .name = "env", .kind = .env_get, .arity = 1, .host = true },
+    .{ .name = "file_append", .kind = .file_append, .arity = 2, .host = true },
+    .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
+    .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
+    .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
+};
+
+// ---------------------------------------------------------------------------
 // FunctionBuilder
 // ---------------------------------------------------------------------------
 
-const Value = struct {
+/// A checked expression's result: the register holding it and the type
+/// the checker decided it has.  A *typed register*, and not a value —
+/// nothing here holds one; `runtime.Value` is the thing that does.
+const Typed = struct {
     register: Register,
     value_type: Type,
 };
@@ -118,7 +193,7 @@ pub const FunctionBuilder = struct {
         local: LocalId,
         register: Register,
         /// Whether this temporary owns the objects in its value, its
-        /// storage, or both — the same two questions `Scope.Release`
+        /// storage, or both — the same two questions `context.Release`
         /// answers for a named binding.
         objects: bool,
         storage: bool,
@@ -433,7 +508,7 @@ pub const FunctionBuilder = struct {
     /// when `storage` is (docs/STRINGS.md).
     fn registerTemp(
         self: *FunctionBuilder,
-        value: Value,
+        value: Typed,
         objects: bool,
         storage: bool,
     ) Error!void {
@@ -688,7 +763,7 @@ pub const FunctionBuilder = struct {
     /// `libluce_rt` never copies at a store: the copy is written once,
     /// here, where the decision that elides it can be seen
     /// (docs/STRINGS.md).
-    fn ownedForStore(self: *FunctionBuilder, value: Value) Error!Register {
+    fn ownedForStore(self: *FunctionBuilder, value: Typed) Error!Register {
         if (!self.analyzer.ownsStorage(value.value_type)) return value.register;
         if (self.takeStorage(value.register)) return value.register;
         return self.code.ownStorage(value.register);
@@ -708,7 +783,7 @@ pub const FunctionBuilder = struct {
 
     /// Store into a local, taking or copying the value's storage in
     /// when the local is the one that will have to give it back.
-    fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Value) Error!void {
+    fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Typed) Error!void {
         const register = if (self.code.localOwnsStorage(local))
             try self.ownedForStore(value)
         else
@@ -837,22 +912,16 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// The builtins that move no ownership: everything but `free`.
+    /// Whether a call to this builtin can leave a container different
+    /// from how it found it.  False for anything not named here,
+    /// including every user function, which is the conservative answer
+    /// `mayMutateContainers` needs.
     fn isPureBuiltin(callee: []const u8) bool {
-        if (std.mem.eql(u8, callee, "free")) return false;
-        const named = [_][]const u8{
-            "abs",         "min",         "max",         "clamp",       "sqrt",
-            "floor",       "ceil",        "len",         "assert",      "trap",
-            "str",         "parse_int",   "parse_float", "chr",         "ord",
-            "print",       "file_read",   "file_write",  "file_exists", "arg_count",
-            "arg",         "term_rows",   "term_cols",   "term_clear",  "term_move",
-            "term_style",  "term_write",  "term_flush",  "key_read",    "key_text",
-            "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
-            "file_append", "file_delete", "file_rename", "dir_list",    "Int",
-            "Float",
-        };
-        for (named) |name| {
-            if (std.mem.eql(u8, callee, name)) return true;
+        // `Int(...)` and `Float(...)` are conversions rather than
+        // intrinsics, so they are not in the table above; both are pure.
+        if (std.mem.eql(u8, callee, "Int") or std.mem.eql(u8, callee, "Float")) return true;
+        for (builtins) |builtin| {
+            if (std.mem.eql(u8, callee, builtin.name)) return builtin.pure;
         }
         return false;
     }
@@ -860,7 +929,7 @@ pub const FunctionBuilder = struct {
     /// Park a freshly allocated String or struct value that was not
     /// produced through `lowerExpression` — a compound assignment's
     /// concatenation, say — so the statement's end reclaims it.
-    fn parkFreshStorage(self: *FunctionBuilder, value: Value) Error!void {
+    fn parkFreshStorage(self: *FunctionBuilder, value: Typed) Error!void {
         if (!self.analyzer.ownsStorage(value.value_type)) return;
         if (!self.producesFreshStorage(value.register)) return;
         if (self.parkedForStorage(value.register)) return;
@@ -1104,7 +1173,7 @@ pub const FunctionBuilder = struct {
     /// real value makes before it looks at the type any further.
     fn refusesAbsence(
         self: *FunctionBuilder,
-        value: Value,
+        value: Typed,
         situation: []const u8,
         span: Span,
         from: ?*const ast.Expression,
@@ -1118,7 +1187,7 @@ pub const FunctionBuilder = struct {
     /// widening the language has: `T` into `T?` (S43 — the widened
     /// value owns exactly what it owned before).  Null means it does
     /// not fit and the caller reports.
-    fn fit(self: *FunctionBuilder, value: Value, expected: Type) Error!?Value {
+    fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
         const payload = expected.held() orelse return null;
         if (!payload.eql(value.value_type)) return null;
@@ -1136,7 +1205,7 @@ pub const FunctionBuilder = struct {
     /// A value that reached its place, and whether it got there by the
     /// `T <: T?` widening — which is how an assignment knows the slot
     /// definitely holds something now.
-    const Fitted = struct { value: Value, present: bool };
+    const Fitted = struct { value: Typed, present: bool };
 
     /// Lower an expression into a place whose type is already known —
     /// which is what gives `none` a type, since it has none of its
@@ -1205,7 +1274,7 @@ pub const FunctionBuilder = struct {
     /// most of the compiler's allocator traffic when it is not one.
     const inline_operands = 8;
 
-    fn lowerOperands(self: *FunctionBuilder, expressions: []const *ast.Expression) Error!?[]Value {
+    fn lowerOperands(self: *FunctionBuilder, expressions: []const *ast.Expression) Error!?[]Typed {
         return self.lowerOperandsInto(expressions, null);
     }
 
@@ -1216,12 +1285,12 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         expressions: []const *ast.Expression,
         expected: ?[]const Type,
-    ) Error!?[]Value {
+    ) Error!?[]Typed {
         var spill_storage: [inline_operands]?LocalId = undefined;
         var split_storage: [inline_operands]bool = undefined;
         const wide = expressions.len > inline_operands;
 
-        const values = try self.arena().alloc(Value, expressions.len);
+        const values = try self.arena().alloc(Typed, expressions.len);
         const spills = if (wide)
             try self.temporary().alloc(?LocalId, expressions.len)
         else
@@ -1395,7 +1464,7 @@ pub const FunctionBuilder = struct {
         // A binding whose initializer failed still declares a name the
         // reader meant; remembering it keeps one mistake from
         // producing an "unknown name" per later use.
-        var value: Value = undefined;
+        var value: Typed = undefined;
         // The annotation said `T?` and the initializer handed over a
         // plain `T`, so the binding starts out present.
         var widened = false;
@@ -1471,6 +1540,8 @@ pub const FunctionBuilder = struct {
         const local = (try self.declareLocal(name, declared, true, .owned, span)) orelse return;
         try self.storeOwned(local, .{ .register = zero, .value_type = declared });
     }
+
+    // Assignment, and the three shapes of place it can name -------------------
 
     fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
         switch (assign.target) {
@@ -1579,7 +1650,7 @@ pub const FunctionBuilder = struct {
                 .index => |index| {
                     const lowered = operands[next_operand .. next_operand + index.indices.len];
                     next_operand += index.indices.len;
-                    const object_value: Value = .{ .register = current, .value_type = current_type };
+                    const object_value: Typed = .{ .register = current, .value_type = current_type };
                     const element_type = (try self.checkIndex(object_value, lowered, index.span)) orelse return;
                     // Writing the element back frees the old one, so a
                     // container of object-carrying structs can't be a
@@ -1643,7 +1714,7 @@ pub const FunctionBuilder = struct {
         op: ast.BinaryOp,
         current: Register,
         place_type: Type,
-        value: Value,
+        value: Typed,
         span: Span,
     ) Error!?Register {
         if (!value.value_type.eql(place_type)) {
@@ -1951,8 +2022,8 @@ pub const FunctionBuilder = struct {
     /// Returns the element/value type.
     fn checkIndex(
         self: *FunctionBuilder,
-        object: Value,
-        indices: []const Value,
+        object: Typed,
+        indices: []const Typed,
         span: Span,
     ) Error!?Type {
         const descriptor = self.analyzer.heapOf(object.value_type) orelse {
@@ -2011,7 +2082,7 @@ pub const FunctionBuilder = struct {
         }
     }
 
-    fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Value {
+    fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Typed {
         const condition = (try self.lowerExpression(expression, false)) orelse return null;
         if (condition.value_type != .boolean) {
             try self.fail("luce.sema.type", expression.span(), "condition must be Bool, not {s}{s}", .{
@@ -2022,6 +2093,8 @@ pub const FunctionBuilder = struct {
         }
         return condition;
     }
+
+    // Control flow: if, while, for, return ------------------------------------
 
     fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!void {
         const temps_floor = self.temps.items.len;
@@ -2414,9 +2487,14 @@ pub const FunctionBuilder = struct {
         try self.code.ret(null);
     }
 
-    // Expressions ----------------------------------------------------------
+    // Expressions: the dispatch --------------------------------------------
+    //
+    // The depth bound and the two-level switch every expression form
+    // below is reached through.  The forms themselves are three
+    // sections down; what sits between is the fallible-call machinery
+    // a `try` or a `catch` is built out of.
 
-    fn lowerExpression(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
+    fn lowerExpression(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Typed {
         // Stage 3 bounds recursive *descent*, which a left-leaning
         // chain never exercises: `1 + 1 + ... + 1` parses in a Pratt
         // loop and hands back a tree as deep as the chain is long, and
@@ -2455,7 +2533,7 @@ pub const FunctionBuilder = struct {
         return value;
     }
 
-    fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Value {
+    fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Typed {
         // The permission a `try` or `catch` raised reaches exactly the
         // expression it was written in front of.  Read and cleared
         // here, before anything nested can see it.
@@ -2464,14 +2542,14 @@ pub const FunctionBuilder = struct {
         switch (expression.*) {
             .int_literal => |literal| {
                 const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
-                    try self.fail("luce.sema.literal", literal.span, "{s}", .{declarations.integer_range_message});
+                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.integer_range_message});
                     return null;
                 };
                 return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
             },
             .float_literal => |literal| {
                 const parsed = helpers.parseFloatLiteral(literal.text) orelse {
-                    try self.fail("luce.sema.literal", literal.span, "{s}", .{declarations.float_range_message});
+                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.float_range_message});
                     return null;
                 };
                 return .{ .register = try self.code.emit(.{ .const_float = parsed }, .float), .value_type = .float };
@@ -2558,7 +2636,7 @@ pub const FunctionBuilder = struct {
     /// reload, and leave the lowering on the side where the call
     /// returned.  The failing side is an empty block waiting for
     /// whoever asked for it.
-    fn openFallible(self: *FunctionBuilder, call: Register, result_type: Type) Error!Value {
+    fn openFallible(self: *FunctionBuilder, call: Register, result_type: Type) Error!Typed {
         const failed = try self.code.errored(call);
         // What the call answered has to survive the branch on its
         // outcome, and it arrives owning something — so the slot that
@@ -2616,7 +2694,7 @@ pub const FunctionBuilder = struct {
         span: Span,
         verb: []const u8,
         as_statement: bool,
-    ) Error!?struct { value: ?Value, opened: Opened } {
+    ) Error!?struct { value: ?Typed, opened: Opened } {
         self.opened = null;
         self.allow_fallible = true;
         const lowered = try self.lowerExpression(operand, as_statement);
@@ -2642,7 +2720,7 @@ pub const FunctionBuilder = struct {
     /// `lowerReturn`'s three lines with one terminator changed:
     /// release the temporaries, release the scopes innermost first,
     /// leave (docs/FAILURE.md).
-    fn lowerTry(self: *FunctionBuilder, attempt: ast.Try, as_statement: bool) Error!?Value {
+    fn lowerTry(self: *FunctionBuilder, attempt: ast.Try, as_statement: bool) Error!?Typed {
         if (!self.code.fallible) {
             try self.fail(
                 "luce.sema.fallible",
@@ -2670,7 +2748,7 @@ pub const FunctionBuilder = struct {
 
     /// `CALL catch FALLBACK` — the fallback runs only where the call
     /// raised, and the reason is deliberately discarded there.
-    fn lowerCatch(self: *FunctionBuilder, binary: ast.Binary, as_statement: bool) Error!?Value {
+    fn lowerCatch(self: *FunctionBuilder, binary: ast.Binary, as_statement: bool) Error!?Typed {
         const attempted = (try self.lowerAttempt(
             binary.left,
             binary.span,
@@ -2760,9 +2838,16 @@ pub const FunctionBuilder = struct {
         self.code.switchTo(merge);
     }
 
+    // Expressions: one form at a time ---------------------------------------
+    //
+    // The ownership verbs, the constructors, the accessors and the
+    // operators, in the order the dispatch above names them.  Calls and
+    // methods are their own section further down, and the builtins one
+    // after that.
+
     /// give NAME — the named object transfers to whatever receives it;
     /// the name is poisoned to the end of its scope (S10, S13, S29).
-    fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Value {
+    fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Typed {
         if (give.operand.* != .name) {
             try self.fail(
                 "luce.sema.own",
@@ -2848,7 +2933,7 @@ pub const FunctionBuilder = struct {
     }
 
     /// Inline a folded file-scope constant at this use site.
-    fn emitConstant(self: *FunctionBuilder, index: u32) Error!?Value {
+    fn emitConstant(self: *FunctionBuilder, index: u32) Error!?Typed {
         const info = self.analyzer.constant_infos.items[index];
         if (info.state != .ready) return null; // already diagnosed
         return .{
@@ -2889,7 +2974,7 @@ pub const FunctionBuilder = struct {
 
     /// copy EXPR — a deep, independent duplicate; always legal on
     /// readable objects (S31).
-    fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Value {
+    fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Typed {
         const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
         // Copying a question makes no sense: there may be nothing to
         // duplicate.  Test it first.
@@ -2914,7 +2999,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Value {
+    fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         var object_type: Type = undefined;
         var dims: []Register = &.{};
         if (std.mem.eql(u8, new.type_name.name, "Array")) {
@@ -2954,7 +3039,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral) Error!?Value {
+    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral) Error!?Typed {
         if (literal.elements.len == 0) {
             try self.fail(
                 "luce.sema.type",
@@ -2998,7 +3083,7 @@ pub const FunctionBuilder = struct {
         return .{ .register = list, .value_type = object_type };
     }
 
-    fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Value {
+    fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Typed {
         const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
         expressions[0] = index.target;
         @memcpy(expressions[1..], index.indices);
@@ -3015,7 +3100,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Value {
+    fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typed {
         var whole_sequence: std.ArrayList(*ast.Expression) = .empty;
         defer whole_sequence.deinit(self.temporary());
         try whole_sequence.append(self.temporary(), slice.target);
@@ -3067,7 +3152,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Value {
+    fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         if (field.target.* == .name) {
             const base = field.target.name.text;
             // geo.pi — an imported module's file-scope constant.
@@ -3103,7 +3188,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+    fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         switch (binary.op) {
             .logic_and, .logic_or => return self.lowerShortCircuit(binary),
             .coalesce => return self.lowerCoalesce(binary),
@@ -3129,7 +3214,7 @@ pub const FunctionBuilder = struct {
         if (!left.value_type.eql(right.value_type)) {
             const absent = if (left.value_type == .optional) left else right;
             const written = if (left.value_type == .optional) binary.left else binary.right;
-            try self.fail("luce.sema.type", binary.span, "operands are {s} and {s} (conversions are explicit){s}", .{
+            try self.fail("luce.sema.type", binary.span, context.mismatched_operands_message ++ "{s}", .{
                 try self.analyzer.typeName(left.value_type),
                 try self.analyzer.typeName(right.value_type),
                 try self.absenceAdvice(absent.value_type, written),
@@ -3209,7 +3294,7 @@ pub const FunctionBuilder = struct {
     /// `x == none` / `x != none` — the test that narrows.  It is the
     /// one comparison `none` takes part in: absence has no ordering
     /// and nothing else to be equal to.
-    fn lowerAbsenceTest(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+    fn lowerAbsenceTest(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         if (binary.op != .equal and binary.op != .not_equal) {
             try self.fail("luce.sema.absent", binary.span, "none only compares with == and !=", .{});
             return null;
@@ -3257,7 +3342,7 @@ pub const FunctionBuilder = struct {
     /// `a else b` — `a` when it is there, `b` when it is not.  The
     /// fallback runs only on the absent side, which is what makes
     /// `x else trap("…")` the assert-unwrap (docs/FAILURE.md).
-    fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+    fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         const already = self.narrowedName(binary.left);
         const left = (try self.lowerExpression(binary.left, false)) orelse return null;
         const payload = left.value_type.held() orelse {
@@ -3315,7 +3400,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Value {
+    fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         const left = (try self.lowerExpression(binary.left, false)) orelse return null;
         if (left.value_type != .boolean) {
             try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands{s}", .{
@@ -3349,7 +3434,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary) Error!?Value {
+    fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary) Error!?Typed {
         // -9223372036854775808 is one literal, not a negated one: the
         // magnitude alone is past Int's maximum, so the sign has to
         // fold in before the range is checked or the smallest Int is
@@ -3357,7 +3442,7 @@ pub const FunctionBuilder = struct {
         if (unary.op == .negate and unary.operand.* == .int_literal) {
             const literal = unary.operand.int_literal;
             const parsed = helpers.parseIntLiteral(literal.text, true) orelse {
-                try self.fail("luce.sema.literal", unary.span, "{s}", .{declarations.integer_range_message});
+                try self.fail("luce.sema.literal", unary.span, "{s}", .{context.integer_range_message});
                 return null;
             };
             return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
@@ -3398,7 +3483,7 @@ pub const FunctionBuilder = struct {
         call: ast.Call,
         as_statement: bool,
         fallible_allowed: bool,
-    ) Error!?Value {
+    ) Error!?Typed {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
@@ -3438,7 +3523,7 @@ pub const FunctionBuilder = struct {
         span: Span,
         as_statement: bool,
         fallible_allowed: bool,
-    ) Error!?Value {
+    ) Error!?Typed {
         const info = self.analyzer.functions.items[function_index];
         if (info.is_entry) {
             try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
@@ -3534,7 +3619,7 @@ pub const FunctionBuilder = struct {
         method: ast.Method,
         as_statement: bool,
         fallible_allowed: bool,
-    ) Error!?Value {
+    ) Error!?Typed {
         switch (try self.methodNamespace(method)) {
             .resolved => |resolved| {
                 if (self.analyzer.struct_names.get(resolved)) |layout_index| {
@@ -3627,7 +3712,7 @@ pub const FunctionBuilder = struct {
     /// Builtin methods on values: strings, lists, arrays, maps, and
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
-    fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Value {
+    fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Typed {
         const expressions = try self.arena().alloc(*ast.Expression, method.arguments.len + 1);
         expressions[0] = method.target;
         for (method.arguments, 0..) |argument, index| {
@@ -3775,9 +3860,9 @@ pub const FunctionBuilder = struct {
     fn stringsCall(
         self: *FunctionBuilder,
         method: ast.Method,
-        values: []const Value,
+        values: []const Typed,
         as_statement: bool,
-    ) Error!?Value {
+    ) Error!?Typed {
         const local_module = std.mem.eql(u8, self.prefix, "strings");
         if (!local_module and !self.analyzer.importsModule(self.module, "strings")) {
             try self.fail(
@@ -3827,11 +3912,11 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         function_index: u32,
         name: []const u8,
-        values: []const Value,
+        values: []const Typed,
         span: Span,
         as_statement: bool,
         fallible_allowed: bool,
-    ) Error!?Value {
+    ) Error!?Typed {
         const info = self.analyzer.functions.items[function_index];
         // **The whole of why a swallowed failure is unwritable.**  A
         // function that says it can fail cannot be called as if it
@@ -3897,11 +3982,13 @@ pub const FunctionBuilder = struct {
     /// answer to the same method names and differ only in what the
     /// element type makes of the arguments, and the descriptor carries
     /// that.  The receiver's `Type` adds nothing on top of it.
+    // Method tables, by receiver shape ----------------------------------------
+
     fn objectMethod(
         self: *FunctionBuilder,
         method: ast.Method,
         descriptor: types.HeapType,
-        arguments: []const Value,
+        arguments: []const Typed,
     ) Error!?MethodFound {
         const name = method.name;
         switch (descriptor) {
@@ -4006,7 +4093,7 @@ pub const FunctionBuilder = struct {
         method: ast.Method,
         element: Type,
         growable: bool,
-        arguments: []const Value,
+        arguments: []const Typed,
     ) Error!?MethodFound {
         const name = method.name;
         if (growable) {
@@ -4065,18 +4152,20 @@ pub const FunctionBuilder = struct {
         return null;
     }
 
+    // Construction and conversion ---------------------------------------------
+
     fn lowerConstruct(
         self: *FunctionBuilder,
         call_arguments: []const ast.Argument,
         span: Span,
         layout_index: u32,
-    ) Error!?Value {
+    ) Error!?Typed {
         const layout = self.analyzer.structs.items[layout_index];
         if (layout.fields.len == 0) {
             try self.fail(
                 "luce.sema.construct",
                 span,
-                "{s} is a function namespace and has no value fields",
+                context.namespace_has_no_fields_message,
                 .{layout.name},
             );
             return null;
@@ -4102,7 +4191,7 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             if (seen[field_index]) {
-                try self.fail("luce.sema.construct", argument.span, "field {s} given twice", .{name});
+                try self.fail("luce.sema.construct", argument.span, context.duplicate_field_message, .{name});
                 return null;
             }
             seen[field_index] = true;
@@ -4144,7 +4233,7 @@ pub const FunctionBuilder = struct {
         }
         for (seen, 0..) |given, index| {
             if (!given) {
-                try self.fail("luce.sema.construct", span, "{s} is missing field {s}", .{
+                try self.fail("luce.sema.construct", span, context.missing_field_message, .{
                     layout.name,
                     layout.fields[index].name,
                 });
@@ -4158,7 +4247,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Value {
+    fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
         if (call.arguments.len != 1 or call.arguments[0].name != null) {
             try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
             return null;
@@ -4196,7 +4285,7 @@ pub const FunctionBuilder = struct {
     const IntrinsicResult = union(enum) {
         not_builtin,
         failed,
-        value: Value,
+        value: Typed,
     };
 
     /// Lower a builtin call; .not_builtin when the callee is no
@@ -4207,55 +4296,6 @@ pub const FunctionBuilder = struct {
         as_statement: bool,
         fallible_allowed: bool,
     ) Error!IntrinsicResult {
-        const Builtin = struct {
-            name: []const u8,
-            kind: mir.Intrinsic,
-            arity: usize,
-            host: bool = false,
-        };
-        const builtins = [_]Builtin{
-            .{ .name = "abs", .kind = .abs, .arity = 1 },
-            .{ .name = "min", .kind = .min, .arity = 2 },
-            .{ .name = "max", .kind = .max, .arity = 2 },
-            .{ .name = "clamp", .kind = .clamp, .arity = 3 },
-            .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
-            .{ .name = "floor", .kind = .floor, .arity = 1 },
-            .{ .name = "ceil", .kind = .ceil, .arity = 1 },
-            .{ .name = "len", .kind = .len, .arity = 1 },
-            .{ .name = "assert", .kind = .assert_true, .arity = 1 },
-            .{ .name = "trap", .kind = .trap_message, .arity = 1 },
-            .{ .name = "error", .kind = .raise_error, .arity = 1 },
-            .{ .name = "free", .kind = .free_object, .arity = 1 },
-            .{ .name = "str", .kind = .str_value, .arity = 1 },
-            .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
-            .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
-            .{ .name = "chr", .kind = .chr_code, .arity = 1 },
-            .{ .name = "ord", .kind = .ord_text, .arity = 1 },
-            .{ .name = "print", .kind = .print, .arity = 1, .host = true },
-            .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
-            .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
-            .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
-            .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
-            .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
-            .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
-            .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
-            .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
-            .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
-            .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
-            .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
-            .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
-            .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
-            .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
-            .{ .name = "read_line", .kind = .read_line, .arity = 1, .host = true },
-            .{ .name = "print_error", .kind = .print_error, .arity = 1, .host = true },
-            .{ .name = "clock_ms", .kind = .clock_ms, .arity = 0, .host = true },
-            .{ .name = "sleep_ms", .kind = .sleep_ms, .arity = 1, .host = true },
-            .{ .name = "env", .kind = .env_get, .arity = 1, .host = true },
-            .{ .name = "file_append", .kind = .file_append, .arity = 2, .host = true },
-            .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
-            .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
-            .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
-        };
         const matched = for (builtins) |builtin| {
             if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
         } else return .not_builtin;

@@ -11,6 +11,9 @@ pub const Span = struct {
     start: usize,
     end: usize,
 
+    /// The text this span covers, borrowed from `source` — no copy,
+    /// so it is valid exactly as long as `source` is.  The span must be
+    /// one taken over that same text.
     pub fn slice(self: Span, source: []const u8) []const u8 {
         return source[self.start..self.end];
     }

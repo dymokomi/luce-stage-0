@@ -588,7 +588,7 @@ test "trailing blank lines do not count as a mismatch, but content does" {
 /// a corpus with no bad fences in it, which is exactly what the rule
 /// produces, proves a check that has been deleted just as happily as
 /// one that is there.
-fn expectComplaint(
+fn expectRejected(
     fence: markdown.Fence,
     follower: ?markdown.Fence,
     wanted: ?[]const u8,
@@ -629,7 +629,7 @@ test "a luce fence that does not say what becomes of it is a build error" {
 
     // A bare ```luce: the whole rule, and the one a new page is most
     // likely to break.
-    try expectComplaint(
+    try expectRejected(
         .{ .info = "luce", .code = body, .line = 3 },
         output,
         "must say run, trap, raise, fail or module",
@@ -637,7 +637,7 @@ test "a luce fence that does not say what becomes of it is a build error" {
 
     // A word that is not one of the modes, named back so a typo reads
     // as a typo.
-    try expectComplaint(
+    try expectRejected(
         .{ .info = "luce runs", .code = body, .line = 3 },
         output,
         "unknown luce fence mode 'runs'",
@@ -646,7 +646,7 @@ test "a luce fence that does not say what becomes of it is a build error" {
     // An attribute nobody has: a misspelled `file=` would otherwise
     // silently write `main.luc`, and the page would claim the wrong
     // program's output.
-    try expectComplaint(
+    try expectRejected(
         .{ .info = "luce module fil=other.luc", .code = body, .line = 3 },
         null,
         "unknown attribute 'fil=other.luc'",
@@ -654,7 +654,7 @@ test "a luce fence that does not say what becomes of it is a build error" {
 
     // A module with nothing to be called: the program after it would
     // import a file that is not there.
-    try expectComplaint(
+    try expectRejected(
         .{ .info = "luce module", .code = body, .line = 3 },
         null,
         "needs file=NAME.luc",
@@ -662,12 +662,12 @@ test "a luce fence that does not say what becomes of it is a build error" {
 
     // And a program with no claimed output is a program nothing is
     // checked against, which is the same hole from the other side.
-    try expectComplaint(
+    try expectRejected(
         .{ .info = "luce run", .code = body, .line = 3 },
         null,
         "needs a ```output fence after it",
     );
-    try expectComplaint(
+    try expectRejected(
         .{ .info = "luce run", .code = body, .line = 3 },
         .{ .info = "text", .code = "hi\n", .line = 9 },
         "must be ```output",
@@ -676,5 +676,5 @@ test "a luce fence that does not say what becomes of it is a build error" {
     // A fence in another language is not this rule's business and is
     // rendered as it stands — shell snippets, IR dumps, diagnostics
     // quoted from the repository.
-    try expectComplaint(.{ .info = "zig", .code = "const x = 1;\n", .line = 3 }, null, null);
+    try expectRejected(.{ .info = "zig", .code = "const x = 1;\n", .line = 3 }, null, null);
 }

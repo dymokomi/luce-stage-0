@@ -22,7 +22,9 @@ const Kind = lex_mod.Kind;
 const Diagnostics = diagnostics_mod.Diagnostics;
 const Error = grammar.Error;
 
-// Expressions ---------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Precedence, and what an expression may start with
+// ---------------------------------------------------------------------------
 
 pub const Precedence = enum(u8) {
     none = 0,
@@ -99,6 +101,10 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
         else => unreachable,
     };
 }
+
+// ---------------------------------------------------------------------------
+// The Pratt loop: binary, unary, postfix
+// ---------------------------------------------------------------------------
 
 pub fn expression(self: *Parser) Error!?*ast.Expression {
     // Grouping, call arguments, indices and interpolation holes all
@@ -364,6 +370,10 @@ fn indexOrSlice(self: *Parser, target: *ast.Expression) Error!?*ast.Expression {
     } });
 }
 
+// ---------------------------------------------------------------------------
+// Primaries: names, literals, calls, `new`
+// ---------------------------------------------------------------------------
+
 fn primaryExpression(self: *Parser) Error!?*ast.Expression {
     switch (self.peekKind()) {
         .int_literal => {
@@ -590,6 +600,10 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
     } });
 }
 
+// ---------------------------------------------------------------------------
+// Building a node
+// ---------------------------------------------------------------------------
+
 pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
     const node = try self.arena.create(ast.Expression);
     node.* = value;
@@ -604,6 +618,10 @@ pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
 ///
 /// This is the one place stage 3 desugars rather than records; the
 /// structured form belongs in stage 5 (docs/PIPELINE.md).
+// ---------------------------------------------------------------------------
+// F-strings, desugared here into `+` and `str(...)`
+// ---------------------------------------------------------------------------
+
 fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
     const raw = self.text(item);
     // Stage 2 emits a recovery token for an *unterminated* literal too,

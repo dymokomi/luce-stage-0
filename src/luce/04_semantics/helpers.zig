@@ -27,6 +27,8 @@ pub const Chain = struct {
     parts: [3][]const u8,
     count: usize,
 
+    /// The outermost name, borrowed from the AST the chain was walked
+    /// out of and valid as long as that arena is.
     pub fn head(self: *const Chain) []const u8 {
         return self.parts[self.count - 1];
     }

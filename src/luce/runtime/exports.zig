@@ -31,10 +31,29 @@
 //! reports itself as a trapped call, and `luce_rt_status` turns it into
 //! a status of its own so a host can tell "the program failed" from
 //! "the machine ran out".
+//!
+//! ## Who owns what
+//!
+//! Two more conventions, and they are what a caller most needs:
+//!
+//! * **Every `*const Value` argument is a borrow the call does not
+//!   keep**, unless the symbol or its section says the call *consumes*
+//!   it.  Consuming means the storage that value owned now belongs to
+//!   whatever received it, and the caller must not release it again —
+//!   the copy, where one is needed, stands in the IR in front of the
+//!   call as `own_storage` (docs/STRINGS.md), never inside it.
+//! * **Every `out: *Value` is written only on success**, and what it
+//!   receives is owned by the statement that asked for it until
+//!   something stores it.  A call that answers 1 leaves `out` untouched,
+//!   because a trapped call has no result to give.
+//!
+//! Nothing here hands back memory a caller has to free by itself: the
+//! run owns every object and every byte of storage, and `luce_rt_close`
+//! ends all of it at once.
 
 const builtin = @import("builtin");
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
@@ -152,7 +171,7 @@ export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Sta
 /// this library, so the host hears about both the same way.
 ///
 /// `message` must outlive the run: either static text in the artifact
-/// or a Luce String, both of which do.  `code` is `mir.TrapCode` from
+/// or a Luce String, both of which do.  `code` is `vocabulary.TrapCode` from
 /// the build that generated the code, which is this one — an artifact
 /// carrying anything else is corrupt, and the conversion says so
 /// loudly rather than inventing a trap.
@@ -162,7 +181,7 @@ export fn luce_rt_raise(
     message: [*]const u8,
     length: i64,
 ) callconv(.c) void {
-    const raised: mir.TrapCode = @enumFromInt(code);
+    const raised: vocabulary.TrapCode = @enumFromInt(code);
     runtime.failMessage(raised, message[0..@intCast(length)]) catch {};
 }
 
@@ -216,7 +235,7 @@ export fn luce_rt_raise_error(
     function: u32,
     instruction: u32,
 ) callconv(.c) void {
-    const raised: mir.ErrorCode = @enumFromInt(code);
+    const raised: vocabulary.ErrorCode = @enumFromInt(code);
     runtime.raise(raised, message[0..@intCast(length)], runtime.frameAt(function, instruction));
 }
 
@@ -324,7 +343,7 @@ export fn luce_rt_names_list(
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.namesList(runtime, bytes[0..@intCast(length)]) catch |mistake|
+    out.* = containers.listOfJoinedText(runtime, bytes[0..@intCast(length)]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -375,7 +394,7 @@ export fn luce_rt_drop_storage(
     held: *const Value,
     out: *Value,
 ) callconv(.c) void {
-    runtime.releaseStorage(held.*);
+    runtime.dropStorage(held.*);
     out.* = heap.Runtime.emptied(held.*);
 }
 
@@ -398,6 +417,55 @@ fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
 // ---------------------------------------------------------------------------
 // Objects and ownership
 // ---------------------------------------------------------------------------
+//
+// The `new_*` four **create**: each writes a fresh object into `out`,
+// owned by nothing yet, and answers 1 only when there was no memory.
+// `luce_rt_new_array` reads `rank` dimensions from `dims` and copies
+// `zero` into every cell; both arguments are borrowed for the call.
+//
+// The other six are scope ownership itself (docs/OWNERSHIP.md), and
+// three of their arguments are one idea:
+//
+//   * `serial` — the frame, as `luce_rt_serial` handed it out.  One per
+//     call, so two live frames of the same function never collide.
+//   * `local` — which binding in that frame, as stage 6 numbered it.
+//   * `owned` — whether the caller is claiming to *be* that binding.
+//     Nonzero means "I am the owner named by (serial, local), check
+//     me"; zero means the verb was written on something with no name to
+//     check — a temporary, a field, an element.
+//
+// So `(owned, serial, local)` is one optional answer to "who says so",
+// and a mismatch is not a technicality: `free x` where `x` is not the
+// owner is the `not_owned` trap (S6, S23), which is what stops a borrow
+// from ending an object the lender still holds.
+//
+// All six walk a value's *top* objects — the object a handle names, or
+// a struct's object fields recursively — and never descend into an
+// object's elements, which already belong to it.
+//
+//   `bind`               the objects in `held` now belong to
+//                        (serial, local).  Nothing is freed.
+//   `unbind`             free the objects in `held` still bound to
+//                        (serial, local); scope exit is a run of these.
+//                        Anything owned elsewhere by now is left alone,
+//                        which is what makes a release safe on every
+//                        path, including a path that already gave.
+//   `loosen_from_frame`  drop frame `serial`'s claim without freeing —
+//                        what `return` does to what it hands back, so
+//                        the value leaves loose and the caller owns it
+//                        (S16).
+//   `free`               end the object now.
+//   `give`               check that giving is legal and answer the
+//                        object to hold from here.  It is the same
+//                        object: what stops the old name being used
+//                        again is the compiler (S10), and what this
+//                        checks is that the giver had it to give.
+//   `copy`               answer a fresh deep copy the caller owns,
+//                        leaving the original alone.
+//
+// `free`, `give` and `copy` are the three a program writes, so all
+// three trap rather than proceed on a freed object, an unfilled slot
+// (S42), or an owner that is not the one named.
 
 export fn luce_rt_new_list(runtime: *Runtime, out: *Value) callconv(.c) i32 {
     out.* = runtime.newList() catch |mistake| return failed(runtime, mistake);
@@ -526,6 +594,19 @@ export fn luce_rt_struct_set(
 // ---------------------------------------------------------------------------
 // Containers
 // ---------------------------------------------------------------------------
+//
+// List, Map, Array and Builder, reached through the `target` they act
+// on.  `target` is always a borrow, and a wrong shape, a bad index, a
+// missing key or a freed object is a trap rather than a return value —
+// which is why most of these answer nothing but "did the program
+// survive".
+//
+// **What is consumed is called out per symbol**, because it is not
+// uniform: a container that takes ownership of what it is handed says
+// so, and one that copies instead (a Builder's bytes, a Map's key) says
+// that.  Everything unmarked borrows.  What comes back through `out` is
+// owned by the statement that asked for it, including the fresh Lists
+// `list_slice`, `map_keys` and `map_values` build.
 
 export fn luce_rt_len(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
     out.* = containers.length(runtime, target.*) catch |mistake|
@@ -749,6 +830,17 @@ export fn luce_rt_array_fill(
 // ---------------------------------------------------------------------------
 // Strings and conversions
 // ---------------------------------------------------------------------------
+//
+// The String primitives and the pure conversions.  Every argument is
+// borrowed and nothing here mutates: a Luce String is a value, so each
+// of these answers a *new* one through `out`, owned by the statement
+// that asked for it (docs/STRINGS.md).
+//
+// They fail the way the language says they fail.  A slice that is out
+// of bounds or splits a UTF-8 sequence traps, and so does `chr` of a
+// number that is not a codepoint.  `parse_int` and `parse_float` do
+// not: they answer `Value.none` for text that is not a number, because
+// parsing is a question and "no" is an answer.
 
 export fn luce_rt_concat(
     runtime: *Runtime,
@@ -828,7 +920,7 @@ export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callco
 /// Comparison for the types generated code cannot compare inline —
 /// String, structs.  The one export that answers its result
 /// directly rather than through an out-pointer, because comparison is
-/// the one operation here that cannot fail.  `op` is `mir.BinaryOp`.
+/// the one operation here that cannot fail.  `op` is `vocabulary.BinaryOp`.
 export fn luce_rt_compare(
     op: i32,
     left: *const Value,

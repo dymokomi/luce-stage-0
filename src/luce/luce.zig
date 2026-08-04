@@ -35,6 +35,7 @@ pub const interpreter = @import("interpreter.zig");
 // Cross-cutting support: not a stage, used by all of them.
 pub const diagnostics = @import("support/diagnostics.zig");
 pub const types = @import("support/types.zig");
+pub const vocabulary = @import("support/vocabulary.zig");
 
 // The executable specification is **not** here.  It runs every
 // program on both engines, so it needs the emitter, and the emitter
@@ -56,4 +57,5 @@ test {
     _ = interpreter;
     _ = diagnostics;
     _ = types;
+    _ = vocabulary;
 }

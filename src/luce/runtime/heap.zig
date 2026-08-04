@@ -15,7 +15,7 @@
 //! It is what a compiled artifact holds a pointer to for its whole run.
 
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const vocabulary = @import("../support/vocabulary.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
 
@@ -23,17 +23,21 @@ const Allocator = std.mem.Allocator;
 const Handle = value.Handle;
 const Value = value.Value;
 
+// ---------------------------------------------------------------------------
+// How a run stops: a trap, or an error a program can catch
+// ---------------------------------------------------------------------------
+
 /// What every fallible runtime operation can do.  `Trap` is a Luce
 /// program error and its details are in `Runtime.pending`;
 /// `OutOfMemory` is the arena giving up, which no Luce program can
 /// cause deliberately and no Luce program can catch.
 pub const Error = error{ OutOfMemory, Trap };
 
-/// A Luce trap: a stable code (`mir.TrapCode`) and the words reported
+/// A Luce trap: a stable code (`vocabulary.TrapCode`) and the words reported
 /// with it.  The message is either static — `code.message()` — or
 /// arena-owned, so it outlives the operation that raised it.
 pub const Trap = struct {
-    code: mir.TrapCode,
+    code: vocabulary.TrapCode,
     message: []const u8,
 };
 
@@ -51,7 +55,7 @@ pub const Trap = struct {
 /// skips, exactly as a trap's words do; `origin` borrows names from
 /// the program or the artifact's constant data.
 pub const Raised = struct {
-    code: mir.ErrorCode,
+    code: vocabulary.ErrorCode,
     message: []const u8,
     origin: trace.Frame,
 };
@@ -62,6 +66,10 @@ pub const MapEntry = struct { key: Value, value: Value };
 /// two different lifetimes, so it takes two allocators, and mixing them
 /// up is what made freed objects unreclaimable for as long as there was
 /// only one.
+// ---------------------------------------------------------------------------
+// Where a run's memory comes from
+// ---------------------------------------------------------------------------
+
 pub const Memory = struct {
     /// Run-lifetime storage, and nothing a program can grow without
     /// bound: the words of a trap, the interpreter's per-layout struct
@@ -89,6 +97,10 @@ pub const Memory = struct {
 /// statement temporary; `container` — an element some container
 /// adopted and frees with itself; `binding` — a named local of one
 /// specific call frame, released when that scope exits.
+// ---------------------------------------------------------------------------
+// Objects, and who owns one
+// ---------------------------------------------------------------------------
+
 pub const OwnedBy = struct { serial: u64, local: u32 };
 
 pub const Owner = union(enum) {
@@ -346,6 +358,10 @@ pub const Object = struct {
 /// equally, or a lookup walks past its own entry.  They are written
 /// against the same two payloads (Int and String — the only key types
 /// the analyzer admits) for that reason.
+// ---------------------------------------------------------------------------
+// The map behind a Map
+// ---------------------------------------------------------------------------
+
 pub const Map = struct {
     entries: std.ArrayList(MapEntry) = .empty,
     /// Entry positions, `free_slot` where nothing lives.  Always a
@@ -642,13 +658,13 @@ pub const Runtime = struct {
     pub fn deinit(self: *Runtime) void {
         for (self.table.items) |*object| {
             switch (object.data) {
-                .list => |list| for (list.items) |item| self.releaseStorage(item),
+                .list => |list| for (list.items) |item| self.dropStorage(item),
                 .map => |map| for (map.entries.items) |entry| {
-                    self.releaseStorage(entry.key);
-                    self.releaseStorage(entry.value);
+                    self.dropStorage(entry.key);
+                    self.dropStorage(entry.value);
                 },
                 .array => if (object.array.kind == .value) {
-                    for (object.array.cells(Value)) |item| self.releaseStorage(item);
+                    for (object.array.cells(Value)) |item| self.dropStorage(item);
                 },
                 .builder => {},
             }
@@ -680,7 +696,7 @@ pub const Runtime = struct {
     // -- the trap channel ------------------------------------------------
 
     /// Record `code` with its standard message and unwind.
-    pub fn fail(self: *Runtime, code: mir.TrapCode) Error {
+    pub fn fail(self: *Runtime, code: vocabulary.TrapCode) Error {
         return self.failMessage(code, code.message());
     }
 
@@ -692,7 +708,7 @@ pub const Runtime = struct {
     /// directly, a compiled artifact through `luce_rt_report` — because
     /// a trap's call trace does not exist until unwinding is over
     /// (trace.zig).
-    pub fn failMessage(self: *Runtime, code: mir.TrapCode, message: []const u8) Error {
+    pub fn failMessage(self: *Runtime, code: vocabulary.TrapCode, message: []const u8) Error {
         self.pending = .{ .code = code, .message = message };
         return error.Trap;
     }
@@ -714,7 +730,7 @@ pub const Runtime = struct {
     /// to the code's own words rather than losing the error.
     pub fn raise(
         self: *Runtime,
-        code: mir.ErrorCode,
+        code: vocabulary.ErrorCode,
         message: []const u8,
         origin: trace.Frame,
     ) void {
@@ -730,7 +746,7 @@ pub const Runtime = struct {
     /// than losing the error.
     pub fn raiseIo(
         self: *Runtime,
-        act: mir.FileAct,
+        act: vocabulary.FileAct,
         path: []const u8,
         origin: trace.Frame,
     ) void {
@@ -738,7 +754,7 @@ pub const Runtime = struct {
         const words = std.fmt.allocPrint(self.arena, "{s}{s}", .{ act.verb(), path }) catch {
             self.raised = .{
                 .code = .io_failed,
-                .message = mir.ErrorCode.io_failed.message(),
+                .message = vocabulary.ErrorCode.io_failed.message(),
                 .origin = origin,
             };
             return;
@@ -923,7 +939,7 @@ pub const Runtime = struct {
     // that one copy, reached from `own_storage` and from the runtime's
     // own duplications (`deepCopy`, a map's key, an array's fill).
     //
-    // `releaseStorage` is the matching death point, and it frees
+    // `dropStorage` is the matching death point, and it frees
     // nothing else — objects belong to the ownership walks above.
 
     /// A copy of `held` whose storage nothing else owns.  Scalars and
@@ -953,7 +969,7 @@ pub const Runtime = struct {
                 const run = try self.objects.alloc(Value, source.len);
                 var filled: usize = 0;
                 errdefer {
-                    for (run[0..filled]) |field| self.releaseStorage(field);
+                    for (run[0..filled]) |field| self.dropStorage(field);
                     self.objects.free(run);
                 }
                 for (source, run) |field, *slot| {
@@ -973,7 +989,7 @@ pub const Runtime = struct {
     /// Safe on anything that owns nothing, which is what makes a
     /// released slot safe to release again: every release writes the
     /// emptied value back, and an empty value frees nothing.
-    pub fn releaseStorage(self: *Runtime, held: Value) void {
+    pub fn dropStorage(self: *Runtime, held: Value) void {
         switch (held.tag) {
             .string => {
                 // Inline text is the value, and a value is not an
@@ -985,7 +1001,7 @@ pub const Runtime = struct {
             .strukt => {
                 if (held.bits == 0 or held.length == 0) return;
                 const fields = held.asStruct();
-                for (fields) |field| self.releaseStorage(field);
+                for (fields) |field| self.dropStorage(field);
                 self.objects.free(fields);
             },
             else => {},
@@ -1050,7 +1066,7 @@ pub const Runtime = struct {
     pub fn makeStruct(self: *Runtime, fields: []const Value) Error!Value {
         if (fields.len == 0) return Value.ofStruct(&.{});
         const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
-            for (fields) |field| self.releaseStorage(field);
+            for (fields) |field| self.dropStorage(field);
             return mistake;
         };
         @memcpy(stored, fields);
@@ -1065,7 +1081,7 @@ pub const Runtime = struct {
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
         const source = held.asStruct();
         const stored = self.objects.alloc(Value, source.len) catch |mistake| {
-            self.releaseStorage(to);
+            self.dropStorage(to);
             return mistake;
         };
         // The unwind releases the copies it made and `to` once each:
@@ -1074,9 +1090,9 @@ pub const Runtime = struct {
         var filled: usize = 0;
         errdefer {
             for (stored[0..filled], 0..) |field, at| {
-                if (at != index) self.releaseStorage(field);
+                if (at != index) self.dropStorage(field);
             }
-            self.releaseStorage(to);
+            self.dropStorage(to);
             self.objects.free(stored);
         }
         for (source, stored, 0..) |field, *slot, at| {
@@ -1220,7 +1236,7 @@ pub const Runtime = struct {
                 // A map owns its keys' storage as well as its values';
                 // keys are Int or String, so there is never an object
                 // in one.
-                self.releaseStorage(entry.key);
+                self.dropStorage(entry.key);
                 self.freeValue(entry.value);
             },
             // Only a `Value` element can hold an object; a `f64`
@@ -1245,7 +1261,7 @@ pub const Runtime = struct {
     /// and the storage it holds is given back.
     pub fn freeValue(self: *Runtime, held: Value) void {
         self.freeObjectsIn(held);
-        self.releaseStorage(held);
+        self.dropStorage(held);
     }
 
     /// The object half of `freeValue`, on its own: everything a struct
@@ -1371,7 +1387,7 @@ pub const Runtime = struct {
                 const copied = try self.objects.alloc(Value, fields.len);
                 var filled: usize = 0;
                 errdefer {
-                    for (copied[0..filled]) |field| self.releaseStorage(field);
+                    for (copied[0..filled]) |field| self.dropStorage(field);
                     self.objects.free(copied);
                 }
                 for (fields, copied) |field, *slot| {

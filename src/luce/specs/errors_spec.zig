@@ -40,11 +40,11 @@ fn printAll(diagnostics: *const Diagnostics) void {
 /// Compile `source` with no host and assert it fails with a
 /// diagnostic carrying `code` somewhere in the list.  The everyday
 /// rejection assertion.
-fn expectError(source: []const u8, code: []const u8) !void {
-    try expectErrorOptions(source, script, code);
+fn expectRejected(source: []const u8, code: []const u8) !void {
+    try expectRejectedOptions(source, script, code);
 }
 
-fn expectErrorOptions(
+fn expectRejectedOptions(
     source: []const u8,
     options: types.CompileOptions,
     code: []const u8,
@@ -114,7 +114,7 @@ fn expectSayingOptions(
 
 /// Assert the FIRST diagnostic is exactly `code` at `line`:`column`.
 /// Used where the span itself is the guarantee under test.
-fn expectErrorAt(source: []const u8, code: []const u8, line: usize, column: usize) !void {
+fn expectRejectedAt(source: []const u8, code: []const u8, line: usize, column: usize) !void {
     var result = try compile_mod.compile(testing.allocator, source, script);
     defer result.deinit();
     switch (result) {
@@ -139,17 +139,17 @@ fn expectErrorAt(source: []const u8, code: []const u8, line: usize, column: usiz
 // than a line, because the file never became source.
 
 test "luce.source.utf8: a file that is not valid UTF-8 is refused" {
-    try expectError("func main():\n    let a = \"\xff\xfe\"\n", "luce.source.utf8");
+    try expectRejected("func main():\n    let a = \"\xff\xfe\"\n", "luce.source.utf8");
     // Anywhere, not only in a string.
-    try expectError("func m\xffain():\n    return\n", "luce.source.utf8");
+    try expectRejected("func m\xffain():\n    return\n", "luce.source.utf8");
 }
 
 test "luce.source.binary: a NUL byte means this is not a text file" {
-    try expectError("func main():\n    let a = 1\x00\n", "luce.source.binary");
+    try expectRejected("func main():\n    let a = 1\x00\n", "luce.source.binary");
 }
 
 test "luce.source.line_ending: a stray carriage return is refused" {
-    try expectError("func main():\r    return\n", "luce.source.line_ending");
+    try expectRejected("func main():\r    return\n", "luce.source.line_ending");
 }
 
 test "CRLF line endings compile, and keep every line and column" {
@@ -184,23 +184,23 @@ test "a byte-order mark is not a syntax error" {
 // ---------------------------------------------------------------------------
 
 test "luce.lex.tab: tabs are rejected as indentation" {
-    try expectError("func main():\n\tlet a = 1\n", "luce.lex.tab");
+    try expectRejected("func main():\n\tlet a = 1\n", "luce.lex.tab");
 }
 
 test "luce.lex.number: a digit run glued to letters is one bad literal" {
-    try expectError("func main():\n    let a = 12ab\n", "luce.lex.number");
+    try expectRejected("func main():\n    let a = 12ab\n", "luce.lex.number");
 }
 
 test "luce.lex.string: an unterminated string is caught" {
-    try expectError("func main():\n    let a = \"open\n", "luce.lex.string");
+    try expectRejected("func main():\n    let a = \"open\n", "luce.lex.string");
 }
 
 test "luce.lex.escape: an unknown escape is rejected" {
-    try expectError("func main():\n    let a = \"\\q\"\n", "luce.lex.escape");
+    try expectRejected("func main():\n    let a = \"\\q\"\n", "luce.lex.escape");
 }
 
 test "luce.lex.character: a stray control byte is rejected" {
-    try expectError("func main():\n    let a = 1\x01\n", "luce.lex.character");
+    try expectRejected("func main():\n    let a = 1\x01\n", "luce.lex.character");
 }
 
 // ---------------------------------------------------------------------------
@@ -208,25 +208,25 @@ test "luce.lex.character: a stray control byte is rejected" {
 // ---------------------------------------------------------------------------
 
 test "luce.lex.string: an unterminated f-string is caught" {
-    try expectError("func main():\n    let a = f\"open {x}\n", "luce.lex.string");
+    try expectRejected("func main():\n    let a = f\"open {x}\n", "luce.lex.string");
 }
 
 test "luce.parse.fstring: a malformed or unmatched hole is rejected" {
     // A hole that does not lex.
-    try expectError("func main():\n    let a = f\"{@}\"\n", "luce.parse.fstring");
+    try expectRejected("func main():\n    let a = f\"{@}\"\n", "luce.parse.fstring");
     // Two expressions where one is expected.
-    try expectError("func main():\n    let a = f\"{1 2}\"\n", "luce.parse.fstring");
+    try expectRejected("func main():\n    let a = f\"{1 2}\"\n", "luce.parse.fstring");
     // A bare close brace without doubling.
-    try expectError("func main():\n    let a = f\"lone }\"\n", "luce.parse.fstring");
+    try expectRejected("func main():\n    let a = f\"lone }\"\n", "luce.parse.fstring");
 }
 
 test "luce.parse.expression: a broken f-string hole reports the sub-parse error" {
-    try expectError("func main():\n    let a = f\"{1 +}\"\n", "luce.parse.expression");
+    try expectRejected("func main():\n    let a = f\"{1 +}\"\n", "luce.parse.expression");
 }
 
 test "luce.sema.type: an f-string hole must be str-able" {
     // A List has no str(); interpolation rejects it.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1, 2]
         \\    let a = f"{xs}"
@@ -235,16 +235,16 @@ test "luce.sema.type: an f-string hole must be str-able" {
 }
 
 test "luce.parse.top: only func/struct/let/import at file scope" {
-    try expectError("fn main():\n    return\n", "luce.parse.top");
-    try expectError("var counter = 0\n", "luce.parse.top");
+    try expectRejected("fn main():\n    return\n", "luce.parse.top");
+    try expectRejected("var counter = 0\n", "luce.parse.top");
 }
 
 test "luce.parse.expression: a missing expression is reported" {
-    try expectError("func main():\n    let a = @\n", "luce.parse.expression");
+    try expectRejected("func main():\n    let a = @\n", "luce.parse.expression");
 }
 
 test "luce.parse.expected: a malformed binding name is reported at the name" {
-    try expectErrorAt("let 3 = 4\n", "luce.parse.expected", 1, 5);
+    try expectRejectedAt("let 3 = 4\n", "luce.parse.expected", 1, 5);
 }
 
 test "luce.parse.precedence: 'not' in front of a comparison must be parenthesized" {
@@ -252,7 +252,7 @@ test "luce.parse.precedence: 'not' in front of a comparison must be parenthesize
     // both readings are legal Bool expressions, so the parser refuses
     // to pick (docs/LANGUAGE.md).  Either pair of parentheses settles
     // it, and each spelling then means what it says.
-    try expectErrorAt(
+    try expectRejectedAt(
         "func main():\n    let a = true\n    let b = false\n    let c = not a == b\n",
         "luce.parse.precedence",
         4,
@@ -265,12 +265,12 @@ test "luce.parse.precedence: 'not' in front of a comparison must be parenthesize
             .{operator},
         );
         defer testing.allocator.free(source);
-        try expectError(source, "luce.parse.precedence");
+        try expectRejected(source, "luce.parse.precedence");
     }
 }
 
 test "luce.parse.chain: comparison operators do not chain" {
-    try expectErrorAt(
+    try expectRejectedAt(
         "func main():\n    let a = 1\n    let c = 0 < a < 10\n",
         "luce.parse.chain",
         3,
@@ -278,7 +278,7 @@ test "luce.parse.chain: comparison operators do not chain" {
     );
     // The whole precedence level is non-associative, not just a
     // repeated operator.
-    try expectError("func main():\n    let c = 1 < 2 == 3\n", "luce.parse.chain");
+    try expectRejected("func main():\n    let c = 1 < 2 == 3\n", "luce.parse.chain");
     // Parentheses start a new chain, so comparing two Bools is legal
     // and reaches the type checker unharmed.
     var result = try compile_mod.compile(
@@ -298,7 +298,7 @@ test "luce.parse.nesting: pathological nesting is rejected, not overflowed" {
     try deep.appendSlice(allocator, "func main():\n    let x = ");
     for (0..2000) |_| try deep.append(allocator, '(');
     try deep.append(allocator, '1');
-    try expectError(deep.items, "luce.parse.nesting");
+    try expectRejected(deep.items, "luce.parse.nesting");
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +306,8 @@ test "luce.parse.nesting: pathological nesting is rejected, not overflowed" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.main: a script needs exactly func main()" {
-    try expectError("func other():\n    return\n", "luce.sema.main");
-    try expectError("func main(x: Int):\n    return\n", "luce.sema.main");
+    try expectRejected("func other():\n    return\n", "luce.sema.main");
+    try expectRejected("func main(x: Int):\n    return\n", "luce.sema.main");
 }
 
 // ---------------------------------------------------------------------------
@@ -316,15 +316,15 @@ test "luce.sema.main: a script needs exactly func main()" {
 
 test "luce.sema.type: compound assignment is numbers, or += on String" {
     // Objects have no compound assignment.
-    try expectError("func main():\n    var xs = [1, 2]\n    xs *= 3\n", "luce.sema.type");
+    try expectRejected("func main():\n    var xs = [1, 2]\n    xs *= 3\n", "luce.sema.type");
     // Non-+ operators do not apply to String.
-    try expectError("func main():\n    var s = \"a\"\n    s -= \"b\"\n", "luce.sema.type");
+    try expectRejected("func main():\n    var s = \"a\"\n    s -= \"b\"\n", "luce.sema.type");
     // The two sides must share a type.
-    try expectError("func main():\n    var n = 1\n    n += 2.0\n", "luce.sema.type");
+    try expectRejected("func main():\n    var n = 1\n    n += 2.0\n", "luce.sema.type");
 }
 
 test "luce.sema.let: a let binding cannot be compound-assigned either" {
-    try expectError("func main():\n    let n = 1\n    n += 1\n", "luce.sema.let");
+    try expectRejected("func main():\n    let n = 1\n    n += 1\n", "luce.sema.let");
 }
 
 // ---------------------------------------------------------------------------
@@ -332,19 +332,19 @@ test "luce.sema.let: a let binding cannot be compound-assigned either" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.name: an unknown name is rejected" {
-    try expectError("func main():\n    let a = ghost\n", "luce.sema.name");
+    try expectRejected("func main():\n    let a = ghost\n", "luce.sema.name");
 }
 
 test "luce.sema.duplicate: a name cannot be declared twice" {
-    try expectError("func main():\n    let a = 1\n    let a = 2\n", "luce.sema.duplicate");
+    try expectRejected("func main():\n    let a = 1\n    let a = 2\n", "luce.sema.duplicate");
 }
 
 test "luce.sema.reserved: builtins cannot be shadowed" {
-    try expectError("func main():\n    let len = 1\n", "luce.sema.reserved");
+    try expectRejected("func main():\n    let len = 1\n", "luce.sema.reserved");
 }
 
 test "luce.sema.let: a let binding cannot be reassigned" {
-    try expectError("func main():\n    let a = 1\n    a = 2\n", "luce.sema.let");
+    try expectRejected("func main():\n    let a = 1\n    a = 2\n", "luce.sema.let");
 }
 
 // ---------------------------------------------------------------------------
@@ -352,20 +352,20 @@ test "luce.sema.let: a let binding cannot be reassigned" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.type: no implicit numeric conversion" {
-    try expectError("func main():\n    let a = 1 + 2.0\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = 1 + 2.0\n", "luce.sema.type");
 }
 
 test "luce.sema.type: a condition must be Bool" {
-    try expectError("func main():\n    if 1:\n        return\n", "luce.sema.type");
+    try expectRejected("func main():\n    if 1:\n        return\n", "luce.sema.type");
 }
 
 test "luce.sema.type: an annotation must match the initializer" {
-    try expectError("func main():\n    let a: Int = \"x\"\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a: Int = \"x\"\n", "luce.sema.type");
 }
 
 test "luce.sema.convert: Int and Float convert only their opposite" {
-    try expectError("func main():\n    let a = Int(\"x\")\n", "luce.sema.convert");
-    try expectError("func main():\n    let a = Float(true)\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = Int(\"x\")\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = Float(true)\n", "luce.sema.convert");
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +373,7 @@ test "luce.sema.convert: Int and Float convert only their opposite" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.field: an unknown struct field is rejected" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\
@@ -385,7 +385,7 @@ test "luce.sema.field: an unknown struct field is rejected" {
 }
 
 test "luce.sema.call: arity and unknown callees are checked" {
-    try expectError(
+    try expectRejected(
         \\func add(a: Int, b: Int) -> Int:
         \\    return a + b
         \\
@@ -393,21 +393,21 @@ test "luce.sema.call: arity and unknown callees are checked" {
         \\    let x = add(1)
         \\
     , "luce.sema.call");
-    try expectError("func main():\n    let x = nope(1)\n", "luce.sema.call");
+    try expectRejected("func main():\n    let x = nope(1)\n", "luce.sema.call");
 }
 
 test "luce.sema.method: a method must exist on its receiver type" {
-    try expectError("func main():\n    let a = 5.append(1)\n", "luce.sema.method");
+    try expectRejected("func main():\n    let a = 5.append(1)\n", "luce.sema.method");
 }
 
 test "luce.sema.method: map get takes (key, default) of the right types" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    let x = m.get("k")
         \\
     , "luce.sema.method");
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    let x = m.get("k", "wrong")
@@ -417,7 +417,7 @@ test "luce.sema.method: map get takes (key, default) of the right types" {
 
 test "luce.sema.loop: two-name for needs a Map or a sequence" {
     // A Builder is not iterable at all.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var b = new Builder()
         \\    for a, c in b:
@@ -427,7 +427,7 @@ test "luce.sema.loop: two-name for needs a Map or a sequence" {
 }
 
 test "luce.sema.duplicate: the two for-loop names must differ" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var m = new Map(Int, Int)
         \\    m[1] = 1
@@ -438,7 +438,7 @@ test "luce.sema.duplicate: the two for-loop names must differ" {
 }
 
 test "luce.sema.index: only heap containers index, with the right key" {
-    try expectError("func main():\n    let a = 1[0]\n", "luce.sema.index");
+    try expectRejected("func main():\n    let a = 1[0]\n", "luce.sema.index");
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +446,7 @@ test "luce.sema.index: only heap containers index, with the right key" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.construct: a struct needs all fields, named, once" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\    y: Int
@@ -458,15 +458,15 @@ test "luce.sema.construct: a struct needs all fields, named, once" {
 }
 
 test "luce.sema.new: new builds only the heap types" {
-    try expectError("func main():\n    let a = new Array(Int)\n", "luce.sema.new");
+    try expectRejected("func main():\n    let a = new Array(Int)\n", "luce.sema.new");
 }
 
 test "luce.sema.loop: break and continue need a loop" {
-    try expectError("func main():\n    break\n", "luce.sema.loop");
+    try expectRejected("func main():\n    break\n", "luce.sema.loop");
 }
 
 test "luce.sema.return: return paths and value shape are checked" {
-    try expectError(
+    try expectRejected(
         \\func f() -> Int:
         \\    let x = 1
         \\
@@ -481,7 +481,7 @@ test "luce.sema.return: return paths and value shape are checked" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.struct: a struct cannot be empty or self-containing" {
-    try expectError(
+    try expectRejected(
         \\struct Loop:
         \\    inner: Loop
         \\
@@ -492,11 +492,11 @@ test "luce.sema.struct: a struct cannot be empty or self-containing" {
 }
 
 test "luce.sema.const: a top-level let is a constant, not a computation" {
-    try expectError("let bad = new List(Int)\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("let bad = new List(Int)\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.host: host builtins are gated off by default" {
-    try expectError("func main():\n    print(\"hi\")\n", "luce.sema.host");
+    try expectRejected("func main():\n    print(\"hi\")\n", "luce.sema.host");
 }
 
 // ===========================================================================
@@ -510,7 +510,7 @@ test "luce.sema.host: host builtins are gated off by default" {
 /// For a program that reaches the host: every file builtin does, and
 /// so does the standard `files` module.
 fn expectHostError(source: []const u8, code: []const u8) !void {
-    try expectErrorOptions(source, hosted, code);
+    try expectRejectedOptions(source, hosted, code);
 }
 
 // ---------------------------------------------------------------------------
@@ -518,15 +518,15 @@ fn expectHostError(source: []const u8, code: []const u8) !void {
 // ---------------------------------------------------------------------------
 
 test "luce.lex.tab: a tab in indentation is pinned to its column" {
-    try expectErrorAt("func main():\n\tlet a = 1\n", "luce.lex.tab", 2, 1);
+    try expectRejectedAt("func main():\n\tlet a = 1\n", "luce.lex.tab", 2, 1);
 }
 
 test "luce.lex.tab: a tab mid-line is also rejected" {
-    try expectErrorAt("func main():\n    let a =\t1\n", "luce.lex.tab", 2, 12);
+    try expectRejectedAt("func main():\n    let a =\t1\n", "luce.lex.tab", 2, 12);
 }
 
 test "luce.lex.indent: a dedent to no open column is rejected" {
-    try expectErrorAt(
+    try expectRejectedAt(
         "func main():\n    if 1 < 2:\n        let a = 1\n     let b = 2\n",
         "luce.lex.indent",
         4,
@@ -535,15 +535,15 @@ test "luce.lex.indent: a dedent to no open column is rejected" {
 }
 
 test "luce.lex.number: a malformed literal is pinned to its start" {
-    try expectErrorAt("func main():\n    let a = 12ab\n", "luce.lex.number", 2, 13);
+    try expectRejectedAt("func main():\n    let a = 12ab\n", "luce.lex.number", 2, 13);
 }
 
 test "luce.lex.string: an unterminated string is pinned to its opening quote" {
-    try expectErrorAt("func main():\n    let a = \"open\n", "luce.lex.string", 2, 13);
+    try expectRejectedAt("func main():\n    let a = \"open\n", "luce.lex.string", 2, 13);
 }
 
 test "luce.lex.escape: an unknown escape is pinned to the backslash" {
-    try expectErrorAt("func main():\n    let a = \"\\q\"\n", "luce.lex.escape", 2, 14);
+    try expectRejectedAt("func main():\n    let a = \"\\q\"\n", "luce.lex.escape", 2, 14);
 }
 
 test "luce.parse.expression: '!' is not an operator, in either position" {
@@ -551,19 +551,19 @@ test "luce.parse.expression: '!' is not an operator, in either position" {
     // `(not a) == 1` and refused at the parser rather than left to
     // become a type error (docs/LANGUAGE.md); parenthesized, the same
     // spelling reaches the type checker it always did.
-    try expectError("func main():\n    let a = 1\n    if not a == 1:\n        return\n", "luce.parse.precedence");
-    try expectError("func main():\n    let a = 1\n    if (not a) == 1:\n        return\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = 1\n    if not a == 1:\n        return\n", "luce.parse.precedence");
+    try expectRejected("func main():\n    let a = 1\n    if (not a) == 1:\n        return\n", "luce.sema.type");
     // `!` lexes now — it is the fallibility mark on a return type —
     // so the hint toward `not` moved to the parser with it.
-    try expectError("func main():\n    let a = 3 ! 4\n", "luce.parse.expression");
+    try expectRejected("func main():\n    let a = 3 ! 4\n", "luce.parse.expression");
 }
 
 test "luce.lex.character: an unexpected symbol is rejected" {
-    try expectError("func main():\n    let a = 1 $ 2\n", "luce.lex.character");
+    try expectRejected("func main():\n    let a = 1 $ 2\n", "luce.lex.character");
 }
 
 test "luce.lex.character: a stray control byte is pinned" {
-    try expectErrorAt("func main():\n    let a = 1\x01\n", "luce.lex.character", 2, 14);
+    try expectRejectedAt("func main():\n    let a = 1\x01\n", "luce.lex.character", 2, 14);
 }
 
 // ---------------------------------------------------------------------------
@@ -571,40 +571,40 @@ test "luce.lex.character: a stray control byte is pinned" {
 // ---------------------------------------------------------------------------
 
 test "luce.parse.top: a bare expression at file scope is rejected" {
-    try expectError("1 + 1\n", "luce.parse.top");
+    try expectRejected("1 + 1\n", "luce.parse.top");
 }
 
 test "luce.parse.top: a top-level var is rejected with guidance" {
-    try expectErrorAt("var counter = 0\n", "luce.parse.top", 1, 1);
+    try expectRejectedAt("var counter = 0\n", "luce.parse.top", 1, 1);
 }
 
 test "luce.parse.expected: a function needs a name" {
-    try expectError("func ():\n    return\n", "luce.parse.expected");
+    try expectRejected("func ():\n    return\n", "luce.parse.expected");
 }
 
 test "luce.parse.expected: a struct field needs a type after its colon" {
-    try expectError("struct P:\n    x:\n\nfunc main():\n    return\n", "luce.parse.expected");
+    try expectRejected("struct P:\n    x:\n\nfunc main():\n    return\n", "luce.parse.expected");
 }
 
 test "luce.parse.type: array shape wildcards must come last" {
-    try expectError(
+    try expectRejected(
         "func f(a: Array(Int, _, Int)):\n    return\n\nfunc main():\n    return\n",
         "luce.parse.type",
     );
 }
 
 test "luce.parse.assign: cannot assign to a literal" {
-    try expectError("func main():\n    1 = 2\n", "luce.parse.assign");
+    try expectRejected("func main():\n    1 = 2\n", "luce.parse.assign");
 }
 
 test "luce.parse.assign: cannot assign through a call result" {
     // Nested field/index places are allowed now; a call in the place
     // chain is not a place.
-    try expectError("func main():\n    f().x = 1\n", "luce.parse.assign");
+    try expectRejected("func main():\n    f().x = 1\n", "luce.parse.assign");
 }
 
 test "luce.sema.field: a nested place checks each field on the way down" {
-    try expectError(
+    try expectRejected(
         \\struct Inner:
         \\    n: Int
         \\
@@ -621,7 +621,7 @@ test "luce.sema.field: a nested place checks each field on the way down" {
 test "luce.sema.own: a nested place cannot assign an object slot" {
     // The single-level form (bag.items = [1, 2]) is the way to
     // restock an object field; a chain leaf must be a value.
-    try expectError(
+    try expectRejected(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -636,7 +636,7 @@ test "luce.sema.own: a nested place cannot assign an object slot" {
 }
 
 test "luce.sema.own: cannot index into object-carrying elements in a chain" {
-    try expectError(
+    try expectRejected(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -650,7 +650,7 @@ test "luce.sema.own: cannot index into object-carrying elements in a chain" {
 }
 
 test "luce.parse.new: new builds only the four heap types" {
-    try expectError("func main():\n    let a = new Point()\n", "luce.parse.new");
+    try expectRejected("func main():\n    let a = new Point()\n", "luce.parse.new");
 }
 
 // ---------------------------------------------------------------------------
@@ -658,15 +658,15 @@ test "luce.parse.new: new builds only the four heap types" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.name: input is not a name in a script" {
-    try expectError("func main():\n    let a = input\n", "luce.sema.name");
+    try expectRejected("func main():\n    let a = input\n", "luce.sema.name");
 }
 
 test "luce.sema.name: give needs a name that exists" {
-    try expectError("func main():\n    let a = give ghost\n", "luce.sema.name");
+    try expectRejected("func main():\n    let a = give ghost\n", "luce.sema.name");
 }
 
 test "luce.sema.duplicate: a struct cannot be declared twice" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\
@@ -680,7 +680,7 @@ test "luce.sema.duplicate: a struct cannot be declared twice" {
 }
 
 test "luce.sema.duplicate: a struct cannot repeat a field" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\    x: Int
@@ -692,7 +692,7 @@ test "luce.sema.duplicate: a struct cannot repeat a field" {
 }
 
 test "luce.sema.duplicate: a function cannot be declared twice" {
-    try expectError(
+    try expectRejected(
         \\func f():
         \\    return
         \\
@@ -706,11 +706,11 @@ test "luce.sema.duplicate: a function cannot be declared twice" {
 }
 
 test "luce.sema.reserved: a function cannot take a builtin's name" {
-    try expectError("func print():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("func print():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 test "luce.sema.reserved: a struct cannot take a type keyword's name" {
-    try expectError("struct Int:\n    x: Int\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct Int:\n    x: Int\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
 // ---------------------------------------------------------------------------
@@ -718,7 +718,7 @@ test "luce.sema.reserved: a struct cannot take a type keyword's name" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.type: a wrong argument type is rejected" {
-    try expectError(
+    try expectRejected(
         \\func f(a: Int):
         \\    return
         \\
@@ -729,7 +729,7 @@ test "luce.sema.type: a wrong argument type is rejected" {
 }
 
 test "luce.sema.type: a returned value must match the declared return type" {
-    try expectError(
+    try expectRejected(
         \\func f() -> Int:
         \\    return "x"
         \\
@@ -740,11 +740,11 @@ test "luce.sema.type: a returned value must match the declared return type" {
 }
 
 test "luce.sema.type: a list literal is homogeneous" {
-    try expectError("func main():\n    let xs = [1, \"x\"]\n", "luce.sema.type");
+    try expectRejected("func main():\n    let xs = [1, \"x\"]\n", "luce.sema.type");
 }
 
 test "luce.sema.type: a struct field takes its declared type" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\
@@ -755,27 +755,27 @@ test "luce.sema.type: a struct field takes its declared type" {
 }
 
 test "luce.sema.type: not needs a Bool" {
-    try expectError("func main():\n    let a = not 1\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = not 1\n", "luce.sema.type");
 }
 
 test "luce.sema.type: negation needs a number" {
-    try expectError("func main():\n    let a = -\"x\"\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = -\"x\"\n", "luce.sema.type");
 }
 
 test "luce.sema.type: Bool has no ordering" {
-    try expectError("func main():\n    let a = true < false\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = true < false\n", "luce.sema.type");
 }
 
 test "luce.sema.type: and needs Bool operands" {
-    try expectError("func main():\n    let a = 1 and 2\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = 1 and 2\n", "luce.sema.type");
 }
 
 test "luce.sema.type: String has no arithmetic operator" {
-    try expectError("func main():\n    let a = \"x\" - \"y\"\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a = \"x\" - \"y\"\n", "luce.sema.type");
 }
 
 test "luce.sema.type: range bounds must be Int" {
-    try expectError("func main():\n    for i in range(1.0, 2.0):\n        return\n", "luce.sema.type");
+    try expectRejected("func main():\n    for i in range(1.0, 2.0):\n        return\n", "luce.sema.type");
 }
 
 // ---------------------------------------------------------------------------
@@ -783,7 +783,7 @@ test "luce.sema.type: range bounds must be Int" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.convert: a conversion takes exactly one argument" {
-    try expectError("func main():\n    let a = Int(1, 2)\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = Int(1, 2)\n", "luce.sema.convert");
 }
 
 // ---------------------------------------------------------------------------
@@ -791,11 +791,11 @@ test "luce.sema.convert: a conversion takes exactly one argument" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.field: a non-struct value has no fields" {
-    try expectError("func main():\n    let a = 1\n    let b = a.x\n", "luce.sema.field");
+    try expectRejected("func main():\n    let a = 1\n    let b = a.x\n", "luce.sema.field");
 }
 
 test "luce.sema.field: assigning through a non-struct is rejected" {
-    try expectError("func main():\n    var a = 1\n    a.x = 2\n", "luce.sema.field");
+    try expectRejected("func main():\n    var a = 1\n    a.x = 2\n", "luce.sema.field");
 }
 
 // ---------------------------------------------------------------------------
@@ -803,11 +803,11 @@ test "luce.sema.field: assigning through a non-struct is rejected" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.call: the entry function cannot be called" {
-    try expectError("func main():\n    main()\n", "luce.sema.call");
+    try expectRejected("func main():\n    main()\n", "luce.sema.call");
 }
 
 test "luce.sema.call: function arguments are positional, not named" {
-    try expectError(
+    try expectRejected(
         \\func f(a: Int):
         \\    return
         \\
@@ -818,7 +818,7 @@ test "luce.sema.call: function arguments are positional, not named" {
 }
 
 test "luce.sema.call: a None function's result is not a value" {
-    try expectError(
+    try expectRejected(
         \\func f():
         \\    return
         \\
@@ -829,11 +829,11 @@ test "luce.sema.call: a None function's result is not a value" {
 }
 
 test "luce.sema.call: a builtin checks its arity" {
-    try expectError("func main():\n    let a = len(1, 2)\n", "luce.sema.call");
+    try expectRejected("func main():\n    let a = len(1, 2)\n", "luce.sema.call");
 }
 
 test "luce.sema.call: a builtin's arguments are positional" {
-    try expectError("func main():\n    let a = len(x = 1)\n", "luce.sema.call");
+    try expectRejected("func main():\n    let a = len(x = 1)\n", "luce.sema.call");
 }
 
 // ---------------------------------------------------------------------------
@@ -841,23 +841,23 @@ test "luce.sema.call: a builtin's arguments are positional" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.method: an unknown method on a List is rejected" {
-    try expectError("func main():\n    var xs = [1]\n    xs.frobnicate()\n", "luce.sema.method");
+    try expectRejected("func main():\n    var xs = [1]\n    xs.frobnicate()\n", "luce.sema.method");
 }
 
 test "luce.sema.method: a method checks its arity" {
-    try expectError("func main():\n    var xs = [1]\n    xs.append(1, 2)\n", "luce.sema.method");
+    try expectRejected("func main():\n    var xs = [1]\n    xs.append(1, 2)\n", "luce.sema.method");
 }
 
 test "luce.sema.method: method arguments are positional" {
-    try expectError("func main():\n    var xs = [1]\n    xs.append(v = 1)\n", "luce.sema.method");
+    try expectRejected("func main():\n    var xs = [1]\n    xs.append(v = 1)\n", "luce.sema.method");
 }
 
 test "luce.sema.method: no method takes more than two arguments" {
-    try expectError("func main():\n    var xs = [1]\n    xs.append(1, 2, 3)\n", "luce.sema.method");
+    try expectRejected("func main():\n    var xs = [1]\n    xs.append(1, 2, 3)\n", "luce.sema.method");
 }
 
 test "luce.sema.method: strings has no such function" {
-    try expectError(
+    try expectRejected(
         \\import std.strings
         \\
         \\func main():
@@ -868,11 +868,11 @@ test "luce.sema.method: strings has no such function" {
 }
 
 test "luce.sema.import: String methods need import strings" {
-    try expectError("func main():\n    let s = \"x\"\n    let n = s.find(\"y\")\n", "luce.sema.import");
+    try expectRejected("func main():\n    let s = \"x\"\n    let n = s.find(\"y\")\n", "luce.sema.import");
 }
 
 test "luce.sema.import: join on List(String) needs import strings" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    let parts = ["a", "b"]
         \\    let s = parts.join(",")
@@ -881,7 +881,7 @@ test "luce.sema.import: join on List(String) needs import strings" {
 }
 
 test "luce.sema.call: a routed strings call checks its arity" {
-    try expectError(
+    try expectRejected(
         \\import std.strings
         \\
         \\func main():
@@ -891,7 +891,7 @@ test "luce.sema.call: a routed strings call checks its arity" {
 }
 
 test "luce.sema.type: a routed strings call checks argument types" {
-    try expectError(
+    try expectRejected(
         \\import std.strings
         \\
         \\func main():
@@ -901,7 +901,7 @@ test "luce.sema.type: a routed strings call checks argument types" {
 }
 
 test "luce.sema.method: Map has no such method" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    m.frobnicate()
@@ -914,19 +914,19 @@ test "luce.sema.method: Map has no such method" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.index: only a String is sliced, so a number is refused" {
-    try expectError("func main():\n    let text = 1[0:1]\n", "luce.sema.index");
+    try expectRejected("func main():\n    let text = 1[0:1]\n", "luce.sema.index");
 }
 
 test "luce.sema.index: a String is sliced, not indexed" {
-    try expectError("func main():\n    let s = \"abc\"\n    let c = s[0]\n", "luce.sema.index");
+    try expectRejected("func main():\n    let s = \"abc\"\n    let c = s[0]\n", "luce.sema.index");
 }
 
 test "luce.sema.index: a List indexes with an Int, not a Bool" {
-    try expectError("func main():\n    var xs = [1]\n    let a = xs[true]\n", "luce.sema.index");
+    try expectRejected("func main():\n    var xs = [1]\n    let a = xs[true]\n", "luce.sema.index");
 }
 
 test "luce.sema.index: an Array wants one index per dimension" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var grid = new Array(Int, 2, 2)
         \\    let a = grid[0]
@@ -935,7 +935,7 @@ test "luce.sema.index: an Array wants one index per dimension" {
 }
 
 test "luce.sema.index: a Map cannot be sliced" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var m = new Map(Int, Int)
         \\    let a = m[0:1]
@@ -948,7 +948,7 @@ test "luce.sema.index: a Map cannot be sliced" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.construct: an unknown field is rejected" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\
@@ -959,7 +959,7 @@ test "luce.sema.construct: an unknown field is rejected" {
 }
 
 test "luce.sema.construct: a field cannot be given twice" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\
@@ -970,7 +970,7 @@ test "luce.sema.construct: a field cannot be given twice" {
 }
 
 test "luce.sema.construct: fields are named, not positional" {
-    try expectError(
+    try expectRejected(
         \\struct P:
         \\    x: Int
         \\
@@ -981,7 +981,7 @@ test "luce.sema.construct: fields are named, not positional" {
 }
 
 test "luce.sema.construct: a function-namespace struct has no value fields" {
-    try expectError(
+    try expectRejected(
         \\struct Util:
         \\    func helper() -> Int:
         \\        return 1
@@ -997,11 +997,11 @@ test "luce.sema.construct: a function-namespace struct has no value fields" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.new: new Array takes one to four dimension sizes" {
-    try expectError("func main():\n    var a = new Array(Int, 1, 2, 3, 4, 5)\n", "luce.sema.new");
+    try expectRejected("func main():\n    var a = new Array(Int, 1, 2, 3, 4, 5)\n", "luce.sema.new");
 }
 
 test "luce.sema.new: array dimensions are Int" {
-    try expectError("func main():\n    var a = new Array(Int, true)\n", "luce.sema.new");
+    try expectRejected("func main():\n    var a = new Array(Int, true)\n", "luce.sema.new");
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,11 +1009,11 @@ test "luce.sema.new: array dimensions are Int" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.loop: continue needs a loop" {
-    try expectError("func main():\n    continue\n", "luce.sema.loop");
+    try expectRejected("func main():\n    continue\n", "luce.sema.loop");
 }
 
 test "luce.sema.loop: a non-iterable cannot drive for-each" {
-    try expectError("func main():\n    for x in 5:\n        return\n", "luce.sema.loop");
+    try expectRejected("func main():\n    for x in 5:\n        return\n", "luce.sema.loop");
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,7 +1021,7 @@ test "luce.sema.loop: a non-iterable cannot drive for-each" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.return: a typed function must return a value" {
-    try expectError(
+    try expectRejected(
         \\func f() -> Int:
         \\    return
         \\
@@ -1032,7 +1032,7 @@ test "luce.sema.return: a typed function must return a value" {
 }
 
 test "luce.sema.return: a None function returns no value" {
-    try expectError(
+    try expectRejected(
         \\func f():
         \\    return 1
         \\
@@ -1047,7 +1047,7 @@ test "luce.sema.return: a None function returns no value" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.struct: mutually recursive structs have no finite value" {
-    try expectError(
+    try expectRejected(
         \\struct A:
         \\    b: B
         \\
@@ -1065,7 +1065,7 @@ test "luce.sema.struct: mutually recursive structs have no finite value" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.const: a call is not a constant" {
-    try expectError(
+    try expectRejected(
         \\func f() -> Int:
         \\    return 1
         \\
@@ -1078,15 +1078,15 @@ test "luce.sema.const: a call is not a constant" {
 }
 
 test "luce.sema.const: an unknown name is not a constant" {
-    try expectError("let bad = ghost\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("let bad = ghost\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.const: a constant cannot depend on itself" {
-    try expectError("let bad = bad\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("let bad = bad\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.const: a list literal is an object, not a constant" {
-    try expectError("let bad = [1, 2]\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("let bad = [1, 2]\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,27 +1094,27 @@ test "luce.sema.const: a list literal is an object, not a constant" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.literal: an over-large integer literal is rejected" {
-    try expectError("func main():\n    let a = 99999999999999999999\n", "luce.sema.literal");
+    try expectRejected("func main():\n    let a = 99999999999999999999\n", "luce.sema.literal");
 }
 
 test "luce.sema.literal: a negated literal past Int's minimum is rejected too" {
-    try expectError("func main():\n    let a = -9223372036854775809\n", "luce.sema.literal");
-    try expectError("func main():\n    let a = 9223372036854775808\n", "luce.sema.literal");
+    try expectRejected("func main():\n    let a = -9223372036854775809\n", "luce.sema.literal");
+    try expectRejected("func main():\n    let a = 9223372036854775808\n", "luce.sema.literal");
 }
 
 test "luce.sema.literal: a float literal that is not finite is rejected" {
     // parseFloat is happy to hand back infinity; a program that says
     // 1e400 did not ask for infinity, it made a mistake.
-    try expectError("func main():\n    let a = 1e400\n", "luce.sema.literal");
-    try expectError("func main():\n    let a = -1e400\n", "luce.sema.literal");
+    try expectRejected("func main():\n    let a = 1e400\n", "luce.sema.literal");
+    try expectRejected("func main():\n    let a = -1e400\n", "luce.sema.literal");
 }
 
 test "luce.sema.const: a non-finite float constant is rejected as well" {
-    try expectError("let a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+    try expectRejected("let a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
 test "luce.sema.const: ord of an empty String has no codepoint to fold" {
-    try expectError("let a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+    try expectRejected("let a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
 // ---------------------------------------------------------------------------
@@ -1143,13 +1143,13 @@ fn longChain(allocator: std.mem.Allocator, prefix: []const u8, term: []const u8,
 test "luce.sema.nesting: a flat operator chain is bounded, not overflowed" {
     const source = try longChain(testing.allocator, "func main():\n    let a = ", "1", 5000, "\n");
     defer testing.allocator.free(source);
-    try expectError(source, "luce.sema.nesting");
+    try expectRejected(source, "luce.sema.nesting");
 }
 
 test "luce.sema.nesting: a flat chain in a constant is bounded too" {
     const source = try longChain(testing.allocator, "let a = ", "1", 5000, "\n\nfunc main():\n    let b = a\n");
     defer testing.allocator.free(source);
-    try expectError(source, "luce.sema.nesting");
+    try expectRejected(source, "luce.sema.nesting");
 }
 
 test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
@@ -1160,7 +1160,7 @@ test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
     try text.appendSlice(testing.allocator, "func main():\n    let x = 1\n    let s = f\"");
     for (0..4000) |_| try text.appendSlice(testing.allocator, "{x}");
     try text.appendSlice(testing.allocator, "\"\n");
-    try expectError(text.items, "luce.sema.nesting");
+    try expectRejected(text.items, "luce.sema.nesting");
 }
 
 test "an ordinary deep expression still compiles" {
@@ -1182,7 +1182,7 @@ test "an ordinary deep expression still compiles" {
 // which name.  Every message here names both.
 
 test "luce.sema.absent: a T? in an operator says how to make it a T" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    let n = parse_int("1")
         \\    let doubled = n * 2
@@ -1206,21 +1206,21 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
         \\
     , "test it first (if flag != none:)");
     // As a method receiver.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var xs: List(Int)? = none
         \\    xs.append(1)
         \\
     , "luce.sema.absent");
     // As something to index.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var xs: List(Int)? = none
         \\    let first = xs[0]
         \\
     , "luce.sema.index");
     // As something to iterate.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var xs: List(Int)? = none
         \\    for x in xs:
@@ -1228,7 +1228,7 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
         \\
     , "luce.sema.loop");
     // As something to hand over, or to free.
-    try expectError(
+    try expectRejected(
         \\func consume(xs: give List(Int)):
         \\    free(xs)
         \\
@@ -1237,7 +1237,7 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
         \\    consume(give xs)
         \\
     , "luce.sema.absent");
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var xs: List(Int)? = none
         \\    free(xs)
@@ -1258,7 +1258,7 @@ test "luce.sema.absent: a field is not a local, so it is told to bind a name" {
 }
 
 test "luce.sema.absent: none needs somewhere to be none of" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    let x = none
         \\
@@ -1269,31 +1269,31 @@ test "luce.sema.absent: none needs somewhere to be none of" {
         \\
     , "none needs a type here");
     // A place that is always there cannot be none.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var n: Int = none
         \\
     , "luce.sema.absent");
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    let n = 1
         \\    assert(n == none)
         \\
     , "luce.sema.absent");
     // Absence has no ordering, and nothing to be equal to but a T?.
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    let n = parse_int("1")
         \\    assert(n < none)
         \\
     , "luce.sema.absent");
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    assert(none == none)
         \\
     , "luce.sema.absent");
     // A constant is a value that is there.
-    try expectError(
+    try expectRejected(
         \\let missing = none
         \\
         \\func main():
@@ -1351,7 +1351,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\
     , "operands are Int? and Int");
     // A call cannot narrow: only the name itself.
-    try expectError(
+    try expectRejected(
         \\func check(n: Int?) -> Bool:
         \\    return n != none
         \\
@@ -1364,7 +1364,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
 }
 
 test "luce.parse.type: T?? is refused where it is written" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var n: Int?? = none
         \\
@@ -1377,12 +1377,12 @@ test "luce.sema.type: a container element may not be optional" {
         \\    var xs = new List(Int?)
         \\
     , "a list element cannot be optional");
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var m = new Map(String, Int?)
         \\
     , "luce.sema.type");
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    var grid = new Array(Int?, 2)
         \\
@@ -1390,7 +1390,7 @@ test "luce.sema.type: a container element may not be optional" {
 }
 
 test "none is a keyword, so nothing can be named it" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    let none = 1
         \\
@@ -1577,7 +1577,7 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: S20\n");
-    try expectError(text.items, "luce.sema.struct");
+    try expectRejected(text.items, "luce.sema.struct");
 }
 
 test "a wide struct graph with no cycle compiles, and quickly" {
@@ -1599,7 +1599,7 @@ test "a wide struct graph with no cycle compiles, and quickly" {
 }
 
 test "luce.sema.struct: a cycle through a wide graph is still found" {
-    try expectError(
+    try expectRejected(
         \\struct A:
         \\    left: B
         \\    right: B
@@ -1623,15 +1623,15 @@ test "luce.sema.struct: a cycle through a wide graph is still found" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.host: file_read is gated" {
-    try expectError("func main():\n    let a = file_read(\"x\")\n", "luce.sema.host");
+    try expectRejected("func main():\n    let a = file_read(\"x\")\n", "luce.sema.host");
 }
 
 test "luce.sema.host: key_read is gated" {
-    try expectError("func main():\n    let a = key_read()\n", "luce.sema.host");
+    try expectRejected("func main():\n    let a = key_read()\n", "luce.sema.host");
 }
 
 test "luce.sema.host: term_write is gated" {
-    try expectError("func main():\n    term_write(\"x\")\n", "luce.sema.host");
+    try expectRejected("func main():\n    term_write(\"x\")\n", "luce.sema.host");
 }
 
 // ---------------------------------------------------------------------------
@@ -1639,7 +1639,7 @@ test "luce.sema.host: term_write is gated" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.import: an unknown module in a type is rejected" {
-    try expectError(
+    try expectRejected(
         "func f(a: geo.Point):\n    return\n\nfunc main():\n    return\n",
         "luce.sema.import",
     );
@@ -1658,7 +1658,7 @@ test "luce.sema.import: an unknown module in a type is rejected" {
 // ---------------------------------------------------------------------------
 
 test "luce.import.missing: a nonexistent module cannot be loaded" {
-    try expectError("import ghost\n\nfunc main():\n    return\n", "luce.import.missing");
+    try expectRejected("import ghost\n\nfunc main():\n    return\n", "luce.import.missing");
 }
 
 // ---------------------------------------------------------------------------
@@ -1666,11 +1666,11 @@ test "luce.import.missing: a nonexistent module cannot be loaded" {
 // ---------------------------------------------------------------------------
 
 test "luce.import.standard: the library has no such module" {
-    try expectError("import std.ghost\n\nfunc main():\n    return\n", "luce.import.standard");
+    try expectRejected("import std.ghost\n\nfunc main():\n    return\n", "luce.import.standard");
 }
 
 test "luce.import.reserved: std is a namespace, not a module" {
-    try expectError("import std\n\nfunc main():\n    return\n", "luce.import.reserved");
+    try expectRejected("import std\n\nfunc main():\n    return\n", "luce.import.reserved");
 }
 
 // NOTE: luce.import.collision — `import std.math` and `import math`
@@ -1728,7 +1728,7 @@ test "luce.sema.fallible: try and catch need a call that can fail" {
 }
 
 test "luce.sema.fallible: error() needs a caller that said it can fail" {
-    try expectError(
+    try expectRejected(
         \\func main():
         \\    error("no")
         \\
@@ -1772,12 +1772,12 @@ test "luce.parse.expected: catch guards a plain assignment, not a compound one" 
 }
 
 test "luce.sema.main: a script entry may say ! and nothing else" {
-    try expectError(
+    try expectRejected(
         \\func main() -> Int!:
         \\    return 1
         \\
     , "luce.sema.main");
-    try expectError(
+    try expectRejected(
         \\func main() -> Int:
         \\    return 1
         \\

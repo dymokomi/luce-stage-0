@@ -55,6 +55,9 @@
 //!
 //! Flat pieces beside this file:
 //!
+//!   context.zig      — the vocabulary both passes speak: collected
+//!                      declarations, folded constants, and the scope,
+//!                      local and loop state a body is checked against.
 //!   declarations.zig — pass one: collect struct layouts, function
 //!                      signatures, top-level constants, and the
 //!                      selected entry; then drive pass two.
@@ -63,18 +66,15 @@
 //!                      tape as it goes.
 //!   helpers.zig      — the small shared predicates both passes use.
 
-pub const Error = @import("04_semantics/declarations.zig").Error;
-pub const Analyzed = @import("04_semantics/declarations.zig").Analyzed;
-pub const ModuleTree = @import("04_semantics/declarations.zig").ModuleTree;
+pub const Error = @import("04_semantics/context.zig").Error;
+pub const Analyzed = @import("04_semantics/context.zig").Analyzed;
+pub const ModuleTree = @import("04_semantics/context.zig").ModuleTree;
 pub const analyze = @import("04_semantics/declarations.zig").analyze;
 pub const max_diagnostics = @import("04_semantics/declarations.zig").max_diagnostics;
 
-pub const declarations = @import("04_semantics/declarations.zig");
-pub const builder = @import("04_semantics/builder.zig");
-pub const helpers = @import("04_semantics/helpers.zig");
-
 test {
-    _ = declarations;
-    _ = builder;
-    _ = helpers;
+    _ = @import("04_semantics/context.zig");
+    _ = @import("04_semantics/declarations.zig");
+    _ = @import("04_semantics/builder.zig");
+    _ = @import("04_semantics/helpers.zig");
 }

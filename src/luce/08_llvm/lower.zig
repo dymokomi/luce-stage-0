@@ -93,6 +93,7 @@ const loops = @import("loops.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 const abi = @import("abi.zig");
+const artifact = @import("artifact.zig");
 const effects = @import("runtime_effects.zig");
 
 const Service = effects.Service;
@@ -114,7 +115,7 @@ const BlockIndex = @typeInfo(
 pub const Options = struct {
     /// The LLVM target triple the generated module carries, e.g.
     /// "arm64-apple-macosx".  A codegen input and nothing else — what
-    /// the artifact's *tag* claims is `abi.machine`, which a loader can
+    /// the artifact's *tag* claims is `artifact.machine`, which a loader can
     /// read without LLVM.  `emit.hostTriple` supplies the host one.
     triple: []const u8,
     /// The target whose pointer size and data layout the builder
@@ -122,7 +123,7 @@ pub const Options = struct {
     target: *const std.Target = &builtin.target,
     /// Module name, for readability in dumps.
     name: []const u8 = "luce",
-    /// The cache key stamped into the artifact's tag: `abi.sourceHash`
+    /// The cache key stamped into the artifact's tag: `artifact.sourceHash`
     /// of the serialized module this program came from.  Zero when the
     /// caller is not building something a loader will cache — an
     /// artifact tagged zero simply never matches a wanted hash.
@@ -241,7 +242,7 @@ const Module = struct {
     gpa: Allocator,
     program: *const mir.Program,
     builder: *Builder,
-    /// What the artifact will say about itself (`abi.Artifact`).
+    /// What the artifact will say about itself (`artifact.Artifact`).
     options: Options,
 
     /// Set alongside `error.Unsupported`; static storage.
@@ -759,7 +760,7 @@ const Module = struct {
     /// Stamp the artifact with what it is: the magic, the tag's own
     /// layout version, the host ABI it was generated against, the
     /// machine it was generated for, the program it came from, whether
-    /// it kept its origins, and what generated it (`abi.Artifact`).
+    /// it kept its origins, and what generated it (`artifact.Artifact`).
     ///
     /// Exported, because the whole point is that a loader can read it
     /// *before* deciding to call anything.  A `.lc` from another
@@ -767,7 +768,7 @@ const Module = struct {
     /// and crashes on the first call, which is the failure mode this
     /// exists to replace with a sentence.
     ///
-    /// `abi.generator` is stamped and never passed in: it is what
+    /// `artifact.generator` is stamped and never passed in: it is what
     /// wrote these instructions, so it is this file's answer to give
     /// and no caller's to choose.
     fn describeArtifact(self: *Module) Error!void {
@@ -779,18 +780,18 @@ const Module = struct {
             if (function.origins.len != 0) break true;
         } else false;
         const initializer = try self.builder.structConst(tag_type, &.{
-            try self.builder.intConst(.i64, @as(i64, @bitCast(abi.artifact_magic))),
-            try self.builder.intConst(.i32, abi.artifact_format),
+            try self.builder.intConst(.i64, @as(i64, @bitCast(artifact.magic))),
+            try self.builder.intConst(.i32, artifact.format),
             try self.builder.intConst(.i32, abi.version),
-            try self.textBytes(abi.machine),
-            try self.builder.intConst(.i64, abi.machine.len),
+            try self.textBytes(artifact.machine),
+            try self.builder.intConst(.i64, artifact.machine.len),
             try self.builder.intConst(.i64, @as(i64, @bitCast(self.options.source_hash))),
             try self.builder.intConst(.i32, @intFromBool(debug_build)),
             try self.builder.intConst(.i32, 0),
-            try self.builder.intConst(.i64, @as(i64, @bitCast(abi.generator))),
+            try self.builder.intConst(.i64, @as(i64, @bitCast(artifact.generator))),
         });
         const variable = try self.builder.addVariable(
-            try self.builder.strtabString(abi.artifact_symbol),
+            try self.builder.strtabString(artifact.symbol),
             tag_type,
             .default,
         );
@@ -4582,6 +4583,8 @@ const Body = struct {
     /// `new List(T)` / `new Map(K, V)` / `new Array(T, ...)` / `new
     /// Builder`.  The shape is a compile-time fact, so the kind picks
     /// the entry point and only an array's sizes travel at runtime.
+    // -- objects, ownership, and the words a trap carries -----------------
+
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
             .list => try self.callAnswering(register, .luce_rt_new_list, &.{self.runtime}),

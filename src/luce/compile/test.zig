@@ -27,11 +27,11 @@ fn expectCompilesOptions(source: []const u8, options: types.CompileOptions) !mir
     }
 }
 
-fn expectFails(source: []const u8, expected_code: []const u8) !void {
-    return expectFailsOptions(source, .{}, expected_code);
+fn expectRejected(source: []const u8, expected_code: []const u8) !void {
+    return expectRejectedOptions(source, .{}, expected_code);
 }
 
-fn expectFailsOptions(
+fn expectRejectedOptions(
     source: []const u8,
     options: types.CompileOptions,
     expected_code: []const u8,
@@ -90,7 +90,7 @@ fn expectDiagnostics(source: []const u8, options: types.CompileOptions, wanted: 
 }
 
 test "func is strict and fn is an ordinary identifier" {
-    try expectFails(
+    try expectRejected(
         \\fn main():
         \\    return
         \\
@@ -168,7 +168,7 @@ test "the previously-unasserted diagnostic codes fire" {
         .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
     };
     for (cases) |case| {
-        try expectFailsOptions(case.source, .{}, case.code);
+        try expectRejectedOptions(case.source, .{}, case.code);
     }
 }
 
@@ -227,17 +227,17 @@ test "decode survives every allocation failure" {
 }
 
 test "the entry is exactly func main(), and nothing else will do" {
-    try expectFails(
+    try expectRejected(
         \\func helper() -> Int:
         \\    return 1
         \\
     , "luce.sema.main");
-    try expectFails(
+    try expectRejected(
         \\func main(value: Int):
         \\    return
         \\
     , "luce.sema.main");
-    try expectFails(
+    try expectRejected(
         \\func main() -> Int:
         \\    return 1
         \\
@@ -280,7 +280,7 @@ test "struct namespaces collect functions and reject invalid members" {
     defer program.deinit();
     try testing.expectEqualStrings("Math.double", program.functions[1].name);
 
-    try expectFails(
+    try expectRejected(
         \\struct Bad:
         \\    value: Int
         \\    func value() -> Int:
@@ -290,7 +290,7 @@ test "struct namespaces collect functions and reject invalid members" {
         \\    return
         \\
     , "luce.sema.duplicate");
-    try expectFails(
+    try expectRejected(
         \\struct Helpers:
         \\    func one() -> Int:
         \\        return 1
@@ -299,7 +299,7 @@ test "struct namespaces collect functions and reject invalid members" {
         \\    let bad = Helpers.missing()
         \\
     , "luce.sema.call");
-    try expectFails(
+    try expectRejected(
         \\struct Helpers:
         \\    func one() -> Int:
         \\        return 1
@@ -510,25 +510,25 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
 }
 
 test "no implicit conversion, no reassigned let, no shadowing" {
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let mixed = 1 + 2.0
         \\
     , "luce.sema.type");
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let once = 1
         \\    once = 2
         \\
     , "luce.sema.let");
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let name = 1
         \\    if true:
         \\        let name = 2
         \\
     , "luce.sema.duplicate");
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let value: Float = 3
         \\
@@ -536,7 +536,7 @@ test "no implicit conversion, no reassigned let, no shadowing" {
 }
 
 test "return paths are checked on every branch" {
-    try expectFails(
+    try expectRejected(
         \\func partial(flag: Bool) -> Int:
         \\    if flag:
         \\        return 1
@@ -554,22 +554,22 @@ test "struct construction is complete, named, and typed" {
         \\    green: Float
         \\
     ;
-    try expectFails(source_prefix ++
+    try expectRejected(source_prefix ++
         \\func main():
         \\    let missing = Color(red = 1.0)
         \\
     , "luce.sema.construct");
-    try expectFails(source_prefix ++
+    try expectRejected(source_prefix ++
         \\func main():
         \\    let doubled = Color(red = 1.0, red = 2.0, green = 3.0)
         \\
     , "luce.sema.construct");
-    try expectFails(source_prefix ++
+    try expectRejected(source_prefix ++
         \\func main():
         \\    let wrong = Color(red = 1, green = 2.0)
         \\
     , "luce.sema.type");
-    try expectFails(
+    try expectRejected(
         \\struct Loop:
         \\    inner: Loop
         \\
@@ -580,7 +580,7 @@ test "struct construction is complete, named, and typed" {
 }
 
 test "calls check arity, types, and none results" {
-    try expectFails(
+    try expectRejected(
         \\func helper(value: Int) -> Int:
         \\    return value
         \\
@@ -588,7 +588,7 @@ test "calls check arity, types, and none results" {
         \\    let wrong = helper(1, 2)
         \\
     , "luce.sema.call");
-    try expectFails(
+    try expectRejected(
         \\func nothing():
         \\    return
         \\
@@ -596,12 +596,12 @@ test "calls check arity, types, and none results" {
         \\    let value = nothing()
         \\
     , "luce.sema.call");
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let bad = sqrt(4)
         \\
     , "luce.sema.type");
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let bad = unknown_helper(1)
         \\
@@ -609,7 +609,7 @@ test "calls check arity, types, and none results" {
 }
 
 test "break and continue require a loop" {
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    break
         \\
@@ -651,12 +651,12 @@ test "string operations type-check" {
 }
 
 test "host builtins type-check and stay host-gated" {
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    print("hello")
         \\
     , "luce.sema.host");
-    try expectFails(
+    try expectRejected(
         \\func main():
         \\    let text = file_read("notes.txt")
         \\
@@ -678,7 +678,7 @@ test "host builtins type-check and stay host-gated" {
     defer hosted.deinit();
     try testing.expect(hosted == .success);
 
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main() -> !:
         \\    let bad = try file_read(7)
         \\
@@ -686,18 +686,18 @@ test "host builtins type-check and stay host-gated" {
     // A call that can fail may not be written as if it could not:
     // this is the shape `if files.write_lines(...)` used to have, and
     // it is the whole of why a swallowed failure is now unwritable.
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    let text = file_read("notes.txt")
         \\
     , .{ .allow_host = true }, "luce.sema.fallible");
     // And `try` needs a caller that said it can fail.
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    let text = try file_read("notes.txt")
         \\
     , .{ .allow_host = true }, "luce.sema.fallible");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    term_style(1, 2, 3)
         \\
@@ -731,51 +731,51 @@ test "collections type-check and reject misuse at compile time" {
     defer featured.deinit();
     try testing.expect(featured == .success);
 
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    let mixed = [1, "two"]
         \\
     , script, "luce.sema.type");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    var untyped = []
         \\
     , script, "luce.sema.type");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    var m = new Map(Float, Int)
         \\
     , script, "luce.sema.type");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    var grid = new Array(Int, 2, 2)
         \\    let bad = grid[0]
         \\
     , script, "luce.sema.index");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    let bad = m[7]
         \\
     , script, "luce.sema.index");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    let bad = 5.append(1)
         \\
     , script, "luce.sema.method");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    for x in 7:
         \\        let unused = x
         \\
     , script, "luce.sema.loop");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    let xs = [1]
         \\    let bad = xs < xs
         \\
     , script, "luce.sema.type");
-    try expectFailsOptions(
+    try expectRejectedOptions(
         \\func main():
         \\    var xs = [1]
         \\    xs[0] = "text"
@@ -809,7 +809,7 @@ const TestLoader = struct {
     }
 
     fn loader(self: *TestLoader) compile_mod.Loader {
-        return .{ .context = self, .loadFn = load };
+        return .{ .context = self, .load = load };
     }
 };
 
@@ -1311,7 +1311,7 @@ test "an import cycle compiles; what may not be circular is checked finer" {
 const script_options: types.CompileOptions = .{};
 
 fn failsWith(source: []const u8, code: []const u8) !void {
-    return expectFailsOptions(source, script_options, code);
+    return expectRejectedOptions(source, script_options, code);
 }
 
 test "constants are compile-time: calls, objects, and verbs are refused" {

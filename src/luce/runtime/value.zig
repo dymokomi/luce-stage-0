@@ -231,7 +231,7 @@ pub const Value = extern struct {
     }
 
     /// True when this value holds a heap allocation of its own — the
-    /// question `releaseStorage` and `ownValue` both turn on.  Inline
+    /// question `dropStorage` and `ownValue` both turn on.  Inline
     /// text answers false: the bytes are the value.
     pub fn ownsStorage(self: Value) bool {
         return switch (self.tag) {
@@ -241,6 +241,13 @@ pub const Value = extern struct {
         };
     }
 
+    /// The field run behind a struct value, as a **mutable alias into
+    /// the run itself** — not a copy.  Writing through it writes the
+    /// struct, and every other value sharing the run sees it, which is
+    /// why `setField` builds a new run rather than storing in place.
+    /// It lives as long as the run does: until `luce_rt_close`, or
+    /// until the storage is dropped.  Empty for a struct with no
+    /// fields.
     pub fn asStruct(self: Value) []Value {
         if (self.length == 0) return &.{};
         const fields: [*]Value = @ptrFromInt(@as(usize, @intCast(self.bits)));

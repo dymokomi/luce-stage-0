@@ -11,11 +11,17 @@
 //! implicit numeric conversion, immutable let and parameters, no
 //! shadowing, definite initialization (bindings always carry a value),
 //! and return on every path.
+//!
+//! What the two passes both speak is `context.zig`, not this file: the
+//! collected declarations, the folded constants, and the scope, local
+//! and loop state a body is checked against are named there so neither
+//! pass exports its working state to the other.
 
 const std = @import("std");
 const source_mod = @import("../01_source.zig");
 const helpers = @import("helpers.zig");
 const builder_mod = @import("builder.zig");
+const context = @import("context.zig");
 const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
@@ -30,61 +36,31 @@ const Register = mir.Register;
 const BlockId = mir.BlockId;
 const LocalId = mir.LocalId;
 
-pub const Error = error{OutOfMemory};
-
-/// Both passes reject a bad literal, and a reader who sees one
-/// message should not get a different one from the other pass.
-pub const integer_range_message =
-    "integer literal out of range; Int holds -9223372036854775808 to 9223372036854775807";
-pub const float_range_message =
-    "float literal is not a finite number; Float holds up to about 1.8e308";
+// The stage's shared vocabulary, spelled unqualified here because this
+// file is one of its two speakers (`04_semantics/context.zig`).
+const Error = context.Error;
+const Analyzed = context.Analyzed;
+const ModuleTree = context.ModuleTree;
+const FunctionDeclInfo = context.FunctionDeclInfo;
+const StructDeclInfo = context.StructDeclInfo;
+const StructShape = context.StructShape;
+const ConstantValue = context.ConstantValue;
+const TypedConstant = context.TypedConstant;
+const ConstantInfo = context.ConstantInfo;
+const OwnershipClass = context.OwnershipClass;
+const isReserved = context.isReserved;
+const integer_range_message = context.integer_range_message;
+const float_range_message = context.float_range_message;
+const mismatched_operands_message = context.mismatched_operands_message;
+const namespace_has_no_fields_message = context.namespace_has_no_fields_message;
+const duplicate_field_message = context.duplicate_field_message;
+const missing_field_message = context.missing_field_message;
 
 /// Reporting cap, matching stages 2 and 3.  One broken declaration
 /// can make every line after it wrong; a reader wants the first
 /// hundred, and an untrusted file must not be able to spend the
 /// host's memory on messages nobody will read.
 pub const max_diagnostics: u32 = 100;
-
-/// Names the language reserves; nothing user-declared may take them.
-pub const reserved_names = [_][]const u8{
-    "range",       "Int",        "Float",       "Bool",        "String",
-    "List",        "Map",        "Array",       "Builder",     "None",
-    "abs",         "min",        "max",         "clamp",       "sqrt",
-    "floor",       "ceil",       "len",         "slice",       "byte_at",
-    "assert",      "trap",       "str",         "parse_int",   "parse_float",
-    "chr",         "ord",        "append",      "pop",         "insert",
-    "remove",      "has",        "dim",         "free",        "print",
-    "file_read",   "file_write", "file_exists", "arg",         "arg_count",
-    "key_read",    "key_text",   "error",       "read_line",   "print_error",
-    "clock_ms",    "sleep_ms",   "env",         "file_append", "file_delete",
-    "file_rename", "dir_list",
-};
-
-pub fn isReserved(name: []const u8) bool {
-    for (reserved_names) |reserved| {
-        if (std.mem.eql(u8, name, reserved)) return true;
-    }
-    return false;
-}
-
-/// What this stage hands to stage 6: struct layouts, heap-type shapes,
-/// the constant pool, the entry, and one open
-/// `Lowering` per function.  All of it is arena-allocated and none of
-/// it points back here, so `mir.build` can close it on its own.
-///
-/// The shape is declared in `06_mir/build.zig` because it is made of
-/// MIR; naming it here keeps the stage's vocabulary its own.
-pub const Analyzed = mir.build.Lowered;
-
-/// One file in a project: the root ("" prefix) or an imported module
-/// whose declarations are namespaced by its import name.  `file` is
-/// its entry in stage 1's registry — the text its spans index, the
-/// path debug info reports, and the line index origins are read from.
-pub const ModuleTree = struct {
-    prefix: []const u8,
-    tree: *const ast.Program,
-    file: source_mod.FileId,
-};
 
 /// Check the project and lower it to IR.  Returns null when errors
 /// were reported; the diagnostics tell the story.
@@ -112,123 +88,15 @@ pub fn analyze(
     return analyzer.run();
 }
 
-pub const FunctionInfo = struct {
-    declaration: *const ast.FuncDecl,
-    name: []const u8,
-    module: usize,
-    parameter_types: []Type,
-    parameter_modes: []ast.ParameterMode,
-    return_type: Type,
-    /// Written `-> T!` or `-> !`: every call site must say `try` or
-    /// `catch`, which is what makes a swallowed failure unwritable
-    /// (docs/FAILURE.md).
-    fallible: bool,
-    is_entry: bool,
-};
+// ---------------------------------------------------------------------------
+// Analyzer — the collected project, and pass one over it
+// ---------------------------------------------------------------------------
 
-/// A collected struct declaration with its module, for cycle spans
-/// and field resolution.
-pub const StructDeclInfo = struct {
-    declaration: *const ast.StructDecl,
-    module: usize,
-};
-
-/// What a struct layout costs and carries, computed once for all.
-pub const StructShape = struct {
-    /// The struct transitively holds a heap object, so the ownership
-    /// rules apply to it (S27's "object-carrying").
-    carries: bool = false,
-    /// How many values the struct flattens to — one per scalar or
-    /// object field, summed through nested structs.  Saturates just
-    /// past `helpers.max_struct_values`, which is all a limit check
-    /// needs and keeps the count from overflowing.
-    values: u32 = 0,
-};
-
-/// The folded value of a file-scope constant.  Constants are values
-/// only — scalars, String, and value structs — computed entirely at
-/// compile time and inlined at every use site.
-pub const ConstantValue = union(enum) {
-    int: i64,
-    float: f64,
-    boolean: bool,
-    string: []const u8, // arena-owned
-    strukt: struct { layout: u32, fields: []ConstantValue },
-};
-
-pub const TypedConstant = struct {
-    value: ConstantValue,
-    value_type: Type,
-};
-
-pub const ConstantInfo = struct {
-    declaration: *const ast.ConstDecl,
-    module: usize,
-    /// Lazy evaluation with cycle detection: constants may reference
-    /// each other across modules in any order, but never in a loop.
-    state: enum { pending, evaluating, ready, failed } = .pending,
-    value: ConstantValue = .{ .int = 0 },
-    value_type: Type = .int,
-};
-
-/// How a binding relates to the object it holds (OWNERSHIP.md):
-/// `owned` bindings received something fresh, a give, or a give
-/// parameter — their scope frees the object; `alias` bindings are just
-/// another name (S8); `borrow_param` marks a borrowed parameter, which
-/// may never keep, give, free, or return its object (S12, S17).
-/// Bindings of value types are all `.alias` — the class never matters.
-pub const OwnershipClass = enum { owned, alias, borrow_param };
-
-pub const Poison = enum { given, freed };
-
-pub const LocalInfo = struct {
-    local: LocalId,
-    mutable: bool,
-    class: OwnershipClass = .alias,
-    /// The local's type is an object or an object-carrying struct.
-    carries: bool = false,
-    /// Set by give/free in lowering (= source) order; any later use in
-    /// this scope is a compile error (S10, S29).
-    poisoned: ?Poison = null,
-    /// True while a for-loop iterates this name: reassignment would
-    /// free the collection under the loop's feet (S5 meets S9).
-    iterating: bool = false,
-};
-
-/// One local this scope has to release on the way out, and in which of
-/// the two senses it owns something: the objects bound to it (S1-S43),
-/// the storage in its slot (docs/STRINGS.md), or both.  They are
-/// separate questions — `let b = a` aliases a's objects and copies its
-/// String fields — so they are answered separately.
-pub const Release = struct {
-    local: LocalId,
-    objects: bool = false,
-    storage: bool = false,
-};
-
-pub const Scope = struct {
-    names: std.StringHashMapUnmanaged(LocalInfo) = .empty,
-    /// Locals this scope releases, in declaration order; scope exit
-    /// releases them in reverse.
-    owned: std.ArrayList(Release) = .empty,
-};
-
-pub const FoundLocal = struct {
-    info: *LocalInfo,
-    /// Index of the scope that declared the name (S30 loop guard).
-    depth: usize,
-};
-
-pub const LoopFrame = struct {
-    continue_block: BlockId,
-    exit_block: BlockId,
-    /// self.scopes.items.len when the loop body began: break and
-    /// continue release every scope at or above this depth.
-    scope_depth: usize,
-    /// self.temps.items.len when the loop body began.
-    temps_depth: usize,
-};
-
+/// What pass one collected, and the queries pass two asks of it.
+///
+/// Pass two (`builder.zig`) holds one of these for the whole walk and
+/// reads the tables below through the methods on it; everything else
+/// here runs once, before any body is checked.
 pub const Analyzer = struct {
     arena: Allocator,
     temporary: Allocator,
@@ -253,7 +121,7 @@ pub const Analyzer = struct {
     struct_shapes: std.ArrayList(StructShape) = .empty,
     heap_types: std.ArrayList(types.HeapType) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
-    functions: std.ArrayList(FunctionInfo) = .empty,
+    functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// The program's string constants.  A `Program` field, so the
     /// pool and its interning live in stage 6; this stage fills it as
@@ -262,7 +130,7 @@ pub const Analyzer = struct {
     constant_infos: std.ArrayList(ConstantInfo) = .empty,
     constant_names: std.StringHashMapUnmanaged(u32) = .empty,
 
-    pub fn deinitScratch(self: *Analyzer) void {
+    fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
         self.struct_shapes.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
@@ -294,7 +162,7 @@ pub const Analyzer = struct {
         try self.diagnostics.add(code, span, format, arguments);
     }
 
-    pub fn run(self: *Analyzer) Error!?Analyzed {
+    fn run(self: *Analyzer) Error!?Analyzed {
         try self.collectStructs();
         try self.collectConstants();
         try self.collectFunctions();
@@ -319,6 +187,8 @@ pub const Analyzer = struct {
     }
 
     // Declarations ---------------------------------------------------------
+
+    // -- names, types, and the heap shapes behind them --------------------
 
     /// A module-qualified declaration name: "geo" + "Point" ->
     /// "geo.Point"; the root module ("") qualifies to the name itself.
@@ -558,7 +428,9 @@ pub const Analyzer = struct {
         };
     }
 
-    pub fn collectStructs(self: *Analyzer) Error!void {
+    // -- pass one: struct layouts -----------------------------------------
+
+    fn collectStructs(self: *Analyzer) Error!void {
         // Imports first: names must be usable and free of collisions.
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
@@ -791,7 +663,9 @@ pub const Analyzer = struct {
 
     /// Register every module's top-level `let` constants, then fold
     /// each one so every error reports even when nothing uses it.
-    pub fn collectConstants(self: *Analyzer) Error!void {
+    // -- pass one: file-scope constants, folded ---------------------------
+
+    fn collectConstants(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
             for (module.tree.constants) |*declaration| {
@@ -822,7 +696,7 @@ pub const Analyzer = struct {
 
     /// Fold one constant, lazily and cycle-checked.  Null after a
     /// reported error.
-    pub fn evaluateConstant(self: *Analyzer, index: u32) Error!?TypedConstant {
+    fn evaluateConstant(self: *Analyzer, index: u32) Error!?TypedConstant {
         const info = &self.constant_infos.items[index];
         switch (info.state) {
             .ready => return .{ .value = info.value, .value_type = info.value_type },
@@ -880,7 +754,7 @@ pub const Analyzer = struct {
         return result;
     }
 
-    pub fn constantError(self: *Analyzer, span: Span, comptime format: []const u8, arguments: anytype) Error!?TypedConstant {
+    fn constantError(self: *Analyzer, span: Span, comptime format: []const u8, arguments: anytype) Error!?TypedConstant {
         try self.fail("luce.sema.const", span, format, arguments);
         return null;
     }
@@ -890,7 +764,7 @@ pub const Analyzer = struct {
     /// comparisons, string concatenation, `Int`/`Float` conversions,
     /// and value-struct construction.  Objects and calls are not
     /// constants.
-    pub fn foldConstant(self: *Analyzer, module: usize, expression: *const ast.Expression) Error!?TypedConstant {
+    fn foldConstant(self: *Analyzer, module: usize, expression: *const ast.Expression) Error!?TypedConstant {
         switch (expression.*) {
             .int_literal => |literal| {
                 const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
@@ -1035,7 +909,7 @@ pub const Analyzer = struct {
         }
     }
 
-    pub fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
+    fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
         const to_int = std.mem.eql(u8, call.callee, "Int");
         if (to_int) {
             switch (operand.value) {
@@ -1059,7 +933,7 @@ pub const Analyzer = struct {
         }
     }
 
-    pub fn foldConstruct(
+    fn foldConstruct(
         self: *Analyzer,
         module: usize,
         call_arguments: []const ast.Argument,
@@ -1072,7 +946,7 @@ pub const Analyzer = struct {
             return self.constantError(span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
         }
         if (layout.fields.len == 0) {
-            return self.constantError(span, "{s} is a function namespace and has no value fields", .{layout.name});
+            return self.constantError(span, namespace_has_no_fields_message, .{layout.name});
         }
         const fields = try self.arena.alloc(ConstantValue, layout.fields.len);
         const seen = try self.temporary.alloc(bool, layout.fields.len);
@@ -1086,7 +960,7 @@ pub const Analyzer = struct {
                 return self.constantError(argument.span, "{s} has no field {s}", .{ layout.name, name });
             };
             if (seen[field_index]) {
-                return self.constantError(argument.span, "field {s} given twice", .{name});
+                return self.constantError(argument.span, duplicate_field_message, .{name});
             }
             const value = (try self.foldConstant(module, argument.value)) orelse return null;
             if (!value.value_type.eql(layout.fields[field_index].field_type)) {
@@ -1102,7 +976,7 @@ pub const Analyzer = struct {
         }
         for (seen, 0..) |given, field_index| {
             if (!given) {
-                return self.constantError(span, "{s} is missing field {s}", .{ layout.name, layout.fields[field_index].name });
+                return self.constantError(span, missing_field_message, .{ layout.name, layout.fields[field_index].name });
             }
         }
         return .{
@@ -1111,7 +985,7 @@ pub const Analyzer = struct {
         };
     }
 
-    pub fn foldBinary(self: *Analyzer, module: usize, binary: ast.Binary) Error!?TypedConstant {
+    fn foldBinary(self: *Analyzer, module: usize, binary: ast.Binary) Error!?TypedConstant {
         // A constant is a value that is there, so there is nothing for
         // a fallback to be a fallback *for*.
         if (binary.op == .coalesce) {
@@ -1127,7 +1001,7 @@ pub const Analyzer = struct {
         // side effects — there are none, so plain evaluation is fine.
         const right = (try self.foldConstant(module, binary.right)) orelse return null;
         if (!left.value_type.eql(right.value_type)) {
-            return self.constantError(binary.span, "operands are {s} and {s} (conversions are explicit)", .{
+            return self.constantError(binary.span, mismatched_operands_message, .{
                 try self.typeName(left.value_type),
                 try self.typeName(right.value_type),
             });
@@ -1231,7 +1105,9 @@ pub const Analyzer = struct {
         }
     }
 
-    pub fn collectFunctions(self: *Analyzer) Error!void {
+    // -- pass one: function signatures, and the entry ---------------------
+
+    fn collectFunctions(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
             for (module.tree.functions) |*declaration| {
@@ -1253,7 +1129,7 @@ pub const Analyzer = struct {
         try self.checkEntry();
     }
 
-    pub fn collectFunction(
+    fn collectFunction(
         self: *Analyzer,
         declaration: *const ast.FuncDecl,
         name: []const u8,
@@ -1313,7 +1189,7 @@ pub const Analyzer = struct {
         });
     }
 
-    pub fn checkEntry(self: *Analyzer) Error!void {
+    fn checkEntry(self: *Analyzer) Error!void {
         const index = self.function_names.get("main") orelse {
             try self.fail("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
             return;
@@ -1333,7 +1209,7 @@ pub const Analyzer = struct {
 
     // Function bodies ------------------------------------------------------
 
-    pub fn lowerFunction(self: *Analyzer, info: FunctionInfo) Error!mir.build.Lowering {
+    fn lowerFunction(self: *Analyzer, info: FunctionDeclInfo) Error!mir.build.Lowering {
         self.diagnostics.scope = self.modules[info.module].file;
         defer self.diagnostics.scope = source_mod.root_file;
         var builder: builder_mod.FunctionBuilder = .{

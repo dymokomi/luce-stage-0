@@ -29,24 +29,79 @@ sectioning is absent, the licence has not been earned.
 
 ## Summary of verdicts
 
-| # | Finding | Verdict | Effort |
-|---|---|---|---|
-| 1 | `declarations.zig` publishes pass two's state to pass two | Change | M |
-| 2 | `host.zig` holds a reporting module with no interface | Change | S–M |
-| 3 | The two `product.zig` harnesses are duplicated, and drifted | Change | M |
-| 4 | `libluce_rt` imports the compiler's IR stage | Change | S |
-| 5 | `abi.zig` holds two contracts with two version numbers | Change | S |
-| 6 | Navigation is bimodal — eight large files have no sections | Change | S, broad |
-| 7 | Constant-folding rules written twice, verbatim | Change | M |
-| 8 | The builtin-name list lives in three places | Change | S |
-| 9 | `writeWhole` and `stemOf` each exist twice, with different contracts | Change | S |
-| 10 | `07_optimize/effects.zig` is right, and in the wrong stage | Change | S |
-| 11 | Two barrel blemishes in an otherwise clean discipline | Change | XS |
-| 12 | `helpers.zig` is a junk drawer by its own description | Change | S |
-| 13 | `key.zig` is a private detail sitting among shared modules | Change | XS |
-| 14 | The guide and CLAUDE.md name files that have moved | Change | XS |
-| 15 | `builder.zig` and `lower.zig` are each one subject | **Fine as is** | — |
-| 16 | The parser's sibling cycle, `05_hir.zig`, sanitization, the layering law | **Fine as is** | — |
+| # | Finding | Verdict | Effort | What happened |
+|---|---|---|---|---|
+| 1 | `declarations.zig` publishes pass two's state to pass two | Change | M | **Fixed**, `df1d4ce` |
+| 2 | `host.zig` holds a reporting module with no interface | Change | S–M | **Fixed**, `965ed6c` |
+| 3 | The two `product.zig` harnesses are duplicated, and drifted | Change | M | **Fixed**, `56d966f` |
+| 4 | `libluce_rt` imports the compiler's IR stage | Change | S | **Fixed**, `9aa49f6` |
+| 5 | `abi.zig` holds two contracts with two version numbers | Change | S | **Fixed**, `1537f19` |
+| 6 | Navigation is bimodal — eight large files have no sections | Change | S, broad | **Fixed**, `87b37cf` |
+| 7 | Constant-folding rules written twice, verbatim | Change | M | **Fixed** (the messages), `fb04e69` |
+| 8 | The builtin-name list lives in three places | Change | S | **Two of three fixed**, `fb04e69`; dissent below |
+| 9 | `writeWhole` and `stemOf` each exist twice, with different contracts | Change | S | **`writeWhole` fixed**, `fb04e69`; `stemOf` open |
+| 10 | `07_optimize/effects.zig` is right, and in the wrong stage | Change | S | Open |
+| 11 | Two barrel blemishes in an otherwise clean discipline | Change | XS | **First fixed**, `df1d4ce`; second open |
+| 12 | `helpers.zig` is a junk drawer by its own description | Change | S | Open |
+| 13 | `key.zig` is a private detail sitting among shared modules | Change | XS | Open |
+| 14 | The guide and CLAUDE.md name files that have moved | Change | XS | Open (docs, another hand) |
+| 15 | `builder.zig` and `lower.zig` are each one subject | **Fine as is** | — | Upheld; both took finding 6 |
+| 16 | The parser's sibling cycle, `05_hir.zig`, sanitization, the layering law | **Fine as is** | — | Upheld, with one note below |
+
+## What happened next
+
+Worked at `f333e12` (merge of `org-naming`), ten commits, `zig build
+test` 944/944 throughout — the same count the audit was taken at, and
+no test was added or removed.  `bench/compare.sh f333e12` puts every
+row within ±2%, which is noise on this host.  Notes where the code
+disagreed with the audit:
+
+* **Finding 1.**  `StructShape`, `StructDeclInfo`, `ConstantInfo` and
+  `TypedConstant` moved to `context.zig` with the rest, as the audit
+  listed — they are collected facts and belong with the vocabulary —
+  but `max_diagnostics` stayed in `declarations.zig` beside
+  `Analyzer.fail`, its only reader.  `Analyzer` itself stayed too:
+  Zig has no way to split a struct's methods across files, so moving it
+  would have moved all of pass one with it.  Its eleven remaining `pub`
+  methods are pass two's real API; the other fourteen are private.
+* **Finding 2.**  The sanitizer had to move, not merely "follow".  Once
+  the trap report left `host.zig`, keeping the rule there would have
+  made `report` depend on the terminal to stay safe — so it is
+  `apps/sanitize.zig`, imported by both, which is what the file's own
+  argument ("the rule lives in one function") demanded.  The two
+  `anytype` parameters became `[]const report.Frame` and `report.Frame`;
+  a test had been declaring its own local `Frame` struct to call one.
+* **Finding 4.**  The audit's remedy was taken and the alternative one
+  refused: two definitions pinned equal by a check is worse than one
+  definition, and these enums are on the serialized module's wire
+  surface, where a silent divergence is a mis-decoded trap.  The four
+  live in `support/vocabulary.zig`, a sibling of `support/types.zig`
+  rather than inside it — trap codes are not the type system.
+* **Finding 5.**  Split, and the stutter went with it:
+  `abi.artifact_symbol` is `artifact.symbol`, `artifact_format` is
+  `format`, `artifact_magic` is `magic`, `checkArtifact` is `check`.
+  Neither version number moved.
+* **Finding 8, dissent on the third copy.**  `reserved_names` is not
+  the same list and cannot be derived from the builtin table: it also
+  holds the type names, the method names, `range`, `slice` and
+  `byte_at`.  The check worth having — every builtin's name is reserved
+  — **does not hold today**: the nine `term_*` builtins are absent from
+  `reserved_names`, so a program may declare a function over one of
+  them.  That is a real finding the audit did not make, and fixing it
+  is a behaviour change, so it is recorded here rather than smuggled
+  into an organization commit.
+* **Finding 9.**  `native.writeWhole`'s two call sites wanted two
+  different things, so they got two.  The published `--emit=object`
+  path now goes through `files.writeWhole` and is atomic and synced,
+  which is what `native.write`'s own doc comment already claimed for
+  all three kinds; the throwaway object handed to `cc` is
+  `writeScratch`, whose doc says it is neither and why.  `stemOf`, the
+  sibling-temporary idiom and the `".lc"` decision are untouched.
+* **Finding 16, one correction.**  The audit says sanitization is
+  single-sourced and it was, in `host.zig`.  Finding 2 moved it, and
+  the reason the audit gives for keeping it there — "beside the two
+  channels that use it" — stopped being true the moment one of those
+  channels moved out.
 
 ---
 
@@ -313,6 +368,31 @@ both:
 | `03_parse/expressions.zig` | 867 | **0** |
 | `08_llvm/abi.zig` | 755 | **0** |
 | `08_llvm/runtime_effects.zig` | 733 | **0** |
+
+**Counted again at `87b37cf`, and the counting was part of the
+finding.**  The table above counts only full-width boxes; `heap.zig`,
+`machine.zig`, `lower.zig` and `runtime_effects.zig` also carried
+indented `// -- name ---` rules, which are the guide's other legitimate
+style and which the audit's own paragraph above says to count.  Counting
+both, the state before and after:
+
+| file | before | after |
+|---|---|---|
+| `apps/host.zig` | 1 per 300 | 1 per 151 |
+| `08_llvm/lower.zig` | 1 per 173 | 1 per 167 |
+| `runtime/heap.zig` | 1 per 140 | 1 per 101 |
+| `interpreter/machine.zig` | 1 per 502 | 1 per 102 |
+| `06_mir/verify.zig` | none | 1 per 146 |
+| `03_parse/expressions.zig` | none | 1 per 177 |
+| `08_llvm/abi.zig` | none | 1 per 133 |
+| `08_llvm/runtime_effects.zig` | 1 per 29 | 1 per 29 (already exemplary) |
+| `03_parse/grammar.zig` | 1 per 223 | 1 per 150 |
+| `04_semantics/declarations.zig` | 1 per 319 | 1 per 160 |
+| `04_semantics/builder.zig` | 1 per 335 | 1 per 246 |
+
+Which of the two styles goes where is now written down
+(`docs/CODING_GUIDE.md`), along with the rule the two lying headers
+broke: a header names what is under it and nothing else.
 
 Two existing headers are also actively misleading — worse than absent,
 because a reader trusts them:

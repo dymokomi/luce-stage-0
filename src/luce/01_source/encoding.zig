@@ -187,7 +187,7 @@ fn expectText(bytes: []const u8, wanted: []const u8) !void {
     }
 }
 
-fn expectProblem(bytes: []const u8, wanted: Problem) !void {
+fn expectRejected(bytes: []const u8, wanted: Problem) !void {
     const prepared = try prepare(testing.allocator, bytes);
     switch (prepared) {
         .text => |text| {
@@ -218,24 +218,24 @@ test "CRLF collapses to LF and keeps every line and column" {
 }
 
 test "a stray carriage return is refused, naming the byte" {
-    try expectProblem("a\rb\n", .{ .stray_carriage_return = 1 });
-    try expectProblem("a\r", .{ .stray_carriage_return = 1 });
+    try expectRejected("a\rb\n", .{ .stray_carriage_return = 1 });
+    try expectRejected("a\r", .{ .stray_carriage_return = 1 });
     // Offsets count from the start of the file, BOM included.
-    try expectProblem("\xEF\xBB\xBFa\rb", .{ .stray_carriage_return = 4 });
+    try expectRejected("\xEF\xBB\xBFa\rb", .{ .stray_carriage_return = 4 });
 }
 
 test "a NUL byte is refused: this is not a text file" {
-    try expectProblem("func main():\x00\n", .{ .nul_byte = 12 });
-    try expectProblem("\x00", .{ .nul_byte = 0 });
+    try expectRejected("func main():\x00\n", .{ .nul_byte = 12 });
+    try expectRejected("\x00", .{ .nul_byte = 0 });
 }
 
 test "invalid UTF-8 is refused at the byte that broke it" {
     // A continuation byte with no lead.
-    try expectProblem("let a = 1\n\x80\n", .{ .invalid_utf8 = 10 });
+    try expectRejected("let a = 1\n\x80\n", .{ .invalid_utf8 = 10 });
     // A lead byte whose sequence runs off the end.
-    try expectProblem("x\xE2\x82", .{ .invalid_utf8 = 1 });
+    try expectRejected("x\xE2\x82", .{ .invalid_utf8 = 1 });
     // An overlong encoding of '/'.
-    try expectProblem("\xC0\xAF", .{ .invalid_utf8 = 0 });
+    try expectRejected("\xC0\xAF", .{ .invalid_utf8 = 0 });
     // Well-formed multi-byte text is not touched.
     try expectText("# héllo — ok\n", "# héllo — ok\n");
 }
@@ -246,43 +246,43 @@ test "a source larger than the limit is refused before it is copied" {
     const oversized = try testing.allocator.alloc(u8, max_bytes + 1);
     defer testing.allocator.free(oversized);
     @memset(oversized, ' ');
-    try expectProblem(oversized, .{ .too_large = max_bytes + 1 });
+    try expectRejected(oversized, .{ .too_large = max_bytes + 1 });
 }
 
 test "a UTF-16 or UTF-32 byte-order mark is refused by name" {
     // "func\n" as each of the four, mark included.
-    try expectProblem(
+    try expectRejected(
         "\xFF\xFEf\x00u\x00n\x00c\x00\n\x00",
         .{ .wrong_encoding = .utf16_le },
     );
-    try expectProblem(
+    try expectRejected(
         "\xFE\xFF\x00f\x00u\x00n\x00c\x00\n",
         .{ .wrong_encoding = .utf16_be },
     );
-    try expectProblem(
+    try expectRejected(
         "\xFF\xFE\x00\x00f\x00\x00\x00u\x00\x00\x00",
         .{ .wrong_encoding = .utf32_le },
     );
-    try expectProblem(
+    try expectRejected(
         "\x00\x00\xFE\xFF\x00\x00\x00f\x00\x00\x00u",
         .{ .wrong_encoding = .utf32_be },
     );
     // The mark alone, with nothing after it, is still the same answer.
-    try expectProblem("\xFF\xFE", .{ .wrong_encoding = .utf16_le });
+    try expectRejected("\xFF\xFE", .{ .wrong_encoding = .utf16_le });
 
     // The four-byte marks win over the two-byte prefix they contain:
     // UTF-32LE begins with the whole UTF-16LE mark.
-    try expectProblem("\xFF\xFE\x00\x00", .{ .wrong_encoding = .utf32_le });
+    try expectRejected("\xFF\xFE\x00\x00", .{ .wrong_encoding = .utf32_le });
 
     // Mid-file those bytes are just bytes, judged by the ordinary
     // rules — this is a sniff of the mark, not a search for it.
-    try expectProblem("a\xFF\xFEb", .{ .invalid_utf8 = 1 });
+    try expectRejected("a\xFF\xFEb", .{ .invalid_utf8 = 1 });
 }
 
 test "UTF-16 with no byte-order mark is still refused, as binary" {
     // Declined on purpose: guessing at BOM-less UTF-16 renames a real
     // problem when the guess is wrong.  The NUL is true and locatable.
-    try expectProblem("f\x00u\x00n\x00c\x00", .{ .nul_byte = 1 });
+    try expectRejected("f\x00u\x00n\x00c\x00", .{ .nul_byte = 1 });
 }
 
 // Property fuzzing: `prepare` is the first thing untrusted bytes

@@ -168,10 +168,42 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "luce", .module = luce },
+            // For the one durable whole-file write there is: an object
+            // a caller will see is published atomically and synced,
+            // like everything else that reaches a name a loader reads.
+            .{ .name = "files", .module = app_files },
         },
     });
     const native_tests = b.addTest(.{ .root_module = app_native });
     test_step.dependOn(&b.addRunArtifact(native_tests).step);
+
+    // The one rule that keeps a program's own text from forging the
+    // terminal (`src/apps/sanitize.zig`).  Its own module because it
+    // has two unrelated consumers — the host's frame buffer, which
+    // allocates, and a trap report, which must not — and there has to
+    // be one answer to "what counts as safe".  It imports nothing.
+    const app_sanitize = b.createModule(.{
+        .root_source_file = b.path("src/apps/sanitize.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_sanitize })).step);
+
+    // How a run ended, said and scored: one rendering of a trap, an
+    // uncaught error and a leak census, and one exit table, for every
+    // runner (`src/apps/report.zig`).  It touches no terminal and holds
+    // no state, which is why loom's runner and the standalone `main`
+    // can both reach it without either reaching the other.
+    const app_report = b.createModule(.{
+        .root_source_file = b.path("src/apps/report.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+            .{ .name = "sanitize", .module = app_sanitize },
+        },
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_report })).step);
 
     // The real host — console, cwd-relative files, arguments, the
     // terminal — as the ABI's C table, which is the one shape a
@@ -184,6 +216,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "luce", .module = luce },
+            .{ .name = "report", .module = app_report },
+            .{ .name = "sanitize", .module = app_sanitize },
         },
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_host })).step);
@@ -203,6 +237,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "luce", .module = luce },
                 .{ .name = "host", .module = app_host },
+                .{ .name = "report", .module = app_report },
                 .{ .name = "streams", .module = app_streams },
             },
         }),
@@ -241,6 +276,16 @@ pub fn build(b: *std.Build) void {
     const compiler_tests = b.addTest(.{ .root_module = compiler_module });
     test_step.dependOn(&b.addRunArtifact(compiler_tests).step);
 
+    // The miniature install tree both product suites drive
+    // (`src/apps/harness.zig`).  Test-only, and shared because it was
+    // written twice and the second copy had already drifted; it has no
+    // tests of its own, because a broken harness fails both suites.
+    const app_harness = b.createModule(.{
+        .root_source_file = b.path("src/apps/harness.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // The compiler at its command line, and the standalone binary it
     // writes (`src/apps/luce/product.zig`).
     //
@@ -253,6 +298,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/apps/luce/product.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "harness", .module = app_harness },
+        },
     });
     const compiler_pieces = b.addOptions();
     compiler_pieces.addOptionPath("luce_binary", compiler.getEmittedBin());
@@ -271,6 +319,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "files", .module = app_files },
             .{ .name = "host", .module = app_host },
             .{ .name = "native", .module = app_native },
+            .{ .name = "report", .module = app_report },
             .{ .name = "streams", .module = app_streams },
         },
     });
@@ -300,6 +349,7 @@ pub fn build(b: *std.Build) void {
         // artifact's tag says about itself.
         .imports = &.{
             .{ .name = "luce", .module = luce },
+            .{ .name = "harness", .module = app_harness },
         },
     });
     const binaries = b.addOptions();

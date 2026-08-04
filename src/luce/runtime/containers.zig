@@ -77,7 +77,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
 /// already exists must not pay for a copy of a key it will not keep.
 pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: Value) Error!void {
     const stored = held;
-    errdefer runtime.releaseStorage(stored);
+    errdefer runtime.dropStorage(stored);
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => |*list| {
@@ -96,7 +96,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
                 // A fresh entry owns its key too, and frees it with
                 // itself.
                 const owned_key = try runtime.ownValue(key);
-                errdefer runtime.releaseStorage(owned_key);
+                errdefer runtime.dropStorage(owned_key);
                 try map.insert(runtime.objects, .{ .key = owned_key, .value = stored });
             }
         },
@@ -140,7 +140,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => |*list| {
-            errdefer runtime.releaseStorage(held);
+            errdefer runtime.dropStorage(held);
             try list.append(runtime.objects, held);
             runtime.adopt(held);
         },
@@ -172,7 +172,7 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
 /// on the out-of-range trap: nothing the caller handed over is left
 /// without an owner.
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
-    errdefer runtime.releaseStorage(held);
+    errdefer runtime.dropStorage(held);
     const object = try runtime.resolve(target);
     if (index < 0 or index > object.data.list.items.len) return runtime.fail(.index_bounds);
     try object.data.list.insert(runtime.objects, @intCast(index), held);
@@ -192,7 +192,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
         .map => |*map| {
             if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
-                runtime.releaseStorage(removed.key);
+                runtime.dropStorage(removed.key);
                 runtime.freeValue(removed.value);
             }
         },
@@ -313,7 +313,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
         },
         .map => |*map| {
             for (map.entries.items) |entry| {
-                runtime.releaseStorage(entry.key);
+                runtime.dropStorage(entry.key);
                 runtime.freeValue(entry.value);
             }
             map.clear();
@@ -330,7 +330,7 @@ pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {
     const entries = (try runtime.resolve(target)).data.map.entries.items;
     var listed: std.ArrayList(Value) = .empty;
     errdefer {
-        for (listed.items) |item| runtime.releaseStorage(item);
+        for (listed.items) |item| runtime.dropStorage(item);
         listed.deinit(runtime.objects);
     }
     for (entries) |entry| {
@@ -345,7 +345,7 @@ pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {
 pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
     var listed: std.ArrayList(Value) = .empty;
     errdefer {
-        for (listed.items) |item| runtime.releaseStorage(item);
+        for (listed.items) |item| runtime.dropStorage(item);
         listed.deinit(runtime.objects);
     }
     try listed.ensureTotalCapacity(runtime.objects, names.len);
@@ -363,10 +363,10 @@ pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
 /// it is the byte no file name may contain.  An empty buffer is an
 /// empty directory, which is why the walk is written out rather than
 /// handed to a general splitter that would answer one empty name.
-pub fn namesList(runtime: *Runtime, joined: []const u8) Error!Value {
+pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
     var listed: std.ArrayList(Value) = .empty;
     errdefer {
-        for (listed.items) |item| runtime.releaseStorage(item);
+        for (listed.items) |item| runtime.dropStorage(item);
         listed.deinit(runtime.objects);
     }
     var rest = joined;
@@ -411,7 +411,7 @@ pub fn mapGet(runtime: *Runtime, target: Value, key: Value, fallback: Value) Err
 pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
     if (object.array.kind == .value) {
-        for (object.array.cells(Value)) |cell| runtime.releaseStorage(cell);
+        for (object.array.cells(Value)) |cell| runtime.dropStorage(cell);
     }
     try runtime.fillArray(object.array, held);
 }
@@ -419,6 +419,12 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
 // ---------------------------------------------------------------------------
 // The ownership verbs
 // ---------------------------------------------------------------------------
+//
+// One operation, spelled three times on its way down: Luce writes
+// `free`, MIR calls the instruction `free_object`, and here it is
+// `freeVerb`.  The suffix is the disambiguator — `free` alone is the
+// allocator's word and this is not it — and all three of `free`, `give`
+// and `copy` carry it, so the family reads as one.
 
 /// `free(x)`.  Only the named owner frees (S6, S23): `expected` carries
 /// the binding to verify against when the verb named one.

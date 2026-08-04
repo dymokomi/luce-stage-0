@@ -122,7 +122,7 @@ pub const Origin = enum {
 /// table) and everything else about loading is decided above.
 pub const Loader = struct {
     context: *anyopaque,
-    loadFn: *const fn (
+    load: *const fn (
         context: *anyopaque,
         arena: Allocator,
         name: []const u8,
@@ -294,7 +294,7 @@ pub fn openImport(
     var scratch = std.heap.ArenaAllocator.init(diagnostics.allocator);
     defer scratch.deinit();
     const found: Found = if (loader) |through|
-        try through.loadFn(through.context, scratch.allocator(), name)
+        try through.load(through.context, scratch.allocator(), name)
     else
         .missing;
 
@@ -451,7 +451,7 @@ const TableLoader = struct {
     }
 
     fn loader(self: *TableLoader) Loader {
-        return .{ .context = self, .loadFn = load };
+        return .{ .context = self, .load = load };
     }
 };
 

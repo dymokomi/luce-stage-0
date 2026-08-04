@@ -98,6 +98,10 @@ const Memory = Builder.Attribute.Memory;
 /// Every `libluce_rt` entry point generated code calls.  The tag is the
 /// C symbol, so `@tagName` is the name that reaches the object file and
 /// there is no second spelling to keep in step.
+// ---------------------------------------------------------------------------
+// The services, and the vocabulary that describes one
+// ---------------------------------------------------------------------------
+
 pub const Service = enum {
     // -- the run ------------------------------------------------------
     luce_rt_open,
@@ -184,7 +188,8 @@ pub const Service = enum {
     luce_rt_drop_storage,
     luce_rt_export_storage,
 
-    /// The C symbol this service is declared under.
+    /// The C symbol this service is declared under: a static string —
+    /// the enum's own tag name — that the caller owns nothing of.
     pub fn symbol(self: Service) []const u8 {
         return @tagName(self);
     }
@@ -265,6 +270,10 @@ pub const Effect = struct {
     returns_noalias: bool = false,
 };
 
+// ---------------------------------------------------------------------------
+// The memory shapes a service can have
+// ---------------------------------------------------------------------------
+//
 // The summaries the table below is written in terms of.  Naming them
 // once keeps the table readable and keeps a reader from having to
 // re-derive what `argmem: readwrite, inaccessiblemem: read` means
@@ -320,6 +329,10 @@ const reads_heap_makes_text: Memory = .{
 /// export in `runtime/exports.zig`; where that body only reads, the
 /// summary says `read`, and where it allocates, frees, or mutates a
 /// container it says `readwrite`.
+// ---------------------------------------------------------------------------
+// What each service does
+// ---------------------------------------------------------------------------
+
 pub fn describe(service: Service) Effect {
     return switch (service) {
         // -- the run --------------------------------------------------
@@ -613,6 +626,10 @@ pub fn describe(service: Service) Effect {
 /// How big a `runtime.Value` is, which is what makes a boxed argument
 /// `dereferenceable`.  Read from the Zig struct so the promise cannot
 /// drift from the layout generated code writes.
+// ---------------------------------------------------------------------------
+// What each argument promises
+// ---------------------------------------------------------------------------
+
 pub const value_size: u32 = @sizeOf(runtime.Value);
 
 /// The alignment every boxed `Value` is allocated at (`lower.zig`'s
@@ -673,6 +690,10 @@ pub fn describeParameter(
 
 /// Every function-level attribute one service carries, as a finished
 /// `FunctionAttributes` ready to hang on the declaration.
+// ---------------------------------------------------------------------------
+// The attribute list a declaration carries
+// ---------------------------------------------------------------------------
+
 pub fn attributes(
     service: Service,
     parameters: []const Builder.Type,

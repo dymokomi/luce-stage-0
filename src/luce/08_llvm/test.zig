@@ -26,6 +26,7 @@ const spec = @import("../specs/agree.zig");
 const interpreter = luce.interpreter;
 const mir = luce.mir;
 const abi = luce.llvm.abi;
+const artifact = luce.llvm.artifact;
 
 const Capture = spec.Capture;
 const Provided = spec.Provided;
@@ -172,7 +173,7 @@ test "a release artifact carries no origin table, and a debug one does" {
     defer gpa.free(release);
 
     // Debug carries a table per function and says so in the tag; the
-    // last two `i32`s of `abi.Artifact` are `debug` and `reserved`.
+    // last two `i32`s of `artifact.Artifact` are `debug` and `reserved`.
     try std.testing.expect(std.mem.indexOf(u8, debug, "@luce.origins.") != null);
     try std.testing.expect(std.mem.indexOf(u8, debug, "i32 1, i32 0") != null);
 
