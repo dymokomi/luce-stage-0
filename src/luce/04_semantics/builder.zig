@@ -4393,14 +4393,16 @@ pub const FunctionBuilder = struct {
             // construction is a store like any other (docs/STRINGS.md).
             registers[field_index] = try self.ownedForStore(fitted);
         }
-        for (seen, 0..) |given, index| {
-            if (!given) {
-                try self.fail("luce.sema.construct", span, context.missing_field_message, .{
-                    layout.name,
-                    layout.fields[index].name,
-                });
-                return null;
-            }
+        for (seen) |given| {
+            if (given) continue;
+            var missing: std.ArrayList(u8) = .empty;
+            defer missing.deinit(self.temporary());
+            try context.writeMissingFields(&missing, self.temporary(), layout, seen);
+            try self.fail("luce.sema.construct", span, context.missing_field_message, .{
+                layout.name,
+                missing.items,
+            });
+            return null;
         }
         const result_type: Type = .{ .strukt = layout_index };
         return .{

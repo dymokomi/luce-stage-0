@@ -1099,10 +1099,12 @@ pub const Analyzer = struct {
             seen[field_index] = true;
             fields[field_index] = value.value;
         }
-        for (seen, 0..) |given, field_index| {
-            if (!given) {
-                return self.constantError(span, missing_field_message, .{ layout.name, layout.fields[field_index].name });
-            }
+        for (seen) |given| {
+            if (given) continue;
+            var missing: std.ArrayList(u8) = .empty;
+            defer missing.deinit(self.temporary);
+            try context.writeMissingFields(&missing, self.temporary, layout, seen);
+            return self.constantError(span, missing_field_message, .{ layout.name, missing.items });
         }
         return .{
             .value = .{ .strukt = .{ .layout = layout_index, .fields = fields } },

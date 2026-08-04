@@ -659,6 +659,66 @@ test "luce.sema.construct: a struct needs all fields, named, once" {
     , "luce.sema.construct");
 }
 
+// Every hole at once.  Reporting the first made a fourteen-field
+// struct take thirteen compile rounds to finish, one field revealed
+// per round — the whole set is known where the message is written.
+
+test "luce.sema.construct: one missing field is named in the singular" {
+    try expectOnlySayingAt(
+        \\struct P:
+        \\    a: Int
+        \\    b: Int
+        \\
+        \\func main():
+        \\    let p = P(a = 1)
+        \\
+    , "luce.sema.construct", "P is missing field b", 6, 13);
+}
+
+test "luce.sema.construct: two missing fields take no serial comma" {
+    try expectOnlySayingAt(
+        \\struct P:
+        \\    a: Int
+        \\    b: Int
+        \\    c: Int
+        \\
+        \\func main():
+        \\    let p = P(a = 1)
+        \\
+    , "luce.sema.construct", "P is missing fields b and c", 7, 13);
+}
+
+test "luce.sema.construct: every missing field is named, in declaration order" {
+    try expectOnlySayingAt(
+        \\struct P:
+        \\    a: Int
+        \\    b: Int
+        \\    c: Int
+        \\    d: Int
+        \\
+        \\func main():
+        \\    let p = P(b = 1)
+        \\
+    , "luce.sema.construct", "P is missing fields a, c, and d", 8, 13);
+}
+
+test "luce.sema.const: a folded constant says the same thing as a body" {
+    // Same sentence from the other pass: a reader must not meet
+    // different words for the same mistake at file scope (context.zig).
+    try expectOnlySayingAt(
+        \\struct P:
+        \\    a: Int
+        \\    b: Int
+        \\    c: Int
+        \\
+        \\let origin = P(a = 1)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "P is missing fields b and c", 6, 14);
+}
+
 test "luce.sema.new: new builds only the heap types" {
     try expectRejected("func main():\n    let a = new Array(Int)\n", "luce.sema.new");
 }

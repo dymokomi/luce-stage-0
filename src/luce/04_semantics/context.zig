@@ -55,7 +55,43 @@ pub const mismatched_operands_message =
 pub const namespace_has_no_fields_message =
     "{s} is a function namespace and has no value fields";
 pub const duplicate_field_message = "field {s} given twice";
-pub const missing_field_message = "{s} is missing field {s}";
+pub const missing_field_message = "{s} is missing {s}";
+
+/// The second half of `missing_field_message`: every field the
+/// construction left out, in declaration order, as English —
+/// `field b`, or `fields b, c, and d`.
+///
+/// Reporting only the first hole made a fourteen-field struct take
+/// thirteen compile rounds to finish, one field revealed per round.
+/// The whole set is known at the point of the message; a reader who
+/// has to run the compiler again to learn the next word of the same
+/// sentence is being made to do the compiler's work.
+///
+/// The caller owns `written`.
+pub fn writeMissingFields(
+    written: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    layout: types.StructLayout,
+    seen: []const bool,
+) error{OutOfMemory}!void {
+    var missing: usize = 0;
+    for (seen) |given| {
+        if (!given) missing += 1;
+    }
+    try written.appendSlice(allocator, if (missing == 1) "field " else "fields ");
+    var written_so_far: usize = 0;
+    for (seen, 0..) |given, index| {
+        if (given) continue;
+        if (written_so_far != 0) {
+            // `b and c`, but `b, c, and d`: two names take no comma.
+            if (missing > 2) try written.appendSlice(allocator, ",");
+            try written.appendSlice(allocator, " ");
+            if (written_so_far + 1 == missing) try written.appendSlice(allocator, "and ");
+        }
+        try written.appendSlice(allocator, layout.fields[index].name);
+        written_so_far += 1;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Reserved names
