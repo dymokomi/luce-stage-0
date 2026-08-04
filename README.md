@@ -189,3 +189,10 @@ not built.
 Persistence images, the Fabric (Texels, Fibers, Views, capabilities),
 the C ABI, braids/synchronization, multi-user collaboration, and the
 agent all stay deferred until the language and terminal are excellent.
+
+## License
+
+Luce and loom are distributed under the terms of both the MIT license
+and the Apache License (Version 2.0), at your option.
+
+See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).

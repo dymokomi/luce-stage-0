@@ -115,3 +115,10 @@ Do not commit `build/`, `zig-out/` or `.zig-cache/`.
 and picking one is the owner's decision alone.  Until it is made, the
 code is under exclusive copyright by default — assume you may read it
 and not that you may redistribute it.
+
+## License
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this project shall be dual licensed under
+the MIT license and the Apache License (Version 2.0), without any
+additional terms or conditions, as in Rust.
