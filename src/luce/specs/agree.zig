@@ -80,7 +80,10 @@ pub const World = struct {
     refuse_writes: bool = false,
     /// The command line this world was started with.
     arguments: []const []const u8 = &default_arguments,
-    /// The keys the program will read; the script repeats.
+    /// The keys the program will read.  The script does **not**
+    /// repeat: running off the end is end of input, which is the case
+    /// `key_read`'s `String?` exists for, and a repeating keyboard is
+    /// one no test can ever reach the end of.
     keys: []const Key = &default_keys,
     /// How many keys the program has read.
     keys_read: usize = 0,
@@ -209,10 +212,10 @@ pub const World = struct {
         return self.arguments[@intCast(index)];
     }
 
-    fn nextKey(self: *World) Key {
-        const answered = self.keys[self.keys_read % self.keys.len];
-        self.keys_read += 1;
-        return answered;
+    fn nextKey(self: *World) ?Key {
+        if (self.keys_read >= self.keys.len) return null;
+        defer self.keys_read += 1;
+        return self.keys[self.keys_read];
     }
 
     /// The listing a compiled program takes, NUL-joined into this
@@ -618,7 +621,7 @@ pub const Capture = struct {
         text: *[*]const u8,
         text_length: *i64,
     ) callconv(.c) abi.Answer {
-        const pressed = of(context).world.nextKey();
+        const pressed = of(context).world.nextKey() orelse return .no;
         name.* = pressed.name.ptr;
         name_length.* = @intCast(pressed.name.len);
         text.* = pressed.text.ptr;
@@ -919,9 +922,9 @@ pub const Reference = struct {
         try of(context).record("[flush]", "");
     }
 
-    fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!interpreter.KeyEvent {
+    fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!?interpreter.KeyEvent {
         _ = arena;
-        const pressed = of(context).world.nextKey();
+        const pressed = of(context).world.nextKey() orelse return null;
         return .{ .name = pressed.name, .text = pressed.text };
     }
 

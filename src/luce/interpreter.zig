@@ -222,9 +222,17 @@ pub const Terminal = struct {
     ) error{OutOfMemory}!void,
     term_write: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
     term_flush: *const fn (context: *anyopaque) error{OutOfMemory}!void,
-    /// Blocks until one key arrives.  Slices must stay valid for the
-    /// evaluation; the host may allocate them from `arena`.
-    key_read: *const fn (context: *anyopaque, arena: Allocator) error{OutOfMemory}!KeyEvent,
+    /// Blocks until one key arrives, or answers null when no key ever
+    /// will — the pipe driving it ended, the terminal closed.  Slices
+    /// must stay valid for the evaluation; the host may allocate them
+    /// from `arena`.
+    ///
+    /// Null and not a name in the closed set: end of input is absence,
+    /// which the program meets as `none`, and it is the same fact
+    /// `read_line` answers null for off the same descriptor
+    /// (docs/FAILURE.md).  A host that cannot say it is a host whose
+    /// caller loops forever asking.
+    key_read: *const fn (context: *anyopaque, arena: Allocator) error{OutOfMemory}!?KeyEvent,
 };
 
 /// One decoded key: a stable name ("text", "enter", "up", "ctrl_s",

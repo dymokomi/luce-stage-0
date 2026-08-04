@@ -81,8 +81,11 @@ func main():
     var running = true
     while running:
         World.draw(grid, generation)
+        # `none` is the keyboard running dry, which ends the run for
+        # the same reason Ctrl-Q does: nobody is going to ask for
+        # another generation.
         let key = key_read()
-        if key == "ctrl_q":
+        if key == none or key == "ctrl_q":
             running = false
         else:
             var steps = 1

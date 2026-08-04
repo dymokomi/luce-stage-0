@@ -29,7 +29,12 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-pub const format_version: u32 = 17;
+/// 18 — `key_read` answers `String?` rather than `String`.  The
+/// intrinsic list is unchanged and the wire shape with it, but the
+/// *type* the verifier demands of `key_read`'s result is not, so a
+/// module written under 17 would either fail verification or, worse,
+/// pass it and lower against the wrong shape.
+pub const format_version: u32 = 18;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -904,6 +909,13 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap or error codes: bump format_version and update BOTH
     // numbers.
-    try testing.expectEqual(@as(u32, 17), format_version);
+    //
+    // **It fingerprints the names and nothing else**, so it catches an
+    // intrinsic added, removed or renamed and cannot catch one whose
+    // *type* changed — `key_read` going from `String` to `String?`
+    // moved this number and left the hash alone.  A version bump is
+    // still required for that, and this test is not what will remind
+    // you.
+    try testing.expectEqual(@as(u32, 18), format_version);
     try testing.expectEqual(@as(u64, 17919741998905907687), hasher.final());
 }

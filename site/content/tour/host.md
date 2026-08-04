@@ -133,6 +133,12 @@ needs no explicit flush, and it returns stable key names — `"text"`,
 `"enter"`, `"up"`, `"ctrl_s"` — with `key_text()` carrying the
 payload when the name is `"text"`.
 
+It answers `String?`, not `String`. A keyboard runs dry when the pipe
+driving the program ends or the terminal closes, and that is the same
+"nothing there" `read_line` answers `none` for off the same input — so
+a draw loop writes `if name == none: break` and stops, instead of
+asking for the next key forever.
+
 Those cannot be demonstrated on a web page, because they need a real
 terminal. What they are enough for is the repository's
 [flagship program](/examples/programs/): a full-screen editor with

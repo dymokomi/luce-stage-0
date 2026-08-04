@@ -1698,7 +1698,32 @@ test "files, arguments, the screen, and the keyboard agree" {
         \\    term_flush()
         \\    var pressed = 0
         \\    while pressed < 4:
-        \\        print(key_read() + "/" + key_text())
+        \\        let name = key_read()
+        \\        print((name else "<end of input>") + "/" + key_text())
+        \\        pressed = pressed + 1
+        \\
+    );
+}
+
+test "a keyboard that has run dry answers none on both engines" {
+    // The default script is three keys and this asks for five, so the
+    // last two are end of input.  Both engines have to say `none`, and
+    // both have to empty `key_text` with it: a payload left standing
+    // from the last real key would make the two answers differ in the
+    // one place a program looks.
+    //
+    // This is the case that used to have no answer at all.  `no` from
+    // the host was read by nobody, so a program at the end of its
+    // input asked again forever.
+    try agree(
+        \\func main():
+        \\    var pressed = 0
+        \\    while pressed < 5:
+        \\        let name = key_read()
+        \\        if name == none:
+        \\            print("dry/" + key_text())
+        \\        else:
+        \\            print(name + "/" + key_text())
         \\        pressed = pressed + 1
         \\
     );

@@ -4588,7 +4588,16 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "term_style takes (foreground Int, background Int, bold Bool)");
                 result = .none;
             },
-            .key_read, .key_text => {
+            .key_read => {
+                // A keyboard runs dry — a pipe ends, a terminal
+                // closes — and there is nothing there and no reason
+                // worth carrying, which is `String?` and not a name
+                // in the closed set (docs/FAILURE.md).  The same fact
+                // `read_line` already answers `none` for, off the same
+                // descriptor.
+                result = .{ .optional = .string };
+            },
+            .key_text => {
                 result = .string;
             },
             .read_line => {

@@ -827,11 +827,22 @@ slots appended in one run — `read_line`, `print_error`, `clock_ms`,
 `sleep_ms`, `env`, `file_append`, `file_delete`, `file_rename`,
 `dir_list` — so a program can read a line, wait, and work with a
 directory.  No field moved, and a run that calls none of them pays
-nothing.
+nothing.  **9** moved no field and changed no signature: it gave
+`key_read`'s `no` a meaning.  End of input — the keyboard has run dry
+— which the program meets as `none`, exactly as `read_line` does.  It
+had been answerable since version 3 under the shared `Answer`
+convention and was read by nobody, so a host saying "no key will ever
+come" and one saying "not yet" arrived as the same answer and the
+program asking went round forever.  An artifact built against the old
+reading spins at the end of its input, so it is rebuilt rather than
+tolerated.
 
 `key_text` has no slot of its own: it answers what the last `key_read`
 carried, which the runtime remembers, so it fails closed on
-`key_read`'s slot.
+`key_read`'s slot.  End of input clears it, which is why the lowering
+clears both out-parameters before the call: a host that answers `no`
+may leave them untouched, and the payload of a key that never came is
+`""` and not the one before it.
 
 Two shapes the version-8 slots settled, both of which stayed inside
 the conventions already there rather than inventing new ones:

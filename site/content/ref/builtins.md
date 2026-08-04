@@ -135,8 +135,22 @@ call after it.
 | `term_style(foreground, background, bold)` | 256-color SGR; `-1` is the default |
 | `term_write(text: String)` | sanitized; a program cannot emit a control sequence |
 | `term_flush()` | |
-| `key_read() -> String` | presents the pending frame, then blocks; returns a stable name |
+| `key_read() -> String?` | presents the pending frame, then blocks; a stable name, or `none` at end of input |
 | `key_text() -> String` | the payload when the last `key_read` returned `"text"` |
+
+`key_read` answers `String?` because a keyboard can run dry — the pipe
+driving the program ends, the terminal closes — and then there is
+nothing there and no reason worth carrying, exactly as for `read_line`
+off the same input. `none` is not one more name in the set: a name
+would be a value a loop can fall past, and a loop that falls past it
+asks for the next key forever. End of input empties `key_text` too, so
+the payload of a key that never came is `""`.
+
+```
+let name = key_read()
+if name == none:
+    break
+```
 
 `std.files` is the layer you should normally use over the file
 builtins.

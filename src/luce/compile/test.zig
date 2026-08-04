@@ -671,12 +671,21 @@ test "host builtins type-check and stay host-gated" {
         \\    term_clear()
         \\    term_move(0, 0)
         \\    term_style(114, -1, false)
-        \\    term_write(key_read() + key_text())
+        \\    term_write((key_read() else "eof") + key_text())
         \\    term_flush()
         \\
     , .{ .allow_host = true });
     defer hosted.deinit();
     try testing.expect(hosted == .success);
+
+    // `key_read` answers `String?`, so a program that treats a key
+    // that never came as a key is refused where it is written rather
+    // than looping on it at run time (docs/FAILURE.md).
+    try expectRejectedOptions(
+        \\func main():
+        \\    term_write(key_read())
+        \\
+    , .{ .allow_host = true }, "luce.sema.type");
 
     try expectRejectedOptions(
         \\func main() -> !:

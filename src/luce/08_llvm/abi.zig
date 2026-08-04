@@ -106,7 +106,15 @@ const trace = @import("../runtime/trace.zig");
 /// had left out.  No field moved; a run that never calls one pays
 /// nothing.  A program *can* now be written, which is what the version
 /// buys.
-pub const version: u32 = 8;
+///
+/// 9 — `key_read` can say the keyboard has run dry.  No field moved
+/// and no signature changed; what changed is that `no` now *means*
+/// something on `key_read`'s slot — end of input, which the program
+/// meets as `none` — where before it was defined by the shared
+/// `Answer` convention and read by nobody.  An artifact built against
+/// the old reading asks again forever at the end of its input, so it
+/// has to be rebuilt rather than tolerated.
+pub const version: u32 = 9;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -315,9 +323,22 @@ pub const TermWriteFn = *const fn (
 /// ("text", "enter", "ctrl_s", ...) and the inserted text when the name
 /// is "text".  Both are borrowed for the duration of the call.
 ///
+/// `no` is **end of input** — no key will ever arrive, because the
+/// pipe driving the program ended or the terminal closed — which the
+/// program sees as `none`, exactly as `read_line` does off the same
+/// descriptor.  Nothing there, and no reason worth carrying
+/// (docs/FAILURE.md).  A host with no way to say it is a host whose
+/// caller asks again forever, which is what this answer used to mean
+/// by accident: it was defined and never read.
+///
+/// A host that answers `no` may leave the out-parameters untouched;
+/// the generated code clears them first and reads them either way.
+///
 /// `key_text` has no slot of its own and needs none: it answers what
 /// the last `key_read` carried, which the runtime remembers, so it
-/// reaches nothing and a program that never read a key gets "".
+/// reaches nothing and a program that never read a key gets "".  End
+/// of input clears it too — the payload of a key that never came is
+/// "" and not the one before it.
 pub const KeyReadFn = *const fn (
     context: ?*anyopaque,
     name: *[*]const u8,

@@ -973,7 +973,15 @@ pub const Machine = struct {
             },
             .key_read => {
                 const screen = try self.terminal();
-                const event = try screen.key_read(screen.context, self.arena);
+                // A keyboard that has run dry answers `none`, and the
+                // payload goes back to empty with it: `key_text()`
+                // after the end of input must not still be holding the
+                // last key's text.  The compiled path clears the same
+                // two out-parameters for the same reason.
+                const event = try screen.key_read(screen.context, self.arena) orelse {
+                    try self.runtime.setKeyText("");
+                    return .none;
+                };
                 try self.runtime.setKeyText(event.text);
                 return self.runtime.ownValue(.ofString(event.name));
             },

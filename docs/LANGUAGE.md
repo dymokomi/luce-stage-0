@@ -472,15 +472,24 @@ dir_list(path)               # List(String)! — plain names, unsorted
 
 term_rows()   term_cols()   term_clear()   term_move(row, col)
 term_style(fg, bg, bold)   term_write(text)   term_flush()
-key_read()   key_text()
+key_read()   key_text()          # key_read is String?
 ```
 
 Three shapes and one rule behind them (docs/FAILURE.md).  A file
 operation is `!` because the world decides and no non-racy check
-stands in for the result.  `read_line` and `env` are `?` because "there
-is nothing there" is the whole of what they have to say — end of
-input, and a variable nobody set, carry no reason worth a message.
-Everything else either cannot fail or is an effect.
+stands in for the result.  `read_line`, `env` and `key_read` are `?`
+because "there is nothing there" is the whole of what they have to
+say — end of input, and a variable nobody set, carry no reason worth a
+message.  Everything else either cannot fail or is an effect.
+
+`key_read` is `String?` for the same fact `read_line` is, off the same
+descriptor: a keyboard runs dry when the pipe driving it ends or the
+terminal closes, and the host cannot tell those apart and has no
+reason to.  It is deliberately **not** one more name in the closed set
+— an `"eof"` among `"enter"` and `"up"` would be a value a program can
+fall past without the compiler saying so, and a draw loop that falls
+past it asks for the next key forever.  `none` is refused where it is
+written.
 
 `sleep_ms` of a duration that has already elapsed — zero, or the
 negative one that `deadline - clock_ms()` produces on a slow frame —

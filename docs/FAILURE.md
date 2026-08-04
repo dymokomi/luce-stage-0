@@ -171,6 +171,34 @@ inventing those codes would be a lie.
 >
 > `file_exists` stays a Bool. It is a question, not a failure.
 
+> **Corrected once built: `key_read` is `String?` too.** The memo's
+> corpus scan found the absence sites and missed one, because at the
+> time it had no answer at all to miss: `key_read` blocks for a key
+> and there was no way to say that none would ever come. The rule at
+> the top decides it in one line — a keyboard runs dry when the pipe
+> driving it ends or the terminal closes, the host cannot tell those
+> apart and has no reason to, and "there is nothing there, with no
+> reason worth carrying" is `T?`. It is the same fact `read_line`
+> already answers `none` for, off the *same file descriptor*.
+>
+> The other candidate was one more name in the closed set — `"eof"`
+> beside `"enter"` and `"up"` — and it is worth saying why it loses,
+> because it is the cheaper change and it does not alter a type
+> anybody has written. It loses because it does not make the compiler
+> say anything. A name is a `String` a loop can fall past, and every
+> loop that falls past it goes back to asking for the next key: the
+> in-band answer leaves the bug writable, and would have needed the
+> same edit to `editor.luc` and `life.luc` with nothing pointing at
+> them. `String?` refuses each call site where it stands, which is
+> what turned the one-line fix into a compile error at four of them.
+>
+> Two smaller things fell out. `key_text` empties at end of input, so
+> a program reading name and payload separately never sees a key half
+> there. And the host had *had* the answer since ABI 3 — `Answer.no`
+> — and the lowering read only `exhausted`, so the channel existed
+> and carried nothing. An answer nobody reads is not a design; it is a
+> loop waiting to be found.
+
 ## Ownership on the error path needs nothing new
 
 This is where the answer is Zig's, wholesale, and the reason is in our

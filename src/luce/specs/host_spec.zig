@@ -241,11 +241,11 @@ test "terminal builtins drive the host screen and key queue" {
         \\    term_move(1, 2)
         \\    term_style(114, -1, true)
         \\    term_write("hi ")
-        \\    term_write(key_read())
+        \\    term_write(key_read() else "?")
         \\    term_write(key_text())
         \\    let quit = key_read()
         \\    term_flush()
-        \\    print(quit)
+        \\    print(quit else "?")
         \\    print(str(term_rows()) + "x" + str(term_cols()))
         \\
     , .{ .world = .{ .keys = &keys } });
@@ -260,4 +260,35 @@ test "terminal builtins drive the host screen and key queue" {
         "[flush]\n" ++
         "ctrl_q\n" ++
         "24x80\n", session.printed());
+}
+
+test "a keyboard with nothing left on it answers none, and empties key_text with it" {
+    // One key, then the script is spent.  What the second `key_read`
+    // answers is the whole of this fix: `none`, so the program can
+    // stop, rather than the host being asked again forever because
+    // "no key yet" and "no key ever" arrived as the same answer.
+    //
+    // `key_text()` is checked *after* the dry read on purpose.  The
+    // payload of a key that never came is "", not the one before it —
+    // otherwise a program that reads the name and the text separately
+    // sees a key that is half there.
+    const keys = [_]agree.World.Key{.{ .name = "text", .text = "x" }};
+    var session = try agree.compare(
+        \\func main():
+        \\    let first = key_read()
+        \\    print((first else "none") + "/" + key_text())
+        \\    let second = key_read()
+        \\    print((second else "none") + "/" + key_text())
+        \\    let third = key_read()
+        \\    print((third else "none") + "/" + key_text())
+        \\
+    , .{ .world = .{ .keys = &keys } });
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "text/x\n" ++
+            "none/\n" ++
+            "none/\n",
+        session.printed(),
+    );
 }

@@ -300,19 +300,36 @@ the proof the language moved.
     *why*.  `docs/FAILURE.md` predicted a binding form "later"; the
     corpus now has a caller for one.  (Also noted under item 6, which
     is where it was found.)
-14. **`key_read` wakes ten times a second doing nothing.**  Raw mode
-    is set with `VMIN = 0, VTIME = 1` (`src/apps/host.zig`'s
-    `ensureScreen`), so `nextKey`'s loop takes a 100 ms timeout,
-    reads zero bytes, and goes round again.  An editor sitting idle
-    with no keys coming is a process waking 10 times a second for
-    nothing.  It is correct and it is not free; the fix is a real
-    blocking wait, and it wants deciding rather than patching,
-    because the same descriptor has to stay usable by `read_line`.
+14. **Nothing pins the site's copies of `reserved_names`.**  The
+    language's list lives in `04_semantics/context.zig`; the site
+    carries it twice, in `site/src/highlight.zig`'s word tables and
+    in the block on `/ref/lexical/`, and neither copy is checked
+    against the original.  That is how the seven `term_*` builtins
+    came to be in the site's "not reserved" list while the analyzer
+    dispatched them — the copy was right about the language and the
+    language was wrong.  Both are correct now and nothing stops them
+    drifting again.  The generator deliberately imports nothing, not
+    `luce` and so not libLLVM (`build.zig` says why), so the pin
+    cannot be an import; it wants either a generated table checked
+    into the site or a test in `luce` that reads the site's text.
+    Neither is obviously right, which is why this is written down
+    rather than done.
 
 ---
 
 ## Resolved since the last edition
 
+- **`key_read` can say the keyboard has run dry, and no longer wakes
+  ten times a second doing nothing.**  It answers `String?`: `none` is
+  end of input, the same fact `read_line` answers `none` for off the
+  same descriptor (docs/FAILURE.md).  The two halves were one bug.
+  Raw mode was `VMIN = 0, VTIME = 1`, so a read of zero bytes meant
+  either "the timer expired" or "there will never be another key" and
+  `nextKey` could not tell — it looped.  With `VMIN = 1, VTIME = 0`
+  the read blocks, zero bytes means end of input and nothing else, and
+  the idle wakeups go with it: measured 52 wakeups in five seconds
+  before, 1 after.  On the compiled path the host's `no` was defined
+  and read by nobody, which is where the loop actually lived.
 - **Character literals — decided against; `ord("(")` folding verified
   working** in expressions and constants.  **But adoption is zero**: a
   grep for `ord` across every `.luc` returns no matches, and 54 bare

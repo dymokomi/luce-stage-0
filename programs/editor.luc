@@ -441,5 +441,11 @@ func main():
         let visible = max(term_rows() - 1, 1)
         state = Handle.adjust(state, visible)
         Draw.frame(state)
+        # `key_read` answers `String?`: `none` is the keyboard running
+        # dry — a pipe that ended, a terminal that closed — and there
+        # is no one left to ask what to do about unsaved work, so the
+        # editor stops rather than asking forever.
         let name = key_read()
+        if name == none:
+            break
         state = Handle.key(state, name, key_text(), visible)

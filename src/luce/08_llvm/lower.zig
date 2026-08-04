@@ -4455,20 +4455,35 @@ const Body = struct {
             },
             .term_flush => _ = try self.callHost(.term_flush, &.{}, "flushed"),
             .key_read => {
+                // `String?`, and the answer is what decides which.
+                // This is where the answer used to be dropped: only
+                // `exhausted` was read, so a host saying "no key will
+                // ever come" was indistinguishable from one that had
+                // not got one yet, and the program asking went round
+                // again forever.  `no` is end of input, the same shape
+                // `read_line` takes (docs/FAILURE.md).
                 const name = try self.hostText("key.name");
                 const typed = try self.hostText("key.text");
-                _ = try self.callHost(
+                // A host that answers no leaves both untouched, and
+                // both are read below whichever way it answered.
+                try name.clear(self);
+                try typed.clear(self);
+                const answer = try self.callHost(
                     .key_read,
                     &.{ name.text, name.length, typed.text, typed.length },
                     "key",
                 );
+                const present = try self.wip.cast(.zext, try self.saidYes(answer), .i32, "present");
                 // The payload belongs to the run, not to the host's
                 // buffer: copy it in before `key_text` can be asked.
+                // Cleared, so end of input empties it rather than
+                // leaving the last key's text standing.
                 const typed_bytes, const typed_size = try typed.load(self);
                 try self.callChecked(.luce_rt_set_key_text, &.{ rt, typed_bytes, typed_size });
                 const name_bytes, const name_size = try name.load(self);
-                try self.callAnswering(register, .luce_rt_intern_text, &.{
+                try self.callAnswering(register, .luce_rt_maybe_text, &.{
                     rt,
+                    present,
                     name_bytes,
                     name_size,
                 });

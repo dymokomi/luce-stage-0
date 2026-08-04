@@ -820,9 +820,15 @@ fn verifyIntrinsic(
             try expectType(arguments[2], .boolean);
             try expectType(result, .none);
         },
-        .key_read, .key_text => {
+        .key_text => {
             try exactly(arguments, 0);
             try expectType(result, .string);
+        },
+        .key_read => {
+            // `String?`: a keyboard that has run dry has nothing to
+            // hand over, which is absence and not news (docs/FAILURE.md).
+            try exactly(arguments, 0);
+            try expectType(result, .{ .optional = .string });
         },
         .read_line, .env_get => {
             try exactly(arguments, 1);

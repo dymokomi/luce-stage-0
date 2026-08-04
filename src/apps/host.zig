@@ -469,8 +469,22 @@ pub const Host = struct {
         raw.lflag.ISIG = false;
         raw.iflag.IXON = false;
         raw.iflag.ICRNL = false;
-        raw.cc[@intFromEnum(std.posix.V.MIN)] = 0;
-        raw.cc[@intFromEnum(std.posix.V.TIME)] = 1;
+        // Block until at least one byte arrives, and never on a timer.
+        //
+        // It was `MIN = 0, TIME = 1` — a tenth-of-a-second poll — and
+        // that is two faults in one setting.  It made an idle editor
+        // wake ten times a second to read nothing (measured: 52
+        // wakeups in five seconds), and it made a read of zero bytes
+        // ambiguous, because "the timer expired" and "there will never
+        // be another key" arrive as the same answer.  `nextKey` needs
+        // to tell those apart to say end of input at all, so the
+        // blocking read is not a tuning of this fix but a part of it.
+        //
+        // A key still cannot be missed while the program is drawing:
+        // the bytes wait in the terminal's own queue, and the frame is
+        // presented before the read, not instead of it.
+        raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
+        raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
         std.posix.tcsetattr(self.screen.handle, .FLUSH, raw) catch return;
         self.screen.saved = saved;
         self.screen.active = true;
@@ -518,10 +532,24 @@ pub const Host = struct {
         self.screen.buffer.clearRetainingCapacity();
     }
 
-    /// Block until one key arrives.  Both slices are borrowed until the
-    /// next call: the name is static text or this Host's own storage,
-    /// and the text points into the pending input.
-    fn nextKey(self: *Host) error{OutOfMemory}!KeyView {
+    /// Block until one key arrives, or answer null when none ever
+    /// will.  Both slices are borrowed until the next call: the name is
+    /// static text or this Host's own storage, and the text points into
+    /// the pending input.
+    ///
+    /// **Null is the whole reason this returns an optional.**  A read
+    /// of zero bytes on a descriptor set to block is end of input and
+    /// nothing else — the pipe closed, the file ran out — so going
+    /// round again asks a question already answered, forever, at the
+    /// speed of the loop.  That is what it used to do: `loom edit`
+    /// with standard input on `/dev/null` never returned, at 97% of a
+    /// core.
+    ///
+    /// The buffer can also be holding an incomplete escape sequence
+    /// when input ends — a lone `\x1b`, the prefix of an arrow key
+    /// nobody finished.  There is no more input to complete it with,
+    /// so it is dropped rather than waited on.
+    fn nextKey(self: *Host) error{OutOfMemory}!?KeyView {
         try self.ensureScreen();
         // Present whatever the program drew before blocking: key_read
         // is the natural end of a frame.
@@ -543,10 +571,19 @@ pub const Host = struct {
                 if (keyView(&self.screen.control_name, decoded.key)) |view| return view;
                 continue;
             }
+            // A full buffer that decodes to nothing is not going to
+            // decode to anything with one more byte in it: drop it
+            // rather than read zero bytes into no room and call that
+            // end of input.
+            if (self.screen.pending_len == self.screen.pending.len) {
+                self.screen.pending_len = 0;
+                continue;
+            }
             const count = std.posix.read(
                 self.screen.handle,
                 self.screen.pending[self.screen.pending_len..],
             ) catch 0;
+            if (count == 0) return null;
             self.screen.pending_len += count;
         }
     }
@@ -804,7 +841,7 @@ pub const Host = struct {
         text: *[*]const u8,
         text_length: *i64,
     ) callconv(.c) abi.Answer {
-        const view = of(context).nextKey() catch return .exhausted;
+        const view = (of(context).nextKey() catch return .exhausted) orelse return .no;
         name.* = view.name.ptr;
         name_length.* = @intCast(view.name.len);
         text.* = view.text.ptr;
