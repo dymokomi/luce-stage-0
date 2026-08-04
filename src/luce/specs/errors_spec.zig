@@ -68,6 +68,50 @@ fn expectErrorOptions(
     }
 }
 
+/// Compile and assert a diagnostic carrying `code` **and saying
+/// `saying`**.
+///
+/// The everyday assertion above names a code, and a code is not a
+/// check: `luce.sema.type` is emitted from thirty-nine places and
+/// `luce.sema.let` from four, so a test that names only the code goes
+/// on passing while three of those four checks are deleted.  The words
+/// are what identify the site, so where a code has more than one
+/// emission point this is the assertion to use.
+fn expectSaying(source: []const u8, code: []const u8, saying: []const u8) !void {
+    return expectSayingOptions(source, script, code, saying);
+}
+
+fn expectHostSaying(source: []const u8, code: []const u8, saying: []const u8) !void {
+    return expectSayingOptions(source, hosted, code, saying);
+}
+
+fn expectSayingOptions(
+    source: []const u8,
+    options: types.CompileOptions,
+    code: []const u8,
+    saying: []const u8,
+) !void {
+    var result = try compile_mod.compile(testing.allocator, source, options);
+    defer result.deinit();
+    switch (result) {
+        .success => {
+            std.debug.print("expected {s}, but this compiled:\n{s}", .{ code, source });
+            return error.TestUnexpectedResult;
+        },
+        .failure => |diagnostics| {
+            for (0..diagnostics.count()) |index| {
+                const found = diagnostics.at(index).?;
+                if (!std.mem.eql(u8, found.code, code)) continue;
+                if (std.mem.indexOf(u8, found.message, saying) != null) return;
+            }
+            const rendered = try diagnostics.render(testing.allocator);
+            defer testing.allocator.free(rendered);
+            std.debug.print("wanted {s} saying \"{s}\", got:\n{s}", .{ code, saying, rendered });
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
 /// Assert the FIRST diagnostic is exactly `code` at `line`:`column`.
 /// Used where the span itself is the guarantee under test.
 fn expectErrorAt(source: []const u8, code: []const u8, line: usize, column: usize) !void {
@@ -1738,4 +1782,410 @@ test "luce.sema.main: a script entry may say ! and nothing else" {
         \\    return 1
         \\
     , "luce.sema.main");
+}
+
+// ---------------------------------------------------------------------------
+// One case per check, where the code alone cannot say which check ran
+// ---------------------------------------------------------------------------
+//
+// Stage 4 emits 186 diagnostics from 186 places, and the tests above
+// reach 145 of them.  The rest are pinned here, each by its own words,
+// because a code shared between checks is a code that stays green
+// while a check is deleted: `luce.sema.let` guards four assignment
+// forms and the everyday tests only ever wrote the simplest one, so
+// removing the check on the other three changed no test at all.
+//
+// Every case below names the *form* it refuses rather than the code,
+// and asserts the sentence that only that check writes.
+//
+// Six of the 186 have no case here because they have no input, and
+// each is written down where it stands rather than left looking
+// untested:
+//
+//   * `luce.sema.import` in `resolveDeclared` — `ast.Call.callee` is
+//     one identifier token, so a dotted call is parsed as a method and
+//     answered on the other path (`compile/test.zig`).
+//   * `luce.sema.type` "compound assignment needs matching types" —
+//     all four callers compare the place with the value first.
+//   * `luce.sema.type` "value has no type" — a `none` operand is
+//     "returns nothing" one check earlier.
+//   * `luce.sema.type` "None? is not a type" — `resolveBase` never
+//     answers `none`, so the `?` never has nothing to widen.
+//   * `luce.sema.fallible` and `luce.sema.call` in `stringsCall` — no
+//     function in std `strings` is fallible or returns nothing.  These
+//     two are the only ones a *library* change makes reachable, and
+//     they are the reason they stay.
+//
+// They are all null arms of shared helpers, which is why they are
+// written and why they are cheap; what they are not is coverage.
+
+test "luce.sema.let: every assignment form refuses a let, not only the plain one" {
+    // Four checks, one per shape of place.  The plain name is the one
+    // everything else already covered; the other three are here.
+    try expectSaying(
+        \\func main():
+        \\    let count = 1
+        \\    count = 2
+        \\
+    , "luce.sema.let", "count is let-bound");
+
+    // A field of a let-bound struct.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\    y: Int
+        \\
+        \\func main():
+        \\    let p = Point(x = 1, y = 2)
+        \\    p.x = 3
+        \\
+    , "luce.sema.let", "p is let-bound");
+
+    // A nested place: the root is what has to be mutable, however
+    // many steps down the leaf sits.
+    try expectSaying(
+        \\struct Inner:
+        \\    value: Int
+        \\
+        \\struct Outer:
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    let held = Outer(inner = Inner(value = 1))
+        \\    held.inner.value = 2
+        \\
+    , "luce.sema.let", "held is let-bound");
+
+    // And compound assignment through a chain is an assignment too.
+    try expectSaying(
+        \\struct Inner:
+        \\    value: Int
+        \\
+        \\struct Outer:
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    let held = Outer(inner = Inner(value = 1))
+        \\    held.inner.value += 2
+        \\
+    , "luce.sema.let", "held is let-bound");
+
+    // A file-scope constant is immutable for a different reason, and
+    // says so in different words.
+    try expectSaying(
+        \\let width = 80
+        \\
+        \\func main():
+        \\    width = 3
+        \\
+    , "luce.sema.let", "width is a file-scope constant");
+}
+
+test "luce.sema.field: an unknown field is named wherever the chain meets it" {
+    // The same helper answers for a read, a single-level write, and a
+    // nested place; each reaches it by its own path.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    let bad = p.z
+        \\
+    , "luce.sema.field", "Point has no field z");
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    var p = Point(x = 1)
+        \\    p.z = 2
+        \\
+    , "luce.sema.field", "Point has no field z");
+    try expectSaying(
+        \\struct Inner:
+        \\    value: Int
+        \\
+        \\struct Outer:
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    var held = Outer(inner = Inner(value = 1))
+        \\    held.inner.missing = 2
+        \\
+    , "luce.sema.field", "Inner has no field missing");
+    // A near miss is spelled out; a name nothing resembles is not.
+    try expectSaying(
+        \\struct Point:
+        \\    value: Int
+        \\
+        \\func main():
+        \\    let p = Point(value = 1)
+        \\    let bad = p.valu
+        \\
+    , "luce.sema.field", "did you mean value?");
+}
+
+test "luce.sema.type: a nested place and a compound assignment check their own types" {
+    try expectSaying(
+        \\struct Inner:
+        \\    value: Int
+        \\
+        \\struct Outer:
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    var held = Outer(inner = Inner(value = 1))
+        \\    held.inner.value = 1.5
+        \\
+    , "luce.sema.type", "this place holds Int but the value is Float");
+    // `compoundCombine`'s own "needs matching types" has no case
+    // here, and cannot: all four callers — name, field, element,
+    // chain — compare the place with the value before they combine,
+    // each in its own words, so the helper's copy of the check is
+    // never the one that fires.  What the helper *does* answer for is
+    // the place that has no compound form at all, which is where a
+    // Bool lands.
+    try expectSaying(
+        \\func main():
+        \\    var flags = [true, false]
+        \\    flags[0] += true
+        \\
+    , "luce.sema.type", "has no compound assignment");
+}
+
+test "luce.sema.type: an empty list literal needs somewhere to learn its element from" {
+    // Three different checks, three different sentences: annotated
+    // with a list type, annotated with something else, and not
+    // annotated at all.
+    try expectSaying(
+        \\func main():
+        \\    var xs = []
+        \\
+    , "luce.sema.type", "an empty [] needs an annotation");
+    try expectSaying(
+        \\func main():
+        \\    var xs: Int = []
+        \\
+    , "luce.sema.type", "[] builds a List, but xs is annotated Int");
+    try expectSaying(
+        \\func main():
+        \\    let size = len([])
+        \\
+    , "luce.sema.type", "an empty [] needs an annotated binding");
+}
+
+test "luce.sema.index: every shape of index says what it will accept" {
+    try expectSaying(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2, 2, 2)
+        \\    let bad = grid[0, 0, 0, 0, 0]
+        \\
+    , "luce.sema.index", "at most 4 index dimensions");
+    try expectSaying(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    let bad = grid[0, 1.5]
+        \\
+    , "luce.sema.index", "array indices are Int");
+    try expectSaying(
+        \\func main():
+        \\    var b = new Builder()
+        \\    let bad = b[0]
+        \\
+    , "luce.sema.index", "Builder has no index");
+    // A slice's bounds are a *type* fault rather than an indexing one:
+    // what is wrong is the value written, not the shape of the access.
+    try expectSaying(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    let bad = xs[0:1.5]
+        \\
+    , "luce.sema.type", "slice bounds are Int");
+    try expectSaying(
+        \\func main():
+        \\    var b = new Builder()
+        \\    let bad = b[0:1]
+        \\
+    , "luce.sema.index", "cannot be sliced");
+}
+
+test "luce.sema.loop: for takes a rank-1 array and nothing wider" {
+    try expectSaying(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    for cell in grid:
+        \\        let unused = cell
+        \\
+    , "luce.sema.loop", "for iterates rank-1 arrays");
+}
+
+test "luce.sema.method: each receiver kind names the methods it has" {
+    try expectSaying(
+        \\func main():
+        \\    var s = "abc"
+        \\    let bad = s.byte_at("x")
+        \\
+    , "luce.sema.method", "byte_at takes an Int offset");
+    try expectSaying(
+        \\func main():
+        \\    var s = "abc"
+        \\    let bad = s.find_byte("x", 0)
+        \\
+    , "luce.sema.method", "find_byte takes (byte Int, start Int)");
+    try expectSaying(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    grid.sort()
+        \\
+    , "luce.sema.method", "only rank-1 arrays have sort");
+    try expectSaying(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let bad = m.hass("a")
+        \\
+    , "luce.sema.method", "did you mean has?");
+    try expectSaying(
+        \\func main():
+        \\    var b = new Builder()
+        \\    b.appen("x")
+        \\
+    , "luce.sema.method", "did you mean append?");
+    try expectSaying(
+        \\func main():
+        \\    var b = new Builder()
+        \\    b.zzzzzz()
+        \\
+    , "luce.sema.method", "(append append_ascii clear)");
+    try expectSaying(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var s = "a,b"
+        \\    let bad = s.spli(",")
+        \\
+    , "luce.sema.method", "did you mean split?");
+}
+
+test "luce.sema.own: the checks that have no name to suggest still say what to do" {
+    // `failNeedsOwnership` has three endings: a borrowed parameter, a
+    // name that could be given, and an expression that is neither.
+    // The third is what a container element read reaches.
+    try expectSaying(
+        \\func main():
+        \\    var outer = new List(List(Int))
+        \\    var source = new List(List(Int))
+        \\    outer.append(source[0])
+        \\    free(outer)
+        \\    free(source)
+        \\
+    , "luce.sema.own", "store something fresh, give NAME, or copy NAME");
+
+    // Both arms of `else` decide ownership together, because the
+    // binding that receives the answer either owns or does not.
+    try expectHostSaying(
+        \\func pick(which: Bool) -> List(Int)?:
+        \\    if which:
+        \\        return new List(Int)
+        \\    return none
+        \\
+        \\func main():
+        \\    let kept = new List(Int)
+        \\    let got = pick(true) else kept
+        \\    free(kept)
+        \\
+    , "luce.sema.own", "the two sides of else must agree on ownership");
+
+    // std strings borrows, so a give at one of its arguments has no
+    // owner to become.
+    try expectSaying(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var parts = new List(String)
+        \\    var other = new List(String)
+        \\    let joined = parts.join(give other)
+        \\    free(parts)
+        \\
+    , "luce.sema.own", "only borrows its arguments");
+}
+
+test "luce.sema.name: a port is not a place, however it is written" {
+    try expectSaying(
+        \\func main():
+        \\    output.total.value = 1
+        \\
+    , "luce.sema.name", "ports are not nested places");
+}
+
+test "luce.sema.type: a written type is checked against the arguments it may take" {
+    try expectSaying(
+        \\func main():
+        \\    var x: Int(String) = 1
+        \\
+    , "luce.sema.type", "Int takes no type arguments");
+    try expectSaying(
+        \\func main():
+        \\    var m: Map(Int) = new Map(Int, Int)
+        \\
+    , "luce.sema.type", "Map takes key and value types");
+    try expectSaying(
+        \\func main():
+        \\    var a: Array(Int) = new Array(Int, 2)
+        \\
+    , "luce.sema.type", "Array spells element and shape");
+    try expectSaying(
+        \\func main():
+        \\    var b: Builder(Int) = new Builder()
+        \\
+    , "luce.sema.type", "Builder takes no type arguments");
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    var p: Point(Int) = Point(x = 1)
+        \\
+    , "luce.sema.type", "Point takes no type arguments");
+    // `None?` has no test because it has no input: `resolveBase`
+    // answers Bool, Int, Float, String, a struct or a heap type and
+    // nothing else, and `Type.optionalOf` refuses only `none` and a
+    // second `?`.  Writing `None?` is `unknown type None` one step
+    // earlier.  The guard stays because it is the null arm of a shared
+    // helper, but there is no program that reaches it.
+}
+
+test "luce.sema.struct: a struct whose fields all fell away has an empty body" {
+    // Reached by a field whose type does not resolve: the field is
+    // skipped, and a struct with no fields and no functions is not a
+    // value at all.  Both sentences are owed here — dropping the
+    // second would leave a struct in the table that nothing can build
+    // and nothing said why.
+    try expectSaying(
+        \\struct Bad:
+        \\    value: Nope
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.struct", "struct Bad has an empty body");
+    try expectSaying(
+        \\struct Bad:
+        \\    value: Nope
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.type", "unknown type Nope");
+}
+
+test "luce.sema.duplicate: two file-scope constants cannot share a name" {
+    try expectSaying(
+        \\let width = 80
+        \\let width = 90
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.duplicate", "duplicate name width");
 }

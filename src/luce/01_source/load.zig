@@ -527,6 +527,35 @@ test "a bad byte is reported at a line and a column, not a raw offset" {
     }
 }
 
+test "luce.source.too_large: a file past the ceiling is refused before it is read" {
+    // The ceiling is the one refusal that costs its own size to prove,
+    // which is why nothing else reaches it — and why it is worth one
+    // test of its own: the check stands between a hostile or corrupt
+    // file and every offset, line index and span the compiler would
+    // otherwise build over it.  The message carries both numbers,
+    // because "too large" without them is not something a reader can
+    // act on.
+    const oversized = try testing.allocator.alloc(u8, encoding.max_bytes + 1);
+    defer testing.allocator.free(oversized);
+    @memset(oversized, 'a');
+
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    try testing.expect((try openRoot(&diagnostics, "huge.luc", oversized)) == null);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+    try testing.expectEqualStrings("luce.source.too_large", diagnostics.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "huge.luc") != null);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "the limit is") != null);
+    // Nothing was registered: a file this size never became source.
+    try testing.expectEqual(@as(usize, 0), diagnostics.sources.count());
+
+    // One byte under, and it is ordinary text.
+    var accepted = Diagnostics.init(testing.allocator);
+    defer accepted.deinit();
+    try testing.expect((try openRoot(&accepted, "big.luc", oversized[0..encoding.max_bytes])) != null);
+    try testing.expectEqual(@as(usize, 0), accepted.count());
+}
+
 test "a byte-order mark counts toward the offsets a message reports" {
     // The BOM is three bytes of the file even though it is not three
     // bytes of the text, so a position must count it — otherwise the

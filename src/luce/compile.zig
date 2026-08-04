@@ -180,3 +180,46 @@ fn verifyStage(
 test {
     _ = @import("compile/test.zig");
 }
+
+test "luce.compiler.verify: broken IR becomes a diagnostic, never a bad artifact" {
+    // The one diagnostic no program can ask for.  It is not reachable
+    // from source by design — it fires when *this compiler* hands the
+    // verifier something the verifier refuses — so it is proved here,
+    // against a program damaged by hand, rather than in the error
+    // suite.  Without this the guard is untested code on the path
+    // between a lowering bug and a `.lcm` nobody would question.
+    const testing = std.testing;
+
+    var program: mir.Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    const arena = program.arena.allocator();
+    const functions = try arena.alloc(mir.Function, 1);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        // A block whose last instruction is not a terminator: what a
+        // lowering that forgot to close a block would produce.
+        .instructions = try arena.dupe(mir.Instruction, &.{.{ .const_int = 1 }}),
+        .result_types = try arena.dupe(types.Type, &.{.int}),
+        .blocks = try arena.dupe(mir.Block, &.{
+            .{ .items = try arena.dupe(mir.Register, &.{0}) },
+        }),
+    };
+    program.functions = functions;
+
+    var diagnostics = Diagnostics.init(testing.allocator);
+    const failed = (try verifyStage(testing.allocator, &program, &diagnostics, "generated")).?;
+    // `verifyStage` took the program with it and handed the list on.
+    var reported = failed.failure;
+    defer reported.deinit();
+
+    try testing.expectEqual(@as(usize, 1), reported.count());
+    try testing.expectEqualStrings("luce.compiler.verify", reported.at(0).?.code);
+    // The message names the stage and what the verifier said, because
+    // that is the whole of what a bug report needs from it.
+    const message = reported.at(0).?.message;
+    try testing.expect(std.mem.indexOf(u8, message, "internal compiler error") != null);
+    try testing.expect(std.mem.indexOf(u8, message, "generated") != null);
+    try testing.expect(std.mem.indexOf(u8, message, "UnterminatedBlock") != null);
+}

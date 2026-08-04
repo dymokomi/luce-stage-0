@@ -504,6 +504,129 @@ test "lists index, append, pop, insert, remove, and bound-check" {
     try expectTrap(.empty_collection, runtime, containers.pop(runtime, held));
 }
 
+// Every bounded operation, at the index on each side of its bound.
+// One-sided coverage is what lets an off-by-one live: a test that only
+// ever asks for index 5 of a three-element list passes whether the
+// comparison is `>=` or `>`, and the difference between those two is
+// a write past the end.  So each of these names a boundary and asks
+// for the last legal index and the first illegal one.
+
+test "every list bound is checked at the last legal index and the first illegal one" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const held = try runtime.newList();
+    for ([_]i64{ 10, 20, 30 }) |element| try containers.append(runtime, held, Value.ofInt(element));
+
+    // Reading: 0 and len-1 answer, -1 and len trap.
+    try testing.expectEqual(@as(i64, 10), (try containers.indexGet(runtime, held, &.{Value.ofInt(0)})).asInt());
+    try testing.expectEqual(@as(i64, 30), (try containers.indexGet(runtime, held, &.{Value.ofInt(2)})).asInt());
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofInt(3)}));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofInt(-1)}));
+
+    // Writing has the same bound, and it is a separate comparison.
+    try containers.indexSet(runtime, held, &.{Value.ofInt(2)}, Value.ofInt(31));
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexSet(runtime, held, &.{Value.ofInt(3)}, Value.ofInt(0)),
+    );
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexSet(runtime, held, &.{Value.ofInt(-1)}, Value.ofInt(0)),
+    );
+
+    // Insert is the one whose bound is *not* the same as the others:
+    // `xs.insert(len, v)` appends, so len is legal and len+1 is not.
+    // Reading this bound as "like index_get" is an off-by-one that
+    // silently loses the append form.
+    try containers.insert(runtime, held, 3, Value.ofInt(40));
+    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, held)).asInt());
+    try testing.expectEqual(@as(i64, 40), (try containers.indexGet(runtime, held, &.{Value.ofInt(3)})).asInt());
+    try containers.insert(runtime, held, 0, Value.ofInt(5));
+    try testing.expectEqual(@as(i64, 5), (try containers.indexGet(runtime, held, &.{Value.ofInt(0)})).asInt());
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, 6, Value.ofInt(0)));
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, -1, Value.ofInt(0)));
+    try testing.expectEqual(@as(i64, 5), (try containers.length(runtime, held)).asInt());
+
+    // Remove is bounded like a read: len-1 is the last element there
+    // is to take out.
+    try containers.remove(runtime, held, Value.ofInt(4));
+    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofInt(4)));
+    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofInt(-1)));
+
+    // A slice is half-open: end may be len, start may equal end, and
+    // an inverted pair is refused rather than answered empty.
+    const whole = bench.made(try containers.listSlice(runtime, held, 0, 4));
+    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, whole)).asInt());
+    const empty = bench.made(try containers.listSlice(runtime, held, 4, 4));
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asInt());
+    try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, 0, 5));
+    try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, 3, 2));
+    try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, -1, 2));
+
+    // And pop empties before it complains: the last element comes out,
+    // and only the call after that has nothing to answer.
+    for (0..4) |_| _ = try containers.pop(runtime, held);
+    try expectTrap(.empty_collection, runtime, containers.pop(runtime, held));
+}
+
+test "every map and array bound is checked on both sides too" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const held = try runtime.newMap();
+    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofInt(1));
+    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofInt(2));
+
+    // Positional access over a map's entries is bounded by its count.
+    try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 1)).asString());
+    try testing.expectEqual(@as(i64, 2), (try containers.valueAt(runtime, held, 1)).asInt());
+    try expectTrap(.index_bounds, runtime, containers.keyAt(runtime, held, 2));
+    try expectTrap(.index_bounds, runtime, containers.keyAt(runtime, held, -1));
+    try expectTrap(.index_bounds, runtime, containers.valueAt(runtime, held, 2));
+    try expectTrap(.index_bounds, runtime, containers.valueAt(runtime, held, -1));
+
+    // A key a map does not hold traps on read, and removing one does
+    // nothing at all — the two are different questions on purpose.
+    try expectTrap(.key_missing, runtime, containers.indexGet(runtime, held, &.{Value.ofString("z")}));
+    try containers.remove(runtime, held, Value.ofString("z"));
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asInt());
+
+    // Every axis of an array is bounded independently, and so is the
+    // axis number `dim_size` is asked about.
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofInt(0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(2) }, Value.ofInt(7));
+    try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
+        runtime,
+        grid,
+        &.{ Value.ofInt(1), Value.ofInt(2) },
+    )).asInt());
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(2), Value.ofInt(2) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(3) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(-1), Value.ofInt(0) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(0), Value.ofInt(-1) }));
+    try testing.expectEqual(@as(i64, 2), (try containers.dimSize(runtime, grid, 0)).asInt());
+    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asInt());
+    try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, 2));
+    try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, -1));
+
+    // A Builder's bytes are ASCII, so its bound is a codepoint range:
+    // 0x7F is the last byte that is one, and 0x80 is the first that is
+    // not.
+    const builder = try runtime.newBuilder();
+    try containers.appendAscii(runtime, builder, 0);
+    try containers.appendAscii(runtime, builder, 0x7F);
+    try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, builder, 0x80));
+    try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, builder, -1));
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, builder)).asInt());
+}
+
 test "maps keep insertion order and answer for missing keys three ways" {
     var bench: Bench = undefined;
     bench.setup();

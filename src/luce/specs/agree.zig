@@ -1050,9 +1050,16 @@ pub fn project(root: []const u8, files: []const File) !mir.Program {
 /// Lower `source` and hand back the textual LLVM IR; the caller owns
 /// it.  Null means the program uses something with no lowering yet.
 pub fn render(source: []const u8) !?[]const u8 {
+    return renderBuilt(source, .debug);
+}
+
+/// The same, in either build mode, so a test can hold the two
+/// artifacts side by side (docs/MODES.md).
+pub fn renderBuilt(source: []const u8, mode: Mode) !?[]const u8 {
     const gpa = testing.allocator;
     var compiled = try program(source);
     defer compiled.deinit();
+    if (mode == .release) mir.strip(&compiled);
 
     const triple = try emit.hostTriple(gpa);
     defer gpa.free(triple);
