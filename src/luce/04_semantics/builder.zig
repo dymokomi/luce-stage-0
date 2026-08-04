@@ -3956,10 +3956,14 @@ pub const FunctionBuilder = struct {
             while (keys.next()) |key| {
                 if (std.mem.startsWith(u8, key.*, "strings.")) suggestion.offer(key.*["strings.".len..]);
             }
+            // The reader wrote a method on a String; `strings` is the
+            // module it routes to, and answering with the routing
+            // target names something they never typed.  Say what they
+            // asked about, then where the answer would have lived.
             if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "strings has no function {s}; did you mean {s}?", .{ method.name, closest });
+                try self.fail("luce.sema.method", method.span, "String has no method {s}; did you mean {s}?", .{ method.name, closest });
             } else {
-                try self.fail("luce.sema.method", method.span, "strings has no function {s}", .{method.name});
+                try self.fail("luce.sema.method", method.span, "String has no method {s}, and neither has the strings module", .{method.name});
             }
             return null;
         };
@@ -4193,13 +4197,21 @@ pub const FunctionBuilder = struct {
             if (!try self.methodTakes(method, arguments, &.{element})) return null;
             return .{ .kind = .list_contains, .result = .boolean };
         }
+        // "here" was the only word naming the receiver, and it names
+        // nothing: Map and Builder both say which they are, and a
+        // reader who mistook a List for a Map needs exactly that.
+        const receiver = if (growable) "List" else "Array";
         var suggestion = helpers.Suggestion.init(name);
         suggestion.offerAll(if (growable) &list_methods else &array_methods);
         if (suggestion.best()) |closest| {
-            try self.fail("luce.sema.method", method.span, "no method {s} here; did you mean {s}?", .{ name, closest });
+            try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{ receiver, name, closest });
             return null;
         }
-        try self.fail("luce.sema.method", method.span, "no method {s} here (append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
+        if (growable) {
+            try self.fail("luce.sema.method", method.span, "List has no method {s} (has append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
+            return null;
+        }
+        try self.fail("luce.sema.method", method.span, "Array has no method {s} (has dim fill sort reverse find contains)", .{name});
         return null;
     }
 

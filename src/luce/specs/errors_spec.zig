@@ -2290,6 +2290,46 @@ test "luce.sema.call: a builtin counts its arguments the way a function does" {
     , "luce.sema.call", "min takes 2 arguments, got 1", 2, 13);
 }
 
+test "luce.sema.method: a missing method names the receiver it is missing from" {
+    // Map and Builder always said which they were; List and Array
+    // said "no method sortt here", where "here" named nothing.
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.sortt()
+        \\
+    , "luce.sema.method", "List has no method sortt; did you mean sort?", 3, 5);
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.zzzzzz()
+        \\
+    ,
+        "luce.sema.method",
+        "List has no method zzzzzz (has append insert remove pop sort reverse find contains clear; join lives in strings)",
+        3,
+        5,
+    );
+    // An Array is offered the methods an Array has, not a List's.
+    try expectSayingAt(
+        \\func main():
+        \\    var grid = new Array(Int, 4)
+        \\    grid.zzzzzz()
+        \\
+    , "luce.sema.method", "Array has no method zzzzzz (has dim fill sort reverse find contains)", 3, 5);
+    // A String method routes through the strings module, but the
+    // reader wrote a String — answering "strings has no function"
+    // names a desugaring target they never typed.
+    try expectSayingAt(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let s = "x"
+        \\    let n = s.frobnicate()
+        \\
+    , "luce.sema.method", "String has no method frobnicate, and neither has the strings module", 5, 13);
+}
+
 test "luce.sema.call: a user function agrees with itself about one argument" {
     try expectSayingAt(
         \\func double(a: Int) -> Int:
