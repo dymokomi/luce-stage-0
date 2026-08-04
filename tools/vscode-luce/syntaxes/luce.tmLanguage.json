@@ -1,4 +1,9 @@
 {
+  "information_for_contributors": [
+    "This file is GENERATED from the Luce compiler's own word tables.",
+    "Do not edit it: run `zig build grammar` and commit the result.",
+    "The generator is tools/grammar.zig, and a test in `zig build test` fails when this file and the language disagree."
+  ],
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Luce",
   "scopeName": "source.luce",
@@ -13,62 +18,91 @@
       "include": "#declarations"
     },
     {
-      "include": "#port-members"
-    },
-    {
-      "include": "#literals"
-    },
-    {
-      "include": "#types"
-    },
-    {
-      "include": "#builtins"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#operators"
-    },
-    {
-      "include": "#punctuation"
+      "include": "#code"
     }
   ],
   "repository": {
+    "accessors": {
+      "patterns": [
+        {
+          "match": "(\\.)(append|insert|remove|pop|clear|sort|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|byte_at|find_byte)\\b",
+          "captures": {
+            "1": { "name": "punctuation.accessor.luce" },
+            "2": { "name": "support.function.method.luce" }
+          }
+        },
+        {
+          "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "punctuation.accessor.luce" },
+            "2": { "name": "entity.name.function.luce" }
+          }
+        },
+        {
+          "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.accessor.luce" },
+            "2": { "name": "variable.other.member.luce" }
+          }
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.luce",
+          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|len|assert|trap|error|str|parse_int|parse_float|chr|ord)\\b"
+        },
+        {
+          "name": "support.function.builtin.host.luce",
+          "match": "\\b(?:print|file_read|file_write|file_exists|arg_count|arg|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list)\\b"
+        }
+      ]
+    },
+    "calls": {
+      "patterns": [
+        {
+          "name": "entity.name.function.call.luce",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "code": {
+      "patterns": [
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#accessors"
+        },
+        {
+          "include": "#builtins"
+        },
+        {
+          "include": "#calls"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         {
           "name": "comment.line.number-sign.luce",
-          "match": "#.*$"
-        }
-      ]
-    },
-    "strings": {
-      "patterns": [
-        {
-          "name": "string.quoted.double.luce",
-          "begin": "\"",
-          "beginCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.begin.luce"
-            }
-          },
-          "end": "(\"|$)",
-          "endCaptures": {
-            "1": {
-              "name": "punctuation.definition.string.end.luce"
-            }
-          },
-          "patterns": [
-            {
-              "name": "constant.character.escape.luce",
-              "match": "\\\\(?:n|t|\\\\|\")"
-            },
-            {
-              "name": "invalid.illegal.escape.luce",
-              "match": "\\\\."
-            }
-          ]
+          "match": "(#).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.luce" }
+          }
         }
       ]
     },
@@ -77,126 +111,30 @@
         {
           "match": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": {
-              "name": "storage.type.function.luce"
-            },
-            "2": {
-              "name": "entity.name.function.luce"
-            }
+            "1": { "name": "storage.type.function.luce" },
+            "2": { "name": "entity.name.function.luce" }
           }
         },
         {
           "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": {
-              "name": "storage.type.struct.luce"
-            },
-            "2": {
-              "name": "entity.name.type.struct.luce"
-            }
+            "1": { "name": "storage.type.struct.luce" },
+            "2": { "name": "entity.name.type.struct.luce" }
           }
         },
         {
           "match": "\\b(let|var)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": {
-              "name": "storage.type.variable.luce"
-            },
-            "2": {
-              "name": "variable.other.definition.luce"
-            }
+            "1": { "name": "storage.type.luce" },
+            "2": { "name": "variable.other.definition.luce" }
           }
-        }
-      ]
-    },
-    "port-members": {
-      "patterns": [
+        },
         {
-          "match": "\\b([A-Z][A-Za-z0-9_]*)(\\.)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "match": "\\b(import)\\s+([A-Za-z_][A-Za-z0-9_.]*)",
           "captures": {
-            "1": {
-              "name": "entity.name.type.struct.luce"
-            },
-            "2": {
-              "name": "punctuation.accessor.luce"
-            },
-            "3": {
-              "name": "entity.name.function.luce"
-            }
+            "1": { "name": "keyword.control.import.luce" },
+            "2": { "name": "entity.name.namespace.luce" }
           }
-        },
-        {
-          "match": "\\b(input|output)(\\.)([A-Za-z_][A-Za-z0-9_]*)\\b",
-          "captures": {
-            "1": {
-              "name": "variable.language.luce"
-            },
-            "2": {
-              "name": "punctuation.accessor.luce"
-            },
-            "3": {
-              "name": "variable.other.member.port.luce"
-            }
-          }
-        },
-        {
-          "name": "variable.language.luce",
-          "match": "\\b(?:input|output)\\b"
-        }
-      ]
-    },
-    "literals": {
-      "patterns": [
-        {
-          "name": "constant.language.boolean.luce",
-          "match": "\\b(?:true|false)\\b"
-        },
-        {
-          "name": "constant.numeric.float.luce",
-          "match": "\\b\\d+(?:(?:\\.\\d+)(?:[eE][+-]?\\d+)?|[eE][+-]?\\d+)\\b"
-        },
-        {
-          "name": "constant.numeric.integer.luce",
-          "match": "\\b\\d+\\b"
-        }
-      ]
-    },
-    "types": {
-      "patterns": [
-        {
-          "name": "support.type.builtin.luce",
-          "match": "\\b(?:Bool|Int|Float|String)\\b"
-        },
-        {
-          "match": "(:|->)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b",
-          "captures": {
-            "1": {
-              "name": "punctuation.separator.type.luce"
-            },
-            "2": {
-              "name": "entity.name.type.luce"
-            }
-          }
-        }
-      ]
-    },
-    "builtins": {
-      "patterns": [
-        {
-          "name": "support.function.builtin.fabric.luce",
-          "match": "\\b(?:create_image|create_texel|texel_input|texel_output|texel_content|texel_evaluator|texel_set)\\b"
-        },
-        {
-          "name": "support.function.builtin.host.luce",
-          "match": "\\b(?:read_file|script_directory)\\b"
-        },
-        {
-          "name": "support.function.builtin.luce",
-          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|len|slice|byte_at|assert|trap)\\b"
-        },
-        {
-          "name": "support.function.entrypoint.luce",
-          "match": "\\b(?:main)\\b"
         }
       ]
     },
@@ -209,26 +147,86 @@
         {
           "name": "keyword.operator.word.luce",
           "match": "\\b(?:and|or|not)\\b"
+        },
+        {
+          "name": "storage.type.luce",
+          "match": "\\b(?:func|struct|let|var)\\b"
+        },
+        {
+          "name": "keyword.control.import.luce",
+          "match": "\\b(?:import)\\b"
+        },
+        {
+          "name": "keyword.control.exception.luce",
+          "match": "\\b(?:try|catch)\\b"
+        },
+        {
+          "name": "constant.language.luce",
+          "match": "\\b(?:true|false|none)\\b"
+        },
+        {
+          "name": "keyword.other.ownership.luce",
+          "match": "\\b(?:new|give|copy|free)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "invalid.illegal.number.luce",
+          "match": "\\b\\d+(?:\\.\\d+){2,}"
+        },
+        {
+          "name": "constant.numeric.float.luce",
+          "match": "\\b\\d+(?:\\.\\d+(?:[eE][+-]?\\d+)?|[eE][+-]?\\d+)\\b"
+        },
+        {
+          "name": "invalid.illegal.number.luce",
+          "match": "\\b\\d+\\.(?![A-Za-z_])"
+        },
+        {
+          "name": "invalid.illegal.number.luce",
+          "match": "\\b\\d+[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "invalid.illegal.number.luce",
+          "match": "\\b0\\d+\\b"
+        },
+        {
+          "name": "invalid.illegal.number.luce",
+          "match": "(?<![A-Za-z0-9_)\\]])\\.\\d+(?:[eE][+-]?\\d+)?"
+        },
+        {
+          "name": "constant.numeric.integer.luce",
+          "match": "\\b\\d+\\b"
         }
       ]
     },
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.assignment.luce",
-          "match": "(?<![=!<>])=(?!=)"
+          "name": "keyword.operator.function-return.luce",
+          "match": "->"
         },
         {
           "name": "keyword.operator.comparison.luce",
           "match": "==|!=|<=|>=|<|>"
         },
         {
-          "name": "keyword.operator.arithmetic.luce",
-          "match": "\\+|-|\\*|/|%"
+          "name": "keyword.operator.assignment.luce",
+          "match": "(?<![=!<>])=(?!=)"
         },
         {
-          "name": "keyword.operator.function-return.luce",
-          "match": "->"
+          "name": "keyword.operator.fallible.luce",
+          "match": "!(?!=)"
+        },
+        {
+          "name": "keyword.operator.optional.luce",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.arithmetic.luce",
+          "match": "\\+|-|\\*|/|%"
         }
       ]
     },
@@ -243,6 +241,14 @@
           "match": "\\)"
         },
         {
+          "name": "punctuation.section.brackets.begin.luce",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.section.brackets.end.luce",
+          "match": "\\]"
+        },
+        {
           "name": "punctuation.separator.comma.luce",
           "match": ","
         },
@@ -253,6 +259,88 @@
         {
           "name": "punctuation.accessor.luce",
           "match": "\\."
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.interpolated.luce",
+          "begin": "\\bf\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.luce" }
+          },
+          "end": "(\")|$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.luce" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.luce",
+              "match": "\\{\\{|\\}\\}"
+            },
+            {
+              "name": "meta.interpolation.luce",
+              "begin": "\\{",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.luce" }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.luce" }
+              },
+              "patterns": [
+                {
+                  "include": "#code"
+                }
+              ]
+            },
+            {
+              "name": "invalid.illegal.unmatched-brace.luce",
+              "match": "\\}"
+            },
+            {
+              "name": "constant.character.escape.luce",
+              "match": "\\\\[nt\\\\\"]"
+            },
+            {
+              "name": "invalid.illegal.escape.luce",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.luce",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.luce" }
+          },
+          "end": "(\")|$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.luce" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.luce",
+              "match": "\\\\[nt\\\\\"]"
+            },
+            {
+              "name": "invalid.illegal.escape.luce",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.luce",
+          "match": "\\b(?:Int|Float|Bool|String|List|Map|Array|Builder|None)\\b"
+        },
+        {
+          "name": "entity.name.type.luce",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
         }
       ]
     }
