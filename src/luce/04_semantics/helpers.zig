@@ -157,6 +157,14 @@ pub fn ordOfLiteral(decoded: []const u8) ?i64 {
     return codepoint;
 }
 
+/// The `s` that makes a counted noun agree: "1 argument", but
+/// "0 arguments" and "2 arguments".  A diagnostic that miscounts its
+/// own grammar reads like one nobody proofread, and every sentence
+/// here that counts something ends up wanting this.
+pub fn plural(count: usize) []const u8 {
+    return if (count == 1) "" else "s";
+}
+
 // Name suggestions ----------------------------------------------------------
 //
 // "unknown name totl" is a true statement; "did you mean total?" is

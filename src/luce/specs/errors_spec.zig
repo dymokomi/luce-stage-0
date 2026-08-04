@@ -130,6 +130,63 @@ fn expectRejectedAt(source: []const u8, code: []const u8, line: usize, column: u
     }
 }
 
+/// Assert the FIRST diagnostic is exactly `code`, says `saying`, and
+/// starts at `line`:`column`.
+///
+/// The three assertions above, taken one at a time, each leave a way
+/// for a diagnostic to rot: a code says which family, the words say
+/// which check, and the span says what the reader will actually see
+/// underlined.  A message can be rewritten while the caret drifts off
+/// the thing it names, and nothing built from the weaker helpers
+/// notices.  Where a diagnostic's whole job is to point at one
+/// argument and say what is wrong with it, all three are the contract.
+fn expectSayingAt(
+    source: []const u8,
+    code: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+) !void {
+    return expectSayingAtOptions(source, script, code, saying, line, column);
+}
+
+fn expectHostSayingAt(
+    source: []const u8,
+    code: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+) !void {
+    return expectSayingAtOptions(source, hosted, code, saying, line, column);
+}
+
+fn expectSayingAtOptions(
+    source: []const u8,
+    options: types.CompileOptions,
+    code: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+) !void {
+    var result = try compile_mod.compile(testing.allocator, source, options);
+    defer result.deinit();
+    switch (result) {
+        .success => {
+            std.debug.print("expected {s}, but this compiled:\n{s}", .{ code, source });
+            return error.TestUnexpectedResult;
+        },
+        .failure => |diagnostics| {
+            const first = diagnostics.at(0) orelse return error.TestUnexpectedResult;
+            errdefer printAll(&diagnostics);
+            try testing.expectEqualStrings(code, first.code);
+            try testing.expectEqualStrings(saying, first.message);
+            const at = source_mod.place(source, first.span.start);
+            try testing.expectEqual(line, at.line);
+            try testing.expectEqual(column, at.column);
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
@@ -401,18 +458,21 @@ test "luce.sema.method: a method must exist on its receiver type" {
 }
 
 test "luce.sema.method: map get takes (key, default) of the right types" {
-    try expectRejected(
+    // Too few is a count mistake and says both counts.
+    try expectSayingAt(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    let x = m.get("k")
         \\
-    , "luce.sema.method");
-    try expectRejected(
+    , "luce.sema.method", "get takes 2 arguments, got 1", 3, 13);
+    // The wrong type in the second slot is a *type* mistake, and is
+    // reported as one, at the argument rather than at the call.
+    try expectSayingAt(
         \\func main():
         \\    var m = new Map(String, Int)
         \\    let x = m.get("k", "wrong")
         \\
-    , "luce.sema.method");
+    , "luce.sema.type", "argument 2 of get is Int, got String", 3, 24);
 }
 
 test "luce.sema.loop: two-name for needs a Map or a sequence" {
@@ -882,8 +942,20 @@ test "luce.sema.method: method arguments are positional" {
     try expectRejected("func main():\n    var xs = [1]\n    xs.append(v = 1)\n", "luce.sema.method");
 }
 
-test "luce.sema.method: no method takes more than two arguments" {
-    try expectRejected("func main():\n    var xs = [1]\n    xs.append(1, 2, 3)\n", "luce.sema.method");
+test "luce.sema.method: more arguments than any method takes is still that method's count" {
+    // There used to be a blanket refusal above the dispatch — "no
+    // method takes more than 2 arguments" — that caught this before
+    // `append` could answer for itself.  It named neither the method
+    // nor a count, and it was never needed: every method checks its
+    // own arity first, and Zig's `or` short-circuits the indexing
+    // that the blanket check was guarding.
+    try expectSayingAt(
+        "func main():\n    var xs = [1]\n    xs.append(1, 2, 3)\n",
+        "luce.sema.method",
+        "append takes 1 argument, got 3",
+        3,
+        5,
+    );
 }
 
 test "luce.sema.method: strings has no such function" {
@@ -2051,18 +2123,18 @@ test "luce.sema.loop: for takes a rank-1 array and nothing wider" {
 }
 
 test "luce.sema.method: each receiver kind names the methods it has" {
-    try expectSaying(
+    try expectSayingAt(
         \\func main():
         \\    var s = "abc"
         \\    let bad = s.byte_at("x")
         \\
-    , "luce.sema.method", "byte_at takes an Int offset");
-    try expectSaying(
+    , "luce.sema.type", "argument 1 of byte_at is Int, got String", 3, 25);
+    try expectSayingAt(
         \\func main():
         \\    var s = "abc"
         \\    let bad = s.find_byte("x", 0)
         \\
-    , "luce.sema.method", "find_byte takes (byte Int, start Int)");
+    , "luce.sema.type", "argument 1 of find_byte is Int, got String", 3, 27);
     try expectSaying(
         \\func main():
         \\    var grid = new Array(Int, 2, 2)
@@ -2095,6 +2167,138 @@ test "luce.sema.method: each receiver kind names the methods it has" {
         \\    let bad = s.spli(",")
         \\
     , "luce.sema.method", "did you mean split?");
+}
+
+// ---------------------------------------------------------------------------
+// A built-in method's arguments are judged like a user function's
+// ---------------------------------------------------------------------------
+//
+// `lowerUserCall` has always written two different sentences for two
+// different mistakes — "add takes 2 arguments, got 1" for a count and
+// "argument 2 of add is Int, got String" for a type, the latter
+// underlined at the argument itself.  The built-in methods wrote one
+// sentence for both, phrased as a count: `xs.append("hi")` on a
+// `List(Int)` was told "append takes one element value" while holding
+// exactly one element value, and the caret covered the whole call.
+//
+// These pin the sentence, the code and the caret column together,
+// because the three rot separately: nothing here failed when the
+// message said one thing and the underline pointed at another.
+
+test "luce.sema.method: a count mistake names the method and both counts" {
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.append(1, 2)
+        \\
+    , "luce.sema.method", "append takes 1 argument, got 2", 3, 5);
+    // Zero is a count like any other, and reads differently from two.
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.append()
+        \\
+    , "luce.sema.method", "append takes 1 argument, got 0", 3, 5);
+    // A method that takes none says "0 arguments", not "no arguments":
+    // one sentence for every arity is one sentence to keep true.
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.sort(1)
+        \\
+    , "luce.sema.method", "sort takes 0 arguments, got 1", 3, 5);
+    // Three arguments used to be answered by "no method takes more
+    // than 2 arguments", which named neither the method nor a count —
+    // an internal limit of the dispatch, worded as advice.  The
+    // per-method count check had always been able to answer it.
+    try expectSayingAt(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let x = m.get("a", 1, 2)
+        \\
+    , "luce.sema.method", "get takes 2 arguments, got 3", 3, 13);
+}
+
+test "luce.sema.type: a wrong argument type names the position, both types, and underlines the argument" {
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    xs.append("hello")
+        \\
+    , "luce.sema.type", "argument 1 of append is Int, got String", 3, 15);
+    // The second slot is reported as the second slot, and the caret
+    // moves to it rather than staying on the receiver.
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = new List(String)
+        \\    xs.insert("zero", 0)
+        \\
+    , "luce.sema.type", "argument 1 of insert is Int, got String", 3, 15);
+    try expectSayingAt(
+        \\func main():
+        \\    var b = new Builder()
+        \\    b.append(65)
+        \\
+    , "luce.sema.type", "argument 1 of append is String, got Int", 3, 14);
+    // The map says what its key and value types *are*, rather than
+    // calling them "the map's key and value types".
+    try expectSayingAt(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    let x = m.get(1, 2)
+        \\
+    , "luce.sema.type", "argument 1 of get is String, got Int", 3, 19);
+}
+
+test "luce.sema.type: a T? argument to a method earns the same advice it earns anywhere" {
+    // This is the sentence that teaches optionals, and the method
+    // path used to drop it: the reader got "append takes one element
+    // value" and no mention of absence at all.  It is now the one
+    // `lowerUserCall` writes, down to the name in the parentheses.
+    try expectSayingAt(
+        \\func maybe() -> Int?:
+        \\    return none
+        \\
+        \\func main():
+        \\    var xs = new List(Int)
+        \\    let m = maybe()
+        \\    xs.append(m)
+        \\
+    ,
+        "luce.sema.type",
+        "argument 1 of append is Int, got Int?; test it first (if m != none:) or supply a fallback (m else …)",
+        7,
+        15,
+    );
+}
+
+test "luce.sema.call: a builtin counts its arguments the way a function does" {
+    // "print takes 1 arguments" miscounted its own grammar and never
+    // said how many it got.  Hosted, because the host gate is checked
+    // before the count and would otherwise answer first — which is the
+    // right order: a program with no console has a bigger problem
+    // than how many things it tried to print.
+    try expectHostSayingAt(
+        \\func main():
+        \\    print("hi", "there")
+        \\
+    , "luce.sema.call", "print takes 1 argument, got 2", 2, 5);
+    try expectSayingAt(
+        \\func main():
+        \\    let x = min(1)
+        \\
+    , "luce.sema.call", "min takes 2 arguments, got 1", 2, 13);
+}
+
+test "luce.sema.call: a user function agrees with itself about one argument" {
+    try expectSayingAt(
+        \\func double(a: Int) -> Int:
+        \\    return a * 2
+        \\
+        \\func main():
+        \\    let x = double(1, 2)
+        \\
+    , "luce.sema.call", "double takes 1 argument, got 2", 5, 13);
 }
 
 test "luce.sema.own: the checks that have no name to suggest still say what to do" {

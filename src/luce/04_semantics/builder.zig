@@ -3566,9 +3566,10 @@ pub const FunctionBuilder = struct {
             return null;
         }
         if (call_arguments.len != info.parameter_types.len) {
-            try self.fail("luce.sema.call", span, "{s} takes {d} arguments, got {d}", .{
+            try self.fail("luce.sema.call", span, "{s} takes {d} argument{s}, got {d}", .{
                 name,
                 info.parameter_types.len,
+                helpers.plural(info.parameter_types.len),
                 call_arguments.len,
             });
             return null;
@@ -3760,22 +3761,14 @@ pub const FunctionBuilder = struct {
                 // every other String method is library code —
                 // s.find(x) is strings.find(s, x) (docs/STD.md).
                 if (std.mem.eql(u8, method.name, "byte_at")) {
-                    if (arguments.len != 1 or arguments[0].value_type != .int) {
-                        try self.fail("luce.sema.method", method.span, "byte_at takes an Int offset", .{});
-                        return null;
-                    }
+                    if (!try self.methodTakes(method, arguments, &.{.int})) return null;
                     break :blk .{ .kind = .string_byte, .result = .int };
                 }
                 // find_byte is the scanning primitive that byte_at is
                 // the access primitive: std strings builds substring
                 // search on it (docs/STD.md).
                 if (std.mem.eql(u8, method.name, "find_byte")) {
-                    if (arguments.len != 2 or arguments[0].value_type != .int or
-                        arguments[1].value_type != .int)
-                    {
-                        try self.fail("luce.sema.method", method.span, "find_byte takes (byte Int, start Int)", .{});
-                        return null;
-                    }
+                    if (!try self.methodTakes(method, arguments, &.{ .int, .int })) return null;
                     break :blk .{ .kind = .string_find_byte, .result = .int };
                 }
                 return self.stringsCall(method, values, as_statement);
@@ -3787,12 +3780,6 @@ pub const FunctionBuilder = struct {
                     std.mem.eql(u8, method.name, "join"))
                 {
                     return self.stringsCall(method, values, as_statement);
-                }
-                // Built-in methods take at most two arguments; only
-                // routed strings calls go wider.
-                if (method.arguments.len > 2) {
-                    try self.fail("luce.sema.method", method.span, "no method takes more than 2 arguments", .{});
-                    return null;
                 }
                 if (try self.objectMethod(method, descriptor, arguments)) |found| {
                     break :blk found;
@@ -3876,6 +3863,59 @@ pub const FunctionBuilder = struct {
         return null;
     }
 
+    /// Check a built-in method's arguments against the types it takes,
+    /// and say the one thing that is wrong.
+    ///
+    /// This is the sentence `lowerUserCall` writes for a user
+    /// function, and a built-in method had better earn the same one:
+    /// the count sentence names both counts, the type sentence names
+    /// the position, the type wanted and the type given, and it is
+    /// underlined at the argument that is wrong rather than at the
+    /// whole call.  Before this existed each method wrote one sentence
+    /// for both mistakes — `xs.append("hi")` on a `List(Int)` was told
+    /// "append takes one element value", which is an answer to a
+    /// question the reader did not ask, since they passed exactly one.
+    ///
+    /// A `T?` standing where a `T` belongs collects the same advice it
+    /// collects anywhere else; that advice is most of what teaches the
+    /// feature, and dropping it here taught it in one place fewer.
+    ///
+    /// False after reporting.  `wanted` is positional and its length
+    /// is the arity.
+    fn methodTakes(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        arguments: []const Typed,
+        wanted: []const Type,
+    ) Error!bool {
+        if (arguments.len != wanted.len) {
+            try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
+                method.name,
+                wanted.len,
+                helpers.plural(wanted.len),
+                arguments.len,
+            });
+            return false;
+        }
+        for (arguments, wanted, 0..) |argument, want, index| {
+            if (argument.value_type.eql(want)) continue;
+            try self.fail(
+                "luce.sema.type",
+                method.arguments[index].span,
+                "argument {d} of {s} is {s}, got {s}{s}",
+                .{
+                    index + 1,
+                    method.name,
+                    try self.analyzer.typeName(want),
+                    try self.analyzer.typeName(argument.value_type),
+                    try self.absenceAdvice(argument.value_type, method.arguments[index].value),
+                },
+            );
+            return false;
+        }
+        return true;
+    }
+
     /// Route a value method to the std strings module: `s.find(x)` is
     /// `strings.find(s, x)`, and `parts.join(sep)` is
     /// `strings.join(parts, sep)`.  The language keeps the primitives
@@ -3956,9 +3996,10 @@ pub const FunctionBuilder = struct {
             return null;
         }
         if (values.len != info.parameter_types.len) {
-            try self.fail("luce.sema.call", span, "{s} takes {d} arguments, got {d}", .{
+            try self.fail("luce.sema.call", span, "{s} takes {d} argument{s}, got {d}", .{
                 name,
                 info.parameter_types.len,
+                helpers.plural(info.parameter_types.len),
                 values.len,
             });
             return null;
@@ -4019,13 +4060,11 @@ pub const FunctionBuilder = struct {
             .list => |element| return self.sequenceMethod(method, element, true, arguments),
             .array => |shape| {
                 if (std.mem.eql(u8, name, "dim")) {
-                    if (arguments.len != 1 or arguments[0].value_type != .int)
-                        return self.methodFail(method, "dim takes an Int axis");
+                    if (!try self.methodTakes(method, arguments, &.{.int})) return null;
                     return .{ .kind = .dim_size, .result = .int };
                 }
                 if (std.mem.eql(u8, name, "fill")) {
-                    if (arguments.len != 1 or !arguments[0].value_type.eql(shape.element))
-                        return self.methodFail(method, "fill takes one element value");
+                    if (!try self.methodTakes(method, arguments, &.{shape.element})) return null;
                     // One value cannot own every slot (S21, S23):
                     // arrays of objects store per slot instead.
                     if (self.analyzer.carriesObjects(shape.element)) {
@@ -4047,31 +4086,27 @@ pub const FunctionBuilder = struct {
             },
             .map => |pair| {
                 if (std.mem.eql(u8, name, "has")) {
-                    if (arguments.len != 1 or !arguments[0].value_type.eql(pair.key))
-                        return self.methodFail(method, "has takes the map's key type");
+                    if (!try self.methodTakes(method, arguments, &.{pair.key})) return null;
                     return .{ .kind = .has_key, .result = .boolean };
                 }
                 if (std.mem.eql(u8, name, "remove")) {
-                    if (arguments.len != 1 or !arguments[0].value_type.eql(pair.key))
-                        return self.methodFail(method, "remove takes the map's key type");
+                    if (!try self.methodTakes(method, arguments, &.{pair.key})) return null;
                     return .{ .kind = .remove_entry, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "keys")) {
-                    if (arguments.len != 0) return self.methodFail(method, "keys takes no arguments");
+                    if (!try self.methodTakes(method, arguments, &.{})) return null;
                     return .{ .kind = .map_keys, .result = try self.analyzer.internHeapType(.{ .list = pair.key }) };
                 }
                 if (std.mem.eql(u8, name, "values")) {
-                    if (arguments.len != 0) return self.methodFail(method, "values takes no arguments");
+                    if (!try self.methodTakes(method, arguments, &.{})) return null;
                     return .{ .kind = .map_values, .result = try self.analyzer.internHeapType(.{ .list = pair.value }) };
                 }
                 if (std.mem.eql(u8, name, "get")) {
-                    if (arguments.len != 2 or !arguments[0].value_type.eql(pair.key) or
-                        !arguments[1].value_type.eql(pair.value))
-                        return self.methodFail(method, "get takes (key, default) of the map's key and value types");
+                    if (!try self.methodTakes(method, arguments, &.{ pair.key, pair.value })) return null;
                     return .{ .kind = .map_get, .result = pair.value };
                 }
                 if (std.mem.eql(u8, name, "clear")) {
-                    if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
+                    if (!try self.methodTakes(method, arguments, &.{})) return null;
                     return .{ .kind = .clear_object, .result = .none };
                 }
                 var suggestion = helpers.Suggestion.init(name);
@@ -4085,17 +4120,15 @@ pub const FunctionBuilder = struct {
             },
             .builder => {
                 if (std.mem.eql(u8, name, "append")) {
-                    if (arguments.len != 1 or arguments[0].value_type != .string)
-                        return self.methodFail(method, "a Builder appends String");
+                    if (!try self.methodTakes(method, arguments, &.{.string})) return null;
                     return .{ .kind = .append_value, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "append_ascii")) {
-                    if (arguments.len != 1 or arguments[0].value_type != .int)
-                        return self.methodFail(method, "append_ascii takes an Int byte in 0..127");
+                    if (!try self.methodTakes(method, arguments, &.{.int})) return null;
                     return .{ .kind = .append_ascii, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "clear")) {
-                    if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
+                    if (!try self.methodTakes(method, arguments, &.{})) return null;
                     return .{ .kind = .clear_object, .result = .none };
                 }
                 var suggestion = helpers.Suggestion.init(name);
@@ -4122,48 +4155,42 @@ pub const FunctionBuilder = struct {
         const name = method.name;
         if (growable) {
             if (std.mem.eql(u8, name, "append")) {
-                if (arguments.len != 1 or !arguments[0].value_type.eql(element))
-                    return self.methodFail(method, "append takes one element value");
+                if (!try self.methodTakes(method, arguments, &.{element})) return null;
                 return .{ .kind = .append_value, .result = .none };
             }
             if (std.mem.eql(u8, name, "insert")) {
-                if (arguments.len != 2 or arguments[0].value_type != .int or
-                    !arguments[1].value_type.eql(element))
-                    return self.methodFail(method, "insert takes (index Int, value)");
+                if (!try self.methodTakes(method, arguments, &.{ .int, element })) return null;
                 return .{ .kind = .insert_value, .result = .none };
             }
             if (std.mem.eql(u8, name, "remove")) {
-                if (arguments.len != 1 or arguments[0].value_type != .int)
-                    return self.methodFail(method, "remove takes an Int index");
+                if (!try self.methodTakes(method, arguments, &.{.int})) return null;
                 return .{ .kind = .remove_entry, .result = .none };
             }
             if (std.mem.eql(u8, name, "pop")) {
-                if (arguments.len != 0) return self.methodFail(method, "pop takes no arguments");
+                if (!try self.methodTakes(method, arguments, &.{})) return null;
                 return .{ .kind = .pop_value, .result = element };
             }
             if (std.mem.eql(u8, name, "clear")) {
-                if (arguments.len != 0) return self.methodFail(method, "clear takes no arguments");
+                if (!try self.methodTakes(method, arguments, &.{})) return null;
                 return .{ .kind = .clear_object, .result = .none };
             }
         }
         if (std.mem.eql(u8, name, "sort")) {
-            if (arguments.len != 0) return self.methodFail(method, "sort takes no arguments");
+            if (!try self.methodTakes(method, arguments, &.{})) return null;
             const ordered = element == .int or element == .float or element == .string;
             if (!ordered) return self.methodFail(method, "sort orders Int, Float, or String elements");
             return .{ .kind = .list_sort, .result = .none };
         }
         if (std.mem.eql(u8, name, "reverse")) {
-            if (arguments.len != 0) return self.methodFail(method, "reverse takes no arguments");
+            if (!try self.methodTakes(method, arguments, &.{})) return null;
             return .{ .kind = .list_reverse, .result = .none };
         }
         if (std.mem.eql(u8, name, "find")) {
-            if (arguments.len != 1 or !arguments[0].value_type.eql(element))
-                return self.methodFail(method, "find takes one element value");
+            if (!try self.methodTakes(method, arguments, &.{element})) return null;
             return .{ .kind = .list_find, .result = .int };
         }
         if (std.mem.eql(u8, name, "contains")) {
-            if (arguments.len != 1 or !arguments[0].value_type.eql(element))
-                return self.methodFail(method, "contains takes one element value");
+            if (!try self.methodTakes(method, arguments, &.{element})) return null;
             return .{ .kind = .list_contains, .result = .boolean };
         }
         var suggestion = helpers.Suggestion.init(name);
@@ -4351,7 +4378,12 @@ pub const FunctionBuilder = struct {
             return .failed;
         }
         if (call.arguments.len != matched.arity) {
-            try self.fail("luce.sema.call", call.span, "{s} takes {d} arguments", .{ matched.name, matched.arity });
+            try self.fail("luce.sema.call", call.span, "{s} takes {d} argument{s}, got {d}", .{
+                matched.name,
+                matched.arity,
+                helpers.plural(matched.arity),
+                call.arguments.len,
+            });
             return .failed;
         }
         var argument_expressions: [3]*ast.Expression = undefined;
