@@ -423,6 +423,21 @@ fn postfixExpression(self: *Parser) Error!?*ast.Expression {
 
 /// value[...]: an index (one or more comma-separated expressions)
 /// or a slice (a colon with either bound optional).
+/// `s[0:4:2]` — Python's third slice field.  Answered where it is
+/// written rather than as "expected ']' to close '['", which names the
+/// bracket and leaves the reader to discover that the language has two
+/// slice fields and not three.  True when it reported.
+fn sliceHasNoStep(self: *Parser) Error!bool {
+    if (self.peekKind() != .colon) return false;
+    try self.report(
+        "luce.parse.expected",
+        self.peek().span,
+        "a slice is [start:end] and has no step; take every nth with a loop",
+        .{},
+    );
+    return true;
+}
+
 fn indexOrSlice(self: *Parser, target: *ast.Expression) Error!?*ast.Expression {
     const opener = self.advance(); // [
 
@@ -432,6 +447,7 @@ fn indexOrSlice(self: *Parser, target: *ast.Expression) Error!?*ast.Expression {
         if (self.peekKind() != .right_bracket) {
             end = (try expression(self)) orelse return null;
         }
+        if (try sliceHasNoStep(self)) return null;
         const closing = (try self.expectClose(.right_bracket, opener)) orelse return null;
         return make(self, .{ .slice_range = .{
             .target = target,
@@ -449,6 +465,7 @@ fn indexOrSlice(self: *Parser, target: *ast.Expression) Error!?*ast.Expression {
         if (self.peekKind() != .right_bracket) {
             end = (try expression(self)) orelse return null;
         }
+        if (try sliceHasNoStep(self)) return null;
         const closing = (try self.expectClose(.right_bracket, opener)) orelse return null;
         return make(self, .{ .slice_range = .{
             .target = target,
@@ -764,7 +781,13 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
             };
             const hole = inner[index + 1 .. close];
             const hole_expr = (try subExpression(self, hole, inner_start + index + 1)) orelse return null;
-            const wrapped = try wrapStr(self, hole_expr, item.span);
+            // The synthesized `str(...)` takes the *hole's* span, not
+            // the whole f-string's.  Everything stage 4 says about this
+            // call is about what the reader wrote between the braces —
+            // `str takes Int, Float, Bool, String, or Builder` for a
+            // list in a hole — and underlining the entire literal makes
+            // a reader with four holes in one line check all four.
+            const wrapped = try wrapStr(self, hole_expr, hole_expr.span());
             result = try concat(self, result, wrapped);
             index = close + 1;
             continue;

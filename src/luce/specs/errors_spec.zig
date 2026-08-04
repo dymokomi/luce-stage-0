@@ -2579,6 +2579,58 @@ test "storing a borrowed parameter is not told to give it" {
     , "borrowed parameter and can never be given away");
 }
 
+test "an f-string hole is underlined, not the whole literal" {
+    // The synthesized `str(...)` used to carry the whole f-string's
+    // span, so a reader with four holes on one line was shown all four
+    // and told one of them was wrong.
+    try expectHostSayingAt(
+        \\func main():
+        \\    let a = 1
+        \\    let b = 2
+        \\    let xs = [1]
+        \\    let c = 3
+        \\    print(f"{a} and {b} and {xs} and {c}")
+        \\    free(xs)
+        \\
+    ,
+        "luce.sema.type",
+        "str takes Int, Float, Bool, String, or Builder",
+        6,
+        30,
+    );
+}
+
+test "luce.parse.expected: a slice has no third field" {
+    // `s[0:4:2]` answered "expected ']' to close '['", which names the
+    // bracket and leaves the reader to find out that this language has
+    // two slice fields rather than three.
+    const say = "a slice is [start:end] and has no step; take every nth with a loop";
+    try expectSayingAt(
+        "func main():\n    let s = \"hello\"\n    let t = s[0:4:2]\n",
+        "luce.parse.expected",
+        say,
+        3,
+        18,
+    );
+    // The open-start form takes the same answer.
+    try expectSayingAt(
+        "func main():\n    let s = \"hello\"\n    let t = s[:4:2]\n",
+        "luce.parse.expected",
+        say,
+        3,
+        17,
+    );
+    // Both real slice shapes keep working.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let s = \"hello\"\n    assert(s[0:2] == \"he\")\n    assert(s[:2] == \"he\")\n    assert(s[3:] == \"lo\")\n",
+        script,
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+}
+
 test "luce.sema.fallible: a try with nothing to try says so, in either kind of function" {
     // The order of these two checks *is* the diagnostic.  Asked the
     // other way round, the same mistake in a plain `main` answered
