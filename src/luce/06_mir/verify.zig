@@ -52,6 +52,17 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     }
     if (try anyStructContainsItself(allocator, program)) return error.BadStruct;
 
+    // Every signature is checked before any body is.  A `call` types
+    // its arguments against `callee.locals[0..parameter_count]`, and
+    // the callee may stand *later* in the table than its caller — so
+    // waiting for the callee's own turn would mean indexing a
+    // parameter table that has not been bounded yet, and a module
+    // claiming more parameters than locals would take the verifier out
+    // of bounds instead of being refused.  That module is precisely
+    // what `decode` exists to refuse.
+    for (program.functions) |*function| {
+        if (function.parameter_count > function.locals.len) return error.BadLocal;
+    }
     for (program.functions) |*function| {
         try verifyFunction(allocator, program, function);
     }

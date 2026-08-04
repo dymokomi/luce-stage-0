@@ -2131,6 +2131,227 @@ test "trap: list index out of bounds" {
     , .index_bounds);
 }
 
+// Every bounded container operation, at the last index it accepts and
+// the first it refuses.  A bound tested from one side only is a bound
+// whose comparison can be loosened by one without any test noticing,
+// and the loose side of `insert` is a write past the end of a list.
+
+test "bounds: a list accepts its last index and refuses the one past it" {
+    try agreeOk(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var last = 2
+        \\    assert(xs[last] == 3)
+        \\    xs[last] = 30
+        \\    assert(xs[2] == 30)
+        \\    xs.remove(last)
+        \\    assert(len(xs) == 2)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var past = 3
+        \\    xs[past] = 0
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var below = -1
+        \\    let bad = xs[below]
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var past = 3
+        \\    xs.remove(past)
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var below = -1
+        \\    xs.remove(below)
+        \\
+    , .index_bounds);
+}
+
+test "bounds: insert accepts the length itself, and nothing beyond it" {
+    // `xs.insert(len(xs), v)` is the append form and must keep
+    // working: this is the one list bound that is not the read bound,
+    // and reading it as one loses a legal call rather than admitting
+    // an illegal one.
+    try agreeOk(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var at = len(xs)
+        \\    xs.insert(at, 4)
+        \\    assert(len(xs) == 4)
+        \\    assert(xs[3] == 4)
+        \\    xs.insert(0, 0)
+        \\    assert(xs[0] == 0)
+        \\    assert(xs[4] == 4)
+        \\    assert(len(xs) == 5)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var past = 4
+        \\    xs.insert(past, 9)
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var below = -1
+        \\    xs.insert(below, 9)
+        \\
+    , .index_bounds);
+}
+
+test "bounds: a list slice is half-open, and an inverted one is refused" {
+    try agreeOk(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var whole = xs[0:3]
+        \\    assert(len(whole) == 3)
+        \\    var nothing = xs[3:3]
+        \\    assert(len(nothing) == 0)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var past = 4
+        \\    var bad = xs[0:past]
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var high = 3
+        \\    var low = 1
+        \\    var bad = xs[high:low]
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    var below = -1
+        \\    var bad = xs[below:2]
+        \\
+    , .index_bounds);
+}
+
+test "bounds: pop empties a list before it has nothing to answer" {
+    try agreeOk(
+        \\func main():
+        \\    var xs = [1]
+        \\    assert(xs.pop() == 1)
+        \\    assert(len(xs) == 0)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var xs = [1]
+        \\    let first = xs.pop()
+        \\    let nothing = xs.pop()
+        \\
+    , .empty_collection);
+}
+
+test "bounds: every axis of an array is checked on its own" {
+    try agreeOk(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 3)
+        \\    var row = 1
+        \\    var column = 2
+        \\    grid[row, column] = 7
+        \\    assert(grid[1, 2] == 7)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 3)
+        \\    var row = 2
+        \\    let bad = grid[row, 0]
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 3)
+        \\    var column = 3
+        \\    let bad = grid[0, column]
+        \\
+    , .index_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 3)
+        \\    var below = -1
+        \\    let bad = grid[0, below]
+        \\
+    , .index_bounds);
+}
+
+test "bounds: a map answers for a key it holds and traps for one it does not" {
+    try agreeOk(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    m["a"] = 1
+        \\    assert(m["a"] == 1)
+        \\    assert(m.has("a"))
+        \\    assert(not m.has("b"))
+        \\    assert(m.get("b", 9) == 9)
+        \\    m.remove("b")
+        \\    assert(len(m) == 1)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var m = new Map(String, Int)
+        \\    m["a"] = 1
+        \\    var wanted = "b"
+        \\    let bad = m[wanted]
+        \\
+    , .key_missing);
+}
+
+test "bounds: a string slice is checked at its length and on its boundaries" {
+    try agreeOk(
+        \\func main():
+        \\    var s = "abc"
+        \\    var end = 3
+        \\    assert(s[0:end] == "abc")
+        \\    assert(s[end:end] == "")
+        \\    assert(s.byte_at(2) == 99)
+        \\
+    );
+    try agreeTrap(
+        \\func main():
+        \\    var s = "abc"
+        \\    var past = 4
+        \\    let bad = s[0:past]
+        \\
+    , .string_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var s = "abc"
+        \\    var past = 3
+        \\    let bad = s.byte_at(past)
+        \\
+    , .string_bounds);
+    try agreeTrap(
+        \\func main():
+        \\    var s = "é"
+        \\    var middle = 1
+        \\    let bad = s[0:middle]
+        \\
+    , .string_boundary);
+}
+
 test "trap: array index out of bounds" {
     try agreeTrap(
         \\func main():

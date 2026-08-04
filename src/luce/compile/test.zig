@@ -838,6 +838,153 @@ const util_module: TestModule = .{ .name = "util", .source =
     \\
 };
 
+test "luce.import.limit: an import graph past the module ceiling is refused" {
+    // The backstop on a runaway import graph, and the only diagnostic
+    // in the compiler that needs more than a page of source to reach:
+    // sixty-four modules is more than any test writes by hand, so it
+    // is generated here.  Refusing at the ceiling is what keeps a
+    // pathological project from being a compiler that never returns.
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+
+    const count = 70;
+    const modules = try arena.alloc(TestModule, count);
+    var root: std.ArrayList(u8) = .empty;
+    for (modules, 0..) |*module, index| {
+        module.* = .{
+            .name = try std.fmt.allocPrint(arena, "m{d}", .{index}),
+            .source = try std.fmt.allocPrint(
+                arena,
+                "func value{d}() -> Int:\n    return {d}\n",
+                .{ index, index },
+            ),
+        };
+        try root.print(arena, "import m{d}\n", .{index});
+    }
+    try root.appendSlice(arena, "\nfunc main():\n    return\n");
+
+    var files: TestLoader = .{ .modules = modules };
+    var result = try compile_mod.compileProject(
+        testing.allocator,
+        root.items,
+        files.loader(),
+        .{},
+    );
+    defer result.deinit();
+    try testing.expect(result == .failure);
+
+    var reported = false;
+    for (0..result.failure.count()) |index| {
+        const found = result.failure.at(index).?;
+        if (!std.mem.eql(u8, found.code, "luce.import.limit")) continue;
+        try testing.expect(std.mem.indexOf(u8, found.message, "too many modules") != null);
+        reported = true;
+    }
+    try testing.expect(reported);
+
+    // Well under the ceiling, the same shape compiles: the limit is a
+    // backstop, not a budget any real project can feel.
+    const few = modules[0..8];
+    var small: std.ArrayList(u8) = .empty;
+    for (few, 0..) |_, index| try small.print(arena, "import m{d}\n", .{index});
+    try small.appendSlice(arena, "\nfunc main():\n    return\n");
+    var fewer: TestLoader = .{ .modules = few };
+    var fine = try compile_mod.compileProject(
+        testing.allocator,
+        small.items,
+        fewer.loader(),
+        .{},
+    );
+    defer fine.deinit();
+    try testing.expect(fine == .success);
+}
+
+test "a namespaced constant resolves through the import that bound it" {
+    // The positive half of the namespace rule, which the rejection
+    // tests below never state: an imported module's file-scope
+    // constant is reachable as `module.name` and folds like any other.
+    //
+    // The dotted *name* has no unimported-namespace check of its own
+    // to pin beside them, and cannot: `ast.Call.callee` is a single
+    // identifier token, so the dot branch of `resolveDeclared`
+    // (`luce.sema.import`, 04_semantics/builder.zig) has no input that
+    // reaches it — every dotted call is parsed as a method and
+    // resolved on the other path, which the next test covers.
+    const constant_module: TestModule = .{ .name = "sizes", .source =
+        \\let width = 80
+        \\
+    };
+    var files: TestLoader = .{ .modules = &.{constant_module} };
+    var imported = try compile_mod.compileProject(testing.allocator,
+        \\import sizes
+        \\
+        \\func main():
+        \\    let fine = sizes.width
+        \\
+    , files.loader(), .{});
+    defer imported.deinit();
+    try testing.expect(imported == .success);
+}
+
+test "luce.sema.reserved: a module cannot be imported under a reserved name" {
+    // The binding an import introduces is a name like any other, so it
+    // goes through the same reserved-word check every declaration
+    // does — before the module is even opened.
+    const module: TestModule = .{ .name = "str", .source =
+        \\func nothing():
+        \\    return
+        \\
+    };
+    var files: TestLoader = .{ .modules = &.{module} };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import str
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), .{});
+    defer result.deinit();
+    try testing.expect(result == .failure);
+
+    var reported = false;
+    for (0..result.failure.count()) |index| {
+        const found = result.failure.at(index).?;
+        if (!std.mem.eql(u8, found.code, "luce.sema.reserved")) continue;
+        try testing.expect(std.mem.indexOf(u8, found.message, "str is a reserved name") != null);
+        reported = true;
+    }
+    try testing.expect(reported);
+}
+
+test "luce.sema.duplicate: an import cannot take a struct's name" {
+    // Both would bind the same word in the same scope, and the reader
+    // is told which two things collided rather than being handed a
+    // resolution that silently picked one.
+    var files: TestLoader = .{ .modules = &.{util_module} };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import util
+        \\
+        \\struct util:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), .{});
+    defer result.deinit();
+    try testing.expect(result == .failure);
+
+    var reported = false;
+    for (0..result.failure.count()) |index| {
+        const found = result.failure.at(index).?;
+        if (!std.mem.eql(u8, found.code, "luce.sema.duplicate")) continue;
+        if (std.mem.indexOf(u8, found.message, "collides with a struct of the same name") == null) continue;
+        reported = true;
+    }
+    try testing.expect(reported);
+}
+
 test "imports are explicit, checked, and reported per file" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };

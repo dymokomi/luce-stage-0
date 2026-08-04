@@ -148,6 +148,90 @@ test "the runtime library is called, not reimplemented" {
     }
 }
 
+test "a release artifact carries no origin table, and a debug one does" {
+    // `--release` strips the origins and changes nothing else
+    // (docs/MODES.md), and the artifact is where that has to be
+    // visible: the tag says which build this is, and a loader reads it
+    // before it calls anything.  Asserting only that `strip` empties
+    // the MIR would leave the two ends free to disagree — a stripped
+    // program whose artifact still claimed origins, or a debug one
+    // that quietly shipped none.
+    const gpa = std.testing.allocator;
+    const source =
+        \\func ratio(value: Int) -> Int:
+        \\    return 10 / value
+        \\
+        \\func main():
+        \\    print(str(ratio(2)))
+        \\
+    ;
+
+    const debug = (try spec.renderBuilt(source, .debug)).?;
+    defer gpa.free(debug);
+    const release = (try spec.renderBuilt(source, .release)).?;
+    defer gpa.free(release);
+
+    // Debug carries a table per function and says so in the tag; the
+    // last two `i32`s of `abi.Artifact` are `debug` and `reserved`.
+    try std.testing.expect(std.mem.indexOf(u8, debug, "@luce.origins.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, debug, "i32 1, i32 0") != null);
+
+    // Release carries neither, and its function names survive — that
+    // is the whole of the difference.
+    try std.testing.expect(std.mem.indexOf(u8, release, "@luce.origins.") == null);
+    try std.testing.expect(std.mem.indexOf(u8, release, "i32 1, i32 0") == null);
+    try std.testing.expect(std.mem.indexOf(u8, release, "i32 0, i32 0") != null);
+    // The trace table stands in both, and the function names it holds
+    // are still there: a stripped trap says `ratio`, only without a
+    // line beside it.
+    try std.testing.expect(std.mem.indexOf(u8, release, "@luce.functions") != null);
+    try std.testing.expect(std.mem.indexOf(u8, debug, "@luce.functions") != null);
+    try std.testing.expect(std.mem.indexOf(u8, release, "c\"ratio\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, debug, "c\"ratio\"") != null);
+    // And the file name goes with the origins.
+    try std.testing.expect(std.mem.indexOf(u8, debug, "c\"test.luc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, release, "c\"test.luc\"") == null);
+
+    // And stripping only ever removes: the release artifact is the
+    // smaller of the two.
+    try std.testing.expect(release.len < debug.len);
+}
+
+test "a hoisted container read lands on the retired row when the handle is null" {
+    // `luce.dead.row` is not a diagnostic code, whatever its shape
+    // suggests: it is the name of a private constant this backend
+    // emits, and the only place a lifted container read can point when
+    // the handle it lifted is null.  Loop hoisting is what asks for
+    // it, so an Array indexed in a loop — the shape loops.zig was
+    // written for — is what proves it is there, and that it carries
+    // the retired generation, which is what makes the read resolve to
+    // "nothing" rather than to whoever holds that row next.
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\func main():
+        \\    var grid = new Array(Int, 2, 2)
+        \\    var row = 0
+        \\    while row < 2:
+        \\        grid[row, 0] = row * 2
+        \\        row = row + 1
+        \\    print(str(grid[1, 0]))
+        \\
+    )).?;
+    defer gpa.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "@luce.dead.row") != null);
+    // Private and constant: it is this module's own, and nothing
+    // writes it.
+    const at = std.mem.indexOf(u8, rendered, "@luce.dead.row =").?;
+    const declaration = rendered[at..std.mem.indexOfScalarPos(u8, rendered, at, '\n').?];
+    try std.testing.expect(std.mem.indexOf(u8, declaration, "private") != null);
+    try std.testing.expect(std.mem.indexOf(u8, declaration, "constant") != null);
+    // And it is reached by a select, which is the null test: the row
+    // is chosen, not branched to, so the loads that follow it are
+    // unconditional and the checks stay where they were.
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "select i1") != null);
+}
+
 test "every runtime declaration carries what the compiler knows about it" {
     const gpa = std.testing.allocator;
     // A bare `declare` is the most pessimistic thing LLVM can be told:

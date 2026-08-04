@@ -528,6 +528,74 @@ test "the precedence table binds exactly as docs/LANGUAGE.md states" {
     try testing.expectEqual(ast.BinaryOp.less, k.right.binary.op);
 }
 
+test "every adjacent pair of precedence levels binds the tighter one first" {
+    // One expression per *adjacency* in `binaryPrecedence`'s table, so
+    // that moving any operator to a neighbouring level fails a test
+    // named for the table rather than something downstream that
+    // happened to depend on it.  The test above pins most of the
+    // ladder; what it does not reach is `coalesce`, the level `else`
+    // and `catch` share between comparison and arithmetic, and the
+    // remainder operator's place among its neighbours.
+    var parsed = try expectClean(
+        \\func main():
+        \\    let a = p or q and r
+        \\    let b = p and q == r
+        \\    let c = p == q else r
+        \\    let d = p else q + r
+        \\    let e = p + q % r
+        \\    let f = p % q * r
+        \\    let g = p else q else r
+        \\    let h = p catch q + r
+        \\    let i = p catch q else r
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+
+    // or is looser than and: p or (q and r)
+    const a = body.statements[0].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.logic_or, a.op);
+    try testing.expectEqual(ast.BinaryOp.logic_and, a.right.binary.op);
+    // and is looser than comparison: p and (q == r)
+    const b = body.statements[1].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.logic_and, b.op);
+    try testing.expectEqual(ast.BinaryOp.equal, b.right.binary.op);
+    // comparison is looser than the fallback: p == (q else r).  This
+    // is what makes `x else 0 > 5` compare the fallback.
+    const c = body.statements[2].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.equal, c.op);
+    try testing.expectEqual(ast.BinaryOp.coalesce, c.right.binary.op);
+    // The fallback is looser than arithmetic: p else (q + r), so
+    // `x else n + 1` falls back to the sum.
+    const d = body.statements[3].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.coalesce, d.op);
+    try testing.expectEqual(ast.BinaryOp.add, d.right.binary.op);
+    // Additive is looser than multiplicative, remainder included:
+    // p + (q % r).
+    const e = body.statements[4].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.add, e.op);
+    try testing.expectEqual(ast.BinaryOp.remainder, e.right.binary.op);
+    // And remainder sits *with* the other multiplicative operators
+    // rather than above or below them, so it associates left with
+    // them: (p % q) * r.
+    const f = body.statements[5].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.multiply, f.op);
+    try testing.expectEqual(ast.BinaryOp.remainder, f.left.binary.op);
+    // `else` is the one operator that associates right, so a chain of
+    // fallbacks is a real chain: p else (q else r).
+    const g = body.statements[6].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.coalesce, g.op);
+    try testing.expectEqual(ast.BinaryOp.coalesce, g.right.binary.op);
+    // `catch` shares the level, so it reads the same way against
+    // arithmetic and against `else`.
+    const h = body.statements[7].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.catch_error, h.op);
+    try testing.expectEqual(ast.BinaryOp.add, h.right.binary.op);
+    const i = body.statements[8].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.catch_error, i.op);
+    try testing.expectEqual(ast.BinaryOp.coalesce, i.right.binary.op);
+}
+
 test "'not' in front of a comparison is refused, naming both readings" {
     // docs/LANGUAGE.md: `not` is a prefix operator, so `not a == b` is
     // `(not a) == b` here and `not (a == b)` in Python.  With Bool
