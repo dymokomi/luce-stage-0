@@ -1381,12 +1381,30 @@ pub const FunctionBuilder = struct {
         // own line, the way Python tracebacks do.
         self.code.origin = @intCast(statement.span().start);
         switch (statement) {
-            .let => |binding| try self.lowerBinding(binding.name, binding.annotation, binding.value, false, binding.span),
+            .let => |binding| try self.lowerBinding(
+                binding.name,
+                binding.name_span,
+                binding.annotation,
+                binding.value,
+                false,
+                binding.span,
+            ),
             .variable => |binding| {
                 if (binding.value) |value| {
-                    try self.lowerBinding(binding.name, binding.annotation, value, true, binding.span);
+                    try self.lowerBinding(
+                        binding.name,
+                        binding.name_span,
+                        binding.annotation,
+                        value,
+                        true,
+                        binding.span,
+                    );
                 } else {
-                    try self.lowerLateDeclaration(binding.name, binding.annotation.?, binding.span);
+                    try self.lowerLateDeclaration(
+                        binding.name,
+                        binding.name_span,
+                        binding.annotation.?,
+                    );
                 }
             },
             .assign => |assign| try self.lowerAssign(assign),
@@ -1424,9 +1442,13 @@ pub const FunctionBuilder = struct {
         }
     }
 
+    /// `name_span` is the name alone and `span` the whole statement:
+    /// a complaint about the word points at the word, and one about
+    /// what the statement says points at the statement.
     fn lowerBinding(
         self: *FunctionBuilder,
         name: []const u8,
+        name_span: Span,
         annotation: ?ast.TypeName,
         value_expression: *ast.Expression,
         mutable: bool,
@@ -1455,7 +1477,8 @@ pub const FunctionBuilder = struct {
                 return self.forgetName(name);
             }
             const list = try self.code.emit(.{ .heap_new = .{ .heap = expected.heap, .dims = &.{} } }, expected);
-            const local = (try self.declareLocal(name, expected, mutable, .owned, span)) orelse return;
+            const local = (try self.declareLocal(name, expected, mutable, .owned, name_span)) orelse
+                return self.forgetName(name);
             try self.code.store(local, list);
             try self.code.bind(local, list);
             return;
@@ -1511,8 +1534,8 @@ pub const FunctionBuilder = struct {
             value.value_type,
             mutable,
             if (owns) .owned else .alias,
-            span,
-        )) orelse return;
+            name_span,
+        )) orelse return self.forgetName(name);
         try self.storeOwned(local, value);
         if (owns) {
             try self.code.bind(local, value.register);
@@ -1529,15 +1552,16 @@ pub const FunctionBuilder = struct {
     fn lowerLateDeclaration(
         self: *FunctionBuilder,
         name: []const u8,
+        name_span: Span,
         written: ast.TypeName,
-        span: Span,
     ) Error!void {
         const declared = (try self.analyzer.resolveType(self.module, written)) orelse
             return self.forgetName(name);
         const zero = try self.code.zeroOf(declared);
         // The declaration establishes the binding and its scope; the
         // scope owns whatever a later assignment fills in (S36, S40).
-        const local = (try self.declareLocal(name, declared, true, .owned, span)) orelse return;
+        const local = (try self.declareLocal(name, declared, true, .owned, name_span)) orelse
+            return self.forgetName(name);
         try self.storeOwned(local, .{ .register = zero, .value_type = declared });
     }
 

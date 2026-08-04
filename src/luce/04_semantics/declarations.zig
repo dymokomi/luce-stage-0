@@ -452,12 +452,12 @@ pub const Analyzer = struct {
             self.diagnostics.scope = module.file;
             for (module.tree.structs) |*declaration| {
                 if (isReserved(declaration.name)) {
-                    try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
+                    try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
                     continue;
                 }
                 const qualified = try self.qualify(module.prefix, declaration.name);
                 if (self.struct_names.contains(qualified)) {
-                    try self.fail("luce.sema.duplicate", declaration.span, "duplicate struct {s}", .{declaration.name});
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate struct {s}", .{declaration.name});
                     continue;
                 }
                 const index: u32 = @intCast(self.structs.items.len);
@@ -486,7 +486,7 @@ pub const Analyzer = struct {
                     if (std.mem.eql(u8, existing.name, field.name)) duplicate = true;
                 }
                 if (duplicate) {
-                    try self.fail("luce.sema.duplicate", field.span, "duplicate field {s}", .{field.name});
+                    try self.fail("luce.sema.duplicate", field.name_span, "duplicate field {s}", .{field.name});
                     continue;
                 }
                 const field_type = (try self.resolveType(info.module, field.type_name)) orelse continue;
@@ -670,12 +670,12 @@ pub const Analyzer = struct {
             self.diagnostics.scope = module.file;
             for (module.tree.constants) |*declaration| {
                 if (isReserved(declaration.name)) {
-                    try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
+                    try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
                     continue;
                 }
                 const qualified = try self.qualify(module.prefix, declaration.name);
                 if (self.constant_names.contains(qualified) or self.struct_names.contains(qualified)) {
-                    try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{declaration.name});
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}", .{declaration.name});
                     continue;
                 }
                 const index: u32 = @intCast(self.constant_infos.items.len);
@@ -1138,14 +1138,14 @@ pub const Analyzer = struct {
     ) Error!void {
         const in_root = self.modules[module].prefix.len == 0;
         if (isReserved(declaration.name)) {
-            try self.fail("luce.sema.reserved", declaration.span, "{s} is a reserved name", .{declaration.name});
+            try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
             return;
         }
         if (self.function_names.contains(name) or
             self.constant_names.contains(name) or
             (top_level and self.struct_names.contains(name)))
         {
-            try self.fail("luce.sema.duplicate", declaration.span, "duplicate name {s}", .{declaration.name});
+            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}", .{declaration.name});
             return;
         }
 
@@ -1249,7 +1249,7 @@ pub const Analyzer = struct {
                     false,
                     class,
                     .borrows,
-                    parameter.span,
+                    parameter.name_span,
                 )) orelse continue;
                 // A give parameter is an owned binding like any other
                 // (S15): take the object over from the caller on entry.

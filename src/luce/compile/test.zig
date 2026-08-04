@@ -153,6 +153,113 @@ test "semantic diagnostics carry the right code and location" {
     , .{}, &.{.{ .code = "luce.sema.field", .line = 6, .column = 13 }});
 }
 
+test "a diagnostic about a name points at the name, not at the declaration" {
+    // They all pointed at the declaration, because a declaration
+    // carried one span and every complaint reused it.  So `func
+    // term_rows():` underlined the `func` as part of a sentence about
+    // the word `term_rows`, and `let print = 3` underlined `= 3`.  The
+    // message named one word and the caret covered a phrase, which
+    // leaves the reader working out which part is meant.
+    //
+    // Columns, so this cannot pass by pointing at the right line.
+    try expectDiagnostics(
+        \\func term_rows() -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 6 }});
+    try expectDiagnostics(
+        \\struct term_style:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 8 }});
+    try expectDiagnostics(
+        \\let print = 3
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 5 }});
+    try expectDiagnostics(
+        \\func main():
+        \\    let term_cols = 1
+        \\
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
+    try expectDiagnostics(
+        \\func main():
+        \\    var term_rows: Int
+        \\
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
+    // The same rule for the duplicates, which read the same spans.
+    try expectDiagnostics(
+        \\func go():
+        \\    return
+        \\
+        \\func go():
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 6 }});
+    try expectDiagnostics(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\struct Point:
+        \\    y: Int
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 8 }});
+    try expectDiagnostics(
+        \\struct Point:
+        \\    x: Int
+        \\    x: Int
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 3, .column = 5 }});
+    try expectDiagnostics(
+        \\func f(a: Int, a: Int) -> Int:
+        \\    return a
+        \\
+        \\func main():
+        \\    return
+        \\
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 1, .column = 16 }});
+    try expectDiagnostics(
+        \\func main():
+        \\    let a = 1
+        \\    if true:
+        \\        let a = 2
+        \\        print(str(a))
+        \\
+    , .{ .allow_host = true }, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 13 }});
+}
+
+test "a name refused at its declaration is not then an unknown name" {
+    // One mistake, one diagnostic.  `var len = 1` is refused because
+    // `len` is reserved — and `len` is still a name the reader wrote
+    // and meant, so the line below it must not become "unknown name
+    // len" on top.  The builder already remembered names whose
+    // *initializer* failed for exactly this reason; a name refused for
+    // what it is spelled was falling out of that.
+    try expectDiagnostics(
+        \\func main():
+        \\    var len = 1
+        \\    len = 2
+        \\
+    , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
+}
+
 test "the previously-unasserted diagnostic codes fire" {
     // A single-case-per-code sweep for codes no other test pinned,
     // so each stays reachable and keeps its stable name.

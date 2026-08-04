@@ -591,6 +591,7 @@ pub const Parser = struct {
         try self.endOfStatement("end of line after the constant");
         return .{
             .name = self.text(name),
+            .name_span = name.span,
             .annotation = annotation,
             .value = value,
             .span = .{ .start = start.span.start, .end = value.span().end },
@@ -715,6 +716,7 @@ pub const Parser = struct {
             try self.endOfStatement("end of line after the field");
             try fields.append(self.arena, .{
                 .name = self.text(field_name),
+                .name_span = field_name.span,
                 .type_name = field_type,
                 .span = .{ .start = field_name.span.start, .end = field_type.span.end },
             });
@@ -722,6 +724,7 @@ pub const Parser = struct {
         _ = self.accept(.dedent);
         return .{
             .name = self.text(name),
+            .name_span = name.span,
             .fields = try fields.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = name.span.end },
@@ -745,6 +748,7 @@ pub const Parser = struct {
             const parameter_type = (try self.typeName()) orelse return null;
             try parameters.append(self.arena, .{
                 .name = self.text(parameter_name),
+                .name_span = parameter_name.span,
                 .mode = mode,
                 .type_name = parameter_type,
                 .span = .{ .start = parameter_name.span.start, .end = parameter_type.span.end },
@@ -769,6 +773,7 @@ pub const Parser = struct {
         const body = (try self.block("func")) orelse return null;
         return .{
             .name = self.text(name),
+            .name_span = name.span,
             .parameters = try parameters.toOwnedSlice(self.arena),
             .return_type = return_type,
             .fallible = fallible,
@@ -870,6 +875,7 @@ pub const Parser = struct {
             _ = self.advance();
             return .{ .variable = .{
                 .name = self.text(name),
+                .name_span = name.span,
                 .annotation = annotation,
                 .value = null,
                 .span = .{ .start = start.span.start, .end = annotation.?.span.end },
@@ -891,6 +897,7 @@ pub const Parser = struct {
         if (mutable) {
             return .{ .variable = .{
                 .name = self.text(name),
+                .name_span = name.span,
                 .annotation = annotation,
                 .value = value,
                 .span = span,
@@ -898,6 +905,7 @@ pub const Parser = struct {
         }
         return .{ .let = .{
             .name = self.text(name),
+            .name_span = name.span,
             .annotation = annotation,
             .value = value,
             .span = span,

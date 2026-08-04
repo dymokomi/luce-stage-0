@@ -160,8 +160,27 @@ pub const Target = union(enum) {
     }
 };
 
-pub const Binding = struct { name: []const u8, annotation: ?TypeName, value: *Expression, span: Span };
-pub const Variable = struct { name: []const u8, annotation: ?TypeName, value: ?*Expression, span: Span };
+/// `name_span` on every declaration below is the span of the **name
+/// alone**, beside the `span` of the whole declaration.  A diagnostic
+/// about a name — reserved, duplicate, already a declaration — points
+/// at the name; a diagnostic about the declaration points at the
+/// declaration.  With one span they all pointed at the declaration,
+/// so `let print = 3` underlined `= 3` as part of a complaint about
+/// the word `print`, and `func term_rows():` underlined the `func`.
+pub const Binding = struct {
+    name: []const u8,
+    name_span: Span,
+    annotation: ?TypeName,
+    value: *Expression,
+    span: Span,
+};
+pub const Variable = struct {
+    name: []const u8,
+    name_span: Span,
+    annotation: ?TypeName,
+    value: ?*Expression,
+    span: Span,
+};
 /// `place = value`, or a compound assignment `place OP= value` when
 /// `compound` is set (which reads the place, applies OP, stores back —
 /// the place is evaluated once).  Compound forms are value-only
@@ -243,12 +262,14 @@ pub const Block = struct {
 
 pub const Field = struct {
     name: []const u8,
+    name_span: Span,
     type_name: TypeName,
     span: Span,
 };
 
 pub const StructDecl = struct {
     name: []const u8,
+    name_span: Span,
     fields: []Field,
     functions: []FuncDecl,
     span: Span,
@@ -262,6 +283,7 @@ pub const ParameterMode = enum { borrow, give };
 
 pub const Parameter = struct {
     name: []const u8,
+    name_span: Span,
     mode: ParameterMode = .borrow,
     type_name: TypeName,
     span: Span,
@@ -269,6 +291,7 @@ pub const Parameter = struct {
 
 pub const FuncDecl = struct {
     name: []const u8,
+    name_span: Span,
     parameters: []Parameter,
     return_type: ?TypeName,
     /// Written `-> T!` or `-> !`.  Fallibility is an attribute of the
@@ -294,6 +317,7 @@ pub const Import = struct {
 /// value type, usable anywhere in the module and through imports.
 pub const ConstDecl = struct {
     name: []const u8,
+    name_span: Span,
     annotation: ?TypeName,
     value: *Expression,
     span: Span,
