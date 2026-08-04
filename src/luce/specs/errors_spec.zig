@@ -448,6 +448,12 @@ test "luce.lex.indent: an over-nested file is one message, not a hundred and fif
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expectEqualStrings("luce.lex.indent", diagnostics.at(0).?.code);
     try testing.expectEqualStrings("blocks may not nest more than 100 deep", diagnostics.at(0).?.message);
+    // On the block being opened, not on the four hundred columns of
+    // indentation in front of it: line 101 is `if true:` at 100 levels
+    // of four spaces, so the keyword starts at column 401.
+    const at = source_mod.place(deep.items, diagnostics.at(0).?.span.start);
+    try testing.expectEqual(@as(usize, 101), at.line);
+    try testing.expectEqual(@as(usize, 401), at.column);
 
     // And the whole rendering stays small, which is the property a
     // reader actually feels.  It used to be 65 KB.
