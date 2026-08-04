@@ -421,6 +421,17 @@ keyed to whether the expression was a local (which narrows) or a field
 of ~110 wrong programs across the lexer, parser and analyzer found the
 list below.  Ranked by how often a real program hits them.
 
+**Where it stands after three rounds of work:** twenty-five items
+closed, four open, and the four left are the ones a sweep has to look
+for rather than trip over.  The families the scorecard was written
+from are still the standard; what has changed is that the lexer and
+parser now meet it.  Two rules came out of the work and are worth
+carrying forward: **one mistake, one report** — which is now a
+mechanism (`Lexed.truncated` per file, statement-scoped suppression
+per construct) and not a habit — and **check in the order the reader
+needs**, after a `try` diagnostic was found giving advice that cost a
+signature edit and a recompile to disprove.
+
 **Closed since this list was written.**  The method and built-in
 **argument** diagnostics went first — one sentence used to cover both a
 wrong count and a wrong type, phrased as a count, with the caret on the
@@ -475,49 +486,113 @@ wording and column:
   `...` for what is cut, measured in characters because the caret pads
   per character.
 
+**Closed in the round after that**, the six that were ranked here
+plus four found while sweeping:
+
+- ~~Foreign operators get "expected an expression, found '+'"~~ —
+  `++` `--` `**` `===` `!==` `<>` `<<` `>>` report once, with the
+  caret across the operator as written and the Luce spelling in the
+  sentence.  The bar for claiming a pair is that it can never be
+  anything else: `a--b` *is* `a - (-b)` and still compiles, so `--`
+  is claimed only where no operand follows, and the halves must
+  touch or nothing is claimed.  `&&` and `||` never become tokens at
+  all and are answered in the lexer, in the same words.
+- ~~Stray-character diagnostics cascade~~ — the `Lexed.truncated`
+  rule, narrowed to one construct: a parse report is suppressed when
+  stage 2 spoke inside the source the current statement consumed.
+  Scoped to the statement, so one bad line does not silence the next.
+  `&&` 2→1, stray `$` 2→1, C braces 3→2.  A matched pair of
+  typographic quotes is now one report across the whole literal,
+  carrying both codepoints, and confined to one line so an unmatched
+  quote cannot swallow a file.
+- ~~No unreachable-code diagnostic~~ — **decided: refuse.**  The
+  compiler has one severity, so warning was never available; the line
+  the language already draws is between *misleading* and *redundant*,
+  and a statement after `return` is the first kind.  It names the
+  terminator and its line, an `if` counts only when every arm leaves,
+  and one terminator is one report.  It found real dead code in two
+  of the tree's own fixtures on its first run.  LANGUAGE.md and
+  /ref/statements carry the reasoning.
+- ~~A diagnostic at end of file prints no snippet~~ — the position
+  was never wrong, so it does not move; the snippet borrows the last
+  line with content and the caret sits one past its end, which is the
+  same byte.  `Rendered.source_line_number` says which line it handed
+  back.  Only at end of file: a blank line in the middle keeps its
+  own emptiness.
+- ~~An optional struct field is counted as one value~~ — **the
+  recorded reasoning was wrong, and so was the guess it rested on.**
+  Both counts are honest.  `valueCount` counts what a value of a type
+  *unconditionally* costs, and `zeroOf` is what it predicts: it
+  recurses through a struct field emitting an instruction per leaf and
+  stops dead at an optional one.  Measured: twelve levels of two
+  struct fields is 12,341 MIR instructions, sixty levels of the
+  optional spelling is 201.  Flattening optionals as well cannot
+  terminate (`next: Node?` has no closing order and would have to be
+  called a cycle, destroying the fix the cycle diagnostic prescribes);
+  flattening *neither* — the alternative this list proposed — disarms
+  the bound, and ninety lines of source then took 2.76 GB to check.
+  What was dishonest was the sentence, which described the data.  It
+  now says the struct *always holds* the values, names the widest
+  field with the caret on it, and offers `?` as well as a container.
+- ~~`expectSayingAt` cannot see a left-operand span widening back~~ —
+  `expectOnlySayingAcross` asserts the column an underline stops at,
+  and both `and`/`or` left-operand cases are pinned by width.
+- ~~A `try` with nothing to try gives wrong advice~~ — the order of
+  two checks was the diagnostic.  Inside a plain `main`, `try
+  plain()` answered "main does not say it can fail; write '-> !'",
+  advice that costs a signature edit and a recompile to reach the
+  truth; the same mistake in a `main() -> !` already got the right
+  sentence.  The operand is asked first now.
+- ~~`let a = risky() catch:`~~ — was "expected end of line after the
+  binding, found the keyword 'catch'".  Now names the binding and
+  both shapes that work.
+- ~~An f-string hole is underlined by underlining the whole
+  literal~~ — the synthesized `str(...)` carried the f-string's span,
+  so four holes on one line were all underlined and one of them was
+  wrong.  It takes the hole's span now.
+- ~~`s[0:4:2]` blames the bracket~~ — says the language has two slice
+  fields, where the third colon is written.
+
 **Still open**, ranked:
 
-1. **Foreign operators get "expected an expression, found '+'".**
-   `x++`, `x === y`, `x <> y` are all answered by naming the second
-   character.  The mechanism to do better exists and is used: `if x =
-   1:` yields "'=' assigns a value; write '==' to compare", and
-   `def`/`class`/`const` are answered with the Luce spelling.
-2. **Stray-character and unterminated-string diagnostics cascade.**
-   The lexer's messages are excellent; each is then followed by a
-   parser complaint about a token gap the lexer's own recovery
-   created.  `03_parse.zig:46` states the invariant, and the
-   nesting-bound case now holds it — `Lexed.truncated` is the
-   mechanism, and what these want is the same idea applied per
-   construct rather than per file.  A matched pair of smart quotes is
-   likewise two diagnostics.
-3. **No unreachable-code diagnostic** after `return` or `trap(...)`,
-   in a compiler that already tells you a redundant `!= none` test is
-   dead code.
-4. **A diagnostic at end of file prints no snippet.**  An empty
-   `func` body reports at the EOF token, so `source_line` is empty and
-   the renderer returns early — the message is right and has no
-   visual anchor.  It wants to point at the header on line 1.
-5. **An optional struct field is counted as one value, a plain one as
-   its whole expansion.**  Found while proving the cycle fix's
-   suggestion.  `struct Holder` with 100 `Big` fields is refused —
-   "expands to more than 4096 values" — and the same struct with 100
-   `Big?` fields, holding the same data, compiles: `valueCount`
-   answers 1 for every `.optional`, while `.strukt` flattens
-   (`04_semantics/declarations.zig`'s `valueCount`/`sumShape`).  One
-   of the two is wrong about what a struct costs, and which one
-   depends on whether an optional's struct payload is stored
-   indirectly — it must be, or `next: Node?` could not terminate, in
-   which case the *plain* count is the odd one out and the bound means
-   two different things depending on spelling.  Not a diagnostics bug;
-   recorded here because this is where it was found.
+1. **`"value %d" % a` is answered as a type error.**  "operands of %
+   are String and Int, and there is no conversion between them" is
+   true, and a reader arriving from Python or C wrote a format string.
+   The foreign-operator machinery now in `expressions.zig` is the
+   shape of the answer, but this one is a *type* mistake rather than a
+   parse one, so it belongs at the `%` type check with the f-string
+   named as the fix.
+2. **A stray `{`/`}` pair is still two reports.**  The typographic
+   quote fix pairs on one line; C braces open a block and close it
+   several lines later, so the same trick does not reach.  Whether one
+   report is even right here is the question to settle first — they
+   are two characters on two statements, and the statement-scoped
+   cascade rule deliberately lets a second statement speak.
+3. **`str takes Int, Float, Bool, String, or Builder` does not say
+   what it got.**  Every other type diagnostic names the type in hand;
+   this one lists the accepted set and stops, so a reader with a
+   `List(Int)` in an f-string hole is told what is allowed and left to
+   work out which rule they broke.
+4. **`give b.items` says "give moves a named object; use copy for
+   other expressions".**  A field *is* named, and the real reason is
+   that a nested place cannot be moved out of (S21, S25) — the fix
+   offered is right, the sentence describing why is not.
 
-**A pinning limit worth knowing.**  `expectSayingAt` and
-`expectOnlySayingAt` assert the span's *start*.  That pins every caret
-that moves — but a diagnostic narrowed onto a binary expression's
-**left** operand starts where the whole expression does, so widening it
-back is invisible to the suite.  The right-operand case pins the
-mechanism, and a helper asserting the end column is what would close it
-properly if another such case turns up.
+**Not a defect, recorded because it looks like one:** `give` through
+an alias (`let a = xs; stash(give a)`) compiles and traps
+`use_after_free` at run time rather than being refused, while
+`free(a)` on the same shape is a compile error.  That asymmetry is
+ratified — `OWNERSHIP.md` S23 makes the alias case "the one dynamic
+ownership check", and the trap fires correctly with file, line and
+column.  The binding's `.alias` class *is* statically known, so a
+static refusal is available if the owner wants to revisit S23; it is a
+language decision, not a bug to fix quietly.
+
+**Swept with nothing to fix**, so the next sweep can start elsewhere:
+the `give`/`copy` family (names the situation, its S-numbers and the
+fix at every site tried), method and builtin arity and argument types,
+index and slice type mistakes, the rest of the `T!`/`try`/`catch`
+family, and `!x`, `//`, `else if`, `def`/`class`/`const`.
 
 **Not a defect, recorded because it looks like one:** `give` through
 an alias (`let a = xs; stash(give a)`) compiles and traps
