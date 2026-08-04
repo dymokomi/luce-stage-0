@@ -1290,8 +1290,10 @@ test "an unclosed bracket is reported at the bracket once it has run past its li
 }
 
 test "f-string holes report their own mistakes, in f-string terms" {
-    try expectDiagnostics("func main():\n    let s = f\"{x:.2f}\"\n", &.{
-        .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "no format specifiers" },
+    // `{x:.2f}` is a format spec now (docs/NUMERICS.md §8); one that
+    // is not the single supported form still reports here.
+    try expectDiagnostics("func main():\n    let s = f\"{x:.2}\"\n", &.{
+        .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "the one form is ':.Nf'" },
     });
     try expectDiagnostics("func main():\n    let s = f\"a{}b\"\n", &.{
         .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "empty interpolation" },

@@ -433,14 +433,34 @@ each converted with `String(...)`:
 ```luce
 f"x = {x}, y = {y}"       # "x = 7, y = 3"
 f"sum = {a + b}"          # any scalar expression: Int, Float, Bool,
-                          # String, Builder — a List is a type error
+                          # String — a List is a type error
 f"name is {user.name}"    # methods, calls, fields all work
 f"{{literal braces}}"     # double a brace for a literal { or }
+f"mean = {mean:.2f}"      # a Float to two decimal places
 ```
 
 The hole is one expression; nested `"..."` strings inside a hole are
 fine.  `f"..."` desugars to plain `+` concatenation of `String(...)`
 pieces, so it is a String like any other.
+
+**Format specs.**  A hole may end `:.Nf` — N decimal places of a
+`Float`, rounded half away from zero (docs/NUMERICS.md §8).  That is
+the whole spec language: no width, no fill, no alignment, no `%`, no
+`e`, no thousands separator, and anything else is a
+`luce.parse.fstring` naming the one form that exists.  The `f` is
+redundant, since the compiler knows the operand's type, and is
+required anyway — `{x:.2}` means *two significant digits* in Python,
+and letting it mean two decimal places here would be a silent
+divergence.
+
+A spec lowers to `strings.format_float(value, N)`, so it needs
+`import std.strings` for the same reason `s.split(",")` does, and says
+so through the same diagnostic.  Formatting is where formatting
+happens: there is no `String.format`, and `%` stays an arithmetic
+operator.
+
+A colon *inside* brackets belongs to the brackets, so `f"{s[1:3]}"` is
+a slice and `f"{m[k]}"` a lookup.
 
 ## Conversions and generic builtins
 

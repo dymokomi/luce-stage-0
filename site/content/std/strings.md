@@ -119,6 +119,11 @@ func main():
 display, rounding half away from zero. `String(x)` gives the shortest
 form that round-trips.
 
+**An f-string spec is this function**: `f"{x:.2f}"` *is*
+`strings.format_float(x, 2)`, which is why a spec needs this import
+like any other String service. Write the call where a format is not
+in a string; write the spec where it is.
+
 It is for **display of ordinary magnitudes**, and it says so at both
 edges rather than pretending otherwise:
 

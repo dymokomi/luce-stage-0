@@ -1128,3 +1128,30 @@ already gone in step 1.
 print a Float with Zig's `{d}` — the Ryū-derived shortest
 representation that round-trips — so a folded `String(2.5)` is the
 same bytes a run would produce, and the specs compare them.
+
+### Step 6 — f-string `:.Nf` — **landed**
+
+`f"{mean:.2f}"` lowers to `strings.format_float(mean, 2)`, exactly as
+§8 recommends: one production in the f-string scanner, no runtime, and
+the std function that already existed and already rounds half away
+from zero.  `programs/dice.luc:36-37` — the shape §8 names as what
+this replaces — is one line now, and reads
+`f"total {total}, mean {total / count:.2f}"`, which is D1, D3 and D6
+in the same expression.
+
+**Two things the memo did not have right, both in its favour.**
+
+1. **The scan was already written.**  §8 costs "one grammar production
+   in the f-string scanner"; it cost slightly less, because
+   `topLevelColon` already existed to *refuse* this exact syntax —
+   *"no format specifiers in an f-string hole; use
+   strings.format_float(x, 2)"* — and it is the same bracket-aware,
+   string-skipping scan the split needs.  The refusal became the
+   feature by deleting four lines and calling the helper for its
+   answer instead of for its existence.
+
+2. **A spec needs `import std.strings`,** which §8 does not mention.
+   It follows from the lowering rather than being a new rule: a spec
+   *is* `strings.format_float`, so it needs what `s.split(",")` needs
+   and reports through the same `luce.sema.import` diagnostic.  Worth
+   writing down because it is the one thing about specs that surprises.

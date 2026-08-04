@@ -1014,6 +1014,55 @@ test "luce.parse.comment: a line that starts with // is told what // is" {
     );
 }
 
+// One spec form, and the message names it (docs/NUMERICS.md §8).  The
+// `f` is redundant and required anyway: `{x:.2}` means two
+// *significant digits* in Python, and letting it mean two decimal
+// places here would be a silent divergence from the language Luce is
+// shaped after.
+
+test "luce.parse.fstring: an unknown format spec names the one that exists" {
+    try expectOnlySayingAt(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:.2}")
+        \\
+    ,
+        "luce.parse.fstring",
+        "unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a Float",
+        5,
+        15,
+    );
+    try expectRejected(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:8.2f}")
+        \\
+    , "luce.parse.fstring");
+    try expectRejected(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:%.2f}")
+        \\
+    , "luce.parse.fstring");
+}
+
+test "luce.sema.import: a format spec is std.strings, and says so" {
+    // It lowers to `strings.format_float`, so it needs the import that
+    // every other String service needs — the same rule, not a new one.
+    try expectHostSaying(
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:.2f}")
+        \\
+    , "luce.sema.import", "import std.strings");
+}
+
 test "luce.sema.convert: String() takes a scalar, and names build() for a Builder" {
     // The one reason `str` could not simply be renamed: it took a heap
     // object, and a scalar constructor should not (docs/NUMERICS.md §7).

@@ -86,8 +86,56 @@ name is ada, next year 37
 A hole is one expression, and `"..."` strings nested inside a hole are
 fine. `f"..."` desugars to plain `+` concatenation of `String(...)`
 pieces, so the result is a `String` like any other. A `List` in a hole
-is a type error — `str` takes `Int`, `Float`, `Bool`, `String` and
-`Builder`.
+is a type error — `String(x)` takes a scalar.
+
+### Format specs
+
+A hole may end `:.Nf` — a `Float` to N decimal places, rounded half
+away from zero. That is the whole spec language: no width, no fill,
+no alignment, no `%`, no `e`. Anything else names the one form that
+exists.
+
+```luce run
+import std.strings
+
+func main():
+    let mean = 23.998425
+    print(f"mean = {mean:.2f}")
+    let total = 74
+    let count = 20
+    print(f"{count} rolls, mean {total / count:.2f}")
+    print(f"{2.5:.0f} and {-2.5:.0f}")
+```
+
+```output
+mean = 24.00
+20 rolls, mean 3.70
+3 and -3
+```
+
+The `f` is redundant — the compiler knows the operand is a `Float` —
+and is required anyway, because `{x:.2}` means *two significant
+digits* in Python and letting it mean two decimal places here would be
+a quiet disagreement with the language Luce is shaped after.
+
+A spec lowers to `strings.format_float(value, N)`, so it needs the
+import like any other String service. A colon *inside* brackets
+belongs to the brackets, so `f"{s[1:3]}"` is still a slice.
+
+```luce fail
+import std.strings
+
+func main():
+    let x = 1.5
+    print(f"{x:.2}")
+```
+
+```output
+luce: compile failed
+main.luc:5:15: unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a Float [luce.parse.fstring]
+        print(f"{x:.2}")
+                  ^~~
+```
 
 ## The strings module
 

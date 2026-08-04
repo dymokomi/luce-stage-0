@@ -89,6 +89,47 @@ test "String(x) prints every scalar, and Builder.build() hands over its own" {
     );
 }
 
+// `{x:.2f}` — format specs inside f-strings, and nowhere else,
+// because that is where formatting happens (docs/NUMERICS.md §8).
+// One form: `.Nf` on a Float.  It lowers to `strings.format_float`,
+// which already existed and already rounds half away from zero, so
+// this is one production in the f-string scanner and no runtime.
+
+test "f-strings: a :.Nf spec writes a Float to N decimal places" {
+    try agree.printsGiven(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let mean = 23.998425
+        \\    print(f"mean = {mean:.2f}")
+        \\    let rate = 1.0 / 3.0
+        \\    print(f"{3} rolls, {rate:.3f}/s")
+        \\    # Rounding is the language's, half away from zero.
+        \\    print(f"{2.5:.0f} {-2.5:.0f}")
+        \\    # Promotion reaches the spec too: an Int widens into it.
+        \\    print(f"{7:.2f}")
+        \\    # And a hole with no spec is unchanged.
+        \\    print(f"{mean}")
+        \\
+    , budget, "mean = 24.00\n3 rolls, 0.333/s\n3 -3\n7.00\n23.998425\n");
+}
+
+test "f-strings: a colon inside brackets belongs to the brackets" {
+    try agree.printsGiven(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let parts = ["a", "b", "c"]
+        \\    let sliced = parts[0:2]
+        \\    print(f"{len(sliced)} {parts[1]} {len(parts[0:3])}")
+        \\    let text = "hello"
+        \\    print(f"{text[1:3]}")
+        \\    free(sliced)
+        \\    free(parts)
+        \\
+    , budget, "2 b 3\nel\n");
+}
+
 test "str is a name a program may take now" {
     // It left the reserved list with the builtin, so the language got
     // one word smaller in both senses (docs/NUMERICS.md §7).

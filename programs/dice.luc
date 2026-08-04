@@ -33,8 +33,7 @@ func main() -> !:
         total += roll
 
     print(f"{count} rolls from seed {seed}: " + rolls.join(" "))
-    let mean = strings.format_float(Float(total) / Float(count), 2)
-    print(f"total {total}, mean {mean}")
+    print(f"total {total}, mean {total / count:.2f}")
     for face in range(1, 7):
         print(f"{face}: " + bar(histogram[face]))
 
