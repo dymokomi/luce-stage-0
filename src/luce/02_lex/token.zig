@@ -69,7 +69,7 @@ pub const Kind = enum {
     float_literal,
     /// `"..."`, quotes included; escapes are decoded by the parser.
     string_literal,
-    /// f"...{expr}..." — the parser expands it into str()-wrapped
+    /// f"...{expr}..." — the parser expands it into String()-wrapped
     /// concatenation; the token spans the whole f"..." including the
     /// leading f and both quotes.
     fstring,

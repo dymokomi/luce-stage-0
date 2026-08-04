@@ -756,14 +756,14 @@ pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
 
 /// Expand f"...{expr}..." into a String-typed concatenation:
 /// literal chunks (escapes and `{{`/`}}` decoded) joined with `+`,
-/// each `{expr}` wrapped in `str(expr)`.  A hole is sub-parsed
+/// each `{expr}` wrapped in `String(expr)`.  A hole is sub-parsed
 /// against the real source with absolute spans, so diagnostics
 /// inside interpolations point at the right bytes.
 ///
 /// This is the one place stage 3 desugars rather than records; the
 /// structured form belongs in stage 5 (docs/PIPELINE.md).
 // ---------------------------------------------------------------------------
-// F-strings, desugared here into `+` and `str(...)`
+// F-strings, desugared here into `+` and `String(...)`
 // ---------------------------------------------------------------------------
 
 fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
@@ -800,10 +800,10 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
             };
             const hole = inner[index + 1 .. close];
             const hole_expr = (try subExpression(self, hole, inner_start + index + 1)) orelse return null;
-            // The synthesized `str(...)` takes the *hole's* span, not
+            // The synthesized `String(...)` takes the *hole's* span, not
             // the whole f-string's.  Everything stage 4 says about this
             // call is about what the reader wrote between the braces —
-            // `str takes Int, Float, Bool, String, or Builder` for a
+            // `String() converts Int, Float, Bool, or String` for a
             // list in a hole — and underlining the entire literal makes
             // a reader with four holes in one line check all four.
             const wrapped = try wrapStr(self, hole_expr, hole_expr.span());
@@ -860,11 +860,11 @@ fn concat(self: *Parser, left: ?*ast.Expression, right: *ast.Expression) Error!*
     } });
 }
 
-/// str(expr) — the interpolation converts each hole to text.
+/// String(expr) — the interpolation converts each hole to text.
 fn wrapStr(self: *Parser, expr: *ast.Expression, span: Span) Error!*ast.Expression {
     const arguments = try self.arena.alloc(ast.Argument, 1);
     arguments[0] = .{ .name = null, .value = expr, .span = expr.span() };
-    return make(self, .{ .call = .{ .callee = "str", .arguments = arguments, .span = span } });
+    return make(self, .{ .call = .{ .callee = "String", .arguments = arguments, .span = span } });
 }
 
 /// Find the `}` matching the `{` just before `from`, tracking

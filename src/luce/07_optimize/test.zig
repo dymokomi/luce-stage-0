@@ -100,7 +100,7 @@ test "ownership drops the temporary's bind and its inert release" {
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
-        \\    print(str(len(xs)))
+        \\    print(String(len(xs)))
         \\
     );
     defer program.deinit();
@@ -133,7 +133,7 @@ test "ownership leaves a bind alone across a call" {
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
-        \\    print(str(take(give(xs))))
+        \\    print(String(take(give(xs))))
         \\
     );
     defer program.deinit();
@@ -150,7 +150,7 @@ test "dead code sweeps unread values and compacts the pool" {
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
-        \\    print(str(len(xs)))
+        \\    print(String(len(xs)))
         \\
     );
     defer program.deinit();
@@ -186,7 +186,7 @@ test "the whole stage shrinks a program and leaves it verifiable" {
         \\    var total = 0
         \\    for word in words:
         \\        total = total + len(word) + len(word)
-        \\    print(str(total))
+        \\    print(String(total))
         \\
     ;
     var program = try compileRaw(source);
@@ -208,7 +208,7 @@ test "running the stage twice changes nothing the second time" {
         \\    while index < 5:
         \\        xs.append(index * index)
         \\        index = index + 1
-        \\    print(str(len(xs)))
+        \\    print(String(len(xs)))
         \\
     );
     defer program.deinit();
@@ -229,7 +229,7 @@ test "every pass on its own leaves verifiable MIR" {
         \\    let m = new Map(String, Int)
         \\    m["a"] = 1
         \\    if m.has("a"):
-        \\        print(str(m["a"]))
+        \\        print(String(m["a"]))
         \\
         ,
         \\func fib(n: Int) -> Int:
@@ -238,7 +238,7 @@ test "every pass on its own leaves verifiable MIR" {
         \\    return fib(n - 1) + fib(n - 2)
         \\
         \\func main():
-        \\    print(str(fib(10)))
+        \\    print(String(fib(10)))
         \\
         ,
         \\struct Point:
@@ -248,7 +248,7 @@ test "every pass on its own leaves verifiable MIR" {
         \\func main():
         \\    var p = Point(x = 1, y = 2)
         \\    p.x = p.x + p.y
-        \\    print(str(p.x))
+        \\    print(String(p.x))
         \\
     };
     const each = [_]optimize.Passes{
@@ -510,7 +510,7 @@ test "ownership leaves a program with nothing to rewrite byte for byte alone" {
         \\    while index < 5:
         \\        total = total + index
         \\        index = index + 1
-        \\    print(str(total))
+        \\    print(String(total))
         \\
     );
     defer program.deinit();

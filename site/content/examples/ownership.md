@@ -44,14 +44,14 @@ func main():
     var sink = new List(List(Int))
     var xs = [1, 2]
     sink.append(give xs)
-    print(str(len(xs)))
+    print(String(len(xs)))
 ```
 
 ```output
 luce: compile failed
-main.luc:5:19: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
-        print(str(len(xs)))
-                      ^~
+main.luc:5:22: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
+        print(String(len(xs)))
+                         ^~
 ```
 
 Poisoning is source-order and branch-insensitive, which is why giving
@@ -182,7 +182,7 @@ func main():
     var xs = [1, 2]
     let view = xs
     free(xs)
-    print(str(view[0]))
+    print(String(view[0]))
 ```
 
 ```output

@@ -1069,7 +1069,10 @@ pub const Analyzer = struct {
             },
             .binary => |binary| return self.foldBinary(module, binary),
             .call => |call| {
-                if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+                if (std.mem.eql(u8, call.callee, "Int") or
+                    std.mem.eql(u8, call.callee, "Float") or
+                    std.mem.eql(u8, call.callee, "String"))
+                {
                     if (call.arguments.len != 1 or call.arguments[0].name != null) {
                         return self.constantError(call.span, "{s}(value) takes one argument", .{call.callee});
                     }
@@ -1126,6 +1129,23 @@ pub const Analyzer = struct {
     }
 
     fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
+        if (std.mem.eql(u8, call.callee, "String")) {
+            // The same text a run would print, spelled by the same
+            // rules — but from a constant, so it is arena-owned here
+            // rather than made by the runtime.
+            // `{d}` on both, which is exactly what `runtime/text.zig`
+            // writes: a Float's text is Zig's Ryū-derived shortest
+            // representation that round-trips, and a folded constant
+            // has to be the same bytes a run would produce.
+            const printed: []const u8 = switch (operand.value) {
+                .int => |held| try std.fmt.allocPrint(self.arena, "{d}", .{held}),
+                .float => |held| try std.fmt.allocPrint(self.arena, "{d}", .{held}),
+                .boolean => |held| if (held) "true" else "false",
+                .string => |held| held,
+                else => return self.constantError(call.span, "String() converts Int, Float, Bool, or String", .{}),
+            };
+            return .{ .value = .{ .string = printed }, .value_type = .string };
+        }
         const to_int = std.mem.eql(u8, call.callee, "Int");
         if (to_int) {
             switch (operand.value) {

@@ -109,14 +109,14 @@ rather than the parser's predicament:
 func main():
     let n: Int = 1
     let s: String = "two"
-    print(str(n + s))
+    print(String(n + s))
 ```
 
 ```output
 luce: compile failed
-main.luc:4:15: operands of + are Int and String, and there is no conversion between them [luce.sema.type]
-        print(str(n + s))
-                  ^~~~~
+main.luc:4:18: operands of + are Int and String, and there is no conversion between them [luce.sema.type]
+        print(String(n + s))
+                     ^~~~~
 ```
 
 Every diagnostic carries a stable code — `luce.lex.*`, `luce.parse.*`,

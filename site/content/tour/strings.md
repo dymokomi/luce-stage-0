@@ -18,9 +18,9 @@ func main():
     let greeting = "hello, loom"
     print(f"{len(greeting)} bytes")
     print(greeting[0:5])                # a slice; still a value
-    print(str(greeting.byte_at(0)))     # 'h'
-    print(str(greeting.find_byte(44, 0)))  # first comma
-    print(str("apple" < "banana"))
+    print(String(greeting.byte_at(0)))     # 'h'
+    print(String(greeting.find_byte(44, 0)))  # first comma
+    print(String("apple" < "banana"))
 ```
 
 ```output
@@ -59,7 +59,7 @@ to vectorize it.
 ## Interpolation
 
 An `f"..."` string splices expressions written in `{...}`, each one
-converted with `str(...)`.
+converted with `String(...)`.
 
 ```luce run
 struct User:
@@ -84,7 +84,7 @@ name is ada, next year 37
 ```
 
 A hole is one expression, and `"..."` strings nested inside a hole are
-fine. `f"..."` desugars to plain `+` concatenation of `str(...)`
+fine. `f"..."` desugars to plain `+` concatenation of `String(...)`
 pieces, so the result is a `String` like any other. A `List` in a hole
 is a type error — `str` takes `Int`, `Float`, `Bool`, `String` and
 `Builder`.
@@ -138,11 +138,11 @@ it keeps them.
 
 ```luce run
 func main():
-    print(str(42))
-    print(str(2.5))
-    print(str(true))
+    print(String(42))
+    print(String(2.5))
+    print(String(true))
     print(chr(955))              # a codepoint becomes a String
-    print(str(ord("λ")))         # and back
+    print(String(ord("λ")))         # and back
 ```
 
 ```output

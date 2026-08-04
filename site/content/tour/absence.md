@@ -110,7 +110,7 @@ is why there is no force-unwrap sigil in the language at all.
 func main():
     let text = "not a number"
     let n = parse_int(text) else trap(f"expected a number, got {text}")
-    print(str(n))
+    print(String(n))
 ```
 
 ```output
@@ -126,14 +126,14 @@ name in front of you.
 ```luce fail
 func main():
     let n = parse_int("7")
-    print(str(n + 1))
+    print(String(n + 1))
 ```
 
 ```output
 luce: compile failed
-main.luc:3:15: operands of + are Int? and Int, and there is no conversion between them; test it first (if n != none:) or supply a fallback (n else …) [luce.sema.type]
-        print(str(n + 1))
-                  ^~~~~
+main.luc:3:18: operands of + are Int? and Int, and there is no conversion between them; test it first (if n != none:) or supply a fallback (n else …) [luce.sema.type]
+        print(String(n + 1))
+                     ^~~~~
 ```
 
 So is a test or a fallback that can never fire: once a name is known

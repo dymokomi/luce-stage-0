@@ -85,7 +85,7 @@ func main():
     var xs = [1, 2]
     let view = xs
     free(xs)                  # released early, on purpose
-    print(str(view[0]))
+    print(String(view[0]))
 ```
 
 ```output
@@ -146,14 +146,14 @@ func main():
     var xs = [1]
     if len(xs) > 0:
         sink.append(give xs)
-    print(str(len(xs)))
+    print(String(len(xs)))
 ```
 
 ```output
 luce: compile failed
-main.luc:6:19: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
-        print(str(len(xs)))
-                      ^~
+main.luc:6:22: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
+        print(String(len(xs)))
+                         ^~
 ```
 
 Because keeping always transfers, **a container always owns its object
@@ -228,7 +228,7 @@ func main():
     var values = squares(5)
     var text: List(String) = []
     for value in values:
-        text.append(str(value))
+        text.append(String(value))
     print(text.join(" "))
 ```
 

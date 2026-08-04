@@ -70,7 +70,7 @@ fn runLuce(
 
 const greeting =
     \\func main():
-    \\    print("total " + str(3 * 10))
+    \\    print("total " + String(3 * 10))
     \\
 ;
 
@@ -183,7 +183,7 @@ test "check compiles, reports, and writes nothing" {
     try tree.write("sub/broken.luc",
         \\func main():
         \\    let count: Int = "seven"
-        \\    print(str(count))
+        \\    print(String(count))
         \\
     );
 
@@ -256,7 +256,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     try testing.expect(!tree.exists("shape.lc"));
 
     // A program that does not compile has no IR to print.
-    try tree.write("broken.luc", "func main():\n    let x: Int = \"s\"\n    print(str(x))\n");
+    try tree.write("broken.luc", "func main():\n    let x: Int = \"s\"\n    print(String(x))\n");
     const broken = try tree.at(gpa, "broken.luc");
     defer gpa.free(broken);
     var failed = try runLuce(gpa, &tree, &.{ "ir", broken }, null);
@@ -288,7 +288,7 @@ test "a program may arrive on standard input, and is named for what it is" {
         gpa,
         &tree,
         &.{ "check", "-" },
-        "func main():\n    let x: Int = \"s\"\n    print(str(x))\n",
+        "func main():\n    let x: Int = \"s\"\n    print(String(x))\n",
     );
     defer complained.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), complained.status);
@@ -409,7 +409,7 @@ const stumbles =
     \\func main():
     \\    var xs = [1, 2, 3]
     \\    print("before")
-    \\    print(str(at(xs, 7)))
+    \\    print(String(at(xs, 7)))
     \\
 ;
 
@@ -525,8 +525,8 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
             \\    return value
             \\
             \\func main() -> !:
-            \\    print(str(try check(1)))
-            \\    print(str(try check(-5)))
+            \\    print(String(try check(1)))
+            \\    print(String(try check(-5)))
             \\
             ,
             .status = 3,
@@ -572,7 +572,7 @@ test "a standalone binary reads the arguments it was given, past its own name" {
     defer tree.deinit(gpa);
     try tree.write("echo.luc",
         \\func main():
-        \\    print(str(arg_count()))
+        \\    print(String(arg_count()))
         \\    var index = 0
         \\    while index < arg_count():
         \\        print(arg(index))

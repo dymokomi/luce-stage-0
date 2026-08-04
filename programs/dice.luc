@@ -28,7 +28,7 @@ func main() -> !:
     var total = 0
     for i in range(0, count):
         let roll = math.random_int(rng, 1, 7)
-        rolls.append(str(roll))
+        rolls.append(String(roll))
         histogram[roll] += 1
         total += roll
 

@@ -12,9 +12,9 @@ func parse_port(text: String) -> Int!:
     return n
 
 func main() -> !:
-    print(str(try parse_port("8080")))
-    print(str(parse_port("nope") catch -1))
-    print(str(parse_port("99999") catch -1))
+    print(String(try parse_port("8080")))
+    print(String(parse_port("nope") catch -1))
+    print(String(parse_port("99999") catch -1))
 ```
 
 ```output
@@ -41,8 +41,8 @@ func outer(n: Int) -> Int!:
     return try middle(n) * 2
 
 func main() -> !:
-    print(str(try outer(5)))
-    print(str(outer(0) catch -1))
+    print(String(try outer(5)))
+    print(String(outer(0) catch -1))
 ```
 
 ```output
@@ -110,8 +110,8 @@ func check(value: Int) -> Int!:
     return value
 
 func main() -> !:
-    print(str(try check(50)))
-    print(str(try check(500)))
+    print(String(try check(50)))
+    print(String(try check(500)))
 ```
 
 ```output

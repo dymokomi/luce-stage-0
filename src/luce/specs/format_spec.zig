@@ -34,7 +34,7 @@ test "a module encoded and decoded again is the same program on both engines" {
         \\    let here = Point(x = xs[3], y = len(xs))
         \\    assert(here.x == 6 and here.y == 8)
         \\    assert(double(21) == 42)
-        \\    print(str(xs[7]) + " " + str(here.x))
+        \\    print(String(xs[7]) + " " + String(here.x))
         \\
     );
     defer program.deinit();

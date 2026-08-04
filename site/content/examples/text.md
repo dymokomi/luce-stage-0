@@ -93,10 +93,10 @@ func main():
     var table = new Builder()
     for row in range(0, 4):
         for column in range(0, 4):
-            table.append(str(row * column))
+            table.append(String(row * column))
             table.append_ascii(9)      # a tab, without allocating a String
         table.append("\n")
-    print(str(table))
+    print(table.build())
 ```
 
 ```output
@@ -146,7 +146,7 @@ away from zero.
 import std.strings
 
 func main():
-    print(str(1.0 / 3.0))
+    print(String(1.0 / 3.0))
     print(strings.format_float(1.0 / 3.0, 4))
     print(strings.format_float(2.5, 0))
     print(strings.format_float(-2.345, 2))

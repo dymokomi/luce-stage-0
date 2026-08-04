@@ -141,7 +141,7 @@ operations take.
 
 ## Builder
 
-Accumulates text. `str(builder)` hands back the `String`.
+Accumulates text. `String(builder)` hands back the `String`.
 
 ## Optionals: `T?`
 

@@ -41,7 +41,7 @@ struct Scan:
         while stop < len(text) and text.byte_at(stop) >= 48 and text.byte_at(stop) <= 57:
             stop = stop + 1
         if stop == at:
-            error("expected a number at position " + str(at))
+            error("expected a number at position " + String(at))
         let digits = text[at:stop]
         return Step(value = parse_int(digits) else error("not a number: " + digits), at = stop)
 
@@ -93,7 +93,7 @@ struct Parse:
             let inner = try Parse.expression(text, here + 1)
             let close = Scan.skip_spaces(text, inner.at)
             if close >= len(text) or text.byte_at(close) != 41:
-                error("expected ) at position " + str(close))
+                error("expected ) at position " + String(close))
             return Step(value = inner.value, at = close + 1)
         return try Scan.number(text, here)
 
@@ -103,8 +103,8 @@ func evaluate(text: String) -> !:
     let result = try Parse.expression(text, 0)
     let rest = Scan.skip_spaces(text, result.at)
     if rest != len(text):
-        error("unexpected character at position " + str(rest))
-    print(text + " = " + str(result.value))
+        error("unexpected character at position " + String(rest))
+    print(text + " = " + String(result.value))
 
 # The interactive loop.  `read_line` answers `String?`, so end of input
 # — a pipe running dry, Ctrl-D at a terminal — is `none` and ends the

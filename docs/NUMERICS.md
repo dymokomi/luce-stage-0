@@ -127,14 +127,14 @@ cheap once these are settled.
 > **Confirm:** `Int(x)` rounds half away from zero (§7), and `trunc`
 > is added.
 
-> ### D5 — If `String(x)` arrives, does `str(x)` leave?
+> ### D5 — If `String(x)` arrives, does `String(x)` leave?
 >
 > `Int(x)` and `Float(x)` are conversion constructors named for the
-> type they produce. `String(x)` completes that family. But `str(x)`
+> type they produce. `String(x)` completes that family. But `String(x)`
 > already does the job and is called 34 times across 14 `.luc` files,
 > plus the site and the specs.
 >
-> **Recommended:** add `String(x)` and **retire `str(x)`**. The rename
+> **Recommended:** add `String(x)` and **retire `String(x)`**. The rename
 > is mechanical, it is the only outcome in which the language gets
 > *smaller* rather than larger, and it fixes a complaint already
 > written into this codebase — `04_semantics/context.zig:61` records
@@ -546,7 +546,7 @@ lowering to the existing `str_value` intrinsic, so this is stage-4
 work and **no new MIR, no new runtime, no new ABI**.
 
 `Builder` is the reason `str` cannot be renamed by search-and-replace:
-`str(builder)` takes a heap object, and a scalar constructor should
+`String(builder)` takes a heap object, and a scalar constructor should
 not. Under D5's recommendation `Builder` gets `b.build()` as the
 method it should always have had and `String(...)` stays scalar-only.
 
@@ -1086,3 +1086,45 @@ NaN and the infinities survive `@round` unchanged, so one check on the
 rounded value catches everything two checks would — and it is one
 check in each of the three places rather than two, which is what keeps
 them provably the same check.
+
+### Step 5 — `String(x)` arrives; `str` retires — **landed**
+
+`String(x)` joins `Int(x)` and `Float(x)` as a conversion constructor
+named for what it produces, `Builder` gets the `build()` method D5
+recommended, and `str` is gone from the builtin table, from the
+reserved list, and from all 35 call sites.  The complaint at
+`04_semantics/context.zig:61` is closed twice over: the `String(...)`
+it sent readers after exists, and the message that sent them there had
+already gone in step 1.
+
+**Three things the memo did not have right.**
+
+1. **`String(x)` is not "the existing `str_value` intrinsic reached by
+   a new name" and nothing else.**  §7 says the change is "stage-4
+   work and no new MIR, no new runtime, no new ABI", which is true of
+   the *intrinsic* and understates the seam: `str` was resolved
+   through the builtin table, where `Int` and `Float` are matched by
+   name in `lowerCall` **before** that table is consulted.  Moving
+   `String` to the second mechanism is what makes all three
+   constructors one thing rather than two-plus-one — and it is why
+   `String` is a reserved name and `str` is no longer one.
+
+2. **f-strings desugar through it.**  §7 does not mention them, and
+   they are the largest caller: every hole is a synthesized `str(...)`
+   call, so the rename reached `03_parse/expressions.zig` and every
+   f-string diagnostic became `luce.sema.convert` at the hole.  That
+   reads better than what it replaced — a hole is a conversion the
+   reader did not write, so the constructor's own message is the right
+   one to give.
+
+3. **`String(x)` of a constant folds, and `str(x)` never did.**  A
+   consequence nobody asked for and worth keeping: the folder handles
+   the three constructors, so `let banner = String(width) + "px"` is
+   now a compile-time constant where it used to be "calls are not
+   constant".  One site sample was built on exactly that refusal and
+   needed a real call to make its point instead.
+
+**The Float text is spelled once.**  Both the runtime and the folder
+print a Float with Zig's `{d}` — the Ryū-derived shortest
+representation that round-trips — so a folded `String(2.5)` is the
+same bytes a run would produce, and the specs compare them.

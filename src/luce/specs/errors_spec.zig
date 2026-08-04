@@ -396,14 +396,15 @@ test "luce.parse.expression: a broken f-string hole reports the sub-parse error"
     try expectRejected("func main():\n    let a = f\"{1 +}\"\n", "luce.parse.expression");
 }
 
-test "luce.sema.type: an f-string hole must be str-able" {
-    // A List has no str(); interpolation rejects it.
+test "luce.sema.convert: an f-string hole must be a scalar" {
+    // A hole is a `String(...)` the reader did not write, so a List in
+    // one is answered by the constructor's own message, at the hole.
     try expectRejected(
         \\func main():
         \\    var xs = [1, 2]
         \\    let a = f"{xs}"
         \\
-    , "luce.sema.type");
+    , "luce.sema.convert");
 }
 
 test "luce.parse.top: only func/struct/let/import at file scope" {
@@ -515,7 +516,7 @@ test "luce.parse.chain: comparison operators do not chain" {
     // and reaches the type checker unharmed.
     var result = try compile_mod.compile(
         testing.allocator,
-        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(str(c))\n",
+        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(String(c))\n",
         .{ .allow_host = true },
     );
     defer result.deinit();
@@ -1013,6 +1014,46 @@ test "luce.parse.comment: a line that starts with // is told what // is" {
     );
 }
 
+test "luce.sema.convert: String() takes a scalar, and names build() for a Builder" {
+    // The one reason `str` could not simply be renamed: it took a heap
+    // object, and a scalar constructor should not (docs/NUMERICS.md §7).
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var b = new Builder()
+        \\    b.append("x")
+        \\    let text = String(b)
+        \\    free(b)
+        \\
+    ,
+        "luce.sema.convert",
+        "String() converts a scalar; a Builder hands over its text with .build()",
+        4,
+        16,
+    );
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let text = String(xs)
+        \\    free(xs)
+        \\
+    ,
+        "luce.sema.convert",
+        "String() converts Int, Float, Bool, or String, not List(Int)",
+        3,
+        16,
+    );
+}
+
+test "luce.sema.call: str is gone, and is not a name anybody kept" {
+    // Not reserved either, so it is an unknown function like any other
+    // — a program may declare one and mean it.
+    try expectRejected(
+        \\func main():
+        \\    let text = str(1)
+        \\
+    , "luce.sema.call");
+}
+
 test "luce.sema.type: a condition must be Bool" {
     try expectRejected("func main():\n    if 1:\n        return\n", "luce.sema.type");
 }
@@ -1490,7 +1531,7 @@ test "luce.parse.expression: the comparison operators of other languages" {
 
 test "luce.parse.expression: '**' names the std function that does it" {
     try expectOnlySayingAcross(
-        "func main():\n    let a = 2 ** 3\n    print(str(a))\n",
+        "func main():\n    let a = 2 ** 3\n    print(String(a))\n",
         "luce.parse.expression",
         "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for Int",
         2,
@@ -2197,7 +2238,7 @@ test "luce.sema.nesting: a flat chain in a constant is bounded too" {
 }
 
 test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
-    // f"{x}{x}..." desugars to str(x) + str(x) + ..., which is the
+    // f"{x}{x}..." desugars to String(x) + String(x) + ..., which is the
     // same flat chain wearing different clothes.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
@@ -2309,7 +2350,7 @@ test "luce.sema.absent: none needs somewhere to be none of" {
     , "luce.sema.absent");
     try expectMessage(
         \\func main():
-        \\    assert(str(none) == "")
+        \\    assert(String(none) == "")
         \\
     , "none needs a type here");
     // A place that is always there cannot be none.
@@ -2606,7 +2647,7 @@ test "storing a borrowed parameter is not told to give it" {
 }
 
 test "an f-string hole is underlined, not the whole literal" {
-    // The synthesized `str(...)` used to carry the whole f-string's
+    // The synthesized `String(...)` used to carry the whole f-string's
     // span, so a reader with four holes on one line was shown all four
     // and told one of them was wrong.
     try expectHostSayingAt(
@@ -2619,8 +2660,8 @@ test "an f-string hole is underlined, not the whole literal" {
         \\    free(xs)
         \\
     ,
-        "luce.sema.type",
-        "str takes Int, Float, Bool, String, or Builder",
+        "luce.sema.convert",
+        "String() converts Int, Float, Bool, or String, not List(Int)",
         6,
         30,
     );
@@ -3522,7 +3563,7 @@ test "luce.sema.method: each receiver kind names the methods it has" {
         \\    var b = new Builder()
         \\    b.zzzzzz()
         \\
-    , "luce.sema.method", "(append append_ascii clear)");
+    , "luce.sema.method", "(append append_ascii build clear)");
     try expectSaying(
         \\import std.strings
         \\

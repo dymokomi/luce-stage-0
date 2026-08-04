@@ -55,7 +55,7 @@ func main():
     for word in "a b c".split(""):   # the list is never named
         print(word)
     # the split list is freed when the for statement completes
-    print(str(len("xy".split(""))))  # freed at the end of this line
+    print(String(len("xy".split(""))))  # freed at the end of this line
 ```
 
 ```output
@@ -117,7 +117,7 @@ func main():
     let view = xs
     free(xs)
     let bad = view[0]
-    print(str(bad))
+    print(String(bad))
 ```
 
 ```output

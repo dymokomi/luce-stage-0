@@ -35,14 +35,14 @@ answer whenever both operands are `Bool`.
 func main():
     let a = true
     let b = false
-    print(str(not a == b))
+    print(String(not a == b))
 ```
 
 ```output
 luce: compile failed
-main.luc:4:15: 'not' binds tighter than '==': write '(not a) == …' for this reading, or 'not (a == …)' for Python's [luce.parse.precedence]
-        print(str(not a == b))
-                  ^~~
+main.luc:4:18: 'not' binds tighter than '==': write '(not a) == …' for this reading, or 'not (a == …)' for Python's [luce.parse.precedence]
+        print(String(not a == b))
+                     ^~~
 ```
 
 ### Chained comparison
@@ -52,14 +52,14 @@ neither: the comparisons are non-associative.
 
 ```luce fail
 func main():
-    print(str(1 < 2 < 3))
+    print(String(1 < 2 < 3))
 ```
 
 ```output
 luce: compile failed
-main.luc:2:21: chained comparison: write '1 < 2 and 2 < 3' [luce.parse.chain]
-        print(str(1 < 2 < 3))
-                        ^
+main.luc:2:24: chained comparison: write '1 < 2 and 2 < 3' [luce.parse.chain]
+        print(String(1 < 2 < 3))
+                           ^
 ```
 
 This costs nothing — `(a < b) < c` was always a type error one stage

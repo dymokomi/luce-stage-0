@@ -22,8 +22,8 @@ import geometry
 func main():
     let a = geometry.Point(x = 0.0, y = 0.0)
     let b = geometry.Point(x = 3.0, y = 4.0)
-    print(str(geometry.distance(a, b)))
-    print(str(geometry.unit))
+    print(String(geometry.distance(a, b)))
+    print(String(geometry.unit))
 ```
 
 ```output
@@ -60,7 +60,7 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 5))
-    print(str(math.ipow(2, 10)))
+    print(String(math.ipow(2, 10)))
     print(strings.format_float(math.ln(math.e), 1))
 
     var rng = math.seed(42)

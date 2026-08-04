@@ -47,10 +47,10 @@ place an `Int` is required, not a silent truncation.
 func main():
     let steps = 7
     let seconds = 2.5
-    print(str(steps * seconds))
+    print(String(steps * seconds))
     let elapsed: Float = steps
-    print(str(elapsed))
-    print(str(Int(seconds)))       # asked for, and it rounds
+    print(String(elapsed))
+    print(String(Int(seconds)))       # asked for, and it rounds
 ```
 
 ```output
@@ -67,8 +67,8 @@ conversion of them.
 
 ```luce run
 func main():
-    print(str(1 < 1.5))
-    print(str(9007199254740993 == 9007199254740992.0))
+    print(String(1 < 1.5))
+    print(String(9007199254740993 == 9007199254740992.0))
 ```
 
 ```output
@@ -87,7 +87,7 @@ func main():
     var n = 9223372036854775807
     print("about to add one")
     n += 1
-    print(str(n))
+    print(String(n))
 ```
 
 ```output
@@ -106,10 +106,10 @@ together, so `%` takes the sign of the divisor and
 
 ```luce run
 func main():
-    print(str(1 / 2))
-    print(str(7 // 2) + " " + str(7 % 2))
-    print(str(-7 // 3) + " " + str(-7 % 3))
-    print(str(-1 % 256))
+    print(String(1 / 2))
+    print(String(7 // 2) + " " + String(7 % 2))
+    print(String(-7 // 3) + " " + String(-7 % 3))
+    print(String(-1 % 256))
 ```
 
 ```output
@@ -139,7 +139,7 @@ what the name points at — `let` is JavaScript's `const`, not Swift's
 func main():
     let limit = 10
     limit = 11
-    print(str(limit))
+    print(String(limit))
 ```
 
 ```output
@@ -175,14 +175,14 @@ func main():
     let a = 1
     let b = 2
     let c = 3
-    print(str(a < b < c))
+    print(String(a < b < c))
 ```
 
 ```output
 luce: compile failed
-main.luc:5:21: chained comparison: write 'a < b and b < c' [luce.parse.chain]
-        print(str(a < b < c))
-                        ^
+main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
+        print(String(a < b < c))
+                           ^
 ```
 
 ## Constants at file scope
@@ -199,7 +199,7 @@ let banner = "loom v" + version
 
 func main():
     print(banner)
-    print(str(half))
+    print(String(half))
 ```
 
 ```output
@@ -209,14 +209,17 @@ loom v2
 
 Constants may reference each other in any order, but never in a cycle.
 What may be folded is literals, other constants, arithmetic,
-comparisons, `and`/`or`, string concatenation, `Int()`/`Float()` and
-value-struct construction. **Calls are not constant** — not even
-`str` — and neither are heap objects, because a top-level binding has
-no scope to die at and therefore cannot own one:
+comparisons, `and`/`or`, string concatenation, the three conversion
+constructors `Int()`, `Float()` and `String()`, and value-struct
+construction. **Calls are not constant**, and neither are heap
+objects, because a top-level binding has no scope to die at and
+therefore cannot own one:
 
 ```luce fail
-let width = 80
-let banner = "loom " + str(width)
+func label() -> String:
+    return "loom"
+
+let banner = label() + " v2"
 
 func main():
     print(banner)
@@ -224,9 +227,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:2:24: constants fold at compile time; calls are not constant [luce.sema.const]
-    let banner = "loom " + str(width)
-                           ^~~~~~~~~~
+main.luc:4:14: constants fold at compile time; calls are not constant [luce.sema.const]
+    let banner = label() + " v2"
+                 ^~~~~~~
 ```
 
 There is no top-level `var`.

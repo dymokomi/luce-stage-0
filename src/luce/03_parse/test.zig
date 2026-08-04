@@ -720,7 +720,7 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
         \\    let tail = xs[1:]
         \\    let whole = xs[:]
         \\    for x in xs:
-        \\        append(b, str(x))
+        \\        append(b, String(x))
         \\
     );
     defer parsed.deinit();
@@ -814,7 +814,7 @@ test "strings decode escapes" {
     try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
 }
 
-test "f-strings expand to str()-wrapped concatenation" {
+test "f-strings expand to String()-wrapped concatenation" {
     var parsed = try expectClean(
         \\func main():
         \\    let a = f"x = {x}, y = {y}"
@@ -826,10 +826,10 @@ test "f-strings expand to str()-wrapped concatenation" {
     );
     defer parsed.deinit();
     const body = parsed.program.functions[0].body;
-    // "x = " + str(x) + ", y = " + str(y), left-associated.
+    // "x = " + String(x) + ", y = " + String(y), left-associated.
     const a = body.statements[0].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.add, a.op);
-    try testing.expectEqualStrings("str", a.right.call.callee);
+    try testing.expectEqualStrings("String", a.right.call.callee);
     try testing.expectEqualStrings("y", a.right.call.arguments[0].value.name.text);
     // Doubled braces are literal text, with no interpolation at all.
     try testing.expectEqualStrings("{literal}", body.statements[1].let.value.string_literal.decoded);

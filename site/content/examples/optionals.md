@@ -67,11 +67,11 @@ right and stops at the first one that is there.
 ```luce run
 func main():
     let first = parse_int("x") else parse_int("y") else parse_int("3") else 0
-    print(str(first))
+    print(String(first))
 
     let n = parse_int("10")
-    print(str(n else 0 > 5))     # else binds tighter than comparison
-    print(str((n else 0) + 1))
+    print(String(n else 0 > 5))     # else binds tighter than comparison
+    print(String((n else 0) + 1))
 ```
 
 ```output
@@ -116,7 +116,7 @@ and is greppable.
 func main():
     let config = "port=notanumber"
     let port = parse_int(config[5:len(config)]) else trap("bad port in config")
-    print(str(port))
+    print(String(port))
 ```
 
 ```output

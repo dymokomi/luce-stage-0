@@ -22,7 +22,7 @@
 //! **Short text lives in the value.**  The tag needs one byte, not
 //! eight, and the seven that frees plus `bits` and `length` are
 //! twenty-two contiguous bytes at offset 2 — enough for the strings
-//! this language actually moves around (`str(Int)` is at most twenty,
+//! this language actually moves around (`String(Int)` is at most twenty,
 //! a split piece averages twelve), and the same twenty-two libc++
 //! reaches in the same twenty-four.  `inline_length` says which form
 //! the text is in: a count from 0 to `inline_capacity` when the bytes

@@ -279,14 +279,14 @@ struct Draw:
             term_style(theme.gutter_current, -1, false)
         else:
             term_style(theme.gutter, -1, false)
-        term_write(Fmt.pad_left(str(number), 4) + " ")
+        term_write(Fmt.pad_left(String(number), 4) + " ")
 
     func status(state: State, rows: Int, cols: Int, line: Int, column: Int):
         term_move(rows - 1, 0)
         var flag = ""
         if state.dirty:
             flag = " +"
-        var left = " " + state.path + flag + "  " + str(line + 1) + ":" + str(column + 1)
+        var left = " " + state.path + flag + "  " + String(line + 1) + ":" + String(column + 1)
         if len(state.message) > 0:
             left = left + "  — " + state.message
         let hint = "Ctrl-S save  Ctrl-Q quit "

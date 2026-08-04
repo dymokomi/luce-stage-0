@@ -20,4 +20,4 @@ func main():
                 iter += 1
             if iter == max_iter:
                 inside += 1
-    print(str(inside))
+    print(String(inside))

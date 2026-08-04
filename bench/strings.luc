@@ -9,9 +9,9 @@ func main():
     var b = new Builder()
     for i in range(0, 400000):
         b.append("item-")
-        b.append(str(i))
+        b.append(String(i))
         b.append(";")
-    let text = str(b)
+    let text = b.build()
 
     let pieces = text.split(";")
     var total_len = 0

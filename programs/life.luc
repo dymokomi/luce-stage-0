@@ -72,7 +72,7 @@ struct World:
                     term_write(" ·")
         term_move(grid.dim(0), 0)
         term_style(252, 237, false)
-        term_write(" generation " + str(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
+        term_write(" generation " + String(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():
     var grid = new Array(Bool, World.rows(), World.cols())

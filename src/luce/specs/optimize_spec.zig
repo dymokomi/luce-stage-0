@@ -88,7 +88,7 @@ test "ownership behaviour survives the elision" {
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
-        \\    print(str(len(xs)))
+        \\    print(String(len(xs)))
         \\
         ,
         // A fresh object adopted by a container instead — the release
@@ -98,7 +98,7 @@ test "ownership behaviour survives the elision" {
         \\    let outer = new List(List(Int))
         \\    outer.append(new List(Int))
         \\    outer[0].append(7)
-        \\    print(str(len(outer[0])))
+        \\    print(String(len(outer[0])))
         \\
         ,
         // Early release, then the scope end that must not free twice.
@@ -115,7 +115,7 @@ test "ownership behaviour survives the elision" {
         \\    var xs = [1, 2]
         \\    let view = xs
         \\    free(xs)
-        \\    print(str(view[0]))
+        \\    print(String(view[0]))
         \\
         ,
         // Reassigning an owning var frees the old object at once (S5).
@@ -123,7 +123,7 @@ test "ownership behaviour survives the elision" {
         \\    var xs = [1]
         \\    let view = xs
         \\    xs = [2, 3]
-        \\    print(str(view[0]))
+        \\    print(String(view[0]))
         \\
         ,
         // An object given away must not be freed by the binding that
@@ -136,7 +136,7 @@ test "ownership behaviour survives the elision" {
         \\func main():
         \\    let xs = new List(Int)
         \\    xs.append(1)
-        \\    print(str(keep(give(xs))))
+        \\    print(String(keep(give(xs))))
         \\
         ,
         // Rebinding in a loop: a fresh object per turn, each released
@@ -147,7 +147,7 @@ test "ownership behaviour survives the elision" {
         \\        let row = new List(Int)
         \\        row.append(index)
         \\        total = total + len(row)
-        \\    print(str(total))
+        \\    print(String(total))
         \\
         ,
         // Returning an object moves it to the caller (S16).
@@ -158,7 +158,7 @@ test "ownership behaviour survives the elision" {
         \\
         \\func main():
         \\    let xs = make()
-        \\    print(str(len(xs)))
+        \\    print(String(len(xs)))
         \\
         ,
         // A copy is a second object, and both have to come back.
@@ -167,7 +167,7 @@ test "ownership behaviour survives the elision" {
         \\    xs.append(1)
         \\    let ys = copy(xs)
         \\    ys.append(2)
-        \\    print(str(len(xs)) + " " + str(len(ys)))
+        \\    print(String(len(xs)) + " " + String(len(ys)))
         \\
         ,
     };
@@ -179,19 +179,19 @@ test "traps keep their code, their message, and their place" {
         \\func main():
         \\    var n = 0
         \\    print("before")
-        \\    print(str(10 // n))
+        \\    print(String(10 // n))
         \\
         ,
         \\func main():
         \\    let xs = new List(Int)
         \\    print("before")
-        \\    print(str(xs[3]))
+        \\    print(String(xs[3]))
         \\
         ,
         \\func main():
         \\    var n = 9223372036854775807
         \\    print("before")
-        \\    print(str(n + n))
+        \\    print(String(n + n))
         \\
         ,
         \\func main():
@@ -202,7 +202,7 @@ test "traps keep their code, their message, and their place" {
         \\func main():
         \\    let m = new Map(String, Int)
         \\    print("before")
-        \\    print(str(m["missing"]))
+        \\    print(String(m["missing"]))
         \\
     };
     for (cases) |source| try unchanged(source);
@@ -228,7 +228,7 @@ fn generate(text: *std.ArrayList(u8), random: std.Random) Allocator.Error!void {
     const statements = random.intRangeAtMost(usize, 1, 6);
     for (0..statements) |_| try statement(text, random, 1);
     try text.appendSlice(testing.allocator,
-        \\    print(str(a) + " " + str(b) + " " + str(len(xs)))
+        \\    print(String(a) + " " + String(b) + " " + String(len(xs)))
         \\
     );
 }

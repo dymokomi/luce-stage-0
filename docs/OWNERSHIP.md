@@ -65,7 +65,7 @@ func main():
     for word in "a b c".split(""):   # the list is never named
         print(word)
     # the split list is freed when the for statement completes
-    print(str(len("xy".split(""))))  # freed at the end of this line
+    print(String(len("xy".split(""))))  # freed at the end of this line
 ```
 Decision: expression temporaries live exactly as long as the
 statement that created them.  Precise wording: "end of the
@@ -110,7 +110,7 @@ func main():
     let count = len(big)
     free(big)                 # done early, on purpose
     # big is poisoned from here on: `big[0]` is a COMPILE error
-    print(str(count))
+    print(String(count))
 ```
 Decision: `free` is legal only on owned names and poisons the name
 like `give`.  Casual code never needs it.
@@ -170,7 +170,7 @@ price S9 pays.
 func main():
     var temp = [1, 2, 3]
     let final_hits = give temp   # final_hits owns now
-    print(str(temp[0]))          # COMPILE error: temp was given away
+    print(String(temp[0]))          # COMPILE error: temp was given away
 ```
 Decision (yours, verbatim): after `give y`, touching `y` is a compile
 error.  People who write `give` know what they are doing.
@@ -189,7 +189,7 @@ func total(values: List(Int)) -> Int:
 
 func main():
     var xs = [1, 2, 3]
-    print(str(total(xs)))     # no verb; xs still owned by main
+    print(String(total(xs)))     # no verb; xs still owned by main
 ```
 Decision: borrows are the default at every call.  Mutating through a
 borrow is allowed (`values.append(...)` inside would be legal —
@@ -216,7 +216,7 @@ func main():
     var index = new Map(String, List(Int))
     var mine = [1, 2]
     stash(index, give mine)   # caller says it out loud too
-    print(str(len(mine)))     # COMPILE error: mine was given away
+    print(String(len(mine)))     # COMPILE error: mine was given away
 ```
 Decision: `give` appears at **both ends** — the parameter type and
 the call site.  Ownership handoffs are never invisible.
@@ -234,7 +234,7 @@ give-parameters alike).
 callee.**
 ```luce
 func consume(xs: give List(Int)):
-    print(str(len(xs)))
+    print(String(len(xs)))
     # xs freed here — the callee owned it and let it die
 ```
 Decision: a `give` parameter is an owned binding like any other.
@@ -447,7 +447,7 @@ func main():
     var sink = new List(List(Int))
     if len(xs) > 0:
         sink.append(give xs)  # give inside a branch...
-    print(str(len(xs)))       # ...still a COMPILE error after the if:
+    print(String(len(xs)))       # ...still a COMPILE error after the if:
                               # give poisons to end of scope, period
 ```
 Decision: blunt and predictable beats flow-sensitive and clever.
@@ -497,7 +497,7 @@ func main():
     if verbose:
         report = new Builder()      # old freed (S5); new one owned by
         report.append("details")    # report — which lives in MAIN's scope
-    print(str(report))              # object survives the if: ownership
+    print(report.build())              # object survives the if: ownership
                                     # follows the BINDING, and the binding
                                     # lives where it was DECLARED
 ```
@@ -600,7 +600,7 @@ var report: Builder
 if verbose:
     report = new Builder()
 if verbose:
-    print(str(report))        # guarded by the same condition; no null
+    print(report.build())        # guarded by the same condition; no null
                               # concept needed anywhere
 ```
 

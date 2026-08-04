@@ -129,7 +129,7 @@ Every other escape is rejected by name — `\r`, `\0`, and hex and
 unicode escapes included. A codepoint goes in with `chr(...)`.
 
 An `f"..."` literal is an interpolated string: `{expression}` holes
-are converted with `str(...)` and concatenated. `{{` and `}}` are
+are converted with `String(...)` and concatenated. `{{` and `}}` are
 literal braces. A hole holds one expression, and `"..."` strings
 nested inside a hole are permitted.
 

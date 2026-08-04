@@ -76,7 +76,7 @@ six benchmarks moved less than 1%, and `bench/strings` went **2.35× C
 allocate-and-free pairs where there used to be unreclaimed bump
 allocations and shared views — and **small-string optimisation took
 most of it back**: a String of 22 bytes or fewer now lives inside the
-`Value` holding it, `str(Int)` and `chr` never allocate at all, and
+`Value` holding it, `String(Int)` and `chr` never allocate at all, and
 `bench/strings` came back to **within 12% of where it stood before
 copy-on-store** (step 5 of `docs/STRINGS.md`, which records the
 phase-by-phase measurement).  What is left is the copying itself —
@@ -547,7 +547,7 @@ plus four found while sweeping:
   binding, found the keyword 'catch'".  Now names the binding and
   both shapes that work.
 - ~~An f-string hole is underlined by underlining the whole
-  literal~~ — the synthesized `str(...)` carried the f-string's span,
+  literal~~ — the synthesized `String(...)` carried the f-string's span,
   so four holes on one line were all underlined and one of them was
   wrong.  It takes the hole's span now.
 - ~~`s[0:4:2]` blames the bracket~~ — says the language has two slice
@@ -620,7 +620,7 @@ multi-user — all deferred by design in `docs/V2.md`.
    0 and step 5 of `docs/STRINGS.md`.  Twenty-two bytes of text live
    in the `Value` that already travels, which cost an `abi.version`
    bump and a `format_version` bump and removed every allocation
-   the benchmark's 400,000 `str(i)` results were making.
+   the benchmark's 400,000 `String(i)` results were making.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**;
    `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`

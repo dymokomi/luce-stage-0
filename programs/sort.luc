@@ -10,7 +10,7 @@ func main():
 
     var pieces: List(String) = []
     for value in values:
-        pieces.append(str(value))
+        pieces.append(String(value))
     print(pieces.join(" "))
     assert(values.find(13) == 6)
     assert(values.contains(99))

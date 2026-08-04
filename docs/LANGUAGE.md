@@ -148,7 +148,7 @@ if x != none: ...                 # the then arm
 if x == none: ...                 # the else arm
 if x == none:                     # an early-exit guard narrows
     return                        #   everything below it
-print(str(x))                     #   (break and continue too)
+print(String(x))                     #   (break and continue too)
 if x != none and x > 3: ...       # the rest of the condition
 while x != none: ...              # the loop body
 x = 3                             # an assignment of a plain value
@@ -268,7 +268,7 @@ hands over a fresh object, the fallback must too.
 ```luce
 func check(n: Int) -> Int!:
     if n < 0:
-        error("negative: " + str(n))
+        error("negative: " + String(n))
     return n
 ```
 
@@ -325,12 +325,12 @@ grid[2, 3] = 7                     # multi-dimensional index
 let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
-let text = str(b)                  # builder -> String
+let text = b.build()                  # builder -> String
 # scope ownership frees xs, m, grid, and b here — no free() needed
 ```
 
 Type-specific operations are **methods** (Python's split: `len`,
-`str`, `print` and friends stay free functions; everything that
+`String`, `print` and friends stay free functions; everything that
 belongs to one type is called on it — and like Zig, `xs.append(v)` is
 sugar for a plain function with the receiver first, not dispatch):
 
@@ -350,7 +350,7 @@ sugar for a plain function with the receiver first, not dispatch):
   lookups (index, `has`, `get`, index-set) are O(1): the entries
   stay a dense array in arrival order with a hash index over it.
 - `Builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
-  `str(b)`.  `append_ascii` puts one ASCII byte in without the String
+  `b.build()`.  `append_ascii` puts one ASCII byte in without the String
   a `chr()` would allocate; it traps `bad_codepoint` outside 0..127,
   because a Builder's bytes become a String and String is valid
   UTF-8.  Wider characters go through `append(chr(code))`.
@@ -428,32 +428,41 @@ error pointing at the missing import otherwise.  Only `byte_at` and
 `find_byte` are built in.
 
 **Interpolation.**  An `f"..."` string splices expressions in `{...}`,
-each converted with `str(...)`:
+each converted with `String(...)`:
 
 ```luce
 f"x = {x}, y = {y}"       # "x = 7, y = 3"
-f"sum = {a + b}"          # any str-able expression: Int, Float, Bool,
+f"sum = {a + b}"          # any scalar expression: Int, Float, Bool,
                           # String, Builder — a List is a type error
 f"name is {user.name}"    # methods, calls, fields all work
 f"{{literal braces}}"     # double a brace for a literal { or }
 ```
 
 The hole is one expression; nested `"..."` strings inside a hole are
-fine.  `f"..."` desugars to plain `+` concatenation of `str(...)`
+fine.  `f"..."` desugars to plain `+` concatenation of `String(...)`
 pieces, so it is a String like any other.
 
 ## Conversions and generic builtins
 
+**Three conversion constructors, each named for the type it
+produces**: `Int(x)`, `Float(x)`, `String(x)` (docs/NUMERICS.md §7).
+They are the only ones, and none of them is a builtin — the compiler
+matches the three names before it resolves anything, which is why all
+three are reserved.
+
 `Int(x)` **rounds half away from zero** — `Int(2.5)` is `3` and
-`Int(-2.5)` is `-3`, the same rounding `math.round` does
-(docs/NUMERICS.md §7) — and traps `conversion_range` on NaN, an
-infinity, or a value outside the `Int` range.  `trunc(x)` is
-truncation toward zero, so `floor`, `ceil`, `trunc` and round are four
-spellings for four different answers.  `Float(x)` widens and never
-traps.
+`Int(-2.5)` is `-3`, the same rounding `math.round` does — and traps
+`conversion_range` on NaN, an infinity, or a value outside the `Int`
+range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
+`trunc` and round are four spellings for four different answers.
+`Float(x)` widens and never traps.  `String(x)` prints an `Int`, a
+`Float`, a `Bool` or a `String`, and takes a **scalar only**: a
+`Builder` is a heap object and hands over its text with `b.build()`.
+An f-string hole is a `String(...)` the reader did not write, so the
+same rule decides what may stand in one.
 
 ```luce
-str(42)          # "42"        (Int, Float, Bool, Builder, String)
+String(42)          # "42"        (Int, Float, Bool, Builder, String)
 parse_int("42")  # 42          Int?   — none when the text is not a number
 parse_float("2.5")               # Float?
 chr(955)         # "λ"         codepoint -> String; traps on invalid
@@ -471,11 +480,11 @@ let n = parse_int(text)
 if n == none:
     print("not a number: " + text)
     return
-print(str(n * 2))
+print(String(n * 2))
 ```
 
 The free builtins are the generic, cross-type set — Python's own
-split of capability: `len str print range assert trap free abs
+split of capability: `len print range assert trap free abs
 min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
 the
 conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,

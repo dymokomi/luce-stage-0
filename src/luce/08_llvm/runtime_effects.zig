@@ -318,7 +318,8 @@ const touches_heap: Memory = .{
     .inaccessiblemem = .readwrite,
     .other = .readwrite,
 };
-/// Reads the object heap and writes the run's private storage: `str`,
+/// Reads the object heap and writes the run's private storage:
+/// `String(x)` and `Builder.build()`,
 /// which renders a Builder's bytes into fresh arena text.
 const reads_heap_makes_text: Memory = .{
     .argmem = .readwrite,

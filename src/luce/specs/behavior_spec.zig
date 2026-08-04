@@ -60,6 +60,64 @@ test "integers: the four operations and precedence" {
     );
 }
 
+// `String(x)` completes the family of conversion constructors, each
+// named for the type it produces, and `str` is gone (docs/NUMERICS.md
+// §7).  `Builder` is why they are not the same function: `str(b)`
+// took a heap object, and a scalar constructor should not — a builder
+// hands over its text with `b.build()`.
+
+test "String(x) prints every scalar, and Builder.build() hands over its own" {
+    try agreeOk(
+        \\func main():
+        \\    assert(String(42) == "42")
+        \\    assert(String(-7) == "-7")
+        \\    assert(String(2.5) == "2.5")
+        \\    assert(String(3.0) == "3")
+        \\    assert(String(true) == "true")
+        \\    assert(String(false) == "false")
+        \\    assert(String("already") == "already")
+        \\    var b = new Builder()
+        \\    b.append("he")
+        \\    b.append("llo")
+        \\    assert(b.build() == "hello")
+        \\    # `build` takes a snapshot; the builder is still usable.
+        \\    b.append("!")
+        \\    assert(b.build() == "hello!")
+        \\    assert(len(b) == 6)
+        \\    free(b)
+        \\
+    );
+}
+
+test "str is a name a program may take now" {
+    // It left the reserved list with the builtin, so the language got
+    // one word smaller in both senses (docs/NUMERICS.md §7).
+    try agreeOk(
+        \\func str(n: Int) -> Int:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    assert(str(21) == 42)
+        \\
+    );
+}
+
+test "String(x) folds in a constant, in the same bytes a run would print" {
+    try agreeOk(
+        \\let count = String(42)
+        \\let ratio = String(2.5)
+        \\let flag = String(true)
+        \\let same = String("x")
+        \\let joined = count + " " + ratio + " " + flag + " " + same
+        \\
+        \\func main():
+        \\    assert(joined == "42 2.5 true x")
+        \\    assert(String(42) == count)
+        \\    assert(String(2.5) == ratio)
+        \\
+    );
+}
+
 // `Int(x)` **rounds half away from zero** — the same rounding
 // `math.round` was always documented as, because a language with two
 // roundings that disagree has a bug in it (docs/NUMERICS.md §7).
@@ -390,18 +448,18 @@ test "mixing: Int widens to Float in every arithmetic operator" {
 }
 
 test "mixing: a promoted operator answers a Float, printed as one" {
-    // `str` of a whole Float is its shortest round-trip, so "8" and
+    // `String` of a whole Float is its shortest round-trip, so "8" and
     // not "8.0" — the division below is what shows the type moved.
     try agree.printsGiven(
         \\func main():
         \\    let n = 7
-        \\    print(str(n + 1.0))
-        \\    print(str(1 + 0.5))
-        \\    print(str(n / 2.0))
+        \\    print(String(n + 1.0))
+        \\    print(String(1 + 0.5))
+        \\    print(String(n / 2.0))
         \\    var f = 2.0
         \\    f += 1
         \\    f *= 2
-        \\    print(str(f / 8.0))
+        \\    print(String(f / 8.0))
         \\
     , budget, "8\n1.5\n3.5\n0.75\n");
 }
@@ -809,13 +867,13 @@ test "strings: UTF-8 aware slicing and byte access" {
 // Conversions
 // ---------------------------------------------------------------------------
 
-test "conversions: str, parse, chr, ord" {
+test "conversions: String, parse, chr, ord" {
     try agreeOk(
         \\func main():
-        \\    assert(str(42) == "42")
-        \\    assert(str(0 - 7) == "-7")
-        \\    assert(str(true) == "true")
-        \\    assert(str(false) == "false")
+        \\    assert(String(42) == "42")
+        \\    assert(String(0 - 7) == "-7")
+        \\    assert(String(true) == "true")
+        \\    assert(String(false) == "false")
         \\    assert((parse_int("100") else 0) == 100)
         \\    assert((parse_float("1.5") else 0.0) == 1.5)
         \\    assert(chr(65) == "A")
@@ -872,7 +930,7 @@ test "ord folds in a file-scope constant, and an empty one still traps at run ti
 // String interpolation (f-strings)
 // ---------------------------------------------------------------------------
 
-test "f-strings interpolate names, expressions, and every str-able type" {
+test "f-strings interpolate names, expressions, and every scalar" {
     try agreeOk(
         \\func main():
         \\    let x = 7
@@ -1076,7 +1134,7 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
         \\    var order = new Builder()
         \\    for k in m.keys():
         \\        order.append(k)
-        \\    assert(str(order) == "ab")
+        \\    assert(order.build() == "ab")
         \\    m.remove("a")
         \\    assert(not m.has("a") and len(m) == 1)
         \\
@@ -1095,7 +1153,7 @@ test "maps: for key, value iteration, values(), and get with default" {
         \\    for k, v in m:
         \\        keys.append(k)
         \\        total += v
-        \\    assert(str(keys) == "abc")
+        \\    assert(keys.build() == "abc")
         \\    assert(total == 6)
         \\    assert(m.get("b", 0) == 2)
         \\    assert(m.get("missing", 99) == 99)
@@ -1170,7 +1228,7 @@ test "builders accumulate text" {
         \\    var b = new Builder()
         \\    b.append("he")
         \\    b.append("llo")
-        \\    assert(str(b) == "hello")
+        \\    assert(b.build() == "hello")
         \\    assert(len(b) == 5)
         \\    b.clear()
         \\    assert(len(b) == 0)
@@ -1387,8 +1445,8 @@ test "for-each over a List sums its elements in order" {
         \\    let xs = [4, 5, 6]
         \\    var out = new Builder()
         \\    for x in xs:
-        \\        out.append(str(x))
-        \\    assert(str(out) == "456")
+        \\        out.append(String(x))
+        \\    assert(out.build() == "456")
         \\
     );
 }
@@ -1419,7 +1477,7 @@ test "for-each over Map keys walks insertion order" {
         \\    var joined = new Builder()
         \\    for k in m.keys():
         \\        joined.append(k)
-        \\    assert(str(joined) == "xyz")
+        \\    assert(joined.build() == "xyz")
         \\
     );
 }
@@ -1588,23 +1646,23 @@ test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
 // Conversions in depth
 // ---------------------------------------------------------------------------
 
-test "str renders every scalar and a Builder" {
+test "String renders every scalar, and a Builder hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(str(0) == "0")
-        \\    assert(str(1000000) == "1000000")
-        \\    assert(str(1.5) == "1.5")
-        \\    assert(str(3.0) == "3")
-        \\    assert(str(true) == "true")
-        \\    assert(str("already") == "already")
+        \\    assert(String(0) == "0")
+        \\    assert(String(1000000) == "1000000")
+        \\    assert(String(1.5) == "1.5")
+        \\    assert(String(3.0) == "3")
+        \\    assert(String(true) == "true")
+        \\    assert(String("already") == "already")
         \\    var b = new Builder()
         \\    b.append("bld")
-        \\    assert(str(b) == "bld")
+        \\    assert(b.build() == "bld")
         \\
     );
 }
 
-test "parse_int and parse_float accept signs and round-trip str" {
+test "parse_int and parse_float accept signs and round-trip String" {
     try agreeOk(
         \\func main():
         \\    assert((parse_int("0") else 1) == 0)
@@ -1612,7 +1670,7 @@ test "parse_int and parse_float accept signs and round-trip str" {
         \\    assert((parse_int("+7") else 0) == 7)
         \\    assert((parse_float("3.25") else 0.0) == 3.25)
         \\    assert((parse_float("-0.5") else 0.0) == 0.0 - 0.5)
-        \\    assert((parse_int(str(98765)) else 0) == 98765)
+        \\    assert((parse_int(String(98765)) else 0) == 98765)
         \\
     );
 }
@@ -1685,8 +1743,8 @@ test "lists: sort is stable — equal elements keep their order" {
         \\    xs.sort()
         \\    i = 0
         \\    while i < 40:
-        \\        assert(str(xs[i * 2]) == "-0")
-        \\        assert(str(xs[i * 2 + 1]) == "0")
+        \\        assert(String(xs[i * 2]) == "-0")
+        \\        assert(String(xs[i * 2 + 1]) == "0")
         \\        i += 1
         \\    assert(xs[80] == 1.0)
         \\
@@ -1817,29 +1875,29 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
         \\    var m = new Map(String, Int)
         \\    var i = 0
         \\    while i < 300:
-        \\        m["k" + str(i)] = i
+        \\        m["k" + String(i)] = i
         \\        i += 1
         \\    assert(len(m) == 300)
         \\    var seen = 0
         \\    for key, held in m:
-        \\        assert(key == "k" + str(held))
+        \\        assert(key == "k" + String(held))
         \\        assert(held == seen)
         \\        seen += 1
         \\    assert(seen == 300)
         \\    i = 0
         \\    while i < 300:
-        \\        assert(m["k" + str(i)] == i)
-        \\        assert(m.has("k" + str(i)))
+        \\        assert(m["k" + String(i)] == i)
+        \\        assert(m.has("k" + String(i)))
         \\        i += 1
         \\    i = 0
         \\    while i < 300:
         \\        if i % 2 == 0:
-        \\            m.remove("k" + str(i))
+        \\            m.remove("k" + String(i))
         \\        i += 1
         \\    assert(len(m) == 150)
         \\    var next = 1
         \\    for key in m:
-        \\        assert(key == "k" + str(next))
+        \\        assert(key == "k" + String(next))
         \\        next += 2
         \\    assert(m.get("k5", 0 - 1) == 5)
         \\    assert(m.get("k4", 0 - 1) == 0 - 1)
@@ -2026,7 +2084,7 @@ test "ownership: reassigning an owning var frees the old object with no leak" {
         \\    b.append("first")
         \\    b = new Builder()
         \\    b.append("second")
-        \\    assert(str(b) == "second")
+        \\    assert(b.build() == "second")
         \\
     );
 }
@@ -2132,7 +2190,7 @@ test "constants of every scalar type fold and inline" {
         \\let prefix = "id_"
         \\
         \\func label(n: Int) -> String:
-        \\    return prefix + str(n)
+        \\    return prefix + String(n)
         \\
         \\func main():
         \\    assert(limit == 12)
@@ -2331,7 +2389,7 @@ test "else runs its fallback only when the value is absent" {
         \\    let log = new Builder
         \\    assert((parse_int("1") else note(log, "a")) == 1)
         \\    assert((parse_int("x") else note(log, "b")) == 0)
-        \\    assert(str(log) == "b")
+        \\    assert(log.build() == "b")
         \\    free(log)
         \\
     );
@@ -2362,7 +2420,7 @@ test "an optional crosses a call, a return, and a struct field" {
         \\func describe(limit: Int?) -> String:
         \\    if limit == none:
         \\        return "unlimited"
-        \\    return str(limit)
+        \\    return String(limit)
         \\
         \\func lookup(found: Bool) -> Int?:
         \\    if found:
@@ -3056,7 +3114,7 @@ test "maps upsert, look up, and iterate keys in insertion order" {
         \\    var joined = new Builder()
         \\    for key in ages:
         \\        joined.append(key)
-        \\    assert(str(joined) == "adaalan")
+        \\    assert(joined.build() == "adaalan")
         \\    ages.remove("alan")
         \\    assert(not ages.has("alan"))
         \\    ages.remove("ghost")
@@ -3092,13 +3150,13 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     );
 }
 
-test "conversions: str, parse_int, parse_float, chr, ord over every kind" {
+test "conversions: String, parse_int, parse_float, chr, ord over every kind" {
     try agreeOk(
         \\func main():
-        \\    assert(str(42) == "42")
-        \\    assert(str(-7) == "-7")
-        \\    assert(str(true) == "true")
-        \\    assert(str(2.5) == "2.5")
+        \\    assert(String(42) == "42")
+        \\    assert(String(-7) == "-7")
+        \\    assert(String(true) == "true")
+        \\    assert(String(2.5) == "2.5")
         \\    assert((parse_int("123") else 0) == 123)
         \\    assert((parse_int("-9") else 0) == 0 - 9)
         \\    assert((parse_float("2.5") else 0.0) == 2.5)

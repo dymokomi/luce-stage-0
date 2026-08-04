@@ -122,7 +122,7 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
 }
 
 /// One intrinsic's effect.  `first_argument` is the type of argument
-/// zero where the answer depends on it (`abs`, `str`); pass null for
+/// zero where the answer depends on it (`abs`, `str_value`); pass null for
 /// the conservative answer, which is what a caller with no function to
 /// look it up in should do.
 ///

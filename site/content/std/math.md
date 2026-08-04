@@ -55,11 +55,11 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 6))
-    print(str(math.round(2.5)) + " " + str(math.round(-2.5)))
+    print(String(math.round(2.5)) + " " + String(math.round(-2.5)))
     print(strings.format_float(math.exp(1.0), 6))
     print(strings.format_float(math.ln(math.e), 6))
     print(strings.format_float(math.log2(1024.0), 1))
-    print(str(math.ipow(2, 20)))
+    print(String(math.ipow(2, 20)))
     print(strings.format_float(math.pow(2.0, 0.5), 6))
     print(strings.format_float(math.sin(math.pi / 2.0), 6))
 ```
@@ -161,9 +161,9 @@ func main():
 
     var text = new Builder()
     for roll in rolls:
-        text.append(str(roll))
+        text.append(String(roll))
         text.append(" ")
-    print(str(text))
+    print(text.build())
 
     # The same seed gives the same stream, always.
     var again = math.seed(2026)
@@ -188,7 +188,7 @@ import std.math
 
 func main():
     print("about to take a logarithm")
-    print(str(math.ln(0.0)))
+    print(String(math.ln(0.0)))
 ```
 
 ```output

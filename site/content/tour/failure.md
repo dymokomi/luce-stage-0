@@ -98,7 +98,7 @@ func check(n: Int) -> Int!:
     return n
 
 func main() -> !:
-    print(str(try check(5)))
+    print(String(try check(5)))
     let fallback = check(-1) catch 0
     print(f"fallback {fallback}")
 ```
@@ -121,7 +121,7 @@ wrap it in.
 ```luce fail
 func main():
     var results: List(Int!) = []
-    print(str(len(results)))
+    print(String(len(results)))
 ```
 
 ```output
@@ -161,7 +161,7 @@ func outer(values: List(Int)) -> Int:
 
 func main():
     var values = [1, 2, 3]
-    print(str(outer(values)))
+    print(String(outer(values)))
 ```
 
 ```output

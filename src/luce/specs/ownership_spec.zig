@@ -67,7 +67,7 @@ test "S1: a fresh object bound to a name frees at scope end, no memory words" {
         \\    grid.fill(7)
         \\    var text = new Builder()
         \\    text.append("hello")
-        \\    assert(str(text) == "hello")
+        \\    assert(text.build() == "hello")
         \\
     );
 }
@@ -135,7 +135,7 @@ test "S4: return, break, and continue unwind what their scopes own" {
         \\        if i == 1:
         \\            continue
         \\        var tail = new Builder()
-        \\        tail.append(str(i))
+        \\        tail.append(String(i))
         \\
     );
 }
@@ -224,7 +224,7 @@ test "S7: a fresh object inside a loop dies every iteration" {
         \\    for i in range(0, 1000):
         \\        var row = new Array(Int, 64)
         \\        row.fill(i)
-        \\        var pieces = str(i).split(".")
+        \\        var pieces = String(i).split(".")
         \\
     );
 }
@@ -1023,7 +1023,7 @@ test "S36: ownership follows the binding, which lives where it was declared" {
         \\    if verbose:
         \\        text = new Builder()
         \\        text.append("details")
-        \\    return str(text)
+        \\    return text.build()
         \\
         \\func main():
         \\    assert(report(true) == "details")
@@ -1169,7 +1169,7 @@ test "mechanics: loop conditions that allocate flush every iteration" {
         \\
         \\func main():
         \\    var i = 0
-        \\    while len(str(i).split(".")) > 0 and i < 100:
+        \\    while len(String(i).split(".")) > 0 and i < 100:
         \\        i = i + 1
         \\    assert(i == 100)
         \\
@@ -1277,7 +1277,7 @@ test "S40: the branch-set pattern works and the object outlives the if" {
         \\        report = new Builder()
         \\        report.append("details")
         \\    if verbose:
-        \\        assert(str(report) == "details")
+        \\        assert(report.build() == "details")
         \\    free(report)
         \\
     );
@@ -1785,8 +1785,8 @@ test "storage: a map owns its keys as well as its values" {
     try agreeClean(
         \\func main():
         \\    var table = new Map(String, String)
-        \\    table["k" + str(1)] = "v1"
-        \\    table["k1"] = "v" + str(2)
+        \\    table["k" + String(1)] = "v1"
+        \\    table["k1"] = "v" + String(2)
         \\    table["k2"] = "v2"
         \\    assert(table["k1"] == "v2")
         \\    assert(len(table) == 2)
@@ -1889,7 +1889,7 @@ test "storage: an Array of Strings and of structs owns every cell" {
         \\
         \\func main():
         \\    var cells = new Array(String, 3)
-        \\    cells[0] = "x" + str(0)
+        \\    cells[0] = "x" + String(0)
         \\    cells[1] = cells[0]
         \\    cells[0] = "y"
         \\    assert(cells[0] == "y")
@@ -1935,7 +1935,7 @@ test "storage: a loop that retains nothing allocates nothing that outlives it" {
         \\func main():
         \\    var total = 0
         \\    for i in range(0, 2000):
-        \\        let piece = "item-" + str(i) + ";"
+        \\        let piece = "item-" + String(i) + ";"
         \\        total += len(piece)
         \\    assert(total > 0)
         \\

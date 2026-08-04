@@ -82,7 +82,6 @@ const builtins = [_]Builtin{
     .{ .name = "trap", .kind = .trap_message, .arity = 1 },
     .{ .name = "error", .kind = .raise_error, .arity = 1, .pure = false },
     .{ .name = "free", .kind = .free_object, .arity = 1, .pure = false },
-    .{ .name = "str", .kind = .str_value, .arity = 1 },
     .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
     .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
     .{ .name = "chr", .kind = .chr_code, .arity = 1 },
@@ -914,7 +913,7 @@ pub const FunctionBuilder = struct {
     /// That means a call to a declaration or any method — a method's
     /// receiver is the container in `xs.remove(0)`.  Every builtin but
     /// `free` moves no ownership at all (`07_optimize/effects.zig`
-    /// answers the same question about instructions), so `str(i)` and
+    /// answers the same question about instructions), so `String(i)` and
     /// `len(xs)` beside a container read cost nothing.
     fn mayMutateContainers(expression: *const ast.Expression) bool {
         return switch (expression.*) {
@@ -2315,7 +2314,7 @@ pub const FunctionBuilder = struct {
                 return pair.value;
             },
             .builder => {
-                try self.fail("luce.sema.index", span, "Builder has no index; str(b) reads it", .{});
+                try self.fail("luce.sema.index", span, "Builder has no index; b.build() reads it", .{});
                 return null;
             },
         }
@@ -3834,7 +3833,10 @@ pub const FunctionBuilder = struct {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
-            if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+            if (std.mem.eql(u8, call.callee, "Int") or
+                std.mem.eql(u8, call.callee, "Float") or
+                std.mem.eql(u8, call.callee, "String"))
+            {
                 return self.lowerConvert(call);
             }
             switch (try self.lowerIntrinsic(call, as_statement, fallible_allowed)) {
@@ -4375,7 +4377,7 @@ pub const FunctionBuilder = struct {
     };
     const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
     const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
-    const builder_methods = [_][]const u8{ "append", "append_ascii", "clear" };
+    const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
 
     /// `descriptor` is the receiver's *shape*, which is everything the
     /// dispatch below turns on: a `List(Int)` and a `List(String)`
@@ -4454,6 +4456,15 @@ pub const FunctionBuilder = struct {
                 return null;
             },
             .builder => {
+                // The method a Builder should always have had.  Its
+                // text used to come out through `b.build()`, which made
+                // the one free builtin that took a heap object — and
+                // is why `str` could not simply be renamed
+                // `String` (docs/NUMERICS.md §7).
+                if (std.mem.eql(u8, name, "build")) {
+                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    return .{ .kind = .str_value, .result = .string };
+                }
                 if (std.mem.eql(u8, name, "append")) {
                     if (!try self.methodTakes(method, arguments, &.{.string})) return null;
                     return .{ .kind = .append_value, .result = .none };
@@ -4471,7 +4482,7 @@ pub const FunctionBuilder = struct {
                 if (suggestion.best()) |closest| {
                     try self.fail("luce.sema.method", method.span, "Builder has no method {s}; did you mean {s}?", .{ name, closest });
                 } else {
-                    try self.fail("luce.sema.method", method.span, "Builder has no method {s} (append append_ascii clear)", .{name});
+                    try self.fail("luce.sema.method", method.span, "Builder has no method {s} (append append_ascii build clear)", .{name});
                 }
                 return null;
             },
@@ -4643,37 +4654,85 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// `Int(x)`, `Float(x)`, `String(x)` — the three conversion
+    /// constructors, each named for the type it produces
+    /// (docs/NUMERICS.md §7).  They are matched by name here, before
+    /// name resolution, which is why they are not in the builtin
+    /// table and why `String` is a reserved name.
+    ///
+    /// `String(x)` takes the scalars and nothing else: a `Builder` is
+    /// a heap object and its text comes out through `b.build()`, which
+    /// is the method it should always have had.
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
         if (call.arguments.len != 1 or call.arguments[0].name != null) {
             try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
             return null;
         }
         const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
+        if (std.mem.eql(u8, call.callee, "String")) {
+            switch (value.value_type) {
+                .string => return value,
+                .int, .float, .boolean => {},
+                .heap => {
+                    const descriptor = self.analyzer.heapOf(value.value_type).?;
+                    if (descriptor == .builder) {
+                        try self.fail(
+                            "luce.sema.convert",
+                            call.span,
+                            "String() converts a scalar; a Builder hands over its text with .build()",
+                            .{},
+                        );
+                        return null;
+                    }
+                    return self.failConvert(call, value);
+                },
+                else => return self.failConvert(call, value),
+            }
+            const arguments = try self.arena().alloc(Register, 1);
+            arguments[0] = value.register;
+            const made = try self.code.emit(
+                .{ .intrinsic = .{ .kind = .str_value, .arguments = arguments } },
+                .string,
+            );
+            // Fresh bytes nothing parked: the statement's end reclaims
+            // them unless a place adopts them (docs/STRINGS.md).
+            const answer: Typed = .{ .register = made, .value_type = .string };
+            try self.parkFreshStorage(answer);
+            return answer;
+        }
         const to_int = std.mem.eql(u8, call.callee, "Int");
         if (to_int) {
             if (value.value_type == .int) return value;
-            if (value.value_type != .float) {
-                try self.fail("luce.sema.convert", call.span, "Int() converts Float, not {s}", .{
-                    try self.analyzer.typeName(value.value_type),
-                });
-                return null;
-            }
+            if (value.value_type != .float) return self.failConvert(call, value);
             return .{
                 .register = try self.code.emit(.{ .convert = .{ .kind = .float_to_int, .operand = value.register } }, .int),
                 .value_type = .int,
             };
         }
         if (value.value_type == .float) return value;
-        if (value.value_type != .int) {
-            try self.fail("luce.sema.convert", call.span, "Float() converts Int, not {s}", .{
-                try self.analyzer.typeName(value.value_type),
-            });
-            return null;
-        }
+        if (value.value_type != .int) return self.failConvert(call, value);
         return .{
             .register = try self.code.emit(.{ .convert = .{ .kind = .int_to_float, .operand = value.register } }, .float),
             .value_type = .float,
         };
+    }
+
+    /// One sentence for all three constructors, naming what each takes.
+    /// It used to be spelled per constructor as "Int() converts Float,
+    /// not X" — which stopped being true the moment `Int(Int)` was an
+    /// identity and `Int` accepted both numeric types.
+    fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Typed {
+        const takes: []const u8 = if (std.mem.eql(u8, call.callee, "String"))
+            "Int, Float, Bool, or String"
+        else
+            "an Int or a Float";
+        try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{
+            call.callee,
+            takes,
+            try self.analyzer.typeName(value.value_type),
+            try self.absenceAdvice(value.value_type, call.arguments[0].value),
+        });
+        return null;
     }
 
     // Builtins ---------------------------------------------------------------
@@ -4860,22 +4919,6 @@ pub const FunctionBuilder = struct {
                 extra_argument = try self.code.emit(.{ .const_int = found.info.local }, .int);
                 result = .none;
             },
-            .str_value => {
-                const descriptor = self.analyzer.heapOf(arguments[0].value_type);
-                const stringable = switch (arguments[0].value_type) {
-                    .int, .float, .boolean, .string => true,
-                    .heap => descriptor.? == .builder,
-                    else => false,
-                };
-                if (!stringable) {
-                    if (arguments[0].value_type == .optional) {
-                        try self.failAbsence(call.span, "str", arguments[0].value_type, call.arguments[0].value);
-                        return .failed;
-                    }
-                    return self.failIntrinsic(call, "str takes Int, Float, Bool, String, or Builder");
-                }
-                result = .string;
-            },
             .parse_int, .parse_float => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "this builtin parses a String");
@@ -4906,6 +4949,9 @@ pub const FunctionBuilder = struct {
             .null_object,
             // Emitted by a mixed comparison; there is no name for it.
             .compare_int_float,
+            // Emitted by `String(x)` and by `Builder.build()`, both of
+            // which are resolved before this table is consulted.
+            .str_value,
             .none_value,
             .is_none,
             .optional_wrap,

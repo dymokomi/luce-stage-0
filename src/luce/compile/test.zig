@@ -240,7 +240,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
         \\    let a = 1
         \\    if true:
         \\        let a = 2
-        \\        print(str(a))
+        \\        print(String(a))
         \\
     , .{ .allow_host = true }, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 13 }});
 }
@@ -302,7 +302,7 @@ test "the pipeline survives every allocation failure" {
         \\    xs.sort()
         \\    var ages = new Map(String, Int)
         \\    ages["ada"] = total(xs)
-        \\    print(str(ages["ada"]))
+        \\    print(String(ages["ada"]))
         \\
     ;
     try testing.checkAllAllocationFailures(testing.allocator, struct {
@@ -484,7 +484,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\import std.strings
         \\
         \\func main():
-        \\    print(str("abc".find("b")))
+        \\    print(String("abc".find("b")))
         \\
     , .{ .allow_host = true });
     defer used.deinit();
@@ -834,8 +834,8 @@ test "collections type-check and reject misuse at compile time" {
         \\
         \\func label(counts: Map(String, Int), grid: Array(Int, _, _)) -> String:
         \\    var b = new Builder()
-        \\    b.append(str(len(counts) + grid[0, 0]))
-        \\    let made = str(b)
+        \\    b.append(String(len(counts) + grid[0, 0]))
+        \\    let made = b.build()
         \\    free(b)
         \\    return made
         \\
@@ -1049,14 +1049,14 @@ test "luce.sema.reserved: a module cannot be imported under a reserved name" {
     // The binding an import introduces is a name like any other, so it
     // goes through the same reserved-word check every declaration
     // does — before the module is even opened.
-    const module: TestModule = .{ .name = "str", .source =
+    const module: TestModule = .{ .name = "trap", .source =
         \\func nothing():
         \\    return
         \\
     };
     var files: TestLoader = .{ .modules = &.{module} };
     var result = try compile_mod.compileProject(testing.allocator,
-        \\import str
+        \\import trap
         \\
         \\func main():
         \\    return
@@ -1069,7 +1069,7 @@ test "luce.sema.reserved: a module cannot be imported under a reserved name" {
     for (0..result.failure.count()) |index| {
         const found = result.failure.at(index).?;
         if (!std.mem.eql(u8, found.code, "luce.sema.reserved")) continue;
-        try testing.expect(std.mem.indexOf(u8, found.message, "str is a reserved name") != null);
+        try testing.expect(std.mem.indexOf(u8, found.message, "trap is a reserved name") != null);
         reported = true;
     }
     try testing.expect(reported);
@@ -1409,7 +1409,7 @@ test "an import cycle compiles; what may not be circular is checked finer" {
         \\import a
         \\
         \\func main():
-        \\    print(str(a.width))
+        \\    print(String(a.width))
         \\
     , constants.loader(), script);
     defer knotted.deinit();
