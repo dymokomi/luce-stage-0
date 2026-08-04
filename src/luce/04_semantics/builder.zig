@@ -416,6 +416,8 @@ pub const FunctionBuilder = struct {
     /// only noise.
     fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Error!void {
         if (self.undeclared.contains(name)) return;
+        const qualified = try self.analyzer.qualify(self.prefix, name);
+        if (try self.failNotAValue(name, qualified, span)) return;
         var suggestion = helpers.Suggestion.init(name);
         self.offerLocals(&suggestion);
         self.offerDeclarations(&suggestion);
@@ -424,6 +426,87 @@ pub const FunctionBuilder = struct {
             return;
         }
         try self.fail("luce.sema.name", span, "unknown name {s}", .{name});
+    }
+
+    /// A name in value position that names a declaration rather than a
+    /// value.  Luce has no function values, so `let f = helper` and
+    /// `let x = math.seed` are mistakes — but they are not *unknown
+    /// names*, and saying so denies a declaration the compiler has
+    /// already checked.  Answers what the name is and how to use it;
+    /// true when it reported.
+    fn failNotAValue(
+        self: *FunctionBuilder,
+        written: []const u8,
+        qualified: []const u8,
+        span: Span,
+    ) Error!bool {
+        if (self.analyzer.function_names.contains(qualified)) {
+            try self.fail(
+                "luce.sema.name",
+                span,
+                "{s} is a function, and Luce has no function values; write {s}(...) to call it",
+                .{ written, written },
+            );
+            return true;
+        }
+        if (self.analyzer.struct_names.contains(qualified)) {
+            try self.fail(
+                "luce.sema.name",
+                span,
+                "{s} is a struct, not a value; write {s}(field = ...) to build one",
+                .{ written, written },
+            );
+            return true;
+        }
+        return false;
+    }
+
+    /// `math.seed`, `Words.classify` — a namespace member reached
+    /// without a call.  The namespace is real and its members are in
+    /// hand, so the answer names what the member is, or offers the
+    /// closest member there actually is.
+    ///
+    /// `namespace` and `member` are spelled the way the author wrote
+    /// them; `joined` is the fully-qualified key those two resolve to,
+    /// which is what the declaration tables are keyed on.
+    fn failNamespaceMember(
+        self: *FunctionBuilder,
+        namespace: []const u8,
+        member: []const u8,
+        joined: []const u8,
+        span: Span,
+    ) Error!void {
+        const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ namespace, member });
+        if (try self.failNotAValue(written, joined, span)) return;
+
+        // Members of this namespace only: `math.sed` wants `seed`
+        // offered, never a same-named function of another module.
+        const scope = joined[0 .. joined.len - member.len];
+        var suggestion = helpers.Suggestion.init(member);
+        const tables = [_]*const std.StringHashMapUnmanaged(u32){
+            &self.analyzer.function_names,
+            &self.analyzer.struct_names,
+            &self.analyzer.constant_names,
+        };
+        for (tables) |table| {
+            var keys = table.keyIterator();
+            while (keys.next()) |key| {
+                if (!std.mem.startsWith(u8, key.*, scope)) continue;
+                const tail = key.*[scope.len..];
+                if (tail.len == 0 or std.mem.indexOfScalar(u8, tail, '.') != null) continue;
+                suggestion.offer(tail);
+            }
+        }
+        if (suggestion.best()) |closest| {
+            try self.fail(
+                "luce.sema.name",
+                span,
+                "{s} has no member {s}; did you mean {s}.{s}?",
+                .{ namespace, member, namespace, closest },
+            );
+            return;
+        }
+        try self.fail("luce.sema.name", span, "{s} has no member {s}", .{ namespace, member });
     }
 
     /// Remember that `name`'s declaration was abandoned, so its later
@@ -3177,14 +3260,30 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
-        if (field.target.* == .name) {
+        // A dotted chain whose head is a bare declaration name is a
+        // namespace, exactly as it is in front of a call
+        // (`methodNamespace`).  Without this the whole access falls
+        // through to lowering the head as a value, which reports
+        // "unknown name math" about an import the compiler just
+        // checked.  Locals shadow nothing, so a head that names a
+        // local is always a value.
+        if (field.target.* == .name and self.findLocal(field.target.name.text) == null) {
             const base = field.target.name.text;
-            // geo.pi — an imported module's file-scope constant.
-            if (self.findLocal(base) == null and self.analyzer.importsModule(self.module, base)) {
+            if (self.analyzer.importsModule(self.module, base)) {
                 const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
+                // geo.pi — an imported module's file-scope constant.
                 if (self.analyzer.constant_names.get(joined)) |constant| {
                     return self.emitConstant(constant);
                 }
+                try self.failNamespaceMember(base, field.name, joined, field.span);
+                return null;
+            }
+            // Words.classify — a struct of this module as a namespace.
+            const head_qualified = try self.analyzer.qualify(self.prefix, base);
+            if (self.analyzer.struct_names.contains(head_qualified)) {
+                const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ head_qualified, field.name });
+                try self.failNamespaceMember(base, field.name, joined, field.span);
+                return null;
             }
         }
         const target = (try self.lowerExpression(field.target, false)) orelse return null;

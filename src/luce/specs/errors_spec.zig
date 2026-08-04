@@ -187,6 +187,41 @@ fn expectSayingAtOptions(
     }
 }
 
+/// `expectSayingAt`, plus: this is the *only* diagnostic the program
+/// produced.
+///
+/// One mistake, one report is a house rule, and it is a property no
+/// assertion about the first diagnostic can see.  Where a check used
+/// to fire once per subsequent line, or once per member of a cycle,
+/// the count is the thing that regressed and the count is what has to
+/// be pinned.
+fn expectOnlySayingAt(
+    source: []const u8,
+    code: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+) !void {
+    var result = try compile_mod.compile(testing.allocator, source, script);
+    defer result.deinit();
+    switch (result) {
+        .success => {
+            std.debug.print("expected {s}, but this compiled:\n{s}", .{ code, source });
+            return error.TestUnexpectedResult;
+        },
+        .failure => |diagnostics| {
+            const first = diagnostics.at(0) orelse return error.TestUnexpectedResult;
+            errdefer printAll(&diagnostics);
+            try testing.expectEqualStrings(code, first.code);
+            try testing.expectEqualStrings(saying, first.message);
+            const at = source_mod.place(source, first.span.start);
+            try testing.expectEqual(line, at.line);
+            try testing.expectEqual(column, at.column);
+            try testing.expectEqual(@as(usize, 1), diagnostics.count());
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
@@ -390,6 +425,113 @@ test "luce.sema.let: a let binding cannot be compound-assigned either" {
 
 test "luce.sema.name: an unknown name is rejected" {
     try expectRejected("func main():\n    let a = ghost\n", "luce.sema.name");
+}
+
+// A name in value position that names a *declaration* is not unknown.
+// Luce has no function values, so these are all mistakes — but the
+// compiler checked the declaration moments earlier, and answering
+// "unknown name math" about an import on line 1 sends the reader to
+// look for a missing import that is right there.  Every one of these
+// used to do exactly that.
+
+test "luce.sema.name: a function used as a value is named, not denied" {
+    try expectOnlySayingAt(
+        \\func helper() -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let f = helper
+        \\
+    ,
+        "luce.sema.name",
+        "helper is a function, and Luce has no function values; write helper(...) to call it",
+        5,
+        13,
+    );
+}
+
+test "luce.sema.name: a struct used as a value says how to build one" {
+    try expectOnlySayingAt(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    let p = Point
+        \\
+    ,
+        "luce.sema.name",
+        "Point is a struct, not a value; write Point(field = ...) to build one",
+        5,
+        13,
+    );
+}
+
+test "luce.sema.name: a std function reached without a call keeps its namespace" {
+    try expectOnlySayingAt(
+        \\import std.math
+        \\
+        \\func main():
+        \\    let x = math.round
+        \\
+    ,
+        "luce.sema.name",
+        "math.round is a function, and Luce has no function values; write math.round(...) to call it",
+        4,
+        13,
+    );
+}
+
+test "luce.sema.name: a missing namespace member offers one of that namespace" {
+    try expectOnlySayingAt(
+        \\import std.math
+        \\
+        \\func main():
+        \\    let x = math.rond
+        \\
+    ,
+        "luce.sema.name",
+        "math has no member rond; did you mean math.round?",
+        4,
+        13,
+    );
+}
+
+test "luce.sema.name: a struct namespace answers for its own members" {
+    try expectOnlySayingAt(
+        \\struct Words:
+        \\    count: Int
+        \\
+        \\    func classify() -> Int:
+        \\        return 1
+        \\
+        \\func main():
+        \\    let f = Words.classify
+        \\
+    ,
+        "luce.sema.name",
+        "Words.classify is a function, and Luce has no function values; write Words.classify(...) to call it",
+        8,
+        13,
+    );
+}
+
+test "luce.sema.name: a struct namespace with no such member says so" {
+    try expectOnlySayingAt(
+        \\struct Words:
+        \\    count: Int
+        \\
+        \\    func classify() -> Int:
+        \\        return 1
+        \\
+        \\func main():
+        \\    let f = Words.nope
+        \\
+    ,
+        "luce.sema.name",
+        "Words has no member nope",
+        8,
+        13,
+    );
 }
 
 test "luce.sema.duplicate: a name cannot be declared twice" {
