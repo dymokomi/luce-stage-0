@@ -17,20 +17,24 @@ const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 const helpers = @import("helpers.zig");
 
-const declarations = @import("declarations.zig");
-const Analyzed = declarations.Analyzed;
-const ModuleTree = declarations.ModuleTree;
-const FunctionInfo = declarations.FunctionInfo;
-const ConstantValue = declarations.ConstantValue;
-const Analyzer = declarations.Analyzer;
-const OwnershipClass = declarations.OwnershipClass;
-const Poison = declarations.Poison;
-const LocalInfo = declarations.LocalInfo;
-const Scope = declarations.Scope;
-const FoundLocal = declarations.FoundLocal;
-const LoopFrame = declarations.LoopFrame;
-const isReserved = declarations.isReserved;
-const Error = declarations.Error;
+// Pass one, for the one thing this walk needs from it: the collected
+// project it runs against.
+const Analyzer = @import("declarations.zig").Analyzer;
+
+// The stage's shared vocabulary (`04_semantics/context.zig`).
+const context = @import("context.zig");
+const Analyzed = context.Analyzed;
+const ModuleTree = context.ModuleTree;
+const FunctionInfo = context.FunctionInfo;
+const ConstantValue = context.ConstantValue;
+const OwnershipClass = context.OwnershipClass;
+const Poison = context.Poison;
+const LocalInfo = context.LocalInfo;
+const Scope = context.Scope;
+const FoundLocal = context.FoundLocal;
+const LoopFrame = context.LoopFrame;
+const isReserved = context.isReserved;
+const Error = context.Error;
 
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
@@ -118,7 +122,7 @@ pub const FunctionBuilder = struct {
         local: LocalId,
         register: Register,
         /// Whether this temporary owns the objects in its value, its
-        /// storage, or both — the same two questions `Scope.Release`
+        /// storage, or both — the same two questions `context.Release`
         /// answers for a named binding.
         objects: bool,
         storage: bool,
@@ -2464,14 +2468,14 @@ pub const FunctionBuilder = struct {
         switch (expression.*) {
             .int_literal => |literal| {
                 const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
-                    try self.fail("luce.sema.literal", literal.span, "{s}", .{declarations.integer_range_message});
+                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.integer_range_message});
                     return null;
                 };
                 return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
             },
             .float_literal => |literal| {
                 const parsed = helpers.parseFloatLiteral(literal.text) orelse {
-                    try self.fail("luce.sema.literal", literal.span, "{s}", .{declarations.float_range_message});
+                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.float_range_message});
                     return null;
                 };
                 return .{ .register = try self.code.emit(.{ .const_float = parsed }, .float), .value_type = .float };
@@ -3357,7 +3361,7 @@ pub const FunctionBuilder = struct {
         if (unary.op == .negate and unary.operand.* == .int_literal) {
             const literal = unary.operand.int_literal;
             const parsed = helpers.parseIntLiteral(literal.text, true) orelse {
-                try self.fail("luce.sema.literal", unary.span, "{s}", .{declarations.integer_range_message});
+                try self.fail("luce.sema.literal", unary.span, "{s}", .{context.integer_range_message});
                 return null;
             };
             return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
