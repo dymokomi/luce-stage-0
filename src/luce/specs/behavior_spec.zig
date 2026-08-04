@@ -60,6 +60,83 @@ test "integers: the four operations and precedence" {
     );
 }
 
+// `Int(x)` **rounds half away from zero** — the same rounding
+// `math.round` was always documented as, because a language with two
+// roundings that disagree has a bug in it (docs/NUMERICS.md §7).
+// `trunc(x)` is how truncation is spelled now, completing the four:
+// `floor`, `ceil`, `trunc`, and round.
+
+test "Int(x) rounds half away from zero, and trunc keeps truncation" {
+    try agreeOk(
+        \\func main():
+        \\    assert(Int(2.5) == 3)
+        \\    assert(Int(-2.5) == -3)
+        \\    assert(Int(0.5) == 1)
+        \\    assert(Int(-0.5) == -1)
+        \\    assert(Int(2.4) == 2)
+        \\    assert(Int(-2.4) == -2)
+        \\    assert(Int(2.6) == 3)
+        \\    assert(Int(-2.6) == -3)
+        \\    assert(Int(3.9) == 4)
+        \\    assert(Int(-3.9) == -4)
+        \\    assert(Int(7) == 7)
+        \\    # Toward zero has a spelling of its own again.
+        \\    assert(trunc(2.9) == 2.0)
+        \\    assert(trunc(-2.9) == -2.0)
+        \\    assert(Int(trunc(-2.9)) == -2)
+        \\    # And the four roundings are four different answers.
+        \\    assert(floor(-2.5) == -3.0)
+        \\    assert(ceil(-2.5) == -2.0)
+        \\    assert(trunc(-2.5) == -2.0)
+        \\    assert(Int(-2.5) == -3)
+        \\
+    );
+}
+
+test "Int(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
+    // `0.49999999999999994 + 0.5` rounds up to exactly 1.0 in
+    // binary64, so the floor of it is 1 where the answer is 0.  That
+    // is how `math.round` used to be written; both now split at
+    // `trunc`, which is exact.
+    try agreeOk(
+        \\import std.math
+        \\
+        \\func main():
+        \\    var nearly = 0.49999999999999994
+        \\    assert(Int(nearly) == 0)
+        \\    assert(math.round(nearly) == 0.0)
+        \\    assert(floor(nearly + 0.5) == 1.0)
+        \\    for step in range(-40, 41):
+        \\        let x = Float(step) / 4.0
+        \\        assert(Float(Int(x)) == math.round(x))
+        \\
+    );
+}
+
+test "trap: Int(x) still refuses NaN, the infinities, and out of range" {
+    try agreeTrap(
+        \\func main():
+        \\    var big = 1.0
+        \\    while big < 1.0e30:
+        \\        big = big * 10.0
+        \\    let bad = Int(big)
+        \\
+    , .conversion_range);
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0.0
+        \\    let bad = Int(zero / zero)
+        \\
+    , .conversion_range);
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0.0
+        \\    var one = 1.0
+        \\    let bad = Int(one / zero)
+        \\
+    , .conversion_range);
+}
+
 // `/` is **real division** and always answers a Float
 // (docs/NUMERICS.md §2, §4): the classic `1/2 == 0` is the single
 // most common cause of surprise for people who do not already think
@@ -288,7 +365,7 @@ test "the conversions are still spelled where a program spells them" {
         \\    let x = 2.0
         \\    assert(Float(n) / x == 3.5)
         \\    assert(Int(x) + n == 9)
-        \\    assert(Float(Int(3.9)) == 3.0)
+        \\    assert(Float(Int(3.9)) == 4.0)
         \\
     );
 }

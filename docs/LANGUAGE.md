@@ -444,6 +444,14 @@ pieces, so it is a String like any other.
 
 ## Conversions and generic builtins
 
+`Int(x)` **rounds half away from zero** — `Int(2.5)` is `3` and
+`Int(-2.5)` is `-3`, the same rounding `math.round` does
+(docs/NUMERICS.md §7) — and traps `conversion_range` on NaN, an
+infinity, or a value outside the `Int` range.  `trunc(x)` is
+truncation toward zero, so `floor`, `ceil`, `trunc` and round are four
+spellings for four different answers.  `Float(x)` widens and never
+traps.
+
 ```luce
 str(42)          # "42"        (Int, Float, Bool, Builder, String)
 parse_int("42")  # 42          Int?   — none when the text is not a number
@@ -468,7 +476,8 @@ print(str(n * 2))
 
 The free builtins are the generic, cross-type set — Python's own
 split of capability: `len str print range assert trap free abs
-min max clamp sqrt floor ceil chr ord parse_int parse_float`, the
+min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
+the
 conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,
 terminal, and key builtins (see docs/V2.md).  Everything that belongs
 to one type is a method on it.

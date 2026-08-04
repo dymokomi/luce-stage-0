@@ -3441,11 +3441,15 @@ const Body = struct {
 
     // -- conversion and struct values ----------------------------------
 
-    /// `Float(x)` widens; `Int(x)` truncates toward zero and traps
-    /// outside the i64 range, NaN and the infinities included.  The
-    /// guards are the interpreter's, value for value
-    /// (`runtime/operators.zig`), because a conversion that disagrees
-    /// at the boundary is a different language.
+    /// `Float(x)` widens; `Int(x)` **rounds half away from zero** and
+    /// traps outside the i64 range, NaN and the infinities included
+    /// (docs/NUMERICS.md §7).  The guards are the interpreter's, value
+    /// for value (`runtime/operators.zig`), because a conversion that
+    /// disagrees at the boundary is a different language — and so is
+    /// the rounding, which is `llvm.round`, the intrinsic whose
+    /// definition *is* "half away from zero".  The range check runs
+    /// before the rounding, so a value rounding would push past 2^63
+    /// is refused rather than wrapped.
     fn emitConvert(
         self: *Body,
         register: mir.Register,
@@ -3459,20 +3463,28 @@ const Body = struct {
             },
             .float_to_int => {
                 const builder = self.module.builder;
+                const rounded = try self.wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    .round,
+                    &.{.double},
+                    &.{held},
+                    "rounded",
+                );
                 // NaN compares unordered with itself and with the
                 // bounds, so it has to be asked about separately.
-                const not_a_number = try self.wip.fcmp(.normal, .uno, held, held, "is.nan");
+                const not_a_number = try self.wip.fcmp(.normal, .uno, rounded, rounded, "is.nan");
                 const too_small = try self.wip.fcmp(
                     .normal,
                     .olt,
-                    held,
+                    rounded,
                     try builder.doubleValue(-9223372036854775808.0),
                     "too.small",
                 );
                 const too_large = try self.wip.fcmp(
                     .normal,
                     .oge,
-                    held,
+                    rounded,
                     try builder.doubleValue(9223372036854775808.0),
                     "too.large",
                 );
@@ -3483,7 +3495,7 @@ const Body = struct {
                     "unrepresentable",
                 );
                 try self.check(outside, .conversion_range);
-                self.values[register] = try self.wip.cast(.fptosi, held, .i64, "int");
+                self.values[register] = try self.wip.cast(.fptosi, rounded, .i64, "int");
             },
         }
     }
@@ -4141,6 +4153,7 @@ const Body = struct {
             .sqrt => self.values[register] = try self.emitFloatCall(.sqrt, of[0]),
             .floor => self.values[register] = try self.emitFloatCall(.floor, of[0]),
             .ceil => self.values[register] = try self.emitFloatCall(.ceil, of[0]),
+            .trunc => self.values[register] = try self.emitFloatCall(.trunc, of[0]),
 
             // Comparison across the Int/Float line is exact, so it is
             // a call and not a widening (docs/NUMERICS.md).  The

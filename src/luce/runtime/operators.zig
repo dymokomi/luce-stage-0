@@ -380,17 +380,78 @@ pub fn intToFloat(operand: Value) Value {
     return Value.ofFloat(@floatFromInt(operand.asInt()));
 }
 
-/// `Int(x)` truncates toward zero and traps outside the i64 range —
-/// NaN and infinities included.
+/// `Int(x)` **rounds half away from zero** and traps outside the i64
+/// range — NaN and infinities included (docs/NUMERICS.md §7).
+///
+/// Half away from zero, and not IEEE's half-to-even, for one reason
+/// that outranks the numerical arguments: `math.round` already
+/// existed, was already documented as rounding that way, and is
+/// already what `strings.format_float` uses.  A language with two
+/// roundings that disagree has a bug in it, and the one already
+/// ratified wins.
+///
+/// The range check is the same one in the same three places — here,
+/// the constant folder, and `08_llvm/lower.zig` — because a
+/// conversion that disagrees at the boundary is a different language.
+/// It runs **after** the rounding, on what rounding produced: NaN and
+/// the infinities survive `@round` unchanged so the one check still
+/// catches them, and a value rounding carried past the top of the
+/// range is refused rather than wrapped.
 pub fn floatToInt(runtime: *Runtime, operand: Value) Error!Value {
-    const held = operand.asFloat();
-    if (std.math.isNan(held) or
-        held < -9223372036854775808.0 or
-        held >= 9223372036854775808.0)
+    const rounded = roundHalfAway(operand.asFloat());
+    if (std.math.isNan(rounded) or
+        rounded < -9223372036854775808.0 or
+        rounded >= 9223372036854775808.0)
     {
         return runtime.fail(.conversion_range);
     }
-    return Value.ofInt(@intFromFloat(@trunc(held)));
+    return Value.ofInt(@intFromFloat(rounded));
+}
+
+/// Round half away from zero: `2.5` to `3.0`, `-2.5` to `-3.0`.
+///
+/// **`floor(x + 0.5)` is not this function**, which is worth writing
+/// down because that is how `std/math.luc` used to spell it and how
+/// most people would: `0.49999999999999994 + 0.5` rounds *up* to
+/// exactly `1.0` in binary64, so the floor of it is `1` where the
+/// right answer is `0`.  `@round` is the operation itself — IEEE
+/// roundToIntegralTiesToAway, and `llvm.round` on the compiled side —
+/// and `math.round` now computes the same thing from `trunc` and a
+/// fraction, which is exact.  A language with two roundings that
+/// disagree has a bug in it.
+pub fn roundHalfAway(held: f64) f64 {
+    return @round(held);
+}
+
+test "Int(x) rounds half away from zero, on both sides of it" {
+    try std.testing.expectEqual(@as(f64, 3.0), roundHalfAway(2.5));
+    try std.testing.expectEqual(@as(f64, -3.0), roundHalfAway(-2.5));
+    try std.testing.expectEqual(@as(f64, 1.0), roundHalfAway(0.5));
+    try std.testing.expectEqual(@as(f64, -1.0), roundHalfAway(-0.5));
+    try std.testing.expectEqual(@as(f64, 2.0), roundHalfAway(2.4));
+    try std.testing.expectEqual(@as(f64, -2.0), roundHalfAway(-2.4));
+    try std.testing.expectEqual(@as(f64, 3.0), roundHalfAway(2.6));
+    try std.testing.expectEqual(@as(f64, -3.0), roundHalfAway(-2.6));
+    try std.testing.expectEqual(@as(f64, 0.0), roundHalfAway(0.0));
+
+    // The value that separates rounding from `floor(x + 0.5)`: at
+    // binary64 precision the sum rounds up to exactly 1.0, so the
+    // floor of it is 1 where the answer is 0.  Both operands are
+    // runtime values, because comptime float arithmetic in Zig is
+    // arbitrary-precision and would not reproduce the rounding step
+    // that is the whole point.
+    var nearly_half: f64 = 0.49999999999999994;
+    _ = &nearly_half;
+    var half: f64 = 0.5;
+    _ = &half;
+    try std.testing.expectEqual(@as(f64, 0.0), roundHalfAway(nearly_half));
+    try std.testing.expectEqual(@as(f64, 1.0), @floor(nearly_half + half));
+
+    // Symmetric about zero, which is what "away from zero" means.
+    var step: f64 = -4.0;
+    while (step <= 4.0) : (step += 0.25) {
+        try std.testing.expectEqual(-roundHalfAway(step), roundHalfAway(-step));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -442,4 +503,10 @@ pub fn floor(operand: Value) Value {
 
 pub fn ceil(operand: Value) Value {
     return Value.ofFloat(@ceil(operand.asFloat()));
+}
+
+/// `trunc(x)` — toward zero.  The fourth rounding, added when `Int(x)`
+/// stopped being the way to spell it (docs/NUMERICS.md §7).
+pub fn truncate(operand: Value) Value {
+    return Value.ofFloat(@trunc(operand.asFloat()));
 }

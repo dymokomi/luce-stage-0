@@ -955,7 +955,12 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
     try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofFloat(0.0))).asFloat()));
 
     try expectTrap(.conversion_range, runtime, operators.floatToInt(runtime, Value.ofFloat(1e30)));
-    try testing.expectEqual(@as(i64, -1), (try operators.floatToInt(runtime, Value.ofFloat(-1.9))).asInt());
+    // `Int(x)` rounds half away from zero (docs/NUMERICS.md §7);
+    // `trunc(x)` is how truncation is spelled now.
+    try testing.expectEqual(@as(i64, -2), (try operators.floatToInt(runtime, Value.ofFloat(-1.9))).asInt());
+    try testing.expectEqual(@as(i64, 3), (try operators.floatToInt(runtime, Value.ofFloat(2.5))).asInt());
+    try testing.expectEqual(@as(i64, -3), (try operators.floatToInt(runtime, Value.ofFloat(-2.5))).asInt());
+    try testing.expectEqual(@as(f64, -1.0), operators.truncate(Value.ofFloat(-1.9)).asFloat());
 
     const joined = bench.made(try operators.binary(runtime, .add, Value.ofString("a"), Value.ofString("b")));
     try testing.expectEqualStrings("ab", joined.asString());

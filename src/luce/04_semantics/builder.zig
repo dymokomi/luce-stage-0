@@ -76,6 +76,7 @@ const builtins = [_]Builtin{
     .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
     .{ .name = "floor", .kind = .floor, .arity = 1 },
     .{ .name = "ceil", .kind = .ceil, .arity = 1 },
+    .{ .name = "trunc", .kind = .trunc, .arity = 1 },
     .{ .name = "len", .kind = .len, .arity = 1 },
     .{ .name = "assert", .kind = .assert_true, .arity = 1 },
     .{ .name = "trap", .kind = .trap_message, .arity = 1 },
@@ -4783,7 +4784,7 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "clamp takes three Ints or three Floats");
                 result = arguments[0].value_type;
             },
-            .sqrt, .floor, .ceil => {
+            .sqrt, .floor, .ceil, .trunc => {
                 if (arguments[0].value_type != .float)
                     return self.failIntrinsic(call, "this builtin takes a Float");
                 result = .float;

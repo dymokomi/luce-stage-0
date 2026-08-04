@@ -50,13 +50,13 @@ func main():
     print(str(steps * seconds))
     let elapsed: Float = steps
     print(str(elapsed))
-    print(str(Int(seconds)))       # asked for, and it truncates
+    print(str(Int(seconds)))       # asked for, and it rounds
 ```
 
 ```output
 17.5
 7
-2
+3
 ```
 
 Comparison crosses the line too — and it is **exact**. `1 < 1.5` is

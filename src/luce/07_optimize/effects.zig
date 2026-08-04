@@ -135,7 +135,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
         // for the same reason `negate` is: abs(Int.min) overflows.
-        .min, .max, .clamp, .sqrt, .floor, .ceil, .compare_int_float => .pure,
+        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_int_float => .pure,
         .abs => if (first_argument) |argument|
             (if (argument == .float) .pure else .stable)
         else
@@ -315,6 +315,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .sqrt,
             .floor,
             .ceil,
+            .trunc,
             .compare_int_float,
             .string_slice,
             .string_byte,
@@ -451,6 +452,7 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             .sqrt,
             .floor,
             .ceil,
+            .trunc,
             .compare_int_float,
             .string_slice,
             .string_byte,

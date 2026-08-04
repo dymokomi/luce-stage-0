@@ -22,17 +22,29 @@ let ln2 = 0.69314718055994530942
 let ln10 = 2.30258509299404568402
 
 # Round half away from zero: round(2.5) == 3.0, round(-2.5) == -3.0.
+# The same rounding Int(x) does, which is the point — a language with
+# two roundings that disagree has a bug in it (docs/NUMERICS.md).
+#
+# Not floor(x + 0.5), which is how this was written and how most
+# people would write it: 0.49999999999999994 + 0.5 rounds up to
+# exactly 1.0 in binary64, so the floor of it is 1 where the answer is
+# 0.  Splitting at trunc(x) instead is exact — the subtraction below
+# is exact for every x whose fraction is not already zero.
 func round(x: Float) -> Float:
-    if x >= 0.0:
-        return floor(x + 0.5)
-    return ceil(x - 0.5)
+    let whole = trunc(x)
+    let fraction = x - whole
+    if fraction >= 0.5:
+        return whole + 1.0
+    if fraction <= -0.5:
+        return whole - 1.0
+    return whole
 
 # e raised to x.  Large x overflows to infinity, very negative x
 # underflows to 0.0 — IEEE semantics, no traps.
 func exp(x: Float) -> Float:
     # Reduce: x = k*ln2 + r with r in [-ln2/2, ln2/2], so the series
     # below converges in a few terms; then scale by 2^k.
-    let k = Int(floor(x / ln2 + 0.5))
+    let k = Int(x / ln2)
     let r = x - Float(k) * ln2
     var term = 1.0
     var total = 1.0

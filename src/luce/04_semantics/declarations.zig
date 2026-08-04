@@ -1131,13 +1131,21 @@ pub const Analyzer = struct {
             switch (operand.value) {
                 .int => return operand,
                 .float => |value| {
-                    if (std.math.isNan(value) or
-                        value < -9223372036854775808.0 or
-                        value >= 9223372036854775808.0)
+                    // The same guard as `runtime/operators.zig` and
+                    // `08_llvm/lower.zig`, value for value: a
+                    // conversion that disagrees at the boundary is a
+                    // different language.  And the same rounding —
+                    // half away from zero (docs/NUMERICS.md §7),
+                    // through the runtime's own function so there is
+                    // one of it.
+                    const rounded = operators.roundHalfAway(value);
+                    if (std.math.isNan(rounded) or
+                        rounded < -9223372036854775808.0 or
+                        rounded >= 9223372036854775808.0)
                     {
                         return self.constantError(call.span, "constant conversion out of range", .{});
                     }
-                    return .{ .value = .{ .int = @intFromFloat(@trunc(value)) }, .value_type = .int };
+                    return .{ .value = .{ .int = @intFromFloat(rounded) }, .value_type = .int };
                 },
                 else => return self.constantError(call.span, "Int() converts Float", .{}),
             }

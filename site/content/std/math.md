@@ -1,8 +1,8 @@
 # std.math
 
-Pure Luce over the checked builtins. `sqrt`, `floor`, `ceil`, `abs`,
-`min`, `max` and `clamp` stay [builtins](/ref/builtins/); `math` adds
-what they lack.
+Pure Luce over the checked builtins. `sqrt`, `floor`, `ceil`, `trunc`,
+`abs`, `min`, `max` and `clamp` stay [builtins](/ref/builtins/);
+`math` adds what they lack.
 
 ```
 import std.math
@@ -17,7 +17,7 @@ compile-time constants and fold at their use sites.
 
 | Signature | Notes |
 |---|---|
-| `math.round(x: Float) -> Float` | half **away from zero**: `round(-2.5)` is `-3.0` |
+| `math.round(x: Float) -> Float` | half **away from zero**: `round(-2.5)` is `-3.0`; the same rounding `Int(x)` does |
 | `math.exp(x: Float) -> Float` | overflow yields infinity, underflow yields `0.0` |
 | `math.ln(x: Float) -> Float` | traps for `x <= 0` |
 | `math.log2(x)`, `math.log10(x)` | |
@@ -194,6 +194,6 @@ func main():
 ```output
 about to take a logarithm
 loom: trap: ln of a non-positive number [explicit_trap]
-    at math.ln (std/math.luc:54:9)
+    at math.ln (std/math.luc:66:9)
     at main (main.luc:5:5)
 ```

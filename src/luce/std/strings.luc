@@ -194,8 +194,13 @@ func format_float(value: Float, decimals: Int) -> String:
     var scale = 1.0
     for i in range(0, decimals):
         scale *= 10.0
-    var whole = Int(magnitude)
-    var fraction = Int(floor((magnitude - Float(whole)) * scale + 0.5))
+    # `Int(x)` rounds (docs/NUMERICS.md), so the split at the
+    # integral part says `trunc` out loud — and the `+ 0.5` that used
+    # to hand-roll the rounding of the fraction is what `Int` does
+    # now, correctly, including at the values `floor(x + 0.5)` gets
+    # wrong.
+    var whole = Int(trunc(magnitude))
+    var fraction = Int((magnitude - Float(whole)) * scale)
     if Float(fraction) >= scale:
         whole += 1
         fraction = 0

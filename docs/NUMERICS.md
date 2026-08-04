@@ -1045,3 +1045,44 @@ get there, because promotion does it.
    It is refused where the operator is chosen instead, and the message
    names the one-character fix: *"/ answers a Float and this place is
    Int; write '//=' for the integer quotient"*.
+
+### Step 4 — `Int(x)` rounds; `trunc` arrives — **landed**
+
+`Int(x)` rounds half away from zero and `trunc(x: Float) -> Float`
+joins `floor` and `ceil`, so the four roundings are four spellings for
+four different answers.  The three guard sites moved in lockstep as
+§7 requires — `runtime/operators.zig`, `04_semantics/declarations.zig`
+and `08_llvm/lower.zig` — and `std/math.luc:35`'s hand-rolled half-up
+is now `Int(x / ln2)`, correct on negative inputs for the first time.
+
+**Two things the memo did not have right.**
+
+1. **`math.round` was not the rounding it was documented as, so
+   "the one already ratified wins" had to be applied to the
+   *documentation* rather than to the code.**  §7 argues that `Int(x)`
+   must agree with `math.round` because `math.round` already exists
+   and already says "half away from zero".  It said so and did not do
+   so: it was `floor(x + 0.5)`, and `0.49999999999999994 + 0.5` rounds
+   up to exactly `1.0` in binary64, so its floor is `1` where the
+   answer is `0`.  Adopting the implementation would have adopted the
+   bug into `Int(x)` and into every artifact.  Both now compute the
+   documented rule: the runtime and the lowering through `@round` /
+   `llvm.round`, which *is* roundToIntegralTiesToAway, and
+   `math.round` by splitting at `trunc(x)` and comparing the fraction
+   — exact, and the first real payoff of adding `trunc`.
+
+2. **`Int(x)` had truncating callers, and §7 does not mention them.**
+   `strings.format_float` split a number at its integral part with
+   `Int(magnitude)` and hand-rolled the fraction's rounding with
+   `floor(… + 0.5)`; three benchmarks took `Int` of a checksum.  All
+   of them say `trunc` out loud now, and `format_float`'s `+ 0.5` is
+   gone because `Int` does that step correctly.  None changed answer:
+   the benchmark outputs are byte-identical and the C twins were not
+   touched.
+
+**The range check moved after the rounding**, which §7 does not
+specify.  Rounding can only carry a value toward the boundary, and
+NaN and the infinities survive `@round` unchanged, so one check on the
+rounded value catches everything two checks would — and it is one
+check in each of the three places rather than two, which is what keeps
+them provably the same check.

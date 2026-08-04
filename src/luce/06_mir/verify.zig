@@ -474,7 +474,7 @@ fn verifyIntrinsic(
             try expectType(arguments[2], arguments[0]);
             try expectType(result, arguments[0]);
         },
-        .sqrt, .floor, .ceil => {
+        .sqrt, .floor, .ceil, .trunc => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .float);
             try expectType(result, .float);

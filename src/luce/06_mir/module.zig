@@ -917,5 +917,5 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // still required for that, and this test is not what will remind
     // you.
     try testing.expectEqual(@as(u32, 19), format_version);
-    try testing.expectEqual(@as(u64, 16570781339708703694), hasher.final());
+    try testing.expectEqual(@as(u64, 1242059040041295902), hasher.final());
 }

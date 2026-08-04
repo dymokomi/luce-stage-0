@@ -22,11 +22,12 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `clamp(x, low, high)` | |
 | `sqrt(x: Float) -> Float` | |
 | `floor(x: Float) -> Float`, `ceil(x: Float) -> Float` | |
+| `trunc(x: Float) -> Float` | toward zero; `math.round` is the fourth |
 | `chr(code: Int) -> String` | traps `bad_codepoint` on an invalid codepoint |
 | `ord(text: String) -> Int` | first codepoint; traps on empty |
 | `parse_int(text: String) -> Int?` | `none` when the text is not an integer |
 | `parse_float(text: String) -> Float?` | `none` when the text is not a number |
-| `Int(x)`, `Float(x)` | the only numeric conversions; `Int` traps outside range |
+| `Int(x)`, `Float(x)` | `Int(x)` rounds half away from zero and traps outside range |
 
 ```luce run
 func main():
@@ -34,7 +35,8 @@ func main():
     print(str(min(3, 9)) + " " + str(max(3, 9)))
     print(str(clamp(42, 0, 10)))
     print(str(sqrt(2.0)))
-    print(str(floor(-2.5)) + " " + str(ceil(-2.5)))
+    print(str(floor(-2.5)) + " " + str(ceil(-2.5)) + " " + str(trunc(-2.5)))
+    print(str(Int(2.5)) + " " + str(Int(-2.5)) + " " + str(Int(2.4)))
     print(chr(9731))
     print(str(ord("A")))
     print(str(parse_int("17") else -1))
@@ -46,7 +48,8 @@ func main():
 3 9
 10
 1.4142135623730951
--3 -2
+-3 -2 -2
+3 -3 2
 ☃
 65
 17

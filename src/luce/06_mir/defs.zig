@@ -27,6 +27,12 @@ pub const Intrinsic = enum {
     sqrt,
     floor,
     ceil,
+    /// `trunc(x)` — toward zero, the fourth of the four roundings.
+    /// It arrived with `Int(x)`'s rounding: before that, `Int(x)` was
+    /// the only way to say "toward zero" and taking it would have
+    /// punched a hole in a set that `floor`, `ceil` and `math.round`
+    /// otherwise complete (docs/NUMERICS.md §7).
+    trunc,
     /// Comparison across the Int/Float line, exactly (docs/NUMERICS.md).
     /// Three arguments — the operator as an `Int`, then the `Int`
     /// operand, then the `Float` one — because `Binary` carries a
