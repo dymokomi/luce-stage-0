@@ -24,6 +24,7 @@ const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 
 const Type = types.Type;
+const Span = source_mod.Span;
 const BlockId = mir.BlockId;
 const LocalId = mir.LocalId;
 
@@ -282,6 +283,9 @@ pub const Poison = enum { given, freed };
 pub const LocalInfo = struct {
     local: LocalId,
     mutable: bool,
+    /// Where the name was written, so a second declaration of it can
+    /// say where the first one is.
+    declared_at: Span = .{ .start = 0, .end = 0 },
     class: OwnershipClass = .alias,
     /// The local's type is an object or an object-carrying struct.
     carries: bool = false,

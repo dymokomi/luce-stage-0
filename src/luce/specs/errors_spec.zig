@@ -646,6 +646,84 @@ test "luce.sema.duplicate: a name cannot be declared twice" {
     try expectRejected("func main():\n    let a = 1\n    let a = 2\n", "luce.sema.duplicate");
 }
 
+// Where the other one is, is the single most useful thing a duplicate
+// message can carry, and none of the four spellings carried anything.
+
+test "luce.sema.duplicate: a duplicate struct points at the first" {
+    try expectOnlySayingAt(
+        \\struct P:
+        \\    x: Int
+        \\
+        \\struct P:
+        \\    y: Int
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.duplicate", "duplicate struct P; the first is on line 1", 4, 8);
+}
+
+test "luce.sema.duplicate: a duplicate field points at the first" {
+    try expectOnlySayingAt(
+        \\struct S:
+        \\    x: Int
+        \\    y: Int
+        \\    x: Int
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.duplicate", "duplicate field x; the first is on line 2", 4, 5);
+}
+
+test "luce.sema.duplicate: a duplicate function points at the first" {
+    try expectOnlySayingAt(
+        \\func go():
+        \\    return
+        \\
+        \\func go():
+        \\    return
+        \\
+        \\func main():
+        \\    go()
+        \\
+    , "luce.sema.duplicate", "duplicate name go; the first is on line 1", 4, 6);
+}
+
+test "luce.sema.duplicate: a duplicate constant points at the first" {
+    try expectOnlySayingAt(
+        \\let k = 1
+        \\
+        \\let k = 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.duplicate", "duplicate name k; the first is on line 1", 3, 5);
+}
+
+test "luce.sema.duplicate: a redeclared local points at the first" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    let n = 1
+        \\    let n = 2
+        \\    return
+        \\
+    , "luce.sema.duplicate", "n is already declared on line 2", 3, 9);
+}
+
+test "luce.sema.duplicate: a local over a declaration says which kind, and where" {
+    try expectOnlySayingAt(
+        \\func helper():
+        \\    return
+        \\
+        \\func main():
+        \\    let helper = 1
+        \\    return
+        \\
+    , "luce.sema.duplicate", "helper is already a top-level declaration on line 1", 5, 9);
+}
+
 test "luce.sema.reserved: builtins cannot be shadowed" {
     try expectRejected("func main():\n    let len = 1\n", "luce.sema.reserved");
 }

@@ -697,16 +697,16 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.reserved", span, "{s} is a reserved name", .{name});
             return null;
         }
-        if (self.findLocal(name) != null) {
-            try self.fail("luce.sema.duplicate", span, "{s} is already declared", .{name});
+        if (self.findLocal(name)) |found| {
+            try self.fail("luce.sema.duplicate", span, "{s} is already declared{s}", .{
+                name,
+                try self.analyzer.declaredAt(self.analyzer.modules[self.module].file, found.info.declared_at),
+            });
             return null;
         }
         const qualified = try self.analyzer.qualify(self.prefix, name);
-        if (self.analyzer.function_names.contains(qualified) or
-            self.analyzer.struct_names.contains(qualified) or
-            self.analyzer.constant_names.contains(qualified))
-        {
-            try self.fail("luce.sema.duplicate", span, "{s} is already a declaration", .{name});
+        if (try self.analyzer.firstDeclarationOf(qualified)) |where| {
+            try self.fail("luce.sema.duplicate", span, "{s} is already a top-level declaration{s}", .{ name, where });
             return null;
         }
         const carries = self.analyzer.carriesObjects(local_type);
@@ -716,6 +716,7 @@ pub const FunctionBuilder = struct {
         try scope.names.put(self.temporary(), name, .{
             .local = local,
             .mutable = mutable,
+            .declared_at = span,
             .class = if (carries) class else .alias,
             .carries = carries,
         });

@@ -456,8 +456,12 @@ pub const Analyzer = struct {
                     continue;
                 }
                 const qualified = try self.qualify(module.prefix, declaration.name);
-                if (self.struct_names.contains(qualified)) {
-                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate struct {s}", .{declaration.name});
+                if (self.struct_names.get(qualified)) |first| {
+                    const info = self.struct_decls.items[first];
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate struct {s}; the first is{s}", .{
+                        declaration.name,
+                        try self.declaredAt(self.modules[info.module].file, info.declaration.name_span),
+                    });
                     continue;
                 }
                 const index: u32 = @intCast(self.structs.items.len);
@@ -486,7 +490,10 @@ pub const Analyzer = struct {
                     if (std.mem.eql(u8, existing.name, field.name)) duplicate = true;
                 }
                 if (duplicate) {
-                    try self.fail("luce.sema.duplicate", field.name_span, "duplicate field {s}", .{field.name});
+                    try self.fail("luce.sema.duplicate", field.name_span, "duplicate field {s}; the first is{s}", .{
+                        field.name,
+                        try self.declaredAt(self.modules[info.module].file, self.fieldSpan(index, field.name)),
+                    });
                     continue;
                 }
                 const field_type = (try self.resolveType(info.module, field.type_name)) orelse continue;
@@ -799,8 +806,11 @@ pub const Analyzer = struct {
                     continue;
                 }
                 const qualified = try self.qualify(module.prefix, declaration.name);
-                if (self.constant_names.contains(qualified) or self.struct_names.contains(qualified)) {
-                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}", .{declaration.name});
+                if (try self.firstDeclarationOf(qualified)) |where| {
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                        declaration.name,
+                        where,
+                    });
                     continue;
                 }
                 const index: u32 = @intCast(self.constant_infos.items.len);
@@ -1274,7 +1284,10 @@ pub const Analyzer = struct {
             self.constant_names.contains(name) or
             (top_level and self.struct_names.contains(name)))
         {
-            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}", .{declaration.name});
+            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                declaration.name,
+                (try self.firstDeclarationOf(name)) orelse "",
+            });
             return;
         }
 
@@ -1350,6 +1363,42 @@ pub const Analyzer = struct {
 
     pub fn typeName(self: *Analyzer, of: Type) Error![]const u8 {
         return types.typeName(self.arena, self.structs.items, self.heap_types.items, of);
+    }
+
+    /// Where a fully-qualified name is already declared, whichever of
+    /// the three tables holds it — or null when none does.
+    pub fn firstDeclarationOf(self: *Analyzer, qualified: []const u8) Error!?[]const u8 {
+        if (self.function_names.get(qualified)) |index| {
+            const info = self.functions.items[index];
+            return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
+        }
+        if (self.struct_names.get(qualified)) |index| {
+            const info = self.struct_decls.items[index];
+            return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
+        }
+        if (self.constant_names.get(qualified)) |index| {
+            const info = self.constant_infos.items[index];
+            return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
+        }
+        return null;
+    }
+
+    /// Where a name was already declared, for a message about the
+    /// second one: " on line 7", or " in geo.luc on line 7" when the
+    /// first is in another file.
+    ///
+    /// Where the other one is, is the single most useful thing a
+    /// duplicate diagnostic can carry, and none of the four spellings
+    /// of it carried anything at all.
+    pub fn declaredAt(self: *Analyzer, file: source_mod.FileId, span: Span) Error![]const u8 {
+        const at = self.diagnostics.sources.place(file, span.start);
+        if (file == self.diagnostics.scope) {
+            return std.fmt.allocPrint(self.arena, " on line {d}", .{at.line});
+        }
+        return std.fmt.allocPrint(self.arena, " in {s} on line {d}", .{
+            self.diagnostics.sources.pathOf(file),
+            at.line,
+        });
     }
 
     // Function bodies ------------------------------------------------------
