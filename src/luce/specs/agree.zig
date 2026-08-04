@@ -1378,6 +1378,20 @@ pub fn trap(source: []const u8, code: mir.TrapCode) !void {
 pub fn trapGiven(source: []const u8, provided: Provided, code: mir.TrapCode) !void {
     var session = try compare(source, provided);
     defer session.deinit();
+    return expectTrapped(&session, code);
+}
+
+/// The same, over a program the caller compiled — and, for the checks
+/// stage 4 now makes statically, over one the caller went on to
+/// damage.  A trap no source program can still reach is reached from
+/// here or nowhere (`src/luce/specs/ownership_spec.zig`'s S23).
+pub fn trapProgram(compiled: *const mir.Program, provided: Provided, code: mir.TrapCode) !void {
+    var session = try compareProgram(compiled, provided);
+    defer session.deinit();
+    return expectTrapped(&session, code);
+}
+
+fn expectTrapped(session: *const Session, code: mir.TrapCode) !void {
     switch (session.end) {
         .trapped => |raised| {
             if (raised == code) return;

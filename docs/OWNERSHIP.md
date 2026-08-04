@@ -353,17 +353,59 @@ func main():
     a.append(give item)       # a owns it; item poisoned
     b.append(give item)       # COMPILE error: item was given away
 ```
-And the alias dodge is caught dynamically:
+And the alias dodge is caught too — at compile time:
 ```luce
     var item2 = [2]
     let alias = item2
     a.append(give item2)      # fine; item2 poisoned
-    b.append(give alias)      # RUNTIME trap: object is container-owned
-                              # (the one dynamic ownership check)
+    b.append(give alias)      # COMPILE error: alias owns nothing
 ```
-Decision: static poisoning catches the direct case; `give` verifies
+Decision: static poisoning catches the direct case; an alias is
+refused at the site, because stage 4 already knows it is one.
+
+**Ratified 2026-08-04, superseding the decision above.** The
+original ratification made the alias case *dynamic* — "`give` verifies
 binding-ownership at run time for the alias case — trap in safe
-builds.
+builds", the one dynamic ownership check. The owner's terms on
+revisiting it: *"yes let's make this compile time error."*
+
+The reason it can be one: a binding's ownership class (`owned`,
+`alias`, `borrow_param`) is settled in `04_semantics` when the name is
+declared, and every keep-verb reaches that class before it emits
+anything. `free` and bare `return` already refused an alias; `give`
+was the one door left open, and it was open at all four of its uses —
+call arguments, container stores, struct construction, and
+`return give`. All four now say the same thing, and name the owner
+when it is still an owner:
+
+```
+view aliases an object it does not own;
+give xs (the owner), or copy view [OWNERSHIP.md S8, S23]
+```
+
+**The split, stated plainly.** Static where the class is known —
+which, after this change, is everywhere a source program can put a
+verb. Dynamic as the backstop: `checkGivable` in `runtime/heap.zig`
+still refuses a container-owned object, still verifies that the named
+binding owns what it hands over, and still traps `not_owned`.
+
+**`not_owned` is no longer reachable from source.** That was checked
+rather than assumed: `give` and `free` are its only two callers, both
+now require an `owned`, unpoisoned name; an `owned` binding is
+established by a `bind` whose object the runtime marks as that
+binding's; `yieldsOwnership` lets only fresh values, verbs, calls and
+`pop` establish one, and S21 refuses assigning a borrow into one; and
+ownership leaves a binding only through `give`, `free` or `return`,
+each of which poisons the name or ends the frame. The alias was the
+last way for an object to move out from under a live owner.
+
+The trap therefore survives as **defense, not as a language rule** —
+`06_mir/verify.zig` trusts instruction *types*, and a `.lc` is an
+executable, so a damaged or forged module can still present a give
+that names the wrong binding. It is proven there: on a module the
+front end did not produce (`specs/ownership_spec.zig`, "the runtime
+backstop still refuses a module stage 4 could not emit") and directly
+against the runtime's C ABI (`runtime/test.zig`).
 
 ---
 

@@ -51,6 +51,34 @@ fn expectRejected(source: []const u8) !void {
     try testing.expectEqualStrings("luce.sema.own", result.failure.at(0).?.code);
 }
 
+/// The same, plus the words and the place: the first diagnostic is
+/// `luce.sema.own`, says exactly `saying`, and underlines from
+/// `line`:`column`.
+///
+/// Used where the refusal itself is the ratified behavior rather than
+/// a consequence of it.  A code alone would go on passing with the
+/// message rewritten to name the wrong name, or the caret parked on
+/// the statement instead of the operand the reader has to change.
+fn expectSayingAt(
+    source: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+) !void {
+    var result = try luce.compile.compile(testing.allocator, source, script);
+    defer result.deinit();
+    if (result == .success) {
+        std.debug.print("expected an ownership error, but this compiled:\n{s}", .{source});
+        return error.TestUnexpectedResult;
+    }
+    const first = result.failure.at(0) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("luce.sema.own", first.code);
+    try testing.expectEqualStrings(saying, first.message);
+    const at = luce.source.place(source, first.span.start);
+    try testing.expectEqual(line, at.line);
+    try testing.expectEqual(column, at.column);
+}
+
 // ---------------------------------------------------------------------------
 // A. Creating and dropping (S1-S7)
 // ---------------------------------------------------------------------------
@@ -700,8 +728,34 @@ test "S23: one object cannot end up owned twice — static poisoning" {
     );
 }
 
-test "S23: the alias dodge is caught dynamically" {
-    try agreeTrap(
+// S23's alias dodge was a runtime trap until 2026-08-04 (docs/OWNERSHIP.md
+// S23).  An alias's class is settled in stage 4, so the four keep-verb
+// paths that could reach it are refused at the site instead, each one
+// pinned to the operand the reader has to change.
+
+test "S23: giving through an alias is refused at a call site" {
+    try expectSayingAt(
+        \\func take(xs: give List(Int)) -> Int:
+        \\    return len(xs)
+        \\
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let view = xs
+        \\    let n = take(give view)
+        \\
+    ,
+        "view aliases an object it does not own; give xs (the owner), or copy view [OWNERSHIP.md S8, S23]",
+        7,
+        18,
+    );
+}
+
+test "S23: giving through an alias is refused at a container store" {
+    // The owner is named when it is still an owner.  Here `item` was
+    // given away on the line before, so pointing at it would only earn
+    // the reader a second diagnostic — the refusal says an owner
+    // exists and stops there.
+    try expectSayingAt(
         \\func main():
         \\    var a = new List(List(Int))
         \\    var b = new List(List(Int))
@@ -710,7 +764,155 @@ test "S23: the alias dodge is caught dynamically" {
         \\    a.append(give item)
         \\    b.append(give alias)
         \\
-    , .not_owned);
+    ,
+        "alias aliases an object it does not own; give the owning name, or copy alias [OWNERSHIP.md S8, S23]",
+        7,
+        14,
+    );
+}
+
+test "S23: returning a give through an alias is refused" {
+    // `return view` is S16's refusal; `return give view` used to walk
+    // past it, because the verb lowered before the return looked at
+    // the name.
+    try expectSayingAt(
+        \\func make() -> List(Int):
+        \\    var xs = [1, 2]
+        \\    let view = xs
+        \\    return give view
+        \\
+        \\func main():
+        \\    var got = make()
+        \\
+    ,
+        "view aliases an object it does not own; give xs (the owner), or copy view [OWNERSHIP.md S8, S23]",
+        4,
+        12,
+    );
+}
+
+test "S23: freeing through an alias is refused" {
+    try expectSayingAt(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let view = xs
+        \\    free(view)
+        \\
+    ,
+        "view aliases an object it does not own; free the owning name [OWNERSHIP.md S6, S8]",
+        4,
+        5,
+    );
+}
+
+test "S23: a loop name owns nothing either" {
+    // The element view a `for` gives its name is an alias like any
+    // other, and this was the second way to reach the old trap.
+    try expectSayingAt(
+        \\func main():
+        \\    var rows = new List(List(Int))
+        \\    var sink = new List(List(Int))
+        \\    rows.append([1])
+        \\    for row in rows:
+        \\        sink.append(give row)
+        \\
+    ,
+        "row aliases an object it does not own; give the owning name, or copy row [OWNERSHIP.md S8, S23]",
+        6,
+        21,
+    );
+}
+
+test "S23: the owner itself still gives, everywhere" {
+    // The positive control for all five refusals above: every one of
+    // them is fixed by naming the owner, and the fix compiles and runs
+    // clean on both engines.
+    try agreeClean(
+        \\func take(xs: give List(Int)) -> Int:
+        \\    return len(xs)
+        \\
+        \\func make() -> List(Int):
+        \\    var fresh = [1, 2]
+        \\    return give fresh
+        \\
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let view = xs
+        \\    assert(len(view) == 2)
+        \\    assert(take(give xs) == 2)
+        \\    var a = new List(List(Int))
+        \\    var item = [2]
+        \\    a.append(give item)
+        \\    var moved = make()
+        \\    free(moved)
+        \\    var early = [3]
+        \\    free(early)
+        \\
+    );
+}
+
+test "S23: copy is the other fix, and it keeps both objects" {
+    try agreeClean(
+        \\func main():
+        \\    var a = new List(List(Int))
+        \\    var b = new List(List(Int))
+        \\    var item = [2]
+        \\    let alias = item
+        \\    a.append(copy alias)
+        \\    a.append(give item)
+        \\    b.append([9])
+        \\    assert(len(a) == 2 and len(b) == 1)
+        \\
+    );
+}
+
+test "S23: the runtime backstop still refuses a module stage 4 could not emit" {
+    // Nothing this compiler accepts can reach `not_owned` any more —
+    // every keep-verb path to it is a compile error above.  The check
+    // stays because `06_mir/verify.zig` trusts instruction *types*: a
+    // damaged or forged module can still name a binding that does not
+    // own what the give hands over, and a `.lc` is an executable.
+    //
+    // So the trap is proven where it now lives — on a module the
+    // front end did not produce.  One integer is changed: the second
+    // give's binding operand is made to name the first give's local,
+    // which is exactly the shape a rewritten module has.  Both engines
+    // read that operand by their own route, so they are still compared
+    // on it.
+    var compiled = try agree.program(
+        \\func main():
+        \\    var a = new List(List(Int))
+        \\    var first = [1]
+        \\    var second = [2]
+        \\    a.append(give first)
+        \\    a.append(give second)
+        \\
+    );
+    defer compiled.deinit();
+
+    const main_function = &compiled.functions[compiled.entry_function];
+    var owner_operand: ?mir.Register = null;
+    var seen: usize = 0;
+    for (main_function.instructions) |instruction| {
+        const call = switch (instruction) {
+            .intrinsic => |intrinsic| intrinsic,
+            else => continue,
+        };
+        if (call.kind != .give_object) continue;
+        seen += 1;
+        // The first give's binding operand is the one to copy; the
+        // second give's is the one to overwrite with it.
+        try testing.expectEqual(@as(usize, 2), call.arguments.len);
+        if (seen == 1) {
+            owner_operand = call.arguments[1];
+        } else if (seen == 2) {
+            const wrong = main_function.instructions[owner_operand.?].const_int;
+            main_function.instructions[call.arguments[1]] = .{ .const_int = wrong };
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), seen);
+
+    try agree.trapProgram(&compiled, budget, .not_owned);
 }
 
 // ---------------------------------------------------------------------------
@@ -1620,15 +1822,25 @@ test "audit: give in a borrow position has no owner to receive it" {
     );
 }
 
-test "audit: a stale owner cannot free what an alias gave away" {
-    try agreeTrap(
+test "audit: an alias never gets to make its owner stale" {
+    // The audit that found this wrote it as a trap on `free(xs)`: the
+    // alias had moved the object out from under the owner, and the
+    // owner's own release was the line that noticed.  Since S23 became
+    // static (2026-08-04) the program stops one line earlier, at the
+    // give that would have done the moving — so `xs` is never stale to
+    // begin with, and the release below it is sound by construction.
+    try expectSayingAt(
         \\func main():
         \\    var xs = [1, 2]
         \\    let a = xs
         \\    let s = give a
         \\    free(xs)
         \\
-    , .not_owned);
+    ,
+        "a aliases an object it does not own; give xs (the owner), or copy a [OWNERSHIP.md S8, S23]",
+        4,
+        13,
+    );
 }
 
 test "audit: reassigning the iterated name mid-loop is a compile error" {
