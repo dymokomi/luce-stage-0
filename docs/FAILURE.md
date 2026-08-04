@@ -295,7 +295,7 @@ every payload-carrying `!T` — even an 8-byte one — through memory.
 >
 > Three things did need a shape after all. **`raise_error` copies the
 > words**: an error unwinds *through* releases, which is the whole
-> difference from a trap, so `error("x: " + str(n))` hands over bytes a
+> difference from a trap, so `error("x: " + String(n))` hands over bytes a
 > statement temporary is about to give back. The copy is one line in
 > `Runtime.raise` and both engines reach it. **A fallible call's value
 > crosses a block boundary**, because the branch on its outcome ends

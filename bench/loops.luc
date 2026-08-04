@@ -7,4 +7,4 @@ func main():
     for i in range(0, n):
         for j in range(0, n):
             total += (i * j) % 7
-    print(str(total))
+    print(String(total))

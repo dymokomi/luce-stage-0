@@ -3,7 +3,7 @@
 //! Luce's semantics below the instruction level live here: the object
 //! heap and scope ownership (docs/OWNERSHIP.md), lists, maps, arrays,
 //! `Builder`, string storage and the small String primitive set,
-//! `str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
+//! `String`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 //! the trap channel they all report through.
 //!
 //! It exists as a library rather than a struct inside an engine

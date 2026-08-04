@@ -224,20 +224,20 @@ userland fix, not a language one.
 
 ### `bench/strings`
 
-400,000 iterations of `b.append("item-"); b.append(str(i));
+400,000 iterations of `b.append("item-"); b.append(String(i));
 b.append(";")`, then split / count / upper / replace over the ~4.69 MB
 result. Currently **1.73× C**.
 
-- 400,000 `str(i)` temporaries: each becomes one allocation and one
+- 400,000 `String(i)` temporaries: each becomes one allocation and one
   free instead of an unreclaimed bump. **~3.1 ms.**
 - Builder appends already copy into the Builder's own buffer
   (`containers.append`). Unchanged.
-- `let text = str(b)` — one extra 4.7 MB copy. **50 µs.**
+- `let text = b.build()` — one extra 4.7 MB copy. **50 µs.**
 - `text.split(";")` — 400,001 pieces, each an `s[at:word_end]` borrow
   appended into a `List(String)`. Every one becomes an owned
   allocation: **~3.1 ms**, plus 400,000 twelve-byte copies at 0.29 ns,
   which is 0.1 ms and beneath notice.
-- `upper` and `replace` return `str(out)` — one fresh buffer each,
+- `upper` and `replace` return `out.build()` — one fresh buffer each,
   moved out rather than copied.
 
 **Predicted: 57 ms → 63–70 ms, i.e. 1.73× C → 1.9–2.1× C**, the wide
@@ -252,11 +252,11 @@ Verified, not assumed. `matmul`, `arrays`, `stats`, `loops` and `math`
 each mention String exactly once, on the last line:
 
 ```
-matmul.luc:25:  print(str(Int(checksum)))
-arrays.luc:22:  print(str(Int(dot)))
-loops.luc:10:   print(str(total))
+matmul.luc:25:  print(String(Int(checksum)))
+arrays.luc:22:  print(String(Int(dot)))
+loops.luc:10:   print(String(total))
 stats.luc:25:   print(f"{Int(math.sum(a))} {low} {high} {Int(checksum)}")
-math.luc:23:    print(str(inside))
+math.luc:23:    print(String(inside))
 ```
 
 Zero String traffic inside any hot loop. `stats`'s f-string desugars to
@@ -289,7 +289,7 @@ libstdc++ and MSVC get 15 in 32). Without demoting the tag, `bits` plus
 `length` give a 15-byte threshold, which is libstdc++'s and Swift's.
 
 Either threshold covers what this corpus actually stores: split pieces
-(~11 bytes), `str(Int)` results (≤20), wordcount's English map keys
+(~11 bytes), `String(Int)` results (≤20), wordcount's English map keys
 (~5). **Take 22 if the tag demotion is clean; 15 is enough.** fbstring
 draws the same line at 23 in-situ
 (https://github.com/facebook/folly/blob/main/folly/docs/FBString.md).
@@ -525,7 +525,7 @@ Each piece is independently valuable and independently shippable.
 6. **Move-instead-of-copy for statically fresh stores.** `xs.append(a +
    b)` and `next.content = Editing.splice(…)` hand over the temporary's
    allocation instead of duplicating it. Removes one 40 KB copy per
-   keystroke and the `let text = str(b)` copy. Pure optimisation.
+   keystroke and the `let text = b.build()` copy. Pure optimisation.
    Shipped; see **What move-instead-of-copy shipped**.
 
 ## Refused, with reasons
@@ -596,7 +596,7 @@ different direction.
 with the container. One allocation per growth instead of per element,
 which would make `split` free. Refused because overwrite and remove
 cannot reclaim into a bump, so `for i in range(0, 1_000_000): m["k"] =
-str(i)` grows without bound. It trades a run-lifetime leak for a
+String(i)` grows without bound. It trades a run-lifetime leak for a
 container-lifetime leak, which is smaller and still a leak.
 
 **Interning.** Deduplicates and never frees. It is the current arena
@@ -687,10 +687,10 @@ it is +15, three orders of magnitude inside a frame either way.
 
 **The parity benchmarks are untouched**, exactly as predicted — five
 rows inside 1%. `strings` is the whole cost, and it is allocation:
-400,000 `str(i)` results and 400,001 split pieces that used to be
+400,000 `String(i)` results and 400,001 split pieces that used to be
 unreclaimed bump allocations and views are now 800,000
 allocate-and-free pairs. The average piece is 11.7 bytes and every
-`str(i)` is at most 7, so **small-string optimisation removes
+`String(i)` is at most 7, so **small-string optimisation removes
 essentially all of it**, which is why step 5 is next.
 
 **The mutation-during-statement rule fires on zero lines** of
@@ -733,7 +733,7 @@ Five things the memo did not have quite right, all found by running it:
    was. `dead.zig` keeps a `local_set` into an owning slot for the
    matching reason: the sweep reads that slot, and no block mentions it.
 
-4. **`str` always allocates.** `str(s)` of a String and `str(b)` of a
+4. **`str` always allocates.** `String(s)` of a String and `b.build()` of a
    Bool used to answer a view and a static. A producer that sometimes
    allocates and sometimes borrows cannot be told apart at its use
    site, and the whole rule turns on being able to.
@@ -816,11 +816,11 @@ is, and it is not allocation:
 
 | phase | pre-copy-on-store | head |
 |---|---|---|
-| build 400,000 pieces with a Builder, `str(b)` | 18ms | **18ms** |
+| build 400,000 pieces with a Builder, `b.build()` | 18ms | **18ms** |
 | + `split(";")` and sum the pieces | 27ms | 30ms |
 | + `count`, `upper`, `replace` | 46ms | 51ms |
 
-The build phase — 400,000 `str(i)` results, which is where 400,000 of
+The build phase — 400,000 `String(i)` results, which is where 400,000 of
 the 800,000 allocations were — is **recovered exactly**, to the
 millisecond. What remains is in `split` and the fold, and it is the
 *copying* copy-on-store introduced: `pieces.append(s[run:at])` used to
@@ -920,7 +920,7 @@ Five things the SSO section did not have quite right.
    compiled path slices in registers, since its source is already a
    `{ptr, i64}` — and the boundary tests are what say they agree.
 
-Two smaller ones. `str(Int)` and `chr` now *never* allocate: twenty
+Two smaller ones. `String(Int)` and `chr` now *never* allocate: twenty
 digits and a sign is the longest an `i64` gets and a codepoint is four
 bytes, so both always fit. And `Value.asString` takes a pointer
 receiver, which is not decoration — it is the compiler refusing to let
@@ -1068,7 +1068,7 @@ unaccounted for.
 
 So `strings` moved 3.3%, not the several points the memo implied, and
 what step 6 actually removed there is the four multi-megabyte copies
-`let text = str(b)`, `return str(out)` inside `upper` and `replace`,
+`let text = b.build()`, `return out.build()` inside `upper` and `replace`,
 and the two bindings that receive them. **The editor's 25% is the real
 result**, and it is the one the memo predicted for the right reason.
 

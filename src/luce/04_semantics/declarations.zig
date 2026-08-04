@@ -26,6 +26,10 @@ const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 const diagnostics_mod = @import("../support/diagnostics.zig");
+// The folder answers what a run would answer, so where a judgment has
+// one implementation in `libluce_rt` the folder calls it rather than
+// keeping a second copy that could drift (docs/NUMERICS.md §5).
+const operators = @import("../runtime/operators.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
@@ -1065,7 +1069,10 @@ pub const Analyzer = struct {
             },
             .binary => |binary| return self.foldBinary(module, binary),
             .call => |call| {
-                if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+                if (std.mem.eql(u8, call.callee, "Int") or
+                    std.mem.eql(u8, call.callee, "Float") or
+                    std.mem.eql(u8, call.callee, "String"))
+                {
                     if (call.arguments.len != 1 or call.arguments[0].name != null) {
                         return self.constantError(call.span, "{s}(value) takes one argument", .{call.callee});
                     }
@@ -1122,18 +1129,43 @@ pub const Analyzer = struct {
     }
 
     fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
+        if (std.mem.eql(u8, call.callee, "String")) {
+            // The same text a run would print, spelled by the same
+            // rules — but from a constant, so it is arena-owned here
+            // rather than made by the runtime.
+            // `{d}` on both, which is exactly what `runtime/text.zig`
+            // writes: a Float's text is Zig's Ryū-derived shortest
+            // representation that round-trips, and a folded constant
+            // has to be the same bytes a run would produce.
+            const printed: []const u8 = switch (operand.value) {
+                .int => |held| try std.fmt.allocPrint(self.arena, "{d}", .{held}),
+                .float => |held| try std.fmt.allocPrint(self.arena, "{d}", .{held}),
+                .boolean => |held| if (held) "true" else "false",
+                .string => |held| held,
+                else => return self.constantError(call.span, "String() converts Int, Float, Bool, or String", .{}),
+            };
+            return .{ .value = .{ .string = printed }, .value_type = .string };
+        }
         const to_int = std.mem.eql(u8, call.callee, "Int");
         if (to_int) {
             switch (operand.value) {
                 .int => return operand,
                 .float => |value| {
-                    if (std.math.isNan(value) or
-                        value < -9223372036854775808.0 or
-                        value >= 9223372036854775808.0)
+                    // The same guard as `runtime/operators.zig` and
+                    // `08_llvm/lower.zig`, value for value: a
+                    // conversion that disagrees at the boundary is a
+                    // different language.  And the same rounding —
+                    // half away from zero (docs/NUMERICS.md §7),
+                    // through the runtime's own function so there is
+                    // one of it.
+                    const rounded = operators.roundHalfAway(value);
+                    if (std.math.isNan(rounded) or
+                        rounded < -9223372036854775808.0 or
+                        rounded >= 9223372036854775808.0)
                     {
                         return self.constantError(call.span, "constant conversion out of range", .{});
                     }
-                    return .{ .value = .{ .int = @intFromFloat(@trunc(value)) }, .value_type = .int };
+                    return .{ .value = .{ .int = @intFromFloat(rounded) }, .value_type = .int };
                 },
                 else => return self.constantError(call.span, "Int() converts Float", .{}),
             }
@@ -1210,16 +1242,60 @@ pub const Analyzer = struct {
         if (binary.op == .catch_error) {
             return self.constantError(binary.span, "catch has nothing to do in a constant: nothing is called there", .{});
         }
-        const left = (try self.foldConstant(module, binary.left)) orelse return null;
+        var left = (try self.foldConstant(module, binary.left)) orelse return null;
         // Short-circuit folds without evaluating the other side's
         // side effects — there are none, so plain evaluation is fine.
-        const right = (try self.foldConstant(module, binary.right)) orelse return null;
+        var right = (try self.foldConstant(module, binary.right)) orelse return null;
+
+        // Numbers that mix, folded (docs/NUMERICS.md).  A constant has
+        // to reach the same answer a run would, so arithmetic widens
+        // the Int here too and comparison stays exact — the comparison
+        // calls the runtime's own function rather than a second copy
+        // of it, because two implementations of one judgment is how
+        // they come to disagree.
+        if ((left.value_type == .int and right.value_type == .float) or
+            (left.value_type == .float and right.value_type == .int))
+        {
+            if (helpers.comparisonOf(binary.op)) |written| {
+                const int_first = left.value_type == .int;
+                return .{
+                    .value = .{ .boolean = operators.compareIntFloat(
+                        if (int_first) written else written.mirrored(),
+                        if (int_first) left.value.int else right.value.int,
+                        if (int_first) right.value.float else left.value.float,
+                    ) },
+                    .value_type = .boolean,
+                };
+            }
+            // The widened number is computed *before* the assignment,
+            // because the struct literal writes into `left` field by
+            // field: reading `left.value.int` inside it would read a
+            // union whose active field the same expression had just
+            // changed.
+            if (left.value_type == .int) {
+                const widened: f64 = @floatFromInt(left.value.int);
+                left = .{ .value = .{ .float = widened }, .value_type = .float };
+            } else {
+                const widened: f64 = @floatFromInt(right.value.int);
+                right = .{ .value = .{ .float = widened }, .value_type = .float };
+            }
+        }
+
+        // `/` is real division and answers a Float whatever it
+        // divides, so two Int constants widen here too — and `1 / 0`
+        // folds to `inf` rather than refusing (docs/NUMERICS.md §2).
+        if (binary.op == .divide and left.value_type == .int and right.value_type == .int) {
+            const numerator: f64 = @floatFromInt(left.value.int);
+            const denominator: f64 = @floatFromInt(right.value.int);
+            left = .{ .value = .{ .float = numerator }, .value_type = .float };
+            right = .{ .value = .{ .float = denominator }, .value_type = .float };
+        }
+
         if (!left.value_type.eql(right.value_type)) {
             return self.constantError(binary.span, mismatched_operands_message, .{
                 context.operatorText(binary.op),
                 try self.typeName(left.value_type),
                 try self.typeName(right.value_type),
-                context.conversionAdvice(left.value_type, right.value_type),
             });
         }
         switch (binary.op) {
@@ -1231,7 +1307,7 @@ pub const Analyzer = struct {
                     left.value.boolean or right.value.boolean;
                 return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
             },
-            .add, .subtract, .multiply, .divide, .remainder => switch (left.value) {
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => switch (left.value) {
                 .int => |a| {
                     const b = right.value.int;
                     const folded: i64 = switch (binary.op) {
@@ -1250,19 +1326,26 @@ pub const Analyzer = struct {
                             if (result[1] != 0) return self.constantError(binary.span, "constant arithmetic overflows", .{});
                             break :blk result[0];
                         },
-                        .divide => blk: {
+                        // `/` widened both sides before this switch,
+                        // so an integer one cannot arrive here
+                        // (docs/NUMERICS.md §2).
+                        .divide => unreachable,
+                        // `//` and `%` floor together
+                        // (docs/NUMERICS.md §3); the folder answers
+                        // what a run answers.
+                        .floor_divide => blk: {
                             if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
                             if (a == std.math.minInt(i64) and b == -1) {
                                 return self.constantError(binary.span, "constant arithmetic overflows", .{});
                             }
-                            break :blk @divTrunc(a, b);
+                            break :blk @divFloor(a, b);
                         },
-                        .remainder => blk: {
+                        .modulo => blk: {
                             if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
                             if (a == std.math.minInt(i64) and b == -1) {
                                 return self.constantError(binary.span, "constant arithmetic overflows", .{});
                             }
-                            break :blk @rem(a, b);
+                            break :blk @mod(a, b);
                         },
                         else => unreachable,
                     };
@@ -1275,7 +1358,8 @@ pub const Analyzer = struct {
                         .subtract => a - b,
                         .multiply => a * b,
                         .divide => a / b,
-                        .remainder => @rem(a, b),
+                        .floor_divide => @floor(a / b),
+                        .modulo => @mod(a, b),
                         else => unreachable,
                     };
                     return .{ .value = .{ .float = folded }, .value_type = .float };

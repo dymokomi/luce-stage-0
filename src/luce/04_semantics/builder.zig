@@ -82,12 +82,12 @@ pub const builtins = [_]Builtin{
     .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
     .{ .name = "floor", .kind = .floor, .arity = 1 },
     .{ .name = "ceil", .kind = .ceil, .arity = 1 },
+    .{ .name = "trunc", .kind = .trunc, .arity = 1 },
     .{ .name = "len", .kind = .len, .arity = 1 },
     .{ .name = "assert", .kind = .assert_true, .arity = 1 },
     .{ .name = "trap", .kind = .trap_message, .arity = 1 },
     .{ .name = "error", .kind = .raise_error, .arity = 1, .pure = false },
     .{ .name = "free", .kind = .free_object, .arity = 1, .pure = false },
-    .{ .name = "str", .kind = .str_value, .arity = 1 },
     .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
     .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
     .{ .name = "chr", .kind = .chr_code, .arity = 1 },
@@ -172,6 +172,18 @@ pub const FunctionBuilder = struct {
     /// permission reaches the call they are written in front of and
     /// nothing nested inside it (docs/FAILURE.md).
     allow_fallible: bool = false,
+    /// The element type the next list literal should be built at, when
+    /// the place it is going into names one — `let xs: List(Float) =
+    /// [1, 2, 3]` (docs/NUMERICS.md).  A literal has no annotation of
+    /// its own, so without this the elements infer `Int` and the whole
+    /// list refuses to fit a `List(Float)` it could have been.
+    ///
+    /// Set for exactly one hop, the way `allow_fallible` is:
+    /// `lowerExpressionInner` reads and clears it, so it reaches the
+    /// literal it was raised in front of and nothing nested inside it.
+    /// Inference where nothing is expected is untouched — `let xs =
+    /// [1, 2, 3]` is still a `List(Int)`.
+    wanted_element: ?Type = null,
     /// What a fallible call left for the `try` or `catch` in front of
     /// it to finish.  Set by `openFallible` and consumed once.
     opened: ?Opened = null,
@@ -907,7 +919,7 @@ pub const FunctionBuilder = struct {
     /// That means a call to a declaration or any method — a method's
     /// receiver is the container in `xs.remove(0)`.  Every builtin but
     /// `free` moves no ownership at all (`07_optimize/effects.zig`
-    /// answers the same question about instructions), so `str(i)` and
+    /// answers the same question about instructions), so `String(i)` and
     /// `len(xs)` beside a container read cost nothing.
     fn mayMutateContainers(expression: *const ast.Expression) bool {
         return switch (expression.*) {
@@ -1273,16 +1285,24 @@ pub const FunctionBuilder = struct {
         return true;
     }
 
-    /// Make an already-lowered value fit `expected`, applying the one
-    /// widening the language has: `T` into `T?` (S43 — the widened
-    /// value owns exactly what it owned before).  Null means it does
-    /// not fit and the caller reports.
+    /// Make an already-lowered value fit `expected`, applying the two
+    /// widenings the language has: `Int` into `Float`
+    /// (docs/NUMERICS.md) and `T` into `T?` (S43 — the widened value
+    /// owns exactly what it owned before).  Null means it does not fit
+    /// and the caller reports.
+    ///
+    /// **This is the one place promotion happens**, which is why every
+    /// site that already called it — annotation, argument, return,
+    /// element, field — gets promotion consistently and none of them
+    /// had to learn about it.  The two widenings compose in the one
+    /// order that makes sense: `let x: Float? = 1` widens, then wraps.
     fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
+        if (expected == .float and value.value_type == .int) return try self.promote(value);
         const payload = expected.held() orelse return null;
-        if (!payload.eql(value.value_type)) return null;
+        const inner = (try self.fit(value, payload)) orelse return null;
         const arguments = try self.arena().alloc(Register, 1);
-        arguments[0] = value.register;
+        arguments[0] = inner.register;
         return .{
             .register = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
@@ -1290,6 +1310,45 @@ pub const FunctionBuilder = struct {
             ),
             .value_type = expected,
         };
+    }
+
+    /// Widen an `Int` to a `Float`: the language's one numeric
+    /// conversion that is not spelled (docs/NUMERICS.md).  One
+    /// direction, and never the reverse — implicit narrowing is what
+    /// would make float contagion silent, and Luce does not have it.
+    ///
+    /// A promoted *literal* costs nothing: `sitofp` of a constant is
+    /// folded before any machine code exists.  A promoted variable
+    /// costs one instruction.
+    fn promote(self: *FunctionBuilder, value: Typed) Error!Typed {
+        return .{
+            .register = try self.code.emit(
+                .{ .convert = .{ .kind = .int_to_float, .operand = value.register } },
+                .float,
+            ),
+            .value_type = .float,
+        };
+    }
+
+    /// The element type a `List(T)` place names, for the literal about
+    /// to be lowered into it; null for every place that is not one.
+    fn elementOf(self: *FunctionBuilder, expected: Type) ?Type {
+        const descriptor = self.analyzer.heapOf(expected) orelse return null;
+        return if (descriptor == .list) descriptor.list else null;
+    }
+
+    /// Bring two numeric operands to one type, when one of them is an
+    /// `Int` and the other a `Float`.  True when it did something.
+    fn unifyNumeric(self: *FunctionBuilder, left: *Typed, right: *Typed) Error!bool {
+        if (left.value_type == .int and right.value_type == .float) {
+            left.* = try self.promote(left.*);
+            return true;
+        }
+        if (left.value_type == .float and right.value_type == .int) {
+            right.* = try self.promote(right.*);
+            return true;
+        }
+        return false;
     }
 
     /// A value that reached its place, and whether it got there by the
@@ -1327,6 +1386,7 @@ pub const FunctionBuilder = struct {
                 .present = false,
             };
         }
+        self.wanted_element = self.elementOf(expected);
         const value = (try self.lowerExpression(expression, false)) orelse return null;
         const fitted = (try self.fit(value, expected)) orelse {
             try self.fail("luce.sema.type", span, "{s} is {s} but the value is {s}{s}", .{
@@ -1628,32 +1688,22 @@ pub const FunctionBuilder = struct {
                 value = ((try self.lowerTyped(value_expression, expected, span, name)) orelse
                     return self.forgetName(name)).value;
             } else {
+                self.wanted_element = self.elementOf(expected);
                 const initializer = (try self.lowerExpression(value_expression, false)) orelse
                     return self.forgetName(name);
                 value = (try self.fit(initializer, expected)) orelse {
-                    // The conversion is only spelled when it exists:
-                    // `let s: String = 1` used to answer "conversions
-                    // are explicit: String(...)", sending the reader
-                    // after a builtin there is no such thing as.  Here
-                    // the direction is known, so the one that applies
-                    // is named rather than both.
-                    const advice = if (context.convertsBetween(expected, initializer.value_type))
-                        try std.fmt.allocPrint(
-                            self.arena(),
-                            "; conversions are explicit, so write {s}(...)",
-                            .{try self.analyzer.typeName(expected)},
-                        )
-                    else
-                        ", and there is no conversion between them";
+                    // `let f: Float = 1` used to arrive here and be
+                    // told to write `Float(...)`; it widens on its own
+                    // now (docs/NUMERICS.md), so everything that still
+                    // reaches this line has no conversion to offer.
                     try self.fail(
                         "luce.sema.type",
                         span,
-                        "{s} declared {s} but initialized with {s}{s}{s}",
+                        "{s} declared {s} but initialized with {s}, and there is no conversion between them{s}",
                         .{
                             name,
                             try self.analyzer.typeName(expected),
                             try self.analyzer.typeName(initializer.value_type),
-                            advice,
                             try self.absenceAdvice(initializer.value_type, value_expression),
                         },
                     );
@@ -1850,16 +1900,22 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.own", chain.span, "a nested place assigns a value; replace the whole object slot with the single-level form [OWNERSHIP.md S21, S25]", .{});
             return;
         }
-        if (!value.value_type.eql(current_type)) {
+        // The value was lowered before the chain named a type for it,
+        // so a Float place takes its Int here (docs/NUMERICS.md).
+        var placed = value;
+        if (current_type == .float and placed.value_type == .int) {
+            placed = try self.promote(placed);
+        }
+        if (!placed.value_type.eql(current_type)) {
             try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
                 try self.analyzer.typeName(current_type),
-                try self.analyzer.typeName(value.value_type),
+                try self.analyzer.typeName(placed.value_type),
             });
             return;
         }
-        var new_value = value.register;
+        var new_value = placed.register;
         if (assign.compound) |op| {
-            new_value = (try self.compoundCombine(op, current, current_type, value, assign.span)) orelse return;
+            new_value = (try self.compoundCombine(op, current, current_type, placed, assign.span)) orelse return;
         }
 
         // The leaf is a store into whatever the chain descended to, so
@@ -1892,6 +1948,20 @@ pub const FunctionBuilder = struct {
             });
             return null;
         }
+        // `/` answers a Float whatever it divides (docs/NUMERICS.md
+        // §2), so `n /= 2` on an Int place is a narrowing nobody
+        // wrote.  It is a compile error rather than a silent
+        // truncation, which is this design's whole safety story in
+        // one line — and the fix is one character.
+        if (op == .divide and place_type == .int) {
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "/ answers a Float and this place is Int; write '//=' for the integer quotient",
+                .{},
+            );
+            return null;
+        }
         const string_concat = op == .add and place_type == .string;
         if (!place_type.isNumeric() and !string_concat) {
             try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String){s}", .{
@@ -1905,7 +1975,8 @@ pub const FunctionBuilder = struct {
             .subtract => .subtract,
             .multiply => .multiply,
             .divide => .divide,
-            .remainder => .remainder,
+            .floor_divide => .floor_divide,
+            .modulo => .modulo,
             else => unreachable, // the parser only builds these five
         };
         const combined = try self.code.emit(.{ .binary = .{
@@ -2139,8 +2210,13 @@ pub const FunctionBuilder = struct {
 
         const object = values[0];
         const indices = values[1 .. values.len - 1];
-        const value = values[values.len - 1];
+        const value = &values[values.len - 1];
         const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
+        // The value was lowered before the container named a type for
+        // it, so a Float element takes its Int here (docs/NUMERICS.md).
+        if (element_type == .float and value.value_type == .int) {
+            value.* = try self.promote(value.*);
+        }
         // Containers own their object elements: storing one takes a
         // fresh value, a give, or a copy (S20, S21).
         if (self.analyzer.carriesObjects(element_type) and
@@ -2172,7 +2248,7 @@ pub const FunctionBuilder = struct {
                 .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
                 element_type,
             );
-            store = (try self.compoundCombine(op, current, element_type, value, assign.span)) orelse return;
+            store = (try self.compoundCombine(op, current, element_type, value.*, assign.span)) orelse return;
         }
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |lowered, *slot| slot.* = lowered.register;
@@ -2244,7 +2320,7 @@ pub const FunctionBuilder = struct {
                 return pair.value;
             },
             .builder => {
-                try self.fail("luce.sema.index", span, "Builder has no index; str(b) reads it", .{});
+                try self.fail("luce.sema.index", span, "Builder has no index; b.build() reads it", .{});
                 return null;
             },
         }
@@ -2707,6 +2783,8 @@ pub const FunctionBuilder = struct {
         // here, before anything nested can see it.
         const fallible_allowed = self.allow_fallible;
         self.allow_fallible = false;
+        const wanted_element = self.wanted_element;
+        self.wanted_element = null;
         switch (expression.*) {
             .int_literal => |literal| {
                 const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
@@ -2784,7 +2862,7 @@ pub const FunctionBuilder = struct {
             .unary => |unary| return self.lowerUnary(unary),
             .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed),
             .new_object => |new| return self.lowerNew(new),
-            .list_literal => |literal| return self.lowerListLiteral(literal),
+            .list_literal => |literal| return self.lowerListLiteral(literal, wanted_element),
             .index => |index| return self.lowerIndex(index),
             .slice_range => |slice| return self.lowerSliceRange(slice),
             .give => |give| return self.lowerGive(give),
@@ -3216,7 +3294,10 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral) Error!?Typed {
+    /// `[a, b, c]`.  `wanted` is the element type the place this
+    /// literal is going into names, when it names one; without it the
+    /// first element decides, exactly as it always has.
+    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted: ?Type) Error!?Typed {
         if (literal.elements.len == 0) {
             try self.fail(
                 "luce.sema.type",
@@ -3227,10 +3308,26 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const elements = (try self.lowerOperands(literal.elements)) orelse return null;
-        for (elements, literal.elements) |element, expression| {
-            if (!element.value_type.eql(elements[0].value_type)) {
+        const element_type = wanted orelse unified: {
+            // One Float among numbers makes them all Floats, wherever
+            // in the literal it stands: `[1, 2.5]` and `[2.5, 1]` are
+            // the same list, as `1 + 2.5` and `2.5 + 1` are the same
+            // sum (docs/NUMERICS.md).
+            for (elements) |element| {
+                if (element.value_type == .float) break :unified .float;
+            }
+            break :unified elements[0].value_type;
+        };
+        for (elements, literal.elements) |*element, expression| {
+            // A `List(Float)` takes Int elements by widening them, and
+            // so does a list whose first element made it Float
+            // (docs/NUMERICS.md): `[1.5, 2]` is a `List(Float)`.
+            if (element_type == .float and element.value_type == .int) {
+                element.* = try self.promote(element.*);
+            }
+            if (!element.value_type.eql(element_type)) {
                 try self.fail("luce.sema.type", expression.span(), "list elements are all {s}, got {s}", .{
-                    try self.analyzer.typeName(elements[0].value_type),
+                    try self.analyzer.typeName(element_type),
                     try self.analyzer.typeName(element.value_type),
                 });
                 return null;
@@ -3249,7 +3346,7 @@ pub const FunctionBuilder = struct {
                 return null;
             }
         }
-        const object_type = try self.analyzer.internHeapType(.{ .list = elements[0].value_type });
+        const object_type = try self.analyzer.internHeapType(.{ .list = element_type });
         const list = try self.code.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = &.{} } }, object_type);
         for (elements) |element| {
             const arguments = try self.arena().alloc(Register, 2);
@@ -3402,28 +3499,16 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const sides = (try self.lowerOperands(&.{ binary.left, binary.right })) orelse return null;
-        const left = sides[0];
-        const right = sides[1];
-        if (!left.value_type.eql(right.value_type)) {
-            const absent = if (left.value_type == .optional) left else right;
-            const written = if (left.value_type == .optional) binary.left else binary.right;
-            try self.fail("luce.sema.type", binary.span, context.mismatched_operands_message ++ "{s}", .{
-                context.operatorText(binary.op),
-                try self.analyzer.typeName(left.value_type),
-                try self.analyzer.typeName(right.value_type),
-                context.conversionAdvice(left.value_type, right.value_type),
-                try self.absenceAdvice(absent.value_type, written),
-            });
-            return null;
-        }
-        const operand_type = left.value_type;
+        var left = sides[0];
+        var right = sides[1];
 
         const operation: mir.BinaryOp = switch (binary.op) {
             .add => .add,
             .subtract => .subtract,
             .multiply => .multiply,
             .divide => .divide,
-            .remainder => .remainder,
+            .floor_divide => .floor_divide,
+            .modulo => .modulo,
             .equal => .equal,
             .not_equal => .not_equal,
             .less => .less,
@@ -3433,6 +3518,40 @@ pub const FunctionBuilder = struct {
             .logic_and, .logic_or, .coalesce, .catch_error => unreachable, // answered above
         };
 
+        // Numbers that mix (docs/NUMERICS.md).  Arithmetic widens the
+        // Int and answers a Float; comparison does **not** widen —
+        // it is exact, and leaves through its own instruction.
+        if ((left.value_type == .int and right.value_type == .float) or
+            (left.value_type == .float and right.value_type == .int))
+        {
+            if (operation.isComparison()) {
+                return self.lowerExactCompare(operation, left, right);
+            }
+            _ = try self.unifyNumeric(&left, &right);
+        }
+
+        // `/` is **real division** and always answers a Float, so two
+        // Ints widen here too and there is no integer `/` left in the
+        // IR (docs/NUMERICS.md §2).  `1 / 2` is `0.5`; the quotient
+        // that answers `0` is `1 // 2`.
+        if (operation == .divide and left.value_type == .int and right.value_type == .int) {
+            left = try self.promote(left);
+            right = try self.promote(right);
+        }
+
+        if (!left.value_type.eql(right.value_type)) {
+            const absent = if (left.value_type == .optional) left else right;
+            const written = if (left.value_type == .optional) binary.left else binary.right;
+            try self.fail("luce.sema.type", binary.span, context.mismatched_operands_message ++ "{s}", .{
+                context.operatorText(binary.op),
+                try self.analyzer.typeName(left.value_type),
+                try self.analyzer.typeName(right.value_type),
+                try self.absenceAdvice(absent.value_type, written),
+            });
+            return null;
+        }
+        const operand_type = left.value_type;
+
         // An operator wants a value, and a `T?` may not be one.  Said
         // here rather than left to "does not support this operator",
         // because the fix is narrowing and the reader needs told.
@@ -3440,7 +3559,7 @@ pub const FunctionBuilder = struct {
         if (try self.refusesAbsence(right, "this operator", binary.span, binary.right)) return null;
 
         const arithmetic = switch (operation) {
-            .add, .subtract, .multiply, .divide, .remainder => true,
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => true,
             else => false,
         };
         if (arithmetic) {
@@ -3482,6 +3601,35 @@ pub const FunctionBuilder = struct {
                 .left = left.register,
                 .right = right.register,
             } }, .boolean),
+            .value_type = .boolean,
+        };
+    }
+
+    /// `1 < 1.5`, `9007199254740993 == 9007199254740992.0`: a
+    /// comparison whose sides are an `Int` and a `Float` compares the
+    /// numbers and not a conversion of them (docs/NUMERICS.md §5).
+    ///
+    /// The runtime answers one shape — Int first — so an operator
+    /// written the other way round is **mirrored** rather than given a
+    /// second implementation.  Only the ordering operators have a
+    /// mirror image; equality is its own.
+    fn lowerExactCompare(
+        self: *FunctionBuilder,
+        operation: mir.BinaryOp,
+        left: Typed,
+        right: Typed,
+    ) Error!?Typed {
+        const int_first = left.value_type == .int;
+        const spelled = if (int_first) operation else operation.mirrored();
+        const arguments = try self.arena().alloc(Register, 3);
+        arguments[0] = try self.code.emit(.{ .const_int = @intFromEnum(spelled) }, .int);
+        arguments[1] = if (int_first) left.register else right.register;
+        arguments[2] = if (int_first) right.register else left.register;
+        return .{
+            .register = try self.code.emit(
+                .{ .intrinsic = .{ .kind = .compare_int_float, .arguments = arguments } },
+                .boolean,
+            ),
             .value_type = .boolean,
         };
     }
@@ -3691,7 +3839,10 @@ pub const FunctionBuilder = struct {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
-            if (std.mem.eql(u8, call.callee, "Int") or std.mem.eql(u8, call.callee, "Float")) {
+            if (std.mem.eql(u8, call.callee, "Int") or
+                std.mem.eql(u8, call.callee, "Float") or
+                std.mem.eql(u8, call.callee, "String"))
+            {
                 return self.lowerConvert(call);
             }
             switch (try self.lowerIntrinsic(call, as_statement, fallible_allowed)) {
@@ -4077,10 +4228,15 @@ pub const FunctionBuilder = struct {
     ///
     /// False after reporting.  `wanted` is positional and its length
     /// is the arity.
+    /// Check a method's arguments against the types it takes, and
+    /// widen the ones that reach them by widening — an `Int` handed to
+    /// a `List(Float)`'s `append` is a `Float` (docs/NUMERICS.md).
+    /// The arguments are rewritten in place, because the registers the
+    /// caller goes on to pass are these.
     fn methodTakes(
         self: *FunctionBuilder,
         method: ast.Method,
-        arguments: []const Typed,
+        arguments: []Typed,
         wanted: []const Type,
     ) Error!bool {
         if (arguments.len != wanted.len) {
@@ -4092,7 +4248,10 @@ pub const FunctionBuilder = struct {
             });
             return false;
         }
-        for (arguments, wanted, 0..) |argument, want, index| {
+        for (arguments, wanted, 0..) |*argument, want, index| {
+            if (want == .float and argument.value_type == .int) {
+                argument.* = try self.promote(argument.*);
+            }
             if (argument.value_type.eql(want)) continue;
             try self.fail(
                 "luce.sema.type",
@@ -4243,7 +4402,7 @@ pub const FunctionBuilder = struct {
     };
     pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
     pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
-    pub const builder_methods = [_][]const u8{ "append", "append_ascii", "clear" };
+    pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
 
     /// `descriptor` is the receiver's *shape*, which is everything the
     /// dispatch below turns on: a `List(Int)` and a `List(String)`
@@ -4256,7 +4415,7 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         method: ast.Method,
         descriptor: types.HeapType,
-        arguments: []const Typed,
+        arguments: []Typed,
     ) Error!?MethodFound {
         const name = method.name;
         switch (descriptor) {
@@ -4322,6 +4481,15 @@ pub const FunctionBuilder = struct {
                 return null;
             },
             .builder => {
+                // The method a Builder should always have had.  Its
+                // text used to come out through `b.build()`, which made
+                // the one free builtin that took a heap object — and
+                // is why `str` could not simply be renamed
+                // `String` (docs/NUMERICS.md §7).
+                if (std.mem.eql(u8, name, "build")) {
+                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    return .{ .kind = .str_value, .result = .string };
+                }
                 if (std.mem.eql(u8, name, "append")) {
                     if (!try self.methodTakes(method, arguments, &.{.string})) return null;
                     return .{ .kind = .append_value, .result = .none };
@@ -4339,7 +4507,7 @@ pub const FunctionBuilder = struct {
                 if (suggestion.best()) |closest| {
                     try self.fail("luce.sema.method", method.span, "Builder has no method {s}; did you mean {s}?", .{ name, closest });
                 } else {
-                    try self.fail("luce.sema.method", method.span, "Builder has no method {s} (append append_ascii clear)", .{name});
+                    try self.fail("luce.sema.method", method.span, "Builder has no method {s} (append append_ascii build clear)", .{name});
                 }
                 return null;
             },
@@ -4353,7 +4521,7 @@ pub const FunctionBuilder = struct {
         method: ast.Method,
         element: Type,
         growable: bool,
-        arguments: []const Typed,
+        arguments: []Typed,
     ) Error!?MethodFound {
         const name = method.name;
         if (growable) {
@@ -4511,37 +4679,85 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// `Int(x)`, `Float(x)`, `String(x)` — the three conversion
+    /// constructors, each named for the type it produces
+    /// (docs/NUMERICS.md §7).  They are matched by name here, before
+    /// name resolution, which is why they are not in the builtin
+    /// table and why `String` is a reserved name.
+    ///
+    /// `String(x)` takes the scalars and nothing else: a `Builder` is
+    /// a heap object and its text comes out through `b.build()`, which
+    /// is the method it should always have had.
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
         if (call.arguments.len != 1 or call.arguments[0].name != null) {
             try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
             return null;
         }
         const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
+        if (std.mem.eql(u8, call.callee, "String")) {
+            switch (value.value_type) {
+                .string => return value,
+                .int, .float, .boolean => {},
+                .heap => {
+                    const descriptor = self.analyzer.heapOf(value.value_type).?;
+                    if (descriptor == .builder) {
+                        try self.fail(
+                            "luce.sema.convert",
+                            call.span,
+                            "String() converts a scalar; a Builder hands over its text with .build()",
+                            .{},
+                        );
+                        return null;
+                    }
+                    return self.failConvert(call, value);
+                },
+                else => return self.failConvert(call, value),
+            }
+            const arguments = try self.arena().alloc(Register, 1);
+            arguments[0] = value.register;
+            const made = try self.code.emit(
+                .{ .intrinsic = .{ .kind = .str_value, .arguments = arguments } },
+                .string,
+            );
+            // Fresh bytes nothing parked: the statement's end reclaims
+            // them unless a place adopts them (docs/STRINGS.md).
+            const answer: Typed = .{ .register = made, .value_type = .string };
+            try self.parkFreshStorage(answer);
+            return answer;
+        }
         const to_int = std.mem.eql(u8, call.callee, "Int");
         if (to_int) {
             if (value.value_type == .int) return value;
-            if (value.value_type != .float) {
-                try self.fail("luce.sema.convert", call.span, "Int() converts Float, not {s}", .{
-                    try self.analyzer.typeName(value.value_type),
-                });
-                return null;
-            }
+            if (value.value_type != .float) return self.failConvert(call, value);
             return .{
                 .register = try self.code.emit(.{ .convert = .{ .kind = .float_to_int, .operand = value.register } }, .int),
                 .value_type = .int,
             };
         }
         if (value.value_type == .float) return value;
-        if (value.value_type != .int) {
-            try self.fail("luce.sema.convert", call.span, "Float() converts Int, not {s}", .{
-                try self.analyzer.typeName(value.value_type),
-            });
-            return null;
-        }
+        if (value.value_type != .int) return self.failConvert(call, value);
         return .{
             .register = try self.code.emit(.{ .convert = .{ .kind = .int_to_float, .operand = value.register } }, .float),
             .value_type = .float,
         };
+    }
+
+    /// One sentence for all three constructors, naming what each takes.
+    /// It used to be spelled per constructor as "Int() converts Float,
+    /// not X" — which stopped being true the moment `Int(Int)` was an
+    /// identity and `Int` accepted both numeric types.
+    fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Typed {
+        const takes: []const u8 = if (std.mem.eql(u8, call.callee, "String"))
+            "Int, Float, Bool, or String"
+        else
+            "an Int or a Float";
+        try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{
+            call.callee,
+            takes,
+            try self.analyzer.typeName(value.value_type),
+            try self.absenceAdvice(value.value_type, call.arguments[0].value),
+        });
+        return null;
     }
 
     // Builtins ---------------------------------------------------------------
@@ -4630,20 +4846,29 @@ pub const FunctionBuilder = struct {
                 if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes Int or Float");
                 result = arguments[0].value_type;
             },
+            // `min`, `max` and `clamp` unify their arguments the way a
+            // binary operator unifies its operands: one Float among
+            // them makes them all Floats (docs/NUMERICS.md).  Anything
+            // else would make `clamp(x, 0, 10)` a type error for a
+            // Float `x` in a language where `x < 0` is not.
             .min, .max => {
+                _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
                 if (!arguments[0].value_type.isNumeric() or
                     !arguments[0].value_type.eql(arguments[1].value_type))
                     return self.failIntrinsic(call, "min/max take two Ints or two Floats");
                 result = arguments[0].value_type;
             },
             .clamp => {
+                _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
+                _ = try self.unifyNumeric(&arguments[0], &arguments[2]);
+                _ = try self.unifyNumeric(&arguments[1], &arguments[2]);
                 if (!arguments[0].value_type.isNumeric() or
                     !arguments[0].value_type.eql(arguments[1].value_type) or
                     !arguments[0].value_type.eql(arguments[2].value_type))
                     return self.failIntrinsic(call, "clamp takes three Ints or three Floats");
                 result = arguments[0].value_type;
             },
-            .sqrt, .floor, .ceil => {
+            .sqrt, .floor, .ceil, .trunc => {
                 if (arguments[0].value_type != .float)
                     return self.failIntrinsic(call, "this builtin takes a Float");
                 result = .float;
@@ -4719,22 +4944,6 @@ pub const FunctionBuilder = struct {
                 extra_argument = try self.code.emit(.{ .const_int = found.info.local }, .int);
                 result = .none;
             },
-            .str_value => {
-                const descriptor = self.analyzer.heapOf(arguments[0].value_type);
-                const stringable = switch (arguments[0].value_type) {
-                    .int, .float, .boolean, .string => true,
-                    .heap => descriptor.? == .builder,
-                    else => false,
-                };
-                if (!stringable) {
-                    if (arguments[0].value_type == .optional) {
-                        try self.failAbsence(call.span, "str", arguments[0].value_type, call.arguments[0].value);
-                        return .failed;
-                    }
-                    return self.failIntrinsic(call, "str takes Int, Float, Bool, String, or Builder");
-                }
-                result = .string;
-            },
             .parse_int, .parse_float => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "this builtin parses a String");
@@ -4763,6 +4972,11 @@ pub const FunctionBuilder = struct {
             .give_object,
             .copy_object,
             .null_object,
+            // Emitted by a mixed comparison; there is no name for it.
+            .compare_int_float,
+            // Emitted by `String(x)` and by `Builder.build()`, both of
+            // which are resolved before this table is consulted.
+            .str_value,
             .none_value,
             .is_none,
             .optional_wrap,

@@ -164,7 +164,7 @@ const greeting =
     \\    var total = 0
     \\    for index in range(0, 5):
     \\        total = total + index * index
-    \\    print("total " + str(total))
+    \\    print("total " + String(total))
     \\
 ;
 
@@ -431,7 +431,7 @@ test "how a program ended is the number a shell reads, whoever started it" {
             \\func main():
             \\    var xs = [1, 2, 3]
             \\    print("before")
-            \\    print(str(xs[7]))
+            \\    print(String(xs[7]))
             \\
             ,
             .status = 1,
@@ -478,7 +478,7 @@ test "the words after a program are the program's, not loom's" {
     defer install.deinit(gpa);
     try install.write("echo.luc",
         \\func main():
-        \\    print(str(arg_count()))
+        \\    print(String(arg_count()))
         \\    var index = 0
         \\    while index < arg_count():
         \\        print(arg(index))

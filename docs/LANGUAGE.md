@@ -5,7 +5,8 @@ project plan; this file is the language.  Luce is **statically typed**
 with inference — every expression has one type known at compile time,
 annotations are optional where the initializer decides
 (`let n = 1` is an Int; `let n: Int = 1` says so out loud), and there
-are no implicit conversions (`Int(x)` / `Float(x)` are spelled).
+is exactly one implicit conversion: an `Int` widens to a `Float`
+wherever a `Float` is required (docs/NUMERICS.md).  Nothing narrows.
 
 ## Values and objects
 
@@ -147,7 +148,7 @@ if x != none: ...                 # the then arm
 if x == none: ...                 # the else arm
 if x == none:                     # an early-exit guard narrows
     return                        #   everything below it
-print(str(x))                     #   (break and continue too)
+print(String(x))                     #   (break and continue too)
 if x != none and x > 3: ...       # the rest of the condition
 while x != none: ...              # the loop body
 x = 3                             # an assignment of a plain value
@@ -267,7 +268,7 @@ hands over a fresh object, the fallback must too.
 ```luce
 func check(n: Int) -> Int!:
     if n < 0:
-        error("negative: " + str(n))
+        error("negative: " + String(n))
     return n
 ```
 
@@ -324,12 +325,12 @@ grid[2, 3] = 7                     # multi-dimensional index
 let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
-let text = str(b)                  # builder -> String
+let text = b.build()                  # builder -> String
 # scope ownership frees xs, m, grid, and b here — no free() needed
 ```
 
 Type-specific operations are **methods** (Python's split: `len`,
-`str`, `print` and friends stay free functions; everything that
+`String`, `print` and friends stay free functions; everything that
 belongs to one type is called on it — and like Zig, `xs.append(v)` is
 sugar for a plain function with the receiver first, not dispatch):
 
@@ -349,7 +350,7 @@ sugar for a plain function with the receiver first, not dispatch):
   lookups (index, `has`, `get`, index-set) are O(1): the entries
   stay a dense array in arrival order with a hash index over it.
 - `Builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
-  `str(b)`.  `append_ascii` puts one ASCII byte in without the String
+  `b.build()`.  `append_ascii` puts one ASCII byte in without the String
   a `chr()` would allocate; it traps `bad_codepoint` outside 0..127,
   because a Builder's bytes become a String and String is valid
   UTF-8.  Wider characters go through `append(chr(code))`.
@@ -427,24 +428,61 @@ error pointing at the missing import otherwise.  Only `byte_at` and
 `find_byte` are built in.
 
 **Interpolation.**  An `f"..."` string splices expressions in `{...}`,
-each converted with `str(...)`:
+each converted with `String(...)`:
 
 ```luce
 f"x = {x}, y = {y}"       # "x = 7, y = 3"
-f"sum = {a + b}"          # any str-able expression: Int, Float, Bool,
-                          # String, Builder — a List is a type error
+f"sum = {a + b}"          # any scalar expression: Int, Float, Bool,
+                          # String — a List is a type error
 f"name is {user.name}"    # methods, calls, fields all work
 f"{{literal braces}}"     # double a brace for a literal { or }
+f"mean = {mean:.2f}"      # a Float to two decimal places
 ```
 
 The hole is one expression; nested `"..."` strings inside a hole are
-fine.  `f"..."` desugars to plain `+` concatenation of `str(...)`
+fine.  `f"..."` desugars to plain `+` concatenation of `String(...)`
 pieces, so it is a String like any other.
+
+**Format specs.**  A hole may end `:.Nf` — N decimal places of a
+`Float`, rounded half away from zero (docs/NUMERICS.md §8).  That is
+the whole spec language: no width, no fill, no alignment, no `%`, no
+`e`, no thousands separator, and anything else is a
+`luce.parse.fstring` naming the one form that exists.  The `f` is
+redundant, since the compiler knows the operand's type, and is
+required anyway — `{x:.2}` means *two significant digits* in Python,
+and letting it mean two decimal places here would be a silent
+divergence.
+
+A spec lowers to `strings.format_float(value, N)`, so it needs
+`import std.strings` for the same reason `s.split(",")` does, and says
+so through the same diagnostic.  Formatting is where formatting
+happens: there is no `String.format`, and `%` stays an arithmetic
+operator.
+
+A colon *inside* brackets belongs to the brackets, so `f"{s[1:3]}"` is
+a slice and `f"{m[k]}"` a lookup.
 
 ## Conversions and generic builtins
 
+**Three conversion constructors, each named for the type it
+produces**: `Int(x)`, `Float(x)`, `String(x)` (docs/NUMERICS.md §7).
+They are the only ones, and none of them is a builtin — the compiler
+matches the three names before it resolves anything, which is why all
+three are reserved.
+
+`Int(x)` **rounds half away from zero** — `Int(2.5)` is `3` and
+`Int(-2.5)` is `-3`, the same rounding `math.round` does — and traps
+`conversion_range` on NaN, an infinity, or a value outside the `Int`
+range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
+`trunc` and round are four spellings for four different answers.
+`Float(x)` widens and never traps.  `String(x)` prints an `Int`, a
+`Float`, a `Bool` or a `String`, and takes a **scalar only**: a
+`Builder` is a heap object and hands over its text with `b.build()`.
+An f-string hole is a `String(...)` the reader did not write, so the
+same rule decides what may stand in one.
+
 ```luce
-str(42)          # "42"        (Int, Float, Bool, Builder, String)
+String(42)          # "42"        (Int, Float, Bool, Builder, String)
 parse_int("42")  # 42          Int?   — none when the text is not a number
 parse_float("2.5")               # Float?
 chr(955)         # "λ"         codepoint -> String; traps on invalid
@@ -462,12 +500,13 @@ let n = parse_int(text)
 if n == none:
     print("not a number: " + text)
     return
-print(str(n * 2))
+print(String(n * 2))
 ```
 
 The free builtins are the generic, cross-type set — Python's own
-split of capability: `len str print range assert trap free abs
-min max clamp sqrt floor ceil chr ord parse_int parse_float`, the
+split of capability: `len print range assert trap free abs
+min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
+the
 conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,
 terminal, and key builtins (see docs/V2.md).  Everything that belongs
 to one type is a method on it.
@@ -584,11 +623,63 @@ binary or octal literals and no `_` digit separators — writing one
 is a `luce.lex.number` error naming the reason, not a silent
 misreading (docs/MISSING.md tier 3, item 11).
 
-Binary operators are `+ - * / %` (Int truncates toward zero, `%`
-follows the dividend's sign; Float is IEEE), the comparisons
+Binary operators are `+ - * / // %`, the comparisons
 `== != < <= > >=` (ordering on Int, Float, String), and `and or not`
-(short-circuit).  There is no implicit numeric conversion — mixing
-Int and Float is a compile error; convert with `Int(x)`/`Float(x)`.
+(short-circuit).
+
+**`/` is real division and always answers a Float**, whatever it
+divides (docs/NUMERICS.md §2): `1 / 2` is `0.5`, `total / len(xs)` is
+the average, and there is no integer `/` in the language at all.  It
+follows IEEE without traps — `1 / 0` is `inf` and `0 / 0` is NaN —
+because the operators that trap are the ones that answer an Int, and
+`/` is not one of them.  `n /= 2` on an Int place is therefore a
+compile error naming `//=`, which is the whole of what the change
+costs and the whole of why it is safe.
+
+**`//` and `%` are the integer pair and they floor together**
+(docs/NUMERICS.md §3).  `//` is floor division — the floor of the
+quotient — and `%` is the modulus that pairs with it, so it takes the
+sign of the **divisor** and `b * (a // b) + (a % b) == a` holds for
+every pair of operands that does not trap:
+
+| `a` | `b` | `a // b` | `a % b` |
+|---:|---:|---:|---:|
+| 7 | 3 | 2 | 1 |
+| −7 | 3 | −3 | 2 |
+| 7 | −3 | −3 | −2 |
+| −7 | −3 | 2 | −1 |
+
+A positive divisor therefore never yields a negative answer, which is
+what makes `x % 256` a byte wrap for every `x` and `(row - 1) % height`
+a torus.  `//` and `%` by zero trap; on Floats they are IEEE and do
+not, and Float `%` floors with the integer one so promotion crosses
+the line without a seam in it.
+
+There is no `//` comment: a comment runs from `#` to the end of the
+line, and a line beginning `//` is answered by name
+(`luce.parse.comment`).
+
+**Numbers that mix** (docs/NUMERICS.md).  An `Int` widens to a `Float`
+wherever a `Float` is required — both operands of `+ - * / %`, a `let`
+annotation, an argument, a return, a struct field, a list element, a
+compound assignment, `min`/`max`/`clamp`.  One direction: a `Float`
+never becomes an `Int` without `Int(x)` being written, so a `Float`
+that reached somewhere it should not be is refused at the first place
+an `Int` is required rather than quietly truncated.
+
+Promotion needs a place that expects a `Float`.  `let xs = [1, 2, 3]`
+is still a `List(Int)`; `let xs: List(Float) = [1, 2, 3]` is a
+`List(Float)`, and `[1, 2.5]` is one too, because one `Float` among
+numbers makes them all `Float`s wherever it stands.
+
+**Comparison across the line is exact.**  `1 < 1.5` is `true`, and so
+is `9007199254740993 != 9007199254740992.0` — those are two different
+numbers, and the first does not survive being widened.  Approximation
+in `+` is expected and understood; an `==` that answers `true` for two
+different numbers is a defect, so a mixed comparison compares the
+numbers rather than a conversion of them.  (The consequence, which
+Python has too: `a == b` is exact while `a + 0.0 == b` is not, because
+the addition really did widen.)
 
 ### Precedence, and the two places Luce refuses to guess
 
@@ -621,7 +712,8 @@ two Bools with `(a < b) == (c < d)` is still legal, because the
 parentheses start a new chain.
 
 Compound assignment applies an operator in place: `n += 1`, `n -= 1`,
-`n *= 2`, `n /= 2`, `n %= 3`, and `s += "!"` (String concat).  It is
+`n *= 2`, `n /= 2`, `n //= 2`, `n %= 3`, and `s += "!"` (String
+concat).  It is
 value-only arithmetic — the place is a number (or a String for `+=`),
 never an object — and the place is evaluated once, so
 `grid[row, col] += 1` reads and writes the same slot:
@@ -789,7 +881,8 @@ or any pipe or process substitution.  Diagnostics then name it
 
 First-class functions, closures, user-defined methods/receivers
 (`x.f()` is builtin sugar, not dispatch), exceptions (traps are
-final), implicit conversions, shadowing, mutable file-scope `var`
+final), implicit *narrowing* of a `Float` to an `Int`, shadowing,
+mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate
 decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads

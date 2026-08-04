@@ -82,7 +82,7 @@ struct Point:
 func main():
     let a = Point(x = 3.0, y = 4.0)
     let b = Point(x = 1.0, y = 2.0)
-    print(str(Point.length(a)))
+    print(String(Point.length(a)))
     let sum = Point.plus(a, b)
     print(f"({sum.x}, {sum.y}) has length {Point.length(sum)}")
 ```

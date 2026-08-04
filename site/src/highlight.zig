@@ -236,7 +236,7 @@ test "every byte of the input survives highlighting" {
         \\
         \\func main():
         \\    var bag = Bag(items = [1, 2])   # <&>
-        \\    print(str(len(bag.items)))
+        \\    print(String(len(bag.items)))
     ;
     const html = try highlighted(gpa, source);
     defer gpa.free(html);

@@ -503,7 +503,7 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
         \\    var total = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
-        \\    print(str(Int(total)))
+        \\    print(String(Int(total)))
         \\
     );
     defer built.deinit(gpa);
@@ -534,7 +534,7 @@ test "a loop that writes plain elements still lifts; matmul's nest lifts all thr
         \\            let pivot = a[i * n + k]
         \\            for j in range(0, n):
         \\                c[i * n + j] += pivot * b[k * n + j]
-        \\    print(str(Int(c[0])))
+        \\    print(String(Int(c[0])))
         \\
     );
     defer built.deinit(gpa);
@@ -560,7 +560,7 @@ test "a loop that can free, allocate, or call refuses to lift" {
         \\    var total = 0.0
         \\    for i in range(0, 8):
         \\        total = total + touch(a)
-        \\    print(str(Int(total)))
+        \\    print(String(Int(total)))
         \\
         ,
         // A fresh object grows the table, and the rows move with it.
@@ -571,7 +571,7 @@ test "a loop that can free, allocate, or call refuses to lift" {
         \\        var xs = new List(Int)
         \\        total = total + a[i]
         \\        free(xs)
-        \\    print(str(Int(total)))
+        \\    print(String(Int(total)))
         \\
     }) |source| {
         var built = try planned(gpa, source);
@@ -590,7 +590,7 @@ test "an inner loop lifts even when the loop around it cannot" {
         \\        for i in range(0, 8):
         \\            total = total + a[i]
         \\        free(a)
-        \\    print(str(Int(total)))
+        \\    print(String(Int(total)))
         \\
     );
     defer built.deinit(gpa);
@@ -617,7 +617,7 @@ test "the reassignment guard has no way to fire from source, and is kept anyway"
         \\    var total = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
-        \\    print(str(Int(total)))
+        \\    print(String(Int(total)))
         \\
     );
     defer built.deinit(gpa);

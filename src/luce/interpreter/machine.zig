@@ -599,6 +599,12 @@ pub const Machine = struct {
             .sqrt => return operators.squareRoot(registers[arguments[0]]),
             .floor => return operators.floor(registers[arguments[0]]),
             .ceil => return operators.ceil(registers[arguments[0]]),
+            .trunc => return operators.truncate(registers[arguments[0]]),
+            .compare_int_float => return .ofBoolean(operators.compareIntFloat(
+                @enumFromInt(registers[arguments[0]].asInt()),
+                registers[arguments[1]].asInt(),
+                registers[arguments[2]].asFloat(),
+            )),
             .len => return containers.length(&self.runtime, registers[arguments[0]]),
             .null_object => return .null_object,
 

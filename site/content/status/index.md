@@ -30,7 +30,7 @@ language question, and one benchmark row.**
 
 | | |
 |---|---|
-| Static typing with inference, no implicit conversions | shipped |
+| Static typing with inference; `Int` widens to `Float`, nothing narrows | shipped |
 | Checked arithmetic, bounds checks, UTF-8 boundary checks, in every mode | shipped |
 | Scope ownership: `give`, `copy`, `free`, 43 ratified situations | shipped |
 | `T?`, `none`, narrowing, `else` | shipped |
@@ -81,7 +81,7 @@ These are decisions with reasons written down, not gaps.
   the one bit `errdefer` encodes is already a parameter of the
   unwinder, and a trace would charge the success path.
 - **Exceptions.** Traps are final.
-- **Implicit conversions, shadowing, truthiness, a ternary operator.**
+- **Implicit narrowing, shadowing, truthiness, a ternary operator.**
 - **Interfaces, inheritance, operator overloading, async, reflection.**
 - **`defer`** for memory. It may return for host cleanup, as a
   separate decision.

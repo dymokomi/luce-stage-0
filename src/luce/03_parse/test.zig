@@ -324,7 +324,7 @@ test "every assignment place parses, nested and compound" {
     try testing.expectEqual(ast.BinaryOp.subtract, body.statements[10].assign.compound.?);
     try testing.expectEqual(ast.BinaryOp.multiply, body.statements[11].assign.compound.?);
     try testing.expectEqual(ast.BinaryOp.divide, body.statements[12].assign.compound.?);
-    try testing.expectEqual(ast.BinaryOp.remainder, body.statements[13].assign.compound.?);
+    try testing.expectEqual(ast.BinaryOp.modulo, body.statements[13].assign.compound.?);
     // The compound form is still one assignment, never a read plus a
     // write in the tree.
     try testing.expect(body.statements[9].assign.value.* == .int_literal);
@@ -503,7 +503,7 @@ test "the precedence table binds exactly as docs/LANGUAGE.md states" {
     try testing.expectEqual(ast.BinaryOp.subtract, e.op);
     try testing.expectEqual(ast.BinaryOp.subtract, e.left.binary.op);
     const f = body.statements[5].let.value.binary;
-    try testing.expectEqual(ast.BinaryOp.remainder, f.op);
+    try testing.expectEqual(ast.BinaryOp.modulo, f.op);
     try testing.expectEqual(ast.BinaryOp.multiply, f.left.binary.op);
     // Parentheses override: (1 + 2) * 3
     const g = body.statements[6].let.value.binary;
@@ -535,7 +535,7 @@ test "every adjacent pair of precedence levels binds the tighter one first" {
     // happened to depend on it.  The test above pins most of the
     // ladder; what it does not reach is `coalesce`, the level `else`
     // and `catch` share between comparison and arithmetic, and the
-    // remainder operator's place among its neighbours.
+    // modulo operator's place among its neighbours.
     var parsed = try expectClean(
         \\func main():
         \\    let a = p or q and r
@@ -570,17 +570,17 @@ test "every adjacent pair of precedence levels binds the tighter one first" {
     const d = body.statements[3].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.coalesce, d.op);
     try testing.expectEqual(ast.BinaryOp.add, d.right.binary.op);
-    // Additive is looser than multiplicative, remainder included:
+    // Additive is looser than multiplicative, modulo included:
     // p + (q % r).
     const e = body.statements[4].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.add, e.op);
-    try testing.expectEqual(ast.BinaryOp.remainder, e.right.binary.op);
-    // And remainder sits *with* the other multiplicative operators
+    try testing.expectEqual(ast.BinaryOp.modulo, e.right.binary.op);
+    // And modulo sits *with* the other multiplicative operators
     // rather than above or below them, so it associates left with
     // them: (p % q) * r.
     const f = body.statements[5].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.multiply, f.op);
-    try testing.expectEqual(ast.BinaryOp.remainder, f.left.binary.op);
+    try testing.expectEqual(ast.BinaryOp.modulo, f.left.binary.op);
     // `else` is the one operator that associates right, so a chain of
     // fallbacks is a real chain: p else (q else r).
     const g = body.statements[6].let.value.binary;
@@ -720,7 +720,7 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
         \\    let tail = xs[1:]
         \\    let whole = xs[:]
         \\    for x in xs:
-        \\        append(b, str(x))
+        \\        append(b, String(x))
         \\
     );
     defer parsed.deinit();
@@ -814,7 +814,7 @@ test "strings decode escapes" {
     try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
 }
 
-test "f-strings expand to str()-wrapped concatenation" {
+test "f-strings expand to String()-wrapped concatenation" {
     var parsed = try expectClean(
         \\func main():
         \\    let a = f"x = {x}, y = {y}"
@@ -826,10 +826,10 @@ test "f-strings expand to str()-wrapped concatenation" {
     );
     defer parsed.deinit();
     const body = parsed.program.functions[0].body;
-    // "x = " + str(x) + ", y = " + str(y), left-associated.
+    // "x = " + String(x) + ", y = " + String(y), left-associated.
     const a = body.statements[0].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.add, a.op);
-    try testing.expectEqualStrings("str", a.right.call.callee);
+    try testing.expectEqualStrings("String", a.right.call.callee);
     try testing.expectEqualStrings("y", a.right.call.arguments[0].value.name.text);
     // Doubled braces are literal text, with no interpolation at all.
     try testing.expectEqualStrings("{literal}", body.statements[1].let.value.string_literal.decoded);
@@ -1290,8 +1290,10 @@ test "an unclosed bracket is reported at the bracket once it has run past its li
 }
 
 test "f-string holes report their own mistakes, in f-string terms" {
-    try expectDiagnostics("func main():\n    let s = f\"{x:.2f}\"\n", &.{
-        .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "no format specifiers" },
+    // `{x:.2f}` is a format spec now (docs/NUMERICS.md §8); one that
+    // is not the single supported form still reports here.
+    try expectDiagnostics("func main():\n    let s = f\"{x:.2}\"\n", &.{
+        .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "the one form is ':.Nf'" },
     });
     try expectDiagnostics("func main():\n    let s = f\"a{}b\"\n", &.{
         .{ .code = "luce.parse.fstring", .line = 2, .column = 17, .contains = "empty interpolation" },

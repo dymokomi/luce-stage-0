@@ -39,7 +39,7 @@ func interpret(code: String, cells: Int) -> String:
         elif op == 43:
             tape[pointer] = (tape[pointer] + 1) % 256
         elif op == 45:
-            tape[pointer] = (tape[pointer] + 255) % 256
+            tape[pointer] = (tape[pointer] - 1) % 256
         elif op == 46:
             out.append(chr(tape[pointer]))
         elif op == 91:
@@ -49,7 +49,7 @@ func interpret(code: String, cells: Int) -> String:
             if tape[pointer] != 0:
                 pc = matching_backward(code, pc)
         pc = pc + 1
-    return str(out)
+    return out.build()
 
 func main():
     let hello = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."

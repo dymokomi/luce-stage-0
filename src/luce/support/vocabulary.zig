@@ -27,7 +27,16 @@ pub const BinaryOp = enum {
     subtract,
     multiply,
     divide,
-    remainder,
+    /// `//`.  The integer pair with `modulo`, and they floor together
+    /// (docs/NUMERICS.md §3) — the name of the thing is *floor
+    /// division*, and under the other pairing `a // b` would not be
+    /// `floor(a / b)` for negative operands.
+    floor_divide,
+    /// `%`.  A modulus and not a remainder: it takes the sign of the
+    /// **divisor**, so `-7 % 3` is `2`.  It was called `remainder`
+    /// while it was C's, and the two differ on exactly the negatives
+    /// the memo spent a table on.
+    modulo,
     equal,
     not_equal,
     less,
@@ -39,6 +48,25 @@ pub const BinaryOp = enum {
         return switch (self) {
             .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => true,
             else => false,
+        };
+    }
+
+    /// The same comparison with its operands the other way round.
+    ///
+    /// Exact Int/Float comparison is implemented once, in one shape —
+    /// the Int on the left (docs/NUMERICS.md §5) — so a comparison
+    /// written the other way round arrives here rather than at a
+    /// second implementation of the same judgment.  Equality is its
+    /// own mirror image; arithmetic has none and is refused.
+    pub fn mirrored(self: BinaryOp) BinaryOp {
+        return switch (self) {
+            .equal => .equal,
+            .not_equal => .not_equal,
+            .less => .greater,
+            .less_equal => .greater_equal,
+            .greater => .less,
+            .greater_equal => .less_equal,
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => unreachable,
         };
     }
 };

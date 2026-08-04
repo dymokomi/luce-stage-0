@@ -159,10 +159,10 @@ Repeated `+` on strings allocates every time. A `Builder` does not.
 func main():
     var out = new Builder()
     for i in range(0, 5):
-        out.append(str(i))
+        out.append(String(i))
         out.append(",")
     out.append_ascii(33)          # one ASCII byte, no String allocated
-    print(str(out))
+    print(out.build())
     print(f"{len(out)} bytes")
 ```
 

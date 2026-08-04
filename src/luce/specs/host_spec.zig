@@ -51,7 +51,7 @@ test "print, arguments, and files flow through the host" {
 
     var session = try agree.compare(
         \\func main() -> !:
-        \\    print("args: " + str(arg_count()))
+        \\    print("args: " + String(arg_count()))
         \\    let path = arg(0)
         \\    if file_exists(path):
         \\        print(try file_read(path))
@@ -97,7 +97,7 @@ test "read_line answers a line, then absence; the prompt goes out in front" {
         \\    var line = read_line("> ")
         \\    while line != none:
         \\        count = count + 1
-        \\        print(str(count) + ":" + line)
+        \\        print(String(count) + ":" + line)
         \\        line = read_line("> ")
         \\    print("done")
         \\
@@ -117,7 +117,7 @@ test "the clock, the wait and the environment reach the host" {
         \\func main():
         \\    let started = clock_ms()
         \\    sleep_ms(30)
-        \\    print("elapsed " + str(clock_ms() - started))
+        \\    print("elapsed " + String(clock_ms() - started))
         \\    sleep_ms(0)
         \\    sleep_ms(-5)
         \\    print_error("to stderr")
@@ -147,7 +147,7 @@ test "every host service fails closed when the host withholds it" {
         \\
         ,
         \\func main():
-        \\    print(str(clock_ms()))
+        \\    print(String(clock_ms()))
         \\
         ,
         \\func main():
@@ -210,13 +210,13 @@ test "error() raises the program's own words, and catch discards them" {
     var session = try agree.compare(
         \\func check(n: Int) -> Int!:
         \\    if n < 0:
-        \\        error("negative: " + str(n))
+        \\        error("negative: " + String(n))
         \\    return n
         \\
         \\func main() -> !:
-        \\    print(str(check(-1) catch 0))
-        \\    print(str(try check(7)))
-        \\    print(str(try check(-2)))
+        \\    print(String(check(-1) catch 0))
+        \\    print(String(try check(7)))
+        \\    print(String(try check(-2)))
         \\
     , .{});
     defer session.deinit();
@@ -246,7 +246,7 @@ test "terminal builtins drive the host screen and key queue" {
         \\    let quit = key_read()
         \\    term_flush()
         \\    print(quit else "?")
-        \\    print(str(term_rows()) + "x" + str(term_cols()))
+        \\    print(String(term_rows()) + "x" + String(term_cols()))
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();

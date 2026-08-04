@@ -7,7 +7,7 @@ async, because those are not in it.
 ## What you have seen
 
 Scalars and structs that copy; four heap objects that do not. Static
-types with inference and no implicit conversions anywhere. Checked
+types with inference, and one widening: `Int` into `Float`. Checked
 arithmetic and bounds checks that no build mode turns off. Scope
 ownership with `give`, `copy` and `free`. `T?` for absence with
 narrowing and `else`. `T!` for failure with `try`, `catch` and

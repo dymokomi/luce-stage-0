@@ -139,7 +139,7 @@ func main():
 
     print(f"sum {math.sum(values)}")
     print(f"mean {math.mean(values) else 0.0}")
-    print(f"norm {Int(math.norm(values))}")
+    print(f"norm {Int(trunc(math.norm(values)))}")
 ```
 
 ```output

@@ -281,6 +281,15 @@ fn verifyInstruction(
             } else {
                 const concat = binary.op == .add and binary.operand_type == .string;
                 if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
+                // `/` is real division and always answers a Float
+                // (docs/NUMERICS.md §2), so `Binary { .divide, .int }`
+                // is not a shape stage 4 can emit — the quotient that
+                // answers an Int is `floor_divide`.  Rejecting it here
+                // is what lets the runtime and the lowering stop
+                // carrying an integer `/` at all.
+                if (binary.op == .divide and binary.operand_type == .int) {
+                    return error.TypeMismatch;
+                }
                 try expectType(result, binary.operand_type);
             }
         },
@@ -465,10 +474,20 @@ fn verifyIntrinsic(
             try expectType(arguments[2], arguments[0]);
             try expectType(result, arguments[0]);
         },
-        .sqrt, .floor, .ceil => {
+        .sqrt, .floor, .ceil, .trunc => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .float);
             try expectType(result, .float);
+        },
+        .compare_int_float => {
+            try exactly(arguments, 3);
+            // The operator travels as an Int because an intrinsic call
+            // carries registers and no immediates; which operator it
+            // names is trusted exactly as an instruction's type is.
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .int);
+            try expectType(arguments[2], .float);
+            try expectType(result, .boolean);
         },
         .len => {
             try exactly(arguments, 1);

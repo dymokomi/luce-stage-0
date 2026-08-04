@@ -57,7 +57,7 @@ with a message and a call stack, never a segmentation fault.
 func main():
     var xs = [1, 2, 3]
     print("before")
-    print(str(xs[7]))
+    print(String(xs[7]))
 ```
 
 ```output
@@ -115,8 +115,8 @@ func check(n: Int) -> Int!:
     return n
 
 func main() -> !:
-    print(str(try check(1)))
-    print(str(try check(-5)))
+    print(String(try check(1)))
+    print(String(try check(-5)))
 ```
 
 ```output

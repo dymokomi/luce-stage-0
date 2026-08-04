@@ -22,4 +22,4 @@ func main():
         for i in range(0, n):
             sum += a[i] * b[i]
         dot += sum
-    print(str(Int(dot)))
+    print(String(Int(trunc(dot))))

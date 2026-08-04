@@ -20,7 +20,7 @@ const Value = value.Value;
 /// Comparison answers a Bool; arithmetic answers the operand type.
 pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Value) Error!Value {
     switch (op) {
-        .add, .subtract, .multiply, .divide, .remainder => {},
+        .add, .subtract, .multiply, .divide, .floor_divide, .modulo => {},
         else => return Value.ofBoolean(compare(op, left, right)),
     }
 
@@ -43,19 +43,33 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
                     if (result[1] != 0) return runtime.fail(.integer_overflow);
                     return Value.ofInt(result[0]);
                 },
-                .divide => {
+                // `/` never reaches here: it is real division and
+                // always answers a Float (docs/NUMERICS.md §2), which
+                // the IR verifier enforces — `Binary { .divide, .int }`
+                // is refused before either engine sees it.
+                .divide => unreachable,
+                // `//` and `%` are the integer pair and they **floor**
+                // together (docs/NUMERICS.md §3): `-7 // 3` is `-3`
+                // and `-7 % 3` is `2`, so `%` takes the sign of the
+                // divisor and `b * (a // b) + (a % b) == a` holds for
+                // every pair of operands that does not trap.
+                .floor_divide => {
                     if (right_int == 0) return runtime.fail(.divide_by_zero);
                     if (left_int == std.math.minInt(i64) and right_int == -1) {
                         return runtime.fail(.integer_overflow);
                     }
-                    return Value.ofInt(@divTrunc(left_int, right_int));
+                    return Value.ofInt(@divFloor(left_int, right_int));
                 },
-                .remainder => {
+                .modulo => {
                     if (right_int == 0) return runtime.fail(.divide_by_zero);
+                    // `minInt % -1` is `0` under flooring and cannot
+                    // overflow, but `@mod` computes it through a
+                    // division that can, so the pair is guarded
+                    // together and answers what `//` answers.
                     if (left_int == std.math.minInt(i64) and right_int == -1) {
                         return runtime.fail(.integer_overflow);
                     }
-                    return Value.ofInt(@rem(left_int, right_int));
+                    return Value.ofInt(@mod(left_int, right_int));
                 },
                 else => unreachable,
             }
@@ -69,7 +83,22 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
                 .subtract => left_float - right_float,
                 .multiply => left_float * right_float,
                 .divide => left_float / right_float,
-                .remainder => @rem(left_float, right_float),
+                // Float `%` floors with the integer one, or promotion
+                // would introduce a discontinuity: `-7 % 3` answering
+                // `2` and `-7 % 3.0` answering `-1.0`, with an
+                // invisible widening choosing between them.  It
+                // imports one known wart with it — floor-mod on
+                // floats can return the divisor, `-1e-100 % 1.0`
+                // being `1.0` exactly, because the true answer is a
+                // hair under 1.0 and rounds up.  Python has lived
+                // with it since 2.0; the two operators agreeing is
+                // worth more (docs/NUMERICS.md §3).
+                .modulo => floorMod(left_float, right_float),
+                // And `//` floors with it, for the same reason and to
+                // keep the identity above true of Floats as well.  It
+                // is IEEE like every other Float operation: `1.0 // 0.0`
+                // is `inf`, not a trap.
+                .floor_divide => @floor(left_float / right_float),
                 else => unreachable,
             };
             return Value.ofFloat(computed);
@@ -179,6 +208,146 @@ test "a struct holding none compares, in either order, instead of crashing" {
     try std.testing.expect(compare(.not_equal, present, absent));
 }
 
+/// Float `%`: the floor modulus, pairing with `//` exactly as the
+/// integer operators do (docs/NUMERICS.md §3).
+///
+/// **Not Zig's `@mod`.**  Zig's integer `@mod` floors and pairs with
+/// `@divFloor`, but its *float* `@mod` only forces a non-negative
+/// answer: `@mod(7.0, -3.0)` is `1.0` where flooring says `-2.0`.
+/// Using it would put the discontinuity promotion is meant to remove
+/// back one type over — `7 % -3` answering `-2` and `7 % -3.0`
+/// answering `1.0`.  So this is written out, and it is the one shape
+/// both engines call.
+///
+/// The result carries the sign of the **divisor**, zeros included:
+/// `-6.0 % 3.0` is `0.0` and `6.0 % -3.0` is `-0.0`, which is the rule
+/// stated without an exception and what Python answers.
+pub fn floorMod(left: f64, right: f64) f64 {
+    const remainder = @rem(left, right);
+    // `-0.0 == 0.0`, so this arm catches both zeros and the sign is
+    // then taken from the divisor rather than left to `@rem`.
+    if (remainder == 0.0) return std.math.copysign(@as(f64, 0.0), right);
+    // A NaN remainder compares false with everything, so it falls
+    // through the addition below and stays NaN either way.
+    if ((remainder < 0.0) != (right < 0.0)) return remainder + right;
+    return remainder;
+}
+
+test "float % floors with //, and the identity holds" {
+    const cases = [_][3]f64{
+        // left, right, expected
+        .{ 7.0, 3.0, 1.0 },
+        .{ -7.0, 3.0, 2.0 },
+        .{ 7.0, -3.0, -2.0 },
+        .{ -7.0, -3.0, -1.0 },
+        .{ 5.5, 2.0, 1.5 },
+        .{ -5.5, 2.0, 0.5 },
+    };
+    for (cases) |case| {
+        const left = case[0];
+        const right = case[1];
+        try std.testing.expectEqual(case[2], floorMod(left, right));
+        // `b * (a // b) + (a % b) == a`, the identity the pairing is
+        // chosen to keep.
+        try std.testing.expectEqual(left, right * @floor(left / right) + floorMod(left, right));
+    }
+
+    // Zeros take the divisor's sign, so the rule has no exception.
+    try std.testing.expect(!std.math.signbit(floorMod(-6.0, 3.0)));
+    try std.testing.expect(std.math.signbit(floorMod(6.0, -3.0)));
+
+    // The wart §3 records and accepts: the true answer is a hair under
+    // 1.0 and rounds up to it, so floor-mod can return the divisor.
+    try std.testing.expectEqual(@as(f64, 1.0), floorMod(-1e-100, 1.0));
+
+    // Infinities and NaN stay IEEE.
+    try std.testing.expectEqual(@as(f64, 5.0), floorMod(5.0, std.math.inf(f64)));
+    try std.testing.expectEqual(std.math.inf(f64), floorMod(-5.0, std.math.inf(f64)));
+    try std.testing.expect(std.math.isNan(floorMod(std.math.inf(f64), 3.0)));
+    try std.testing.expect(std.math.isNan(floorMod(1.0, 0.0)));
+}
+
+/// Comparison across the Int/Float line, on the mathematical values
+/// rather than on a conversion (docs/NUMERICS.md §5).
+///
+/// The naive lowering — widen the Int with `sitofp`, then compare —
+/// is wrong from exactly 2^53 upward, where an `Int` no longer
+/// survives the trip: `9007199254740993 == 9007199254740992.0` is
+/// false mathematically and true under widening.  Approximation in
+/// `+` is expected; an `==` that answers true for two different
+/// numbers is a defect, and ordering has to agree with it or
+/// `a == b` and `not (a < b) and not (b < a)` part company.  Python's
+/// `float_richcompare` is the reference and reaches the same answers.
+///
+/// **The Int is always the left operand.**  Stage 4 mirrors the
+/// operator when the Float was written first, so there is one shape
+/// here and one to prove.
+pub fn compareIntFloat(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
+    // NaN is unordered with everything, itself included, so only `!=`
+    // is true of it — the same answer `compare` gives above.
+    if (std.math.isNan(right)) return op == .not_equal;
+
+    const order: std.math.Order = if (right >= 9223372036854775808.0)
+        // Past the top of the i64 range the Float wins on magnitude
+        // alone; +inf arrives here too.  2^63 is exactly
+        // representable, which is what makes `>=` the right edge.
+        .lt
+    else if (right < -9223372036854775808.0)
+        .gt
+    else compared: {
+        // In range, so the integral part converts exactly and the two
+        // integers decide it; a tie is broken by the fraction, whose
+        // sign says which side of the whole number the Float sits on.
+        const whole = @trunc(right);
+        const whole_as_int: i64 = @intFromFloat(whole);
+        if (left != whole_as_int) break :compared if (left < whole_as_int) .lt else .gt;
+        const fraction = right - whole;
+        if (fraction == 0.0) break :compared .eq;
+        break :compared if (fraction > 0.0) .lt else .gt;
+    };
+
+    return switch (op) {
+        .equal => order == .eq,
+        .not_equal => order != .eq,
+        .less => order == .lt,
+        .less_equal => order != .gt,
+        .greater => order == .gt,
+        .greater_equal => order != .lt,
+        // The analyzer emits this intrinsic for comparisons only.
+        .add, .subtract, .multiply, .divide, .floor_divide, .modulo => unreachable,
+    };
+}
+
+test "mixed comparison is exact at 2^53, where widening stops being" {
+    const two53: i64 = 9007199254740992;
+    const as_float: f64 = 9007199254740992.0;
+
+    // The number that does not survive `sitofp`.
+    try std.testing.expect(!compareIntFloat(.equal, two53 + 1, as_float));
+    try std.testing.expect(compareIntFloat(.greater, two53 + 1, as_float));
+    try std.testing.expect(!compareIntFloat(.less_equal, two53 + 1, as_float));
+    // And the one that does.
+    try std.testing.expect(compareIntFloat(.equal, two53, as_float));
+    try std.testing.expect(compareIntFloat(.less_equal, two53, as_float));
+
+    // Fractions on both sides of zero.
+    try std.testing.expect(compareIntFloat(.less, 1, 1.5));
+    try std.testing.expect(compareIntFloat(.greater, -1, -1.5));
+    try std.testing.expect(compareIntFloat(.equal, 1, 1.0));
+
+    // The infinities and NaN.
+    try std.testing.expect(compareIntFloat(.less, std.math.maxInt(i64), std.math.inf(f64)));
+    try std.testing.expect(compareIntFloat(.greater, std.math.minInt(i64), -std.math.inf(f64)));
+    try std.testing.expect(compareIntFloat(.not_equal, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareIntFloat(.equal, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareIntFloat(.less, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareIntFloat(.greater_equal, 0, std.math.nan(f64)));
+
+    // The i64 edges, where the bound itself is representable.
+    try std.testing.expect(compareIntFloat(.equal, std.math.minInt(i64), -9223372036854775808.0));
+    try std.testing.expect(compareIntFloat(.less, std.math.maxInt(i64), 9223372036854775808.0));
+}
+
 /// Ordering for sort: elements are Int, Float, or String (the
 /// analyzer guarantees it).
 pub fn orderedBefore(context: void, left: Value, right: Value) bool {
@@ -211,17 +380,78 @@ pub fn intToFloat(operand: Value) Value {
     return Value.ofFloat(@floatFromInt(operand.asInt()));
 }
 
-/// `Int(x)` truncates toward zero and traps outside the i64 range —
-/// NaN and infinities included.
+/// `Int(x)` **rounds half away from zero** and traps outside the i64
+/// range — NaN and infinities included (docs/NUMERICS.md §7).
+///
+/// Half away from zero, and not IEEE's half-to-even, for one reason
+/// that outranks the numerical arguments: `math.round` already
+/// existed, was already documented as rounding that way, and is
+/// already what `strings.format_float` uses.  A language with two
+/// roundings that disagree has a bug in it, and the one already
+/// ratified wins.
+///
+/// The range check is the same one in the same three places — here,
+/// the constant folder, and `08_llvm/lower.zig` — because a
+/// conversion that disagrees at the boundary is a different language.
+/// It runs **after** the rounding, on what rounding produced: NaN and
+/// the infinities survive `@round` unchanged so the one check still
+/// catches them, and a value rounding carried past the top of the
+/// range is refused rather than wrapped.
 pub fn floatToInt(runtime: *Runtime, operand: Value) Error!Value {
-    const held = operand.asFloat();
-    if (std.math.isNan(held) or
-        held < -9223372036854775808.0 or
-        held >= 9223372036854775808.0)
+    const rounded = roundHalfAway(operand.asFloat());
+    if (std.math.isNan(rounded) or
+        rounded < -9223372036854775808.0 or
+        rounded >= 9223372036854775808.0)
     {
         return runtime.fail(.conversion_range);
     }
-    return Value.ofInt(@intFromFloat(@trunc(held)));
+    return Value.ofInt(@intFromFloat(rounded));
+}
+
+/// Round half away from zero: `2.5` to `3.0`, `-2.5` to `-3.0`.
+///
+/// **`floor(x + 0.5)` is not this function**, which is worth writing
+/// down because that is how `std/math.luc` used to spell it and how
+/// most people would: `0.49999999999999994 + 0.5` rounds *up* to
+/// exactly `1.0` in binary64, so the floor of it is `1` where the
+/// right answer is `0`.  `@round` is the operation itself — IEEE
+/// roundToIntegralTiesToAway, and `llvm.round` on the compiled side —
+/// and `math.round` now computes the same thing from `trunc` and a
+/// fraction, which is exact.  A language with two roundings that
+/// disagree has a bug in it.
+pub fn roundHalfAway(held: f64) f64 {
+    return @round(held);
+}
+
+test "Int(x) rounds half away from zero, on both sides of it" {
+    try std.testing.expectEqual(@as(f64, 3.0), roundHalfAway(2.5));
+    try std.testing.expectEqual(@as(f64, -3.0), roundHalfAway(-2.5));
+    try std.testing.expectEqual(@as(f64, 1.0), roundHalfAway(0.5));
+    try std.testing.expectEqual(@as(f64, -1.0), roundHalfAway(-0.5));
+    try std.testing.expectEqual(@as(f64, 2.0), roundHalfAway(2.4));
+    try std.testing.expectEqual(@as(f64, -2.0), roundHalfAway(-2.4));
+    try std.testing.expectEqual(@as(f64, 3.0), roundHalfAway(2.6));
+    try std.testing.expectEqual(@as(f64, -3.0), roundHalfAway(-2.6));
+    try std.testing.expectEqual(@as(f64, 0.0), roundHalfAway(0.0));
+
+    // The value that separates rounding from `floor(x + 0.5)`: at
+    // binary64 precision the sum rounds up to exactly 1.0, so the
+    // floor of it is 1 where the answer is 0.  Both operands are
+    // runtime values, because comptime float arithmetic in Zig is
+    // arbitrary-precision and would not reproduce the rounding step
+    // that is the whole point.
+    var nearly_half: f64 = 0.49999999999999994;
+    _ = &nearly_half;
+    var half: f64 = 0.5;
+    _ = &half;
+    try std.testing.expectEqual(@as(f64, 0.0), roundHalfAway(nearly_half));
+    try std.testing.expectEqual(@as(f64, 1.0), @floor(nearly_half + half));
+
+    // Symmetric about zero, which is what "away from zero" means.
+    var step: f64 = -4.0;
+    while (step <= 4.0) : (step += 0.25) {
+        try std.testing.expectEqual(-roundHalfAway(step), roundHalfAway(-step));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,4 +503,10 @@ pub fn floor(operand: Value) Value {
 
 pub fn ceil(operand: Value) Value {
     return Value.ofFloat(@ceil(operand.asFloat()));
+}
+
+/// `trunc(x)` — toward zero.  The fourth rounding, added when `Int(x)`
+/// stopped being the way to spell it (docs/NUMERICS.md §7).
+pub fn truncate(operand: Value) Value {
+    return Value.ofFloat(@trunc(operand.asFloat()));
 }

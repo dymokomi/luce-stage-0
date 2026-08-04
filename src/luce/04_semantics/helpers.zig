@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const ast = @import("../03_parse.zig").ast;
+const vocabulary = @import("../support/vocabulary.zig");
 const Span = @import("../01_source.zig").Span;
 
 /// How deep an expression tree this stage will walk before refusing
@@ -66,6 +67,30 @@ pub fn dottedChain(target: *const ast.Expression) ?Chain {
             else => return null,
         }
     }
+}
+
+/// The comparison this source operator names, in the vocabulary the
+/// runtime answers in, or null when it names something else.
+pub fn comparisonOf(op: ast.BinaryOp) ?vocabulary.BinaryOp {
+    return switch (op) {
+        .equal => .equal,
+        .not_equal => .not_equal,
+        .less => .less,
+        .less_equal => .less_equal,
+        .greater => .greater,
+        .greater_equal => .greater_equal,
+        .add,
+        .subtract,
+        .multiply,
+        .divide,
+        .floor_divide,
+        .modulo,
+        .logic_and,
+        .logic_or,
+        .coalesce,
+        .catch_error,
+        => null,
+    };
 }
 
 pub fn compareOrder(op: ast.BinaryOp, a: anytype, b: @TypeOf(a)) bool {

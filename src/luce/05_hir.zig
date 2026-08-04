@@ -28,7 +28,7 @@
 //! only place that knows what `+=` expands to.
 //!
 //! **Today the desugaring is scattered across two stages that should
-//! not be doing it.**  `03_parse` expands f-strings into `str(x) + ...`
+//! not be doing it.**  `03_parse` expands f-strings into `String(x) + ...`
 //! and `elif` chains into nested `if`s while it still has nothing but
 //! syntax.  `04_semantics/builder.zig` expands methods, `for x in xs`,
 //! `for i in range(a, b)`, compound assignment, nested place

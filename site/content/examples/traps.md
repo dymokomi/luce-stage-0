@@ -17,7 +17,7 @@ func depth_one(values: List(Int)) -> Int:
 func main():
     var values = [1, 2, 3]
     print("before")
-    print(str(depth_one(values)))
+    print(String(depth_one(values)))
 ```
 
 ```output
@@ -38,7 +38,7 @@ build mode — there is no `--release` that turns them off.
 func main():
     let a = 4611686018427387904
     print("doubling")
-    print(str(a * 2))
+    print(String(a * 2))
 ```
 
 ```output
@@ -49,11 +49,11 @@ loom: trap: integer overflow [integer_overflow]
 
 ```luce trap
 func ratio(a: Int, b: Int) -> Int:
-    return a / b
+    return a // b
 
 func main():
-    print(str(ratio(10, 2)))
-    print(str(ratio(10, 0)))
+    print(String(ratio(10, 2)))
+    print(String(ratio(10, 0)))
 ```
 
 ```output
@@ -69,7 +69,7 @@ loom: trap: division by zero [divide_by_zero]
 func main():
     var xs: List(Int) = []
     print("popping an empty list")
-    print(str(xs.pop()))
+    print(String(xs.pop()))
 ```
 
 ```output
@@ -82,7 +82,7 @@ loom: trap: pop from an empty list [empty_collection]
 func main():
     var m = new Map(String, Int)
     m["a"] = 1
-    print(str(m["b"]))
+    print(String(m["b"]))
 ```
 
 ```output
@@ -141,7 +141,7 @@ func forever(n: Int) -> Int:
     return forever(n + 1)
 
 func main():
-    print(str(forever(0)))
+    print(String(forever(0)))
 ```
 
 ```output

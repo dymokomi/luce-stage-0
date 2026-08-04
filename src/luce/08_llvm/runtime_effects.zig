@@ -182,6 +182,8 @@ pub const Service = enum {
 
     // -- operators ----------------------------------------------------
     luce_rt_compare,
+    luce_rt_compare_int_float,
+    luce_rt_float_mod,
 
     // -- value storage --------------------------------------------------
     luce_rt_own_storage,
@@ -285,6 +287,9 @@ pub const Effect = struct {
 // and it must name the default location.  If it only moves bytes
 // through the arena or a String, it does not.
 
+/// Touches no memory whatsoever: everything it needs arrives in
+/// registers and the answer goes back the same way.
+const reads_nothing: Memory = .{};
 /// Reads through its arguments and nothing else.
 const reads_run: Memory = .{ .argmem = .read };
 /// Writes only through its arguments.
@@ -313,7 +318,8 @@ const touches_heap: Memory = .{
     .inaccessiblemem = .readwrite,
     .other = .readwrite,
 };
-/// Reads the object heap and writes the run's private storage: `str`,
+/// Reads the object heap and writes the run's private storage:
+/// `String(x)` and `Builder.build()`,
 /// which renders a Builder's bytes into fresh arena text.
 const reads_heap_makes_text: Memory = .{
     .argmem = .readwrite,
@@ -619,6 +625,18 @@ pub fn describe(service: Service) Effect {
         .luce_rt_compare => .{
             .memory = reads_private,
             .parameters = &.{ .plain, .value_in, .value_in },
+        },
+        // Three scalars in, an answer out: it reads nothing at all,
+        // which is the strongest summary in this file and the only
+        // service that earns it.
+        .luce_rt_compare_int_float => .{
+            .memory = reads_nothing,
+            .parameters = &.{ .plain, .plain, .plain },
+        },
+        // Two scalars in, one out, and the same nothing read.
+        .luce_rt_float_mod => .{
+            .memory = reads_nothing,
+            .parameters = &.{ .plain, .plain },
         },
     };
 }

@@ -127,14 +127,14 @@ cheap once these are settled.
 > **Confirm:** `Int(x)` rounds half away from zero (§7), and `trunc`
 > is added.
 
-> ### D5 — If `String(x)` arrives, does `str(x)` leave?
+> ### D5 — If `String(x)` arrives, does `String(x)` leave?
 >
 > `Int(x)` and `Float(x)` are conversion constructors named for the
-> type they produce. `String(x)` completes that family. But `str(x)`
+> type they produce. `String(x)` completes that family. But `String(x)`
 > already does the job and is called 34 times across 14 `.luc` files,
 > plus the site and the specs.
 >
-> **Recommended:** add `String(x)` and **retire `str(x)`**. The rename
+> **Recommended:** add `String(x)` and **retire `String(x)`**. The rename
 > is mechanical, it is the only outcome in which the language gets
 > *smaller* rather than larger, and it fixes a complaint already
 > written into this codebase — `04_semantics/context.zig:61` records
@@ -546,7 +546,7 @@ lowering to the existing `str_value` intrinsic, so this is stage-4
 work and **no new MIR, no new runtime, no new ABI**.
 
 `Builder` is the reason `str` cannot be renamed by search-and-replace:
-`str(builder)` takes a heap object, and a scalar constructor should
+`String(builder)` takes a heap object, and a scalar constructor should
 not. Under D5's recommendation `Builder` gets `b.build()` as the
 method it should always have had and `String(...)` stays scalar-only.
 
@@ -894,3 +894,290 @@ correctly as `x % 256` for the first time (§3).
 **A `numeric` or `Number` supertype.** There is no subtyping in Luce
 beyond `T <: T?` and this would be the second, which is how a small
 type system stops being small.
+
+---
+
+## As built
+
+The ratified plan, landed step by step.  Each entry says what shipped
+and — where the memo met the code and lost — what the memo had wrong,
+corrected here rather than left for the next reader to re-derive.
+
+### Step 1 — promotion, and exact comparison — **landed**
+
+`fit` (`04_semantics/builder.zig`) grew its second arm and every site
+that already called it got promotion for free: annotation, argument,
+return, struct field.  `Intrinsic.compare_int_float` arrived with
+`operators.compareIntFloat` behind it, one implementation in
+`libluce_rt` that the constant folder calls too.  `format_version` is
+**19** and `abi.version` did not move, exactly as §10 predicted.  The
+benchmarks are unchanged to the tenth of a percent: promotion costs
+nothing in code that does not mix.
+
+**Five things the memo did not have right.**
+
+1. **`fit` is not the whole of it.**  Five places compare an operand's
+   type against a wanted type *without* calling `fit`, because they
+   lower before the wanted type is known: binary operands, compound
+   assignment through a nested place, `xs[i] = v`, `methodTakes`
+   (`xs.append(1)`), and `min`/`max`/`clamp`.  Each needed its own
+   line.  The memo's "promotion is a second arm on that function" is
+   true of half the sites and no more.
+
+2. **`min`, `max` and `clamp` are promotion sites**, and the memo does
+   not list them.  They are not `fit` sites — they have no expected
+   type, they unify — but `clamp(x, 0, 10)` being a type error for a
+   Float `x`, in a language where `x < 0` is not, is exactly the
+   arbitrary carve-out §1 argues against.  They unify like a binary
+   operator: one Float among them makes them all Floats.
+
+3. **A list literal needs the expected type pushed *into* it.**
+   §1's "`let xs: List(Float) = [1, 2, 3]` is `List(Float)`" cannot
+   come from `fit`: the literal is inferred bottom-up and hands back a
+   `List(Int)` that no widening turns into a `List(Float)` — a
+   container is not its element.  It works by a one-hop
+   `wanted_element` field on the builder, the same shape
+   `allow_fallible` already uses.  While there: `[1, 2.5]` was a type
+   error and `[2.5, 1]` would have been legal under the naive rule, so
+   the literal unifies over *all* its elements — one Float anywhere
+   makes them all Floats.
+
+4. **Nothing folds a promoted literal at compile time.**  §1 says
+   "`x * 2` with `x: Float` becomes `x * 2.0` in the constant folder";
+   there is no such folder for function bodies — `07_optimize` is
+   prune, ownership and dead, and none of them is constant folding.
+   The `convert` instruction is emitted and LLVM folds `sitofp` of a
+   constant before any machine code exists, so the *claim* (zero cost)
+   holds and the *mechanism* named does not.
+
+5. **The mirror belongs to the operator.**  §5 describes
+   `compare_int_float(op, i, f)` without saying what happens when the
+   Float is written first.  `BinaryOp.mirrored` answers it in one
+   place: the Int is always the left operand and an operator written
+   the other way round is turned around, rather than the runtime
+   growing a second implementation of the same judgment.
+
+**Deliberately not done here.**  Method arguments promote numerically
+but still refuse `T` into `T?` — `fit` would have given both, and
+admitting the second is a separate decision that has nothing to do
+with numbers.
+
+### Step 2 — `//`, `//=`, and floor `%` — **landed**
+
+`BinaryOp.floor_divide` arrived, `remainder` became `modulo`, and the
+two floor together in the runtime (`@divFloor`/`@mod`), in the
+constant folder, and in the lowering.  §3's table is a program in
+`specs/` on both engines, beside the identity `b * (a // b) + (a % b)
+== a` swept over every sign, and the mask property (`x % 256` in
+`[0, 256)` for every `x`) that made `bf.luc:42` the spelling its
+author meant.  Every integer `/` in the tree is now `//`: **35 sites**
+— nine in `.luc`, twenty in Zig specs, four on the site, two in
+`src/apps` — against the memo's estimate of 36, which was one out.
+The three `%` workarounds §3 named are gone, `math.luc:230-233` from
+four lines to one.  The benchmarks do not move and the C twins were
+not touched, as §11 predicted.
+
+**Three things the memo did not have right.**
+
+1. **Zig's float `@mod` is not floor-mod**, so the runtime could not
+   simply swap `@rem` for `@mod` in both arms as §10 says.  Zig's
+   *integer* `@mod` floors and pairs with `@divFloor` correctly, but
+   its float `@mod` only forces a non-negative answer:
+   `@mod(7.0, -3.0)` is `1.0` where flooring says `-2.0`.  Using it
+   would have put the discontinuity promotion exists to remove back
+   one type over.  `operators.floorMod` is written out instead, and
+   because its answer is a `frem`, a zero case that takes the
+   divisor's sign, and a correction on opposed signs — three chances
+   to differ if written twice — the compiled path **calls** it rather
+   than inlining it.  It is the only float operator that is a call.
+
+2. **`//` works on Floats.**  Rule 3 says `//` and `%` "answer `Int`
+   for `Int` operands" and the memo never says what `7 // 2.0` is.
+   It has to be something: `//` promotes like every other arithmetic
+   operator, and refusing the mixed form while `%` accepts it is the
+   arbitrary carve-out §1 argues against.  So Float `//` is
+   `floor(a / b)`, which keeps the §3 identity true of Floats as well
+   and is IEEE like the rest of them — `1.0 // 0.0` is `inf`, not a
+   trap.
+
+3. **The lexer's message did not die, it moved.**  §3 accepts spending
+   `luce.lex.comment` for the operator.  It did not have to be spent
+   outright: **prefix position** is where the comment reading is
+   unambiguous — an operator with nothing on its left cannot be
+   arithmetic — and a `// comment` is written at the start of a line
+   every time.  So a statement beginning `//` is `luce.parse.comment`,
+   *"'//' is floor division and needs a number on its left; a comment
+   starts with '#'"*, and `a // b` is division without a word about
+   it.  `/* */` keeps its lexer arm unchanged.
+
+### Step 3 — `/` is true division — **landed**
+
+Exactly as §Order predicted, and for the reason it gave: step 2 had
+emptied the operator, so this commit changed the behaviour of no
+program in the tree.  Stage 4 widens two Int operands of `/`, the
+verifier **refuses** `Binary { .divide, .int }` outright — which is
+what let the runtime, the folder and the lowering stop carrying an
+integer `/` at all rather than keeping a dead arm — `effects.zig` now
+reaches `/` through its Float arm and calls it `pure`, and the
+`divide_by_zero` guard lives on `//` and `%`.  `1 / 0` is `inf`,
+`0 / 0` is NaN, and `minInt / -1` is `-9.223372036854776e18`.
+`programs/calc.luc` is a Float calculator: `7/2` is `3.5`, `1/0` is
+`inf`, and its scanner did not have to learn about decimal points to
+get there, because promotion does it.
+
+**Two things the memo did not have right.**
+
+1. **The four site samples needed nothing.**  §11 calls
+   `examples/traps.md:52` and `tour/control.md:40` samples that "need
+   more than a mechanical edit" and asks for real new content.  They
+   did not: step 2 moved both to `//`, and `//` still traps
+   `divide_by_zero` and still answers the Int quotient, so each keeps
+   proving exactly what it proved with the caret in the same column.
+   Landing the operator before flipping `/` is what made the hard
+   cases disappear, which is the strongest evidence for the order the
+   memo chose.
+
+2. **`n /= 2` needed its own diagnostic, not an inherited one.**  §9
+   says the existing message at `builder.zig:1882` catches it — "place
+   is Int, value is Float".  It does not: compound assignment fits its
+   value to the *place* first, so the Int value fits an Int place and
+   the mismatch only appears in the result, which nothing looks at.
+   It is refused where the operator is chosen instead, and the message
+   names the one-character fix: *"/ answers a Float and this place is
+   Int; write '//=' for the integer quotient"*.
+
+### Step 4 — `Int(x)` rounds; `trunc` arrives — **landed**
+
+`Int(x)` rounds half away from zero and `trunc(x: Float) -> Float`
+joins `floor` and `ceil`, so the four roundings are four spellings for
+four different answers.  The three guard sites moved in lockstep as
+§7 requires — `runtime/operators.zig`, `04_semantics/declarations.zig`
+and `08_llvm/lower.zig` — and `std/math.luc:35`'s hand-rolled half-up
+is now `Int(x / ln2)`, correct on negative inputs for the first time.
+
+**Two things the memo did not have right.**
+
+1. **`math.round` was not the rounding it was documented as, so
+   "the one already ratified wins" had to be applied to the
+   *documentation* rather than to the code.**  §7 argues that `Int(x)`
+   must agree with `math.round` because `math.round` already exists
+   and already says "half away from zero".  It said so and did not do
+   so: it was `floor(x + 0.5)`, and `0.49999999999999994 + 0.5` rounds
+   up to exactly `1.0` in binary64, so its floor is `1` where the
+   answer is `0`.  Adopting the implementation would have adopted the
+   bug into `Int(x)` and into every artifact.  Both now compute the
+   documented rule: the runtime and the lowering through `@round` /
+   `llvm.round`, which *is* roundToIntegralTiesToAway, and
+   `math.round` by splitting at `trunc(x)` and comparing the fraction
+   — exact, and the first real payoff of adding `trunc`.
+
+2. **`Int(x)` had truncating callers, and §7 does not mention them.**
+   `strings.format_float` split a number at its integral part with
+   `Int(magnitude)` and hand-rolled the fraction's rounding with
+   `floor(… + 0.5)`; three benchmarks took `Int` of a checksum.  All
+   of them say `trunc` out loud now, and `format_float`'s `+ 0.5` is
+   gone because `Int` does that step correctly.  None changed answer:
+   the benchmark outputs are byte-identical and the C twins were not
+   touched.
+
+**The range check moved after the rounding**, which §7 does not
+specify.  Rounding can only carry a value toward the boundary, and
+NaN and the infinities survive `@round` unchanged, so one check on the
+rounded value catches everything two checks would — and it is one
+check in each of the three places rather than two, which is what keeps
+them provably the same check.
+
+### Step 5 — `String(x)` arrives; `str` retires — **landed**
+
+`String(x)` joins `Int(x)` and `Float(x)` as a conversion constructor
+named for what it produces, `Builder` gets the `build()` method D5
+recommended, and `str` is gone from the builtin table, from the
+reserved list, and from all 35 call sites.  The complaint at
+`04_semantics/context.zig:61` is closed twice over: the `String(...)`
+it sent readers after exists, and the message that sent them there had
+already gone in step 1.
+
+**Three things the memo did not have right.**
+
+1. **`String(x)` is not "the existing `str_value` intrinsic reached by
+   a new name" and nothing else.**  §7 says the change is "stage-4
+   work and no new MIR, no new runtime, no new ABI", which is true of
+   the *intrinsic* and understates the seam: `str` was resolved
+   through the builtin table, where `Int` and `Float` are matched by
+   name in `lowerCall` **before** that table is consulted.  Moving
+   `String` to the second mechanism is what makes all three
+   constructors one thing rather than two-plus-one — and it is why
+   `String` is a reserved name and `str` is no longer one.
+
+2. **f-strings desugar through it.**  §7 does not mention them, and
+   they are the largest caller: every hole is a synthesized `str(...)`
+   call, so the rename reached `03_parse/expressions.zig` and every
+   f-string diagnostic became `luce.sema.convert` at the hole.  That
+   reads better than what it replaced — a hole is a conversion the
+   reader did not write, so the constructor's own message is the right
+   one to give.
+
+3. **`String(x)` of a constant folds, and `str(x)` never did.**  A
+   consequence nobody asked for and worth keeping: the folder handles
+   the three constructors, so `let banner = String(width) + "px"` is
+   now a compile-time constant where it used to be "calls are not
+   constant".  One site sample was built on exactly that refusal and
+   needed a real call to make its point instead.
+
+**The Float text is spelled once.**  Both the runtime and the folder
+print a Float with Zig's `{d}` — the Ryū-derived shortest
+representation that round-trips — so a folded `String(2.5)` is the
+same bytes a run would produce, and the specs compare them.
+
+### Step 6 — f-string `:.Nf` — **landed**
+
+`f"{mean:.2f}"` lowers to `strings.format_float(mean, 2)`, exactly as
+§8 recommends: one production in the f-string scanner, no runtime, and
+the std function that already existed and already rounds half away
+from zero.  `programs/dice.luc:36-37` — the shape §8 names as what
+this replaces — is one line now, and reads
+`f"total {total}, mean {total / count:.2f}"`, which is D1, D3 and D6
+in the same expression.
+
+**Two things the memo did not have right, both in its favour.**
+
+1. **The scan was already written.**  §8 costs "one grammar production
+   in the f-string scanner"; it cost slightly less, because
+   `topLevelColon` already existed to *refuse* this exact syntax —
+   *"no format specifiers in an f-string hole; use
+   strings.format_float(x, 2)"* — and it is the same bracket-aware,
+   string-skipping scan the split needs.  The refusal became the
+   feature by deleting four lines and calling the helper for its
+   answer instead of for its existence.
+
+2. **A spec needs `import std.strings`,** which §8 does not mention.
+   It follows from the lowering rather than being a new rule: a spec
+   *is* `strings.format_float`, so it needs what `s.split(",")` needs
+   and reports through the same `luce.sema.import` diagnostic.  Worth
+   writing down because it is the one thing about specs that surprises.
+
+### Step 7 — the docs, and what the numbers say — **landed**
+
+`docs/LANGUAGE.md`'s arithmetic and conversion sections are rewritten,
+`docs/MISSING.md` item 9 is closed by name (both workarounds it cited
+by line are gone) along with its Tier-5b item 3, `docs/PIPELINE.md`
+and `CLAUDE.md` no longer claim there are no implicit conversions, and
+every site page that asserted it says what is true instead.  The site
+builds every sample it shows, so the tour and the reference are
+verified rather than merely edited.
+
+**The measurements.**  `bench/compare.sh` against the base, twice:
+every row within noise, the largest consistent movement 1% and in both
+directions between runs.  The one row that looked real on the first
+pass — matmul's compute column at +5.9% — was 0.5% on the second, and
+matmul is the shortest benchmark there is.  Promotion costs nothing in
+code that does not mix, which is what §1 predicted; the C twins were
+never touched, which is what §11 predicted; and `bench/run.sh`'s
+cross-check passed at every step.
+
+**`abi.version` did not move**, at any step.  §10 said nothing here
+touches the `LuceHost` vtable and nothing did: every new semantic is a
+`libluce_rt` call (`luce_rt_compare_int_float`, `luce_rt_float_mod`)
+or an inline sequence.  `format_version` moved once, to **19**, at the
+first wire change, and the fingerprint moved with it three times as
+the instruction set settled.

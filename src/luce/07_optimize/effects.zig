@@ -79,14 +79,19 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
         .binary => |binary| if (binary.op.isComparison())
             .pure
         else if (binary.operand_type == .float)
-            // IEEE arithmetic answers everything, including /0.
+            // IEEE arithmetic answers everything, `/0` included, so
+            // every Float operator is pure — and since `/` is real
+            // division and always answers a Float
+            // (docs/NUMERICS.md §2), `/` is now always in this arm.
+            // The operators that can still trap are `//` and `%`, the
+            // two that produce an Int.
             .pure
         else if (binary.operand_type == .string)
             // String `+` allocates bytes somebody has to free.
             .impure
         else
-            // Integer arithmetic traps on overflow and on /0, and is
-            // deterministic all the same.
+            // Integer arithmetic traps on overflow and on `// 0`, and
+            // is deterministic all the same.
             .stable,
 
         // A fresh struct value has an identity for the same reason a
@@ -117,7 +122,7 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
 }
 
 /// One intrinsic's effect.  `first_argument` is the type of argument
-/// zero where the answer depends on it (`abs`, `str`); pass null for
+/// zero where the answer depends on it (`abs`, `str_value`); pass null for
 /// the conservative answer, which is what a caller with no function to
 /// look it up in should do.
 ///
@@ -130,7 +135,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
         // for the same reason `negate` is: abs(Int.min) overflows.
-        .min, .max, .clamp, .sqrt, .floor, .ceil => .pure,
+        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_int_float => .pure,
         .abs => if (first_argument) |argument|
             (if (argument == .float) .pure else .stable)
         else
@@ -310,6 +315,8 @@ pub fn viewStable(instruction: Instruction) bool {
             .sqrt,
             .floor,
             .ceil,
+            .trunc,
+            .compare_int_float,
             .string_slice,
             .string_byte,
             .string_find_byte,
@@ -445,6 +452,8 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             .sqrt,
             .floor,
             .ceil,
+            .trunc,
+            .compare_int_float,
             .string_slice,
             .string_byte,
             .string_find_byte,

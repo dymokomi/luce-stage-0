@@ -12,9 +12,9 @@ func parse_port(text: String) -> Int!:
     return n
 
 func main() -> !:
-    print(str(try parse_port("8080")))
-    print(str(parse_port("nope") catch -1))
-    print(str(parse_port("99999") catch -1))
+    print(String(try parse_port("8080")))
+    print(String(parse_port("nope") catch -1))
+    print(String(parse_port("99999") catch -1))
 ```
 
 ```output
@@ -32,7 +32,7 @@ does, with one terminator changed. It needs a caller that said `!`.
 func inner(n: Int) -> Int!:
     if n == 0:
         error("inner refuses zero")
-    return 100 / n
+    return 100 // n
 
 func middle(n: Int) -> Int!:
     return try inner(n) + 1
@@ -41,8 +41,8 @@ func outer(n: Int) -> Int!:
     return try middle(n) * 2
 
 func main() -> !:
-    print(str(try outer(5)))
-    print(str(outer(0) catch -1))
+    print(String(try outer(5)))
+    print(String(outer(0) catch -1))
 ```
 
 ```output
@@ -110,8 +110,8 @@ func check(value: Int) -> Int!:
     return value
 
 func main() -> !:
-    print(str(try check(50)))
-    print(str(try check(500)))
+    print(String(try check(50)))
+    print(String(try check(500)))
 ```
 
 ```output
@@ -123,10 +123,12 @@ loom: error: 500 is too large [user_error]
 ## The worked example
 
 `programs/calc.luc` in the repository is a recursive-descent
-calculator. Every way it can be defeated is a way the *user* defeated
-it, so the parser says `-> Step!` and raises with `error(...)`; `try`
-carries the failure up through four frames of recursion without a
-single `if` written for it.
+calculator — a `Float` one, because `/` is real division and a pocket
+calculator that answers `3` to `7 / 2` is broken. Every way it can be
+defeated is a way the *user* defeated it, so the parser says
+`-> Step!` and raises with `error(...)`; `try` carries the failure up
+through four frames of recursion without a single `if` written for
+it.
 
 ```luce run include=programs/calc.luc args="2 + 3 * (10 - 4)"
 ```
@@ -143,5 +145,5 @@ position it gave up:
 
 ```output
 loom: error: expected a number at position 4 [user_error]
-    raised in Scan.number (calc.luc:36:13)
+    raised in Scan.number (calc.luc:44:13)
 ```

@@ -49,7 +49,7 @@ fn binaryPrecedence(kind: Kind) Precedence {
         .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => .comparison,
         .keyword_else, .keyword_catch => .coalesce,
         .plus, .minus => .additive,
-        .star, .slash, .percent => .multiplicative,
+        .star, .slash, .slash_slash, .percent => .multiplicative,
         else => .none,
     };
 }
@@ -97,7 +97,8 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
         .minus => .subtract,
         .star => .multiply,
         .slash => .divide,
-        .percent => .remainder,
+        .slash_slash => .floor_divide,
+        .percent => .modulo,
         else => unreachable,
     };
 }
@@ -565,6 +566,24 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             try bangIsNotAnOperator(self);
             return null;
         },
+        // `//` is floor division (docs/NUMERICS.md), and taking that
+        // spelling spent the lexer's *"a comment starts with '#';
+        // there is no '//' form"* — a good message aimed at exactly
+        // the newcomer the operator is otherwise courting.  It is not
+        // gone, it moved here, because **prefix position is where the
+        // comment reading is unambiguous**: an operator with nothing
+        // to its left cannot be arithmetic, and a `// comment` is
+        // written at the start of a line every time.  With a left
+        // operand, `a // b` is division and is meant to be.
+        .slash_slash => {
+            try self.report(
+                "luce.parse.comment",
+                self.peek().span,
+                "'//' is floor division and needs a number on its left; a comment starts with '#'",
+                .{},
+            );
+            return null;
+        },
         else => {
             try self.report(
                 "luce.parse.expression",
@@ -737,14 +756,14 @@ pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
 
 /// Expand f"...{expr}..." into a String-typed concatenation:
 /// literal chunks (escapes and `{{`/`}}` decoded) joined with `+`,
-/// each `{expr}` wrapped in `str(expr)`.  A hole is sub-parsed
+/// each `{expr}` wrapped in `String(expr)`.  A hole is sub-parsed
 /// against the real source with absolute spans, so diagnostics
 /// inside interpolations point at the right bytes.
 ///
 /// This is the one place stage 3 desugars rather than records; the
 /// structured form belongs in stage 5 (docs/PIPELINE.md).
 // ---------------------------------------------------------------------------
-// F-strings, desugared here into `+` and `str(...)`
+// F-strings, desugared here into `+` and `String(...)`
 // ---------------------------------------------------------------------------
 
 fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
@@ -779,15 +798,33 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
                 try self.report("luce.parse.fstring", item.span, "unmatched open brace in f-string", .{});
                 return null;
             };
-            const hole = inner[index + 1 .. close];
-            const hole_expr = (try subExpression(self, hole, inner_start + index + 1)) orelse return null;
-            // The synthesized `str(...)` takes the *hole's* span, not
-            // the whole f-string's.  Everything stage 4 says about this
-            // call is about what the reader wrote between the braces —
-            // `str takes Int, Float, Bool, String, or Builder` for a
-            // list in a hole — and underlining the entire literal makes
-            // a reader with four holes in one line check all four.
-            const wrapped = try wrapStr(self, hole_expr, hole_expr.span());
+            const whole_hole = inner[index + 1 .. close];
+            const hole_start = inner_start + index + 1;
+            // `{x:.2f}` — the value, then how to write it.
+            const split = topLevelColon(whole_hole);
+            const hole = if (split) |at| whole_hole[0..at] else whole_hole;
+            const hole_expr = (try subExpression(self, hole, hole_start)) orelse return null;
+            const wrapped = if (split) |at| blk: {
+                const spec = whole_hole[at + 1 ..];
+                const digits = decimalsOf(spec) orelse {
+                    try self.report(
+                        "luce.parse.fstring",
+                        .{ .start = hole_start + at, .end = hole_start + whole_hole.len },
+                        "unknown format spec ':{s}'; the one form is ':.Nf' — N decimal places of a Float",
+                        .{spec},
+                    );
+                    return null;
+                };
+                break :blk try wrapFormat(self, hole_expr, digits, hole_expr.span());
+            } else
+                // The synthesized `String(...)` takes the *hole's*
+                // span, not the whole f-string's.  Everything stage 4
+                // says about this call is about what the reader wrote
+                // between the braces — `String() converts Int, Float,
+                // Bool, or String` for a list in a hole — and
+                // underlining the entire literal makes a reader with
+                // four holes in one line check all four.
+                try wrapStr(self, hole_expr, hole_expr.span());
             result = try concat(self, result, wrapped);
             index = close + 1;
             continue;
@@ -841,11 +878,61 @@ fn concat(self: *Parser, left: ?*ast.Expression, right: *ast.Expression) Error!*
     } });
 }
 
-/// str(expr) — the interpolation converts each hole to text.
+/// String(expr) — the interpolation converts each hole to text.
 fn wrapStr(self: *Parser, expr: *ast.Expression, span: Span) Error!*ast.Expression {
     const arguments = try self.arena.alloc(ast.Argument, 1);
     arguments[0] = .{ .name = null, .value = expr, .span = expr.span() };
-    return make(self, .{ .call = .{ .callee = "str", .arguments = arguments, .span = span } });
+    return make(self, .{ .call = .{ .callee = "String", .arguments = arguments, .span = span } });
+}
+
+/// `strings.format_float(expr, decimals)` — what `{x:.2f}` means.
+///
+/// **Formatting belongs where formatting happens** (docs/NUMERICS.md
+/// §8), and where it happens is an f-string: every numeric formatting
+/// site in the corpus is inside one or inside a `print`.  So the spec
+/// lowers to the std function that already existed, already rounds
+/// half away from zero, and is already tested — which is why this is
+/// one production in this scanner and no runtime at all.  It needs
+/// `import std.strings` for the same reason `s.split(",")` does, and
+/// says so through the same diagnostic.
+fn wrapFormat(
+    self: *Parser,
+    expr: *ast.Expression,
+    digits: []const u8,
+    span: Span,
+) Error!*ast.Expression {
+    // The digit run travels as the literal text it was written as, so
+    // stage 4 range-checks it exactly as it checks one a reader typed.
+    const places = try make(self, .{ .int_literal = .{
+        .text = try self.arena.dupe(u8, digits),
+        .span = span,
+    } });
+    const arguments = try self.arena.alloc(ast.Argument, 2);
+    arguments[0] = .{ .name = null, .value = expr, .span = expr.span() };
+    arguments[1] = .{ .name = null, .value = places, .span = span };
+    return make(self, .{ .call = .{
+        .callee = "strings.format_float",
+        .arguments = arguments,
+        .span = span,
+    } });
+}
+
+/// The `N` of a `.Nf` spec, or null when the spec is anything else.
+///
+/// **One form, deliberately** (docs/NUMERICS.md §8): no width, no
+/// fill, no alignment, no `%`, no `e`, no thousands separator.  The
+/// `f` is redundant — the compiler knows the operand's type — and is
+/// required anyway, because `{x:.2}` means *two significant digits* in
+/// Python and letting it mean two decimal places here would be a
+/// silent divergence from the language Luce is shaped after.
+fn decimalsOf(spec: []const u8) ?[]const u8 {
+    if (spec.len < 3) return null;
+    if (spec[0] != '.' or spec[spec.len - 1] != 'f') return null;
+    const digits = spec[1 .. spec.len - 1];
+    for (digits) |character| {
+        if (character < '0' or character > '9') return null;
+    }
+    return digits;
 }
 
 /// Find the `}` matching the `{` just before `from`, tracking
@@ -888,19 +975,6 @@ fn subExpression(self: *Parser, bytes: []const u8, offset: usize) Error!?*ast.Ex
             "luce.parse.fstring",
             .{ .start = offset, .end = offset },
             "empty interpolation: {{}} needs an expression between the braces",
-            .{},
-        );
-        return null;
-    }
-    // `f"{x:.2f}"` is the habit Python travellers arrive with, and its
-    // tail rarely even lexes.  A colon outside strings and brackets is
-    // never valid in a Luce expression, so catch it before the lexer
-    // turns it into "malformed expression".
-    if (topLevelColon(bytes)) |at| {
-        try self.report(
-            "luce.parse.fstring",
-            .{ .start = offset + at, .end = offset + at + 1 },
-            "no format specifiers in an f-string hole; use strings.format_float(x, 2)",
             .{},
         );
         return null;
@@ -955,6 +1029,16 @@ fn subExpression(self: *Parser, bytes: []const u8, offset: usize) Error!?*ast.Ex
 /// The offset of a `:` in an f-string hole that sits outside any
 /// string literal and any bracket — the shape a Python format
 /// specifier has, and one no Luce expression ever has.
+/// Where a hole's format spec begins, or null when it has none.
+///
+/// A colon outside strings and brackets used to be refused outright —
+/// `f"{x:.2f}"` is the habit Python travellers arrive with, and its
+/// tail rarely even lexes, so it was caught before the lexer could
+/// call it a malformed expression.  It is the feature now
+/// (docs/NUMERICS.md §8), and this is the same scan: a colon *inside*
+/// brackets belongs to whatever opened them, which is what keeps
+/// `f"{s[1:3]}"` a slice and `f"{m[k]}"` a lookup, and a colon inside
+/// a string is text.
 fn topLevelColon(bytes: []const u8) ?usize {
     var brackets: usize = 0;
     var index: usize = 0;

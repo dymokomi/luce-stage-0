@@ -43,7 +43,7 @@ which cannot trap.
 func main():
     var ages = new Map(String, Int)
     ages["ada"] = 36
-    print(str(ages["nobody"]))
+    print(String(ages["nobody"]))
 ```
 
 ```output

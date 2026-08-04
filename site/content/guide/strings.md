@@ -50,15 +50,15 @@ frame either way.
 ## What it cost, and what took most of it back
 
 The bill arrived in one place. `bench/strings` went from **2.35× its C
-twin to 3.40×**: 400,000 `str(i)` results and 400,001 split pieces
+twin to 3.40×**: 400,000 `String(i)` results and 400,001 split pieces
 that used to be unreclaimed bump allocations and shared views became
 800,000 allocate-and-free pairs. The other five benchmarks moved less
 than 1%, exactly as predicted.
 
 **Small-string optimisation took roughly three quarters of that
 back.** A string of 22 bytes or fewer now lives inside the value that
-carries it, so `str(Int)` and `chr` allocate nothing at all. The
-average split piece in that benchmark is 11.7 bytes and every `str(i)`
+carries it, so `String(Int)` and `chr` allocate nothing at all. The
+average split piece in that benchmark is 11.7 bytes and every `String(i)`
 is at most 7, so almost every allocation the change added went away
 again.
 
@@ -98,16 +98,16 @@ func main():
     # The shape that allocates per step.
     var slow = ""
     for i in range(0, 5):
-        slow += str(i) + ","
+        slow += String(i) + ","
 
     # The shape that does not.
     var fast = new Builder()
     for i in range(0, 5):
-        fast.append(str(i))
+        fast.append(String(i))
         fast.append_ascii(44)
 
     print(slow)
-    print(str(fast))
+    print(fast.build())
 ```
 
 ```output

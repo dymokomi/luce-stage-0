@@ -51,7 +51,7 @@ test "integers: the four operations and precedence" {
         \\    assert(2 + 3 == 5)
         \\    assert(10 - 4 == 6)
         \\    assert(6 * 7 == 42)
-        \\    assert(20 / 3 == 6)
+        \\    assert(20 // 3 == 6)
         \\    assert(2 + 3 * 4 == 14)
         \\    assert((2 + 3) * 4 == 20)
         \\    assert(-5 + 2 == -3)
@@ -60,17 +60,336 @@ test "integers: the four operations and precedence" {
     );
 }
 
-test "integers: division truncates toward zero, remainder follows the dividend" {
+// `String(x)` completes the family of conversion constructors, each
+// named for the type it produces, and `str` is gone (docs/NUMERICS.md
+// §7).  `Builder` is why they are not the same function: `str(b)`
+// took a heap object, and a scalar constructor should not — a builder
+// hands over its text with `b.build()`.
+
+test "String(x) prints every scalar, and Builder.build() hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(7 / 2 == 3)
-        \\    assert(-7 / 2 == -3)
-        \\    assert(7 / -2 == -3)
-        \\    assert(-7 / -2 == 3)
+        \\    assert(String(42) == "42")
+        \\    assert(String(-7) == "-7")
+        \\    assert(String(2.5) == "2.5")
+        \\    assert(String(3.0) == "3")
+        \\    assert(String(true) == "true")
+        \\    assert(String(false) == "false")
+        \\    assert(String("already") == "already")
+        \\    var b = new Builder()
+        \\    b.append("he")
+        \\    b.append("llo")
+        \\    assert(b.build() == "hello")
+        \\    # `build` takes a snapshot; the builder is still usable.
+        \\    b.append("!")
+        \\    assert(b.build() == "hello!")
+        \\    assert(len(b) == 6)
+        \\    free(b)
+        \\
+    );
+}
+
+// `{x:.2f}` — format specs inside f-strings, and nowhere else,
+// because that is where formatting happens (docs/NUMERICS.md §8).
+// One form: `.Nf` on a Float.  It lowers to `strings.format_float`,
+// which already existed and already rounds half away from zero, so
+// this is one production in the f-string scanner and no runtime.
+
+test "f-strings: a :.Nf spec writes a Float to N decimal places" {
+    try agree.printsGiven(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let mean = 23.998425
+        \\    print(f"mean = {mean:.2f}")
+        \\    let rate = 1.0 / 3.0
+        \\    print(f"{3} rolls, {rate:.3f}/s")
+        \\    # Rounding is the language's, half away from zero.
+        \\    print(f"{2.5:.0f} {-2.5:.0f}")
+        \\    # Promotion reaches the spec too: an Int widens into it.
+        \\    print(f"{7:.2f}")
+        \\    # And a hole with no spec is unchanged.
+        \\    print(f"{mean}")
+        \\
+    , budget, "mean = 24.00\n3 rolls, 0.333/s\n3 -3\n7.00\n23.998425\n");
+}
+
+test "f-strings: a colon inside brackets belongs to the brackets" {
+    try agree.printsGiven(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let parts = ["a", "b", "c"]
+        \\    let sliced = parts[0:2]
+        \\    print(f"{len(sliced)} {parts[1]} {len(parts[0:3])}")
+        \\    let text = "hello"
+        \\    print(f"{text[1:3]}")
+        \\    free(sliced)
+        \\    free(parts)
+        \\
+    , budget, "2 b 3\nel\n");
+}
+
+test "str is a name a program may take now" {
+    // It left the reserved list with the builtin, so the language got
+    // one word smaller in both senses (docs/NUMERICS.md §7).
+    try agreeOk(
+        \\func str(n: Int) -> Int:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    assert(str(21) == 42)
+        \\
+    );
+}
+
+test "String(x) folds in a constant, in the same bytes a run would print" {
+    try agreeOk(
+        \\let count = String(42)
+        \\let ratio = String(2.5)
+        \\let flag = String(true)
+        \\let same = String("x")
+        \\let joined = count + " " + ratio + " " + flag + " " + same
+        \\
+        \\func main():
+        \\    assert(joined == "42 2.5 true x")
+        \\    assert(String(42) == count)
+        \\    assert(String(2.5) == ratio)
+        \\
+    );
+}
+
+// `Int(x)` **rounds half away from zero** — the same rounding
+// `math.round` was always documented as, because a language with two
+// roundings that disagree has a bug in it (docs/NUMERICS.md §7).
+// `trunc(x)` is how truncation is spelled now, completing the four:
+// `floor`, `ceil`, `trunc`, and round.
+
+test "Int(x) rounds half away from zero, and trunc keeps truncation" {
+    try agreeOk(
+        \\func main():
+        \\    assert(Int(2.5) == 3)
+        \\    assert(Int(-2.5) == -3)
+        \\    assert(Int(0.5) == 1)
+        \\    assert(Int(-0.5) == -1)
+        \\    assert(Int(2.4) == 2)
+        \\    assert(Int(-2.4) == -2)
+        \\    assert(Int(2.6) == 3)
+        \\    assert(Int(-2.6) == -3)
+        \\    assert(Int(3.9) == 4)
+        \\    assert(Int(-3.9) == -4)
+        \\    assert(Int(7) == 7)
+        \\    # Toward zero has a spelling of its own again.
+        \\    assert(trunc(2.9) == 2.0)
+        \\    assert(trunc(-2.9) == -2.0)
+        \\    assert(Int(trunc(-2.9)) == -2)
+        \\    # And the four roundings are four different answers.
+        \\    assert(floor(-2.5) == -3.0)
+        \\    assert(ceil(-2.5) == -2.0)
+        \\    assert(trunc(-2.5) == -2.0)
+        \\    assert(Int(-2.5) == -3)
+        \\
+    );
+}
+
+test "Int(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
+    // `0.49999999999999994 + 0.5` rounds up to exactly 1.0 in
+    // binary64, so the floor of it is 1 where the answer is 0.  That
+    // is how `math.round` used to be written; both now split at
+    // `trunc`, which is exact.
+    try agreeOk(
+        \\import std.math
+        \\
+        \\func main():
+        \\    var nearly = 0.49999999999999994
+        \\    assert(Int(nearly) == 0)
+        \\    assert(math.round(nearly) == 0.0)
+        \\    assert(floor(nearly + 0.5) == 1.0)
+        \\    for step in range(-40, 41):
+        \\        let x = Float(step) / 4.0
+        \\        assert(Float(Int(x)) == math.round(x))
+        \\
+    );
+}
+
+test "trap: Int(x) still refuses NaN, the infinities, and out of range" {
+    try agreeTrap(
+        \\func main():
+        \\    var big = 1.0
+        \\    while big < 1.0e30:
+        \\        big = big * 10.0
+        \\    let bad = Int(big)
+        \\
+    , .conversion_range);
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0.0
+        \\    let bad = Int(zero / zero)
+        \\
+    , .conversion_range);
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0.0
+        \\    var one = 1.0
+        \\    let bad = Int(one / zero)
+        \\
+    , .conversion_range);
+}
+
+// `/` is **real division** and always answers a Float
+// (docs/NUMERICS.md §2, §4): the classic `1/2 == 0` is the single
+// most common cause of surprise for people who do not already think
+// in machine words, and the quotient that answers `0` is `1 // 2`.
+
+test "integers: / is real division and answers a Float" {
+    try agreeOk(
+        \\func main():
+        \\    assert(1 / 2 == 0.5)
+        \\    assert(7 / 2 == 3.5)
+        \\    assert(-7 / 2 == -3.5)
+        \\    assert(6 / 3 == 2.0)
+        \\    assert(6 / 3 == 2)
+        \\    let total = 10
+        \\    let count = 4
+        \\    assert(total / count == 2.5)
+        \\
+    );
+}
+
+test "integers: / never traps, and 1 / 0 is inf" {
+    // The operators that produce an Int keep integer semantics,
+    // including the trap; the one that produces a Float is IEEE like
+    // every other Float operation (docs/NUMERICS.md §4).
+    try agreeOk(
+        \\func main():
+        \\    var zero = 0
+        \\    var one = 1
+        \\    let infinity = one / zero
+        \\    assert(infinity > 9.0e300)
+        \\    let negative = (0 - one) / zero
+        \\    assert(negative < -9.0e300)
+        \\    let nan = zero / zero
+        \\    assert(nan != nan)
+        \\    # And `minInt / -1`, which the Int quotient could not hold.
+        \\    var low = -9223372036854775808
+        \\    var minus_one = -1
+        \\    assert(low / minus_one > 9.0e18)
+        \\
+    );
+}
+
+test "integers: // and % keep the trap / gave up" {
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0
+        \\    let bad = 1 // zero
+        \\
+    , .divide_by_zero);
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0
+        \\    let bad = 1 % zero
+        \\
+    , .divide_by_zero);
+    try agreeTrap(
+        \\func main():
+        \\    var low = -9223372036854775808
+        \\    var minus_one = -1
+        \\    let bad = low // minus_one
+        \\
+    , .integer_overflow);
+}
+
+// `//` and `%` are the integer pair and they **floor** together
+// (docs/NUMERICS.md §3).  This is the memo's table verbatim, on both
+// engines, plus the identity the pairing is chosen to keep.
+
+test "integers: // and % floor together, and the identity holds" {
+    try agreeOk(
+        \\func main():
+        \\    assert(7 // 3 == 2)
         \\    assert(7 % 3 == 1)
-        \\    assert(-7 % 3 == -1)
-        \\    assert(7 % -3 == 1)
+        \\    assert(-7 // 3 == -3)
+        \\    assert(-7 % 3 == 2)
+        \\    assert(7 // -3 == -3)
+        \\    assert(7 % -3 == -2)
+        \\    assert(-7 // -3 == 2)
+        \\    assert(-7 % -3 == -1)
         \\    assert(0 % 5 == 0)
+        \\    assert(6 % 3 == 0)
+        \\    assert(-6 % 3 == 0)
+        \\    assert(20 // 3 == 6)
+        \\
+    );
+}
+
+test "integers: b * (a // b) + (a % b) == a, over every sign" {
+    try agreeOk(
+        \\func main():
+        \\    for a in range(-9, 10):
+        \\        for b in range(-4, 5):
+        \\            if b != 0:
+        \\                assert(b * (a // b) + (a % b) == a)
+        \\                # `%` takes the sign of the divisor, so a
+        \\                # positive divisor never yields a negative.
+        \\                if b > 0:
+        \\                    assert(a % b >= 0)
+        \\                    assert(a % b < b)
+        \\                else:
+        \\                    assert(a % b <= 0)
+        \\                    assert(a % b > b)
+        \\
+    );
+}
+
+test "integers: floor-mod by a power of two is a mask, negatives included" {
+    // What C's remainder cannot do without a sign fixup, and the
+    // reason `bf.luc`'s byte decrement is `(x - 1) % 256` now.
+    try agreeOk(
+        \\func main():
+        \\    for x in range(-600, 600):
+        \\        let wrapped = x % 256
+        \\        assert(wrapped >= 0)
+        \\        assert(wrapped < 256)
+        \\    assert(-1 % 256 == 255)
+        \\    assert(0 % 256 == 0)
+        \\    assert(256 % 256 == 0)
+        \\
+    );
+}
+
+test "integers: // and %= and //= carry the same rule" {
+    try agreeOk(
+        \\func main():
+        \\    var n = -7
+        \\    n //= 3
+        \\    assert(n == -3)
+        \\    var m = -7
+        \\    m %= 3
+        \\    assert(m == 2)
+        \\
+    );
+}
+
+test "floats: % floors with the integer operator, and // is its floor" {
+    // Promotion would otherwise put a discontinuity here: `-7 % 3`
+    // answering 2 and `-7 % 3.0` answering -1.0, with an invisible
+    // widening choosing between them.
+    try agreeOk(
+        \\func main():
+        \\    assert(7.0 % 3.0 == 1.0)
+        \\    assert(-7.0 % 3.0 == 2.0)
+        \\    assert(7.0 % -3.0 == -2.0)
+        \\    assert(-7.0 % -3.0 == -1.0)
+        \\    assert(7.0 // 3.0 == 2.0)
+        \\    assert(-7.0 // 3.0 == -3.0)
+        \\    assert(7.0 // -3.0 == -3.0)
+        \\    assert(-7.0 // -3.0 == 2.0)
+        \\    assert(-5.5 % 2.0 == 0.5)
+        \\    # Promotion crosses the line without a seam in it.
+        \\    assert(-7 % 3.0 == 2.0)
+        \\    assert(-7.0 % 3 == 2.0)
+        \\    assert(-7 // 3.0 == -3.0)
         \\
     );
 }
@@ -97,7 +416,7 @@ test "integers: Int's minimum is written the way it reads" {
         \\    assert(low < 0)
         \\    assert(low + 1 == -9223372036854775807)
         \\    assert(low == 0 - 9223372036854775807 - 1)
-        \\    let step = -9223372036854775808 / 2
+        \\    let step = -9223372036854775808 // 2
         \\    assert(step == -4611686018427387904)
         \\
     );
@@ -134,14 +453,192 @@ test "floats: arithmetic, IEEE division, and builtins" {
     );
 }
 
-test "floats and ints do not mix without explicit conversion" {
+// ---------------------------------------------------------------------------
+// Numbers that mix (docs/NUMERICS.md)
+// ---------------------------------------------------------------------------
+
+test "the conversions are still spelled where a program spells them" {
     try agreeOk(
         \\func main():
         \\    let n = 7
         \\    let x = 2.0
         \\    assert(Float(n) / x == 3.5)
         \\    assert(Int(x) + n == 9)
-        \\    assert(Float(Int(3.9)) == 3.0)
+        \\    assert(Float(Int(3.9)) == 4.0)
+        \\
+    );
+}
+
+test "mixing: Int widens to Float in every arithmetic operator" {
+    try agreeOk(
+        \\func main():
+        \\    let n = 7
+        \\    let x = 2.0
+        \\    assert(n + x == 9.0)
+        \\    assert(x + n == 9.0)
+        \\    assert(n - x == 5.0)
+        \\    assert(x - n == -5.0)
+        \\    assert(n * x == 14.0)
+        \\    assert(x * n == 14.0)
+        \\    assert(n / x == 3.5)
+        \\    assert(x / n == 0.2857142857142857)
+        \\    assert(n % x == 1.0)
+        \\    assert(x % n == 2.0)
+        \\
+    );
+}
+
+test "mixing: a promoted operator answers a Float, printed as one" {
+    // `String` of a whole Float is its shortest round-trip, so "8" and
+    // not "8.0" — the division below is what shows the type moved.
+    try agree.printsGiven(
+        \\func main():
+        \\    let n = 7
+        \\    print(String(n + 1.0))
+        \\    print(String(1 + 0.5))
+        \\    print(String(n / 2.0))
+        \\    var f = 2.0
+        \\    f += 1
+        \\    f *= 2
+        \\    print(String(f / 8.0))
+        \\
+    , budget, "8\n1.5\n3.5\n0.75\n");
+}
+
+test "mixing: promotion reaches annotations, arguments, returns, and fields" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\func scale(by: Float) -> Float:
+        \\    return by * 2
+        \\
+        \\func whole() -> Float:
+        \\    return 3
+        \\
+        \\func maybe_whole(present: Bool) -> Float?:
+        \\    if present:
+        \\        return 4
+        \\    return none
+        \\
+        \\func main():
+        \\    let f: Float = 1
+        \\    assert(f == 1.0)
+        \\    assert(scale(3) == 6.0)
+        \\    assert(whole() == 3.0)
+        \\    let p = Point(x = 1, y = 2.5)
+        \\    assert(p.x == 1.0)
+        \\    # The two widenings compose, in the one order that works.
+        \\    let held = maybe_whole(true)
+        \\    if held != none:
+        \\        assert(held == 4.0)
+        \\    assert(maybe_whole(false) == none)
+        \\
+    );
+}
+
+test "mixing: promotion reaches container elements and min/max/clamp" {
+    try agreeOk(
+        \\func main():
+        \\    var xs: List(Float) = [1, 2, 3]
+        \\    xs.append(4)
+        \\    xs[0] = 9
+        \\    assert(xs[0] == 9.0)
+        \\    assert(xs[3] == 4.0)
+        \\    assert(len(xs) == 4)
+        \\    let mixed = [1, 2.5, 3]
+        \\    assert(mixed[0] == 1.0)
+        \\    assert(mixed[2] == 3.0)
+        \\    let plain = [1, 2, 3]
+        \\    assert(plain[0] == 1)
+        \\    let x = 7.5
+        \\    assert(clamp(x, 0, 5) == 5.0)
+        \\    assert(min(x, 8) == 7.5)
+        \\    assert(max(1, x) == 7.5)
+        \\
+    );
+}
+
+// Comparison across the line is **exact**: it compares the numbers,
+// not a conversion of them.  The boundary is 2^53, where an Int stops
+// surviving `sitofp` — below it every answer agrees with widening and
+// above it they part company, which is the whole reason this is a
+// call and not a cast (docs/NUMERICS.md §5).
+
+test "mixing: comparison across the line is exact at 2^53, both sides" {
+    try agreeOk(
+        \\func main():
+        \\    var two53 = 9007199254740992
+        \\    var as_float = 9007199254740992.0
+        \\    assert(two53 == as_float)
+        \\    assert(two53 <= as_float)
+        \\    assert(as_float == two53)
+        \\    # The number that does not survive widening.
+        \\    assert(two53 + 1 != as_float)
+        \\    assert(two53 + 1 > as_float)
+        \\    assert(as_float < two53 + 1)
+        \\    assert(not (two53 + 1 == as_float))
+        \\    assert(not (two53 + 1 <= as_float))
+        \\    # And its neighbour on the other side.
+        \\    assert(two53 - 1 < as_float)
+        \\    assert(as_float > two53 - 1)
+        \\
+    );
+}
+
+test "mixing: ordering, equality, and the fraction that breaks a tie" {
+    try agreeOk(
+        \\func main():
+        \\    assert(1 < 1.5)
+        \\    assert(1.5 > 1)
+        \\    assert(2 > 1.5)
+        \\    assert(1.5 < 2)
+        \\    assert(1 == 1.0)
+        \\    assert(1.0 == 1)
+        \\    assert(1 != 1.5)
+        \\    assert(-1 > -1.5)
+        \\    assert(-2 < -1.5)
+        \\    assert(0 >= -0.0)
+        \\    assert(0 <= -0.0)
+        \\
+    );
+}
+
+test "mixing: infinity and NaN compare with an Int without widening it" {
+    try agreeOk(
+        \\func main():
+        \\    var one = 1.0
+        \\    var zero = 0.0
+        \\    let infinity = one / zero
+        \\    let nan = zero / zero
+        \\    var big = 9223372036854775807
+        \\    assert(big < infinity)
+        \\    assert(infinity > big)
+        \\    assert(0 - big - 1 > 0.0 - infinity)
+        \\    # NaN is unordered with everything, so only != holds.
+        \\    assert(0 != nan)
+        \\    assert(not (0 == nan))
+        \\    assert(not (0 < nan))
+        \\    assert(not (0 > nan))
+        \\    assert(not (0 >= nan))
+        \\    assert(not (0 <= nan))
+        \\
+    );
+}
+
+test "mixing: an exact comparison folds the same way in a constant" {
+    try agreeOk(
+        \\let below = 9007199254740992 == 9007199254740992.0
+        \\let above = 9007199254740993 == 9007199254740992.0
+        \\let ordered = 9007199254740992.0 < 9007199254740993
+        \\let widened = 1 + 2.5
+        \\
+        \\func main():
+        \\    assert(below)
+        \\    assert(not above)
+        \\    assert(ordered)
+        \\    assert(widened == 3.5)
         \\
     );
 }
@@ -160,14 +657,15 @@ test "compound assignment on names: every operator, Int and Float" {
         \\    assert(n == 12)
         \\    n *= 2
         \\    assert(n == 24)
-        \\    n /= 5
+        \\    n //= 5
         \\    assert(n == 4)
         \\    n %= 3
         \\    assert(n == 1)
         \\    var f = 2.0
         \\    f += 0.5
         \\    f *= 4.0
-        \\    assert(f == 10.0)
+        \\    f /= 2.5
+        \\    assert(f == 4.0)
         \\
     );
 }
@@ -410,13 +908,13 @@ test "strings: UTF-8 aware slicing and byte access" {
 // Conversions
 // ---------------------------------------------------------------------------
 
-test "conversions: str, parse, chr, ord" {
+test "conversions: String, parse, chr, ord" {
     try agreeOk(
         \\func main():
-        \\    assert(str(42) == "42")
-        \\    assert(str(0 - 7) == "-7")
-        \\    assert(str(true) == "true")
-        \\    assert(str(false) == "false")
+        \\    assert(String(42) == "42")
+        \\    assert(String(0 - 7) == "-7")
+        \\    assert(String(true) == "true")
+        \\    assert(String(false) == "false")
         \\    assert((parse_int("100") else 0) == 100)
         \\    assert((parse_float("1.5") else 0.0) == 1.5)
         \\    assert(chr(65) == "A")
@@ -473,7 +971,7 @@ test "ord folds in a file-scope constant, and an empty one still traps at run ti
 // String interpolation (f-strings)
 // ---------------------------------------------------------------------------
 
-test "f-strings interpolate names, expressions, and every str-able type" {
+test "f-strings interpolate names, expressions, and every scalar" {
     try agreeOk(
         \\func main():
         \\    let x = 7
@@ -677,7 +1175,7 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
         \\    var order = new Builder()
         \\    for k in m.keys():
         \\        order.append(k)
-        \\    assert(str(order) == "ab")
+        \\    assert(order.build() == "ab")
         \\    m.remove("a")
         \\    assert(not m.has("a") and len(m) == 1)
         \\
@@ -696,7 +1194,7 @@ test "maps: for key, value iteration, values(), and get with default" {
         \\    for k, v in m:
         \\        keys.append(k)
         \\        total += v
-        \\    assert(str(keys) == "abc")
+        \\    assert(keys.build() == "abc")
         \\    assert(total == 6)
         \\    assert(m.get("b", 0) == 2)
         \\    assert(m.get("missing", 99) == 99)
@@ -771,7 +1269,7 @@ test "builders accumulate text" {
         \\    var b = new Builder()
         \\    b.append("he")
         \\    b.append("llo")
-        \\    assert(str(b) == "hello")
+        \\    assert(b.build() == "hello")
         \\    assert(len(b) == 5)
         \\    b.clear()
         \\    assert(len(b) == 0)
@@ -786,7 +1284,7 @@ test "builders accumulate text" {
 test "file-scope constants fold and inline" {
     try agreeOk(
         \\let width = 80
-        \\let half = width / 2
+        \\let half = width // 2
         \\let name = "loom"
         \\let greeting = "hi " + name
         \\
@@ -988,8 +1486,8 @@ test "for-each over a List sums its elements in order" {
         \\    let xs = [4, 5, 6]
         \\    var out = new Builder()
         \\    for x in xs:
-        \\        out.append(str(x))
-        \\    assert(str(out) == "456")
+        \\        out.append(String(x))
+        \\    assert(out.build() == "456")
         \\
     );
 }
@@ -1020,7 +1518,7 @@ test "for-each over Map keys walks insertion order" {
         \\    var joined = new Builder()
         \\    for k in m.keys():
         \\        joined.append(k)
-        \\    assert(str(joined) == "xyz")
+        \\    assert(joined.build() == "xyz")
         \\
     );
 }
@@ -1189,23 +1687,23 @@ test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
 // Conversions in depth
 // ---------------------------------------------------------------------------
 
-test "str renders every scalar and a Builder" {
+test "String renders every scalar, and a Builder hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(str(0) == "0")
-        \\    assert(str(1000000) == "1000000")
-        \\    assert(str(1.5) == "1.5")
-        \\    assert(str(3.0) == "3")
-        \\    assert(str(true) == "true")
-        \\    assert(str("already") == "already")
+        \\    assert(String(0) == "0")
+        \\    assert(String(1000000) == "1000000")
+        \\    assert(String(1.5) == "1.5")
+        \\    assert(String(3.0) == "3")
+        \\    assert(String(true) == "true")
+        \\    assert(String("already") == "already")
         \\    var b = new Builder()
         \\    b.append("bld")
-        \\    assert(str(b) == "bld")
+        \\    assert(b.build() == "bld")
         \\
     );
 }
 
-test "parse_int and parse_float accept signs and round-trip str" {
+test "parse_int and parse_float accept signs and round-trip String" {
     try agreeOk(
         \\func main():
         \\    assert((parse_int("0") else 1) == 0)
@@ -1213,7 +1711,7 @@ test "parse_int and parse_float accept signs and round-trip str" {
         \\    assert((parse_int("+7") else 0) == 7)
         \\    assert((parse_float("3.25") else 0.0) == 3.25)
         \\    assert((parse_float("-0.5") else 0.0) == 0.0 - 0.5)
-        \\    assert((parse_int(str(98765)) else 0) == 98765)
+        \\    assert((parse_int(String(98765)) else 0) == 98765)
         \\
     );
 }
@@ -1286,8 +1784,8 @@ test "lists: sort is stable — equal elements keep their order" {
         \\    xs.sort()
         \\    i = 0
         \\    while i < 40:
-        \\        assert(str(xs[i * 2]) == "-0")
-        \\        assert(str(xs[i * 2 + 1]) == "0")
+        \\        assert(String(xs[i * 2]) == "-0")
+        \\        assert(String(xs[i * 2 + 1]) == "0")
         \\        i += 1
         \\    assert(xs[80] == 1.0)
         \\
@@ -1418,29 +1916,29 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
         \\    var m = new Map(String, Int)
         \\    var i = 0
         \\    while i < 300:
-        \\        m["k" + str(i)] = i
+        \\        m["k" + String(i)] = i
         \\        i += 1
         \\    assert(len(m) == 300)
         \\    var seen = 0
         \\    for key, held in m:
-        \\        assert(key == "k" + str(held))
+        \\        assert(key == "k" + String(held))
         \\        assert(held == seen)
         \\        seen += 1
         \\    assert(seen == 300)
         \\    i = 0
         \\    while i < 300:
-        \\        assert(m["k" + str(i)] == i)
-        \\        assert(m.has("k" + str(i)))
+        \\        assert(m["k" + String(i)] == i)
+        \\        assert(m.has("k" + String(i)))
         \\        i += 1
         \\    i = 0
         \\    while i < 300:
         \\        if i % 2 == 0:
-        \\            m.remove("k" + str(i))
+        \\            m.remove("k" + String(i))
         \\        i += 1
         \\    assert(len(m) == 150)
         \\    var next = 1
         \\    for key in m:
-        \\        assert(key == "k" + str(next))
+        \\        assert(key == "k" + String(next))
         \\        next += 2
         \\    assert(m.get("k5", 0 - 1) == 5)
         \\    assert(m.get("k4", 0 - 1) == 0 - 1)
@@ -1627,7 +2125,7 @@ test "ownership: reassigning an owning var frees the old object with no leak" {
         \\    b.append("first")
         \\    b = new Builder()
         \\    b.append("second")
-        \\    assert(str(b) == "second")
+        \\    assert(b.build() == "second")
         \\
     );
 }
@@ -1733,7 +2231,7 @@ test "constants of every scalar type fold and inline" {
         \\let prefix = "id_"
         \\
         \\func label(n: Int) -> String:
-        \\    return prefix + str(n)
+        \\    return prefix + String(n)
         \\
         \\func main():
         \\    assert(limit == 12)
@@ -1932,7 +2430,7 @@ test "else runs its fallback only when the value is absent" {
         \\    let log = new Builder
         \\    assert((parse_int("1") else note(log, "a")) == 1)
         \\    assert((parse_int("x") else note(log, "b")) == 0)
-        \\    assert(str(log) == "b")
+        \\    assert(log.build() == "b")
         \\    free(log)
         \\
     );
@@ -1963,7 +2461,7 @@ test "an optional crosses a call, a return, and a struct field" {
         \\func describe(limit: Int?) -> String:
         \\    if limit == none:
         \\        return "unlimited"
-        \\    return str(limit)
+        \\    return String(limit)
         \\
         \\func lookup(found: Bool) -> Int?:
         \\    if found:
@@ -2076,16 +2574,16 @@ test "trap: integer overflow taking abs of the minimum" {
     , .integer_overflow);
 }
 
-test "trap: divide by zero" {
+test "trap: // by zero" {
     try agreeTrap(
         \\func main():
         \\    var z = 0
-        \\    let bad = 1 / z
+        \\    let bad = 1 // z
         \\
     , .divide_by_zero);
 }
 
-test "trap: remainder by zero" {
+test "trap: % by zero" {
     try agreeTrap(
         \\func main():
         \\    var z = 0
@@ -2578,7 +3076,7 @@ test "checked string intrinsics trap on bounds and UTF-8 splits" {
 test "checked arithmetic and conversions trap" {
     const cases = [_]struct { line: []const u8, code: mir.TrapCode }{
         .{ .line = "assert(9223372036854775807 + 1 == 0)", .code = .integer_overflow },
-        .{ .line = "assert(1 / (2 - 2) == 0)", .code = .divide_by_zero },
+        .{ .line = "assert(1 // (2 - 2) == 0)", .code = .divide_by_zero },
         .{ .line = "assert(Int(1.0e300) == 0)", .code = .conversion_range },
         .{ .line = "assert(1 == 0)", .code = .assertion_failed },
     };
@@ -2657,7 +3155,7 @@ test "maps upsert, look up, and iterate keys in insertion order" {
         \\    var joined = new Builder()
         \\    for key in ages:
         \\        joined.append(key)
-        \\    assert(str(joined) == "adaalan")
+        \\    assert(joined.build() == "adaalan")
         \\    ages.remove("alan")
         \\    assert(not ages.has("alan"))
         \\    ages.remove("ghost")
@@ -2693,13 +3191,13 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     );
 }
 
-test "conversions: str, parse_int, parse_float, chr, ord over every kind" {
+test "conversions: String, parse_int, parse_float, chr, ord over every kind" {
     try agreeOk(
         \\func main():
-        \\    assert(str(42) == "42")
-        \\    assert(str(-7) == "-7")
-        \\    assert(str(true) == "true")
-        \\    assert(str(2.5) == "2.5")
+        \\    assert(String(42) == "42")
+        \\    assert(String(-7) == "-7")
+        \\    assert(String(true) == "true")
+        \\    assert(String(2.5) == "2.5")
         \\    assert((parse_int("123") else 0) == 123)
         \\    assert((parse_int("-9") else 0) == 0 - 9)
         \\    assert((parse_float("2.5") else 0.0) == 2.5)
@@ -2919,7 +3417,7 @@ test "file-scope constants fold every value kind" {
         \\let debug = not (width > 100)
         \\let greeting = "hello, " + "loom"
         \\let shout = greeting
-        \\let half_width = width / 2 - 1
+        \\let half_width = width // 2 - 1
         \\let truncated = Int(tau)
         \\let widened = Float(width)
         \\let roomy = width >= 80 and tau > 6.0
@@ -2974,7 +3472,7 @@ test "struct constants: the Theme case" {
 test "a trap reports its statement's line and the full call trace" {
     var session = try agree.compare(
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func ratio(n: Int) -> Int:
         \\    return divide(100, n)
@@ -2997,7 +3495,7 @@ test "a trap reports its statement's line and the full call trace" {
 test "a stripped program still names its trap frames, without lines" {
     var compiled = try agree.program(
         \\func boom() -> Int:
-        \\    return 1 / 0
+        \\    return 1 // 0
         \\
         \\func main():
         \\    let x = boom()

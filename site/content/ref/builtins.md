@@ -10,7 +10,6 @@ receiver first, resolved by the receiver's type, not dispatched.
 | Signature | Notes |
 |---|---|
 | `len(x) -> Int` | `String` bytes; list, map, builder or rank-1 array length; an `Array`'s dimension 0 |
-| `str(x) -> String` | `Int`, `Float`, `Bool`, `String`, `Builder`. Anything else is a type error |
 | `print(text: String)` | host-gated |
 | `range(low: Int, high: Int)` | `for` only; excludes `high` |
 | `assert(condition: Bool)` | traps `assertion_failed` |
@@ -22,23 +21,25 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `clamp(x, low, high)` | |
 | `sqrt(x: Float) -> Float` | |
 | `floor(x: Float) -> Float`, `ceil(x: Float) -> Float` | |
+| `trunc(x: Float) -> Float` | toward zero; `math.round` is the fourth |
 | `chr(code: Int) -> String` | traps `bad_codepoint` on an invalid codepoint |
 | `ord(text: String) -> Int` | first codepoint; traps on empty |
 | `parse_int(text: String) -> Int?` | `none` when the text is not an integer |
 | `parse_float(text: String) -> Float?` | `none` when the text is not a number |
-| `Int(x)`, `Float(x)` | the only numeric conversions; `Int` traps outside range |
+| `Int(x)`, `Float(x)`, `String(x)` | the three conversion constructors, each named for what it produces. `Int(x)` rounds half away from zero and traps outside range; `String(x)` takes a scalar |
 
 ```luce run
 func main():
-    print(str(abs(-7)))
-    print(str(min(3, 9)) + " " + str(max(3, 9)))
-    print(str(clamp(42, 0, 10)))
-    print(str(sqrt(2.0)))
-    print(str(floor(-2.5)) + " " + str(ceil(-2.5)))
+    print(String(abs(-7)))
+    print(String(min(3, 9)) + " " + String(max(3, 9)))
+    print(String(clamp(42, 0, 10)))
+    print(String(sqrt(2.0)))
+    print(String(floor(-2.5)) + " " + String(ceil(-2.5)) + " " + String(trunc(-2.5)))
+    print(String(Int(2.5)) + " " + String(Int(-2.5)) + " " + String(Int(2.4)))
     print(chr(9731))
-    print(str(ord("A")))
-    print(str(parse_int("17") else -1))
-    print(str(parse_float("nope") else -1.0))
+    print(String(ord("A")))
+    print(String(parse_int("17") else -1))
+    print(String(parse_float("nope") else -1.0))
 ```
 
 ```output
@@ -46,7 +47,8 @@ func main():
 3 9
 10
 1.4142135623730951
--3 -2
+-3 -2 -2
+3 -3 2
 ☃
 65
 17
@@ -228,9 +230,12 @@ func main():
 |---|---|
 | `append(text: String)` | |
 | `append_ascii(code: Int)` | one ASCII byte; traps `bad_codepoint` outside 0..127 |
+| `build() -> String` | the bytes so far, as a String; the builder stays usable |
 | `clear()` | |
 
-Plus `len` and `str(builder)`.
+Plus `len`.  A `Builder` is a heap object, so its text comes out
+through `build()` rather than through `String(...)`, which takes a
+scalar.
 
 ## String
 
@@ -254,9 +259,9 @@ func main():
     let s = "hello, loom"
     print(f"{len(s)} bytes")
     print(s[7:11])
-    print(str(s.byte_at(0)))
-    print(str(s.find_byte(44, 0)))
-    print(str(s.find_byte(122, 0)))
+    print(String(s.byte_at(0)))
+    print(String(s.find_byte(44, 0)))
+    print(String(s.find_byte(122, 0)))
 ```
 
 ```output

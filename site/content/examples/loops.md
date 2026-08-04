@@ -5,7 +5,7 @@
 ```luce run
 func main():
     for i in range(0, 5):
-        print(str(i))
+        print(String(i))
 ```
 
 ```output
@@ -87,8 +87,8 @@ func main():
     for row in range(0, 3):
         for column in range(0, 3):
             grid[row, column] = row * 3 + column
-    print(str(find(grid, 5)))
-    print(str(find(grid, 99)))
+    print(String(find(grid, 5)))
+    print(String(find(grid, 99)))
 ```
 
 ```output

@@ -615,7 +615,7 @@ func look(xs: List(Int)?) -> Bool:
 
 func main():
     var raw: List(Int)          # the null handle
-    print(str(look(raw)))       # interpreter: false — it is *there*
+    print(String(look(raw)))       # interpreter: false — it is *there*
 ```
 
 Absence on the interpreter is `Value.Tag.none`, a tag beside the
@@ -672,7 +672,7 @@ The message travels as `libluce_rt`, not as generated code:
 `luce_rt_raise_error` takes the words and copies them, and
 `luce_rt_raise_io` builds `cannot read PATH` itself.  Both copies are
 mandatory rather than tidy: an error unwinds *through* releases, so
-`error("x: " + str(n))` hands over bytes a statement temporary is
+`error("x: " + String(n))` hands over bytes a statement temporary is
 about to give back.  Building the words in one place is also what
 makes both engines report the same sentence about the same path.
 

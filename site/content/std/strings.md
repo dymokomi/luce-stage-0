@@ -34,11 +34,11 @@ import std.strings
 
 func main():
     let path = "src/luce/std/strings.luc"
-    print(str(path.find("/")))
-    print(str(path.find_from("/", 4)))
-    print(str(path.find("nowhere")))
+    print(String(path.find("/")))
+    print(String(path.find_from("/", 4)))
+    print(String(path.find("nowhere")))
     print(f"{path.contains("std")} {path.starts_with("src")} {path.ends_with(".luc")}")
-    print(str(path.count("/")))
+    print(String(path.count("/")))
 ```
 
 ```output
@@ -116,8 +116,13 @@ func main():
 ## Formatting
 
 `strings.format_float(x, decimals) -> String` gives fixed-point
-display, rounding half away from zero. `str(x)` gives the shortest
+display, rounding half away from zero. `String(x)` gives the shortest
 form that round-trips.
+
+**An f-string spec is this function**: `f"{x:.2f}"` *is*
+`strings.format_float(x, 2)`, which is why a spec needs this import
+like any other String service. Write the call where a format is not
+in a string; write the spec where it is.
 
 It is for **display of ordinary magnitudes**, and it says so at both
 edges rather than pretending otherwise:
@@ -126,7 +131,7 @@ edges rather than pretending otherwise:
   count is not a request this function can round; it is a bug at the
   call site.
 - above about 1e15 there are no fractional digits left to print, so it
-  falls back to `str(value)` — `format_float(1.0e20, 2)` is
+  falls back to `String(value)` — `format_float(1.0e20, 2)` is
   `100000000000000000000`, with no `.00`.
 
 ```luce trap
@@ -152,7 +157,7 @@ func main():
     print(strings.format_float(1.0 / 3.0, 5))
     print(strings.format_float(-2.345, 2))
     print(strings.format_float(9.99, 0))
-    print(str(1.0 / 3.0))
+    print(String(1.0 / 3.0))
 ```
 
 ```output

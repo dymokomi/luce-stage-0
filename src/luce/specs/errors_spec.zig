@@ -396,14 +396,15 @@ test "luce.parse.expression: a broken f-string hole reports the sub-parse error"
     try expectRejected("func main():\n    let a = f\"{1 +}\"\n", "luce.parse.expression");
 }
 
-test "luce.sema.type: an f-string hole must be str-able" {
-    // A List has no str(); interpolation rejects it.
+test "luce.sema.convert: an f-string hole must be a scalar" {
+    // A hole is a `String(...)` the reader did not write, so a List in
+    // one is answered by the constructor's own message, at the hole.
     try expectRejected(
         \\func main():
         \\    var xs = [1, 2]
         \\    let a = f"{xs}"
         \\
-    , "luce.sema.type");
+    , "luce.sema.convert");
 }
 
 test "luce.parse.top: only func/struct/let/import at file scope" {
@@ -515,7 +516,7 @@ test "luce.parse.chain: comparison operators do not chain" {
     // and reaches the type checker unharmed.
     var result = try compile_mod.compile(
         testing.allocator,
-        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(str(c))\n",
+        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(String(c))\n",
         .{ .allow_host = true },
     );
     defer result.deinit();
@@ -850,11 +851,14 @@ test "luce.sema.let: a let binding cannot be reassigned" {
 // Types and conversions
 // ---------------------------------------------------------------------------
 
-// A conversion is only offered where there is one to offer.
-// "(conversions are explicit)" was printed for every mismatch — `Int`
-// against `String` included, which sends the reader after a
-// `String(...)` that does not exist — and never named the operator or
-// spelled the conversion where there really was one.
+// The mismatch message ends with a fact, not with advice.  It used to
+// offer "conversions are explicit, so write Int(...) or Float(...)",
+// because `Int` against `Float` was the one mismatch a constructor
+// could repair; `Int` widens to `Float` on its own now
+// (docs/NUMERICS.md), so every pair that still reaches the message
+// genuinely has nothing between it, and the sentence says so.  What
+// those three programs do *instead* of failing is pinned in
+// behavior_spec.zig, on both engines.
 
 test "luce.sema.type: a mismatch with no conversion says so" {
     try expectOnlySayingAt(
@@ -871,39 +875,7 @@ test "luce.sema.type: a mismatch with no conversion says so" {
     );
 }
 
-test "luce.sema.type: a mismatch with a conversion spells it, and names the operator" {
-    try expectOnlySayingAt(
-        \\func main():
-        \\    let a = 1
-        \\    let b = 2.5
-        \\    let c = a * b
-        \\
-    ,
-        "luce.sema.type",
-        "operands of * are Int and Float; conversions are explicit, " ++
-            "so write Int(...) or Float(...) to make them one type",
-        4,
-        13,
-    );
-}
-
-test "luce.sema.const: a folded constant offers the same conversion advice" {
-    try expectOnlySayingAt(
-        \\let bad = 1 + 2.5
-        \\
-        \\func main():
-        \\    return
-        \\
-    ,
-        "luce.sema.const",
-        "operands of + are Int and Float; conversions are explicit, " ++
-            "so write Int(...) or Float(...) to make them one type",
-        1,
-        11,
-    );
-}
-
-test "luce.sema.type: an annotation names only the conversion that exists" {
+test "luce.sema.type: an annotation says so when nothing converts" {
     try expectOnlySayingAt(
         "func main():\n    let s: String = 1\n",
         "luce.sema.type",
@@ -911,13 +883,51 @@ test "luce.sema.type: an annotation names only the conversion that exists" {
         2,
         5,
     );
+}
+
+// Promotion is one direction.  A `Float` never becomes an `Int`
+// without being asked, which is what stops float contagion silently:
+// it is refused at the first place an `Int` is required, by a message
+// that was already in the tree (docs/NUMERICS.md §9).
+
+test "luce.sema.type: n /= 2 on an Int place names the one-character fix" {
+    // The migration's sharpest edge (docs/NUMERICS.md §9): `/` answers
+    // a Float, so this is a narrowing nobody wrote.  That it is an
+    // error rather than a silent truncation is the whole safety story.
     try expectOnlySayingAt(
-        "func main():\n    let f: Float = 1\n",
+        \\func main():
+        \\    var n = 10
+        \\    n /= 2
+        \\
+    ,
         "luce.sema.type",
-        "f declared Float but initialized with Int; conversions are explicit, so write Float(...)",
-        2,
+        "/ answers a Float and this place is Int; write '//=' for the integer quotient",
+        3,
         5,
     );
+}
+
+test "luce.sema.type: a Float where an Int is required is still refused" {
+    try expectRejectedAt(
+        \\func take(n: Int) -> Int:
+        \\    return n
+        \\
+        \\func main():
+        \\    let x = 2.5
+        \\    let bad = take(x)
+        \\
+    , "luce.sema.type", 6, 20);
+    try expectRejected(
+        \\func main():
+        \\    var n = 10
+        \\    n += 1.5
+        \\
+    , "luce.sema.type");
+    try expectRejected(
+        \\func main():
+        \\    let n: Int = 2.5
+        \\
+    , "luce.sema.type");
 }
 
 // `and`/`or` used to underline both operands and name neither, in a
@@ -983,8 +993,114 @@ test "luce.sema.return: a returned type takes no article either" {
     , "luce.sema.return", "return needs a value of type Int", 2, 5);
 }
 
-test "luce.sema.type: no implicit numeric conversion" {
-    try expectRejected("func main():\n    let a = 1 + 2.0\n", "luce.sema.type");
+// `//` is floor division, and the message that used to greet a
+// C-style comment was spent buying that spelling (docs/NUMERICS.md
+// §3).  It is not gone: prefix position is where the comment reading
+// is unambiguous — an operator with nothing on its left cannot be
+// arithmetic — and that is where a `// comment` is written every
+// time.  With a left operand it is division, and meant to be.
+
+test "luce.parse.comment: a line that starts with // is told what // is" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    // this is a comment
+        \\    print("hi")
+        \\
+    ,
+        "luce.parse.comment",
+        "'//' is floor division and needs a number on its left; a comment starts with '#'",
+        2,
+        5,
+    );
+}
+
+// One spec form, and the message names it (docs/NUMERICS.md §8).  The
+// `f` is redundant and required anyway: `{x:.2}` means two
+// *significant digits* in Python, and letting it mean two decimal
+// places here would be a silent divergence from the language Luce is
+// shaped after.
+
+test "luce.parse.fstring: an unknown format spec names the one that exists" {
+    try expectOnlySayingAt(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:.2}")
+        \\
+    ,
+        "luce.parse.fstring",
+        "unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a Float",
+        5,
+        15,
+    );
+    try expectRejected(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:8.2f}")
+        \\
+    , "luce.parse.fstring");
+    try expectRejected(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:%.2f}")
+        \\
+    , "luce.parse.fstring");
+}
+
+test "luce.sema.import: a format spec is std.strings, and says so" {
+    // It lowers to `strings.format_float`, so it needs the import that
+    // every other String service needs — the same rule, not a new one.
+    try expectHostSaying(
+        \\func main():
+        \\    let x = 1.5
+        \\    print(f"{x:.2f}")
+        \\
+    , "luce.sema.import", "import std.strings");
+}
+
+test "luce.sema.convert: String() takes a scalar, and names build() for a Builder" {
+    // The one reason `str` could not simply be renamed: it took a heap
+    // object, and a scalar constructor should not (docs/NUMERICS.md §7).
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var b = new Builder()
+        \\    b.append("x")
+        \\    let text = String(b)
+        \\    free(b)
+        \\
+    ,
+        "luce.sema.convert",
+        "String() converts a scalar; a Builder hands over its text with .build()",
+        4,
+        16,
+    );
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    let text = String(xs)
+        \\    free(xs)
+        \\
+    ,
+        "luce.sema.convert",
+        "String() converts Int, Float, Bool, or String, not List(Int)",
+        3,
+        16,
+    );
+}
+
+test "luce.sema.call: str is gone, and is not a name anybody kept" {
+    // Not reserved either, so it is an unknown function like any other
+    // — a program may declare one and mean it.
+    try expectRejected(
+        \\func main():
+        \\    let text = str(1)
+        \\
+    , "luce.sema.call");
 }
 
 test "luce.sema.type: a condition must be Bool" {
@@ -1464,7 +1580,7 @@ test "luce.parse.expression: the comparison operators of other languages" {
 
 test "luce.parse.expression: '**' names the std function that does it" {
     try expectOnlySayingAcross(
-        "func main():\n    let a = 2 ** 3\n    print(str(a))\n",
+        "func main():\n    let a = 2 ** 3\n    print(String(a))\n",
         "luce.parse.expression",
         "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for Int",
         2,
@@ -2171,7 +2287,7 @@ test "luce.sema.nesting: a flat chain in a constant is bounded too" {
 }
 
 test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
-    // f"{x}{x}..." desugars to str(x) + str(x) + ..., which is the
+    // f"{x}{x}..." desugars to String(x) + String(x) + ..., which is the
     // same flat chain wearing different clothes.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
@@ -2283,7 +2399,7 @@ test "luce.sema.absent: none needs somewhere to be none of" {
     , "luce.sema.absent");
     try expectMessage(
         \\func main():
-        \\    assert(str(none) == "")
+        \\    assert(String(none) == "")
         \\
     , "none needs a type here");
     // A place that is always there cannot be none.
@@ -2447,7 +2563,7 @@ test "every statement is checked, not just the first that fails" {
     var result = try compile_mod.compile(testing.allocator,
         \\func main():
         \\    let a: Int = "x"
-        \\    let b: Float = 1
+        \\    let b: Bool = 1
         \\    let c = 1 < true
         \\
     , script);
@@ -2580,7 +2696,7 @@ test "storing a borrowed parameter is not told to give it" {
 }
 
 test "an f-string hole is underlined, not the whole literal" {
-    // The synthesized `str(...)` used to carry the whole f-string's
+    // The synthesized `String(...)` used to carry the whole f-string's
     // span, so a reader with four holes on one line was shown all four
     // and told one of them was wrong.
     try expectHostSayingAt(
@@ -2593,8 +2709,8 @@ test "an f-string hole is underlined, not the whole literal" {
         \\    free(xs)
         \\
     ,
-        "luce.sema.type",
-        "str takes Int, Float, Bool, String, or Builder",
+        "luce.sema.convert",
+        "String() converts Int, Float, Bool, or String, not List(Int)",
         6,
         30,
     );
@@ -3496,7 +3612,7 @@ test "luce.sema.method: each receiver kind names the methods it has" {
         \\    var b = new Builder()
         \\    b.zzzzzz()
         \\
-    , "luce.sema.method", "(append append_ascii clear)");
+    , "luce.sema.method", "(append append_ascii build clear)");
     try expectSaying(
         \\import std.strings
         \\

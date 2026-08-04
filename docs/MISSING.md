@@ -76,7 +76,7 @@ six benchmarks moved less than 1%, and `bench/strings` went **2.35× C
 allocate-and-free pairs where there used to be unreclaimed bump
 allocations and shared views — and **small-string optimisation took
 most of it back**: a String of 22 bytes or fewer now lives inside the
-`Value` holding it, `str(Int)` and `chr` never allocate at all, and
+`Value` holding it, `String(Int)` and `chr` never allocate at all, and
 `bench/strings` came back to **within 12% of where it stood before
 copy-on-store** (step 5 of `docs/STRINGS.md`, which records the
 phase-by-phase measurement).  What is left is the copying itself —
@@ -283,9 +283,12 @@ the proof the language moved.
    `var b: Bytes` compiled, nothing produced one and nothing consumed
    one, and it was one of the two things keeping stage 10 from being
    total.  A real `Bytes` would be designed fresh.
-9. **Integer division spelling.**  `bf.luc:42` writes a decrement as
-   `(tape[pointer] + 255) % 256`; `math.luc:91` writes
-   `(Int(y) % 2 + 2) % 2`.  Neither `//` nor `rem_euclid` exists.
+9. ~~**Integer division spelling.**~~  **Closed** by
+   docs/NUMERICS.md.  `//` is floor division and `%` is the modulus
+   that pairs with it, so both workarounds this item named by line are
+   gone: `bf.luc:42` is `(tape[pointer] - 1) % 256`, the spelling its
+   author meant, and `math.luc`'s sign-safe parity is
+   `Int(y) % 2 == 1`.  `/` became real division in the same memo.
 10. **No visibility.**  std leaks `is_space_byte` and `fold_case`.
     Cheap, and matters before userland libraries exist.
 11. **No bitwise operators, no hex literals, no digit separators.**
@@ -547,7 +550,7 @@ plus four found while sweeping:
   binding, found the keyword 'catch'".  Now names the binding and
   both shapes that work.
 - ~~An f-string hole is underlined by underlining the whole
-  literal~~ — the synthesized `str(...)` carried the f-string's span,
+  literal~~ — the synthesized `String(...)` carried the f-string's span,
   so four holes on one line were all underlined and one of them was
   wrong.  It takes the hole's span now.
 - ~~`s[0:4:2]` blames the bracket~~ — says the language has two slice
@@ -561,18 +564,19 @@ plus four found while sweeping:
    The foreign-operator machinery now in `expressions.zig` is the
    shape of the answer, but this one is a *type* mistake rather than a
    parse one, so it belongs at the `%` type check with the f-string
-   named as the fix.
+   named as the fix — and the fix is now a real one to name, since
+   `f"{x:.2f}"` exists (docs/NUMERICS.md §8).
 2. **A stray `{`/`}` pair is still two reports.**  The typographic
    quote fix pairs on one line; C braces open a block and close it
    several lines later, so the same trick does not reach.  Whether one
    report is even right here is the question to settle first — they
    are two characters on two statements, and the statement-scoped
    cascade rule deliberately lets a second statement speak.
-3. **`str takes Int, Float, Bool, String, or Builder` does not say
-   what it got.**  Every other type diagnostic names the type in hand;
-   this one lists the accepted set and stops, so a reader with a
-   `List(Int)` in an f-string hole is told what is allowed and left to
-   work out which rule they broke.
+3. ~~**`str takes Int, Float, Bool, String, or Builder` does not say
+   what it got.**~~  **Closed** by docs/NUMERICS.md, which retired
+   `str` for `String(x)`: the constructor's message names the type in
+   hand — *"String() converts Int, Float, Bool, or String, not
+   List(Int)"* — and an f-string hole reports it at the hole.
 4. **`give b.items` says "give moves a named object; use copy for
    other expressions".**  A field *is* named, and the real reason is
    that a nested place cannot be moved out of (S21, S25) — the fix
@@ -620,7 +624,7 @@ multi-user — all deferred by design in `docs/V2.md`.
    0 and step 5 of `docs/STRINGS.md`.  Twenty-two bytes of text live
    in the `Value` that already travels, which cost an `abi.version`
    bump and a `format_version` bump and removed every allocation
-   the benchmark's 400,000 `str(i)` results were making.
+   the benchmark's 400,000 `String(i)` results were making.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**;
    `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`
@@ -642,8 +646,9 @@ multi-user — all deferred by design in `docs/V2.md`.
 9. **Share one `libluce_rt` between artifacts** instead of copying it
    into each.  The other one from `docs/CODEGEN.md`, and the reason a
    `.lc` is mostly runtime by size.
-10. **Decide receivers, multiple returns, and integer-division
-    spelling** — one memo each.
+10. **Decide receivers and multiple returns** — one memo each.
+    Integer-division spelling is decided and shipped
+    (docs/NUMERICS.md).
 11. **Sum types**, if the `T?` experience says the hole is still there.
 12. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
     array operations whole.

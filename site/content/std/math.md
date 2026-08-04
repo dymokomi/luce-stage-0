@@ -1,8 +1,8 @@
 # std.math
 
-Pure Luce over the checked builtins. `sqrt`, `floor`, `ceil`, `abs`,
-`min`, `max` and `clamp` stay [builtins](/ref/builtins/); `math` adds
-what they lack.
+Pure Luce over the checked builtins. `sqrt`, `floor`, `ceil`, `trunc`,
+`abs`, `min`, `max` and `clamp` stay [builtins](/ref/builtins/);
+`math` adds what they lack.
 
 ```
 import std.math
@@ -17,7 +17,7 @@ compile-time constants and fold at their use sites.
 
 | Signature | Notes |
 |---|---|
-| `math.round(x: Float) -> Float` | half **away from zero**: `round(-2.5)` is `-3.0` |
+| `math.round(x: Float) -> Float` | half **away from zero**: `round(-2.5)` is `-3.0`; the same rounding `Int(x)` does |
 | `math.exp(x: Float) -> Float` | overflow yields infinity, underflow yields `0.0` |
 | `math.ln(x: Float) -> Float` | traps for `x <= 0` |
 | `math.log2(x)`, `math.log10(x)` | |
@@ -55,11 +55,11 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 6))
-    print(str(math.round(2.5)) + " " + str(math.round(-2.5)))
+    print(String(math.round(2.5)) + " " + String(math.round(-2.5)))
     print(strings.format_float(math.exp(1.0), 6))
     print(strings.format_float(math.ln(math.e), 6))
     print(strings.format_float(math.log2(1024.0), 1))
-    print(str(math.ipow(2, 20)))
+    print(String(math.ipow(2, 20)))
     print(strings.format_float(math.pow(2.0, 0.5), 6))
     print(strings.format_float(math.sin(math.pi / 2.0), 6))
 ```
@@ -161,9 +161,9 @@ func main():
 
     var text = new Builder()
     for roll in rolls:
-        text.append(str(roll))
+        text.append(String(roll))
         text.append(" ")
-    print(str(text))
+    print(text.build())
 
     # The same seed gives the same stream, always.
     var again = math.seed(2026)
@@ -188,12 +188,12 @@ import std.math
 
 func main():
     print("about to take a logarithm")
-    print(str(math.ln(0.0)))
+    print(String(math.ln(0.0)))
 ```
 
 ```output
 about to take a logarithm
 loom: trap: ln of a non-positive number [explicit_trap]
-    at math.ln (std/math.luc:54:9)
+    at math.ln (std/math.luc:66:9)
     at main (main.luc:5:5)
 ```

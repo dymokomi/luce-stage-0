@@ -146,8 +146,8 @@ func configure(text: String) -> Int!:
     return try read_setting(text) * 2
 
 func main() -> !:
-    print(str(try configure("21")))
-    print(str(try configure("x")))
+    print(String(try configure("21")))
+    print(String(try configure("x")))
 ```
 
 ```output

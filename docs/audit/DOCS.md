@@ -340,7 +340,7 @@ $ cat fl.luc
 func main():
     var g = new Array(Int, 2, 3)
     g.fill(7)
-    print(str(g[1, 2]))
+    print(String(g[1, 2]))
 $ build/loom run fl.lc
 7
 ```
@@ -509,7 +509,7 @@ written, a reader concludes `get` does not exist.
   being made is right and attached to the wrong function.
 - **`/std/strings/:112-116`** — `format_float` is described as
   unconditional fixed-point.  It **traps** on `decimals < 0`
-  (`strings.luc:180-181`) and falls back to `str(value)` above `|value| >
+  (`strings.luc:180-181`) and falls back to `String(value)` above `|value| >
   1e15` (`:186-187`), so `format_float(1.0e20, 2)` prints
   `100000000000000000000`.  On a page whose own "The one sentinel"
   section is about honesty at the edges, the trap should be stated.

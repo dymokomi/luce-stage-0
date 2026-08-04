@@ -35,7 +35,10 @@ pub const BinaryOp = enum {
     subtract,
     multiply,
     divide,
-    remainder,
+    /// `//` — floor division (docs/NUMERICS.md).
+    floor_divide,
+    /// `%` — a modulus, taking the sign of the divisor.
+    modulo,
     equal,
     not_equal,
     less,
@@ -184,7 +187,7 @@ pub const Variable = struct {
 /// `place = value`, or a compound assignment `place OP= value` when
 /// `compound` is set (which reads the place, applies OP, stores back —
 /// the place is evaluated once).  Compound forms are value-only
-/// arithmetic; OP is add/subtract/multiply/divide/remainder.
+/// arithmetic; OP is add/subtract/multiply/divide/floor_divide/modulo.
 pub const Assign = struct { target: Target, compound: ?BinaryOp = null, value: *Expression, span: Span };
 pub const Conditional = struct {
     condition: *Expression,

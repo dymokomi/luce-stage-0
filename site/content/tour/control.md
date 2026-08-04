@@ -38,7 +38,7 @@ func main():
     var steps = 0
     while remaining != 1:
         if remaining % 2 == 0:
-            remaining = remaining / 2
+            remaining = remaining // 2
         else:
             remaining = 3 * remaining + 1
         steps += 1

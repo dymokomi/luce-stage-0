@@ -723,7 +723,7 @@ pub const Runtime = struct {
     ///
     /// **The words are copied here, and that is not optional.**  An
     /// error unwinds *through* releases — that is the whole difference
-    /// from a trap, which unwinds past them — so `error("x: " + str(n))`
+    /// from a trap, which unwinds past them — so `error("x: " + String(n))`
     /// hands over bytes a statement temporary is about to give back.
     /// The copy goes in the values arena, which nothing releases and
     /// the run drops whole.  An arena that cannot hold it falls back

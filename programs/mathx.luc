@@ -15,9 +15,9 @@ func sorted(values: List(Float)) -> List(Float):
 func median(values: List(Float)) -> Float:
     var ordered = sorted(values)
     let count = len(ordered)
-    var middle = ordered[count / 2]
+    var middle = ordered[count // 2]
     if count % 2 == 0:
-        middle = (ordered[count / 2 - 1] + ordered[count / 2]) / 2.0
+        middle = (ordered[count // 2 - 1] + ordered[count // 2]) / 2.0
     return middle
 
 func deviation(values: List(Float)) -> Float:

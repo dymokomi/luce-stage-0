@@ -3441,11 +3441,15 @@ const Body = struct {
 
     // -- conversion and struct values ----------------------------------
 
-    /// `Float(x)` widens; `Int(x)` truncates toward zero and traps
-    /// outside the i64 range, NaN and the infinities included.  The
-    /// guards are the interpreter's, value for value
-    /// (`runtime/operators.zig`), because a conversion that disagrees
-    /// at the boundary is a different language.
+    /// `Float(x)` widens; `Int(x)` **rounds half away from zero** and
+    /// traps outside the i64 range, NaN and the infinities included
+    /// (docs/NUMERICS.md §7).  The guards are the interpreter's, value
+    /// for value (`runtime/operators.zig`), because a conversion that
+    /// disagrees at the boundary is a different language — and so is
+    /// the rounding, which is `llvm.round`, the intrinsic whose
+    /// definition *is* "half away from zero".  The range check runs
+    /// before the rounding, so a value rounding would push past 2^63
+    /// is refused rather than wrapped.
     fn emitConvert(
         self: *Body,
         register: mir.Register,
@@ -3459,20 +3463,28 @@ const Body = struct {
             },
             .float_to_int => {
                 const builder = self.module.builder;
+                const rounded = try self.wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    .round,
+                    &.{.double},
+                    &.{held},
+                    "rounded",
+                );
                 // NaN compares unordered with itself and with the
                 // bounds, so it has to be asked about separately.
-                const not_a_number = try self.wip.fcmp(.normal, .uno, held, held, "is.nan");
+                const not_a_number = try self.wip.fcmp(.normal, .uno, rounded, rounded, "is.nan");
                 const too_small = try self.wip.fcmp(
                     .normal,
                     .olt,
-                    held,
+                    rounded,
                     try builder.doubleValue(-9223372036854775808.0),
                     "too.small",
                 );
                 const too_large = try self.wip.fcmp(
                     .normal,
                     .oge,
-                    held,
+                    rounded,
                     try builder.doubleValue(9223372036854775808.0),
                     "too.large",
                 );
@@ -3483,7 +3495,7 @@ const Body = struct {
                     "unrepresentable",
                 );
                 try self.check(outside, .conversion_range);
-                self.values[register] = try self.wip.cast(.fptosi, held, .i64, "int");
+                self.values[register] = try self.wip.cast(.fptosi, rounded, .i64, "int");
             },
         }
     }
@@ -3557,10 +3569,28 @@ const Body = struct {
             .add => return self.emitChecked(.@"sadd.with.overflow", left, right),
             .subtract => return self.emitChecked(.@"ssub.with.overflow", left, right),
             .multiply => return self.emitChecked(.@"smul.with.overflow", left, right),
-            .divide, .remainder => {
+            // `/` is real division and always answers a Float, so an
+            // integer one is IR the verifier already refused
+            // (docs/NUMERICS.md §2).
+            .divide => return self.fail("integer division, which the language does not have"),
+            // `//` and `%` floor together (docs/NUMERICS.md §3).  The
+            // chip only offers the truncating pair, so each gets the
+            // one correction that turns it into the flooring one, and
+            // both corrections fire on the same condition: the true
+            // quotient was negative and did not divide evenly.
+            .floor_divide, .modulo => {
                 try self.checkDivisor(left, right);
-                const tag: Tag = if (operation == .divide) .sdiv else .srem;
-                return self.wip.bin(tag, left, right, "int");
+                const truncated = try self.wip.bin(
+                    if (operation == .floor_divide) .sdiv else .srem,
+                    left,
+                    right,
+                    "int",
+                );
+                const remainder = if (operation == .modulo)
+                    truncated
+                else
+                    try self.wip.bin(.srem, left, right, "rem");
+                return self.correctToFloor(operation, truncated, remainder, right);
             },
             .equal,
             .not_equal,
@@ -3572,23 +3602,88 @@ const Body = struct {
         }
     }
 
+    /// Turn a truncating quotient or remainder into the flooring one.
+    ///
+    /// The two differ exactly when the remainder is non-zero and its
+    /// sign disagrees with the divisor's — which is to say when the
+    /// true quotient was negative and did not come out even.  There
+    /// the quotient is one *lower* than truncation gave (truncation
+    /// rounds toward zero, flooring away from it) and the remainder is
+    /// one divisor *higher*.
+    ///
+    /// It is branchless: two comparisons, an `and`, and a `select`.
+    /// LLVM recognises the shape and folds it to a mask for a constant
+    /// power-of-two divisor, which is why `x % 256` is `x & 255` here
+    /// for every `x`, negative ones included — the thing C's remainder
+    /// cannot do without a sign fixup.
+    fn correctToFloor(
+        self: *Body,
+        operation: mir.BinaryOp,
+        truncated: Builder.Value,
+        remainder: Builder.Value,
+        right: Builder.Value,
+    ) Error!Builder.Value {
+        const builder = self.module.builder;
+        const zero = try builder.intValue(.i64, 0);
+        const uneven = try self.wip.icmp(.ne, remainder, zero, "uneven");
+        // `(a ^ b) < 0` is "the signs disagree", in one instruction
+        // and without the two comparisons the words would take.
+        const signs = try self.wip.bin(.xor, remainder, right, "signs");
+        const opposed = try self.wip.icmp(.slt, signs, zero, "opposed");
+        const needs = try self.wip.bin(.@"and", uneven, opposed, "needs.floor");
+        // Plain `sub`/`add`, with no `nsw`: both arms of a `select`
+        // are computed, and the discarded one must be a defined value
+        // rather than poison.  Neither can wrap where it is chosen.
+        const corrected = if (operation == .floor_divide)
+            try self.wip.bin(.sub, truncated, try builder.intValue(.i64, 1), "floored")
+        else
+            try self.wip.bin(.add, remainder, right, "modded");
+        return self.wip.select(.normal, needs, corrected, truncated, "int");
+    }
+
     /// Float arithmetic is plain IEEE 754 and never traps: division by
     /// zero and overflow produce infinities and NaN, exactly as they do
-    /// in the interpreter.  `%` is `frem`, which is C's `fmod` — the
-    /// remainder carrying the sign of the dividend, which is what Zig's
-    /// `@rem` computes in `runtime/operators.zig`.
+    /// in the interpreter.
+    ///
+    /// Two of the six are not one instruction.  `%` is the **floor**
+    /// modulus, pairing with `//` so that promotion introduces no
+    /// discontinuity (docs/NUMERICS.md §3), and it is neither `frem`
+    /// nor any host `fmod`: it goes to `libluce_rt`, so there is one
+    /// implementation of a rule with a zero case and a sign
+    /// correction in it.  `//` is `floor(a / b)` and that really is
+    /// two instructions, so it stays here.
     fn emitFloatArithmetic(
         self: *Body,
         operation: mir.BinaryOp,
         left: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
+        switch (operation) {
+            .modulo => return self.callRuntime(
+                .luce_rt_float_mod,
+                .double,
+                &.{ left, right },
+                "float",
+            ),
+            .floor_divide => {
+                const quotient = try self.wip.bin(.fdiv, left, right, "quotient");
+                return self.wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    .floor,
+                    &.{.double},
+                    &.{quotient},
+                    "float",
+                );
+            },
+            else => {},
+        }
         const tag: Tag = switch (operation) {
             .add => .fadd,
             .subtract => .fsub,
             .multiply => .fmul,
             .divide => .fdiv,
-            .remainder => .frem,
+            .floor_divide, .modulo => unreachable, // answered above
             .equal,
             .not_equal,
             .less,
@@ -3657,7 +3752,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             };
             return self.wip.fcmp(.normal, condition, left, right, "compare");
@@ -3692,7 +3788,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
             .boolean => switch (operation.op) {
@@ -3707,7 +3804,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
             // Object equality is identity: same object, not same
@@ -3724,7 +3822,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
             .float, .string, .strukt => unreachable, // answered above
@@ -4054,6 +4153,25 @@ const Body = struct {
             .sqrt => self.values[register] = try self.emitFloatCall(.sqrt, of[0]),
             .floor => self.values[register] = try self.emitFloatCall(.floor, of[0]),
             .ceil => self.values[register] = try self.emitFloatCall(.ceil, of[0]),
+            .trunc => self.values[register] = try self.emitFloatCall(.trunc, of[0]),
+
+            // Comparison across the Int/Float line is exact, so it is
+            // a call and not a widening (docs/NUMERICS.md).  The
+            // operator arrives as an Int register — a constant every
+            // time — and narrows to the `i32` the C surface takes.
+            .compare_int_float => {
+                const answer = try self.callRuntime(.luce_rt_compare_int_float, .i32, &.{
+                    try self.wip.cast(.trunc, self.values[of[0]], .i32, "op"),
+                    self.values[of[1]],
+                    self.values[of[2]],
+                }, "compared");
+                self.values[register] = try self.wip.icmp(
+                    .ne,
+                    answer,
+                    try self.module.builder.intValue(.i32, 0),
+                    "compare",
+                );
+            },
 
             // -- traps and effects, generated here --------------------
             .print => {

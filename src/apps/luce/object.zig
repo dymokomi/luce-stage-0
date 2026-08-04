@@ -233,7 +233,7 @@ const counter =
     \\    return sum
     \\
     \\func main():
-    \\    print(str(total(10)))
+    \\    print(String(total(10)))
     \\
 ;
 
@@ -350,12 +350,12 @@ test "a standalone executable prints, and a trapping one reports and exits nonze
     // down — so the trace has something to say as well.
     var program = try compileScript(gpa,
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func main():
         \\    print("alive")
         \\    if arg_count() == 1:
-        \\        print(str(divide(1, 0)))
+        \\        print(String(divide(1, 0)))
         \\
     );
     defer program.deinit();
@@ -399,10 +399,10 @@ test "a release executable keeps the function names and drops the lines" {
 
     var program = try compileScript(gpa,
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func main():
-        \\    print(str(divide(1, 0)))
+        \\    print(String(divide(1, 0)))
         \\
     );
     defer program.deinit();

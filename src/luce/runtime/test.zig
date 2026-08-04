@@ -938,11 +938,14 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
 
     const biggest = Value.ofInt(std.math.maxInt(i64));
     try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofInt(1)));
-    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .divide, biggest, Value.ofInt(0)));
+    // The operators that still produce an Int are the ones that still
+    // trap: `/` answers a Float and is IEEE (docs/NUMERICS.md §4).
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofInt(0)));
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofInt(0)));
     try expectTrap(
         .integer_overflow,
         runtime,
-        operators.binary(runtime, .divide, Value.ofInt(std.math.minInt(i64)), Value.ofInt(-1)),
+        operators.binary(runtime, .floor_divide, Value.ofInt(std.math.minInt(i64)), Value.ofInt(-1)),
     );
     try expectTrap(.integer_overflow, runtime, operators.negate(runtime, Value.ofInt(std.math.minInt(i64))));
 
@@ -952,7 +955,12 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
     try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofFloat(0.0))).asFloat()));
 
     try expectTrap(.conversion_range, runtime, operators.floatToInt(runtime, Value.ofFloat(1e30)));
-    try testing.expectEqual(@as(i64, -1), (try operators.floatToInt(runtime, Value.ofFloat(-1.9))).asInt());
+    // `Int(x)` rounds half away from zero (docs/NUMERICS.md §7);
+    // `trunc(x)` is how truncation is spelled now.
+    try testing.expectEqual(@as(i64, -2), (try operators.floatToInt(runtime, Value.ofFloat(-1.9))).asInt());
+    try testing.expectEqual(@as(i64, 3), (try operators.floatToInt(runtime, Value.ofFloat(2.5))).asInt());
+    try testing.expectEqual(@as(i64, -3), (try operators.floatToInt(runtime, Value.ofFloat(-2.5))).asInt());
+    try testing.expectEqual(@as(f64, -1.0), operators.truncate(Value.ofFloat(-1.9)).asFloat());
 
     const joined = bench.made(try operators.binary(runtime, .add, Value.ofString("a"), Value.ofString("b")));
     try testing.expectEqualStrings("ab", joined.asString());

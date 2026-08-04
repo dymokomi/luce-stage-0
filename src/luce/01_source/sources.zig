@@ -241,7 +241,7 @@ test "place agrees with the reference scan on every offset" {
     // Blank lines, a line without a newline at the end, and the two
     // texts that differ only in their terminator.
     for ([_][]const u8{
-        "func main():\n\n    let a = 1\n    print(str(a))\nlast line, no newline",
+        "func main():\n\n    let a = 1\n    print(String(a))\nlast line, no newline",
         "func main():\n\n    return\n",
         "",
         "\n",
@@ -263,7 +263,7 @@ test "lineText and place agree: the line of an offset contains that offset" {
     var sources = Sources.init(testing.allocator);
     defer sources.deinit();
     for ([_][]const u8{
-        "func main():\n\n    let a = 1\n    print(str(a))\nlast line, no newline",
+        "func main():\n\n    let a = 1\n    print(String(a))\nlast line, no newline",
         "one\r\ntwo\r\n", // registered as prepared text would never be, on purpose
         "\n\n\n",
         "no newline at all",

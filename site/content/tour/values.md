@@ -33,27 +33,48 @@ There are no hexadecimal, binary or octal literals and no `_` digit
 separators — writing one is a `luce.lex.number` error naming the
 reason, rather than a silent misreading.
 
-## There are no implicit conversions
+## `Int` widens to `Float`, and never the other way
 
-Mixing an `Int` and a `Float` in one expression is a compile error.
-You convert with `Int(x)` and `Float(x)`, and the conversion is
-visible at the place it happens.
+Mix an `Int` and a `Float` and the `Int` widens: the answer is a
+`Float`, wherever the two meet — an operator, an annotation, an
+argument, a return, a field, a list element. It is the one conversion
+Luce makes without being asked, and it goes in one direction only.
+Nothing narrows a `Float` to an `Int` on its own, so a `Float` that
+wandered somewhere it should not be is a compile error at the first
+place an `Int` is required, not a silent truncation.
 
 ```luce run
 func main():
     let steps = 7
     let seconds = 2.5
-    print(str(Float(steps) * seconds))
-    print(str(Int(seconds)))       # truncates toward zero
+    print(String(steps * seconds))
+    let elapsed: Float = steps
+    print(String(elapsed))
+    print(String(Int(seconds)))       # asked for, and it rounds
 ```
 
 ```output
 17.5
-2
+7
+3
 ```
 
-That rule is the same everywhere, including comparisons: `1 < 1.5` is
-a type error, not a promotion.
+Comparison crosses the line too — and it is **exact**. `1 < 1.5` is
+`true`; so is `9007199254740993 != 9007199254740992.0`, because those
+really are two different numbers even though the first does not
+survive being turned into a `Float`. Luce compares the numbers, not a
+conversion of them.
+
+```luce run
+func main():
+    print(String(1 < 1.5))
+    print(String(9007199254740993 == 9007199254740992.0))
+```
+
+```output
+true
+false
+```
 
 ## Arithmetic is checked
 
@@ -66,7 +87,7 @@ func main():
     var n = 9223372036854775807
     print("about to add one")
     n += 1
-    print(str(n))
+    print(String(n))
 ```
 
 ```output
@@ -75,8 +96,38 @@ loom: trap: integer overflow [integer_overflow]
     at main (main.luc:4:5)
 ```
 
-Integer division truncates toward zero, and `%` follows the sign of
-the dividend. `Float` arithmetic is IEEE and does not trap.
+## `/` divides, `//` quotients
+
+`/` is real division and always answers a `Float` — `1 / 2` is `0.5`,
+not `0`. The quotient people mean when they say "integer division" is
+`//`, and `%` is the modulus that pairs with it: they **floor**
+together, so `%` takes the sign of the divisor and
+`b * (a // b) + (a % b) == a` holds for every pair.
+
+```luce run
+func main():
+    print(String(1 / 2))
+    print(String(7 // 2) + " " + String(7 % 2))
+    print(String(-7 // 3) + " " + String(-7 % 3))
+    print(String(-1 % 256))
+```
+
+```output
+0.5
+3 1
+-3 2
+255
+```
+
+That last line is why `%` floors: a positive divisor never yields a
+negative answer, so `x % 256` wraps a byte for every `x` and
+`(row - 1) % height` walks a torus, without the `+ height` other
+languages need.
+
+`//` and `%` by zero are traps, because they answer an `Int` and
+there is no `Int` that means "undefined". `/` answers a `Float` and is
+IEEE like every other `Float` operation: `1 / 0` is `inf` and `0 / 0`
+is NaN, neither of them a trap.
 
 ## let and var
 
@@ -88,7 +139,7 @@ what the name points at — `let` is JavaScript's `const`, not Swift's
 func main():
     let limit = 10
     limit = 11
-    print(str(limit))
+    print(String(limit))
 ```
 
 ```output
@@ -124,14 +175,14 @@ func main():
     let a = 1
     let b = 2
     let c = 3
-    print(str(a < b < c))
+    print(String(a < b < c))
 ```
 
 ```output
 luce: compile failed
-main.luc:5:21: chained comparison: write 'a < b and b < c' [luce.parse.chain]
-        print(str(a < b < c))
-                        ^
+main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
+        print(String(a < b < c))
+                           ^
 ```
 
 ## Constants at file scope
@@ -142,13 +193,13 @@ costs nothing to ship.
 
 ```luce run
 let width = 80
-let half = width / 2
+let half = width // 2
 let version = "2"
 let banner = "loom v" + version
 
 func main():
     print(banner)
-    print(str(half))
+    print(String(half))
 ```
 
 ```output
@@ -158,14 +209,17 @@ loom v2
 
 Constants may reference each other in any order, but never in a cycle.
 What may be folded is literals, other constants, arithmetic,
-comparisons, `and`/`or`, string concatenation, `Int()`/`Float()` and
-value-struct construction. **Calls are not constant** — not even
-`str` — and neither are heap objects, because a top-level binding has
-no scope to die at and therefore cannot own one:
+comparisons, `and`/`or`, string concatenation, the three conversion
+constructors `Int()`, `Float()` and `String()`, and value-struct
+construction. **Calls are not constant**, and neither are heap
+objects, because a top-level binding has no scope to die at and
+therefore cannot own one:
 
 ```luce fail
-let width = 80
-let banner = "loom " + str(width)
+func label() -> String:
+    return "loom"
+
+let banner = label() + " v2"
 
 func main():
     print(banner)
@@ -173,9 +227,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:2:24: constants fold at compile time; calls are not constant [luce.sema.const]
-    let banner = "loom " + str(width)
-                           ^~~~~~~~~~
+main.luc:4:14: constants fold at compile time; calls are not constant [luce.sema.const]
+    let banner = label() + " v2"
+                 ^~~~~~~
 ```
 
 There is no top-level `var`.

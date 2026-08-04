@@ -69,7 +69,7 @@ pub const Kind = enum {
     float_literal,
     /// `"..."`, quotes included; escapes are decoded by the parser.
     string_literal,
-    /// f"...{expr}..." — the parser expands it into str()-wrapped
+    /// f"...{expr}..." — the parser expands it into String()-wrapped
     /// concatenation; the token spans the whole f"..." including the
     /// leading f and both quotes.
     fstring,
@@ -94,12 +94,18 @@ pub const Kind = enum {
     minus_assign,
     star_assign,
     slash_assign,
+    /// `//=`, the compound form of floor division.
+    slash_slash_assign,
     percent_assign,
     arrow,
     plus,
     minus,
     star,
     slash,
+    /// `//`, floor division — the integer pair with `%`
+    /// (docs/NUMERICS.md).  It is not the start of a comment: a
+    /// comment runs from `#` to the end of the line.
+    slash_slash,
     percent,
     equal,
     not_equal,
