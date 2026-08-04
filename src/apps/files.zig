@@ -240,7 +240,7 @@ pub const FileLoader = struct {
     }
 
     pub fn loader(self: *FileLoader) luce.compile.Loader {
-        return .{ .context = self, .loadFn = load };
+        return .{ .context = self, .load = load };
     }
 };
 
@@ -332,7 +332,7 @@ test "the import loader resolves NAME.luc beside the root and returns missing ot
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.loadFn(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
     try testing.expect(found == .text);
     try testing.expect(std.mem.indexOf(u8, found.text.bytes, "return 4") != null);
     // The host says where it really opened the file, so a diagnostic
@@ -341,7 +341,7 @@ test "the import loader resolves NAME.luc beside the root and returns missing ot
 
     // An unknown module is missing (the caller reports the failed
     // import), not an error and not an empty module.
-    const absent = try resolver.loadFn(resolver.context, arena.allocator(), "nope");
+    const absent = try resolver.load(resolver.context, arena.allocator(), "nope");
     try testing.expect(absent == .missing);
 }
 
@@ -366,7 +366,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.loadFn(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
     try testing.expect(found == .unreadable);
     // Naming the real spelling is the whole point: "cannot load module
     // geo" would send the author looking for a file that is right
@@ -380,7 +380,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     const exact_path = try std.fmt.allocPrint(testing.allocator, "{s}/util.luc", .{directory});
     defer testing.allocator.free(exact_path);
     try writeWhole(io, exact_path, "func twice(v: Int) -> Int:\n    return v * 2\n");
-    const exact = try resolver.loadFn(resolver.context, arena.allocator(), "util");
+    const exact = try resolver.load(resolver.context, arena.allocator(), "util");
     try testing.expect(exact == .text);
     try testing.expect(std.mem.indexOf(u8, exact.text.bytes, "v * 2") != null);
 }
@@ -402,7 +402,7 @@ test "an import must be a regular file, not a device or a fifo" {
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.loadFn(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
     try testing.expect(found == .unreadable);
     // Naming the kind, not just refusing: /dev/null is a device.
     try testing.expectEqualStrings("it is a device", found.unreadable);
@@ -443,7 +443,7 @@ test "a directory where a module should be is unreadable, not missing" {
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.loadFn(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
     try testing.expect(found == .unreadable);
     try testing.expectEqualStrings("it is a directory", found.unreadable);
 }

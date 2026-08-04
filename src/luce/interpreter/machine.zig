@@ -776,13 +776,13 @@ pub const Machine = struct {
 
             .print => {
                 const host = try self.service();
-                const callback = host.printFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.print orelse return self.runtime.fail(.host_unavailable);
                 try callback(host.context, registers[arguments[0]].asString());
                 return .none;
             },
             .file_read => {
                 const host = try self.service();
-                const callback = host.readFileFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.file_read orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 return switch (try callback(host.context, self.arena, path)) {
                     // The host allocates from the arena, which cannot
@@ -802,7 +802,7 @@ pub const Machine = struct {
             },
             .file_write => {
                 const host = try self.service();
-                const callback = host.writeFileFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.file_write orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 if (!callback(host.context, path, registers[arguments[1]].asString())) {
                     self.runtime.raiseIo(.write, path, self.placeOf(site));
@@ -811,7 +811,7 @@ pub const Machine = struct {
             },
             .file_append => {
                 const host = try self.service();
-                const callback = host.appendFileFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.file_append orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 if (!callback(host.context, path, registers[arguments[1]].asString())) {
                     self.runtime.raiseIo(.append, path, self.placeOf(site));
@@ -820,7 +820,7 @@ pub const Machine = struct {
             },
             .file_delete => {
                 const host = try self.service();
-                const callback = host.deleteFileFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.file_delete orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 if (!callback(host.context, path)) {
                     self.runtime.raiseIo(.delete, path, self.placeOf(site));
@@ -829,7 +829,7 @@ pub const Machine = struct {
             },
             .file_rename => {
                 const host = try self.service();
-                const callback = host.renameFileFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.file_rename orelse return self.runtime.fail(.host_unavailable);
                 const from = registers[arguments[0]].asString();
                 if (!callback(host.context, from, registers[arguments[1]].asString())) {
                     self.runtime.raiseIo(.rename, from, self.placeOf(site));
@@ -838,7 +838,7 @@ pub const Machine = struct {
             },
             .dir_list => {
                 const host = try self.service();
-                const callback = host.listDirectoryFn orelse
+                const callback = host.dir_list orelse
                     return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
                 const names = (try callback(host.context, self.arena, path)) orelse {
@@ -852,7 +852,7 @@ pub const Machine = struct {
             },
             .read_line => {
                 const host = try self.service();
-                const callback = host.readLineFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.read_line orelse return self.runtime.fail(.host_unavailable);
                 const prompt = registers[arguments[0]].asString();
                 // End of input is absence and not failure: there is
                 // nothing there, and no reason worth carrying
@@ -863,19 +863,19 @@ pub const Machine = struct {
             },
             .print_error => {
                 const host = try self.service();
-                const callback = host.printErrorFn orelse
+                const callback = host.print_error orelse
                     return self.runtime.fail(.host_unavailable);
                 try callback(host.context, registers[arguments[0]].asString());
                 return .none;
             },
             .clock_ms => {
                 const host = try self.service();
-                const callback = host.clockFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.clock_ms orelse return self.runtime.fail(.host_unavailable);
                 return .ofInt(callback(host.context));
             },
             .sleep_ms => {
                 const host = try self.service();
-                const callback = host.sleepFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.sleep_ms orelse return self.runtime.fail(.host_unavailable);
                 // A duration that has already elapsed is not a bug:
                 // `deadline - now` goes negative on a slow frame, and
                 // the answer is "no time left to wait".
@@ -884,7 +884,7 @@ pub const Machine = struct {
             },
             .env_get => {
                 const host = try self.service();
-                const callback = host.envFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.env orelse return self.runtime.fail(.host_unavailable);
                 const name = registers[arguments[0]].asString();
                 const found = (try callback(host.context, self.arena, name)) orelse
                     return .none;
@@ -892,17 +892,17 @@ pub const Machine = struct {
             },
             .file_exists => {
                 const host = try self.service();
-                const callback = host.fileExistsFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.file_exists orelse return self.runtime.fail(.host_unavailable);
                 return .ofBoolean(callback(host.context, registers[arguments[0]].asString()));
             },
             .arg_count => {
                 const host = try self.service();
-                const callback = host.argCountFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.arg_count orelse return self.runtime.fail(.host_unavailable);
                 return .ofInt(callback(host.context));
             },
             .arg_get => {
                 const host = try self.service();
-                const callback = host.argFn orelse return self.runtime.fail(.host_unavailable);
+                const callback = host.arg orelse return self.runtime.fail(.host_unavailable);
                 const index = registers[arguments[0]].asInt();
                 if (index < 0 or index > std.math.maxInt(u32)) {
                     return self.runtime.fail(.argument_bounds);
@@ -913,20 +913,20 @@ pub const Machine = struct {
             },
             .term_rows => {
                 const screen = try self.terminal();
-                return .ofInt(screen.rowsFn(screen.context));
+                return .ofInt(screen.term_rows(screen.context));
             },
             .term_cols => {
                 const screen = try self.terminal();
-                return .ofInt(screen.colsFn(screen.context));
+                return .ofInt(screen.term_cols(screen.context));
             },
             .term_clear => {
                 const screen = try self.terminal();
-                try screen.clearFn(screen.context);
+                try screen.term_clear(screen.context);
                 return .none;
             },
             .term_move => {
                 const screen = try self.terminal();
-                try screen.moveFn(
+                try screen.term_move(
                     screen.context,
                     registers[arguments[0]].asInt(),
                     registers[arguments[1]].asInt(),
@@ -935,7 +935,7 @@ pub const Machine = struct {
             },
             .term_style => {
                 const screen = try self.terminal();
-                try screen.styleFn(
+                try screen.term_style(
                     screen.context,
                     registers[arguments[0]].asInt(),
                     registers[arguments[1]].asInt(),
@@ -945,17 +945,17 @@ pub const Machine = struct {
             },
             .term_write => {
                 const screen = try self.terminal();
-                try screen.writeFn(screen.context, registers[arguments[0]].asString());
+                try screen.term_write(screen.context, registers[arguments[0]].asString());
                 return .none;
             },
             .term_flush => {
                 const screen = try self.terminal();
-                try screen.flushFn(screen.context);
+                try screen.term_flush(screen.context);
                 return .none;
             },
             .key_read => {
                 const screen = try self.terminal();
-                const event = try screen.keyFn(screen.context, self.arena);
+                const event = try screen.key_read(screen.context, self.arena);
                 try self.runtime.setKeyText(event.text);
                 return self.runtime.ownValue(.ofString(event.name));
             },

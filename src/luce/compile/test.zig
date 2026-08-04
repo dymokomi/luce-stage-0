@@ -809,7 +809,7 @@ const TestLoader = struct {
     }
 
     fn loader(self: *TestLoader) compile_mod.Loader {
-        return .{ .context = self, .loadFn = load };
+        return .{ .context = self, .load = load };
     }
 };
 
