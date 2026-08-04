@@ -59,23 +59,86 @@ Every one of these is gated. In a program compiled without host
 access, naming one is `luce.sema.host`. At run time a service the host
 does not implement traps `host_unavailable` rather than doing nothing.
 
+Each one's shape is a decision about what kind of fact it reports.
+A service the world can say no to answers `!`; a service that can only
+report "there is nothing there" answers `T?`; a service that cannot
+fail answers a plain value. See [traps and errors](../failure/).
+
+### Console
+
 | Signature | Notes |
 |---|---|
-| `print(text: String)` | |
-| `file_read(path: String) -> String!` | fallible |
-| `file_write(path: String, text: String) -> !` | fallible |
-| `file_exists(path: String) -> Bool` | a question about the past, not a guard |
+| `print(text: String)` | a line to standard output, unsanitized — it is the program's own channel and may be a pipe |
+| `print_error(text: String)` | a line to standard error, **always sanitized**: that channel is shared with the runner, so a program may not scribble on a frame it does not own |
+| `read_line(prompt: String) -> String?` | writes the prompt, reads one line without its newline; `none` at end of input. Hands the terminal back its line discipline first, so a line read and a raw key loop never fight over standard input |
+
+End of input is absence, not failure — nothing went wrong, there is
+just nothing more — so `read_line` answers `T?` and
+`read_line("> ") else ""` is the whole handling.
+
+### Arguments and environment
+
+| Signature | Notes |
+|---|---|
 | `arg(index: Int) -> String` | traps `argument_bounds` outside the range |
 | `arg_count() -> Int` | |
+| `env(name: String) -> String?` | one environment variable; `none` when it is unset. There is no setter and no way to read the whole environment |
+
+### The clock
+
+| Signature | Notes |
+|---|---|
+| `clock_ms() -> Int` | a **monotonic** reading in milliseconds; only differences mean anything, and it is not a wall clock or a calendar |
+| `sleep_ms(milliseconds: Int)` | waits at least that long; presents the pending frame first, as `key_read` does |
+
+Neither can fail, and that is deliberate for `sleep_ms`: a duration
+that has **already elapsed** — zero, or the negative left by
+`deadline - clock_ms()` when a frame overran — is not a bug and not a
+failure. There is no time left to wait, so it returns at once. An
+animation loop can subtract without guarding.
+
+```luce run
+func main():
+    let started = clock_ms()
+    sleep_ms(0)
+    sleep_ms(-40)
+    print(f"an overrun frame waits {clock_ms() - started} ms")
+```
+
+```output
+an overrun frame waits 0 ms
+```
+
+### Files
+
+| Signature | Notes |
+|---|---|
+| `file_read(path: String) -> String!` | the whole file; 64 MiB ceiling |
+| `file_write(path: String, text: String) -> !` | truncates or creates |
+| `file_append(path: String, text: String) -> !` | adds to the end, creating the file if it is not there |
+| `file_delete(path: String) -> !` | an absent path is `io_failed`, not a quiet success |
+| `file_rename(from: String, to: String) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
+| `file_exists(path: String) -> Bool` | a question about the past, not a guard |
+| `dir_list(path: String) -> List(String)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. A fresh list the caller owns |
+
+Every one that changes a file is fallible, because the world decides
+whether it lands. `file_exists` is the exception and answers a plain
+`Bool` — but it is a question about the past, never a guard for the
+call after it.
+
+### The terminal
+
+| Signature | Notes |
+|---|---|
 | `term_rows() -> Int`, `term_cols() -> Int` | |
 | `term_clear()`, `term_move(row, column)` | |
-| `term_style(foreground, background, bold)` | |
+| `term_style(foreground, background, bold)` | 256-color SGR; `-1` is the default |
 | `term_write(text: String)` | sanitized; a program cannot emit a control sequence |
 | `term_flush()` | |
 | `key_read() -> String` | presents the pending frame, then blocks; returns a stable name |
 | `key_text() -> String` | the payload when the last `key_read` returned `"text"` |
 
-`std.files` is the layer you should normally use over the three file
+`std.files` is the layer you should normally use over the file
 builtins.
 
 **Paths are not confined.** A program may name any path the process
@@ -125,11 +188,25 @@ absent — and `m[k] = v`, which inserts or updates.
 | Method | Notes |
 |---|---|
 | `dim(axis) -> Int` | the size of one axis |
-| `fill(value)` | rank-1, **value elements only** |
+| `fill(value)` | every element at any rank; **value elements only** |
 | `sort()`, `reverse()`, `find(v)`, `contains(v)` | rank-1 only |
 
 Plus `len` (dimension 0), `a[i]`, `grid[r, c]` up to four indices, and
 index assignment.
+
+`dim` and `fill` are the two that work at every rank; the rest need a
+single axis to mean anything.
+
+```luce run
+func main():
+    var grid = new Array(Int, 2, 3)
+    grid.fill(7)
+    print(f"{grid.dim(0)} by {grid.dim(1)}, corner {grid[1, 2]}")
+```
+
+```output
+2 by 3, corner 7
+```
 
 ## Builder
 

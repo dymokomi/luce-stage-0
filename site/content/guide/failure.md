@@ -31,9 +31,9 @@ information there is.
 
 ## What the rule moved
 
-Applying that rule to Luce's twenty trap codes left eighteen exactly
-where they were. What it moved was the host's file boundary — reads
-and writes became fallible — and the five whole-array reductions in
+Applying that rule to the trap codes Luce had then moved exactly one
+of them. What it moved was the host's file boundary — reads and writes
+became fallible — and the five whole-array reductions in
 `std.math`, which took `?` rather than `!` because an empty array has
 no mean and that is absence rather than failure.
 

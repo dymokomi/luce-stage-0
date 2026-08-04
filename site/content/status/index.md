@@ -46,10 +46,11 @@ language question, and one benchmark row.**
 
 ## What is measured
 
-Against C twins at `-O3 -march=native`, on one host: **0.78× to 1.09×
-on loops, math, arrays, matrix multiply and statistics**, and
-**2.31× on strings**. That last row is the one genuinely behind, and
-it is allocation-bound rather than code-generation-bound.
+Against C twins at `-O3 -march=native`, on one host, on the
+floor-subtracted `compute` column: **0.77× to 1.06× on loops, math,
+arrays, matrix multiply and statistics**, and **2.73× on strings**.
+That last row is the one genuinely behind, and it is allocation-bound
+rather than code-generation-bound.
 [The table and its caveats](/guide/performance/).
 
 Memory, on a churn loop that retains nothing: **flat**, where it used
@@ -106,9 +107,9 @@ the third design bent around the same hole.
 
 The corpus pays for it constantly, and the counts are real:
 
-- `editor.luc` handles keys with **17 string comparisons and no
-  `else`**. A misspelled `"page_dwon"` compiles and silently does
-  nothing.
+- `editor.luc` handles keys with **15 string comparisons in one
+  `elif` chain and no final `else`**. A misspelled `"page_dwon"`
+  compiles and silently does nothing.
 - `editor.luc` writes `# 1 keyword, 2 type name, 3 builtin, 0 plain` —
   an enum written as an `Int` with a comment.
 - `editor.luc` implements `is_keyword` and `is_builtin` as **46
@@ -129,10 +130,12 @@ workaround-dense and the proof that the language moved.
    truth tables.
 2. **No character classes in the library.** `is_digit`/`is_alpha`
    re-derived by hand three times. Five functions would fix it.
-3. **No receivers on user structs.** 87 `Struct.func(state, …)` calls;
-   the receiver is the first parameter of ten of ten functions in one
-   struct. Nine of twelve structs in `programs/` have **no fields at
-   all** — namespaces impersonating types.
+3. **No receivers on user structs.** 88 namespaced `Struct.func(…)`
+   calls across `programs/`, with the receiver written out as the
+   first argument wherever there is one — ten of `editor.luc`'s
+   eleven `Text` functions take the same `value: String` first. Nine
+   of twelve structs in `programs/` have **no fields at all** —
+   namespaces impersonating types.
 4. **No multiple returns.** One program declares a struct solely to
    return two `Int`s, constructed at 8 sites and destructured at 15.
 5. **No sort with a comparator.** `wordcount.luc` produces a top-five
@@ -143,7 +146,8 @@ workaround-dense and the proof that the language moved.
    delete/rename and append mode all shipped with host ABI version 8.
    What is still absent is `exit` and path manipulation.
 7. **No default or named arguments.** `term_style(fg, bg, bold)` is
-   called 16 times and 13 of them end in the same noise word `false`.
+   called 15 times across `programs/` and 14 of them end in the same
+   noise word `false`.
 8. ~~**`Bytes` is unconstructible.**~~ Cut. Nothing produced one and
    nothing consumed one, and it was one of the two things keeping the
    backend from lowering everything a program can say. The backend is

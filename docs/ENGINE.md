@@ -25,9 +25,11 @@ test` is green: **849/849 in 71.1 s**.
 > `LOOM_ENGINE`, no `backend.zig`, and stage 7 is three passes. The
 > module's `format_version` is 17 and `abi.version` is unchanged at 8
 > — nothing about the *contract* moved, only what is on either side of
-> it. `zig build test` is **832/832 in ~4 min**, of which 536 are the
-> executable specification, every one of them run on both engines and
-> compared. Each step below carries a note on what it cost in contact
+> it. `zig build test` was **832/832 in ~4 min** at the commit that
+> closed step 9, of which 536 were the executable specification, every
+> one of them run on both engines and compared; the suite has grown
+> since and the number in the build summary is the only current one.
+> Each step below carries a note on what it cost in contact
 > with the code, and every one of those notes exists because the memo
 > was wrong about something.
 
@@ -36,11 +38,14 @@ test` is green: **849/849 in 71.1 s**.
 > any of the nine steps landed, and they are in the present tense
 > because that is what they were describing. Everything they say
 > *would* happen has happened: there is no fallback, no `LOOM_ENGINE`,
-> no `.lcn`, no step budget, no `backend.zig`, no `Bytes`, no
+> no `.lcn`, no step budget, no `backend.zig` and therefore no
+> `backend.Host` (the oracle's side is `interpreter.Host` and the
+> compiled side is `08_llvm/abi.zig`'s `LuceHost`), no `Bytes`, no
 > evaluator, and 282 specs that proved only the oracle now prove both
-> arms. This file is the decision record, so the measurements stay as
-> taken; `docs/CODEGEN.md` and `docs/PIPELINE.md` describe what is
-> there now, and where they disagree with a Hat, they win.
+> arms. This file is the decision record, so the measurements and the
+> names stay as taken; `docs/CODEGEN.md` and `docs/PIPELINE.md`
+> describe what is there now, and where they disagree with a Hat, they
+> win.
 
 ---
 
@@ -380,10 +385,12 @@ to do with the budget the retirement frees.
 
 ## Hat 6 — format and portability
 
-Today `.lc` is a direct binary serialization of verified MIR
-(`format_version` 16) and `.lcn` is the tagged native artifact beside
-it. The direction makes `.lc` the artifact. Six consequences, each
-with its evidence.
+*As this Hat was written*, `.lc` was a direct binary serialization of
+verified MIR (`format_version` 16) and `.lcn` the tagged native
+artifact beside it. The direction makes `.lc` the artifact, and it
+went that way: there is no `.lcn`, serialized MIR answers to `.lcm`,
+and `format_version` is 17 (`06_mir/module.zig`). Six consequences,
+each with its evidence.
 
 ### 1. Size, and the decision it forces
 
@@ -500,8 +507,9 @@ reverses that decision, and it should be reversed knowingly.
   0% runtime**, because `default<O3>` already finds everything they
   find. That is 498 lines the retirement collects for free.
 - **The step budget's only production setting is "unlimited"** (Hat 4).
-- **`docs/MODES.md:103` says `format_version` 15.** It is 16
-  (`06_mir/module.zig:23`). A doc defect found in passing.
+- **`docs/MODES.md` said `format_version` 15** where it was 16. A doc
+  defect found in passing, and fixed since: MODES.md now says 17,
+  which is what `06_mir/module.zig` says.
 - **The prose is the largest single body of work.** A full sweep of
   README, CLAUDE.md, AGENTS.md, `docs/*.md`, `site/content/**/*.md` and
   the `//!` headers finds **232 sites across 44 files** that state
@@ -815,9 +823,9 @@ that were shaped for value numbering and block merging now exercise
 stage 8, which is where those shapes get decided, and cutting them
 would only narrow the widest differential net in the tree.
 
-`zig build test` is **832**: 835 minus the two value-numbering shape
-tests and the one control-flow shape test, which were the only tests
-that named a deleted pass.
+`zig build test` came out of this step at **832**: 835 minus the two
+value-numbering shape tests and the one control-flow shape test, which
+were the only tests that named a deleted pass.
 
 **8. Move the executable specification onto the compiled path — as
 `agree`. — DONE.** *(needs 1–2; independent of 4–7)*

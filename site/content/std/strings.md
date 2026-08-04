@@ -88,7 +88,11 @@ Mixed CASE words
 | `strings.split(s, separator) -> List(String)` | keeps empty pieces; an empty separator splits on whitespace runs and drops the empties, which is Python's `split()` |
 | `strings.join(parts, separator) -> String` | |
 
-Both hand back fresh objects the receiver owns.
+`split` hands back a fresh **object** — a `List(String)` the receiver
+owns and must give away or free. `join` hands back a `String`, which
+is a **value**: it copies like any other, and there is nothing to own.
+That distinction is the one the whole
+[memory model](/ref/ownership/) rests on.
 
 ```luce run
 import std.strings
@@ -114,6 +118,31 @@ func main():
 `strings.format_float(x, decimals) -> String` gives fixed-point
 display, rounding half away from zero. `str(x)` gives the shortest
 form that round-trips.
+
+It is for **display of ordinary magnitudes**, and it says so at both
+edges rather than pretending otherwise:
+
+- `decimals` below zero **traps** `explicit_trap`. A negative digit
+  count is not a request this function can round; it is a bug at the
+  call site.
+- above about 1e15 there are no fractional digits left to print, so it
+  falls back to `str(value)` — `format_float(1.0e20, 2)` is
+  `100000000000000000000`, with no `.00`.
+
+```luce trap
+import std.strings
+
+func main():
+    print(strings.format_float(1.0e20, 2))
+    print(strings.format_float(2.5, -1))
+```
+
+```output
+100000000000000000000
+loom: trap: format_float needs decimals >= 0 [explicit_trap]
+    at strings.format_float (std/strings.luc:186:9)
+    at main (main.luc:5:5)
+```
 
 ```luce run
 import std.strings
@@ -150,7 +179,15 @@ enters.
 ## The one sentinel
 
 `find` and `find_from` answer `-1` for "not found". `Int?` exists now,
-so the sentinel is a wart with nothing holding it up
-— and `find` also returns `-1` for an *argument* error, which is not
-the same fact as "absent". The
-[status page](/status/) keeps it on the list.
+so the sentinel is a wart with nothing holding it up — and
+`find_from` overloads it: a `start` below zero or past the end of the
+string answers `-1` too, which is an *argument* error and not the same
+fact as "absent". `find` is `find_from(s, needle, 0)` and cannot reach
+that case, so the sentinel means only one thing there.
+
+The two also disagree with `count` about the empty needle: `find` and
+`find_from` treat it as a match at `start`, while `count` counts it
+zero times. Both answers are defensible and they are not the same
+answer.
+
+The [status page](/status/) keeps this on the list.

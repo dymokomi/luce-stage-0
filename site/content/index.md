@@ -39,9 +39,9 @@ that used to grow without bound now sits flat at about 1.8 MB.
 [The memory model](/guide/memory/).
 
 **Compiled code is at C's speed.** Against C twins built with
-`-O3 -march=native`, the same algorithms measure 0.78× to 1.09× on
+`-O3 -march=native`, the same algorithms measure 0.77× to 1.06× on
 loops, math, arrays, matrix multiply and statistics. One row is not
-there: string processing measures 2.31×, and that is
+there: string processing measures 2.73×, and that is
 allocation-bound rather than code-generation-bound.
 [The numbers, and what they do not say](/guide/performance/).
 

@@ -122,7 +122,7 @@ build/loom run programs/life.lc
 ```
 
 The editor is also the honest example of what Luce still lacks: its
-key handling is seventeen string comparisons with no `else`, and its
-keyword tables are forty-six `word == "…"` comparisons — a hash set
-written as a truth table, because there are no sets and no tagged
-unions. The [status page](/status/) counts them.
+key handling is one `elif` chain of fifteen string comparisons with no
+final `else`, and its keyword tables are forty-six `word == "…"`
+comparisons — a hash set written as a truth table, because there are
+no sets and no tagged unions. The [status page](/status/) counts them.

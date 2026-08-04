@@ -22,12 +22,21 @@ of memo for the one remaining semantic hole.
 > And if the answer is simply "there is nothing there", with no reason
 > worth carrying, it is neither — it is `T?`.
 
-Applied to the 21 codes in `06_mir/defs.zig`, that rule moves almost
-nothing. Eighteen stay traps. `file_read_failed` becomes an error —
+Applied to the **20** codes `06_mir/defs.zig` carried when this was
+written (`72fe8be^`), that rule moves almost nothing: **nineteen stay
+traps**, and exactly one moves. `file_read_failed` becomes an error —
 `file_exists` before `file_read` is a TOCTOU race, which is the
 canonical proof that a guard function cannot substitute for a result.
-`parse_failed` becomes an optional, because "not a number" is the same
-reason every time and the function's name already implies it.
+Parse failure moves too, but it was never a trap code to begin with:
+`parse_int` answers `Int?`, because "not a number" is the same reason
+every time and the function's name already implies it.
+
+> Since then one more code has gone, for a reason unrelated to this
+> rule: `step_budget_exhausted` left with the step budget itself
+> (`16ed137`). **Luce has 18 trap codes today**, and
+> `06_mir/defs.zig`'s `TrapCode` is the list — the site's
+> [reference](https://luce.luciaos.com/ref/failure/) carries all of
+> them, and a test fails the site build if it stops doing so.
 `key_missing` and `empty_collection` keep their traps and gain
 optional-returning siblings.
 

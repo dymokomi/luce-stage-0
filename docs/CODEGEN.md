@@ -468,6 +468,11 @@ sides through LLVM, process startup taken off both — `bench/run.sh`'s
 | loops     |  1.04x | 1.04x |
 | math      |  1.03x | 1.03x |
 
+**Both columns are this change's A/B and neither is a current
+figure**, `strings` least of all: copy-on-store and small-string
+optimisation both landed afterwards and moved that row twice.  The
+snapshot below is the live table.
+
 `Map` is deliberately not on the inline path: a hash probe is genuinely
 call-worthy.  Neither is `List`, whose buffer moves under `append`, nor
 `find_byte`, which is a vectorized `memchr` in the runtime and would be
@@ -881,21 +886,37 @@ change moves.  Absolute times mean nothing off this host — for a
 before/after, use `bench/compare.sh GIT-REF`, which interleaves the
 two on the machine in front of you.
 
+**Taken at `f333e12`.**  This table is the one number: where a
+document quotes a benchmark row it quotes the `compute` column here,
+and says which column it is.
+
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  80.8 ms |  84.8 ms |  1.05x |   1.04x |
-| math      | 138.6 ms | 109.2 ms |  0.79x |   0.78x |
-| strings   |  20.6 ms |  47.4 ms |  2.31x |   2.49x |
-| arrays    |  44.0 ms |  47.2 ms |  1.07x |   1.06x |
-| matmul    |  10.9 ms |  11.7 ms |  1.07x |   1.02x |
-| stats     |  32.3 ms |  35.3 ms |  1.09x |   1.08x |
-| floor     |   3.0 ms |   3.7 ms |      - |       - |
+| loops     |  83.1 ms |  87.3 ms |  1.05x |   1.04x |
+| math      | 142.5 ms | 111.6 ms |  0.78x |   0.77x |
+| strings   |  21.3 ms |  53.7 ms |  2.52x |   2.73x |
+| arrays    |  44.3 ms |  47.4 ms |  1.07x |   1.06x |
+| matmul    |  11.1 ms |  12.0 ms |  1.08x |   1.02x |
+| stats     |  33.9 ms |  35.9 ms |  1.06x |   1.04x |
+| floor     |   2.9 ms |   3.6 ms |      - |       - |
 
 `strings` is the one row that is genuinely behind, and it is
 allocation-bound rather than code-generation-bound.  Everything else
 is at parity or ahead, and `math` is ahead because Luce's transcendental
 calls land in the same libm C's do while the surrounding loop
 vectorizes.
+
+> **What the previous snapshot said, and why it was replaced.**  The
+> table here read `20.6 / 47.4 ms, 2.31x / 2.49x` for `strings` and
+> had done since `48453a4` — fifty-one commits back, and *before*
+> copy-on-store, small-string optimisation and `T!` all landed.  Two
+> runs at `f333e12` put Luce's `strings` at 53.5 and 53.7 ms with
+> every other row and the do-nothing floor unmoved, so the difference
+> is that row and not the host.  `docs/STRINGS.md`'s own closing
+> measurement — `2.71× C → 2.68× C` — was the figure that had stayed
+> honest, and it agrees with today's within noise.  A stale row in
+> the table every other document quotes is the expensive kind, so it
+> is refreshed here rather than annotated.
 
 ## Building
 

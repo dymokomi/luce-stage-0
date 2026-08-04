@@ -25,10 +25,10 @@ all, because compiling a bundled program is a link:
 
 ```sh
 ./build.sh         # installs build/luce, build/loom, build/lib/libluce_rt.a, build/programs/*.lc
-zig build test     # 832 tests in ~4 min: the executable specification
-                   # (every program run on both the compiled path and
-                   # the test suite's reference implementation, and
-                   # compared) + language, compiler and terminal suites
+zig build test     # ~5 min: the executable specification (every program
+                   # run on both the compiled path and the test suite's
+                   # reference implementation, and compared) + language,
+                   # compiler, terminal and documentation-site suites
 ```
 
 ## Try it
@@ -67,9 +67,11 @@ so a runtime trap prints `file:line:column` and a call trace.
 `--release` strips them for a smaller artifact — the program itself
 behaves identically (docs/MODES.md).
 
-All three compile through LLVM, which measures at 0.79-1.09x of C on
+All three compile through LLVM, which measures at 0.77-1.06x of C on
 five of the six benchmarks — `strings` is the one row still behind, at
-2.31x ([docs/CODEGEN.md](docs/CODEGEN.md)).  They are stamped with the
+2.73x.  Those are `bench/run.sh`'s floor-subtracted `compute` column,
+the one a code-generation change moves; the table and the host it was
+taken on are in [docs/CODEGEN.md](docs/CODEGEN.md).  They are stamped with the
 machine, the host ABI and the code generator they were built for, so a
 loader refuses the wrong one by name rather than crashing.  Linking
 uses `cc`; `LUCE_CC` names another driver and `LUCE_LIB` the directory

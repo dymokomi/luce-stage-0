@@ -190,10 +190,12 @@ the check is inherently racy or impossible, it is an error. And if the
 answer is simply "there is nothing there", with no reason worth
 carrying, it is neither — it is `T?`.
 
-That rule leaves eighteen of the twenty trap codes exactly where they
-were. What it moves is the host's file boundary: a read or a write the
-world refuses is an error, because `file_exists` before `file_read` is
-a race no program can close.
+That rule left nineteen of the twenty trap codes then in the language
+exactly where they were. What it moves is the host's file boundary: a
+read or a write the world refuses is an error, because `file_exists`
+before `file_read` is a race no program can close. (Luce has **18**
+trap codes today; the twentieth left with the step budget, for
+reasons of its own.)
 
 **A call that can fail must say which it means.** Ignoring the outcome
 is not a spelling the grammar has:

@@ -14,13 +14,19 @@ code-generation change moves.
 
 | benchmark | C | Luce | Luce/C | compute |
 |---|---|---|---|---|
-| loops | 80.8 ms | 84.8 ms | 1.05× | 1.04× |
-| math | 138.6 ms | 109.2 ms | 0.79× | **0.78×** |
-| strings | 20.6 ms | 47.4 ms | 2.31× | **2.49×** |
-| arrays | 44.0 ms | 47.2 ms | 1.07× | 1.06× |
-| matmul | 10.9 ms | 11.7 ms | 1.07× | 1.02× |
-| stats | 32.3 ms | 35.3 ms | 1.09× | 1.08× |
-| *(do-nothing floor)* | 3.0 ms | 3.7 ms | — | — |
+| loops | 83.1 ms | 87.3 ms | 1.05× | 1.04× |
+| math | 142.5 ms | 111.6 ms | 0.78× | **0.77×** |
+| strings | 21.3 ms | 53.7 ms | 2.52× | **2.73×** |
+| arrays | 44.3 ms | 47.4 ms | 1.07× | 1.06× |
+| matmul | 11.1 ms | 12.0 ms | 1.08× | 1.02× |
+| stats | 33.9 ms | 35.9 ms | 1.06× | 1.04× |
+| *(do-nothing floor)* | 2.9 ms | 3.6 ms | — | — |
+
+**`compute` is the column to quote.** Where anything else in the
+repository names a benchmark ratio it names that column and says so,
+because the two differ by as much as 0.2× on the row that matters and
+picking silently between them is how one row ends up with four
+numbers.
 
 `math` is ahead of C because Luce's transcendental calls land in the
 same libm C's do while the surrounding loop vectorizes.

@@ -39,7 +39,22 @@ A sibling import names the file exactly, **including its case**, and
 the file must be an ordinary file. A case-insensitive filesystem would
 happily open `Geo.luc` for `import geo`, so the directory entry is
 checked rather than the open — a program that builds on one machine
-builds on the machine that ships it.
+builds on the machine that ships it. A name with no file beside it is
+`luce.import.missing`, and it names the path it looked for.
+
+```luce fail
+import geometry
+
+func main():
+    print("x")
+```
+
+```output
+luce: compile failed
+main.luc:1:1: cannot load module geometry (looked for geometry.luc) [luce.import.missing]
+    import geometry
+    ^~~~~~~~~~~~~~~
+```
 
 Deliberately absent: package managers, search paths, conditional
 imports, re-exports, and any `as` clause.

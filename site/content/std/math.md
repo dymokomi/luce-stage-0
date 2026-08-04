@@ -10,8 +10,8 @@ import std.math
 
 ## Constants
 
-`math.pi`, `math.tau`, `math.e`. All three are compile-time constants
-and fold at their use sites.
+`math.pi`, `math.tau`, `math.e`, `math.ln2`, `math.ln10`. All five are
+compile-time constants and fold at their use sites.
 
 ## Scalar functions
 
@@ -23,10 +23,31 @@ and fold at their use sites.
 | `math.log2(x)`, `math.log10(x)` | |
 | `math.pow(x: Float, y: Float) -> Float` | negative `x` needs a whole `y` or it traps; `0^negative` traps; `0^0` is `1` |
 | `math.ipow(base: Int, n: Int) -> Int` | integer power by squaring; checked, so overflow traps; negative `n` traps |
-| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians, any magnitude |
+| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians; every `Float` is in the domain, but see the accuracy note below |
 
-Series are range-reduced: `exp` and `ln` hold to about 1e-14 relative,
-the trigonometric functions to about 1e-12 absolute.
+Series are range-reduced, and `exp` and `ln` hold to about 1e-14
+relative.
+
+**The trigonometric accuracy depends on the magnitude.** Range
+reduction is `x - floor(x / tau) * tau` in ordinary double precision,
+so the error in the reduced angle grows with the size of `x` and the
+result loses digits with it. Measured against the system libm on one
+host:
+
+| magnitude of `x` | absolute error of `sin` |
+|---|---|
+| 1 | exact |
+| 1e3 | 1e-14 |
+| 1e4 | 1.4e-12 |
+| 1e6 | 6.8e-11 |
+| 1e9 | 1.3e-8 |
+| 1e15 | 8.0e-3 |
+
+So "about 1e-12 absolute" is a promise for arguments up to roughly
+1e4, and nothing bigger. There is no domain error and nothing traps —
+a huge argument returns a plausible number that is simply wrong,
+which is the usual shape of this problem and the reason it is written
+down here. Reduce large angles yourself if you need them.
 
 ```luce run
 import std.math
@@ -122,9 +143,10 @@ no hidden globals and every stream is deterministic from its seed.
 
 | Signature | Notes |
 |---|---|
-| `math.seed(value: Int) -> List(Int)` | the state; the caller owns it |
+| `math.seed(value: Int) -> List(Int)` | the state; the caller owns it. Any seed works — it is folded into `[1, 2³¹ − 2]` |
 | `math.random(state) -> Float` | in the open interval (0, 1) |
-| `math.random_int(state, low, high) -> Int` | in `[low, high)`; an empty range traps |
+| `math.random_int(state, low, high) -> Int` | in `[low, high)`, `high` exclusive like `range`; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses |
+| `math.random_step(state) -> Int` | the raw next state in `[1, 2³¹ − 2]`; the other two are the friendly faces over it |
 
 Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
 

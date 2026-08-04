@@ -28,6 +28,27 @@ Blocks are introduced by `:` at the end of a line and delimited by
 indentation. One level is **four spaces**, exactly. Tabs are not
 indentation and neither is any other width.
 
+Both are refused by name rather than misread, because a file that
+looks one way and runs another is the failure this rule exists to
+prevent.
+
+| Written | Code |
+|---|---|
+| A tab where indentation belongs | `luce.lex.tab` |
+| Any step that is not four spaces | `luce.lex.indent` |
+
+```luce fail
+func main():
+  print("two spaces")
+```
+
+```output
+luce: compile failed
+main.luc:2:1: a block is indented exactly 4 spaces past the one containing it, not 2 [luce.lex.indent]
+      print("two spaces")
+    ^~
+```
+
 ## Comments
 
 `#` to the end of the line. There is no block comment form.
@@ -52,7 +73,8 @@ true     try      var      while
 
 ## Reserved names
 
-The language reserves these; nothing user-declared may take them.
+The language reserves these; nothing user-declared may take them, and
+one that does is `luce.sema.reserved`.
 
 ```
 range       Int         Float       Bool        String
@@ -123,3 +145,30 @@ stage that raised them: `luce.source.*`, `luce.lex.*`,
 `luce.parse.*`, `luce.sema.*`, `luce.import.*`.
 
 At most 100 diagnostics are reported for one compilation.
+
+There are 59 codes and this site names about 26 of them. That is
+deliberate rather than partial: most of the rest are ordinary
+"expected `X`, found `Y`" parse errors whose message *is* the
+documentation, and a page repeating it would add nothing to search
+for. What is named is every code a reader might want to look up
+because the message alone does not say why the rule exists — the four
+above, the import rules on [modules](/ref/modules/), the ownership
+codes, and the two entry-point rules below.
+
+## The entry point
+
+A program is exactly `func main():`, or `func main() -> !:` when the
+world can stop it. Anything else — no `main` at all, or a `main` that
+takes parameters or returns a value — is `luce.sema.main`.
+
+```luce fail
+func start():
+    print("x")
+```
+
+```output
+luce: compile failed
+main.luc:1:1: missing func main(): [luce.sema.main]
+    func start():
+    ^
+```

@@ -131,13 +131,13 @@ func main():
 Decision: aliasing is free and untracked.  (Casual users never meet
 ownership here.)
 
-**S9. An alias after the owner is gone traps at use — in safe builds.**
+**S9. An alias used after the owner is gone traps at use.**
 ```luce
 func main():
     var xs = [1, 2]
     let view = xs
     free(xs)                  # owner releases early
-    let bad = view[0]         # RUNTIME trap: use_after_free (safe builds)
+    let bad = view[0]         # RUNTIME trap: use_after_free
 ```
 Decision: this is the accepted cost of no borrow checker.  The trap
 is deterministic and names the faulting line.  There is no build mode

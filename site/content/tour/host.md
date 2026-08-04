@@ -34,10 +34,11 @@ fig
 
 ## Files
 
-The host's raw file builtins are `file_read`, `file_write` and
-`file_exists`, and `std.files` is the honest layer over them. Reading
-and writing are **fallible**: the world decides whether they land, so
-they answer `!` and you `try` or `catch`.
+The host's raw file builtins are `file_read`, `file_write`,
+`file_append`, `file_delete`, `file_rename`, `file_exists` and
+`dir_list`, and [`std.files`](/std/files/) is the honest layer over
+them. Everything that changes a file is **fallible**: the world decides
+whether it lands, so they answer `!` and you `try` or `catch`.
 
 ```luce run
 import std.files
@@ -76,6 +77,49 @@ close.
 
 Paths resolve relative to the current directory.
 
+## Standard input, standard error, the clock
+
+Three more services, and each one's shape is a decision about what
+kind of fact it is reporting.
+
+`read_line(prompt)` writes the prompt and answers `String?`. End of
+input is **absence**, not failure — nothing went wrong, there is just
+nothing more — so it is `T?` and not `T!`, and `else` is the whole
+handling.
+
+`print_error(text)` writes a line to standard error. Unlike `print`,
+it is always sanitized: standard output is the program's own channel
+and may be a pipe, while standard error is shared with the runner.
+
+`clock_ms()` reads a **monotonic** clock in milliseconds and
+`sleep_ms(ms)` waits. Neither can fail, and `sleep_ms` of an
+already-elapsed duration — zero, or the negative left by
+`deadline - clock_ms()` after a frame overran — simply returns. There
+is no time left to wait, so an animation loop subtracts without
+guarding. That is exactly what `programs/life.luc` does.
+
+`env(name)` answers `String?`: one variable, or `none` when unset.
+
+```luce run
+func main():
+    let started = clock_ms()
+    print(f"PATH is set: {env("PATH") != none}")
+    print(f"nonsense: {env("LUCE_NOT_A_REAL_VARIABLE") else "(unset)"}")
+    print(f"typed: {read_line("") else "(end of input)"}")
+    sleep_ms(started - clock_ms())
+    print_error("this line went to standard error")
+```
+
+```output
+PATH is set: true
+nonsense: (unset)
+typed: (end of input)
+this line went to standard error
+```
+
+The generator ran that program with nothing on standard input, which
+is why `read_line` answered `none`.
+
 ## The terminal
 
 `loom` also offers a screen: `term_rows`, `term_cols`, `term_clear`,
@@ -109,8 +153,22 @@ language rather than about good behaviour.
 
 ## What is missing
 
-There is no standard input, no clock, no `sleep`, no `exit`, no
-environment access, no stderr, no directory listing, no delete or
-rename, and no path manipulation. Each is one builtin plus one
-wrapper, and none of them is built yet. The
+Two things, and both were left out on purpose rather than not reached.
+
+**`exit`.** It is not one builtin: it is a fourth way for a run to
+end, and every party needs an answer for it — the status the entry
+point returns, the leak census, and what "scope ownership" means for a
+scope that never closes. `main() -> !` already ends a program early
+with a reason and a status a shell can read, which is what the corpus
+actually wanted.
+
+**Path manipulation.** Not a host gap at all — joining and splitting a
+path is pure text, so it belongs in a std module over
+[`std.strings`](/std/strings/), designed against a program that needs
+one.
+
+Also absent, smaller: a wall clock and a calendar (`clock_ms` is
+monotonic and says only that differences mean something — dates are a
+library, and the library does not exist), setting an environment
+variable, and reading the environment whole. The
 [status page](/status/) keeps that list.
