@@ -5,7 +5,13 @@
 //! screen engage lazily on the first terminal builtin, every frame is
 //! buffered and presented on flush (or before blocking on a key), and
 //! program text is sanitized so a Luce program can never emit raw
-//! escape sequences — the host writes every control byte itself.
+//! escape sequences — the host writes every control byte itself.  The
+//! sanitizing rule is `sanitize.zig`'s, because a trap report follows
+//! it too and a trap report is not a terminal.
+//!
+//! **What a run's ending is called, and what it exits with, is not
+//! here**: `report.zig` renders the trap, the uncaught error and the
+//! leak census for every runner alike, and never touches a Host.
 //!
 //! The services reach a program as `luce.llvm.abi`'s C table, which is
 //! the one calling convention there is: a compiled artifact indexes it
@@ -17,6 +23,8 @@
 const std = @import("std");
 const luce = @import("luce");
 const key_mod = @import("key.zig");
+const report = @import("report");
+const sanitize = @import("sanitize");
 
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
@@ -66,7 +74,7 @@ pub const Host = struct {
     /// Where program text is rewritten before it reaches a real
     /// terminal: a `read_line` prompt and a `print_error` line.  Both
     /// are the program's bytes on a channel the host owns, so both go
-    /// through `appendSanitized` and neither can emit a control
+    /// through `sanitize.append` and neither can emit a control
     /// sequence (the rule `term_write` follows).
     sanitized: std.ArrayList(u8) = .empty,
     /// One directory listing, NUL-joined, which is the shape the ABI's
@@ -78,7 +86,7 @@ pub const Host = struct {
     trap_length: usize = 0,
     /// The call trace that came with that trap, innermost first, with
     /// its names copied out of the borrowed report.
-    trace_frames: [max_trace_frames]Reported.Frame = undefined,
+    trace_frames: [max_trace_frames]report.Frame = undefined,
     trace_count: usize = 0,
     /// Frames the runtime's cap cut, plus any this host had no room
     /// for — what "... N more frames" counts.
@@ -92,7 +100,7 @@ pub const Host = struct {
     error_code: ?luce.mir.ErrorCode = null,
     error_storage: [512]u8 = undefined,
     error_length: usize = 0,
-    error_origin: Reported.Frame = .{ .function = "", .source = "", .line = 0, .column = 0 },
+    error_origin: report.Frame = .{ .function = "", .source = "", .line = 0, .column = 0 },
 
     pub fn setup(
         self: *Host,
@@ -135,7 +143,7 @@ pub const Host = struct {
     pub const Raised = struct {
         code: luce.mir.ErrorCode,
         message: []const u8,
-        origin: Reported.Frame,
+        origin: report.Frame,
     };
 
     /// The trap a compiled artifact reported, if it did.  The words are
@@ -153,19 +161,11 @@ pub const Host = struct {
         code: luce.mir.TrapCode,
         message: []const u8,
         /// Innermost first, the same order and shape the oracle
-        /// reports (`luce.interpreter.Trap.trace`).
-        trace: []const Frame,
+        /// reports (`luce.interpreter.Trap.trace`), with every name
+        /// copied into this Host — what arrives through the C table is
+        /// borrowed for the length of the call.
+        trace: []const report.Frame,
         dropped: u32,
-
-        /// One call, with its names copied into this Host.  A
-        /// `--release` artifact reports line zero and still names the
-        /// function.
-        pub const Frame = struct {
-            function: []const u8,
-            source: []const u8,
-            line: u32,
-            column: u32,
-        };
     };
 
     /// The services, as the C table a compiled artifact is handed
@@ -222,7 +222,7 @@ pub const Host = struct {
         // A print while the screen is active would scribble over the
         // frame; route it through the frame buffer as plain text.
         if (self.screen.active) {
-            try appendSanitized(&self.screen.buffer, self.gpa, text);
+            try sanitize.append(&self.screen.buffer, self.gpa, text);
             try self.screen.buffer.appendSlice(self.gpa, "\r\n");
             return;
         }
@@ -357,7 +357,7 @@ pub const Host = struct {
             self.sanitized.clearRetainingCapacity();
             // Program text on a real terminal: sanitized like every
             // other byte a program hands this host to display.
-            try appendSanitized(&self.sanitized, self.gpa, prompt);
+            try sanitize.append(&self.sanitized, self.gpa, prompt);
             self.out.writeAll(self.sanitized.items) catch {};
             // Flushed before the read, for the reason `key_read`
             // presents the frame first: a prompt nobody can see is a
@@ -407,7 +407,7 @@ pub const Host = struct {
     /// host channel, and the same rule `term_write` follows applies.
     fn printDiagnostic(self: *Host, text: []const u8) error{OutOfMemory}!void {
         self.sanitized.clearRetainingCapacity();
-        try appendSanitized(&self.sanitized, self.gpa, text);
+        try sanitize.append(&self.sanitized, self.gpa, text);
         self.err.writeAll(self.sanitized.items) catch return;
         self.err.writeAll(if (self.screen.active) "\r\n" else "\n") catch return;
         self.err.flush() catch return;
@@ -491,7 +491,7 @@ pub const Host = struct {
 
     fn write(self: *Host, text: []const u8) error{OutOfMemory}!void {
         try self.ensureScreen();
-        try appendSanitized(&self.screen.buffer, self.gpa, text);
+        try sanitize.append(&self.screen.buffer, self.gpa, text);
     }
 
     fn flush(self: *Host) error{OutOfMemory}!void {
@@ -899,130 +899,6 @@ pub const Host = struct {
 
 const max_file_size = 64 * 1024 * 1024;
 
-/// A reported trace prints at most this many frames; a runaway
-/// recursion shows its innermost calls and a count of the rest.
-pub const max_printed_frames = 12;
-
-/// What a runner exits with, for each way a run can end — one table,
-/// because a program's behaviour must not depend on who started it,
-/// and that includes the number a shell reads afterwards.  `loom run
-/// PROGRAM.lc` and the standalone binary `luce build --emit=exe`
-/// writes both answer from here.
-///
-/// **A trap and an uncaught error get different numbers**, because
-/// they are different sentences about the program (docs/FAILURE.md): a
-/// trap is a bug, an error is news the program chose not to handle.
-/// A script that has to tell them apart should read `$?`, not parse
-/// stderr.  Their numbers are the ABI's own (`abi.Status`).
-///
-/// The other two are not about the program at all, so they take
-/// sysexits numbers well clear of anything a program means.
-pub const exit_ok: u8 = 0;
-pub const exit_trapped: u8 = 1;
-pub const exit_errored: u8 = 3;
-/// Out of memory: the machine ran out, not the program (EX_SOFTWARE).
-pub const exit_exhausted: u8 = 70;
-/// The run could not be carried out, or its output could not be
-/// delivered — the artifact, the runner, or the pipe (EX_OSERR).
-pub const exit_broken: u8 = 71;
-
-/// Render a trap — one rendering, for every way a Luce program can be
-/// run.
-///
-/// A compiled artifact under loom and a standalone compiled binary
-/// have to report the same failure the same way; a program's behaviour
-/// must not depend on who started it, and that includes how it says it
-/// failed.  `trace` is any slice of frames carrying `function`,
-/// `source`, `line` and `column`, so this takes the ABI's shape and
-/// the oracle's alike without copying one into the other on the
-/// failure path.
-///
-/// **The program's words are sanitized, like every other host channel
-/// that reaches a terminal.**  A trap message carries program text —
-/// `trap(f"...")` says whatever the program says — and a source path
-/// carries whatever the filesystem allows; stderr is shared with the
-/// runner, so raw control bytes there could clear the screen or forge
-/// the terminal's state on the way out of a failing program.  Nothing
-/// here allocates: the rewriting streams straight onto the writer,
-/// because the failure path has no allocator left to fail on.
-///
-/// Writes are best-effort — a trap report must not fail to be a trap
-/// because the pipe closed.
-pub fn printTrap(
-    err: *std.Io.Writer,
-    reporter: []const u8,
-    code: []const u8,
-    message: []const u8,
-    trace: anytype,
-    dropped: u32,
-) void {
-    err.print("{s}: trap: ", .{reporter}) catch {};
-    writeSanitized(err, message);
-    err.print(" [{s}]\n", .{code}) catch {};
-    // Innermost first, like Zig's own traces.  A --release artifact
-    // has no lines; the function names still print.
-    for (trace, 0..) |frame, index| {
-        if (index == max_printed_frames) break;
-        err.writeAll("    at ") catch {};
-        writeSanitized(err, frame.function);
-        if (frame.line != 0) {
-            err.writeAll(" (") catch {};
-            writeSanitized(err, frame.source);
-            err.print(":{d}:{d})", .{ frame.line, frame.column }) catch {};
-        }
-        err.writeAll("\n") catch {};
-    }
-    const hidden = dropped + @as(u32, @intCast(trace.len -| max_printed_frames));
-    if (hidden != 0) err.print("    ... {d} more frames\n", .{hidden}) catch {};
-}
-
-/// Report an uncaught error, in one shape for every runner.
-///
-/// **Not "trap", and it does not print a stack.**  A trap is a bug and
-/// the stack is its diagnosis; an error is news, and the news is what
-/// the world said and where the program asked it (docs/FAILURE.md).
-/// `origin` carries `function`, `source`, `line` and `column`.  The
-/// ABI's origin and the oracle's frame are those same four facts in
-/// two structs, so this takes either.
-///
-/// The words and the names are sanitized for the same reason
-/// `printTrap`'s are, and by the same rule.
-pub fn printError(
-    err: *std.Io.Writer,
-    reporter: []const u8,
-    code: []const u8,
-    message: []const u8,
-    origin: anytype,
-) void {
-    err.print("{s}: error: ", .{reporter}) catch {};
-    writeSanitized(err, message);
-    err.print(" [{s}]\n", .{code}) catch {};
-    if (origin.function.len == 0) return;
-    err.writeAll("    raised in ") catch {};
-    writeSanitized(err, origin.function);
-    if (origin.line != 0) {
-        err.writeAll(" (") catch {};
-        writeSanitized(err, origin.source);
-        err.print(":{d}:{d})", .{ origin.line, origin.column }) catch {};
-    }
-    err.writeAll("\n") catch {};
-}
-
-/// The one thing to say about a run that ended without trapping.
-/// Scope ownership frees everything (OWNERSHIP.md S33), so a nonzero
-/// count is an engine bug rather than a program's.
-///
-/// It takes the `i64` the ABI hands over rather than a narrowed copy,
-/// so no caller has to decide what a negative count would mean — a
-/// number that is not zero is the bug, whatever its sign.
-pub fn printLeaks(err: *std.Io.Writer, reporter: []const u8, leaked: i64) void {
-    if (leaked == 0) return;
-    err.print(
-        "{s}: internal error: {d} object{s} escaped ownership — please report this\n",
-        .{ reporter, leaked, if (leaked == 1) "" else "s" },
-    ) catch {};
-}
-
 /// One decoded key as the host sees it, before either boundary copies
 /// it: `name` is static text or `control_name`, `text` points into the
 /// pending input buffer.
@@ -1081,65 +957,6 @@ fn appendStyle(
     }
 }
 
-/// One step of the sanitizing rule: the bytes to emit for the front of
-/// `text`, and how many input bytes they stand for.
-///
-/// The rule itself: a newline becomes a real line break (CR LF, because
-/// raw mode may be on); every other C0, DEL, C1, or malformed sequence
-/// becomes `?`; everything else passes through as itself.
-///
-/// **The rule lives in one function** because host text reaches a
-/// terminal two ways that cannot share a mechanism: the frame buffer,
-/// which allocates, and a trap report, which must not.  Two copies of
-/// the rule would be two answers to "what counts as safe".
-const Step = struct { emit: []const u8, consumed: usize };
-
-fn sanitizeStep(text: []const u8) Step {
-    const first = text[0];
-    if (first == '\n') return .{ .emit = "\r\n", .consumed = 1 };
-    const length: usize = std.unicode.utf8ByteSequenceLength(first) catch
-        return .{ .emit = "?", .consumed = 1 };
-    // A sequence cut off by the end of the text is one `?` for the
-    // whole remainder: there is nothing left to decode it against.
-    if (length > text.len) return .{ .emit = "?", .consumed = text.len };
-    const sequence = text[0..length];
-    const codepoint = std.unicode.utf8Decode(sequence) catch
-        return .{ .emit = "?", .consumed = 1 };
-    if (codepoint < 0x20 or (codepoint >= 0x7f and codepoint <= 0x9f)) {
-        return .{ .emit = "?", .consumed = length };
-    }
-    return .{ .emit = sequence, .consumed = length };
-}
-
-/// Append UTF-8 display text without letting the program smuggle
-/// terminal controls.
-fn appendSanitized(
-    buffer: *std.ArrayList(u8),
-    gpa: Allocator,
-    text: []const u8,
-) error{OutOfMemory}!void {
-    var offset: usize = 0;
-    while (offset < text.len) {
-        const step = sanitizeStep(text[offset..]);
-        try buffer.appendSlice(gpa, step.emit);
-        offset += step.consumed;
-    }
-}
-
-/// The same rewriting, straight onto a writer: no allocator, no
-/// scratch buffer, and no length a long message could exceed.  That is
-/// what the failure path needs — a trap report has nothing left to
-/// allocate from and no message it is allowed to refuse.  Best-effort,
-/// like every other write in a trap report.
-fn writeSanitized(err: *std.Io.Writer, text: []const u8) void {
-    var offset: usize = 0;
-    while (offset < text.len) {
-        const step = sanitizeStep(text[offset..]);
-        err.writeAll(step.emit) catch return;
-        offset += step.consumed;
-    }
-}
-
 /// The process's own environment block.
 ///
 /// Taken here rather than handed in, exactly as `Dir.cwd()` is: this
@@ -1173,55 +990,6 @@ fn windowSize() Size {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-
-test "program text cannot inject terminal controls" {
-    var buffer: std.ArrayList(u8) = .empty;
-    defer buffer.deinit(testing.allocator);
-    try appendSanitized(&buffer, testing.allocator, "safe\x1b[2J\r\t λ \xc2\x9b tail\xff\nnext");
-    try testing.expectEqualStrings("safe?[2J?? λ ? tail?\r\nnext", buffer.items);
-}
-
-test "every shape a byte sequence can be broken in becomes one question mark" {
-    // The rule has four exits and the test above walks two of them.
-    // These are the rest, said as `sanitizeStep` answers them — how
-    // many bytes are emitted *and* how many the step stands for, which
-    // is what decides whether the text after a broken sequence is read
-    // as text or as more rubbish.
-    const cases = [_]struct { text: []const u8, emit: []const u8, consumed: usize }{
-        // A sequence the end of the text cuts off: nothing is left to
-        // decode it against, so the whole remainder is one `?`.
-        .{ .text = "\xe2\x82", .emit = "?", .consumed = 2 },
-        .{ .text = "\xf0\x9f\x92", .emit = "?", .consumed = 3 },
-        // A lead byte whose continuation bytes are not continuations:
-        // the length is believable and the decode is not, so exactly
-        // one byte is consumed and the `(` after it is read as text.
-        .{ .text = "\xe2\x28\xa1", .emit = "?", .consumed = 1 },
-        // DEL, which is not a C0 control and is not printable either.
-        .{ .text = "\x7f", .emit = "?", .consumed = 1 },
-        // The far end of the C1 block, three bytes wide in UTF-8's
-        // two-byte form.
-        .{ .text = "\xc2\x9f", .emit = "?", .consumed = 2 },
-        // And the first codepoint past it, which is text.
-        .{ .text = "\xc2\xa0", .emit = "\xc2\xa0", .consumed = 2 },
-    };
-    for (cases) |case| {
-        const step = sanitizeStep(case.text);
-        try testing.expectEqualStrings(case.emit, step.emit);
-        try testing.expectEqual(case.consumed, step.consumed);
-    }
-
-    // End to end, so the two callers of the rule agree: a truncated
-    // sequence, a bad one, and a DEL in one run of text.
-    var buffer: std.ArrayList(u8) = .empty;
-    defer buffer.deinit(testing.allocator);
-    try appendSanitized(&buffer, testing.allocator, "a\x7fb\xe2\x28\xa1c\xe2\x82");
-    try testing.expectEqualStrings("a?b?(?c?", buffer.items);
-
-    var streamed: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer streamed.deinit();
-    writeSanitized(&streamed.writer, "a\x7fb\xe2\x28\xa1c\xe2\x82");
-    try testing.expectEqualStrings(buffer.items, streamed.written());
-}
 
 test "styles render 256-color SGR runs and clamp to defaults" {
     var buffer: std.ArrayList(u8) = .empty;
@@ -1373,55 +1141,6 @@ test "a program may name any path the process itself can" {
     try testing.expectEqualStrings("kept", (try host.loadFile(climbing)).?);
 }
 
-test "how a run ended is one table, and every ending has its own number" {
-    // A program's behaviour must not depend on who started it, and
-    // that includes the number a shell reads afterwards: `loom run`
-    // and the standalone binary both answer from here.  A trap and an
-    // uncaught error are different sentences about a program, so
-    // collapsing their two numbers into one would leave a script
-    // parsing stderr to tell them apart.
-    const table = [_]u8{ exit_ok, exit_trapped, exit_errored, exit_exhausted, exit_broken };
-    try testing.expectEqualSlices(u8, &.{ 0, 1, 3, 70, 71 }, &table);
-    for (table, 0..) |code, index| {
-        for (table[index + 1 ..]) |other| try testing.expect(code != other);
-    }
-
-    // The two the ABI hands over are the ABI's own numbers.
-    try testing.expectEqual(@as(i32, exit_ok), @intFromEnum(abi.Status.ok));
-    try testing.expectEqual(@as(i32, exit_trapped), @intFromEnum(abi.Status.trapped));
-    try testing.expectEqual(@as(i32, exit_errored), @intFromEnum(abi.Status.errored));
-}
-
-test "a run that leaked says so, and one that did not says nothing" {
-    // Scope ownership frees everything (OWNERSHIP.md S33), so a nonzero
-    // census is an engine bug rather than a program's — which is why it
-    // is reported as one, in words that ask for it to be reported on.
-    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer reported.deinit();
-
-    printLeaks(&reported.writer, "loom", 0);
-    try testing.expectEqualStrings("", reported.written());
-
-    printLeaks(&reported.writer, "loom", 1);
-    try testing.expectEqualStrings(
-        "loom: internal error: 1 object escaped ownership — please report this\n",
-        reported.written(),
-    );
-
-    reported.clearRetainingCapacity();
-    printLeaks(&reported.writer, "luce", 4);
-    try testing.expectEqualStrings(
-        "luce: internal error: 4 objects escaped ownership — please report this\n",
-        reported.written(),
-    );
-
-    // A negative count is the same bug seen from the other side, and
-    // is not silently a success.
-    reported.clearRetainingCapacity();
-    printLeaks(&reported.writer, "loom", -2);
-    try testing.expect(std.mem.indexOf(u8, reported.written(), "-2 objects") != null);
-}
-
 test "a program cannot smuggle terminal controls onto stderr or into a prompt" {
     // `term_write` has always been sanitized; standard error and a
     // `read_line` prompt are the two new ways program text reaches a
@@ -1449,7 +1168,7 @@ test "a program cannot smuggle terminal controls onto stderr or into a prompt" {
     // The prompt takes the same path.  Nothing is read here — this is
     // the writing half, and stdin is not a test's to script.
     host.sanitized.clearRetainingCapacity();
-    try appendSanitized(&host.sanitized, host.gpa, hostile);
+    try sanitize.append(&host.sanitized, host.gpa, hostile);
     try testing.expectEqualStrings("clear?[2Jbell? done", host.sanitized.items);
 }
 
@@ -1567,61 +1286,6 @@ test "a diagnostic ends its line the way the screen it lands on needs" {
     try testing.expectEqualStrings("during a frame\r\n", reported.written());
     // Nothing here took the screen, so nothing may hand it back.
     host.screen.active = false;
-}
-
-test "a trap report cannot smuggle terminal controls either" {
-    // The last channel program text reaches stderr through, and the
-    // one that used to be raw: a trap message is whatever the program
-    // said, and it is printed while the screen has just been restored.
-    // `chr(27) + "[2J"` in a trap message cleared the terminal.
-    //
-    // Frame names go the same way.  A function name is an identifier
-    // and cannot carry one, but a *source* name is a path the world
-    // chose, and the ABI hands both over as borrowed bytes.
-    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer reported.deinit();
-
-    const Frame = struct {
-        function: []const u8,
-        source: []const u8,
-        line: u32,
-        column: u32,
-    };
-    const trace = [_]Frame{
-        .{ .function = "main", .source = "bad\x1b[2J.luc", .line = 3, .column = 5 },
-        .{ .function = "helper\x07", .source = "", .line = 0, .column = 0 },
-    };
-    printTrap(
-        &reported.writer,
-        "loom",
-        "user_trap",
-        "wiping\x1b[2J the screen\x07",
-        &trace,
-        0,
-    );
-    try testing.expectEqualStrings(
-        "loom: trap: wiping?[2J the screen? [user_trap]\n" ++
-            "    at main (bad?[2J.luc:3:5)\n" ++
-            "    at helper?\n",
-        reported.written(),
-    );
-    try testing.expect(std.mem.indexOfScalar(u8, reported.written(), 0x1b) == null);
-
-    // An uncaught error takes the same route and the same rule.
-    reported.clearRetainingCapacity();
-    printError(
-        &reported.writer,
-        "loom",
-        "io_failed",
-        "cannot read \x1b]0;title\x07",
-        trace[0],
-    );
-    try testing.expectEqualStrings(
-        "loom: error: cannot read ?]0;title? [io_failed]\n" ++
-            "    raised in main (bad?[2J.luc:3:5)\n",
-        reported.written(),
-    );
-    try testing.expect(std.mem.indexOfScalar(u8, reported.written(), 0x1b) == null);
 }
 
 test "a message too long for the fixed report buffer is cut on a codepoint" {

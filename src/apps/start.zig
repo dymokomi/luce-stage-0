@@ -27,6 +27,7 @@
 const std = @import("std");
 const luce = @import("luce");
 const host_mod = @import("host");
+const report = @import("report");
 const streams = @import("streams");
 
 const abi = luce.llvm.abi;
@@ -60,7 +61,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const count: usize = if (argc > 1) @intCast(argc - 1) else 0;
     const arguments = gpa.alloc([]const u8, count) catch {
         err.print("luce: out of memory\n", .{}) catch {};
-        return host_mod.exit_exhausted;
+        return report.exit_exhausted;
     };
     defer gpa.free(arguments);
     for (arguments, 0..) |*argument, index| {
@@ -73,7 +74,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
             .{@tagName(mismatch)},
         ) catch {};
         err.flush() catch {};
-        return host_mod.exit_broken;
+        return report.exit_broken;
     }
 
     var services: host_mod.Host = undefined;
@@ -93,35 +94,35 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         err.print("luce: output could not be written\n", .{}) catch {};
         break :undelivered false;
     };
-    const code = report(&services, err, status);
+    const code = finish(&services, err, status);
     err.flush() catch {};
-    if (code == host_mod.exit_ok and !delivered) return host_mod.exit_broken;
+    if (code == report.exit_ok and !delivered) return report.exit_broken;
     return code;
 }
 
 /// How the run ended, said and scored — every sentence and every
-/// number out of `apps/host.zig`, which is also where loom's runner
+/// number out of `apps/report.zig`, which is also where loom's runner
 /// gets them.  Nothing about a failure is rendered twice in this tree.
-fn report(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_int {
+fn finish(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_int {
     switch (status) {
         .ok => {
-            host_mod.printLeaks(err, "luce", services.leaked orelse 0);
-            return host_mod.exit_ok;
+            report.printLeaks(err, "luce", services.leaked orelse 0);
+            return report.exit_ok;
         },
         .errored => {
             const raised = services.reportedError() orelse {
                 err.print("luce: the program failed and said nothing\n", .{}) catch {};
-                return host_mod.exit_errored;
+                return report.exit_errored;
             };
-            host_mod.printError(err, "luce", @tagName(raised.code), raised.message, raised.origin);
-            return host_mod.exit_errored;
+            report.printError(err, "luce", @tagName(raised.code), raised.message, raised.origin);
+            return report.exit_errored;
         },
         .trapped => {
             const trap = services.reportedTrap() orelse {
                 err.print("luce: the program trapped and said nothing\n", .{}) catch {};
-                return host_mod.exit_trapped;
+                return report.exit_trapped;
             };
-            host_mod.printTrap(
+            report.printTrap(
                 err,
                 "luce",
                 @tagName(trap.code),
@@ -129,15 +130,15 @@ fn report(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_i
                 trap.trace,
                 trap.dropped,
             );
-            return host_mod.exit_trapped;
+            return report.exit_trapped;
         },
         .exhausted => {
             err.print("luce: out of memory\n", .{}) catch {};
-            return host_mod.exit_exhausted;
+            return report.exit_exhausted;
         },
         _ => {
             err.print("luce: the program returned an unknown status\n", .{}) catch {};
-            return host_mod.exit_broken;
+            return report.exit_broken;
         },
     }
 }

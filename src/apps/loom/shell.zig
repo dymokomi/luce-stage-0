@@ -17,7 +17,7 @@
 const std = @import("std");
 const runner = @import("runner.zig");
 const palette_mod = @import("palette.zig");
-const host_mod = @import("host");
+const report = @import("report");
 
 const Allocator = std.mem.Allocator;
 
@@ -38,7 +38,7 @@ pub const Shell = struct {
         // The worst thing any line did, which a non-interactive loom
         // returns as its own status.  An interactive one always
         // returns 0: the person saw every failure as it happened.
-        var worst: u8 = host_mod.exit_ok;
+        var worst: u8 = report.exit_ok;
         while (true) {
             if (interactive) {
                 try self.out.print("{s}loom{s} \u{25b8} ", .{
@@ -50,27 +50,27 @@ pub const Shell = struct {
             const line = reader.takeDelimiter('\n') catch |mistake| switch (mistake) {
                 error.StreamTooLong => {
                     try self.err.print("loom: line too long\n", .{});
-                    return host_mod.exit_trapped;
+                    return report.exit_trapped;
                 },
                 // Not end of input — that arrives as null below — but
                 // a real failure to read.  A script whose remaining
                 // commands were never seen has not succeeded, whatever
                 // the ones before it did.
                 error.ReadFailed => {
-                    if (interactive) return host_mod.exit_ok;
+                    if (interactive) return report.exit_ok;
                     try self.err.print("loom: cannot read further input\n", .{});
-                    return host_mod.exit_broken;
+                    return report.exit_broken;
                 },
             } orelse {
                 if (interactive) try self.out.print("\n", .{});
                 try self.out.flush();
-                return if (interactive) host_mod.exit_ok else worst;
+                return if (interactive) report.exit_ok else worst;
             };
             const outcome = try self.dispatch(line);
             if (outcome.status > worst) worst = outcome.status;
             if (!outcome.keep_going) {
                 try self.out.flush();
-                return if (interactive) host_mod.exit_ok else worst;
+                return if (interactive) report.exit_ok else worst;
             }
         }
     }
@@ -88,7 +88,7 @@ pub const Shell = struct {
     /// status it would have exited with had it been the only line.
     const Outcome = struct {
         keep_going: bool = true,
-        status: u8 = host_mod.exit_ok,
+        status: u8 = report.exit_ok,
     };
 
     /// One line in.
@@ -98,7 +98,7 @@ pub const Shell = struct {
         if (count == 0) return .{};
         if (count == max_words) {
             try self.err.print("loom: too many arguments\n", .{});
-            return .{ .status = host_mod.exit_trapped };
+            return .{ .status = report.exit_trapped };
         }
         const command = words[0];
         const rest = words[1..count];
@@ -172,7 +172,7 @@ pub const Shell = struct {
             self.palette.sgr(.prompt),
             self.palette.sgr(.reset),
         });
-        return .{ .status = host_mod.exit_trapped };
+        return .{ .status = report.exit_trapped };
     }
 
     /// Run the editor on one file: the LOOM_EDITOR script when set,
@@ -219,7 +219,7 @@ pub const Shell = struct {
 
     fn complain(self: *Shell, wanted: []const u8) !Outcome {
         try self.err.print("loom: usage: {s}\n", .{wanted});
-        return .{ .status = host_mod.exit_trapped };
+        return .{ .status = report.exit_trapped };
     }
 };
 
@@ -346,7 +346,7 @@ fn expectQuiet(line: []const u8) !void {
     try ran.of(line, false, null);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
-    try testing.expectEqual(@as(u8, host_mod.exit_ok), ran.outcome.status);
+    try testing.expectEqual(@as(u8, report.exit_ok), ran.outcome.status);
     try testing.expectEqualStrings("", ran.err.written());
 }
 
@@ -357,7 +357,7 @@ fn expectRefused(line: []const u8, mentioning: []const u8) !void {
     try ran.of(line, false, null);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
-    try testing.expectEqual(@as(u8, host_mod.exit_trapped), ran.outcome.status);
+    try testing.expectEqual(@as(u8, report.exit_trapped), ran.outcome.status);
     try testing.expect(std.mem.indexOf(u8, ran.err.written(), mentioning) != null);
     // A refusal is a refusal wherever it is read: nothing about it
     // goes to the program's own channel.
@@ -386,7 +386,7 @@ test "leaving is spelled two ways and both stop the shell without a word" {
         try ran.of(word, false, null);
         defer ran.deinit();
         try testing.expect(!ran.outcome.keep_going);
-        try testing.expectEqual(@as(u8, host_mod.exit_ok), ran.outcome.status);
+        try testing.expectEqual(@as(u8, report.exit_ok), ran.outcome.status);
         try testing.expectEqualStrings("", ran.err.written());
         try testing.expectEqualStrings("", ran.out.written());
     }
@@ -440,7 +440,7 @@ test "a command nobody has is named back, and counts as a line that failed" {
     try ran.of("rnu hello.lc", false, null);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
-    try testing.expectEqual(@as(u8, host_mod.exit_trapped), ran.outcome.status);
+    try testing.expectEqual(@as(u8, report.exit_trapped), ran.outcome.status);
     // The word that was typed, so a typo is visible as a typo, and the
     // one command that lists the rest.
     try testing.expect(std.mem.indexOf(u8, ran.err.written(), "rnu") != null);

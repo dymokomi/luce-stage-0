@@ -69,6 +69,7 @@ const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
 const host_mod = @import("host");
+const report = @import("report");
 
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
@@ -575,32 +576,32 @@ fn runLoaded(
     };
     switch (status) {
         .ok => {
-            host_mod.printLeaks(err, "loom", services.leaked orelse 0);
-            return if (delivered) host_mod.exit_ok else host_mod.exit_broken;
+            report.printLeaks(err, "loom", services.leaked orelse 0);
+            return if (delivered) report.exit_ok else report.exit_broken;
         },
         .trapped => {
             const trap = services.reportedTrap() orelse {
                 try err.print("loom: the program trapped and said nothing\n", .{});
-                return host_mod.exit_trapped;
+                return report.exit_trapped;
             };
-            host_mod.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
-            return host_mod.exit_trapped;
+            report.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
+            return report.exit_trapped;
         },
         .errored => {
             const raised = services.reportedError() orelse {
                 try err.print("loom: the program failed and said nothing\n", .{});
-                return host_mod.exit_errored;
+                return report.exit_errored;
             };
-            host_mod.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
-            return host_mod.exit_errored;
+            report.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
+            return report.exit_errored;
         },
         .exhausted => {
             try err.print("loom: out of memory\n", .{});
-            return host_mod.exit_exhausted;
+            return report.exit_exhausted;
         },
         _ => {
             try err.print("loom: the program returned an unknown status\n", .{});
-            return host_mod.exit_broken;
+            return report.exit_broken;
         },
     }
 }
