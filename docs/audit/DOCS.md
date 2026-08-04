@@ -1,5 +1,17 @@
 # Documentation audit — the sentences, both directions
 
+> **Executed.**  Every finding below is marked with its disposition —
+> **fixed** with the commit, or **dissent** with the reason — in the
+> line immediately under its heading.  Three findings were wrong in
+> contact with the tree and say so; one number the audit trusted
+> turned out to be the stale one, and it was the number this document
+> told four other documents to adopt.  See *Disposition* at the foot
+> of Part 1 for the summary and the four things the audit missed.
+>
+> The structural fix the audit asks for at the end is built:
+> `site/src/coverage.zig` reads the compiler's lists out of `src/` at
+> test time and fails the build when the reference stops naming one.
+
 Audited at `0a22b81` (merge of `refusal-tests`).  What was checked: every
 prose claim in `site/content/**` (48 pages), `docs/*.md` (13 files),
 `README.md`, `CLAUDE.md` and `AGENTS.md`, against the code and against a
@@ -66,6 +78,14 @@ disagree, or a number drifted; **3** organization and reachability.
 ## Sev 1
 
 ### F1. The ABI-8 host expansion reached the compiler and three site pages missed it — two of them say the features do not exist
+
+> **FIXED** (`bf45def`).  `/ref/builtins/` gains all nine, grouped by
+> purpose and each with the decision its shape encodes.  `/std/files/`
+> documents all ten wrappers plus the three semantics a caller cannot
+> guess.  `/tour/host/` loses the denial and keeps `exit` and paths, each
+> with the reason it was left out, and its raw-builtin list names all
+> seven file builtins.  Guarded by `site/src/coverage.zig` (`2c40b24`),
+> which reproduced this finding exactly on its first run.
 
 This is one event with three faces, and it is the worst finding in the
 audit, because two of the three are not omissions but **active denials**
@@ -143,6 +163,14 @@ pages a user actually consults to answer "can I do X" all say no.
 
 ### F2. `docs/V2.md` describes a backend that has not existed for a week
 
+> **FIXED** (`dbfa587`), and the audit understated it.  Roadmap item 5
+> is rewritten.  But V2.md's *"The .lc module format"* section also still
+> described a `.lc` that **was** the serialized IR, decoded and
+> interpreted by `loom` — the arrangement `ENGINE.md` retired.  That is
+> the more misleading of the two, because it is structural rather than a
+> status line, and the audit did not catch it.  Both fixed, both with a
+> note on what they used to say.
+
 > "Finish code generation: the LLVM backend exists and covers the integer
 > and String core, but not floats, structs, or the host services, and
 > loom cannot yet load what it produces (docs/CODEGEN.md)."
@@ -155,6 +183,13 @@ V2.md "the north star" and `README.md:11` sends the reader there first —
 it is the paragraph a newcomer reaches earliest and trusts most.
 
 ### F3. Three entry points, three wrong test counts
+
+> **FIXED** (`bf45def`), by removing the counts rather than correcting
+> them.  Three documents embedded a number that rots on every commit
+> adding a test, and replacing one wrong number with another that will
+> be wrong next week is not a fix.  The build summary prints the only
+> current one.  (For the record: 944 at `f333e12`, 951 with this work's
+> seven coverage tests.)
 
 The suite passes at this commit.  Nobody says how large it is correctly:
 
@@ -171,6 +206,12 @@ visible in the log — `CLAUDE.md` was last touched at `63a1366`, and the
 next commit added exactly 52 tests: 892 + 52 = 944.
 
 ### F4. `docs/MISSING.md` contradicts its own body, and miscounts the specs
+
+> **FIXED** (`dbfa587`).  Eight specs, seven folders, and the closing
+> summary rewritten — it was a wishlist paragraph 330 lines behind its
+> own body.  MISSING.md was re-verified line by line rather than
+> patched: every line reference and corpus count in it was re-derived
+> against the tree.
 
 Two separate defects in the one document that exists to be the honest
 gap list:
@@ -194,6 +235,12 @@ paragraph on a document whose body has moved past it.
 
 ### F5. `docs/ENGINE.md` states a stale `format_version` as a live fact
 
+> **FIXED** (`bf45def`).  The `Today` sentence is reframed as what the
+> Hat was written about, with the current truth beside it; the
+> doc-defect callout says what it found and that it is fixed.  `.lcn`
+> and `backend.Host` are named in the preamble as gone, so a grepper
+> meeting them inside a Hat knows why they are there.
+
 > "Today `.lc` is a direct binary serialization of verified MIR
 > (`format_version` 16) and `.lcn` is the tagged native artifact beside
 > it." — `docs/ENGINE.md:383-384`
@@ -215,6 +262,16 @@ Stale three ways: the true value is 17, `MODES.md:105` now correctly says
 ## Sev 2
 
 ### F6. The `strings` benchmark row has four different current numbers
+
+> **FIXED** (`bf45def`) — and the audit picked the wrong survivor.  It
+> names `CODEGEN.md`'s snapshot as the table to quote and
+> `STRINGS.md`'s 2.68x as the outlier.  Re-measured at `f333e12`, twice:
+> the `strings` compute ratio is **2.73x**, with every other row and the
+> do-nothing floor unmoved.  The snapshot's 2.49x had stood since
+> `48453a4` — fifty-one commits and three String changes earlier — and
+> `STRINGS.md`'s figure was the one that had stayed honest.  The
+> snapshot is refreshed rather than annotated, and every document now
+> quotes that table's `compute` column and says which column it is.
 
 | file:line | claim |
 |---|---|
@@ -238,6 +295,14 @@ Pick one column, say which, and quote it everywhere.
 
 ### F7. The trap-code count is wrong in four places, three different ways
 
+> **FIXED** (`bf45def`) in all four places, and the history corrected
+> with it.  Checked against `72fe8be^`: the enum had **20**, the rule
+> moved exactly **one** (`file_read_failed`) leaving nineteen, and
+> `step_budget_exhausted` went later in `16ed137` for reasons of its
+> own.  `FAILURE.md`'s "21 codes" and its second mover (`parse_failed`,
+> which was never a `TrapCode` at all) were both wrong.  Guarded by
+> `site/src/coverage.zig`.
+
 - `docs/FAILURE.md:25` — "Applied to the **21 codes** in
   `06_mir/defs.zig` … Eighteen stay traps."
 - `docs/LANGUAGE.md:193` — "leaves **eighteen of the twenty** trap codes
@@ -259,6 +324,9 @@ had nothing to do with the rule.  The true sentence is: the rule left
 nineteen of twenty where they were, and Luce now has eighteen.
 
 ### F8. `/ref/builtins/` states a rank restriction on `fill` that does not exist
+
+> **FIXED** (`bf45def`), with a rank-2 sample in a verified fence so
+> the correction is machine-checked from here on.
 
 > "| `fill(value)` | rank-1, **value elements only** |"
 > — `site/content/ref/builtins.md:128`
@@ -283,6 +351,10 @@ page that will send a reader to write a loop they do not need.
 
 ### F9. `/std/strings/` calls a `String` an object
 
+> **FIXED** (`bf45def`).  The two returns are separated explicitly,
+> with the value/object distinction named as the one the whole memory
+> model rests on.
+
 > "Both hand back fresh objects the receiver owns." — of `split` and
 > `join`, `site/content/std/strings.md:91`
 
@@ -294,6 +366,13 @@ one distinction the whole memory model rests on, so blurring it in a
 std page is worse than an ordinary slip.
 
 ### F10. `/std/math/`'s trig accuracy figure holds only to about `|x| < 1e4`
+
+> **FIXED** (`bf45def`) on the site, with the audit's measurements
+> reproduced exactly against libm at `f333e12` — 1e-14 at 1e3 through
+> 8.0e-3 at 1e15 — printed as a table, plus the fact that nothing traps:
+> a huge angle returns a plausible number that is simply wrong.  **The
+> `math.luc` header carries the same sentence and is not fixed here**:
+> it is `src/`, which this pass does not own.  It needs the same edit.
 
 > "| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians, **any
 > magnitude** |" … "the trigonometric functions to about **1e-12
@@ -310,6 +389,13 @@ is one fix in two places.
 
 ### F11. "Eight folders" is seven
 
+> **FIXED** (`bf45def`) in both files, and `PIPELINE.md`'s tree draws
+> `05_hir.zig` as the barrel it is.  **The `AGENTS.md` half of this
+> finding is wrong**: that line wrote
+> `` `01_source`/`02_lex`/…/`05_hir`/… ``, where the slashes are list
+> separators and not directory marks.  (AGENTS.md is now a pointer to
+> CLAUDE.md regardless — F19.)
+
 `docs/PIPELINE.md:47` and `docs/MISSING.md:10` both say "Ten conceptual
 stages, eight folders."  There are **seven** stage directories —
 `01_source 02_lex 03_parse 04_semantics 06_mir 07_optimize 08_llvm`.
@@ -319,6 +405,10 @@ PIPELINE.md's own table row says in as many words.  The tree diagram at
 directory slash.
 
 ### F12. `CLAUDE.md`'s map of `src/apps/loom/` names two files that are not there
+
+> **FIXED** (`dbfa587`).  CLAUDE.md separates what is loom's from what
+> is shared one level up, names `product.zig`, and says in as many words
+> that "loom's host" is `src/apps/host.zig`.
 
 > "**`src/apps/loom/`** — `main.zig` (dispatch), `shell.zig` …,
 > `runner.zig` …, `host.zig` (the real host…), `key.zig`
@@ -330,6 +420,18 @@ shared with the compiler; `product.zig` is unmentioned.  An agent told to
 edit "loom's host" looks in the wrong directory.
 
 ### F13. The status page's corpus counts are half-drifted, on a page that swears they are not
+
+> **FIXED** (`bf45def`, `dbfa587`), re-derived from `programs/` in both
+> site pages and in MISSING.md.  The dispatch chain is **15**
+> comparisons, not 17; `term_style` is **15 calls, 14 ending in
+> `false`** across `programs/`; 46 is right; and the
+> `Struct.func(state, …)` figure was muddled rather than off by one — it
+> is 88 namespaced calls of every shape, and the ten-of-ten is ten of
+> `Text`'s **eleven** functions.  **The "with no `else`" half of this
+> finding is wrong**: the `else` at `editor.luc:402` belongs to the
+> nested `if next.dirty and not next.quit_pending`, not to the
+> name-dispatch chain, which genuinely has no final `else` — which is
+> the point the sentence was making.
 
 > "The corpus pays for it constantly, and **the counts are real**"
 > — `site/content/status/index.md:107`
@@ -357,6 +459,11 @@ re-derived.  `MISSING.md`'s line references have drifted further still
 
 ### F14. `docs/OWNERSHIP.md` S9 contradicts itself in two lines
 
+> **FIXED** (`bf45def`).  OWNERSHIP.md also now says why its situations
+> run out of numeric order, which is a decision (topic first, and a
+> number a diagnostic quotes is not renumbered) rather than the accident
+> Part 3 reads it as.
+
 > "**S9. An alias after the owner is gone traps at use — in safe
 > builds.**" … "`# RUNTIME trap: use_after_free (safe builds)`"
 > — `docs/OWNERSHIP.md:134-139`
@@ -372,6 +479,10 @@ reads "an alias used after the owner is gone traps at use", full stop.
 
 ### F15. `MISSING.md` calls a shipped method unbuilt
 
+> **FIXED** (`dbfa587`) in both MISSING.md sites.  The work-order entry
+> says what is actually wanted: the overload that can tell a stored `0`
+> from an absent one.
+
 > "`m.get(k) -> V?` is the answer and **is not built**"
 > — `docs/MISSING.md:152-154`, repeated `:385` and `FAILURE.md:308`
 
@@ -383,6 +494,13 @@ written, a reader concludes `get` does not exist.
 ## Sev 3
 
 ### F16. Three smaller site-prose slips
+
+> **FIXED** (`bf45def`).  All three, plus the `find`/`count`
+> empty-needle disagreement noted in Part 2 and the `format_float` trap,
+> the latter in a verified `trap` fence.  Note that `/examples/programs/`
+> and `/examples/errors/` pull `calc.luc` and `life.luc` in through
+> `include=`, so the *source* on those pages was never stale; the prose
+> around it was, and that is what is fixed.
 
 - **`/std/strings/:154-155`** — "`find` also returns `-1` for an
   *argument* error".  `strings.find(s, needle)` is `find_from(s, needle,
@@ -408,6 +526,11 @@ change landed in the compiler, the std library, `docs/STD.md` and
 
 ### F17. `docs/` has no index, and the README names 6 of 13 files
 
+> **FIXED** (`dbfa587`).  `docs/README.md` is one line per document,
+> split by exactly the distinction the audit says a reader cannot make —
+> current reference versus frozen decision record — and the README
+> reaches all of them through it.
+
 There is no `docs/README.md` and no table of contents anywhere.
 `README.md` links `V2 LANGUAGE OWNERSHIP PIPELINE MODES CODEGEN` — and
 never mentions **ENGINE, FAILURE, MEMORY, MISSING, STD, STRINGS,
@@ -423,6 +546,9 @@ directory listing.
 
 ### F18. Nothing in the repository mentions the documentation site
 
+> **FIXED** (`dbfa587`).  The site is the README's third paragraph, and
+> `site/` is in the Packages block with `vendor-llvm.sh` beside it.
+
 `luce.luciaos.com` appears exactly once outside `site/` — in
 `CLAUDE.md:65`.  Not in `README.md`, not in any `docs/*.md`, not in
 `AGENTS.md`.  The README's **Packages** block (`:136-165`) lists
@@ -435,6 +561,13 @@ The link works in the other direction: the generated footer
 repo→site edge is missing, and it is the one a cloner needs.
 
 ### F19. No `CONTRIBUTING`, no `LICENSE`, and two agent files that disagree
+
+> **PARTLY FIXED** (`dbfa587`).  `CONTRIBUTING.md` exists and carries
+> the two rules that were agent-file-only.  `AGENTS.md` is now a pointer
+> to `CLAUDE.md`, so there is nothing left for the two to disagree
+> about.  **No `LICENSE`, deliberately**: choosing one is the owner's
+> decision and not an agent's.  `CONTRIBUTING.md` records it as "to be
+> chosen" and says what that means in the meantime.
 
 - No `CONTRIBUTING.md`.  The rules exist — they are spread across
   `CLAUDE.md` (commit author, workflow), `AGENTS.md` (commit style) and
@@ -450,6 +583,13 @@ repo→site edge is missing, and it is the one a cloner needs.
 
 ### F20. `tools/vscode-luce/` ships a v1 grammar
 
+> **NOT FIXED — out of scope, and dissenting on the framing.**
+> `tools/vscode-luce/` is not documentation, and "update it or stop
+> shipping it" is a product decision this pass should not take.  What is
+> fixed is the reachability: the README's Packages block says the
+> grammar is stale on the way past, so the disclosure is at the front
+> door and not only on `/status/`.
+
 The status page discloses this honestly — "There **is** a VS Code syntax
 definition in the repository, and it is stale — it still lists builtins
 from a removed era" (`status/index.md:262-264`) — and it is true.  The
@@ -459,6 +599,67 @@ grammar highlights `create_image`, `create_texel`, `texel_content`,
 which the compiler has accepted since v1.  It knows none of the 24 host
 builtins, and none of `try catch none give copy`.  Honest disclosure is
 not a fix for a shipped tool; either update it or stop shipping it.
+
+---
+
+## Disposition
+
+Executed at `f333e12` over three commits: `bf45def` (the content
+sweep), `2c40b24` (the coverage tests), `dbfa587` (the front door and
+the two gap lists).
+
+**19 of 20 fixed.**  F20 is declined as out of scope — a stale VS Code
+grammar is a product decision, not a sentence — with the disclosure
+moved to the README so it is at the front door.  F19 is fixed but for
+the `LICENSE`, which is the owner's decision and not an agent's;
+`CONTRIBUTING.md` records it as "to be chosen".
+
+**Three findings were wrong in contact with the tree**, and each is
+marked at its own heading:
+
+- **F6 picked the wrong survivor.**  It named `CODEGEN.md`'s snapshot
+  as the table to quote.  Re-measured twice at `f333e12`, `strings` is
+  **2.73×** on the compute column, not 2.49× — the snapshot had stood
+  since `48453a4`, fifty-one commits and three String changes back,
+  and `STRINGS.md`'s 2.68× was the figure that had stayed honest.  An
+  audit that tells four documents to adopt one number should measure
+  it; this is the finding that most needed catching and was closest to
+  making things worse.
+- **F11's `AGENTS.md` half** reads a list separator as a directory
+  slash.
+- **F13's "with no `else`"** attaches an `else` from a nested `if` to
+  the dispatch chain it is not part of.
+
+**Four things the audit missed**, found while executing it:
+
+1. **`docs/V2.md`'s `.lc` section** still described a `.lc` that *was*
+   the serialized IR, decoded and interpreted by `loom`.  Structural,
+   and worse than the roadmap line F2 does name.
+2. **`FAILURE.md` had two errors in one sentence**, not one: "21
+   codes" where there were 20, and a second mover (`parse_failed`)
+   that was never a `TrapCode`.
+3. **`std/math.luc`'s header** carries F10's accuracy sentence too, so
+   that fix is in two places and only one of them is done here.
+4. **`key_read` wakes ten times a second doing nothing** — raw mode is
+   `VMIN = 0, VTIME = 1`, so an idle editor takes a 100 ms timeout,
+   reads zero bytes and loops.  Not a prose defect, but found by
+   checking one, and now in `MISSING.md`.
+
+**The structural fix is built.**  `site/src/coverage.zig` reads five
+of the compiler's lists out of `src/` at test time — builtins, the
+receiver methods, `TrapCode` and `ErrorCode`, every std `func` and
+top-level `let`, and every option and command word both mains parse —
+and fails the build when a reference page stops naming one.  On its
+first run it reproduced F1c and the three `/std/math/` omissions from
+Part 2 without being told about them.  Each of the five was then
+demonstrated to bite by deleting one row: `dir_list`, `insert`,
+`not_owned`, `files.rename`, `--full`.
+
+What that does **not** cover is the class F8, F10 and F9 belong to: a
+name that is present and described *wrongly*.  Nothing mechanical
+catches "rank-1 only" on a method that works at any rank.  Verified
+fences are the answer where the claim is executable, and F8 and the
+`format_float` edges now have them.
 
 ---
 
@@ -520,6 +721,15 @@ the **false negative** — naming a shipped feature as unbuilt (**F1a**,
 That is the more damaging direction of the two: a missing table row costs
 a reader a search, while "none of them is built" costs them the feature.
 
+> **Acted on.**  `random_step`, `ln2` and `ln10` are on `/std/math/`;
+> all five missing `files` wrappers are on `/std/files/`; the nine
+> host builtins are on `/ref/builtins/`; and the `find`/`count`
+> empty-needle disagreement is written down on `/std/strings/`.  The
+> `strings` pair stays undocumented for the reason given, now recorded
+> as a named exemption in `site/src/coverage.zig` with that reason
+> beside it — and an exemption naming something the compiler no longer
+> has fails the build, so the list cannot rot into a blanket.
+
 ### The diagnostics fraction, and whether it matters
 
 59 stable codes are emitted; the site names 21.  It should not name all
@@ -541,11 +751,29 @@ code into a search box finds nothing.  The cheap fix is not 38 new
 sections — it is naming the code beside the rule that raises it, which
 the page already does for `luce.lex.number`.
 
+> **Done, all five** (`bf45def`), by the cheap fix the audit
+> prescribes: `luce.lex.tab` and `luce.lex.indent` beside the
+> indentation rule and `luce.sema.reserved` beside the reserved-name
+> list on `/ref/lexical/`, `luce.sema.main` beside a new entry-point
+> section on the same page, and `luce.import.missing` beside sibling
+> resolution on `/ref/modules/` — each with a verified `fail` fence
+> carrying the real message.  The site now names **26 of the 59**,
+> and `/ref/lexical/` says so and stands by the other 33 not needing
+> pages: their message *is* the documentation.
+
 ### Documented-but-gone
 
 None found on the site.  In `docs/`: `.lcn` (`ENGINE.md:383`),
 `format_version` 16 (same line), `backend.Host` (`ENGINE.md:55,489` —
 now `interpreter.Host`), and `m.get` described as unbuilt (**F15**).
+
+> **All four addressed.**  The `.lcn` and `format_version` sentence is
+> reframed as what the Hat described, with today's truth beside it;
+> `backend.Host` survives inside the frozen Hats as the name of the
+> day, and ENGINE.md's preamble now lists it among what went and says
+> what replaced it on each side.  `m.get` is F15.
+> `docs/V2.md`'s serialized-`.lc` section belonged on this list too and
+> was not on it (see *Disposition*).
 
 ---
 
@@ -764,6 +992,15 @@ representative of the whole.
 ---
 
 # The short list
+
+> **Worked through.**  Eleven of the twelve are done and item 12's
+> second half — `tools/vscode-luce/` — is declined as a product
+> decision (F20).  No `LICENSE`, deliberately (F19).  The two
+> structural asks at the foot of this section are the more important
+> half of the document, and both are built: `docs/` numbers that
+> drifted are now either removed or dated to a commit, and
+> `site/src/coverage.zig` is the check the last paragraph describes,
+> widened from the two tests it proposes to five.
 
 Twelve changes close everything above that matters.
 
