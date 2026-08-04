@@ -59,6 +59,7 @@ pub const ErrorCode = enum {
     /// `error("…")` — the program decided, and supplied the words.
     user_error,
 
+    /// A static string; the caller owns nothing.
     pub fn message(self: ErrorCode) []const u8 {
         return switch (self) {
             .io_failed => "the file operation failed",
@@ -83,6 +84,8 @@ pub const FileAct = enum(i32) {
     rename,
     list,
 
+    /// A static string, with its trailing space; the caller owns
+    /// nothing.
     pub fn verb(self: FileAct) []const u8 {
         return switch (self) {
             .read => "cannot read ",
@@ -115,6 +118,7 @@ pub const TrapCode = enum {
     bad_codepoint,
     not_owned,
 
+    /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
             .integer_overflow => "integer overflow",

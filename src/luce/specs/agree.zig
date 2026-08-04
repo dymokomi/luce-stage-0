@@ -371,6 +371,12 @@ pub const Capture = struct {
     /// What this host answers when asked how deep calls may go.
     call_depth: i64 = abi.default_call_depth,
 
+    // What this run said, each borrowed from a fixed buffer inside
+    // this Capture.  **The next run overwrites all five**: a Capture is
+    // reused across the two engines on purpose (the header says why the
+    // buffers are fixed), so anything a caller needs after the second
+    // run has to be copied out before it starts.
+
     pub fn printed(self: *const Capture) []const u8 {
         return self.printed_storage[0..self.printed_length];
     }

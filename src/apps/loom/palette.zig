@@ -31,6 +31,8 @@ pub const Palette = struct {
     enabled: bool = false,
 
     /// The escape code for a style, or nothing when color is off.
+    /// A static escape sequence, empty when colour is off; the caller
+    /// owns nothing.
     pub fn sgr(self: Palette, style: Style) []const u8 {
         if (!self.enabled) return "";
         return style.sequence();

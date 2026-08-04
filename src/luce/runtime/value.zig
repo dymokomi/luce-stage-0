@@ -241,6 +241,13 @@ pub const Value = extern struct {
         };
     }
 
+    /// The field run behind a struct value, as a **mutable alias into
+    /// the run itself** — not a copy.  Writing through it writes the
+    /// struct, and every other value sharing the run sees it, which is
+    /// why `setField` builds a new run rather than storing in place.
+    /// It lives as long as the run does: until `luce_rt_close`, or
+    /// until the storage is dropped.  Empty for a struct with no
+    /// fields.
     pub fn asStruct(self: Value) []Value {
         if (self.length == 0) return &.{};
         const fields: [*]Value = @ptrFromInt(@as(usize, @intCast(self.bits)));

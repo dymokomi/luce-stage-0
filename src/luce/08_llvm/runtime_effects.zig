@@ -184,7 +184,8 @@ pub const Service = enum {
     luce_rt_drop_storage,
     luce_rt_export_storage,
 
-    /// The C symbol this service is declared under.
+    /// The C symbol this service is declared under: a static string —
+    /// the enum's own tag name — that the caller owns nothing of.
     pub fn symbol(self: Service) []const u8 {
         return @tagName(self);
     }
