@@ -693,6 +693,128 @@ test "luce.sema.struct: a struct cannot be empty or self-containing" {
     , "luce.sema.struct");
 }
 
+// A containment cycle is one mistake with one fix, however many
+// structs it runs through.  It used to be reported once per struct on
+// the loop, each saying "struct X contains itself" — which is false of
+// every member of a mutual cycle, names neither the other struct nor
+// the field that closes it, and puts the caret on the `struct` keyword
+// rather than the line that gets edited.
+
+test "luce.sema.struct: a direct cycle names the field and the fix" {
+    try expectOnlySayingAt(
+        \\struct Node:
+        \\    value: Int
+        \\    next: Node
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.struct",
+        "struct Node contains itself: Node.next is Node; a struct is a value, " ++
+            "so write next: Node? to let the chain end at absence",
+        3,
+        5,
+    );
+}
+
+test "luce.sema.struct: a mutual cycle is one message that walks the loop" {
+    try expectOnlySayingAt(
+        \\struct A:
+        \\    b: B
+        \\
+        \\struct B:
+        \\    a: A
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.struct",
+        "struct A contains itself: A.b is B, and B.a is A; a struct is a value, " ++
+            "so write b: B? to let the chain end at absence",
+        2,
+        5,
+    );
+}
+
+test "luce.sema.struct: a three-struct cycle reads the whole way round" {
+    try expectOnlySayingAt(
+        \\struct A:
+        \\    n: Int
+        \\    b: B
+        \\
+        \\struct B:
+        \\    c: C
+        \\
+        \\struct C:
+        \\    a: A
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.struct",
+        "struct A contains itself: A.b is B, B.c is C, and C.a is A; a struct is a value, " ++
+            "so write b: B? to let the chain end at absence",
+        3,
+        5,
+    );
+}
+
+test "luce.sema.struct: two independent cycles are two mistakes" {
+    var result = try compile_mod.compile(testing.allocator,
+        \\struct A:
+        \\    b: B
+        \\
+        \\struct B:
+        \\    a: A
+        \\
+        \\struct C:
+        \\    d: D
+        \\
+        \\struct D:
+        \\    c: C
+        \\
+        \\func main():
+        \\    return
+        \\
+    , script);
+    defer result.deinit();
+    const diagnostics = result.failure;
+    errdefer printAll(&diagnostics);
+    try testing.expectEqual(@as(usize, 2), diagnostics.count());
+    try testing.expect(std.mem.startsWith(u8, diagnostics.at(0).?.message, "struct A contains itself"));
+    try testing.expect(std.mem.startsWith(u8, diagnostics.at(1).?.message, "struct C contains itself"));
+}
+
+test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
+    // The one thing worse than a message that does not help is a
+    // message whose suggested edit does not work.  This is that
+    // suggestion, compiled.
+    var result = try compile_mod.compile(testing.allocator,
+        \\struct Node:
+        \\    value: Int
+        \\    next: Node?
+        \\
+        \\func main():
+        \\    let tail = Node(value = 2, next = none)
+        \\    let head = Node(value = 1, next = tail)
+        \\    let rest = head.next
+        \\    if rest != none:
+        \\        let seen = rest.value
+        \\
+    , script);
+    defer result.deinit();
+    switch (result) {
+        .success => {},
+        .failure => |diagnostics| {
+            printAll(&diagnostics);
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
 test "luce.sema.const: a top-level let is a constant, not a computation" {
     try expectRejected("let bad = new List(Int)\n\nfunc main():\n    return\n", "luce.sema.const");
 }

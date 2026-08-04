@@ -520,18 +520,13 @@ pub const Analyzer = struct {
         defer self.temporary.free(cyclic);
         @memset(cyclic, false);
         try self.settleStructGraph(cyclic);
+        try self.reportStructCycles(cyclic);
 
         for (self.structs.items, 0..) |layout, index| {
+            if (cyclic[index]) continue;
             const info = self.struct_decls.items[index];
             self.diagnostics.scope = self.modules[info.module].file;
-            if (cyclic[index]) {
-                try self.fail(
-                    "luce.sema.struct",
-                    info.declaration.span,
-                    "struct {s} contains itself",
-                    .{layout.name},
-                );
-            } else if (self.struct_shapes.items[index].values > helpers.max_struct_values) {
+            if (self.struct_shapes.items[index].values > helpers.max_struct_values) {
                 try self.fail(
                     "luce.sema.struct",
                     info.declaration.span,
@@ -541,6 +536,136 @@ pub const Analyzer = struct {
             }
         }
         self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// One step of a containment chain: a layout, and the field of it
+    /// that holds the next layout along.
+    const ChainStep = struct { layout: u32, field: u32 };
+
+    /// One diagnostic per cycle, naming the chain that closes it.
+    ///
+    /// `cyclic` marks every layout *on* a cycle, which for
+    /// `struct A: b: B` with `struct B: a: A` is both of them — and a
+    /// report per marked layout said "struct A contains itself" and
+    /// "struct B contains itself": twice, and false both times.
+    /// Neither contains itself.  Together they contain each other,
+    /// which is one mistake with one fix, so it gets one message that
+    /// walks the loop the reader has to break.
+    ///
+    /// The chain is the shortest walk from a layout back to itself,
+    /// breadth-first over struct fields and confined to layouts that
+    /// are on a cycle.  The caret goes on the field that opens it,
+    /// never the `struct` keyword, because the field is the line that
+    /// gets edited — and `T?` is the edit, because a value that may be
+    /// absent is where the recursion stops (docs/LANGUAGE.md).
+    fn reportStructCycles(self: *Analyzer, cyclic: []const bool) Error!void {
+        const count = self.structs.items.len;
+        const unvisited = std.math.maxInt(u32);
+
+        const reported = try self.temporary.alloc(bool, count);
+        defer self.temporary.free(reported);
+        @memset(reported, false);
+        const came_from = try self.temporary.alloc(u32, count);
+        defer self.temporary.free(came_from);
+        const came_via = try self.temporary.alloc(u32, count);
+        defer self.temporary.free(came_via);
+
+        var queue: std.ArrayList(u32) = .empty;
+        defer queue.deinit(self.temporary);
+        var chain: std.ArrayList(ChainStep) = .empty;
+        defer chain.deinit(self.temporary);
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary);
+
+        for (0..count) |start_index| {
+            const start: u32 = @intCast(start_index);
+            if (!cyclic[start] or reported[start]) continue;
+
+            // Breadth-first from `start`, stopping at the first edge
+            // that points back at it: the first such edge found closes
+            // the shortest cycle through `start`.
+            @memset(came_from, unvisited);
+            came_from[start] = start; // visited; never re-entered
+            queue.clearRetainingCapacity();
+            try queue.append(self.temporary, start);
+            var closing_layout: u32 = unvisited;
+            var closing_field: u32 = unvisited;
+            var head: usize = 0;
+            search: while (head < queue.items.len) : (head += 1) {
+                const layout = queue.items[head];
+                for (self.structs.items[layout].fields, 0..) |field, field_index| {
+                    if (field.field_type != .strukt) continue;
+                    const held = field.field_type.strukt;
+                    if (held == start) {
+                        closing_layout = layout;
+                        closing_field = @intCast(field_index);
+                        break :search;
+                    }
+                    if (!cyclic[held] or came_from[held] != unvisited) continue;
+                    came_from[held] = layout;
+                    came_via[held] = @intCast(field_index);
+                    try queue.append(self.temporary, held);
+                }
+            }
+            // `start` is marked cyclic, so an edge back to it exists.
+            if (closing_layout == unvisited) continue;
+
+            // Walk the parent links back to `start`, then turn the
+            // chain around so it reads the way the source does.
+            chain.clearRetainingCapacity();
+            try chain.append(self.temporary, .{ .layout = closing_layout, .field = closing_field });
+            var cursor = closing_layout;
+            while (cursor != start) {
+                const parent = came_from[cursor];
+                try chain.append(self.temporary, .{ .layout = parent, .field = came_via[cursor] });
+                cursor = parent;
+            }
+            std.mem.reverse(ChainStep, chain.items);
+            for (chain.items) |step| reported[step.layout] = true;
+
+            written.clearRetainingCapacity();
+            for (chain.items, 0..) |step, position| {
+                if (position != 0) {
+                    try written.appendSlice(self.temporary, ", ");
+                    if (position + 1 == chain.items.len) try written.appendSlice(self.temporary, "and ");
+                }
+                const layout = self.structs.items[step.layout];
+                const field = layout.fields[step.field];
+                try written.print(self.temporary, "{s}.{s} is {s}", .{
+                    layout.name,
+                    field.name,
+                    try self.typeName(field.field_type),
+                });
+            }
+
+            const opening = chain.items[0];
+            const opening_field = self.structs.items[opening.layout].fields[opening.field];
+            const info = self.struct_decls.items[opening.layout];
+            self.diagnostics.scope = self.modules[info.module].file;
+            try self.fail(
+                "luce.sema.struct",
+                self.fieldSpan(opening.layout, opening_field.name),
+                "struct {s} contains itself: {s}; a struct is a value, so write {s}: {s}? to let the chain end at absence",
+                .{
+                    self.structs.items[start].name,
+                    written.items,
+                    opening_field.name,
+                    try self.typeName(opening_field.field_type),
+                },
+            );
+        }
+    }
+
+    /// Where a layout's field is written in its own source.  Layout
+    /// fields are a subset of declared ones — a duplicate or an
+    /// unresolvable type is reported and dropped — so the match is by
+    /// name, and the declaration stands in if it somehow fails.
+    fn fieldSpan(self: *const Analyzer, layout: u32, name: []const u8) Span {
+        const declaration = self.struct_decls.items[layout].declaration;
+        for (declaration.fields) |field| {
+            if (std.mem.eql(u8, field.name, name)) return field.span;
+        }
+        return declaration.span;
     }
 
     /// One pass over the struct containment graph: mark every layout
