@@ -324,7 +324,7 @@ export fn luce_rt_names_list(
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.namesList(runtime, bytes[0..@intCast(length)]) catch |mistake|
+    out.* = containers.listOfJoinedText(runtime, bytes[0..@intCast(length)]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -375,7 +375,7 @@ export fn luce_rt_drop_storage(
     held: *const Value,
     out: *Value,
 ) callconv(.c) void {
-    runtime.releaseStorage(held.*);
+    runtime.dropStorage(held.*);
     out.* = heap.Runtime.emptied(held.*);
 }
 

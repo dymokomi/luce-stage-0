@@ -236,7 +236,7 @@ pub const Machine = struct {
         const locals = self.frame_storage.items[frame.slots_at + frame.register_count ..];
         for (function.locals, 0..) |local, index| {
             if (!local.owns_storage) continue;
-            self.runtime.releaseStorage(locals[index]);
+            self.runtime.dropStorage(locals[index]);
             locals[index] = runtime.Runtime.emptied(locals[index]);
         }
     }
@@ -618,7 +618,7 @@ pub const Machine = struct {
             .export_storage => return self.runtime.exportValue(registers[arguments[0]]),
             .drop_storage => {
                 const held = registers[arguments[0]];
-                self.runtime.releaseStorage(held);
+                self.runtime.dropStorage(held);
                 return runtime.Runtime.emptied(held);
             },
             .index_get => return containers.indexGet(

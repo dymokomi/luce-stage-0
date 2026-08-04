@@ -352,7 +352,7 @@ fn expectQuiet(line: []const u8) !void {
 
 /// A line the shell refuses: it keeps reading, says something on
 /// standard error, and scores the line as failed.
-fn expectRefused(line: []const u8, mentioning: []const u8) !void {
+fn expectRejected(line: []const u8, mentioning: []const u8) !void {
     var ran: Dispatched = undefined;
     try ran.of(line, false, null);
     defer ran.deinit();
@@ -377,7 +377,7 @@ test "a blank line is not a command, and too many words is not one either" {
     defer crowded.deinit(gpa);
     try crowded.appendSlice(gpa, "run x.lc");
     for (0..max_words) |index| try crowded.print(gpa, " a{d}", .{index});
-    try expectRefused(crowded.items, "too many arguments");
+    try expectRejected(crowded.items, "too many arguments");
 }
 
 test "leaving is spelled two ways and both stop the shell without a word" {
@@ -426,13 +426,13 @@ test "clear writes the escape sequence only where escapes are read" {
 }
 
 test "every command that takes a file says so when it is given none" {
-    try expectRefused("run", "run PROGRAM.lc [ARGS]");
-    try expectRefused("luce", "luce PROGRAM.luc [ARGS]");
-    try expectRefused("edit", "edit FILE");
+    try expectRejected("run", "run PROGRAM.lc [ARGS]");
+    try expectRejected("luce", "luce PROGRAM.luc [ARGS]");
+    try expectRejected("edit", "edit FILE");
     // `edit` takes exactly one, so a second is refused rather than
     // ignored: an editor opening the wrong file is worse than one that
     // does not open.
-    try expectRefused("edit one.txt two.txt", "edit FILE");
+    try expectRejected("edit one.txt two.txt", "edit FILE");
 }
 
 test "a command nobody has is named back, and counts as a line that failed" {
@@ -453,13 +453,13 @@ test "a bare path runs, and reaches the same refusals the named commands do" {
     // is that the line reached the runner at all — a bare path that
     // fell through to "unknown command" would say something else.
     for ([_][]const u8{ "no/such/program.lc", "run no/such/program.lc" }) |line| {
-        try expectRefused(line, "no such file");
+        try expectRejected(line, "no such file");
     }
     for ([_][]const u8{ "no/such/program.luc", "luce no/such/program.luc" }) |line| {
-        try expectRefused(line, "no such file");
+        try expectRejected(line, "no such file");
     }
     // Arguments after the path are the program's, not the shell's.
-    try expectRefused("no/such/program.lc alpha beta", "no such file");
+    try expectRejected("no/such/program.lc alpha beta", "no such file");
 }
 
 test "edit runs the editor LOOM_EDITOR names, in place of the embedded one" {

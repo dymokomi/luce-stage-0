@@ -93,7 +93,7 @@ pub const Analyzed = mir.build.Lowered;
 
 /// A collected function signature: everything a call site has to know
 /// before the body it belongs to has been walked.
-pub const FunctionInfo = struct {
+pub const FunctionDeclInfo = struct {
     declaration: *const ast.FuncDecl,
     name: []const u8,
     module: usize,

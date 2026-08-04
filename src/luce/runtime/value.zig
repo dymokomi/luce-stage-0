@@ -231,7 +231,7 @@ pub const Value = extern struct {
     }
 
     /// True when this value holds a heap allocation of its own — the
-    /// question `releaseStorage` and `ownValue` both turn on.  Inline
+    /// question `dropStorage` and `ownValue` both turn on.  Inline
     /// text answers false: the bytes are the value.
     pub fn ownsStorage(self: Value) bool {
         return switch (self.tag) {

@@ -642,13 +642,13 @@ pub const Runtime = struct {
     pub fn deinit(self: *Runtime) void {
         for (self.table.items) |*object| {
             switch (object.data) {
-                .list => |list| for (list.items) |item| self.releaseStorage(item),
+                .list => |list| for (list.items) |item| self.dropStorage(item),
                 .map => |map| for (map.entries.items) |entry| {
-                    self.releaseStorage(entry.key);
-                    self.releaseStorage(entry.value);
+                    self.dropStorage(entry.key);
+                    self.dropStorage(entry.value);
                 },
                 .array => if (object.array.kind == .value) {
-                    for (object.array.cells(Value)) |item| self.releaseStorage(item);
+                    for (object.array.cells(Value)) |item| self.dropStorage(item);
                 },
                 .builder => {},
             }
@@ -923,7 +923,7 @@ pub const Runtime = struct {
     // that one copy, reached from `own_storage` and from the runtime's
     // own duplications (`deepCopy`, a map's key, an array's fill).
     //
-    // `releaseStorage` is the matching death point, and it frees
+    // `dropStorage` is the matching death point, and it frees
     // nothing else — objects belong to the ownership walks above.
 
     /// A copy of `held` whose storage nothing else owns.  Scalars and
@@ -953,7 +953,7 @@ pub const Runtime = struct {
                 const run = try self.objects.alloc(Value, source.len);
                 var filled: usize = 0;
                 errdefer {
-                    for (run[0..filled]) |field| self.releaseStorage(field);
+                    for (run[0..filled]) |field| self.dropStorage(field);
                     self.objects.free(run);
                 }
                 for (source, run) |field, *slot| {
@@ -973,7 +973,7 @@ pub const Runtime = struct {
     /// Safe on anything that owns nothing, which is what makes a
     /// released slot safe to release again: every release writes the
     /// emptied value back, and an empty value frees nothing.
-    pub fn releaseStorage(self: *Runtime, held: Value) void {
+    pub fn dropStorage(self: *Runtime, held: Value) void {
         switch (held.tag) {
             .string => {
                 // Inline text is the value, and a value is not an
@@ -985,7 +985,7 @@ pub const Runtime = struct {
             .strukt => {
                 if (held.bits == 0 or held.length == 0) return;
                 const fields = held.asStruct();
-                for (fields) |field| self.releaseStorage(field);
+                for (fields) |field| self.dropStorage(field);
                 self.objects.free(fields);
             },
             else => {},
@@ -1050,7 +1050,7 @@ pub const Runtime = struct {
     pub fn makeStruct(self: *Runtime, fields: []const Value) Error!Value {
         if (fields.len == 0) return Value.ofStruct(&.{});
         const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
-            for (fields) |field| self.releaseStorage(field);
+            for (fields) |field| self.dropStorage(field);
             return mistake;
         };
         @memcpy(stored, fields);
@@ -1065,7 +1065,7 @@ pub const Runtime = struct {
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
         const source = held.asStruct();
         const stored = self.objects.alloc(Value, source.len) catch |mistake| {
-            self.releaseStorage(to);
+            self.dropStorage(to);
             return mistake;
         };
         // The unwind releases the copies it made and `to` once each:
@@ -1074,9 +1074,9 @@ pub const Runtime = struct {
         var filled: usize = 0;
         errdefer {
             for (stored[0..filled], 0..) |field, at| {
-                if (at != index) self.releaseStorage(field);
+                if (at != index) self.dropStorage(field);
             }
-            self.releaseStorage(to);
+            self.dropStorage(to);
             self.objects.free(stored);
         }
         for (source, stored, 0..) |field, *slot, at| {
@@ -1220,7 +1220,7 @@ pub const Runtime = struct {
                 // A map owns its keys' storage as well as its values';
                 // keys are Int or String, so there is never an object
                 // in one.
-                self.releaseStorage(entry.key);
+                self.dropStorage(entry.key);
                 self.freeValue(entry.value);
             },
             // Only a `Value` element can hold an object; a `f64`
@@ -1245,7 +1245,7 @@ pub const Runtime = struct {
     /// and the storage it holds is given back.
     pub fn freeValue(self: *Runtime, held: Value) void {
         self.freeObjectsIn(held);
-        self.releaseStorage(held);
+        self.dropStorage(held);
     }
 
     /// The object half of `freeValue`, on its own: everything a struct
@@ -1371,7 +1371,7 @@ pub const Runtime = struct {
                 const copied = try self.objects.alloc(Value, fields.len);
                 var filled: usize = 0;
                 errdefer {
-                    for (copied[0..filled]) |field| self.releaseStorage(field);
+                    for (copied[0..filled]) |field| self.dropStorage(field);
                     self.objects.free(copied);
                 }
                 for (fields, copied) |field, *slot| {

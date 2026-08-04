@@ -41,7 +41,7 @@ const LocalId = mir.LocalId;
 const Error = context.Error;
 const Analyzed = context.Analyzed;
 const ModuleTree = context.ModuleTree;
-const FunctionInfo = context.FunctionInfo;
+const FunctionDeclInfo = context.FunctionDeclInfo;
 const StructDeclInfo = context.StructDeclInfo;
 const StructShape = context.StructShape;
 const ConstantValue = context.ConstantValue;
@@ -117,7 +117,7 @@ pub const Analyzer = struct {
     struct_shapes: std.ArrayList(StructShape) = .empty,
     heap_types: std.ArrayList(types.HeapType) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
-    functions: std.ArrayList(FunctionInfo) = .empty,
+    functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// The program's string constants.  A `Program` field, so the
     /// pool and its interning live in stage 6; this stage fills it as
@@ -1197,7 +1197,7 @@ pub const Analyzer = struct {
 
     // Function bodies ------------------------------------------------------
 
-    fn lowerFunction(self: *Analyzer, info: FunctionInfo) Error!mir.build.Lowering {
+    fn lowerFunction(self: *Analyzer, info: FunctionDeclInfo) Error!mir.build.Lowering {
         self.diagnostics.scope = self.modules[info.module].file;
         defer self.diagnostics.scope = source_mod.root_file;
         var builder: builder_mod.FunctionBuilder = .{

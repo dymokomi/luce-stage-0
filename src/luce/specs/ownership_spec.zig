@@ -41,7 +41,7 @@ fn agreeTrap(source: []const u8, code: mir.TrapCode) !void {
 
 /// The program is rejected with the stable ownership code — no engine
 /// involved, because nothing was produced to run.
-fn expectOwnError(source: []const u8) !void {
+fn expectRejected(source: []const u8) !void {
     var result = try luce.compile.compile(testing.allocator, source, script);
     defer result.deinit();
     if (result == .success) {
@@ -169,7 +169,7 @@ test "S5: the life.luc pattern — reassign in a loop, no free dance" {
 }
 
 test "S5: assigning a bare name into an owning var is a compile error" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    var ys = [2]
@@ -189,7 +189,7 @@ test "S6: free is early release and poisons the name" {
         \\    assert(count == 4)
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var big = [1, 2]
         \\    free(big)
@@ -200,7 +200,7 @@ test "S6: free is early release and poisons the name" {
 
 test "S6: free applies to owned names only" {
     // An alias cannot free.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    let view = xs
@@ -208,7 +208,7 @@ test "S6: free applies to owned names only" {
         \\
     );
     // Neither can an arbitrary expression.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1, 2]
         \\    free(xs[0:1])
@@ -246,7 +246,7 @@ test "S8: let x = y is two names for one object, freed once" {
 }
 
 test "S8: an alias var cannot receive a fresh object" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    var view = xs
@@ -293,7 +293,7 @@ test "S10: give transfers between names and poisons the giver" {
         \\    assert(len(final_hits) == 3)
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var temp = [1, 2, 3]
         \\    let final_hits = give temp
@@ -303,7 +303,7 @@ test "S10: give transfers between names and poisons the giver" {
 }
 
 test "S10: give takes a name, not an expression" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([1])
@@ -334,7 +334,7 @@ test "S11: passing an object is a borrow — free, silent, still owned by the ca
 }
 
 test "S11: giving to a borrow parameter is a compile error" {
-    try expectOwnError(
+    try expectRejected(
         \\func peek(values: List(Int)) -> Int:
         \\    return len(values)
         \\
@@ -347,7 +347,7 @@ test "S11: giving to a borrow parameter is a compile error" {
 
 test "S12: a callee cannot keep a borrowed parameter" {
     // Storing into a container.
-    try expectOwnError(
+    try expectRejected(
         \\func stash(index: Map(String, List(Int)), hits: List(Int)):
         \\    index["latest"] = hits
         \\
@@ -358,7 +358,7 @@ test "S12: a callee cannot keep a borrowed parameter" {
         \\
     );
     // Giving it away.
-    try expectOwnError(
+    try expectRejected(
         \\func keep(sink: List(List(Int)), hits: List(Int)):
         \\    sink.append(give hits)
         \\
@@ -369,7 +369,7 @@ test "S12: a callee cannot keep a borrowed parameter" {
         \\
     );
     // Freeing it.
-    try expectOwnError(
+    try expectRejected(
         \\func drop(hits: List(Int)):
         \\    free(hits)
         \\
@@ -393,7 +393,7 @@ test "S13: give appears in the signature and at the call site" {
         \\
     );
     // The caller must say it out loud: a bare name is refused.
-    try expectOwnError(
+    try expectRejected(
         \\func consume(xs: give List(Int)):
         \\    assert(len(xs) == 1)
         \\
@@ -403,7 +403,7 @@ test "S13: give appears in the signature and at the call site" {
         \\
     );
     // And the giver is poisoned afterwards.
-    try expectOwnError(
+    try expectRejected(
         \\func consume(xs: give List(Int)):
         \\    assert(len(xs) == 1)
         \\
@@ -461,7 +461,7 @@ test "S16: returning something you own moves it to the caller" {
 }
 
 test "S17: returning a borrowed parameter is a compile error" {
-    try expectOwnError(
+    try expectRejected(
         \\func pick(xs: List(Int)) -> List(Int):
         \\    return xs
         \\
@@ -471,7 +471,7 @@ test "S17: returning a borrowed parameter is a compile error" {
         \\
     );
     // An alias cannot be returned either.
-    try expectOwnError(
+    try expectRejected(
         \\func sneak() -> List(Int):
         \\    var xs = [1]
         \\    let view = xs
@@ -482,7 +482,7 @@ test "S17: returning a borrowed parameter is a compile error" {
         \\
     );
     // Nor a borrowed element; return a copy.
-    try expectOwnError(
+    try expectRejected(
         \\func first(rows: List(List(Int))) -> List(Int):
         \\    return rows[0]
         \\
@@ -572,7 +572,7 @@ test "S20: freeing a container frees the objects it owns" {
 
 test "S21: storing a bare name is a compile error at every container door" {
     // Map value.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var index = new Map(String, List(Int))
         \\    var hits = [12, 40]
@@ -580,7 +580,7 @@ test "S21: storing a bare name is a compile error at every container door" {
         \\
     );
     // List append.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    var hits = [1]
@@ -588,7 +588,7 @@ test "S21: storing a bare name is a compile error at every container door" {
         \\
     );
     // List insert.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    var hits = [1]
@@ -596,7 +596,7 @@ test "S21: storing a bare name is a compile error at every container door" {
         \\
     );
     // List element overwrite.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var rows = new List(List(Int))
         \\    rows.append([0])
@@ -605,7 +605,7 @@ test "S21: storing a bare name is a compile error at every container door" {
         \\
     );
     // Array element.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var cells = new Array(List(Int), 2)
         \\    var hits = [1]
@@ -689,7 +689,7 @@ test "S22: map overwrite and remove free the old owned value" {
 }
 
 test "S23: one object cannot end up owned twice — static poisoning" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var a = new List(List(Int))
         \\    var b = new List(List(Int))
@@ -735,7 +735,7 @@ test "S24: object fields follow the verb rule at construction" {
         \\    seed.append(6)
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -761,7 +761,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
         \\
     , .use_after_free);
     // Bare names stay refused.
-    try expectOwnError(
+    try expectRejected(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -787,7 +787,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
 }
 
 test "S25: only the owning name restocks an object field" {
-    try expectOwnError(
+    try expectRejected(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -815,7 +815,7 @@ test "S26: struct copies alias the same objects" {
 }
 
 test "S27: keeping an object-carrying struct needs a verb" {
-    try expectOwnError(
+    try expectRejected(
         \\struct Bag:
         \\    label: String
         \\    items: List(Int)
@@ -898,7 +898,7 @@ test "S28: returning an object-carrying struct moves the whole tree" {
 // ---------------------------------------------------------------------------
 
 test "S29: poisoning is source-order and branch-insensitive" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    var sink = new List(List(Int))
@@ -926,7 +926,7 @@ test "S29: a conditional give still releases correctly on both paths" {
 }
 
 test "S30: giving or freeing an outer name inside a loop is a compile error" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    var sink = new List(List(Int))
@@ -934,7 +934,7 @@ test "S30: giving or freeing an outer name inside a loop is a compile error" {
         \\        sink.append(give xs)
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    while true:
@@ -989,19 +989,19 @@ test "S31: slices of object lists are deep copies too" {
 }
 
 test "S32: values never take verbs" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    let name = "loom"
         \\    let title = give name
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    let count = 3
         \\    let doubled = copy count
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\func square(value: give Int) -> Int:
         \\    return value * value
         \\
@@ -1208,7 +1208,7 @@ test "mechanics: assignment can receive a give" {
 }
 
 test "mechanics: giving the same name twice in one statement is caught" {
-    try expectOwnError(
+    try expectRejected(
         \\func pair(a: give List(Int), b: give List(Int)):
         \\    assert(len(a) == len(b))
         \\
@@ -1452,7 +1452,7 @@ test "optionals: an object-carrying struct field may be absent and still frees" 
 test "optionals: the ownership rules still refuse what they refused" {
     // A binding that owns its object cannot be handed a borrow, `T?`
     // or not (S5, S21).
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    let source = new List(Int)
         \\    var kept: List(Int)? = none
@@ -1460,7 +1460,7 @@ test "optionals: the ownership rules still refuse what they refused" {
         \\
     );
     // A borrowed parameter cannot be given away (S12).
-    try expectOwnError(
+    try expectRejected(
         \\func steal(xs: List(Int)?) -> List(Int)?:
         \\    return xs
         \\
@@ -1471,7 +1471,7 @@ test "optionals: the ownership rules still refuse what they refused" {
         \\
     );
     // Poisoning survives the wrapper: a given name is untouchable.
-    try expectOwnError(
+    try expectRejected(
         \\func consume(xs: give List(Int)):
         \\    free(xs)
         \\
@@ -1505,13 +1505,13 @@ test "optionals: use after free still traps through a T?" {
 // ---------------------------------------------------------------------------
 
 test "audit: fill on arrays of objects is refused — one value cannot own every slot" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var arr = new Array(List(Int), 2)
         \\    arr.fill([9])
         \\
     );
-    try expectOwnError(
+    try expectRejected(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -1536,7 +1536,7 @@ test "audit: fill on arrays of objects is refused — one value cannot own every
 
 test "audit: list literals are container doors too (S21)" {
     // A bare name in a literal is refused...
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1, 2, 3]
         \\    var a = [xs]
@@ -1544,7 +1544,7 @@ test "audit: list literals are container doors too (S21)" {
     );
     // ...which keeps a borrowing callee from adopting the caller's
     // object (S11, S12).
-    try expectOwnError(
+    try expectRejected(
         \\func keepit(hits: List(Int)):
         \\    var wrapped = [hits]
         \\
@@ -1555,7 +1555,7 @@ test "audit: list literals are container doors too (S21)" {
         \\
     );
     // Carrying structs need the verb here as well (S27).
-    try expectOwnError(
+    try expectRejected(
         \\struct Bag:
         \\    items: List(Int)
         \\
@@ -1580,7 +1580,7 @@ test "audit: list literals are container doors too (S21)" {
 }
 
 test "audit: the S30 guard sees while conditions" {
-    try expectOwnError(
+    try expectRejected(
         \\func eat(xs: give List(Int)) -> Int:
         \\    return len(xs)
         \\
@@ -1595,14 +1595,14 @@ test "audit: the S30 guard sees while conditions" {
 
 test "audit: give in a borrow position has no owner to receive it" {
     // Builtins borrow.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1, 2]
         \\    let n = len(give xs)
         \\
     );
     // Non-adopting method arguments borrow.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = new List(List(Int))
         \\    xs.append([1])
@@ -1611,7 +1611,7 @@ test "audit: give in a borrow position has no owner to receive it" {
         \\
     );
     // Operators borrow.
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1]
         \\    var ys = [1]
@@ -1632,7 +1632,7 @@ test "audit: a stale owner cannot free what an alias gave away" {
 }
 
 test "audit: reassigning the iterated name mid-loop is a compile error" {
-    try expectOwnError(
+    try expectRejected(
         \\func main():
         \\    var xs = [1, 2, 3]
         \\    for x in xs:
@@ -1709,7 +1709,7 @@ test "audit: give and free of an outer name are refused in every loop shape (S30
             \\
         );
         try source.appendSlice(testing.allocator, body);
-        try expectOwnError(source.items);
+        try expectRejected(source.items);
     }
 }
 
