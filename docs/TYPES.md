@@ -158,6 +158,30 @@ an audit; the rest follow from the shape of the ladder.
 > **Three — it is decided once.** Changing a literal default later
 > re-breaks every program written against it, so there is no version
 > of this that can be deferred and revisited.
+
+> **OVERRULED — ratified 2026-08-04.** The owner, verbatim: *"The
+> default value for Int - is 32bit and for Float is 32bit. when you do
+> var i = 7 or var j = 2.5."*  So `var i = 7` is `Int` (i32) and
+> `var j = 2.5` is `Float` (binary32): **the short names are the
+> defaults**, symmetrically — a rule Java itself does not have (its
+> `2.5` is double while its `7` is int).  The recommendation above is
+> kept as the record of the road not taken, and its costs are now
+> owned deliberately rather than avoided:
+>
+> - **The migration becomes the audit, not the grep.**  Every
+>   unannotated integer in the tree must be re-derived against the
+>   2.1-billion ceiling and every unannotated float against binary32
+>   precision.  The plan's rename step gains a sibling: annotate what
+>   must stay wide (`let pi: Double = …` — std's constants back a
+>   documented 1e-14 contract and are wrong at 32 bits;
+>   `math.luc:247`'s generator intermediates; accumulators that grow).
+> - **Checked arithmetic is the net.**  An unannotated accumulator
+>   that outgrows i32 traps with a location — loud, not silent, which
+>   is what makes this ruling survivable where it would be reckless in
+>   C.
+> - Literals still fit annotated contexts exactly (D3 stands):
+>   `let n: Long = 7` and `let x: Double = 2.5` land at full width
+>   with no double-rounding.
 >
 > **What it costs, stated plainly:** the two shortest names are not
 > the defaults. That is Swift's known wart — `Double` is Swift's
@@ -203,6 +227,9 @@ an audit; the rest follow from the shape of the ladder.
 > **Confirm:** untyped constants; no literal suffixes (§1).
 
 > ### D4 — `Byte` is unsigned, and it is the only unsigned type there will be.
+>
+> **Ratified 2026-08-04.**  The owner, verbatim: *"Byte is unsigned -
+> correct."*
 >
 > Java's `byte` is signed −128..127 and is, by a distance, the most
 > regretted decision in its numeric tower; `Byte.toUnsignedInt` was
