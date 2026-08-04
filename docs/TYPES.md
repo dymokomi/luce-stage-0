@@ -229,7 +229,25 @@ an audit; the rest follow from the shape of the ladder.
 > ### D4 — `Byte` is unsigned, and it is the only unsigned type there will be.
 >
 > **Ratified 2026-08-04.**  The owner, verbatim: *"Byte is unsigned -
-> correct."*
+> correct."*  And, in a follow-up that sharpens the ruling into a
+> principle: *"Bytes are bytes, a fixed-size sequence of bits...
+> Should an array of bits be signed or unsigned?  Neither, the
+> question is nonsensical: an array cannot be signed or unsigned in
+> the first place.  There's a long-standing tradition in programming
+> languages to conflate integers and arrays of bits... I argue that
+> this blending of the two roles is a mistake: a violation of the
+> Single Responsibility Principle."*
+>
+> So the ruling, precisely: **`Byte` is a bits type, not a small
+> integer.**  D5 already gave it no arithmetic; this says why.  The
+> word "unsigned" describes only the widening boundary — reading the
+> bits as a magnitude (`zext`, what `byte_at` has always done) is the
+> one numeric reading that does not invent a sign bit — and nothing
+> else about `Byte` is numeric at all.  Forward consequence, binding
+> on the bitwise/hex roadmap item: **when bitwise operations arrive,
+> they are defined on `Byte`, not on the integer family.**  Integers
+> do arithmetic; bytes do bits.  Every mainstream precedent conflates
+> the two; Luce separates them on purpose.
 >
 > Java's `byte` is signed −128..127 and is, by a distance, the most
 > regretted decision in its numeric tower; `Byte.toUnsignedInt` was
