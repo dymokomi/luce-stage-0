@@ -7,7 +7,7 @@
 //! the C surface's calling convention.
 
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
@@ -56,7 +56,7 @@ const Bench = struct {
     }
 };
 
-fn expectTrap(code: mir.TrapCode, runtime: *Runtime, mistake: anytype) !void {
+fn expectTrap(code: vocabulary.TrapCode, runtime: *Runtime, mistake: anytype) !void {
     try testing.expectError(error.Trap, mistake);
     try testing.expectEqual(code, runtime.pending.?.code);
     try testing.expectEqualStrings(code.message(), runtime.pending.?.message);
@@ -678,7 +678,7 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
     );
 
     try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 20, 1 << 20 }, Value.none));
-    try testing.expectEqual(mir.TrapCode.index_bounds, runtime.pending.?.code);
+    try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
 }
 
 test "compiled code's byte offsets find the fields they name" {
@@ -1084,7 +1084,7 @@ test "the C surface opens a run, carries values, and reports its own traps" {
     luce_rt_unwound(runtime, 1, 0);
     luce_rt_report(runtime, &reported, Reported.take);
 
-    try testing.expectEqual(@intFromEnum(mir.TrapCode.index_bounds), reported.code);
+    try testing.expectEqual(@intFromEnum(vocabulary.TrapCode.index_bounds), reported.code);
     try testing.expectEqualStrings("index out of bounds", reported.message());
     try testing.expectEqual(@as(usize, 2), reported.frame_count);
     try testing.expectEqual(@as(i64, 0), reported.dropped);

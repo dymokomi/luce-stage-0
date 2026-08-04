@@ -7,7 +7,7 @@
 //! arithmetic is plain IEEE 754 and never traps.
 
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const vocabulary = @import("../support/vocabulary.zig");
 const heap = @import("heap.zig");
 const text = @import("text.zig");
 const value = @import("value.zig");
@@ -18,7 +18,7 @@ const Value = value.Value;
 
 /// One binary operator applied to two values of the same Luce type.
 /// Comparison answers a Bool; arithmetic answers the operand type.
-pub fn binary(runtime: *Runtime, op: mir.BinaryOp, left: Value, right: Value) Error!Value {
+pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Value) Error!Value {
     switch (op) {
         .add, .subtract, .multiply, .divide, .remainder => {},
         else => return Value.ofBoolean(compare(op, left, right)),
@@ -85,7 +85,7 @@ pub fn binary(runtime: *Runtime, op: mir.BinaryOp, left: Value, right: Value) Er
 /// Comparison, for every type the analyzer admits one on.  Equality on
 /// Bool, structs, and objects; full ordering on Int, Float, and
 /// String.
-pub fn compare(op: mir.BinaryOp, left: Value, right: Value) bool {
+pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
     // Absence, before the payload dispatch below, because absence has
     // no payload to dispatch on.  Two absences are the same absence
     // and an absent value equals nothing present — the answer every

@@ -34,7 +34,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const mir = @import("../06_mir.zig");
+const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
@@ -152,7 +152,7 @@ export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Sta
 /// this library, so the host hears about both the same way.
 ///
 /// `message` must outlive the run: either static text in the artifact
-/// or a Luce String, both of which do.  `code` is `mir.TrapCode` from
+/// or a Luce String, both of which do.  `code` is `vocabulary.TrapCode` from
 /// the build that generated the code, which is this one — an artifact
 /// carrying anything else is corrupt, and the conversion says so
 /// loudly rather than inventing a trap.
@@ -162,7 +162,7 @@ export fn luce_rt_raise(
     message: [*]const u8,
     length: i64,
 ) callconv(.c) void {
-    const raised: mir.TrapCode = @enumFromInt(code);
+    const raised: vocabulary.TrapCode = @enumFromInt(code);
     runtime.failMessage(raised, message[0..@intCast(length)]) catch {};
 }
 
@@ -216,7 +216,7 @@ export fn luce_rt_raise_error(
     function: u32,
     instruction: u32,
 ) callconv(.c) void {
-    const raised: mir.ErrorCode = @enumFromInt(code);
+    const raised: vocabulary.ErrorCode = @enumFromInt(code);
     runtime.raise(raised, message[0..@intCast(length)], runtime.frameAt(function, instruction));
 }
 
@@ -828,7 +828,7 @@ export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callco
 /// Comparison for the types generated code cannot compare inline —
 /// String, structs.  The one export that answers its result
 /// directly rather than through an out-pointer, because comparison is
-/// the one operation here that cannot fail.  `op` is `mir.BinaryOp`.
+/// the one operation here that cannot fail.  `op` is `vocabulary.BinaryOp`.
 export fn luce_rt_compare(
     op: i32,
     left: *const Value,
