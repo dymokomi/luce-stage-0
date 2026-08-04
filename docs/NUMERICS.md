@@ -1155,3 +1155,29 @@ in the same expression.
    *is* `strings.format_float`, so it needs what `s.split(",")` needs
    and reports through the same `luce.sema.import` diagnostic.  Worth
    writing down because it is the one thing about specs that surprises.
+
+### Step 7 — the docs, and what the numbers say — **landed**
+
+`docs/LANGUAGE.md`'s arithmetic and conversion sections are rewritten,
+`docs/MISSING.md` item 9 is closed by name (both workarounds it cited
+by line are gone) along with its Tier-5b item 3, `docs/PIPELINE.md`
+and `CLAUDE.md` no longer claim there are no implicit conversions, and
+every site page that asserted it says what is true instead.  The site
+builds every sample it shows, so the tour and the reference are
+verified rather than merely edited.
+
+**The measurements.**  `bench/compare.sh` against the base, twice:
+every row within noise, the largest consistent movement 1% and in both
+directions between runs.  The one row that looked real on the first
+pass — matmul's compute column at +5.9% — was 0.5% on the second, and
+matmul is the shortest benchmark there is.  Promotion costs nothing in
+code that does not mix, which is what §1 predicted; the C twins were
+never touched, which is what §11 predicted; and `bench/run.sh`'s
+cross-check passed at every step.
+
+**`abi.version` did not move**, at any step.  §10 said nothing here
+touches the `LuceHost` vtable and nothing did: every new semantic is a
+`libluce_rt` call (`luce_rt_compare_int_float`, `luce_rt_float_mod`)
+or an inline sequence.  `format_version` moved once, to **19**, at the
+first wire change, and the fingerprint moved with it three times as
+the instruction set settled.
