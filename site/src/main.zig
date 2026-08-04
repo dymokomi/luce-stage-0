@@ -561,6 +561,7 @@ test "the generator's own units" {
     // below would be checked at all.
     _ = &main;
     _ = @import("buffer.zig");
+    _ = @import("coverage.zig");
     _ = @import("highlight.zig");
     _ = @import("markdown.zig");
     _ = @import("page.zig");
