@@ -1008,6 +1008,27 @@ integer* — `"array indices are Int"`, `"lists index with one Int"`,
 three Floats"`, `"Int() converts Float"` — and each becomes a sentence
 about a family rather than a type.
 
+## D8 — builtin types are lowercase (ratified 2026-08-04)
+
+The owner, verbatim: *"all builtin types should be lowercase. short,
+float, int, long, byte, string, etc..."*
+
+The rule this creates: **lowercase names are the language's; TitleCase
+names are yours.**  `byte`, `short`, `int`, `long`, `half`, `float`,
+`double`, `string`, `bool` — and, reading "etc" as written, the
+containers with them: `list(T)`, `map(K, V)`, `array(T, _)`,
+`builder`.  User structs stay TitleCase, so the case of a type name
+says who defined it — the split Rust and Zig read well on.  The
+conversion constructors follow their types: `int(x)`, `float(x)`,
+`string(x)`, which is Python's exact spelling.
+
+Migration: folded into the rename step of the Order below, which
+already touches every annotation in the tree — one mechanical pass,
+not two.  The TitleCase spellings do not survive as aliases; the
+build-failing grep at the end of that step checks for them by name.
+The site highlighter's and grammar generator's type tables regenerate
+from the compiler's own, per their pins.
+
 ## Order
 
 Seven steps. Each leaves the tree green and shippable, and the sequence
