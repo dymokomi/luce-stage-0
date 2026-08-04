@@ -2579,6 +2579,134 @@ test "storing a borrowed parameter is not told to give it" {
     , "borrowed parameter and can never be given away");
 }
 
+test "luce.sema.fallible: a try with nothing to try says so, in either kind of function" {
+    // The order of these two checks *is* the diagnostic.  Asked the
+    // other way round, the same mistake in a plain `main` answered
+    // "main does not say it can fail; write '-> !'", which is wrong,
+    // and wrong in the expensive direction: following it changes a
+    // signature, recompiles, and produces the real message.
+    const say = "try applies to a call that can fail, and this one cannot; drop the try";
+    try expectOnlySayingAt(
+        \\func plain() -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = try plain()
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.sema.fallible",
+        say,
+        5,
+        13,
+    );
+    // The arm that was always right, kept honest.
+    try expectOnlySayingAt(
+        \\func plain() -> Int:
+        \\    return 1
+        \\
+        \\func main() -> !:
+        \\    let a = try plain()
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.sema.fallible",
+        say,
+        5,
+        13,
+    );
+    // And a try that really does hand an error up still says that.
+    try expectOnlySayingAt(
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = try risky()
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.sema.fallible",
+        "try hands the error to the caller, and main does not say it can fail; " ++
+            "write '-> !' (or '-> T!') on its signature, or handle it with catch",
+        5,
+        13,
+    );
+}
+
+test "luce.parse.expected: a catch block cannot initialize a binding" {
+    // The block form guards a statement or an assignment; it supplies
+    // no value, and a binding is nothing but a value (docs/FAILURE.md).
+    // The old answer was "expected end of line after the binding,
+    // found the keyword 'catch'", which leaves the reader to work out
+    // which of the two catch forms they have met.
+    try expectSayingAt(
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = risky() catch:
+        \\        assert(false)
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.parse.expected",
+        "a catch block supplies no value, so it cannot initialize a: " ++
+            "write 'let a = … catch VALUE', or declare a first and guard the assignment",
+        5,
+        21,
+    );
+    try expectSayingAt(
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    var total = risky() catch:
+        \\        assert(false)
+        \\    assert(total == 1)
+        \\
+    ,
+        "luce.parse.expected",
+        "a catch block supplies no value, so it cannot initialize total: " ++
+            "write 'var total = … catch VALUE', or declare total first and guard the assignment",
+        5,
+        25,
+    );
+    // Both fixes the message names actually compile.
+    var fallback = try compile_mod.compile(
+        testing.allocator,
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = risky() catch 0
+        \\    assert(a == 1)
+        \\
+    ,
+        script,
+    );
+    defer fallback.deinit();
+    if (fallback == .failure) printAll(&fallback.failure);
+    try testing.expect(fallback == .success);
+
+    var guarded = try compile_mod.compile(
+        testing.allocator,
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    var a = 0
+        \\    a = risky() catch:
+        \\        a = -1
+        \\    assert(a == 1)
+        \\
+    ,
+        script,
+    );
+    defer guarded.deinit();
+    if (guarded == .failure) printAll(&guarded.failure);
+    try testing.expect(guarded == .success);
+}
+
 // ---------------------------------------------------------------------------
 // luce.sema.unreachable — a statement below one that never comes back
 // ---------------------------------------------------------------------------

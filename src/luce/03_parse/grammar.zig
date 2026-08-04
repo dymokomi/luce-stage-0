@@ -960,6 +960,27 @@ pub const Parser = struct {
         }
         if ((try self.expect(.assign, "'=' with an initial value")) == null) return null;
         const value = (try self.expression()) orelse return null;
+        // `let a = risky() catch:` — the block form of catch, in the one
+        // place it cannot go.  A handler block supplies no value, and a
+        // binding is nothing but a value; the expression form is what a
+        // binding takes, and the block form wants a name that already
+        // exists to assign to (docs/FAILURE.md).  Saying "expected end
+        // of line, found 'catch'" leaves the reader to guess which of
+        // those two facts they have met.
+        if (self.peekKind() == .keyword_catch and self.peekAhead(1) == .colon) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "a catch block supplies no value, so it cannot initialize {s}: write '{s} {s} = … catch VALUE', or declare {s} first and guard the assignment",
+                .{
+                    self.text(name),
+                    if (mutable) "var" else "let",
+                    self.text(name),
+                    self.text(name),
+                },
+            );
+            return null;
+        }
         try self.endOfStatement("end of line after the binding");
         const span: Span = .{ .start = start.span.start, .end = value.span().end };
         if (mutable) {

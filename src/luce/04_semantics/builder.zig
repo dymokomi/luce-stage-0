@@ -2883,6 +2883,21 @@ pub const FunctionBuilder = struct {
     /// release the temporaries, release the scopes innermost first,
     /// leave (docs/FAILURE.md).
     fn lowerTry(self: *FunctionBuilder, attempt: ast.Try, as_statement: bool) Error!?Typed {
+        // Whether the operand can fail is asked **first**, and the
+        // order is the diagnostic.  Asked the other way round, `try
+        // plain()` inside a plain `main` answered "main does not say it
+        // can fail; write '-> !'" — advice that is wrong, and wrong in
+        // the expensive direction: following it changes a signature,
+        // recompiles, and produces the real message, which is that
+        // there was never an error to hand anywhere.  The same mistake
+        // in a `main() -> !` already got that real message, so the
+        // compiler knew; it just spoke in the wrong order.
+        const attempted = (try self.lowerAttempt(
+            attempt.operand,
+            attempt.span,
+            "try",
+            as_statement,
+        )) orelse return null;
         if (!self.code.fallible) {
             try self.fail(
                 "luce.sema.fallible",
@@ -2892,12 +2907,6 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        const attempted = (try self.lowerAttempt(
-            attempt.operand,
-            attempt.span,
-            "try",
-            as_statement,
-        )) orelse return null;
 
         const resume_at = self.code.current;
         self.code.switchTo(attempted.opened.handler);
