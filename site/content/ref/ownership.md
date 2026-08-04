@@ -266,9 +266,88 @@ rows 0
 
 ### S23 — one object cannot end up owned twice {#s23}
 
-Static poisoning catches the direct case. The alias dodge is caught
-dynamically: `give` verifies binding-ownership at run time and traps
-`not_owned`. It is the one dynamic ownership check.
+Static poisoning catches the direct case: a name that was given away
+cannot be given again.
+
+```luce fail
+func main():
+    var a = new List(List(Int))
+    var b = new List(List(Int))
+    var item = [1]
+    a.append(give item)
+    b.append(give item)
+```
+
+```output
+luce: compile failed
+main.luc:6:14: item was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
+        b.append(give item)
+                 ^~~~~~~~~
+```
+
+The alias dodge — a second name for the same object, given away after
+the first one was — is caught the same way. An alias owns nothing, and
+the compiler knows it is one where it stands:
+
+```luce fail
+func main():
+    var a = new List(List(Int))
+    var b = new List(List(Int))
+    var item = [1]
+    let alias = item
+    a.append(give item)
+    b.append(give alias)
+```
+
+```output
+luce: compile failed
+main.luc:7:14: alias aliases an object it does not own; give the owning name, or copy alias [OWNERSHIP.md S8, S23] [luce.sema.own]
+        b.append(give alias)
+                 ^~~~~~~~~~
+```
+
+Where the owner is still an owner, the refusal names it:
+
+```luce fail
+func take(xs: give List(Int)) -> Int:
+    return len(xs)
+
+func main():
+    var xs = [1, 2]
+    let view = xs
+    let n = take(give view)
+```
+
+```output
+luce: compile failed
+main.luc:7:18: view aliases an object it does not own; give xs (the owner), or copy view [OWNERSHIP.md S8, S23] [luce.sema.own]
+        let n = take(give view)
+                     ^~~~~~~~~
+```
+
+The two fixes it names both work: `give xs` hands over the owner, and
+`copy view` makes a second object so both names have one.
+
+```luce run
+func take(xs: give List(Int)) -> Int:
+    return len(xs)
+
+func main():
+    var xs = [1, 2]
+    let view = xs
+    print(String(len(view)))
+    print(String(take(give xs)))
+```
+
+```output
+2
+2
+```
+
+This was a run-time check until 2026-08-04 — the one dynamic
+ownership check, trapping `not_owned`. It is a compile error now.
+The trap remains in the runtime as defense against a module the
+compiler did not produce, and **no source program can reach it**.
 
 ---
 

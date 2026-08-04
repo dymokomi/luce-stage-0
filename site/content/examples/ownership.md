@@ -190,20 +190,42 @@ loom: trap: object used after free [use_after_free]
     at main (main.luc:5:5)
 ```
 
-The other dynamic backstop is giving away an object a container
-already owns, reached through an alias:
+That one is dynamic because the compiler cannot see which way a
+program will branch before the alias is read. The other way to end up
+with one object owned twice — giving away something a container
+already owns, reached through an alias — needs no run time at all,
+because an alias is an alias where it is written:
 
-```luce trap
+```luce fail
 func main():
     var first = new List(List(Int))
     var second = new List(List(Int))
     var item = [1]
     let alias = item
     first.append(give item)        # first owns it now
-    second.append(give alias)      # …and this is the one dynamic check
+    second.append(give alias)      # …and alias never owned anything
 ```
 
 ```output
-loom: trap: object is owned by a container [not_owned]
-    at main (main.luc:7:5)
+luce: compile failed
+main.luc:7:19: alias aliases an object it does not own; give the owning name, or copy alias [OWNERSHIP.md S8, S23] [luce.sema.own]
+        second.append(give alias)      # …and alias never owned anything
+                      ^~~~~~~~~~
+```
+
+Say `copy alias` and both containers get a list of their own:
+
+```luce run
+func main():
+    var first = new List(List(Int))
+    var second = new List(List(Int))
+    var item = [1]
+    let alias = item
+    second.append(copy alias)
+    first.append(give item)
+    print(String(len(first) + len(second)))
+```
+
+```output
+2
 ```

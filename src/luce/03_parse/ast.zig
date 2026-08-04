@@ -77,7 +77,23 @@ pub const BoolLiteral = struct { value: bool, span: Span };
 pub const StringLiteral = struct { decoded: []const u8, span: Span }; // arena-owned, unescaped
 pub const Name = struct { text: []const u8, span: Span };
 pub const FieldAccess = struct { target: *Expression, name: []const u8, span: Span };
-pub const Call = struct { callee: []const u8, arguments: []Argument, span: Span };
+pub const Call = struct {
+    callee: []const u8,
+    arguments: []Argument,
+    span: Span,
+    /// Where the call came from.  Almost every one was written by the
+    /// reader; a few are the compiler's own lowering of some other
+    /// syntax, and a diagnostic about one of those has to talk about
+    /// the syntax rather than about the call — the reader never typed
+    /// the callee and cannot be asked to fix it.
+    origin: CallOrigin = .written,
+};
+
+pub const CallOrigin = enum {
+    written,
+    /// `f"{x:.2f}"`, lowered to `strings.format_float(x, 2)`.
+    format_spec,
+};
 pub const Binary = struct { op: BinaryOp, left: *Expression, right: *Expression, span: Span };
 pub const Unary = struct { op: UnaryOp, operand: *Expression, span: Span };
 pub const NewObject = struct { type_name: TypeName, dims: []*Expression, span: Span };

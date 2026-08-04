@@ -277,6 +277,12 @@ pub const LocalInfo = struct {
     class: OwnershipClass = .alias,
     /// The local's type is an object or an object-carrying struct.
     carries: bool = false,
+    /// For an `.alias` binding written as `let y = x`, the name that
+    /// actually owns the object — resolved through a chain of aliases
+    /// to its root, so a refusal can say which name to give instead
+    /// (S23).  Null when the alias came from something with no name to
+    /// offer: a container read, a field, a call.
+    owner_name: ?[]const u8 = null,
     /// Set by give/free in lowering (= source) order; any later use in
     /// this scope is a compile error (S10, S29).
     poisoned: ?Poison = null,

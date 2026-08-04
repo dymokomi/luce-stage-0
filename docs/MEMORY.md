@@ -205,6 +205,11 @@ pure optimization later), Lobster/Perceus (compile-time RC elision if
    (`let y = xs`, give `xs` away, then `give y`), so `give` verifies
    binding-ownership at run time — trap in safe builds, UB in a
    future ReleaseFast, exactly Zig's posture.
+   *Superseded 2026-08-04* (docs/OWNERSHIP.md S23): the dodge is a
+   compile error now — the analyzer knows `y` is an alias where it
+   stands — and the run-time check stayed on as defense against a
+   module the front end did not produce.  This item is left as
+   written because it records what was decided at the time.
 6. Confirmations pending: reassigning an owning `var` frees the old
    object immediately; `free` survives as early release on owned
    names and poisons like `give`; `share` stays out of v1; final

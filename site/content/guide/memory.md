@@ -66,17 +66,20 @@ tracks every object and traps on dead references. Luce can afford
 
 ## What it costs
 
-Two things surface at run time rather than at compile time.
+One thing surfaces at run time rather than at compile time.
 
 An **alias that outlives its owner** traps `use_after_free` at the
 point of use. That is the accepted price of having no borrow checker,
 and the trap is deterministic and names the faulting line.
 
-**Giving away an object a container already owns**, reached through an
-alias, traps `not_owned`. It is the one dynamic ownership check; the
-direct case is caught statically by poisoning.
+There used to be a second. **Giving away an object a container already
+owns**, reached through an alias, trapped `not_owned` — the one
+dynamic ownership check. Since 2026-08-04 it is a compile error: an
+alias is an alias where it is written, so the compiler says so there
+and names the owner to give instead. The trap survives only as
+defense against a module the compiler did not produce.
 
-Neither can be turned off. There is no build mode that omits them —
+It cannot be turned off. There is no build mode that omits it —
 `--release` strips source locations from traps and nothing else.
 
 ## Object identity survives a reused row

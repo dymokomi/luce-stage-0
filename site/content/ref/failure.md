@@ -46,7 +46,17 @@ the rest.
 | `use_after_free` | object used after free | an alias outliving its owner ([S9](../ownership/#s9)) |
 | `null_object` | null object reference | using an unfilled object slot ([S41](../ownership/#s41)) |
 | `bad_codepoint` | invalid character code | `chr` outside Unicode, or `append_ascii` outside 0..127 |
-| `not_owned` | object is owned by a container | `give` through an alias of a container-owned object ([S23](../ownership/#s23)) |
+| `not_owned` | object is owned by a container | never, from source — see below ([S23](../ownership/#s23)) |
+
+Every code above is reachable from a program you can write, with one
+exception. **`not_owned` is defense, not a language rule.** It was
+S23's dynamic check — `give` through an alias — until 2026-08-04,
+when that became a compile error instead, because the compiler
+already knows an alias is one where it stands. The check stayed in
+the runtime because the IR verifier trusts instruction types and a
+`.lc` is an executable: a damaged or forged module can still present
+a `give` that names a binding owning nothing. A correct compiler
+cannot emit one, so a correct program cannot meet the trap.
 
 Call depth is a **policy** limit, not a native-stack accident:
 compiled code carries its remaining depth as a hidden argument and

@@ -71,11 +71,14 @@ it):
   holding `none` owns nothing (S43), so a `List(T)?` obeys every rule
   above exactly as a `List(T)` does.
 
-Two dynamic backstops cover what static rules cannot see: `give`
-through an alias of a container-owned object traps `not_owned`
-(S23), and every verb demands a filled slot (`null_object`
-otherwise).  Nothing can leak — loom's leak report is now a runtime
-self-check, not a program diagnostic.
+One dynamic backstop covers what static rules cannot see: every verb
+demands a filled slot, or traps `null_object`.  The second one is
+gone — `give` through an alias was a `not_owned` trap until
+2026-08-04 and is now a compile error, because an alias is one at the
+site (S23).  `not_owned` itself stays as defense against a module the
+front end did not produce, and is no longer reachable from source.
+Nothing can leak — loom's leak report is now a runtime self-check,
+not a program diagnostic.
 
 ## Absence: `T?` and `none`
 
@@ -805,6 +808,11 @@ meet anyway is an *error* and is not here (see the section above).
 New codes in this round:
 `index_bounds`, `key_missing`, `empty_collection`, `use_after_free`,
 `null_object`, `not_owned`, `bad_codepoint`.
+One of those is **defense-only**: no source program can still reach
+`not_owned`, because S23's alias case became a compile error on
+2026-08-04.  It remains in the runtime for a module the front end did
+not produce, which is a real thing to defend against — the IR
+verifier trusts instruction types, and a `.lc` is an executable.
 Long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
 string bounds/boundary, call depth.  Call depth is a

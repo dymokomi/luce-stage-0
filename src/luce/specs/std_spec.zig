@@ -417,6 +417,23 @@ test "strings: format_float rounds half away and carries" {
     , .explicit_trap);
 }
 
+test "strings: a format spec is that function, and the import is what it needs" {
+    // The positive control for `luce.sema.import`'s format-spec
+    // refusal (`specs/errors_spec.zig`): the whole fix is the import
+    // line, and with it the spec and the call it lowers to are the
+    // same program.
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let mean = 23.998425
+        \\    assert(f"{mean:.2f}" == strings.format_float(mean, 2))
+        \\    assert(f"mean = {mean:.2f}" == "mean = 24.00")
+        \\    assert(f"{2.5:.0f} and {-2.5:.0f}" == "3 and -3")
+        \\
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The mechanism
 // ---------------------------------------------------------------------------

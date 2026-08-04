@@ -889,17 +889,28 @@ test "a reused row is refused by every door, and the newcomer by none" {
     );
 }
 
-test "the alias dodge agrees: not_owned (S23)" {
+test "give names its binding, and the two engines read it the same way" {
+    // This was the alias-dodge program, agreeing on `not_owned`.  S23
+    // became a compile error on 2026-08-04, so the dodge no longer
+    // reaches an engine and the trap is proven on a forged module
+    // instead (`specs/ownership_spec.zig`).  What is still worth
+    // agreeing on here is the operand that refusal left behind: every
+    // give now carries the binding it moves from, `lower.zig` passes
+    // it to `luce_rt_give` as two scalars while the oracle reads it off
+    // a register, and a give that moved the wrong thing would show up
+    // as a differing census rather than a differing print.
     try agree(
         \\func main():
         \\    var a = new List(List(Int))
         \\    var b = new List(List(Int))
-        \\    var item = new List(Int)
-        \\    item.append(2)
-        \\    let alias = item
-        \\    a.append(give item)
+        \\    var first = new List(Int)
+        \\    first.append(2)
+        \\    var second = new List(Int)
+        \\    second.append(3)
+        \\    a.append(give first)
         \\    print("adopted")
-        \\    b.append(give alias)
+        \\    b.append(give second)
+        \\    print(String(a[0][0] + b[0][0]))
         \\
     );
 }

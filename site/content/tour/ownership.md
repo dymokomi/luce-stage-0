@@ -262,9 +262,8 @@ a statement temporary, and all three have defined death points. There
 is no collector to pause, no reference count to increment on every
 assignment, and no cycle problem to have.
 
-What it costs is the two dynamic backstops you have met — an alias
-used after its owner released it traps `use_after_free`, and giving
-away something a container already owns traps `not_owned` — plus the
+What it costs is the one dynamic backstop you have met — an alias used
+after its owner released it traps `use_after_free` — plus the
 occasional `give` or `copy` on a line the compiler could not read your
 mind on.
 

@@ -914,6 +914,7 @@ fn wrapFormat(
         .callee = "strings.format_float",
         .arguments = arguments,
         .span = span,
+        .origin = .format_spec,
     } });
 }
 

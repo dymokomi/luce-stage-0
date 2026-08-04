@@ -1119,6 +1119,16 @@ test "imports are explicit, checked, and reported per file" {
     defer unimported.deinit();
     try testing.expect(unimported == .failure);
     try testing.expectEqualStrings("luce.sema.import", unimported.failure.at(0).?.code);
+    // Pinned in full: this is the wording a *written* namespace gets,
+    // and it comes from `methodNamespace` — `mod.func()` parses as a
+    // method, so it never reaches the `resolveDeclared` site that the
+    // f-string lowering does (`specs/errors_spec.zig`, the format-spec
+    // case).  The two sentences live in two places for that reason,
+    // and this is what holds the reader-facing one still.
+    try testing.expectEqualStrings(
+        "unknown namespace util; import util to use it",
+        unimported.failure.at(0).?.message,
+    );
     var unknown = try compile_mod.compileProject(testing.allocator,
         \\func main():
         \\    let bad = geo.make(1.0, 2.0)

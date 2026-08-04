@@ -387,6 +387,36 @@ pub const FunctionBuilder = struct {
         return null;
     }
 
+    // Who owns what an alias names (S8, S23) --------------------------------
+    //
+    // `let y = x` makes y another name for x's object.  Refusing
+    // `give y` is only half an answer; the other half is `give x`, and
+    // these two keep enough to say it.
+
+    /// Record, on the alias just declared, the name that owns its
+    /// object.  Chains collapse to their root: after `let a = xs` and
+    /// `let b = a`, both name `xs`, because that is the name a reader
+    /// would have to write.
+    fn rememberOwnerName(self: *FunctionBuilder, alias: []const u8, source: []const u8) void {
+        const from = self.findLocal(source) orelse return;
+        const root = from.info.owner_name orelse source;
+        const declared = self.findLocal(alias) orelse return;
+        declared.info.owner_name = root;
+    }
+
+    /// The owner to name in a refusal, or null when there is none worth
+    /// naming.  A recorded name is only useful advice while it is still
+    /// the owner: one that has since been given away or freed would
+    /// send the reader to a second diagnostic, so it is withheld and
+    /// the refusal falls back to saying that an owner exists.
+    fn ownerNameFor(self: *FunctionBuilder, info: *const LocalInfo) ?[]const u8 {
+        const owner = info.owner_name orelse return null;
+        const found = self.findLocal(owner) orelse return null;
+        if (found.info.class != .owned) return null;
+        if (found.info.poisoned != null) return null;
+        return owner;
+    }
+
     // Unknown names --------------------------------------------------------
     //
     // "unknown name totl" is a true statement; "did you mean total?"
@@ -668,7 +698,12 @@ pub const FunctionBuilder = struct {
     /// view: bare names are module-local; a dotted name is either a
     /// module-local struct namespace (Text.width) or an imported one
     /// (geo.helper, geo.Text.width).
-    fn resolveDeclared(self: *FunctionBuilder, written: []const u8, span: Span) Error!?[]const u8 {
+    fn resolveDeclared(
+        self: *FunctionBuilder,
+        written: []const u8,
+        span: Span,
+        origin: ast.CallOrigin,
+    ) Error!?[]const u8 {
         if (std.mem.indexOfScalar(u8, written, '.')) |dot| {
             const head = written[0..dot];
             const local_head = try self.analyzer.qualify(self.prefix, head);
@@ -678,7 +713,38 @@ pub const FunctionBuilder = struct {
             if (self.analyzer.importsModule(self.module, head)) {
                 return written;
             }
-            try self.fail("luce.sema.import", span, "unknown namespace {s}; import {s} to use it", .{ head, try self.analyzer.importSpelling(head) });
+            // A call the reader never wrote cannot be fixed where it
+            // points.  `f"{x:.2f}"` lowers to `strings.format_float`,
+            // so the generic message would name a namespace that
+            // appears nowhere in the program, under a caret inside an
+            // f-string hole.  The rule is the same one — a format spec
+            // is a String service like any other — but it has to be
+            // said about the syntax that is actually there.
+            //
+            // **`.written` cannot be reached from here today**, and is
+            // the safe default rather than live behavior: a dotted
+            // callee only ever arrives on a `.call` node the compiler
+            // synthesized, because `namedCallExpression` builds one
+            // only from a bare identifier, which holds no dot.  A
+            // written `mod.func()` parses as a method and is answered
+            // by `methodNamespace` below, which carries its own copy
+            // of these words.  Kept, and kept exhaustive, so that the
+            // next synthesized callee has to choose rather than
+            // inherit a sentence about format specs.
+            switch (origin) {
+                .written => try self.fail(
+                    "luce.sema.import",
+                    span,
+                    "unknown namespace {s}; import {s} to use it",
+                    .{ head, try self.analyzer.importSpelling(head) },
+                ),
+                .format_spec => try self.fail(
+                    "luce.sema.import",
+                    span,
+                    "a format spec like {{x:.2f}} formats through std.strings; add import std.strings",
+                    .{},
+                ),
+            }
             return null;
         }
         return try self.analyzer.qualify(self.prefix, written);
@@ -1733,6 +1799,10 @@ pub const FunctionBuilder = struct {
         try self.storeOwned(local, value);
         if (owns) {
             try self.code.bind(local, value.register);
+        } else if (value_expression.* == .name) {
+            // `let y = x` aliases (S8).  Remember whose object it is,
+            // so refusing `give y` can name `x` (S23).
+            self.rememberOwnerName(name, value_expression.name.text);
         }
         // `let x: Int? = 5` is optional in its type and present in
         // fact, and the reader should not have to test what they just
@@ -3139,6 +3209,28 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        // An alias owns nothing, so it has nothing to hand over (S8).
+        // This used to be left to the runtime, which trapped
+        // `not_owned` at the give; the class is known right here, so
+        // the answer is given here instead (S23).
+        if (info.class == .alias) {
+            if (self.ownerNameFor(info)) |owner| {
+                try self.fail(
+                    "luce.sema.own",
+                    give.span,
+                    "{s} aliases an object it does not own; give {s} (the owner), or copy {s} [OWNERSHIP.md S8, S23]",
+                    .{ name, owner, name },
+                );
+            } else {
+                try self.fail(
+                    "luce.sema.own",
+                    give.span,
+                    "{s} aliases an object it does not own; give the owning name, or copy {s} [OWNERSHIP.md S8, S23]",
+                    .{ name, name },
+                );
+            }
+            return null;
+        }
         if (self.loops.items.len > 0 and
             found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
         {
@@ -3158,7 +3250,6 @@ pub const FunctionBuilder = struct {
             return null;
         }
         info.poisoned = .given;
-        const owned = info.class == .owned;
         var value = try self.code.load(local);
         // A narrowed `T?` hands over the `T` it was proved to hold.
         const given_type = local_type.held() orelse local_type;
@@ -3170,14 +3261,16 @@ pub const FunctionBuilder = struct {
                 given_type,
             );
         }
-        // An owned name passes its binding along so the runtime can
-        // verify the name still owns the object; an alias keeps only
-        // the container backstop (S23).
-        const arguments = try self.arena().alloc(Register, if (owned) 2 else 1);
+        // Every class but `.owned` was refused above, so the give
+        // always names its binding and the runtime always has an owner
+        // to check it against.  The intrinsic still accepts the
+        // unnamed form, which is now reachable only from a module that
+        // did not come from this stage (`06_mir/verify.zig` trusts
+        // instruction types); the runtime keeps the container backstop
+        // for it.
+        const arguments = try self.arena().alloc(Register, 2);
         arguments[0] = value;
-        if (owned) {
-            arguments[1] = try self.code.emit(.{ .const_int = local }, .int);
-        }
+        arguments[1] = try self.code.emit(.{ .const_int = local }, .int);
         return .{
             .register = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
@@ -3852,7 +3945,8 @@ pub const FunctionBuilder = struct {
             }
         }
 
-        const resolved = (try self.resolveDeclared(call.callee, call.span)) orelse return null;
+        const resolved = (try self.resolveDeclared(call.callee, call.span, call.origin)) orelse
+            return null;
         if (self.analyzer.struct_names.get(resolved)) |layout_index| {
             return self.lowerConstruct(call.arguments, call.span, layout_index);
         }
