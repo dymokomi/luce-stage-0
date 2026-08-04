@@ -4715,3 +4715,41 @@ pub const FunctionBuilder = struct {
         return .failed;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "every free builtin's name is reserved" {
+    // Read from the two tables rather than from a copy of either, so
+    // adding a builtin and forgetting to reserve its name fails here
+    // instead of shipping a name a program can quietly take over.
+    //
+    // It shipped that way seven times.  The `term_*` services were
+    // added to `builtins` and not to `reserved_names`, so
+    // `func term_rows():` compiled and stood in front of the builtin
+    // for the rest of the program — a name collision the language
+    // refuses everywhere else, missed because nothing was checking.
+    for (builtins) |builtin| {
+        if (!isReserved(builtin.name)) {
+            std.debug.print(
+                "builtin '{s}' is dispatched but not in reserved_names\n",
+                .{builtin.name},
+            );
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "no name is reserved twice" {
+    // A duplicate is harmless to `isReserved` and a lie to every
+    // reader of the list, including the site page that mirrors it.
+    for (context.reserved_names, 0..) |name, index| {
+        for (context.reserved_names[index + 1 ..]) |later| {
+            if (std.mem.eql(u8, name, later)) {
+                std.debug.print("'{s}' is reserved twice\n", .{name});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}

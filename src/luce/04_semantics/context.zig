@@ -62,6 +62,15 @@ pub const missing_field_message = "{s} is missing field {s}";
 // ---------------------------------------------------------------------------
 
 /// Names the language reserves; nothing user-declared may take them.
+///
+/// **Every free builtin belongs here**, and a test in `builder.zig`
+/// reads that table against this list so the next one added cannot be
+/// left out.  It was left out seven times: the `term_*` services
+/// arrived without their names, so a program could declare
+/// `func term_rows():` over the builtin and get whichever the
+/// resolver reached first.  The names of the *methods* are deliberately
+/// not here — `sort` and `has` are resolved by receiver type, so a
+/// function called `sort` collides with nothing.
 pub const reserved_names = [_][]const u8{
     "range",       "Int",        "Float",       "Bool",        "String",
     "List",        "Map",        "Array",       "Builder",     "None",
@@ -73,7 +82,8 @@ pub const reserved_names = [_][]const u8{
     "file_read",   "file_write", "file_exists", "arg",         "arg_count",
     "key_read",    "key_text",   "error",       "read_line",   "print_error",
     "clock_ms",    "sleep_ms",   "env",         "file_append", "file_delete",
-    "file_rename", "dir_list",
+    "file_rename", "dir_list",   "term_rows",   "term_cols",   "term_clear",
+    "term_move",   "term_style", "term_write",  "term_flush",
 };
 
 pub fn isReserved(name: []const u8) bool {

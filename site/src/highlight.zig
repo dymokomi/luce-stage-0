@@ -320,18 +320,20 @@ test "every name the language spells has a class here" {
         "file_read",   "file_write", "file_exists", "arg",         "arg_count",
         "key_read",    "key_text",   "error",       "read_line",   "print_error",
         "clock_ms",    "sleep_ms",   "env",         "file_append", "file_delete",
-        "file_rename", "dir_list",
+        "file_rename", "dir_list",   "term_rows",   "term_cols",   "term_clear",
+        "term_move",   "term_style", "term_write",  "term_flush",
     };
-    // The host services and the receiver methods `reserved_names` does
-    // not carry: a program *may* declare these, but where it does not,
-    // they are the language and must read as it.  Sources are
-    // `lowerIntrinsic` and the four method tables in
-    // `04_semantics/builder.zig`, plus `find_byte` beside them.
+    // The receiver methods `reserved_names` does not carry: a program
+    // *may* declare these, because they are resolved by receiver type
+    // and so collide with nothing — but where a program does not, they
+    // are the language and must read as it.  Sources are the four
+    // method tables in `04_semantics/builder.zig`, plus `find_byte`
+    // beside them.  The `term_*` services moved out of this list and
+    // into the one above when the language reserved them.
     const also = [_][]const u8{
-        "term_rows",  "term_cols",  "term_clear",   "term_move", "term_style",
-        "term_write", "term_flush", "find_byte",    "clear",     "sort",
-        "reverse",    "find",       "contains",     "fill",      "get",
-        "keys",       "values",     "append_ascii",
+        "find_byte",    "clear", "sort", "reverse", "find",
+        "contains",     "fill",  "get",  "keys",    "values",
+        "append_ascii",
     };
 
     for (&[_][]const []const u8{ &reserved, &also }) |list| {

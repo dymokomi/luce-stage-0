@@ -87,8 +87,14 @@ remove      has         dim         free        print
 file_read   file_write  file_exists arg         arg_count
 key_read    key_text    error       read_line   print_error
 clock_ms    sleep_ms    env         file_append file_delete
-file_rename dir_list
+file_rename dir_list    term_rows   term_cols   term_clear
+term_move   term_style  term_write  term_flush
 ```
+
+The **methods** are not on that list. `sort`, `has`, `get` and the rest
+are resolved by the type of the receiver they are called on, so a
+function of the same name collides with nothing and a program may
+declare one.
 
 ## Number literals
 

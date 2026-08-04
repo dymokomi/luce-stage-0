@@ -713,6 +713,36 @@ test "luce.sema.reserved: a struct cannot take a type keyword's name" {
     try expectRejected("struct Int:\n    x: Int\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
+test "luce.sema.reserved: a function cannot take a terminal service's name" {
+    // The seven `term_*` builtins were dispatched and not reserved, so
+    // this program compiled and the declaration stood in front of the
+    // builtin.  One per shape: no arguments, some arguments, and the
+    // one whose name a program is most likely to reach for.
+    try expectRejected(
+        "func term_rows() -> Int:\n    return 1\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+    );
+    try expectRejected(
+        "func term_write(text: String):\n    return\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+    );
+    try expectRejected(
+        "func term_clear():\n    return\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+    );
+}
+
+test "luce.sema.reserved: a local cannot take a terminal service's name" {
+    try expectRejected("func main():\n    let term_cols = 1\n", "luce.sema.reserved");
+}
+
+test "luce.sema.reserved: a struct cannot take a terminal service's name" {
+    try expectRejected(
+        "struct term_style:\n    x: Int\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // luce.sema.type — the biggest fan-out, distinct paths
 // ---------------------------------------------------------------------------
