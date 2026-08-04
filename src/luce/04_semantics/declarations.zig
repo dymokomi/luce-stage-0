@@ -421,6 +421,28 @@ pub const Analyzer = struct {
 
     /// How many values a type flattens to: one, unless it is a struct
     /// that nests others.
+    ///
+    /// **An optional answers one whatever its payload is, and that is
+    /// deliberate.**  The two arms look inconsistent — `Big` flattens
+    /// and `Big?` does not, for the same data — and the difference is
+    /// the point: this counts what a value of the type
+    /// *unconditionally* costs, and an optional's payload is not
+    /// unconditional.  `zeroOf` is the proof, because it is what the
+    /// count predicts: it recurses through a struct field emitting an
+    /// instruction per leaf, and stops dead at an optional one, whose
+    /// zero is a single `none`.  Measured, with a struct of two struct
+    /// fields per level: twelve levels is 12,341 MIR instructions and
+    /// sixty levels of the optional spelling is 201.
+    ///
+    /// Flattening optionals too is not available even in principle:
+    /// the shape walk closes a layout only after the layouts it
+    /// contains, and `struct Node: next: Node?` has no such order.  It
+    /// would have to be reported as a cycle — destroying the fix the
+    /// cycle diagnostic itself prescribes, and with it the only way to
+    /// write a recursive structure.  Flattening *neither* was the other
+    /// candidate and is worse than wrong: with `.strukt` answering one,
+    /// the bound never fires, and ninety lines of source took 2.76 GB
+    /// and 1.6 s to check.
     fn valueCount(self: *const Analyzer, of: Type) u32 {
         return switch (of) {
             .strukt => |layout_index| self.struct_shapes.items[layout_index].values,
@@ -529,17 +551,12 @@ pub const Analyzer = struct {
         try self.settleStructGraph(cyclic);
         try self.reportStructCycles(cyclic);
 
-        for (self.structs.items, 0..) |layout, index| {
+        for (0..self.structs.items.len) |index| {
             if (cyclic[index]) continue;
             const info = self.struct_decls.items[index];
             self.diagnostics.scope = self.modules[info.module].file;
             if (self.struct_shapes.items[index].values > helpers.max_struct_values) {
-                try self.fail(
-                    "luce.sema.struct",
-                    info.declaration.span,
-                    "struct {s} expands to more than {d} values once its nested structs are counted; bulk data belongs in a List, Map, or Array, which is one reference",
-                    .{ layout.name, helpers.max_struct_values },
-                );
+                try self.reportStructTooWide(@intCast(index));
             }
         }
         self.diagnostics.scope = source_mod.root_file;
@@ -548,6 +565,66 @@ pub const Analyzer = struct {
     /// One step of a containment chain: a layout, and the field of it
     /// that holds the next layout along.
     const ChainStep = struct { layout: u32, field: u32 };
+
+    /// The struct is past `max_struct_values`, said in terms of what
+    /// the bound actually bounds.
+    ///
+    /// It bounds what a value of this type *unconditionally* costs to
+    /// bring into existence — `zeroOf` emits one instruction per
+    /// counted value, and a folded constant is re-emitted at every use
+    /// site — which is why `valueCount` flattens a struct field and
+    /// stops at an optional one.  That is not a quirk of the counter:
+    /// a plain field's payload is part of what the struct *is*, and an
+    /// optional field's payload is a separate value that starts absent
+    /// and arrives only when a program builds one.  So this check and
+    /// the cycle check above are the same rule at two scales — a
+    /// struct's unconditional expansion must be finite, and small —
+    /// and `?` is what turns "must hold" into "may hold" in both.
+    /// The old wording said "expands to N values", which reads as a
+    /// claim about the data and left the reader no way to discover
+    /// that `?` is an answer here exactly as it is for a cycle.
+    ///
+    /// The caret goes on the widest struct field, for the same reason
+    /// the cycle's goes on the field that opens the loop: that is the
+    /// line that gets edited.  A struct that is too wide from its own
+    /// scalar fields has no such field to name, and gets the shorter
+    /// sentence rather than a misleading one.
+    fn reportStructTooWide(self: *Analyzer, index: u32) Error!void {
+        const layout = self.structs.items[index];
+
+        // The widest struct field, which is the one worth naming.  A
+        // tie goes to the first, so the message is deterministic.
+        var widest: ?struct { name: []const u8, of: Type, values: u32 } = null;
+        for (layout.fields) |field| {
+            if (field.field_type != .strukt) continue;
+            const values = self.valueCount(field.field_type);
+            if (widest) |found| {
+                if (values <= found.values) continue;
+            }
+            widest = .{ .name = field.name, .of = field.field_type, .values = values };
+        }
+
+        const found = widest orelse return self.fail(
+            "luce.sema.struct",
+            self.struct_decls.items[index].declaration.span,
+            "struct {s} always holds more than {d} values; bulk data belongs in a List, Map, or Array, which is one reference",
+            .{ layout.name, helpers.max_struct_values },
+        );
+        try self.fail(
+            "luce.sema.struct",
+            self.fieldSpan(index, found.name),
+            "struct {s} always holds more than {d} values once its nested structs are counted; {s} is {s}, which is {d} of them on its own; write {s}: {s}? to hold those only when they are there, or move bulk data into a List, Map, or Array, which is one reference",
+            .{
+                layout.name,
+                helpers.max_struct_values,
+                found.name,
+                try self.typeName(found.of),
+                found.values,
+                found.name,
+                try self.typeName(found.of),
+            },
+        );
+    }
 
     /// One diagnostic per cycle, naming the chain that closes it.
     ///

@@ -104,6 +104,32 @@ struct Node:
     next: Node?
 ```
 
+That is one case of a rule the compiler applies at two scales: **a
+struct's *unconditional* size must be finite, and small.**  A plain
+field's payload is part of what the struct is, so it is counted, and
+counted through — a struct of two struct fields doubles per level.
+Past 4096 values the declaration is refused, exactly as a struct that
+contains itself is refused for being infinite.  An optional field
+counts as one whatever it holds, because its payload starts absent and
+arrives only when a program builds one.  So `?` is the answer to both
+refusals, and the diagnostics say so:
+
+```luce
+struct Big:                       # 4096 values
+    ...
+
+struct Pair:
+    a: Big
+    b: Big                        # refused: always holds 8192
+
+struct Pair:
+    a: Big?
+    b: Big?                       # fine: holds two `none` until told otherwise
+```
+
+The other answer is a container — a `List`, `Map` or `Array` is one
+reference however much it holds.
+
 **Narrowing is the feature.**  After a test, the name *is* its
 payload: no unwrapping operator, no second spelling.
 

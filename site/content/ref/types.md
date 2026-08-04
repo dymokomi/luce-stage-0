@@ -93,6 +93,16 @@ Narrowing applies to locals and parameters, never to a field — which
 could change between the test and the use — so the field is bound to a
 name first.
 
+The cycle rule is one scale of a single rule: **a struct's
+unconditional size must be finite, and small.** A plain field's
+payload is part of what the struct is, so it is counted through — a
+struct of two struct fields doubles per level — and past 4096 values
+the declaration is refused, just as an infinite one is. An optional
+field counts as one whatever it holds, because its payload starts
+absent and arrives only when a program builds one. So `?` answers both
+refusals, and so does a container: a `List`, `Map` or `Array` is one
+reference however much it holds.
+
 ## List(T)
 
 A growable sequence. Created with a literal or `new List(T)`. An empty

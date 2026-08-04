@@ -187,6 +187,54 @@ fn expectSayingAtOptions(
     }
 }
 
+/// `expectOnlySayingAt`, plus the column the underline **stops** at —
+/// one past the last character the reader sees marked.
+///
+/// The helpers above assert where a span starts, which pins every
+/// caret that can move sideways.  It does not pin a caret that can only
+/// grow: a diagnostic narrowed onto a binary expression's *left*
+/// operand starts exactly where the whole expression starts, so
+/// widening it back to the whole expression is a change no assertion
+/// about the start can see.  `n and true` would go on passing with the
+/// underline back under all three tokens, which is the regression the
+/// narrowing was the fix for.  Where the *width* of the underline is
+/// the claim, this is the assertion.
+///
+/// `end_column` is 1-based and half-open, matching `Rendered`: for a
+/// single-character operand at column 8 it is 9.  The span must start
+/// and end on the same line, which every diagnostic that narrows onto
+/// an operand does.
+fn expectOnlySayingAcross(
+    source: []const u8,
+    code: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+    end_column: usize,
+) !void {
+    var result = try compile_mod.compile(testing.allocator, source, script);
+    defer result.deinit();
+    switch (result) {
+        .success => {
+            std.debug.print("expected {s}, but this compiled:\n{s}", .{ code, source });
+            return error.TestUnexpectedResult;
+        },
+        .failure => |diagnostics| {
+            const first = diagnostics.at(0) orelse return error.TestUnexpectedResult;
+            errdefer printAll(&diagnostics);
+            try testing.expectEqualStrings(code, first.code);
+            try testing.expectEqualStrings(saying, first.message);
+            const at = source_mod.place(source, first.span.start);
+            try testing.expectEqual(line, at.line);
+            try testing.expectEqual(column, at.column);
+            const stop = source_mod.place(source, first.span.end);
+            try testing.expectEqual(line, stop.line);
+            try testing.expectEqual(end_column, stop.column);
+            try testing.expectEqual(@as(usize, 1), diagnostics.count());
+        },
+    }
+}
+
 /// `expectSayingAt`, plus: this is the *only* diagnostic the program
 /// produced.
 ///
@@ -814,25 +862,42 @@ test "luce.sema.type: an annotation names only the conversion that exists" {
 
 // `and`/`or` used to underline both operands and name neither, in a
 // compiler where `condition must be Bool, not Int` already did both.
+//
+// The left-operand case pins its *end* as well as its start, because
+// those are the same column here: `n and true` and `n` both begin at
+// column 8, so only the width tells the narrowed span from the whole
+// expression it was narrowed out of.
 
 test "luce.sema.type: a bad left operand of and is named, and underlined alone" {
-    try expectOnlySayingAt(
+    try expectOnlySayingAcross(
         \\func main():
         \\    let n = 1
         \\    if n and true:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of and must be Bool, not Int", 3, 8);
+    , "luce.sema.type", "the left operand of and must be Bool, not Int", 3, 8, 9);
+}
+
+test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
+    // `total + 1` as the left operand: the underline stops at the end
+    // of the operand, not at the end of the condition.
+    try expectOnlySayingAcross(
+        \\func main():
+        \\    let total = 1
+        \\    if total + 1 or false:
+        \\        return
+        \\
+    , "luce.sema.type", "the left operand of or must be Bool, not Int", 3, 8, 17);
 }
 
 test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
-    try expectOnlySayingAt(
+    try expectOnlySayingAcross(
         \\func main():
         \\    let n = 1
         \\    if true or n:
         \\        return
         \\
-    , "luce.sema.type", "the right operand of or must be Bool, not Int", 3, 16);
+    , "luce.sema.type", "the right operand of or must be Bool, not Int", 3, 16, 17);
 }
 
 test "luce.sema.absent: a type name takes no article" {
@@ -2312,6 +2377,130 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: S20\n");
     try expectRejected(text.items, "luce.sema.struct");
+}
+
+/// `struct S0: v: Int`, then `levels` layouts of two fields each, so
+/// `S{levels}` is exactly `2^levels` values.  The header of `S{k}` is
+/// on line `3k` and its first field on line `3k + 1`.
+fn doublingStructs(text: *std.ArrayList(u8), levels: usize) !void {
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    for (1..levels + 1) |level| {
+        var line: [64]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(
+            &line,
+            "struct S{d}:\n    a: S{d}\n    b: S{d}\n",
+            .{ level, level - 1, level - 1 },
+        ));
+    }
+}
+
+test "luce.sema.struct: the value limit is exact in both directions" {
+    // 2^12 is 4096, which is the limit and not past it; 2^13 is the
+    // first refusal.  A bound nobody stands on either side of drifts.
+    {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(testing.allocator);
+        try doublingStructs(&text, 12);
+        try text.appendSlice(testing.allocator, "func main():\n    var g: S12\n    assert(g.a.a.a.a.a.a.a.a.a.a.a.a.v == 0)\n");
+        var result = try compile_mod.compile(testing.allocator, text.items, script);
+        defer result.deinit();
+        if (result == .failure) printAll(&result.failure);
+        try testing.expect(result == .success);
+    }
+    {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(testing.allocator);
+        try doublingStructs(&text, 13);
+        try text.appendSlice(testing.allocator, "func main():\n    var g: S13\n");
+        // The caret is on the widest field, never the `struct`
+        // keyword: that is the line that gets edited, and `?` is one
+        // of the two edits that work.
+        try expectOnlySayingAt(
+            text.items,
+            "luce.sema.struct",
+            "struct S13 always holds more than 4096 values once its nested structs are counted; " ++
+                "a is S12, which is 4096 of them on its own; write a: S12? to hold those only when " ++
+                "they are there, or move bulk data into a List, Map, or Array, which is one reference",
+            40,
+            5,
+        );
+    }
+}
+
+test "luce.sema.struct: a struct too wide from its own fields names no field" {
+    // 4097 Int fields: nothing is nested, so there is no widest
+    // struct field to point at and the shorter sentence is the honest
+    // one.  Naming `f0: Int` as the culprit would be advice that does
+    // not work.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "struct Wide:\n");
+    for (0..4097) |index| {
+        var line: [32]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: Int\n", .{index}));
+    }
+    try text.appendSlice(testing.allocator, "func main():\n    var g: Wide\n");
+    try expectOnlySayingAt(
+        text.items,
+        "luce.sema.struct",
+        "struct Wide always holds more than 4096 values; bulk data belongs in a List, Map, or Array, which is one reference",
+        1,
+        1,
+    );
+}
+
+test "the value limit counts what a struct always holds, so `?` is an answer" {
+    // The pair that reads as an inconsistency and is not one.  Both
+    // Holders describe the same data; only the first *always* holds
+    // it.  An optional field starts absent and its payload arrives
+    // when a program builds one, which is why `valueCount` stops
+    // there — and why the refusal above offers `?` as a fix.
+    //
+    // Flattening optionals too is not available: the shape walk closes
+    // a layout only after the layouts it contains, and `next: Node?`
+    // has no such order, so it would have to be reported as a cycle —
+    // destroying the fix the cycle diagnostic itself prescribes.  The
+    // last block is that fix, still compiling.
+    var plain: std.ArrayList(u8) = .empty;
+    defer plain.deinit(testing.allocator);
+    try doublingStructs(&plain, 13);
+    try plain.appendSlice(testing.allocator, "func main():\n    var g: S13\n");
+    try expectRejected(plain.items, "luce.sema.struct");
+
+    var optional: std.ArrayList(u8) = .empty;
+    defer optional.deinit(testing.allocator);
+    try optional.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    for (1..14) |level| {
+        var line: [64]u8 = undefined;
+        try optional.appendSlice(testing.allocator, try std.fmt.bufPrint(
+            &line,
+            "struct S{d}:\n    a: S{d}?\n    b: S{d}?\n",
+            .{ level, level - 1, level - 1 },
+        ));
+    }
+    try optional.appendSlice(testing.allocator, "func main():\n    var g: S13\n    assert(g.a == none)\n");
+    var result = try compile_mod.compile(testing.allocator, optional.items, script);
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+
+    // The recursive structure the whole rule exists to permit.
+    var recursive = try compile_mod.compile(
+        testing.allocator,
+        \\struct Node:
+        \\    value: Int
+        \\    next: Node?
+        \\
+        \\func main():
+        \\    var n: Node
+        \\    assert(n.next == none)
+        \\
+    ,
+        script,
+    );
+    defer recursive.deinit();
+    if (recursive == .failure) printAll(&recursive.failure);
+    try testing.expect(recursive == .success);
 }
 
 test "a wide struct graph with no cycle compiles, and quickly" {
