@@ -52,14 +52,14 @@ const type_names = [_][]const u8{
 /// is a verb above.
 const builtins = [_][]const u8{
     "abs",         "min",         "max",         "clamp",       "sqrt",
-    "floor",       "ceil",        "len",         "slice",       "range",
-    "assert",      "trap",        "error",       "str",         "parse_int",
-    "parse_float", "chr",         "ord",         "print",       "print_error",
-    "read_line",   "env",         "clock_ms",    "sleep_ms",    "file_read",
-    "file_write",  "file_append", "file_exists", "file_delete", "file_rename",
-    "dir_list",    "arg",         "arg_count",   "term_rows",   "term_cols",
-    "term_clear",  "term_move",   "term_style",  "term_write",  "term_flush",
-    "key_read",    "key_text",
+    "floor",       "ceil",        "len",         "range",       "assert",
+    "trap",        "error",       "str",         "parse_int",   "parse_float",
+    "chr",         "ord",         "print",       "print_error", "read_line",
+    "env",         "clock_ms",    "sleep_ms",    "file_read",   "file_write",
+    "file_append", "file_exists", "file_delete", "file_rename", "dir_list",
+    "arg",         "arg_count",   "term_rows",   "term_cols",   "term_clear",
+    "term_move",   "term_style",  "term_write",  "term_flush",  "key_read",
+    "key_text",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,
@@ -310,18 +310,18 @@ test "every name the language spells has a class here" {
     // the language keeps for itself, which no program may redeclare
     // and every one of which may therefore appear in a sample.
     const reserved = [_][]const u8{
-        "range",       "Int",        "Float",       "Bool",        "String",
-        "List",        "Map",        "Array",       "Builder",     "None",
-        "abs",         "min",        "max",         "clamp",       "sqrt",
-        "floor",       "ceil",       "len",         "slice",       "byte_at",
-        "assert",      "trap",       "str",         "parse_int",   "parse_float",
-        "chr",         "ord",        "append",      "pop",         "insert",
-        "remove",      "has",        "dim",         "free",        "print",
-        "file_read",   "file_write", "file_exists", "arg",         "arg_count",
-        "key_read",    "key_text",   "error",       "read_line",   "print_error",
-        "clock_ms",    "sleep_ms",   "env",         "file_append", "file_delete",
-        "file_rename", "dir_list",   "term_rows",   "term_cols",   "term_clear",
-        "term_move",   "term_style", "term_write",  "term_flush",
+        "range",      "Int",         "Float",       "Bool",        "String",
+        "List",       "Map",         "Array",       "Builder",     "None",
+        "abs",        "min",         "max",         "clamp",       "sqrt",
+        "floor",      "ceil",        "len",         "byte_at",     "assert",
+        "trap",       "str",         "parse_int",   "parse_float", "chr",
+        "ord",        "append",      "pop",         "insert",      "remove",
+        "has",        "dim",         "free",        "print",       "file_read",
+        "file_write", "file_exists", "arg",         "arg_count",   "key_read",
+        "key_text",   "error",       "read_line",   "print_error", "clock_ms",
+        "sleep_ms",   "env",         "file_append", "file_delete", "file_rename",
+        "dir_list",   "term_rows",   "term_cols",   "term_clear",  "term_move",
+        "term_style", "term_write",  "term_flush",
     };
     // The receiver methods `reserved_names` does not carry: a program
     // *may* declare these, because they are resolved by receiver type

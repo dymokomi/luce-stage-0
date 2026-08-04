@@ -147,12 +147,11 @@ const reserved_syntax = [_][]const u8{"range"};
 /// Reserved and unspellable: a name the language keeps out of a
 /// program's reach with nothing behind it.
 ///
-/// `slice` is the only one.  The free builtin it named is gone —
-/// `xs[a:b]` is the syntax now — and the reservation outlived it.  The
-/// grammar leaves it alone on purpose: colouring a name that cannot be
-/// called would be a lie about the language, and this list is where
-/// the day it becomes real, or stops being reserved, gets noticed.
-const unspellable = [_][]const u8{"slice"};
+/// Reserved words that name nothing callable.  Empty since `slice`
+/// stopped being reserved (owner, 2026-08-04: the syntax `xs[a:b]` is
+/// the feature, so the word needs no claiming) — and it stays here so
+/// the next fossil has a place to be noticed instead of coloured.
+const unspellable = [_][]const u8{};
 
 // ---------------------------------------------------------------------------
 // Reading the language's tables
