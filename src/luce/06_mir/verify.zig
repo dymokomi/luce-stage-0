@@ -281,6 +281,15 @@ fn verifyInstruction(
             } else {
                 const concat = binary.op == .add and binary.operand_type == .string;
                 if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
+                // `/` is real division and always answers a Float
+                // (docs/NUMERICS.md §2), so `Binary { .divide, .int }`
+                // is not a shape stage 4 can emit — the quotient that
+                // answers an Int is `floor_divide`.  Rejecting it here
+                // is what lets the runtime and the lowering stop
+                // carrying an integer `/` at all.
+                if (binary.op == .divide and binary.operand_type == .int) {
+                    return error.TypeMismatch;
+                }
                 try expectType(result, binary.operand_type);
             }
         },

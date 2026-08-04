@@ -1942,6 +1942,20 @@ pub const FunctionBuilder = struct {
             });
             return null;
         }
+        // `/` answers a Float whatever it divides (docs/NUMERICS.md
+        // §2), so `n /= 2` on an Int place is a narrowing nobody
+        // wrote.  It is a compile error rather than a silent
+        // truncation, which is this design's whole safety story in
+        // one line — and the fix is one character.
+        if (op == .divide and place_type == .int) {
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "/ answers a Float and this place is Int; write '//=' for the integer quotient",
+                .{},
+            );
+            return null;
+        }
         const string_concat = op == .add and place_type == .string;
         if (!place_type.isNumeric() and !string_concat) {
             try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String){s}", .{
@@ -3508,6 +3522,15 @@ pub const FunctionBuilder = struct {
                 return self.lowerExactCompare(operation, left, right);
             }
             _ = try self.unifyNumeric(&left, &right);
+        }
+
+        // `/` is **real division** and always answers a Float, so two
+        // Ints widen here too and there is no integer `/` left in the
+        // IR (docs/NUMERICS.md §2).  `1 / 2` is `0.5`; the quotient
+        // that answers `0` is `1 // 2`.
+        if (operation == .divide and left.value_type == .int and right.value_type == .int) {
+            left = try self.promote(left);
+            right = try self.promote(right);
         }
 
         if (!left.value_type.eql(right.value_type)) {

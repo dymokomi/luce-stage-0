@@ -60,6 +60,70 @@ test "integers: the four operations and precedence" {
     );
 }
 
+// `/` is **real division** and always answers a Float
+// (docs/NUMERICS.md §2, §4): the classic `1/2 == 0` is the single
+// most common cause of surprise for people who do not already think
+// in machine words, and the quotient that answers `0` is `1 // 2`.
+
+test "integers: / is real division and answers a Float" {
+    try agreeOk(
+        \\func main():
+        \\    assert(1 / 2 == 0.5)
+        \\    assert(7 / 2 == 3.5)
+        \\    assert(-7 / 2 == -3.5)
+        \\    assert(6 / 3 == 2.0)
+        \\    assert(6 / 3 == 2)
+        \\    let total = 10
+        \\    let count = 4
+        \\    assert(total / count == 2.5)
+        \\
+    );
+}
+
+test "integers: / never traps, and 1 / 0 is inf" {
+    // The operators that produce an Int keep integer semantics,
+    // including the trap; the one that produces a Float is IEEE like
+    // every other Float operation (docs/NUMERICS.md §4).
+    try agreeOk(
+        \\func main():
+        \\    var zero = 0
+        \\    var one = 1
+        \\    let infinity = one / zero
+        \\    assert(infinity > 9.0e300)
+        \\    let negative = (0 - one) / zero
+        \\    assert(negative < -9.0e300)
+        \\    let nan = zero / zero
+        \\    assert(nan != nan)
+        \\    # And `minInt / -1`, which the Int quotient could not hold.
+        \\    var low = -9223372036854775808
+        \\    var minus_one = -1
+        \\    assert(low / minus_one > 9.0e18)
+        \\
+    );
+}
+
+test "integers: // and % keep the trap / gave up" {
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0
+        \\    let bad = 1 // zero
+        \\
+    , .divide_by_zero);
+    try agreeTrap(
+        \\func main():
+        \\    var zero = 0
+        \\    let bad = 1 % zero
+        \\
+    , .divide_by_zero);
+    try agreeTrap(
+        \\func main():
+        \\    var low = -9223372036854775808
+        \\    var minus_one = -1
+        \\    let bad = low // minus_one
+        \\
+    , .integer_overflow);
+}
+
 // `//` and `%` are the integer pair and they **floor** together
 // (docs/NUMERICS.md §3).  This is the memo's table verbatim, on both
 // engines, plus the identity the pairing is chosen to keep.
@@ -417,14 +481,15 @@ test "compound assignment on names: every operator, Int and Float" {
         \\    assert(n == 12)
         \\    n *= 2
         \\    assert(n == 24)
-        \\    n /= 5
+        \\    n //= 5
         \\    assert(n == 4)
         \\    n %= 3
         \\    assert(n == 1)
         \\    var f = 2.0
         \\    f += 0.5
         \\    f *= 4.0
-        \\    assert(f == 10.0)
+        \\    f /= 2.5
+        \\    assert(f == 4.0)
         \\
     );
 }
@@ -2835,7 +2900,7 @@ test "checked string intrinsics trap on bounds and UTF-8 splits" {
 test "checked arithmetic and conversions trap" {
     const cases = [_]struct { line: []const u8, code: mir.TrapCode }{
         .{ .line = "assert(9223372036854775807 + 1 == 0)", .code = .integer_overflow },
-        .{ .line = "assert(1 / (2 - 2) == 0)", .code = .divide_by_zero },
+        .{ .line = "assert(1 // (2 - 2) == 0)", .code = .divide_by_zero },
         .{ .line = "assert(Int(1.0e300) == 0)", .code = .conversion_range },
         .{ .line = "assert(1 == 0)", .code = .assertion_failed },
     };

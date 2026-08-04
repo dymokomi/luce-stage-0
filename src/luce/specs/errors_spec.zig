@@ -889,6 +889,23 @@ test "luce.sema.type: an annotation says so when nothing converts" {
 // it is refused at the first place an `Int` is required, by a message
 // that was already in the tree (docs/NUMERICS.md §9).
 
+test "luce.sema.type: n /= 2 on an Int place names the one-character fix" {
+    // The migration's sharpest edge (docs/NUMERICS.md §9): `/` answers
+    // a Float, so this is a narrowing nobody wrote.  That it is an
+    // error rather than a silent truncation is the whole safety story.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var n = 10
+        \\    n /= 2
+        \\
+    ,
+        "luce.sema.type",
+        "/ answers a Float and this place is Int; write '//=' for the integer quotient",
+        3,
+        5,
+    );
+}
+
 test "luce.sema.type: a Float where an Int is required is still refused" {
     try expectRejectedAt(
         \\func take(n: Int) -> Int:

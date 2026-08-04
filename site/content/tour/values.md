@@ -96,8 +96,38 @@ loom: trap: integer overflow [integer_overflow]
     at main (main.luc:4:5)
 ```
 
-Integer division truncates toward zero, and `%` follows the sign of
-the dividend. `Float` arithmetic is IEEE and does not trap.
+## `/` divides, `//` quotients
+
+`/` is real division and always answers a `Float` — `1 / 2` is `0.5`,
+not `0`. The quotient people mean when they say "integer division" is
+`//`, and `%` is the modulus that pairs with it: they **floor**
+together, so `%` takes the sign of the divisor and
+`b * (a // b) + (a % b) == a` holds for every pair.
+
+```luce run
+func main():
+    print(str(1 / 2))
+    print(str(7 // 2) + " " + str(7 % 2))
+    print(str(-7 // 3) + " " + str(-7 % 3))
+    print(str(-1 % 256))
+```
+
+```output
+0.5
+3 1
+-3 2
+255
+```
+
+That last line is why `%` floors: a positive divisor never yields a
+negative answer, so `x % 256` wraps a byte for every `x` and
+`(row - 1) % height` walks a torus, without the `+ height` other
+languages need.
+
+`//` and `%` by zero are traps, because they answer an `Int` and
+there is no `Int` that means "undefined". `/` answers a `Float` and is
+IEEE like every other `Float` operation: `1 / 0` is `inf` and `0 / 0`
+is NaN, neither of them a trap.
 
 ## let and var
 

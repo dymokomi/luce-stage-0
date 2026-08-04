@@ -43,13 +43,11 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
                     if (result[1] != 0) return runtime.fail(.integer_overflow);
                     return Value.ofInt(result[0]);
                 },
-                .divide => {
-                    if (right_int == 0) return runtime.fail(.divide_by_zero);
-                    if (left_int == std.math.minInt(i64) and right_int == -1) {
-                        return runtime.fail(.integer_overflow);
-                    }
-                    return Value.ofInt(@divTrunc(left_int, right_int));
-                },
+                // `/` never reaches here: it is real division and
+                // always answers a Float (docs/NUMERICS.md §2), which
+                // the IR verifier enforces — `Binary { .divide, .int }`
+                // is refused before either engine sees it.
+                .divide => unreachable,
                 // `//` and `%` are the integer pair and they **floor**
                 // together (docs/NUMERICS.md §3): `-7 // 3` is `-3`
                 // and `-7 % 3` is `2`, so `%` takes the sign of the

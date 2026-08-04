@@ -123,10 +123,12 @@ loom: error: 500 is too large [user_error]
 ## The worked example
 
 `programs/calc.luc` in the repository is a recursive-descent
-calculator. Every way it can be defeated is a way the *user* defeated
-it, so the parser says `-> Step!` and raises with `error(...)`; `try`
-carries the failure up through four frames of recursion without a
-single `if` written for it.
+calculator — a `Float` one, because `/` is real division and a pocket
+calculator that answers `3` to `7 / 2` is broken. Every way it can be
+defeated is a way the *user* defeated it, so the parser says
+`-> Step!` and raises with `error(...)`; `try` carries the failure up
+through four frames of recursion without a single `if` written for
+it.
 
 ```luce run include=programs/calc.luc args="2 + 3 * (10 - 4)"
 ```
@@ -143,5 +145,5 @@ position it gave up:
 
 ```output
 loom: error: expected a number at position 4 [user_error]
-    raised in Scan.number (calc.luc:36:13)
+    raised in Scan.number (calc.luc:44:13)
 ```

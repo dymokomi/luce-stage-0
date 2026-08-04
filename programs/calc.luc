@@ -1,9 +1,17 @@
 # A recursive-descent expression calculator: structs as parser state,
-# recursion, checked integer arithmetic — and the worked example for
-# errors (docs/FAILURE.md).
+# recursion, real arithmetic — and the worked example for errors
+# (docs/FAILURE.md).
 #
 #   loom run calc.lc "2 + 3 * (10 - 4)"     one expression, then exit
 #   loom run calc.lc                        a REPL: type, blank line to quit
+#
+# **It computes in Float**, which is what a calculator is: `7 / 2` is
+# `3.5` here and was `3` while `/` meant the integer quotient
+# (docs/NUMERICS.md).  A pocket calculator that answers 3 to that is
+# broken, and this one no longer has to choose — `//` is still
+# available for the quotient, and `%` still pairs with it.  The parser
+# reads whole numbers and lets promotion make them Floats, so nothing
+# in the scanner had to learn about decimal points to get this.
 #
 # Every way this parser can be defeated is a way the *user* defeated
 # it, not a way the program is wrong: a correct calculator given
@@ -18,7 +26,7 @@
 # program with "trap:" in front of a message about the user's typing.
 
 struct Step:
-    value: Int
+    value: Float
     at: Int
 
 struct Scan:
@@ -53,6 +61,13 @@ struct Parse:
         return left
 
     # term = factor (("*" | "/" | "%") factor)*
+    #
+    # `/` is real division and `%` is the modulus that pairs with `//`,
+    # so both work on Floats and both mean here what they mean in the
+    # language (docs/NUMERICS.md).  `%` by zero is a NaN rather than a
+    # trap, because these are Floats — which is the right answer for a
+    # calculator: a user who divides by zero has asked a question, not
+    # broken the program.
     func term(text: String, at: Int) -> Step!:
         var left = try Parse.factor(text, at)
         var here = Scan.skip_spaces(text, left.at)
@@ -62,7 +77,7 @@ struct Parse:
             if operator == 42:
                 left = Step(value = left.value * right.value, at = right.at)
             elif operator == 47:
-                left = Step(value = left.value // right.value, at = right.at)
+                left = Step(value = left.value / right.value, at = right.at)
             else:
                 left = Step(value = left.value % right.value, at = right.at)
             here = Scan.skip_spaces(text, left.at)
@@ -73,7 +88,7 @@ struct Parse:
         let here = Scan.skip_spaces(text, at)
         if here < len(text) and text.byte_at(here) == 45:
             let inner = try Parse.factor(text, here + 1)
-            return Step(value = 0 - inner.value, at = inner.at)
+            return Step(value = 0.0 - inner.value, at = inner.at)
         if here < len(text) and text.byte_at(here) == 40:
             let inner = try Parse.expression(text, here + 1)
             let close = Scan.skip_spaces(text, inner.at)

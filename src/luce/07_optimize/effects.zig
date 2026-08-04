@@ -79,14 +79,19 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
         .binary => |binary| if (binary.op.isComparison())
             .pure
         else if (binary.operand_type == .float)
-            // IEEE arithmetic answers everything, including /0.
+            // IEEE arithmetic answers everything, `/0` included, so
+            // every Float operator is pure — and since `/` is real
+            // division and always answers a Float
+            // (docs/NUMERICS.md §2), `/` is now always in this arm.
+            // The operators that can still trap are `//` and `%`, the
+            // two that produce an Int.
             .pure
         else if (binary.operand_type == .string)
             // String `+` allocates bytes somebody has to free.
             .impure
         else
-            // Integer arithmetic traps on overflow and on /0, and is
-            // deterministic all the same.
+            // Integer arithmetic traps on overflow and on `// 0`, and
+            // is deterministic all the same.
             .stable,
 
         // A fresh struct value has an identity for the same reason a

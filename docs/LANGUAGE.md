@@ -585,9 +585,18 @@ binary or octal literals and no `_` digit separators — writing one
 is a `luce.lex.number` error naming the reason, not a silent
 misreading (docs/MISSING.md tier 3, item 11).
 
-Binary operators are `+ - * / // %` (Int `/` truncates toward zero;
-Float is IEEE), the comparisons `== != < <= > >=` (ordering on Int,
-Float, String), and `and or not` (short-circuit).
+Binary operators are `+ - * / // %`, the comparisons
+`== != < <= > >=` (ordering on Int, Float, String), and `and or not`
+(short-circuit).
+
+**`/` is real division and always answers a Float**, whatever it
+divides (docs/NUMERICS.md §2): `1 / 2` is `0.5`, `total / len(xs)` is
+the average, and there is no integer `/` in the language at all.  It
+follows IEEE without traps — `1 / 0` is `inf` and `0 / 0` is NaN —
+because the operators that trap are the ones that answer an Int, and
+`/` is not one of them.  `n /= 2` on an Int place is therefore a
+compile error naming `//=`, which is the whole of what the change
+costs and the whole of why it is safe.
 
 **`//` and `%` are the integer pair and they floor together**
 (docs/NUMERICS.md §3).  `//` is floor division — the floor of the

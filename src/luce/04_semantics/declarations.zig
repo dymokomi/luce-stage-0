@@ -1253,6 +1253,16 @@ pub const Analyzer = struct {
             }
         }
 
+        // `/` is real division and answers a Float whatever it
+        // divides, so two Int constants widen here too — and `1 / 0`
+        // folds to `inf` rather than refusing (docs/NUMERICS.md §2).
+        if (binary.op == .divide and left.value_type == .int and right.value_type == .int) {
+            const numerator: f64 = @floatFromInt(left.value.int);
+            const denominator: f64 = @floatFromInt(right.value.int);
+            left = .{ .value = .{ .float = numerator }, .value_type = .float };
+            right = .{ .value = .{ .float = denominator }, .value_type = .float };
+        }
+
         if (!left.value_type.eql(right.value_type)) {
             return self.constantError(binary.span, mismatched_operands_message, .{
                 context.operatorText(binary.op),
@@ -1288,13 +1298,10 @@ pub const Analyzer = struct {
                             if (result[1] != 0) return self.constantError(binary.span, "constant arithmetic overflows", .{});
                             break :blk result[0];
                         },
-                        .divide => blk: {
-                            if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
-                            if (a == std.math.minInt(i64) and b == -1) {
-                                return self.constantError(binary.span, "constant arithmetic overflows", .{});
-                            }
-                            break :blk @divTrunc(a, b);
-                        },
+                        // `/` widened both sides before this switch,
+                        // so an integer one cannot arrive here
+                        // (docs/NUMERICS.md §2).
+                        .divide => unreachable,
                         // `//` and `%` floor together
                         // (docs/NUMERICS.md §3); the folder answers
                         // what a run answers.

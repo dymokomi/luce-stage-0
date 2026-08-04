@@ -31,8 +31,10 @@ freed by scope ownership: `List(T)`, `Map(K, V)`, `Array(T, ...)`,
 | `Float` | IEEE 754 binary64. Does not trap. |
 | `String` | Immutable UTF-8. A value. |
 
-`Int` division truncates toward zero; `%` takes the sign of the
-dividend. Division or remainder by zero traps.
+`/` is real division and always answers a `Float`. `//` is floor
+division and `%` the modulus that pairs with it — both answer an `Int`
+for `Int` operands, both floor, so `%` takes the sign of the divisor,
+and both trap on a zero divisor. `/` does not trap: `1 / 0` is `inf`.
 
 Mixing the two promotes: `Int op Float` widens the `Int` and answers a
 `Float`, for `+ - * / %`. Comparison across the line does **not**

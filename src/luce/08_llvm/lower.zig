@@ -3557,10 +3557,10 @@ const Body = struct {
             .add => return self.emitChecked(.@"sadd.with.overflow", left, right),
             .subtract => return self.emitChecked(.@"ssub.with.overflow", left, right),
             .multiply => return self.emitChecked(.@"smul.with.overflow", left, right),
-            .divide => {
-                try self.checkDivisor(left, right);
-                return self.wip.bin(.sdiv, left, right, "int");
-            },
+            // `/` is real division and always answers a Float, so an
+            // integer one is IR the verifier already refused
+            // (docs/NUMERICS.md §2).
+            .divide => return self.fail("integer division, which the language does not have"),
             // `//` and `%` floor together (docs/NUMERICS.md §3).  The
             // chip only offers the truncating pair, so each gets the
             // one correction that turns it into the flooring one, and

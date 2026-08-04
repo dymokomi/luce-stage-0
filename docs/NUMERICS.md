@@ -1009,3 +1009,39 @@ not touched, as §11 predicted.
    *"'//' is floor division and needs a number on its left; a comment
    starts with '#'"*, and `a // b` is division without a word about
    it.  `/* */` keeps its lexer arm unchanged.
+
+### Step 3 — `/` is true division — **landed**
+
+Exactly as §Order predicted, and for the reason it gave: step 2 had
+emptied the operator, so this commit changed the behaviour of no
+program in the tree.  Stage 4 widens two Int operands of `/`, the
+verifier **refuses** `Binary { .divide, .int }` outright — which is
+what let the runtime, the folder and the lowering stop carrying an
+integer `/` at all rather than keeping a dead arm — `effects.zig` now
+reaches `/` through its Float arm and calls it `pure`, and the
+`divide_by_zero` guard lives on `//` and `%`.  `1 / 0` is `inf`,
+`0 / 0` is NaN, and `minInt / -1` is `-9.223372036854776e18`.
+`programs/calc.luc` is a Float calculator: `7/2` is `3.5`, `1/0` is
+`inf`, and its scanner did not have to learn about decimal points to
+get there, because promotion does it.
+
+**Two things the memo did not have right.**
+
+1. **The four site samples needed nothing.**  §11 calls
+   `examples/traps.md:52` and `tour/control.md:40` samples that "need
+   more than a mechanical edit" and asks for real new content.  They
+   did not: step 2 moved both to `//`, and `//` still traps
+   `divide_by_zero` and still answers the Int quotient, so each keeps
+   proving exactly what it proved with the caret in the same column.
+   Landing the operator before flipping `/` is what made the hard
+   cases disappear, which is the strongest evidence for the order the
+   memo chose.
+
+2. **`n /= 2` needed its own diagnostic, not an inherited one.**  §9
+   says the existing message at `builder.zig:1882` catches it — "place
+   is Int, value is Float".  It does not: compound assignment fits its
+   value to the *place* first, so the Int value fits an Int place and
+   the mismatch only appears in the result, which nothing looks at.
+   It is refused where the operator is chosen instead, and the message
+   names the one-character fix: *"/ answers a Float and this place is
+   Int; write '//=' for the integer quotient"*.

@@ -938,11 +938,14 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
 
     const biggest = Value.ofInt(std.math.maxInt(i64));
     try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofInt(1)));
-    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .divide, biggest, Value.ofInt(0)));
+    // The operators that still produce an Int are the ones that still
+    // trap: `/` answers a Float and is IEEE (docs/NUMERICS.md §4).
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofInt(0)));
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofInt(0)));
     try expectTrap(
         .integer_overflow,
         runtime,
-        operators.binary(runtime, .divide, Value.ofInt(std.math.minInt(i64)), Value.ofInt(-1)),
+        operators.binary(runtime, .floor_divide, Value.ofInt(std.math.minInt(i64)), Value.ofInt(-1)),
     );
     try expectTrap(.integer_overflow, runtime, operators.negate(runtime, Value.ofInt(std.math.minInt(i64))));
 
