@@ -291,20 +291,71 @@ numbered-prefix-dropping re-exports are model work.
 
 ## 7. Ranked findings
 
-| # | Finding | Fix | Size |
-| --- | --- | --- | --- |
-| 1 | `interpreter.Host` / `Terminal` — 23 camelCase fields, word order and vocabulary diverging from `abi.Host` | Rename every field to the `abi.Host` spelling: `printFn`→`print`, `readFileFn`→`file_read`, `listDirectoryFn`→`dir_list`, `clockFn`→`clock_ms`, `Terminal.rowsFn`→`term_rows`, … Drop the `Fn` suffix (the type already says it). Only three files touch these: the declaration (`interpreter.zig`), the reads (`interpreter/machine.zig`, 23 sites) and the one construction site (`specs/agree.zig`, `Reference.host()`). Mechanical, compiler-checked. | **~1 h** |
-| 2 | Four largest engine files have 0–3 dashed section headers | `04_semantics/builder.zig` (4,677 lines, 1 header at line 44), `08_llvm/lower.zig` (4,672, last header at 1,294 — 3,378 unmarked lines), `apps/host.zig` (1,835, one header, and it says "Tests"), `04_semantics/declarations.zig` (1,410, none), `03_parse/grammar.zig` (1,341, none), `interpreter/machine.zig` (1,003, none). Add headers at the natural seams. The tree's own spec files average one per 58 lines; aim for one per ~150 in engine code. **Headers, not splits** — the guide is explicit that length is not a split signal. | **~3 h** |
-| 3 | 40 of 66 `luce_rt_*` ABI symbols carry no contract | Either a `///` per symbol or prose under each of the four bare section headers, on the model of "Struct values" which already does it right. The ownership six (`bind` `unbind` `loosen_from_frame` `free` `give` `copy`) need it most: `owned`/`serial`/`local` are undocumented today. | **~2 h** |
-| 4 | `agree.Capture`'s five accessors return borrows into buffers the next run overwrites, undocumented | One shared `///` above the group naming the invalidation. | **~15 min** |
-| 5 | `drop_storage` → `releaseStorage`; one act, two verbs | Rename `Runtime.releaseStorage` → `Runtime.dropStorage`, matching the intrinsic and the export. (Or move the intrinsic to `release_storage` — but the intrinsic name is in `format_version`, so renaming the Zig method is the cheap direction.) `releaseSlots`/`releaseFrameStorage` are a different act and keep their word. | **~30 min** |
-| 6 | `builder.Value` (a typed register) shadows `runtime.Value` conceptually | Rename to `Typed`. Private to one file. | **~10 min** |
-| 7 | `declarations.FunctionInfo` collides with the ABI's `trace.FunctionInfo` | Rename to `FunctionDeclInfo` beside its existing `StructDeclInfo`, and give it a `///`. | **~20 min** |
-| 8 | `listOfText` / `namesList` are the same product under mirrored names | Rename `namesList` → `listOfJoinedText`. | **~10 min** |
-| 9 | `08_llvm/emit.zig`'s entry point is `compile`, a fourth stage's word, in a file whose name is a third sense of `emit` | Rename `emit.compile` → `emit.object` (it returns a relocatable object). | **~15 min** |
-| 10 | Six file-private spellings of "expect a rejection" | Standardise on `expectRejected` where the file has no reason to differ. Cosmetic; no ambiguity exists today. | **~30 min** |
-| 11 | The `lower` / `emit` rule is real but nowhere written | One sentence in `docs/CODING_GUIDE.md`'s Naming section: *`lower` walks a structure into the next representation; `emit` appends code for one thing.* | **~5 min** |
-| 12 | 20 of 52 borrow-returning public functions state a lifetime | Add one clause to the rest. Static-string returners need only "a static string"; `value.asStruct` needs the real answer (it hands out a mutable alias). | **~1 h** |
+| # | Finding | Fix | Size | What happened |
+| --- | --- | --- | --- | --- |
+| 1 | `interpreter.Host` / `Terminal` — 23 camelCase fields, word order and vocabulary diverging from `abi.Host` | Rename every field to the `abi.Host` spelling: `printFn`→`print`, `readFileFn`→`file_read`, `listDirectoryFn`→`dir_list`, `clockFn`→`clock_ms`, `Terminal.rowsFn`→`term_rows`, … Drop the `Fn` suffix (the type already says it). Only three files touch these: the declaration (`interpreter.zig`), the reads (`interpreter/machine.zig`, 23 sites) and the one construction site (`specs/agree.zig`, `Reference.host()`). Mechanical, compiler-checked. | **~1 h** | **Fixed**, `d0e2508` |
+| 2 | Four largest engine files have 0–3 dashed section headers | `04_semantics/builder.zig` (4,677 lines, 1 header at line 44), `08_llvm/lower.zig` (4,672, last header at 1,294 — 3,378 unmarked lines), `apps/host.zig` (1,835, one header, and it says "Tests"), `04_semantics/declarations.zig` (1,410, none), `03_parse/grammar.zig` (1,341, none), `interpreter/machine.zig` (1,003, none). Add headers at the natural seams. The tree's own spec files average one per 58 lines; aim for one per ~150 in engine code. **Headers, not splits** — the guide is explicit that length is not a split signal. | **~3 h** | **Fixed**, `87b37cf` |
+| 3 | 40 of 66 `luce_rt_*` ABI symbols carry no contract | Either a `///` per symbol or prose under each of the four bare section headers, on the model of "Struct values" which already does it right. The ownership six (`bind` `unbind` `loosen_from_frame` `free` `give` `copy`) need it most: `owned`/`serial`/`local` are undocumented today. | **~2 h** | **Fixed**, `3b16407` |
+| 4 | `agree.Capture`'s five accessors return borrows into buffers the next run overwrites, undocumented | One shared `///` above the group naming the invalidation. | **~15 min** | **Fixed**, `3b16407` |
+| 5 | `drop_storage` → `releaseStorage`; one act, two verbs | Rename `Runtime.releaseStorage` → `Runtime.dropStorage`, matching the intrinsic and the export. (Or move the intrinsic to `release_storage` — but the intrinsic name is in `format_version`, so renaming the Zig method is the cheap direction.) `releaseSlots`/`releaseFrameStorage` are a different act and keep their word. | **~30 min** | **Fixed**, `685d8f9` |
+| 6 | `builder.Value` (a typed register) shadows `runtime.Value` conceptually | Rename to `Typed`. Private to one file. | **~10 min** | **Fixed**, `685d8f9` — `Typed` |
+| 7 | `declarations.FunctionInfo` collides with the ABI's `trace.FunctionInfo` | Rename to `FunctionDeclInfo` beside its existing `StructDeclInfo`, and give it a `///`. | **~20 min** | **Fixed**, `685d8f9` |
+| 8 | `listOfText` / `namesList` are the same product under mirrored names | Rename `namesList` → `listOfJoinedText`. | **~10 min** | **Fixed**, `685d8f9` |
+| 9 | `08_llvm/emit.zig`'s entry point is `compile`, a fourth stage's word, in a file whose name is a third sense of `emit` | Rename `emit.compile` → `emit.object` (it returns a relocatable object). | **~15 min** | Open |
+| 10 | Six file-private spellings of "expect a rejection" | Standardise on `expectRejected` where the file has no reason to differ. Cosmetic; no ambiguity exists today. | **~30 min** | **Fixed**, `685d8f9` — `expectRejected` |
+| 11 | The `lower` / `emit` rule is real but nowhere written | One sentence in `docs/CODING_GUIDE.md`'s Naming section: *`lower` walks a structure into the next representation; `emit` appends code for one thing.* | **~5 min** | Open |
+| 12 | 20 of 52 borrow-returning public functions state a lifetime | Add one clause to the rest. Static-string returners need only "a static string"; `value.asStruct` needs the real answer (it hands out a mutable alias). | **~1 h** | **Fixed**, `3b16407` |
 
 Findings 1–3 are the ones that change how the tree reads.  The rest are
 half a day together.
+
+## What happened next
+
+Worked at `f333e12` (merge of `org-naming`), ten commits, `zig build
+test` 944/944 throughout, `bench/compare.sh f333e12` every row within
+±2%.  Eleven of the twelve are done; the notes are where the code had
+something to say back.
+
+* **1, the host tables.**  One rule, stated at the top of
+  `interpreter.Host`: every slot is named for the Luce builtin it
+  stands behind, spelled exactly as `LuceHost` spells it, no `Fn`
+  suffix.  `Terminal` keeps the `term_` prefix — `abi.Host` is one flat
+  table, and the two lining up row for row is the point, so
+  `terminal.term_write` and `abi.Host.term_write` are the same row.
+  `01_source`'s `Loader.loadFn`, the 24th violation, is `load`; the
+  tree has no camelCase field left.
+* **3, the ABI contracts.**  Written as section prose, on the model of
+  "Struct values", because that is the style the file chose and it is a
+  good one for a table of similar things.  The ownership six got the
+  most: `(owned, serial, local)` is named as the one idea it is — the
+  frame, the binding, and whether the caller is claiming to *be* that
+  binding — and each of `bind`, `unbind`, `loosen_from_frame`, `free`,
+  `give` and `copy` gets a line saying what it does to an owner.  The
+  file header gained the two rules a caller most needs: a
+  `*const Value` argument is a borrow unless it says otherwise, and an
+  `out` is written only on success.
+* **5, `drop_storage`.**  `Runtime.releaseStorage` is `dropStorage`, as
+  the audit's cheap direction says; the intrinsic's name is in
+  `format_version` and did not move.
+* **9, `emit.compile`.**  Open — outside the brief this pass was given.
+* **10, the rejection helpers.**  All six are `expectRejected`, no
+  shared helper: the assertions genuinely differ, and only the name
+  needed settling.  **Dissent on the seventh:** `expectDiagnostics` is
+  not one of them.  It asserts an exhaustive list of diagnostics with
+  their positions, which is a different claim from "this was rejected",
+  and it already has one name across the two files that use it.
+* **11, the `lower`/`emit` sentence.**  Open — the guide took the two
+  paragraphs findings 3 and STRUCTURE 6 asked for, and this one was
+  outside the brief.
+* **12, the borrow-returners.**  `value.asStruct` was the one that
+  mattered and it is documented as what it is: a *mutable alias* into
+  the field run, which is why `setField` builds a new run rather than
+  storing in place.  `agree.Capture`'s five share one comment naming
+  the invalidation.  The static-string returners took the one clause
+  that is their whole answer.
+* **One thing the audit called and the code confirmed harder than
+  stated.**  `freeVerb`'s suffix is fine and is used consistently, as
+  the audit says — but nothing in the tree said that one operation is
+  spelled three times on its way down (Luce's `free`, MIR's
+  `free_object`, the runtime's `freeVerb`).  A note above the three
+  verbs says it now; no rename.
