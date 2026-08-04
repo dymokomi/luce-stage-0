@@ -6,12 +6,20 @@
     [
       "(",
       ")"
+    ],
+    [
+      "[",
+      "]"
     ]
   ],
   "autoClosingPairs": [
     {
       "open": "(",
       "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
     },
     {
       "open": "\"",
@@ -28,6 +36,10 @@
       ")"
     ],
     [
+      "[",
+      "]"
+    ],
+    [
       "\"",
       "\""
     ]
@@ -36,8 +48,8 @@
     "offSide": true
   },
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(?:func|struct|if|elif|else|while|for)\\b.*:\\s*(?:#.*)?$",
+    "increaseIndentPattern": ":\\s*(?:#.*)?$",
     "decreaseIndentPattern": "^\\s*(?:elif|else)\\b.*:\\s*(?:#.*)?$"
   },
-  "wordPattern": "(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)|([^\\s()\\\",.:+\\-*/%<>=#]+)"
+  "wordPattern": "(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)|([^\\s()\\[\\]\\\",.:+\\-*/%<>=#]+)"
 }
