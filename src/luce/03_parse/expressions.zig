@@ -138,6 +138,13 @@ fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
             try bangIsNotAnOperator(self);
             return null;
         }
+        // Before the token is read as an operator of ours: `i++` and
+        // `a === b` both start with one that is, and answering them
+        // as the operator plus a broken operand names the wrong half.
+        if (foreignOperator(self)) |found| {
+            try reportForeignOperator(self, found);
+            return null;
+        }
         const precedence = binaryPrecedence(self.peekKind());
         if (@intFromEnum(precedence) < minimum or precedence == .none) return left;
         const operator = self.advance();
@@ -163,6 +170,100 @@ fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
         } };
         left = node;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Operators other languages have
+// ---------------------------------------------------------------------------
+//
+// `x++`, `a === b`, `a <> b` are all written by people arriving from
+// C, JavaScript or Python, and every one of them used to be answered
+// by naming the *second* character: "expected an expression, found
+// '+'".  That is true and useless.  The lexer splits these into two
+// ordinary tokens because Luce has no such operator, so the pair is
+// still sitting there adjacent in the stream and can be read back.
+//
+// The bar for claiming a pair is that it can never be anything else.
+// `a++b` cannot (there is no prefix `+`), so `++` is always a
+// diagnostic.  `a--b` *is* `a - (-b)` and compiles today, and `--a` is
+// a double negation, so `--` is claimed only where nothing follows it
+// — which is exactly the postfix decrement a C hand writes and the one
+// spelling the existing grammar has no reading for.
+
+/// A foreign operator, and what Luce writes instead.
+const Foreign = struct {
+    /// As written, for the message and to size the span.
+    written: []const u8,
+    /// The rest of the sentence, after "there is no 'X' operator".
+    instead: []const u8,
+    /// True when the pair is only foreign with no operand after it:
+    /// `i--` is a decrement, `a--b` is a subtraction of a negation.
+    postfix_only: bool = false,
+};
+
+fn foreignPair(first: Kind, second: Kind) ?Foreign {
+    return switch (first) {
+        .plus => switch (second) {
+            .plus => .{ .written = "++", .instead = "write 'x += 1' to increment" },
+            else => null,
+        },
+        .minus => switch (second) {
+            .minus => .{
+                .written = "--",
+                .instead = "write 'x -= 1' to decrement",
+                .postfix_only = true,
+            },
+            else => null,
+        },
+        .star => switch (second) {
+            .star => .{ .written = "**", .instead = "import std.math and call math.pow(x, y), or math.ipow(x, y) for Int" },
+            else => null,
+        },
+        .equal => switch (second) {
+            .assign => .{ .written = "===", .instead = "'==' compares, and compares by value" },
+            else => null,
+        },
+        .not_equal => switch (second) {
+            .assign => .{ .written = "!==", .instead = "'!=' compares, and compares by value" },
+            else => null,
+        },
+        .less => switch (second) {
+            .greater => .{ .written = "<>", .instead = "write '!=' to compare for difference" },
+            .less => .{ .written = "<<", .instead = "Luce has no bitwise operators; multiply by a power of two" },
+            else => null,
+        },
+        .greater => switch (second) {
+            .greater => .{ .written = ">>", .instead = "Luce has no bitwise operators; divide by a power of two" },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// The foreign operator starting at the current token, if there is
+/// one.  The two tokens must **touch** — `a < > b` is two operators
+/// the reader spaced out, not one they meant — and a `postfix_only`
+/// pair must have nothing that could be an operand after it.
+fn foreignOperator(self: *Parser) ?Foreign {
+    const first = self.peek();
+    const found = foreignPair(first.kind, self.peekAhead(1)) orelse return null;
+    if (self.tokenAhead(1).span.start != first.span.end) return null;
+    if (found.postfix_only and startsExpression(self.peekAhead(2))) return null;
+    return found;
+}
+
+/// Report the foreign operator at the current token and consume both
+/// halves, so the statement ends here rather than reporting the second
+/// character again as a stray one.  One habit, one diagnostic.
+fn reportForeignOperator(self: *Parser, found: Foreign) Error!void {
+    const first = self.advance();
+    const second = self.advance();
+    try self.report(
+        "luce.parse.expression",
+        .{ .start = first.span.start, .end = second.span.end },
+        "there is no '{s}' operator: {s}",
+        .{ found.written, found.instead },
+    );
 }
 
 /// The one thing `!` is for, said in the one place a reader can meet
@@ -216,6 +317,13 @@ fn chainedComparison(
 fn unaryExpression(self: *Parser) Error!?*ast.Expression {
     if (!try self.enter("expression")) return null;
     defer self.leave();
+
+    // `++i` in front of an operand.  Not `--i`, which is the double
+    // negation this grammar already reads and answers correctly.
+    if (foreignOperator(self)) |found| {
+        try reportForeignOperator(self, found);
+        return null;
+    }
 
     if (self.accept(.keyword_give)) |keyword| {
         const operand = (try unaryExpression(self)) orelse return null;

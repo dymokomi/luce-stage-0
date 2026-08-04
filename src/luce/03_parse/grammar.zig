@@ -128,6 +128,14 @@ pub const Parser = struct {
         return self.tokens[at].kind;
     }
 
+    /// The whole token `ahead` of the cursor, for the checks that need
+    /// its span — whether two operator characters touch, and so were
+    /// one operator the reader meant, decides how they are read back.
+    pub fn tokenAhead(self: *const Parser, ahead: usize) Token {
+        const at = @min(self.index + ahead, self.tokens.len - 1);
+        return self.tokens[at];
+    }
+
     pub fn advance(self: *Parser) Token {
         const item = self.tokens[self.index];
         if (self.index + 1 < self.tokens.len) self.index += 1;

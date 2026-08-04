@@ -1041,6 +1041,21 @@ const Lexer = struct {
             self.offset += 1;
         }
         const span: Span = .{ .start = begin, .end = self.offset };
+        // `&&` and `||` are one operator to the person who typed them,
+        // and the one they mean has a Luce spelling.  Answering them as
+        // a repeated stray character is true and unhelpful — the same
+        // mistake the parser's foreign-operator pairs make, on the two
+        // characters that never became tokens at all.
+        if (self.offset - begin == 2) {
+            if (doubledOperator(first)) |written| {
+                return self.report(
+                    "luce.lex.character",
+                    span,
+                    "there is no '{c}{c}' operator: write '{s}'",
+                    .{ first, first, written },
+                );
+            }
+        }
         var count_text: [40]u8 = undefined;
         const repeated: []const u8 = if (self.offset - begin == 1) "" else std.fmt.bufPrint(
             &count_text,
@@ -1239,6 +1254,18 @@ fn numberProblem(text: []const u8) []const u8 {
 
 /// A short "here is the Luce way" note for the punctuation people
 /// reach for out of habit.  Null when there is nothing useful to add.
+/// The Luce keyword a doubled stray character was reaching for.  Only
+/// the two logical operators: `&&` and `||` are written by everyone
+/// arriving from C, and a doubled `^` or `~` is not an operator
+/// anywhere and stays a repeated stray.
+fn doubledOperator(character: u8) ?[]const u8 {
+    return switch (character) {
+        '&' => "and",
+        '|' => "or",
+        else => null,
+    };
+}
+
 fn hintFor(character: u8) ?[]const u8 {
     return switch (character) {
         '!' => "use 'not'; '!=' is inequality",

@@ -1315,6 +1315,165 @@ test "luce.parse.expression: '!' is not an operator, in either position" {
     try expectRejected("func main():\n    let a = 3 ! 4\n", "luce.parse.expression");
 }
 
+// ---------------------------------------------------------------------------
+// Operators other languages have
+// ---------------------------------------------------------------------------
+//
+// Every one of these used to be answered by naming the second
+// character — "expected an expression, found '+'" for `x++`.  The
+// caret spans the whole operator as written, and the sentence names
+// what Luce writes instead.
+
+test "luce.parse.expression: '++' is answered with '+=', in either position" {
+    try expectOnlySayingAcross(
+        "func main():\n    var i = 0\n    i++\n",
+        "luce.parse.expression",
+        "there is no '++' operator: write 'x += 1' to increment",
+        3,
+        6,
+        8,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    var i = 0\n    ++i\n",
+        "luce.parse.expression",
+        "there is no '++' operator: write 'x += 1' to increment",
+        3,
+        5,
+        7,
+    );
+}
+
+test "luce.parse.expression: '--' is claimed only where it cannot be a negation" {
+    // Postfix, with nothing after it, is the decrement.
+    try expectOnlySayingAcross(
+        "func main():\n    var i = 0\n    i--\n",
+        "luce.parse.expression",
+        "there is no '--' operator: write 'x -= 1' to decrement",
+        3,
+        6,
+        8,
+    );
+    // `a--b` is `a - (-b)` and has always compiled.  Reading it as a
+    // decrement would break working code, so an operand after the pair
+    // is what tells the two apart.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 5\n    let b = 3\n    assert(a--b == 8)\n",
+        script,
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+    // And prefix `--a` is a double negation, for the same reason.
+    var twice = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 5\n    assert(--a == 5)\n",
+        script,
+    );
+    defer twice.deinit();
+    if (twice == .failure) printAll(&twice.failure);
+    try testing.expect(twice == .success);
+}
+
+test "luce.parse.expression: the comparison operators of other languages" {
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    if a === 1:\n        return\n",
+        "luce.parse.expression",
+        "there is no '===' operator: '==' compares, and compares by value",
+        3,
+        10,
+        13,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    if a !== 1:\n        return\n",
+        "luce.parse.expression",
+        "there is no '!==' operator: '!=' compares, and compares by value",
+        3,
+        10,
+        13,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    if a <> 2:\n        return\n",
+        "luce.parse.expression",
+        "there is no '<>' operator: write '!=' to compare for difference",
+        3,
+        10,
+        12,
+    );
+}
+
+test "luce.parse.expression: '**' names the std function that does it" {
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 2 ** 3\n    print(str(a))\n",
+        "luce.parse.expression",
+        "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for Int",
+        2,
+        15,
+        17,
+    );
+}
+
+test "luce.parse.expression: the shifts say there are no bitwise operators" {
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    let b = a << 2\n",
+        "luce.parse.expression",
+        "there is no '<<' operator: Luce has no bitwise operators; multiply by a power of two",
+        3,
+        15,
+        17,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 8\n    let b = a >> 2\n",
+        "luce.parse.expression",
+        "there is no '>>' operator: Luce has no bitwise operators; divide by a power of two",
+        3,
+        15,
+        17,
+    );
+}
+
+test "the operator pair must touch to be read as one operator" {
+    // `a < > b` is two operators spaced out, not a `<>` — the reader
+    // who writes `<>` writes it closed up.  Answering the spaced form
+    // as a foreign operator would be inventing an intent.
+    try expectSaying(
+        "func main():\n    let a = 1\n    if a < > 2:\n        return\n",
+        "luce.parse.expression",
+        "expected an expression, found '>'",
+    );
+}
+
+test "luce.lex.character: '&&' and '||' name the Luce keyword" {
+    // These never become tokens at all, so the lexer is where they
+    // are answered — but the answer is the same shape as the parser's.
+    try expectSayingAt(
+        "func main():\n    let a = true\n    if a && a:\n        return\n",
+        "luce.lex.character",
+        "there is no '&&' operator: write 'and'",
+        3,
+        10,
+    );
+    try expectSayingAt(
+        "func main():\n    let a = true\n    if a || a:\n        return\n",
+        "luce.lex.character",
+        "there is no '||' operator: write 'or'",
+        3,
+        10,
+    );
+    // A single one keeps the general answer, and a longer run is
+    // still a run of noise rather than an operator.
+    try expectSaying(
+        "func main():\n    let a = 1 & 2\n",
+        "luce.lex.character",
+        "unexpected character '&' (there are no bitwise operators)",
+    );
+    try expectSaying(
+        "func main():\n    let a = 1 &&& 2\n",
+        "luce.lex.character",
+        "unexpected character '&' (there are no bitwise operators), repeated 3 times",
+    );
+}
+
 test "luce.lex.character: an unexpected symbol is rejected" {
     try expectRejected("func main():\n    let a = 1 $ 2\n", "luce.lex.character");
 }
