@@ -65,6 +65,12 @@ pub fn parse(
     source: []const u8,
     diagnostics: *Diagnostics,
 ) Error!ast.Program {
+    // Which diagnostics are stage 2's, for this file: everything it
+    // adds between here and the line below.  Read out of the shared
+    // list rather than carried on `Lexed`, because the list is where
+    // they already are and a second copy is a second thing to keep
+    // true.
+    const before_lex = diagnostics.count();
     const lexed = try lex_mod.lex(temporary, source, diagnostics);
     defer temporary.free(lexed.tokens);
 
@@ -74,6 +80,8 @@ pub fn parse(
         .tokens = lexed.tokens,
         .diagnostics = diagnostics,
         .silenced = lexed.truncated,
+        .lexed_first = before_lex,
+        .lexed_last = diagnostics.count(),
     };
     return parser.program();
 }
@@ -110,6 +118,19 @@ pub const Parser = struct {
     /// — starting with the innermost block looking empty — would be
     /// the compiler talking to itself.  So it says nothing.
     silenced: bool = false,
+    /// The half-open range of `diagnostics` that stage 2 wrote for
+    /// this file.  `statementIsLexerDamage` reads their spans.
+    lexed_first: usize = 0,
+    lexed_last: usize = 0,
+    /// Where the statement being parsed started, in bytes.  A stray
+    /// character is dropped by stage 2, so what reaches this stage is
+    /// a statement with a hole in it, and the complaint about the hole
+    /// is the *same mistake* reported twice (`if a && a:` was "there
+    /// is no '&&' operator" and then "expected ':', found 'a'").  The
+    /// rule is the one `silenced` already applies to a truncated file,
+    /// narrowed to one construct: if stage 2 spoke inside the source
+    /// this statement has consumed, this stage has nothing to add.
+    statement_start: usize = 0,
 
     pub const max_depth: u32 = 512;
 
@@ -191,6 +212,7 @@ pub const Parser = struct {
         arguments: anytype,
     ) Error!void {
         if (self.silenced) return;
+        if (self.statementIsLexerDamage(span)) return;
         if (self.reported > max_diagnostics) return;
         if (self.reported == max_diagnostics) {
             self.reported += 1;
@@ -204,6 +226,27 @@ pub const Parser = struct {
         }
         self.reported += 1;
         try self.diagnostics.add(code, span, format, arguments);
+    }
+
+    /// True when stage 2 already reported inside the statement being
+    /// parsed, up to and including what this report is about.
+    ///
+    /// Stage 2 drops the character it complains about, so the token
+    /// stream reaching this stage has a hole where it was, and every
+    /// complaint about the hole is the first mistake said again in
+    /// worse words.  A lexical report *before* this statement began is
+    /// a different mistake and does not silence anything, so a file
+    /// with one bad line still reports the next one.
+    ///
+    /// Linear in stage 2's diagnostics, which is a handful in any file
+    /// that gets this far and capped at a hundred in one that does not.
+    fn statementIsLexerDamage(self: *const Parser, span: Span) bool {
+        for (self.lexed_first..self.lexed_last) |index| {
+            const lexical = self.diagnostics.at(index) orelse continue;
+            if (lexical.span.start < self.statement_start) continue;
+            if (lexical.span.start <= span.end) return true;
+        }
+        return false;
     }
 
     /// Report "expected `what`, found X" at the offending token — the
@@ -835,6 +878,14 @@ pub const Parser = struct {
     pub fn statement(self: *Parser) Error!?ast.Statement {
         if (!try self.enter("block")) return null;
         defer self.leave();
+
+        // The construct a lexical mistake is measured against.  Nested
+        // statements set and restore it, so an inner one that is
+        // undamaged still reports even when the `if` around it was
+        // where stage 2 spoke.
+        const enclosing = self.statement_start;
+        defer self.statement_start = enclosing;
+        self.statement_start = self.peek().span.start;
 
         switch (self.peekKind()) {
             .keyword_let => return self.binding(false),

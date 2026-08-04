@@ -412,7 +412,67 @@ test "luce.parse.top: only func/struct/let/import at file scope" {
 }
 
 test "luce.parse.expression: a missing expression is reported" {
-    try expectRejected("func main():\n    let a = @\n", "luce.parse.expression");
+    try expectRejected("func main():\n    let a = 1 +\n", "luce.parse.expression");
+}
+
+test "a character stage 2 refused is not refused twice" {
+    // `let a = @` is one mistake.  Stage 2 names the character it
+    // could not use and drops it; stage 3 then had a binding with no
+    // value and said "expected an expression", which is the same
+    // mistake in worse words — it cannot name `@`, because `@` never
+    // became a token.  One mistake, one report, and the report is the
+    // one that names the character.
+    try expectOnlySayingAt(
+        "func main():\n    let a = @\n",
+        "luce.lex.character",
+        "unexpected character '@'",
+        2,
+        13,
+    );
+    // The suppression is per construct, not per file: a later
+    // statement with a mistake of its own still reports.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 1 $ 2\n    let b = 1 +\n",
+        script,
+    );
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    try testing.expectEqual(@as(usize, 2), result.failure.count());
+    try testing.expectEqualStrings("luce.lex.character", result.failure.at(0).?.code);
+    try testing.expectEqualStrings("luce.parse.expression", result.failure.at(1).?.code);
+}
+
+test "a matched pair of typographic quotes is one mistake" {
+    // `let a = \u{201C}hello\u{201D}` is a string somebody typed in a
+    // word processor.  It used to be two stray-character reports
+    // naming neither the pair nor the string it delimits.
+    try expectOnlySayingAt(
+        "func main():\n    let a = \u{201C}hello\u{201D}\n    print(a)\n",
+        "luce.lex.character",
+        "typographic quotes (U+201C and U+201D) around a string; text is written \"like this\"",
+        2,
+        13,
+    );
+    // Unmatched, there is no pair to name and the single character
+    // keeps its own answer.
+    try expectSayingAt(
+        "func main():\n    let a = \u{201C}hello\n",
+        "luce.lex.character",
+        "unexpected character '\u{201C}' (U+201C): a typographic quote; text is written \"like this\"",
+        2,
+        13,
+    );
+    // And the search does not cross a line: an opening quote with its
+    // partner three lines down is two unrelated mistakes, not one
+    // literal swallowing the file.
+    try expectSayingAt(
+        "func main():\n    let a = \u{201C}x\n    let b = 1\n    let c = \u{201D}y\n",
+        "luce.lex.character",
+        "unexpected character '\u{201C}' (U+201C): a typographic quote; text is written \"like this\"",
+        2,
+        13,
+    );
 }
 
 test "luce.parse.expected: a malformed binding name is reported at the name" {

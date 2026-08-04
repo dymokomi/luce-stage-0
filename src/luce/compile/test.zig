@@ -269,7 +269,9 @@ test "the previously-unasserted diagnostic codes fire" {
         // never gets this far: stage 1 refuses the file.)
         .{ .source = "func main():\n    let a = 1\x01\n", .code = "luce.lex.character" },
         .{ .source = "func main():\n    let a = \"\\q\"\n", .code = "luce.lex.escape" },
-        .{ .source = "func main():\n    let a = @\n", .code = "luce.parse.expression" },
+        // A missing operand, not a stray character: `let a = @` is
+        // stage 2's mistake, and stage 3 no longer says it again.
+        .{ .source = "func main():\n    let a = 1 +\n", .code = "luce.parse.expression" },
         .{ .source = "func main():\n    let a: List = []\n", .code = "luce.sema.type" },
         .{ .source = "func main():\n    let a = new Array(Int)\n", .code = "luce.sema.new" },
         .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
