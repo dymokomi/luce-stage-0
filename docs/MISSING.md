@@ -14,9 +14,12 @@ every `file:line` here was re-derived rather than carried forward.
 
 The **language surface is done.**  Ten conceptual stages, seven
 folders, eight executable specs, stages 1 and 2 marked *Locked*, and a
-front end whose diagnostics name the fix rather than the parser's
-predicament.  `T?` closed the absence half of the last semantic hole
-and `T!` closed the failure half; nothing designed is now unbuilt.
+front end whose diagnostics mostly name the fix rather than the
+parser's predicament — mostly, because the ownership, optional and
+failure families set a standard that fifteen other places do not yet
+meet (Tier 5b).  `T?` closed the absence half of the last semantic
+hole and `T!` closed the failure half; nothing designed is now
+unbuilt.
 
 The **runtime is not done**, but the wall is down.  Tier 0 held two
 items, both properties of what existed rather than missing features,
@@ -404,6 +407,113 @@ the proof the language moved.
   `fold_case` and `is_space_byte` — are omitted on purpose because
   they are internals; that they are *reachable* anyway is the
   visibility gap above, not a documentation gap.
+
+---
+
+## Tier 5b — diagnostics still below the standard the good ones set
+
+The scorecard above calls this "a front end whose diagnostics name the
+fix".  That is true of most of them and was written from the ownership,
+optional and failure families, which are genuinely excellent — S-numbers,
+carets on the offending name, a fix in the sentence, and the advice
+keyed to whether the expression was a local (which narrows) or a field
+(which does not).  It is not true everywhere, and a hostile-user sweep
+of ~110 wrong programs across the lexer, parser and analyzer found the
+following still open.  Ranked by how often a real program hits them.
+
+The method and built-in **argument** diagnostics were the worst of it
+and are now fixed: one sentence used to cover both a wrong count and a
+wrong type, phrased as a count, with the caret on the whole call.  What
+is left:
+
+1. **A mutual struct cycle reports twice, and both messages are
+   false.**  `struct A: b: B` with `struct B: a: A` says "struct A
+   contains itself" *and* "struct B contains itself".  Neither
+   contains itself; neither message names the other struct or the
+   field that closes the loop, and the caret is on the `struct`
+   keyword rather than the field.  The direct case (`next: Node`) is
+   correctly single but also never mentions the fix `LANGUAGE.md`
+   spells out in prose — `next: Node?`, because the recursion stops
+   at absence.  `04_semantics/declarations.zig:527`.
+2. **A namespace used without a call denies its own import.**
+   `import std.math` then `math.seed` (no parentheses) answers
+   "unknown name math", about an import on line 1 that the compiler
+   just checked.  In call position the same typo gets the excellent
+   "unknown function math.sed; did you mean math.seed?".  Only the
+   field-access-on-a-namespace path falls through to `failUnknownName`.
+   `04_semantics/builder.zig:3179`.
+3. **Only the first missing struct field is reported.**  A 14-field
+   struct constructed with one field takes thirteen compile rounds to
+   finish.  The loop `return null`s on the first hole instead of
+   collecting them.  `04_semantics/builder.zig:4285`.
+4. **`script entry must be exactly func main():` is not true.**
+   `func main() -> !:` is legal — `programs/dice.luc` writes it — and
+   the comment three lines above the message says so.  The message
+   omits the second form and its caret covers `func main` rather than
+   the offending return type.  `04_semantics/declarations.zig:1202`.
+5. **Over-nested blocks produce 152 diagnostics and 215 KB.**  The
+   indent-depth guard fires once per subsequent line with no
+   once-only flag, and the lexer's error cap does not gate the parser,
+   which then spends its own budget on the cascade.  The sibling tab
+   handler and the parser's `nesting_reported` flag both do this
+   correctly.  `02_lex/lexer.zig:335`.
+6. **`1.2.3` names the wrong thing and prints harmful advice.**  "a
+   float needs a digit before the point; write 0.3" — the user wrote a
+   valid `1.2` and a stray point, and the suggested edit yields
+   `1.20.3`.  `leadingPointNumber` is reached for any `.` before a
+   digit without asking whether a number was just emitted.
+   `02_lex/lexer.zig:709`.  Its mirror: `1.` is diagnosed as a member
+   access ("expected a field or function name after '.'") when `.5`
+   gets the model message.
+7. **`and`/`or` on a non-Bool will not say which side or what it is.**
+   The caret covers both operands and the type is in hand at the
+   report site.  `condition must be Bool, not Int` — same file — does
+   name it.  `04_semantics/builder.zig:3430` and `:3448`, the latter
+   also reporting the *left* span for a bad right operand.
+8. **Duplicate-name diagnostics never point at the first
+   declaration**, in three different spellings ("duplicate name go",
+   "duplicate field x", "n is already declared").  Where the other one
+   is, is the single most useful thing such a message can carry.
+9. **`operands are String and Int (conversions are explicit)`** offers
+   a conversion that does not exist between those two types, never
+   names the operator, and does not spell the conversion when there
+   *is* one.  `let` already writes the better shape — "…(conversions
+   are explicit: `Float(...)`)".  `04_semantics/context.zig:52`.
+10. **Foreign operators get "expected an expression, found '+'".**
+    `x++`, `x === y`, `x <> y` are all answered by naming the second
+    character.  The mechanism to do better exists and is used: `if x =
+    1:` yields "'=' assigns a value; write '==' to compare", and
+    `def`/`class`/`const` are answered with the Luce spelling.
+11. **Grammar: "a Int", "a Int?"** at `builder.zig:1223` (twice in one
+    format string, which is also tautological — "n is Int, and a Int
+    is always there") and `:2504`.  The good variants at `:3338` and
+    `:3380` sidestep the article and are the wording to standardise on.
+12. **No unreachable-code diagnostic** after `return` or `trap(...)`,
+    in a compiler that already tells you a redundant `!= none` test is
+    dead code.
+13. **Long source lines are never windowed.**  `Rendered.writeTo`
+    prints the whole line and pads the caret to its column, so a
+    300-deep paren nest renders a 617-character line with the caret at
+    column 268.  `support/diagnostics.zig:88`.
+14. **A diagnostic at end of file prints no snippet.**  An empty
+    `func` body reports at the EOF token, so `source_line` is empty and
+    the renderer returns early — the message is right and has no
+    visual anchor.  It wants to point at the header on line 1.
+15. **Stray-character and unterminated-string diagnostics cascade.**
+    The lexer's messages are excellent; each is then followed by a
+    parser complaint about a token gap the lexer's own recovery
+    created.  `03_parse.zig:44` states the invariant that is not held.
+    A matched pair of smart quotes is likewise two diagnostics.
+
+**Not a defect, recorded because it looks like one:** `give` through
+an alias (`let a = xs; stash(give a)`) compiles and traps
+`use_after_free` at run time rather than being refused, while
+`free(a)` on the same shape is a compile error.  That asymmetry is
+ratified — `OWNERSHIP.md` S23 makes the alias case "the one dynamic
+ownership check", and the trap fires correctly with file, line and
+column.  The binding's `.alias` class *is* statically known, so a
+static refusal is available if the owner wants to revisit S23; it is a
+language decision, not a bug to fix quietly.
 
 ---
 

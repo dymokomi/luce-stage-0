@@ -114,6 +114,57 @@ String methods other than `byte_at` and `find_byte` route to the
 and needs `import std.strings` in scope, or it is a `luce.sema.import`
 diagnostic naming the missing import.
 
+Because a method is a function, its arguments are judged like a
+function's, and the two ways to get them wrong are two diagnostics.
+Too many or too few is a count, `luce.sema.method`, naming the method
+and both counts:
+
+```luce fail
+func main():
+    var xs = new List(Int)
+    xs.append(1, 2)
+```
+
+```output
+luce: compile failed
+main.luc:3:5: append takes 1 argument, got 2 [luce.sema.method]
+        xs.append(1, 2)
+        ^~~~~~~~~~~~~~~
+```
+
+A wrong type is `luce.sema.type`, naming the position, the type the
+method takes and the type it was handed — underlined at the argument
+rather than at the call:
+
+```luce fail
+func main():
+    var xs = new List(Int)
+    xs.append("hello")
+```
+
+```output
+luce: compile failed
+main.luc:3:15: argument 1 of append is Int, got String [luce.sema.type]
+        xs.append("hello")
+                  ^~~~~~~
+```
+
+A method the receiver does not have names the receiver, and suggests
+a spelling when one is close enough:
+
+```luce fail
+func main():
+    var xs = new List(Int)
+    let found = xs.has(1)
+```
+
+```output
+luce: compile failed
+main.luc:3:17: List has no method has (has append insert remove pop sort reverse find contains clear; join lives in strings) [luce.sema.method]
+        let found = xs.has(1)
+                    ^~~~~~~~~
+```
+
 ## Indexing and slicing
 
 | Form | Meaning |
