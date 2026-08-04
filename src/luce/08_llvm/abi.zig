@@ -58,6 +58,10 @@ const build_options = @import("build_options");
 /// behind it.  `trace.zig` imports nothing but `std`.
 const trace = @import("../runtime/trace.zig");
 
+// ---------------------------------------------------------------------------
+// The version, and what a run answers
+// ---------------------------------------------------------------------------
+
 /// The ABI version a compiled artifact was built against.  Bumped
 /// whenever a field's meaning or signature changes.
 ///
@@ -154,6 +158,10 @@ pub const Answer = enum(i32) {
     yes = 1,
     _,
 };
+
+// ---------------------------------------------------------------------------
+// The services, one typedef each
+// ---------------------------------------------------------------------------
 
 /// Console line output for `print`.  Optional: a null slot means the
 /// service does not exist, and the program traps `host_unavailable`
@@ -417,6 +425,10 @@ pub const DirListFn = *const fn (
 /// code assumes: `context` first, then one pointer-sized slot per
 /// service in declaration order.  `Slot` names those positions once so
 /// the lowering and this struct cannot drift.
+// ---------------------------------------------------------------------------
+// The table itself
+// ---------------------------------------------------------------------------
+
 pub const Host = extern struct {
     /// Opaque host state, passed back to every callback.
     context: ?*anyopaque = null,
@@ -497,6 +509,10 @@ pub const Slot = enum(u32) {
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 test "the slot table matches the struct layout" {
     inline for (@typeInfo(Slot).@"enum".fields) |field| {

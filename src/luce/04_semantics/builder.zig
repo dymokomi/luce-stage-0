@@ -1541,6 +1541,8 @@ pub const FunctionBuilder = struct {
         try self.storeOwned(local, .{ .register = zero, .value_type = declared });
     }
 
+    // Assignment, and the three shapes of place it can name -------------------
+
     fn lowerAssign(self: *FunctionBuilder, assign: ast.Assign) Error!void {
         switch (assign.target) {
             .name => |name| try self.lowerAssignName(name.text, name.span, assign),
@@ -2092,6 +2094,8 @@ pub const FunctionBuilder = struct {
         return condition;
     }
 
+    // Control flow: if, while, for, return ------------------------------------
+
     fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!void {
         const temps_floor = self.temps.items.len;
         const condition = (try self.lowerCondition(conditional.condition)) orelse return;
@@ -2483,7 +2487,12 @@ pub const FunctionBuilder = struct {
         try self.code.ret(null);
     }
 
-    // Expressions ----------------------------------------------------------
+    // Expressions: the dispatch --------------------------------------------
+    //
+    // The depth bound and the two-level switch every expression form
+    // below is reached through.  The forms themselves are three
+    // sections down; what sits between is the fallible-call machinery
+    // a `try` or a `catch` is built out of.
 
     fn lowerExpression(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Typed {
         // Stage 3 bounds recursive *descent*, which a left-leaning
@@ -2828,6 +2837,13 @@ pub const FunctionBuilder = struct {
         try self.code.jump(merge);
         self.code.switchTo(merge);
     }
+
+    // Expressions: one form at a time ---------------------------------------
+    //
+    // The ownership verbs, the constructors, the accessors and the
+    // operators, in the order the dispatch above names them.  Calls and
+    // methods are their own section further down, and the builtins one
+    // after that.
 
     /// give NAME — the named object transfers to whatever receives it;
     /// the name is poisoned to the end of its scope (S10, S13, S29).
@@ -3966,6 +3982,8 @@ pub const FunctionBuilder = struct {
     /// answer to the same method names and differ only in what the
     /// element type makes of the arguments, and the descriptor carries
     /// that.  The receiver's `Type` adds nothing on top of it.
+    // Method tables, by receiver shape ----------------------------------------
+
     fn objectMethod(
         self: *FunctionBuilder,
         method: ast.Method,
@@ -4133,6 +4151,8 @@ pub const FunctionBuilder = struct {
         try self.fail("luce.sema.method", method.span, "no method {s} here (append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
         return null;
     }
+
+    // Construction and conversion ---------------------------------------------
 
     fn lowerConstruct(
         self: *FunctionBuilder,

@@ -23,6 +23,10 @@ const Allocator = std.mem.Allocator;
 const Handle = value.Handle;
 const Value = value.Value;
 
+// ---------------------------------------------------------------------------
+// How a run stops: a trap, or an error a program can catch
+// ---------------------------------------------------------------------------
+
 /// What every fallible runtime operation can do.  `Trap` is a Luce
 /// program error and its details are in `Runtime.pending`;
 /// `OutOfMemory` is the arena giving up, which no Luce program can
@@ -62,6 +66,10 @@ pub const MapEntry = struct { key: Value, value: Value };
 /// two different lifetimes, so it takes two allocators, and mixing them
 /// up is what made freed objects unreclaimable for as long as there was
 /// only one.
+// ---------------------------------------------------------------------------
+// Where a run's memory comes from
+// ---------------------------------------------------------------------------
+
 pub const Memory = struct {
     /// Run-lifetime storage, and nothing a program can grow without
     /// bound: the words of a trap, the interpreter's per-layout struct
@@ -89,6 +97,10 @@ pub const Memory = struct {
 /// statement temporary; `container` — an element some container
 /// adopted and frees with itself; `binding` — a named local of one
 /// specific call frame, released when that scope exits.
+// ---------------------------------------------------------------------------
+// Objects, and who owns one
+// ---------------------------------------------------------------------------
+
 pub const OwnedBy = struct { serial: u64, local: u32 };
 
 pub const Owner = union(enum) {
@@ -346,6 +358,10 @@ pub const Object = struct {
 /// equally, or a lookup walks past its own entry.  They are written
 /// against the same two payloads (Int and String — the only key types
 /// the analyzer admits) for that reason.
+// ---------------------------------------------------------------------------
+// The map behind a Map
+// ---------------------------------------------------------------------------
+
 pub const Map = struct {
     entries: std.ArrayList(MapEntry) = .empty,
     /// Entry positions, `free_slot` where nothing lives.  Always a

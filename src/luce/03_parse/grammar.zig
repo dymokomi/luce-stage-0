@@ -55,6 +55,10 @@ const max_diagnostics = 100;
 /// whole from `lex()` — valid UTF-8, LF endings, no NUL, no leading
 /// byte-order mark (`01_source.prepare`).  Every span this stage
 /// produces indexes it.
+// ---------------------------------------------------------------------------
+// Parsing a file
+// ---------------------------------------------------------------------------
+
 pub fn parse(
     arena: Allocator,
     temporary: Allocator,
@@ -72,6 +76,10 @@ pub fn parse(
     };
     return parser.program();
 }
+
+// ---------------------------------------------------------------------------
+// The parser
+// ---------------------------------------------------------------------------
 
 pub const Parser = struct {
     arena: Allocator,
@@ -1217,6 +1225,10 @@ pub const Parser = struct {
 /// into another expression.  In both places a hit is the reader's
 /// other language speaking, not a variable they meant to use, so the
 /// table can be generous without ever firing on a valid program.
+// ---------------------------------------------------------------------------
+// Naming a token for a person, and guessing at a wrong one
+// ---------------------------------------------------------------------------
+
 fn foreignWord(word: []const u8) ?[]const u8 {
     const import_advice = "imports name one module: 'import name' for a file beside " ++
         "this one, 'import " ++ source_mod.standard_namespace ++ ".name' for the standard library";

@@ -4583,6 +4583,8 @@ const Body = struct {
     /// `new List(T)` / `new Map(K, V)` / `new Array(T, ...)` / `new
     /// Builder`.  The shape is a compile-time fact, so the kind picks
     /// the entry point and only an array's sizes travel at runtime.
+    // -- objects, ownership, and the words a trap carries -----------------
+
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
             .list => try self.callAnswering(register, .luce_rt_new_list, &.{self.runtime}),

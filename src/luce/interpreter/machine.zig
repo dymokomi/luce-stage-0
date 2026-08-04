@@ -29,6 +29,10 @@ const containers = runtime.containers;
 const operators = runtime.operators;
 const text = runtime.text;
 
+// ---------------------------------------------------------------------------
+// Running a program
+// ---------------------------------------------------------------------------
+
 pub fn run(
     memory: runtime.Memory,
     program: *const mir.Program,
@@ -89,6 +93,10 @@ pub fn run(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Frames and their outcome
+// ---------------------------------------------------------------------------
+
 /// Deep recursion reports the innermost frames and drops the rest;
 /// a call_depth_exceeded trace would otherwise be the whole budget.
 /// One number for both engines: compiled code caps its unwind trace at
@@ -129,6 +137,10 @@ pub const Frame = struct {
 
 const Register = mir.Register;
 
+// ---------------------------------------------------------------------------
+// The machine
+// ---------------------------------------------------------------------------
+
 pub const Machine = struct {
     arena: Allocator,
     /// Luce's semantics: the object heap, ownership, containers,
@@ -166,6 +178,8 @@ pub const Machine = struct {
     struct_zeros: []?RuntimeValue = &.{},
 
     pub const EvalError = runtime.Error;
+
+    // -- trapping, and the traceback a trap carries --------------------
 
     fn trap(self: *Machine, code: mir.TrapCode) CallOutcome {
         _ = self;
@@ -231,6 +245,8 @@ pub const Machine = struct {
     /// parameter borrows its caller's bytes and a spill carries a
     /// borrow across a branch, so freeing either would be a double
     /// free (docs/STRINGS.md).
+    // -- the frame stack, and the world a frame is given ----------------
+
     fn releaseSlots(self: *Machine, frame: Frame) void {
         const function = &self.program.functions[frame.function];
         const locals = self.frame_storage.items[frame.slots_at + frame.register_count ..];
@@ -301,6 +317,8 @@ pub const Machine = struct {
         });
         return null;
     }
+
+    // -- the dispatch loop ----------------------------------------------
 
     pub fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
         if (try self.pushFrame(entry, &.{}, 0)) |failed| return failed;
@@ -977,6 +995,10 @@ pub const Machine = struct {
         return self.index_scratch.items;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Values a slot starts life with, and who may end one
+// ---------------------------------------------------------------------------
 
 /// What a slot that owns its storage holds before anything is stored
 /// in it: the type's tag and no storage, so the release it will get

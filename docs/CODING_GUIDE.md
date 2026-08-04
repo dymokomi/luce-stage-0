@@ -77,6 +77,25 @@ not narration of obvious code.  Compiler and interpreter code that
 implements a ratified rule cites its number (`(S23)`) so the reader
 can find the contract.
 
+**Every published symbol answers three questions: what it does, who
+owns what it returns or is given, and how it fails.**  A symbol whose
+answers are all obvious needs one clause — "a static string" is a
+complete answer.  A symbol on a published boundary — a `luce_rt_*`
+export, an `abi.Host` field, anything returning a borrow — needs all
+three, in writing.  A dashed section header may carry the answer for a
+group, and that is a good way to write a table of similar things; but
+then it must actually carry it.  A bare header over undocumented
+exports documents nothing.
+
+**Two header styles, and which to use.**  A full-width box
+(`// ---` above and below a title, at column zero) separates the
+subjects of a file; an indented `// -- name ---` rule separates the
+parts of one long declaration, and is what a struct's methods are
+grouped with.  Use the first between top-level things and the second
+inside them.  A header names what is under it and nothing else: a
+header that has drifted off the code beneath it is worse than no
+header, because a reader trusts it.
+
 ## Organization
 
 ```text

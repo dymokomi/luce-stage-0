@@ -29,6 +29,10 @@ const sanitize = @import("sanitize");
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
 
+// ---------------------------------------------------------------------------
+// Limits this host sets
+// ---------------------------------------------------------------------------
+
 /// How many nested Luce calls loom allows before a program traps
 /// `call_depth_exceeded`.  Depth is policy, not a native-stack
 /// accident, and the policy is the host's: this one number reaches a
@@ -53,6 +57,10 @@ const trace_text_bytes = 4096;
 /// One program run's host services.  Must not move after `host()` or
 /// `table()` is taken (both capture a pointer): use the in-place setup
 /// pattern and call `deinit` (which restores the screen) when done.
+// ---------------------------------------------------------------------------
+// The host
+// ---------------------------------------------------------------------------
+
 pub const Host = struct {
     gpa: Allocator,
     io: std.Io,
@@ -80,6 +88,8 @@ pub const Host = struct {
     /// One directory listing, NUL-joined, which is the shape the ABI's
     /// `dir_list` hands out (`luce_rt_names_list` splits it).
     listed_names: std.ArrayList(u8) = .empty,
+    // -- what a trapped or errored run left behind ------------------------
+
     /// What a compiled artifact reported through the C table.
     trap_code: ?luce.mir.TrapCode = null,
     trap_storage: [512]u8 = undefined,
@@ -167,6 +177,8 @@ pub const Host = struct {
         trace: []const report.Frame,
         dropped: u32,
     };
+
+    // -- setup, teardown, and what the run reported -----------------------
 
     /// The services, as the C table a compiled artifact is handed
     /// (`luce.llvm.abi`).  Every slot is filled: loom withholds
@@ -896,6 +908,10 @@ pub const Host = struct {
         return .yes;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Reading a file, drawing a key, sizing a window
+// ---------------------------------------------------------------------------
 
 const max_file_size = 64 * 1024 * 1024;
 

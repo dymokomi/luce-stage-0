@@ -188,6 +188,8 @@ pub const Analyzer = struct {
 
     // Declarations ---------------------------------------------------------
 
+    // -- names, types, and the heap shapes behind them --------------------
+
     /// A module-qualified declaration name: "geo" + "Point" ->
     /// "geo.Point"; the root module ("") qualifies to the name itself.
     pub fn qualify(self: *Analyzer, prefix: []const u8, name: []const u8) Error![]const u8 {
@@ -426,6 +428,8 @@ pub const Analyzer = struct {
         };
     }
 
+    // -- pass one: struct layouts -----------------------------------------
+
     fn collectStructs(self: *Analyzer) Error!void {
         // Imports first: names must be usable and free of collisions.
         for (self.modules, 0..) |module, module_index| {
@@ -659,6 +663,8 @@ pub const Analyzer = struct {
 
     /// Register every module's top-level `let` constants, then fold
     /// each one so every error reports even when nothing uses it.
+    // -- pass one: file-scope constants, folded ---------------------------
+
     fn collectConstants(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
@@ -1098,6 +1104,8 @@ pub const Analyzer = struct {
             .coalesce, .catch_error => unreachable, // answered above
         }
     }
+
+    // -- pass one: function signatures, and the entry ---------------------
 
     fn collectFunctions(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
