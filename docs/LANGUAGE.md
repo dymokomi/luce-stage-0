@@ -547,7 +547,7 @@ exponent makes a Float (`1.5`, `1e10`, `1.5e-3`).  A `.` only starts
 a fraction when a digit follows it.  There are no hexadecimal,
 binary or octal literals and no `_` digit separators — writing one
 is a `luce.lex.number` error naming the reason, not a silent
-misreading (docs/MISSING.md tier 2, item 13).
+misreading (docs/MISSING.md tier 3, item 11).
 
 Binary operators are `+ - * / %` (Int truncates toward zero, `%`
 follows the dividend's sign; Float is IEEE), the comparisons

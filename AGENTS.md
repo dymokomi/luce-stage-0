@@ -1,31 +1,43 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+**[`CLAUDE.md`](CLAUDE.md) is the single source for how this
+repository works** — its architecture, its conventions, and what a
+change to any part of it costs.  Read it.  This file existed as a
+second, overlapping description of the same tree, and two descriptions
+of one thing drift: they had already disagreed about which directories
+`zig fmt` covers, and this one was still offering a deleted subsystem
+as the model commit subject.  So it is a pointer now, and there is
+nothing here to fall out of step.
 
-LuciaOS v2 is a Zig 0.16 project built around Luce. `src/luce/` owns the language pipeline in numbered stage folders (`01_source`/`02_lex`/`03_parse`/`04_semantics`/`05_hir`/`06_mir`/`07_optimize`/`08_llvm`, driven by `compile.zig` — see docs/PIPELINE.md), plus `runtime/` (`libluce_rt`, the semantics as a linkable library), `interpreter/` (the differential oracle over it, which ships in nothing), `support/` (diagnostics and types), and `std/*.luc`; `src/apps/luce/` is the compiler CLI, and `src/apps/loom/` is the terminal and host boundary. Shared app I/O lives in `src/apps/files.zig`. Bundled applications are in `programs/`, paired C/Luce benchmarks in `bench/`, and references in `docs/` (`docs/v1/` is historical). Editor support is under `tools/`. Do not commit generated `build/`, `zig-out/`, or `.zig-cache/` content.
+What to read, in order:
 
-## Build, Test, and Development Commands
+- [`CLAUDE.md`](CLAUDE.md) — the architecture, the stages, the seams,
+  and the rules that are load-bearing.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — build, test, where a test
+  goes, style, and the commit convention, in short form.
+- [`docs/CODING_GUIDE.md`](docs/CODING_GUIDE.md) — how Zig is written
+  here.  Authoritative and intentionally opinionated.
+- [`docs/README.md`](docs/README.md) — the index of the documents, and
+  which of them are frozen decision records.
 
-LLVM is a build prerequisite: the code generator calls libLLVM in process, discovered through `llvm-config` (override with `zig build -Dllvm-config=PATH`).
+Three things worth having in front of you before the first edit,
+because each one silently costs you something if you miss it:
 
-- `./build.sh` installs ReleaseSafe `build/luce`, `build/loom`, `build/lib/libluce_rt.a`, and compiled `build/programs/*.lc` files.
-- `zig build test` runs all Zig suites and compile-checks bundled programs and benchmarks. It does not refresh `build/` binaries.
-- `zig fmt src/ build.zig` formats repository Zig code; run it before committing.
-- `build/luce check programs/hello.luc` type-checks without output; `build/loom luce programs/hello.luc` compiles and runs source.
-- `./build.sh && bench/run.sh` runs optimized benchmarks. For performance changes, use `bench/compare.sh GIT-REF` for a same-host A/B comparison.
-
-## Coding Style & Naming Conventions
-
-Let `zig fmt` determine Zig layout. Luce uses four-space indentation and forbids tabs. Use `TitleCase` types, `camelCase` functions, and `snake_case` variables and fields. Prefer plain verbs such as `parse`, `read`, or `emit`; avoid redundant or cryptic names. Start files with `//!` purpose documentation and use `///` on public APIs for ownership or assumptions. Keep allocation explicit, give heap-owning types a `deinit`, and return errors instead of panicking for routine failures. Split a file only where a subproblem has a one-to-three-function interface, never because it is long; a file boundary in Zig is a privacy boundary (`docs/CODING_GUIDE.md`).
-
-## Testing Guidelines
-
-Tests are descriptive Zig `test "..."` blocks beside the code; larger contracts use `*_spec.zig`. Use `std.testing` and its allocator for leak detection. Cover success, bounds/failure, and round-trip or rejection paths where relevant; no numeric coverage target exists. Add new language modules to the exports and root test block in `src/luce/luce.zig`, and new spec files to `src/luce/specs.zig`'s, or their tests will not run. The rule that decides where a test goes: **anything that runs a Luce program is a specification and lives in `specs/`, where it runs on both the compiled path and the differential oracle and the two are compared; anything that inspects a structure lives beside the code it proves** (docs/ENGINE.md).
-
-## Commit & Pull Request Guidelines
-
-History uses concise descriptive subjects, often scope-led (`Benchmarks: ...`, `WASM backend M3: ...`), not Conventional Commit prefixes. Explain motivation, verification, and benchmark evidence in nontrivial commit bodies. This is currently a single-developer repository: changes go directly to `main`, without feature branches or pull requests, unless the maintainer requests otherwise.
-
-## Architecture Guardrails
-
-Keep host access behind the published `08_llvm/abi.zig` table (or `interpreter.Host`, its test-side twin) or explicit `std.Io`; `src/luce/` must not access the host directly. Semantics belong in `runtime/` and nowhere else — the interpreter and generated code both call it, so a rule implemented on one side only is a bug. Treat a serialized module as executable input, preserve verifier coverage, and consult the format documentation before changing instructions, intrinsics, or trap codes (a change there bumps `module.format_version`; a change to `abi.Host` bumps the ABI version).
+1. **Where a test goes.** Anything that runs a Luce program is a
+   specification and lives in `src/luce/specs/`, where it runs on both
+   the compiled path and the differential oracle and the two are
+   compared.  Anything that inspects a structure lives beside the code
+   it proves.  A new language package must be added to
+   `src/luce/luce.zig`'s re-exports *and* its test block, and a new
+   spec file to `src/luce/specs.zig`'s, or the tests do not run.
+2. **`zig fmt src/ build.zig site/src/`** before committing.  The
+   documentation site's generator is Zig in this repository too.
+3. **Semantics live in `src/luce/runtime/` and nowhere else.**  The
+   compiled path and the oracle both call it, so a rule implemented on
+   one side only is a bug by construction.  Host access goes through
+   the published table (`src/luce/08_llvm/abi.zig`, or
+   `interpreter.Host` on the oracle's side) or an explicit `std.Io`;
+   `src/luce/` never touches the host directly.  A change to the
+   instruction set, the intrinsics or the trap codes bumps
+   `module.format_version`; a change to the host table bumps
+   `abi.version`.

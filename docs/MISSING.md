@@ -1,14 +1,19 @@
 # What Luce is still missing — the honest inventory
 
 Rewritten 2026-08-02, after the front-end hardening pass, the `std.`
-namespace, the LLVM backend, and `docs/FAILURE.md`.  Verified against
-the tree, not the docs.  Where a doc and the code disagree, the code
-wins and it is said so.
+namespace, the LLVM backend, and `docs/FAILURE.md`.  **Re-verified
+line by line against the tree at `f333e12`**, which is where the line
+references and corpus counts below now point.  Where a doc and the
+code disagree, the code wins and it is said so.
+
+A gap list whose numbers cannot be trusted is still useful and is no
+longer *authoritative*, which is the thing it is for.  Every count and
+every `file:line` here was re-derived rather than carried forward.
 
 ## Scorecard
 
-The **language surface is done.**  Ten conceptual stages, eight
-folders, four executable specs, stages 1 and 2 marked *Locked*, and a
+The **language surface is done.**  Ten conceptual stages, seven
+folders, eight executable specs, stages 1 and 2 marked *Locked*, and a
 front end whose diagnostics name the fix rather than the parser's
 predicament.  `T?` closed the absence half of the last semantic hole
 and `T!` closed the failure half; nothing designed is now unbuilt.
@@ -55,7 +60,7 @@ struct zero templates, host text on its way into owned storage).
   language's own claim made literal — *values copy*.
 
 The flagship program was the worked example and is now the proof.
-`Editing.splice` (`programs/editor.luc:127`) is
+`Editing.splice` (`programs/editor.luc:129`) is
 `value[0:cursor] + extra + value[cursor:len(value)]`, and 20,000
 keystrokes into a 40 KB file peaked at **1204 MB RSS**.  The same
 simulation now peaks at **3.3 MB**, and costs 24 µs a keystroke
@@ -135,7 +140,7 @@ The corpus that argued for it, item by item:
   silently swallowed write failure.  **Fixed, and unwritable**: the
   call answers nothing, so there is no Bool to test and no branch to
   forget, and `main() -> !` reports what the disk said.
-- `editor.luc:414`, `wordcount.luc:46` — `file_exists` then
+- `editor.luc`, `wordcount.luc` — `file_exists` then
   `file_read`.  **Both gone.**  One read each, and what it answers
   decides: `catch:` sets the editor's greeting, `try` ends wordcount
   with the path it could not open.  What that removes is a window
@@ -149,10 +154,12 @@ The corpus that argued for it, item by item:
 
 **Still open, and the honest remainder:**
 
-- `wordcount.luc:23` — `counts.has(word)` then index: three hash
-  lookups on the hit path.  `m.get(k) -> V?` is the answer and is not
-  built.
-- `wordcount.luc:33` — `var best = ""` as "no answer",
+- `wordcount.luc:25` — `counts.has(word)` then index: three hash
+  lookups on the hit path.  **`m.get(key, default) -> V` is built**
+  and answers a plain value; what is missing is the `V?`-returning
+  overload, which is what a counter wants — a default of `0` is
+  indistinguishable from a stored `0`.
+- `wordcount.luc:35` — `var best = ""` as "no answer",
   indistinguishable from an empty key.
 - ~~11 `trap(...)` calls in `std/math.luc`~~ — **settled.**  The five
   reductions answer `Float?`: an empty array has no mean, and that is
@@ -160,10 +167,12 @@ The corpus that argued for it, item by item:
   seven left are domains the caller was handed and could have
   checked, which is the rule's definition of a bug.
 - `strings.find` returns `-1` because `Int?` did not exist.  It does
-  now, so the sentinel is a wart with nothing holding it
-  up any more — `strings.luc:20` returns `-1` for an *argument error*,
-  which is not the same fact as "absent", and `find_from`'s
-  empty-needle case returns success where `count`'s returns failure.
+  now, so the sentinel is a wart with nothing holding it up any more.
+  The overload is `find_from`'s, not `find`'s: `strings.luc:19-20`
+  returns `-1` for a `start` outside the string, which is an *argument
+  error* and not the same fact as "absent", while `find` passes
+  `start = 0` and can never reach that branch.  And `find_from`'s
+  empty-needle case returns success where `count`'s returns zero.
 
 ---
 
@@ -179,12 +188,12 @@ bent around the same hole.
 
 The corpus pays constantly:
 
-- `editor.luc:342-395` — key handling is **17 string comparisons** with
-  no `else`.  A misspelled `"page_dwon"` compiles and silently does
-  nothing.
-- `editor.luc:187` — `# 1 keyword, 2 type name, 3 builtin, 0 plain.`  An
+- `editor.luc:361-405` — key handling is one `elif` chain of **15
+  string comparisons** with no final `else`.  A misspelled
+  `"page_dwon"` compiles and silently does nothing.
+- `editor.luc:189` — `# 1 keyword, 2 type name, 3 builtin, 0 plain.`  An
   enum written as an Int with a comment.
-- `editor.luc:157-185` — `is_keyword`/`is_builtin` as **46 `word == "…"`
+- `editor.luc:159-187` — `is_keyword`/`is_builtin` as **46 `word == "…"`
   comparisons**: a hash set written as a truth table.
 
 **Optionals have shipped, so this is now decidable on evidence.**  A
@@ -205,14 +214,19 @@ the proof the language moved.
    tables.  Cheap if scoped to a frozen container.
 2. **No character classes in std.**  `is_digit`/`is_alpha` re-derived by
    hand three times.  Trivial — five functions.
-3. **No receivers on user structs.**  87 `Struct.func(state, …)` calls;
-   the receiver is the first parameter of 10 of 10 functions in
-   `struct Text`.  Nine of twelve structs in `programs/` have **no
-   fields at all** — namespaces impersonating types.
-4. **No multiple returns.**  `calc.luc` declares a struct solely to
-   return two Ints, constructed at 8 sites and destructured at 15.
-5. **No sort with a comparator.**  `wordcount.luc:58` produces a top-5
-   listing by **destroying the map**.  The one place
+3. **No receivers on user structs.**  88 namespaced `Struct.func(…)`
+   calls across `programs/`, with the receiver written out as the
+   first argument wherever there is one: 10 of `struct Text`'s 11
+   functions take the same `value: String` first, and all 4 of
+   `struct Handle`'s take `state: State`.  Nine of twelve structs in
+   `programs/` have **no fields at all** — namespaces impersonating
+   types.
+4. **No multiple returns.**  `calc.luc:20` declares `struct Step`
+   solely to return two Ints, constructed at 8 sites and taken apart
+   by 25 field reads.
+5. **No sort with a comparator.**  `wordcount.luc:61-70` produces a
+   top-5 listing by **destroying the map** — `heaviest` scans, the
+   caller prints, `counts.remove(word)`, repeat.  The one place
    no-first-class-functions draws blood.
 6. ~~**Host surface gaps**~~ — **mostly closed.**  Nine services
    shipped at ABI 8: `read_line` (with its prompt),
@@ -260,7 +274,8 @@ the proof the language moved.
      `files.append_text`.  That is item 10's visibility question
      wearing a different hat.
 7. **No default or named arguments.**  `term_style(fg, bg, bold)` is
-   called 16 times; 13 end in the same noise word `false`.
+   called 15 times across `programs/`; 14 end in the same noise word
+   `false`.
 8. ~~**`Bytes` is unconstructible.**~~  Cut (docs/ENGINE.md step 1):
    `var b: Bytes` compiled, nothing produced one and nothing consumed
    one, and it was one of the two things keeping stage 10 from being
@@ -274,8 +289,25 @@ the proof the language moved.
     Refused by name rather than misread, which is right — but it caps
     what userland can reach.
 12. **No codepoint iteration.**  `for c in "abc"` is refused; every
-    UTF-8 walk is hand-written, and `editor.luc:51` and `:154` are the
-    same function copied across two namespaces.
+    UTF-8 walk is hand-written, and `editor.luc:53`
+    (`Text.continuation`) and `:156` (`Words.continuation_byte`) are
+    the same function copied across two namespaces.
+13. **`catch` cannot see the reason.**  `EXPR catch FALLBACK` supplies
+    a value and `CALL catch:` opens a handler, and neither can name
+    what was raised — `catch e:` is `luce.parse.expected`.  The words
+    exist and are unreachable, and `calc.luc`'s REPL is the site that
+    wants them: it can say *that* an expression failed and never
+    *why*.  `docs/FAILURE.md` predicted a binding form "later"; the
+    corpus now has a caller for one.  (Also noted under item 6, which
+    is where it was found.)
+14. **`key_read` wakes ten times a second doing nothing.**  Raw mode
+    is set with `VMIN = 0, VTIME = 1` (`src/apps/host.zig`'s
+    `ensureScreen`), so `nextKey`'s loop takes a 100 ms timeout,
+    reads zero bytes, and goes round again.  An editor sitting idle
+    with no keys coming is a process waking 10 times a second for
+    nothing.  It is correct and it is not free; the fix is a real
+    blocking wait, and it wants deciding rather than patching,
+    because the same descriptor has to stay usable by `read_line`.
 
 ---
 
@@ -382,21 +414,37 @@ multi-user — all deferred by design in `docs/V2.md`.
    stderr, directory listing~~ — **done**; see Tier 3
    item 6 for what shipped and what was deliberately left out.
 5. ~~**Cut `Bytes`**~~ — done; stage 10 is total.
-6. **`m.get(k) -> V?`**, rewrite `wordcount.luc`, and sweep the corpus
-   for `ord("x")` and f-strings.
+6. **A `V?`-returning `m.get`**, rewrite `wordcount.luc`, and sweep
+   the corpus for `ord("x")` and f-strings.  (`m.get(key, default)`
+   already exists; what is wanted is the overload that can tell a
+   stored `0` from an absent one.)
 7. ~~**Errors** — steps 5–7 of FAILURE.md.~~ **Done.**
-8. **Decide receivers, multiple returns, and integer-division
-   spelling** — one memo each.
-9. **Sum types**, if the `T?` experience says the hole is still there.
-10. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
+8. **Cross-compilation** — `--target`, and one `libluce_rt` per
+   target.  Named in `docs/CODEGEN.md` and folded into Tier 0's tail
+   without ever reaching this list, which is how the largest
+   outstanding backend item came to have no scheduled position.
+9. **Share one `libluce_rt` between artifacts** instead of copying it
+   into each.  The other one from `docs/CODEGEN.md`, and the reason a
+   `.lc` is mostly runtime by size.
+10. **Decide receivers, multiple returns, and integer-division
+    spelling** — one memo each.
+11. **Sum types**, if the `T?` experience says the hole is still there.
+12. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
     array operations whole.
 
 ---
 
 **The honest summary:** the language is complete as designed.  The
 front end is in genuinely good shape, and the remaining language work
-is one open question (sum types) and a short list of library and host
-builtins.  The runtime's outstanding item is not correctness but
-speed: `strings` is the one benchmark row still well behind its C
-twin, and small-string optimisation is the queued answer
-(docs/STRINGS.md).
+is one open question (sum types) and a short list of library
+functions.  The host surface is closed but for `exit` and paths, and
+both were left out with reasons rather than unreached.  The runtime's
+outstanding item is not correctness but speed: `strings` is the one
+benchmark row still behind its C twin, at **2.73× on the compute
+column** (`docs/CODEGEN.md`'s table is the one place that number is
+written down).  Small-string optimisation was the queued answer and
+**has shipped**; it took roughly three quarters of the cost back and
+not the "essentially all" that was predicted, and what is left of the
+row is **not yet accounted for** — the element copy it was long
+blamed on measures 1.3 ms and cannot be removed anyway, because a
+slice is a borrow with no allocation to hand over (`docs/STRINGS.md`).

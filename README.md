@@ -5,12 +5,22 @@ LuciaOS v2 is a small computing environment built language-first:
 and **loom**, the terminal that runs compiled Luce programs against
 ordinary files on Linux and macOS.
 
+**The documentation is [luce.luciaos.com](https://luce.luciaos.com)** —
+a tour, worked examples, a reference, and a status page that says out
+loud what the language cannot yet do.  It is built from
+[`site/`](site/) in this repository, and **every Luce sample on it is
+compiled and run by the freshly built toolchain**, with the output on
+the page compared byte for byte against what the program actually
+printed.  A wrong claim fails the build.
+
 v1 — the persistent Fabric of Texels and Fibers — lives on the
 `main-v1` branch and in [docs/v1/](docs/v1/).  Its lesson drives v2:
 the language is the part that enables everything else, so the language
 comes first and the Fabric returns later on top of it.  The plan is
 [docs/V2.md](docs/V2.md); the language itself is
-[docs/LANGUAGE.md](docs/LANGUAGE.md).
+[docs/LANGUAGE.md](docs/LANGUAGE.md), and
+[docs/README.md](docs/README.md) indexes the rest.  To make a change,
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Build and test
 
@@ -18,10 +28,12 @@ Everything is Zig 0.16 and runs on any host OS.  LLVM is a build
 prerequisite — Luce's one code generator calls libLLVM in process, and
 the `luce` compiler links it (`brew install llvm`, `apt install
 llvm-dev`, or point the build at an installation with
-`-Dllvm-config=/path/to/llvm-config`).  `loom` does not link it, and
-neither does anything it loads, so a machine that only *runs* Luce
-programs needs no LLVM at all.  `cc` is a prerequisite of building at
-all, because compiling a bundled program is a link:
+`-Dllvm-config=/path/to/llvm-config`).  When the system LLVM is the
+wrong one, [`./vendor-llvm.sh`](vendor-llvm.sh) builds a pinned one
+from source and `./build.sh` picks it up automatically.  `loom` does
+not link LLVM, and neither does anything it loads, so a machine that
+only *runs* Luce programs needs none at all.  `cc` is a prerequisite
+of building at all, because compiling a bundled program is a link:
 
 ```sh
 ./build.sh         # installs build/luce, build/loom, build/lib/libluce_rt.a, build/programs/*.lc
@@ -154,11 +166,23 @@ programs/                 userland, written in Luce: the editor,
                           demo), dice, and a Brainfuck interpreter
 bench/                    paired C/Luce benchmarks, same algorithm
                           and same output, cross-checked before timed
-tools/vscode-luce/        VS Code syntax highlighting for .luc
-docs/                     V2.md is the plan; LANGUAGE.md the language;
-                          v1/ preserves the Fabric era
+site/                     luce.luciaos.com: the documentation, and the
+                          generator that compiles and runs every
+                          sample on it (site/README.md)
+tools/vscode-luce/        VS Code syntax highlighting for .luc —
+                          stale, and it still lists v1 builtins
+docs/                     the decision records and references, indexed
+                          by docs/README.md; v1/ preserves the Fabric
+                          era, audit/ holds point-in-time reviews
 build.sh  build.zig       ./build.sh installs, zig build test proves
+vendor-llvm.sh            build a pinned libLLVM from source, for when
+                          the system one is not the one you want
 ```
+
+`CONTRIBUTING.md` is the short version of all of it; the coding
+conventions themselves are [docs/CODING_GUIDE.md](docs/CODING_GUIDE.md),
+and [docs/MISSING.md](docs/MISSING.md) is the honest list of what is
+not built.
 
 ## Deferred scope
 
