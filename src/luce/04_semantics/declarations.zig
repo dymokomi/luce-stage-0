@@ -1129,8 +1129,10 @@ pub const Analyzer = struct {
         const right = (try self.foldConstant(module, binary.right)) orelse return null;
         if (!left.value_type.eql(right.value_type)) {
             return self.constantError(binary.span, mismatched_operands_message, .{
+                context.operatorText(binary.op),
                 try self.typeName(left.value_type),
                 try self.typeName(right.value_type),
+                context.conversionAdvice(left.value_type, right.value_type),
             });
         }
         switch (binary.op) {

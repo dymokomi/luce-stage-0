@@ -113,7 +113,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:15: operands are Int and Float (conversions are explicit) [luce.sema.type]
+main.luc:4:15: operands of + are Int and Float; conversions are explicit, so write Int(...) or Float(...) to make them one type [luce.sema.type]
         print(str(n + x))
                   ^~~~~
 ```

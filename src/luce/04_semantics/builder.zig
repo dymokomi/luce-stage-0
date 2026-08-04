@@ -1303,9 +1303,13 @@ pub const FunctionBuilder = struct {
     ) Error!?Fitted {
         if (expression.* == .none_literal) {
             if (expected != .optional) {
-                try self.fail("luce.sema.absent", expression.span(), "{s} is {s}, and a {s} is always there; only a {s}? is ever none", .{
+                // No article in front of a type name: "a Int" is not
+                // English and "a Int is always there" says nothing
+                // besides.  The variants below sidestep it the same
+                // way, and this is the wording they are standardised
+                // on.
+                try self.fail("luce.sema.absent", expression.span(), "{s} is {s}, which is always there; only {s}? is ever none", .{
                     subject,
-                    try self.analyzer.typeName(expected),
                     try self.analyzer.typeName(expected),
                     try self.analyzer.typeName(expected),
                 });
@@ -1584,15 +1588,29 @@ pub const FunctionBuilder = struct {
                 const initializer = (try self.lowerExpression(value_expression, false)) orelse
                     return self.forgetName(name);
                 value = (try self.fit(initializer, expected)) orelse {
+                    // The conversion is only spelled when it exists:
+                    // `let s: String = 1` used to answer "conversions
+                    // are explicit: String(...)", sending the reader
+                    // after a builtin there is no such thing as.  Here
+                    // the direction is known, so the one that applies
+                    // is named rather than both.
+                    const advice = if (context.convertsBetween(expected, initializer.value_type))
+                        try std.fmt.allocPrint(
+                            self.arena(),
+                            "; conversions are explicit, so write {s}(...)",
+                            .{try self.analyzer.typeName(expected)},
+                        )
+                    else
+                        ", and there is no conversion between them";
                     try self.fail(
                         "luce.sema.type",
                         span,
-                        "{s} declared {s} but initialized with {s} (conversions are explicit: {s}(...)){s}",
+                        "{s} declared {s} but initialized with {s}{s}{s}",
                         .{
                             name,
                             try self.analyzer.typeName(expected),
                             try self.analyzer.typeName(initializer.value_type),
-                            try self.analyzer.typeName(expected),
+                            advice,
                             try self.absenceAdvice(initializer.value_type, value_expression),
                         },
                     );
@@ -2584,7 +2602,7 @@ pub const FunctionBuilder = struct {
             return;
         }
         if (self.code.return_type != .none) {
-            try self.fail("luce.sema.return", returned.span, "return needs a {s} value", .{
+            try self.fail("luce.sema.return", returned.span, "return needs a value of type {s}", .{
                 try self.analyzer.typeName(self.code.return_type),
             });
             return;
@@ -3338,8 +3356,10 @@ pub const FunctionBuilder = struct {
             const absent = if (left.value_type == .optional) left else right;
             const written = if (left.value_type == .optional) binary.left else binary.right;
             try self.fail("luce.sema.type", binary.span, context.mismatched_operands_message ++ "{s}", .{
+                context.operatorText(binary.op),
                 try self.analyzer.typeName(left.value_type),
                 try self.analyzer.typeName(right.value_type),
+                context.conversionAdvice(left.value_type, right.value_type),
                 try self.absenceAdvice(absent.value_type, written),
             });
             return null;
@@ -3524,10 +3544,17 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
+        const operator: []const u8 = if (binary.op == .logic_and) "and" else "or";
         const left = (try self.lowerExpression(binary.left, false)) orelse return null;
         if (left.value_type != .boolean) {
-            try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands{s}", .{
-                if (binary.op == .logic_and) @as([]const u8, "and") else "or",
+            // Which side, and what it is: the type is in hand and the
+            // operand has its own span, so underlining both of them and
+            // naming neither — which is what "and needs Bool operands"
+            // did — throws away everything the reader needs.
+            // `condition must be Bool, not Int` is the model.
+            try self.fail("luce.sema.type", binary.left.span(), "the left operand of {s} must be Bool, not {s}{s}", .{
+                operator,
+                try self.analyzer.typeName(left.value_type),
                 try self.absenceAdvice(left.value_type, binary.left),
             });
             return null;
@@ -3544,8 +3571,10 @@ pub const FunctionBuilder = struct {
         defer self.narrowed.shrinkRetainingCapacity(facts_floor);
         if (try self.lowerExpression(binary.right, false)) |right| {
             if (right.value_type != .boolean) {
-                try self.fail("luce.sema.type", binary.span, "{s} needs Bool operands", .{
-                    if (binary.op == .logic_and) @as([]const u8, "and") else "or",
+                try self.fail("luce.sema.type", binary.right.span(), "the right operand of {s} must be Bool, not {s}{s}", .{
+                    operator,
+                    try self.analyzer.typeName(right.value_type),
+                    try self.absenceAdvice(right.value_type, binary.right),
                 });
             } else {
                 try self.code.store(either.result, right.register);

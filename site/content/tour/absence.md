@@ -131,7 +131,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:3:15: operands are Int? and Int (conversions are explicit); test it first (if n != none:) or supply a fallback (n else …) [luce.sema.type]
+main.luc:3:15: operands of + are Int? and Int, and there is no conversion between them; test it first (if n != none:) or supply a fallback (n else …) [luce.sema.type]
         print(str(n + 1))
                   ^~~~~
 ```

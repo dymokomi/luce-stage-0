@@ -658,6 +658,122 @@ test "luce.sema.let: a let binding cannot be reassigned" {
 // Types and conversions
 // ---------------------------------------------------------------------------
 
+// A conversion is only offered where there is one to offer.
+// "(conversions are explicit)" was printed for every mismatch — `Int`
+// against `String` included, which sends the reader after a
+// `String(...)` that does not exist — and never named the operator or
+// spelled the conversion where there really was one.
+
+test "luce.sema.type: a mismatch with no conversion says so" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    let a = 1
+        \\    let b = "s"
+        \\    let c = a + b
+        \\
+    ,
+        "luce.sema.type",
+        "operands of + are Int and String, and there is no conversion between them",
+        4,
+        13,
+    );
+}
+
+test "luce.sema.type: a mismatch with a conversion spells it, and names the operator" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    let a = 1
+        \\    let b = 2.5
+        \\    let c = a * b
+        \\
+    ,
+        "luce.sema.type",
+        "operands of * are Int and Float; conversions are explicit, " ++
+            "so write Int(...) or Float(...) to make them one type",
+        4,
+        13,
+    );
+}
+
+test "luce.sema.const: a folded constant offers the same conversion advice" {
+    try expectOnlySayingAt(
+        \\let bad = 1 + 2.5
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.const",
+        "operands of + are Int and Float; conversions are explicit, " ++
+            "so write Int(...) or Float(...) to make them one type",
+        1,
+        11,
+    );
+}
+
+test "luce.sema.type: an annotation names only the conversion that exists" {
+    try expectOnlySayingAt(
+        "func main():\n    let s: String = 1\n",
+        "luce.sema.type",
+        "s declared String but initialized with Int, and there is no conversion between them",
+        2,
+        5,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    let f: Float = 1\n",
+        "luce.sema.type",
+        "f declared Float but initialized with Int; conversions are explicit, so write Float(...)",
+        2,
+        5,
+    );
+}
+
+// `and`/`or` used to underline both operands and name neither, in a
+// compiler where `condition must be Bool, not Int` already did both.
+
+test "luce.sema.type: a bad left operand of and is named, and underlined alone" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    let n = 1
+        \\    if n and true:
+        \\        return
+        \\
+    , "luce.sema.type", "the left operand of and must be Bool, not Int", 3, 8);
+}
+
+test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    let n = 1
+        \\    if true or n:
+        \\        return
+        \\
+    , "luce.sema.type", "the right operand of or must be Bool, not Int", 3, 16);
+}
+
+test "luce.sema.absent: a type name takes no article" {
+    // Was "n is Int, and a Int is always there; only a Int? is ever
+    // none" — twice ungrammatical, and tautological besides.
+    try expectOnlySayingAt(
+        "func main():\n    let n: Int = none\n",
+        "luce.sema.absent",
+        "n is Int, which is always there; only Int? is ever none",
+        2,
+        18,
+    );
+}
+
+test "luce.sema.return: a returned type takes no article either" {
+    try expectOnlySayingAt(
+        \\func f() -> Int:
+        \\    return
+        \\
+        \\func main():
+        \\    let x = f()
+        \\
+    , "luce.sema.return", "return needs a value of type Int", 2, 5);
+}
+
 test "luce.sema.type: no implicit numeric conversion" {
     try expectRejected("func main():\n    let a = 1 + 2.0\n", "luce.sema.type");
 }
@@ -1869,7 +1985,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\        total = total + n
         \\        n = none
         \\
-    , "operands are Int and Int?");
+    , "operands of + are Int and Int?");
     // One arm narrowing is not both arms narrowing.  (Where *both*
     // arms do — `if n == none: n = 1` — the join keeps it, and that is
     // the point of a join.)
@@ -1883,7 +1999,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\func main():
         \\    assert(maybe(true) == 2)
         \\
-    , "operands are Int? and Int");
+    , "operands of * are Int? and Int");
     // A call cannot narrow: only the name itself.
     try expectRejected(
         \\func check(n: Int?) -> Bool:
