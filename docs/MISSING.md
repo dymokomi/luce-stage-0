@@ -419,91 +419,105 @@ carets on the offending name, a fix in the sentence, and the advice
 keyed to whether the expression was a local (which narrows) or a field
 (which does not).  It is not true everywhere, and a hostile-user sweep
 of ~110 wrong programs across the lexer, parser and analyzer found the
-following still open.  Ranked by how often a real program hits them.
+list below.  Ranked by how often a real program hits them.
 
-The method and built-in **argument** diagnostics were the worst of it
-and are now fixed: one sentence used to cover both a wrong count and a
-wrong type, phrased as a count, with the caret on the whole call.  What
-is left:
+**Closed since this list was written.**  The method and built-in
+**argument** diagnostics went first — one sentence used to cover both a
+wrong count and a wrong type, phrased as a count, with the caret on the
+whole call.  Then eleven more, each pinned by a spec asserting code,
+wording and column:
 
-1. **A mutual struct cycle reports twice, and both messages are
-   false.**  `struct A: b: B` with `struct B: a: A` says "struct A
-   contains itself" *and* "struct B contains itself".  Neither
-   contains itself; neither message names the other struct or the
-   field that closes the loop, and the caret is on the `struct`
-   keyword rather than the field.  The direct case (`next: Node`) is
-   correctly single but also never mentions the fix `LANGUAGE.md`
-   spells out in prose — `next: Node?`, because the recursion stops
-   at absence.  `04_semantics/declarations.zig:527`.
-2. **A namespace used without a call denies its own import.**
-   `import std.math` then `math.seed` (no parentheses) answers
-   "unknown name math", about an import on line 1 that the compiler
-   just checked.  In call position the same typo gets the excellent
-   "unknown function math.sed; did you mean math.seed?".  Only the
-   field-access-on-a-namespace path falls through to `failUnknownName`.
-   `04_semantics/builder.zig:3179`.
-3. **Only the first missing struct field is reported.**  A 14-field
-   struct constructed with one field takes thirteen compile rounds to
-   finish.  The loop `return null`s on the first hole instead of
-   collecting them.  `04_semantics/builder.zig:4285`.
-4. **`script entry must be exactly func main():` is not true.**
-   `func main() -> !:` is legal — `programs/dice.luc` writes it — and
-   the comment three lines above the message says so.  The message
-   omits the second form and its caret covers `func main` rather than
-   the offending return type.  `04_semantics/declarations.zig:1202`.
-5. **Over-nested blocks produce 152 diagnostics and 215 KB.**  The
-   indent-depth guard fires once per subsequent line with no
-   once-only flag, and the lexer's error cap does not gate the parser,
-   which then spends its own budget on the cascade.  The sibling tab
-   handler and the parser's `nesting_reported` flag both do this
-   correctly.  `02_lex/lexer.zig:335`.
-6. **`1.2.3` names the wrong thing and prints harmful advice.**  "a
-   float needs a digit before the point; write 0.3" — the user wrote a
-   valid `1.2` and a stray point, and the suggested edit yields
-   `1.20.3`.  `leadingPointNumber` is reached for any `.` before a
-   digit without asking whether a number was just emitted.
-   `02_lex/lexer.zig:709`.  Its mirror: `1.` is diagnosed as a member
-   access ("expected a field or function name after '.'") when `.5`
-   gets the model message.
-7. **`and`/`or` on a non-Bool will not say which side or what it is.**
-   The caret covers both operands and the type is in hand at the
-   report site.  `condition must be Bool, not Int` — same file — does
-   name it.  `04_semantics/builder.zig:3430` and `:3448`, the latter
-   also reporting the *left* span for a bad right operand.
-8. **Duplicate-name diagnostics never point at the first
-   declaration**, in three different spellings ("duplicate name go",
-   "duplicate field x", "n is already declared").  Where the other one
-   is, is the single most useful thing such a message can carry.
-9. **`operands are String and Int (conversions are explicit)`** offers
-   a conversion that does not exist between those two types, never
-   names the operator, and does not spell the conversion when there
-   *is* one.  `let` already writes the better shape — "…(conversions
-   are explicit: `Float(...)`)".  `04_semantics/context.zig:52`.
-10. **Foreign operators get "expected an expression, found '+'".**
-    `x++`, `x === y`, `x <> y` are all answered by naming the second
-    character.  The mechanism to do better exists and is used: `if x =
-    1:` yields "'=' assigns a value; write '==' to compare", and
-    `def`/`class`/`const` are answered with the Luce spelling.
-11. **Grammar: "a Int", "a Int?"** at `builder.zig:1223` (twice in one
-    format string, which is also tautological — "n is Int, and a Int
-    is always there") and `:2504`.  The good variants at `:3338` and
-    `:3380` sidestep the article and are the wording to standardise on.
-12. **No unreachable-code diagnostic** after `return` or `trap(...)`,
-    in a compiler that already tells you a redundant `!= none` test is
-    dead code.
-13. **Long source lines are never windowed.**  `Rendered.writeTo`
-    prints the whole line and pads the caret to its column, so a
-    300-deep paren nest renders a 617-character line with the caret at
-    column 268.  `support/diagnostics.zig:88`.
-14. **A diagnostic at end of file prints no snippet.**  An empty
-    `func` body reports at the EOF token, so `source_line` is empty and
-    the renderer returns early — the message is right and has no
-    visual anchor.  It wants to point at the header on line 1.
-15. **Stray-character and unterminated-string diagnostics cascade.**
-    The lexer's messages are excellent; each is then followed by a
-    parser complaint about a token gap the lexer's own recovery
-    created.  `03_parse.zig:44` states the invariant that is not held.
-    A matched pair of smart quotes is likewise two diagnostics.
+- ~~A namespace used without a call denies its own import~~ — and it
+  was wider than reported.  `math.seed`, `P.make` and a bare `helper`
+  all answered "unknown name" about a declaration the compiler had
+  just checked.  Field access on a bare declaration name now resolves
+  as a namespace, exactly as it already did in front of a call, and a
+  name in value position that names a declaration says what it is:
+  *`helper` is a function, and Luce has no function values; write
+  `helper(...)` to call it*.  Suggestions come from that namespace's
+  own members.
+- ~~A mutual struct cycle reports twice, and both messages are
+  false~~ — one message per cycle now, walking the loop that closes
+  it (*struct A contains itself: A.b is B, and B.a is A*), caret on
+  the field rather than the `struct` keyword, and carrying the fix
+  `LANGUAGE.md` only ever spelled in prose: `b: B?`.  A spec compiles
+  that suggestion, because a message whose fix does not work is worse
+  than one that does not help.
+- ~~Only the first missing struct field is reported~~ — all of them,
+  in declaration order, with the conjunction English wants.
+- ~~`script entry must be exactly func main():` is not true~~ — it
+  names `func main() -> !:` too, splits the two unrelated mistakes it
+  used to answer with one sentence, and points at the return type or
+  the parameter rather than at `func main`.
+- ~~Over-nested blocks produce 152 diagnostics and 215 KB~~ — one
+  message and 305 bytes.  The bound reports once and stops; `lex()`
+  answers `Lexed{tokens, truncated}` and the parser falls silent on a
+  cut stream, which is what `03_parse.zig`'s stated invariant always
+  claimed.
+- ~~`1.2.3` names the wrong thing and prints harmful advice~~ — it
+  names the second decimal point and says what was read instead, and
+  the extra run is swallowed so the parser adds nothing.  Its mirror
+  `1.` gets `.5`'s model message; `5.foo` is still member access.
+- ~~`and`/`or` will not say which side or what it is~~ — *the left
+  operand of and must be Bool, not Int*, underlining that operand
+  alone, with the absence advice the right side never had.
+- ~~Duplicate-name diagnostics never point at the first
+  declaration~~ — all four spellings do, naming the file too when the
+  first is in another one.
+- ~~`operands are String and Int (conversions are explicit)`~~ — names
+  the operator, and offers a conversion only where one exists
+  (`Int()` takes a Float and `Float()` takes an Int, and that is the
+  whole set).  `let` no longer offers a `String(...)` by name.
+- ~~Grammar: "a Int", "a Int?"~~ — standardised on the variants that
+  sidestep the article.
+- ~~Long source lines are never windowed~~ — past 100 characters a
+  line is windowed around the caret with 30 characters of context and
+  `...` for what is cut, measured in characters because the caret pads
+  per character.
+
+**Still open**, ranked:
+
+1. **Foreign operators get "expected an expression, found '+'".**
+   `x++`, `x === y`, `x <> y` are all answered by naming the second
+   character.  The mechanism to do better exists and is used: `if x =
+   1:` yields "'=' assigns a value; write '==' to compare", and
+   `def`/`class`/`const` are answered with the Luce spelling.
+2. **Stray-character and unterminated-string diagnostics cascade.**
+   The lexer's messages are excellent; each is then followed by a
+   parser complaint about a token gap the lexer's own recovery
+   created.  `03_parse.zig:46` states the invariant, and the
+   nesting-bound case now holds it — `Lexed.truncated` is the
+   mechanism, and what these want is the same idea applied per
+   construct rather than per file.  A matched pair of smart quotes is
+   likewise two diagnostics.
+3. **No unreachable-code diagnostic** after `return` or `trap(...)`,
+   in a compiler that already tells you a redundant `!= none` test is
+   dead code.
+4. **A diagnostic at end of file prints no snippet.**  An empty
+   `func` body reports at the EOF token, so `source_line` is empty and
+   the renderer returns early — the message is right and has no
+   visual anchor.  It wants to point at the header on line 1.
+5. **An optional struct field is counted as one value, a plain one as
+   its whole expansion.**  Found while proving the cycle fix's
+   suggestion.  `struct Holder` with 100 `Big` fields is refused —
+   "expands to more than 4096 values" — and the same struct with 100
+   `Big?` fields, holding the same data, compiles: `valueCount`
+   answers 1 for every `.optional`, while `.strukt` flattens
+   (`04_semantics/declarations.zig`'s `valueCount`/`sumShape`).  One
+   of the two is wrong about what a struct costs, and which one
+   depends on whether an optional's struct payload is stored
+   indirectly — it must be, or `next: Node?` could not terminate, in
+   which case the *plain* count is the odd one out and the bound means
+   two different things depending on spelling.  Not a diagnostics bug;
+   recorded here because this is where it was found.
+
+**A pinning limit worth knowing.**  `expectSayingAt` and
+`expectOnlySayingAt` assert the span's *start*.  That pins every caret
+that moves — but a diagnostic narrowed onto a binary expression's
+**left** operand starts where the whole expression does, so widening it
+back is invisible to the suite.  The right-operand case pins the
+mechanism, and a helper asserting the end column is what would close it
+properly if another such case turns up.
 
 **Not a defect, recorded because it looks like one:** `give` through
 an alias (`let a = xs; stash(give a)`) compiles and traps
