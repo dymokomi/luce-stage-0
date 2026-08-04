@@ -133,6 +133,14 @@ are converted with `String(...)` and concatenated. `{{` and `}}` are
 literal braces. A hole holds one expression, and `"..."` strings
 nested inside a hole are permitted.
 
+A hole may end with a format spec, and `:.Nf` is the only one there
+is — a `Float` to N decimal places, rounded half away from zero. It
+lowers to `strings.format_float(value, N)`, so a program using one
+needs `import std.strings` exactly as any other String service does.
+A colon inside brackets belongs to the brackets: `f"{s[1:3]}"` is a
+slice, not a spec. [Format specs](/tour/strings/#format-specs) has the
+worked examples.
+
 ## Operators and punctuation
 
 ```

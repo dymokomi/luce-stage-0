@@ -119,8 +119,25 @@ digits* in Python and letting it mean two decimal places here would be
 a quiet disagreement with the language Luce is shaped after.
 
 A spec lowers to `strings.format_float(value, N)`, so it needs the
-import like any other String service. A colon *inside* brackets
-belongs to the brackets, so `f"{s[1:3]}"` is still a slice.
+import like any other String service. Leave the import out and the
+compiler says which syntax needs it, rather than naming a module you
+never wrote:
+
+```luce fail
+func main():
+    let mean = 23.998425
+    print(f"mean = {mean:.2f}")
+```
+
+```output
+luce: compile failed
+main.luc:3:21: a format spec like {x:.2f} formats through std.strings; add import std.strings [luce.sema.import]
+        print(f"mean = {mean:.2f}")
+                        ^~~~
+```
+
+A colon *inside* brackets belongs to the brackets, so `f"{s[1:3]}"` is
+still a slice.
 
 ```luce fail
 import std.strings

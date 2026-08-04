@@ -1055,12 +1055,30 @@ test "luce.parse.fstring: an unknown format spec names the one that exists" {
 test "luce.sema.import: a format spec is std.strings, and says so" {
     // It lowers to `strings.format_float`, so it needs the import that
     // every other String service needs — the same rule, not a new one.
-    try expectHostSaying(
+    //
+    // The rule was always right and the words were not: this said
+    // "unknown namespace strings; import std.strings to use it",
+    // naming a namespace that appears nowhere in the program, under a
+    // caret inside an f-string hole.  A reader who never wrote
+    // `strings.` cannot act on that.  Pinned in full and to the
+    // column, because the substring this used to assert
+    // ("import std.strings") was true of the wrong sentence too.
+    try expectHostSayingAt(
         \\func main():
         \\    let x = 1.5
         \\    print(f"{x:.2f}")
         \\
-    , "luce.sema.import", "import std.strings");
+    ,
+        "luce.sema.import",
+        "a format spec like {x:.2f} formats through std.strings; add import std.strings",
+        3,
+        14,
+    );
+    // The namespace form a reader *did* write keeps the original
+    // words; that arm needs a loaded-but-unimported sibling, so its
+    // control lives with the multi-file harness in
+    // `compile/test.zig` ("imports are explicit, checked, and
+    // reported per file").
 }
 
 test "luce.sema.convert: String() takes a scalar, and names build() for a Builder" {

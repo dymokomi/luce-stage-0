@@ -668,7 +668,12 @@ pub const FunctionBuilder = struct {
     /// view: bare names are module-local; a dotted name is either a
     /// module-local struct namespace (Text.width) or an imported one
     /// (geo.helper, geo.Text.width).
-    fn resolveDeclared(self: *FunctionBuilder, written: []const u8, span: Span) Error!?[]const u8 {
+    fn resolveDeclared(
+        self: *FunctionBuilder,
+        written: []const u8,
+        span: Span,
+        origin: ast.CallOrigin,
+    ) Error!?[]const u8 {
         if (std.mem.indexOfScalar(u8, written, '.')) |dot| {
             const head = written[0..dot];
             const local_head = try self.analyzer.qualify(self.prefix, head);
@@ -678,7 +683,27 @@ pub const FunctionBuilder = struct {
             if (self.analyzer.importsModule(self.module, head)) {
                 return written;
             }
-            try self.fail("luce.sema.import", span, "unknown namespace {s}; import {s} to use it", .{ head, try self.analyzer.importSpelling(head) });
+            // A call the reader never wrote cannot be fixed where it
+            // points.  `f"{x:.2f}"` lowers to `strings.format_float`,
+            // so the generic message would name a namespace that
+            // appears nowhere in the program, under a caret inside an
+            // f-string hole.  The rule is the same one — a format spec
+            // is a String service like any other — but it has to be
+            // said about the syntax that is actually there.
+            switch (origin) {
+                .written => try self.fail(
+                    "luce.sema.import",
+                    span,
+                    "unknown namespace {s}; import {s} to use it",
+                    .{ head, try self.analyzer.importSpelling(head) },
+                ),
+                .format_spec => try self.fail(
+                    "luce.sema.import",
+                    span,
+                    "a format spec like {{x:.2f}} formats through std.strings; add import std.strings",
+                    .{},
+                ),
+            }
             return null;
         }
         return try self.analyzer.qualify(self.prefix, written);
@@ -3852,7 +3877,8 @@ pub const FunctionBuilder = struct {
             }
         }
 
-        const resolved = (try self.resolveDeclared(call.callee, call.span)) orelse return null;
+        const resolved = (try self.resolveDeclared(call.callee, call.span, call.origin)) orelse
+            return null;
         if (self.analyzer.struct_names.get(resolved)) |layout_index| {
             return self.lowerConstruct(call.arguments, call.span, layout_index);
         }
