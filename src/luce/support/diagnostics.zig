@@ -69,11 +69,23 @@ pub const Rendered = struct {
     /// for an empty span.
     end_line: usize,
     end_column: usize,
-    /// The text of `line`, without its terminator; "" when there is no
-    /// file.  Carried rather than re-read: the file on disk may have
-    /// changed, and the registry has the bytes the span actually
-    /// indexes.
+    /// The text of `source_line_number`, without its terminator; ""
+    /// when there is no file.  Carried rather than re-read: the file on
+    /// disk may have changed, and the registry has the bytes the span
+    /// actually indexes.
     source_line: []const u8,
+    /// Which line `source_line` is, normally `line`.
+    ///
+    /// It differs for a span at end of file.  A file ending in a
+    /// newline gets one more line index than it has lines of text —
+    /// deliberately, because that empty line is where "the thing
+    /// missing at the end" belongs (`01_source/sources.zig`) — and an
+    /// empty line renders as no snippet at all, so `func main():` with
+    /// nothing under it reported a correct message with nothing to
+    /// look at.  The position stays what it is and the snippet borrows
+    /// the last line that has content, with the caret one past its
+    /// end: the same byte, and the picture a reader wants.
+    source_line_number: usize,
     /// Byte offsets into the file, kept because a tool that has the
     /// text already would rather slice than count.
     span: Span,
@@ -99,10 +111,18 @@ pub const Rendered = struct {
         });
         if (self.source_line.len == 0) return;
 
-        const caret_at = @min(self.column - 1, self.source_line.len);
+        // A borrowed line (end of file) puts the caret one past its
+        // last character, which is the byte the span points at.
+        const borrowed = self.source_line_number != self.line;
+        const caret_at = if (borrowed)
+            self.source_line.len
+        else
+            @min(self.column - 1, self.source_line.len);
         // A span that runs past this line is underlined to its end;
         // one that ends on it is underlined exactly.
-        const stop = if (self.end_line == self.line)
+        const stop = if (borrowed)
+            self.source_line.len
+        else if (self.end_line == self.line)
             @min(self.end_column - 1, self.source_line.len)
         else
             self.source_line.len;
@@ -287,10 +307,23 @@ pub const Diagnostics = struct {
             .end_line = 0,
             .end_column = 0,
             .source_line = "",
+            .source_line_number = 0,
             .span = item.span,
         };
         const start = self.sources.place(item.file, item.span.start);
         const end = self.sources.place(item.file, @max(item.span.end, item.span.start));
+        // A span at end of file lands past the last line of text, and
+        // that line renders as nothing.  Borrow the last line that has
+        // content — but only at end of file, so a diagnostic on a blank
+        // line in the middle still shows the blank line it names.
+        var shown_line = start.line;
+        var shown_text = self.sources.lineText(item.file, shown_line);
+        if (item.span.start >= file.text.len) {
+            while (shown_text.len == 0 and shown_line > 1) {
+                shown_line -= 1;
+                shown_text = self.sources.lineText(item.file, shown_line);
+            }
+        }
         return .{
             .code = item.code,
             .severity = item.severity,
@@ -300,7 +333,8 @@ pub const Diagnostics = struct {
             .column = start.column,
             .end_line = end.line,
             .end_column = end.column,
-            .source_line = self.sources.lineText(item.file, start.line),
+            .source_line = shown_text,
+            .source_line_number = shown_line,
             .span = item.span,
         };
     }
@@ -371,6 +405,60 @@ test "each diagnostic renders against the file its span indexes" {
         \\        ^~~~~~~~
         \\
     , rendered);
+}
+
+test "a diagnostic at end of file shows the last line and points past it" {
+    // `func main():` with nothing under it reports on the empty line
+    // after the last newline — which is where the missing statement
+    // belongs, and which renders as nothing at all.  So the snippet
+    // borrows the last line with content, and the caret sits one past
+    // its end: the same byte the span names.
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    const text = "func main():\n";
+    _ = try register(&diagnostics, .root, "", "main.luc", text);
+    try diagnostics.add("luce.parse.expected", .{ .start = 13, .end = 13 }, "this 'func' block is empty", .{});
+
+    const rendered = try diagnostics.render(testing.allocator);
+    defer testing.allocator.free(rendered);
+    try testing.expectEqualStrings(
+        \\main.luc:2:1: this 'func' block is empty [luce.parse.expected]
+        \\    func main():
+        \\                ^
+        \\
+    , rendered);
+
+    // The reported position is unchanged — only the snippet is
+    // borrowed, and it says which line it came from.
+    const resolved = diagnostics.resolve(0).?;
+    try testing.expectEqual(@as(usize, 2), resolved.line);
+    try testing.expectEqual(@as(usize, 1), resolved.column);
+    try testing.expectEqual(@as(usize, 1), resolved.source_line_number);
+    try testing.expectEqualStrings("func main():", resolved.source_line);
+}
+
+test "the borrowed line is only borrowed at end of file" {
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    // A blank line in the middle keeps its own emptiness: the reader
+    // is being told about *that* line, and showing the one above it
+    // under a different line number would be a lie.
+    const text = "func main():\n\n    return\n";
+    _ = try register(&diagnostics, .root, "", "main.luc", text);
+    try diagnostics.add("luce.parse.expected", .{ .start = 13, .end = 13 }, "blank", .{});
+    const resolved = diagnostics.resolve(0).?;
+    try testing.expectEqual(@as(usize, 2), resolved.line);
+    try testing.expectEqual(@as(usize, 2), resolved.source_line_number);
+    try testing.expectEqualStrings("", resolved.source_line);
+
+    // An empty file has no line to borrow and renders no snippet.
+    var empty = Diagnostics.init(testing.allocator);
+    defer empty.deinit();
+    _ = try register(&empty, .root, "", "empty.luc", "");
+    try empty.add("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
+    const rendered = try empty.render(testing.allocator);
+    defer testing.allocator.free(rendered);
+    try testing.expectEqualStrings("empty.luc:1:1: missing func main(): [luce.sema.main]\n", rendered);
 }
 
 test "a diagnostic with no registered file still renders its message" {
@@ -528,13 +616,14 @@ test "a span that runs past its line underlines to the end of it" {
     , rendered);
 }
 
-test "an empty file and a span at its end render without inventing a line" {
+test "an empty file invents no line, and a span at the end borrows one" {
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
     _ = try register(&diagnostics, .root, "", "empty.luc", "");
     try diagnostics.add("luce.parse.expected", .{ .start = 0, .end = 0 }, "expected a program", .{});
     // The empty line after a final newline: where an end-of-file span
-    // lands, and it has no text to show.
+    // lands.  It has no text of its own, so it shows the line above it
+    // and points one past the end — the byte the span actually names.
     const ended = try register(&diagnostics, .imported, "geo", "geo.luc", "a\n");
     diagnostics.scope = ended;
     try diagnostics.add("luce.parse.expected", .{ .start = 2, .end = 2 }, "expected a body", .{});
@@ -544,6 +633,8 @@ test "an empty file and a span at its end render without inventing a line" {
     try testing.expectEqualStrings(
         \\empty.luc:1:1: expected a program [luce.parse.expected]
         \\geo.luc:2:1: expected a body [luce.parse.expected]
+        \\    a
+        \\     ^
         \\
     , rendered);
 }

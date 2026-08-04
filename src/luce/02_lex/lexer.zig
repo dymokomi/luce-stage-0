@@ -1041,6 +1041,21 @@ const Lexer = struct {
             self.offset += 1;
         }
         const span: Span = .{ .start = begin, .end = self.offset };
+        // `&&` and `||` are one operator to the person who typed them,
+        // and the one they mean has a Luce spelling.  Answering them as
+        // a repeated stray character is true and unhelpful — the same
+        // mistake the parser's foreign-operator pairs make, on the two
+        // characters that never became tokens at all.
+        if (self.offset - begin == 2) {
+            if (doubledOperator(first)) |written| {
+                return self.report(
+                    "luce.lex.character",
+                    span,
+                    "there is no '{c}{c}' operator: write '{s}'",
+                    .{ first, first, written },
+                );
+            }
+        }
         var count_text: [40]u8 = undefined;
         const repeated: []const u8 = if (self.offset - begin == 1) "" else std.fmt.bufPrint(
             &count_text,
@@ -1094,6 +1109,9 @@ const Lexer = struct {
         // A letter glued to ASCII name characters is a name, not a
         // stray: let `word()` take the whole run and report once.
         if (spellingFor(codepoint) == null and self.foreignRunIsName()) return self.word();
+        // A matched pair of typographic quotes is one string somebody
+        // typed in a word processor, not two stray characters.
+        if (try self.typographicString(at, codepoint)) return;
         self.offset += length;
         if (spellingFor(codepoint)) |spelling| {
             try self.report(
@@ -1110,6 +1128,49 @@ const Lexer = struct {
                 .{ sequence, codepoint },
             );
         }
+    }
+
+    /// `“hello”` — a string literal pasted out of a word processor.
+    ///
+    /// The two quotes are one mistake with one fix, and reporting each
+    /// as a stray character says it twice and names neither as the
+    /// pair it is.  So an opening typographic quote looks along the
+    /// rest of its line for the partner it opens; finding one, it
+    /// reports across the whole literal, steps over it, and emits no
+    /// token — the statement is left with a hole, and the parser's
+    /// complaint about that hole is suppressed by the same rule that
+    /// covers every other dropped character.
+    ///
+    /// Confined to one line, because that is as far as a string
+    /// literal reaches in this language and an unmatched open quote
+    /// three hundred lines up should not swallow the file.  Unmatched,
+    /// it falls through to the ordinary one-character report.
+    fn typographicString(self: *Lexer, at: usize, opening: u21) Error!bool {
+        const closing = closingQuoteFor(opening) orelse return false;
+        var scan = at + codepointLength(self.source, at);
+        while (scan < self.source.len and self.source[scan] != '\n') {
+            const length = codepointLength(self.source, scan);
+            if (scan + length > self.source.len) break;
+            const codepoint = std.unicode.utf8Decode(self.source[scan..][0..length]) catch {
+                scan += 1;
+                continue;
+            };
+            if (codepoint == closing) {
+                self.offset = scan + length;
+                // Both codepoints, because a terminal font may render
+                // either of them as an ordinary `"` and then the caret
+                // is under something that looks already correct.
+                try self.report(
+                    "luce.lex.character",
+                    .{ .start = at, .end = self.offset },
+                    "typographic quotes (U+{X:0>4} and U+{X:0>4}) around a string; text is written \"like this\"",
+                    .{ opening, closing },
+                );
+                return true;
+            }
+            scan += length;
+        }
+        return false;
     }
 
     /// Whether the name-shaped run starting at the cursor contains an
@@ -1183,6 +1244,20 @@ fn bidiControlAt(source: []const u8, at: usize) ?u21 {
     };
 }
 
+/// The typographic quote that closes this one, for the four pairs a
+/// word processor produces.  A straight-looking `"` substitute is not
+/// here: `„…”` and the rest of the rarer pairs are not what anyone
+/// pastes, and a wrong guess would swallow a line.
+fn closingQuoteFor(opening: u21) ?u21 {
+    return switch (opening) {
+        0x2018 => 0x2019, // ‘ ’
+        0x201C => 0x201D, // “ ”
+        0x00AB => 0x00BB, // « »
+        0x2039 => 0x203A, // ‹ ›
+        else => null,
+    };
+}
+
 /// What to write instead of a non-ASCII character people actually
 /// paste into source, or null when there is nothing useful to say.
 ///
@@ -1239,6 +1314,18 @@ fn numberProblem(text: []const u8) []const u8 {
 
 /// A short "here is the Luce way" note for the punctuation people
 /// reach for out of habit.  Null when there is nothing useful to add.
+/// The Luce keyword a doubled stray character was reaching for.  Only
+/// the two logical operators: `&&` and `||` are written by everyone
+/// arriving from C, and a doubled `^` or `~` is not an operator
+/// anywhere and stays a repeated stray.
+fn doubledOperator(character: u8) ?[]const u8 {
+    return switch (character) {
+        '&' => "and",
+        '|' => "or",
+        else => null,
+    };
+}
+
 fn hintFor(character: u8) ?[]const u8 {
     return switch (character) {
         '!' => "use 'not'; '!=' is inequality",

@@ -85,6 +85,41 @@ also apply to `Bool` and to objects, where they compare identity.
 `and`, `or`, `not` take `Bool` and only `Bool`, and `and`/`or`
 short-circuit. There is no truthiness: no other type is a condition.
 
+## Operators Luce does not have
+
+The table above is the whole set. The operators other languages have
+are answered by name, with the Luce spelling in the sentence rather
+than a complaint about the second character:
+
+| Written | Luce |
+|---|---|
+| `x++`, `x--` | `x += 1`, `x -= 1` |
+| `&&`, `\|\|` | `and`, `or` |
+| `!x` | `not x` |
+| `===`, `!==` | `==`, `!=` — which already compare by value |
+| `<>` | `!=` |
+| `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `Int` |
+| `<<`, `>>`, `&`, `\|`, `^`, `~` | nothing: there are no bitwise operators |
+| `//` | `/`; `//` starts nothing, and a comment is `#` |
+
+```luce fail
+func main():
+    var i = 0
+    i++
+```
+
+```output
+luce: compile failed
+main.luc:3:6: there is no '++' operator: write 'x += 1' to increment [luce.parse.expression]
+        i++
+         ^~
+```
+
+Two of these are also legal expressions when they are spaced or
+followed by an operand, and there the existing reading wins: `a - -b`
+is a subtraction of a negation, `--a` is a double negation, and
+`a < > b` is not a `<>`.
+
 ## Calls
 
 Arguments are positional and are evaluated left to right. There are no

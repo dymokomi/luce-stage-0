@@ -13,11 +13,20 @@ const Span = @import("../01_source.zig").Span;
 /// desugars to exactly such a chain — overflows the native stack.
 pub const max_expression_depth: u32 = 400;
 
-/// How many values a struct may expand to once every nested struct
-/// field is flattened.  Each one costs an instruction to zero and a
-/// register to build, and struct nesting multiplies: a chain of 20
-/// structs with two struct fields each is a million values from
-/// forty lines of source.  Objects are the way to hold bulk data.
+/// How many values a struct may **unconditionally** hold once every
+/// nested struct field is flattened.  Each one costs an instruction to
+/// zero and a register to build, and struct nesting multiplies: a
+/// chain of 20 structs with two struct fields each is a million values
+/// from forty lines of source.
+///
+/// "Unconditionally" is the whole of it, and is why an optional field
+/// counts as one whatever it holds (`declarations.zig`'s
+/// `valueCount`): a plain field's payload is part of what the struct
+/// is, an optional field's starts absent and arrives only when a
+/// program builds one.  This bound and the struct-cycle check are the
+/// same rule at two scales — a struct's unconditional expansion must
+/// be finite, and small — and `?` is what turns "must hold" into "may
+/// hold" for both.  Objects are the other way to hold bulk data.
 pub const max_struct_values: u32 = 4096;
 
 /// A dotted chain of bare names in front of a call, collected
@@ -296,6 +305,33 @@ pub fn alwaysExits(block: ast.Block) bool {
         }
     }
     return false;
+}
+
+/// What a single statement is, when it is one control leaves and never
+/// comes back from — and null when control can fall out of it.
+///
+/// The name is the word the reader wrote, because a diagnostic about
+/// unreachable code has one job: say which line took the control away.
+/// An `if` counts only when *both* arms leave, which is `alwaysExits`'
+/// rule and is conservative in the safe direction — a missed one costs
+/// nothing, a wrong one would refuse a running program.
+pub fn exitingStatement(statement: ast.Statement) ?[]const u8 {
+    return switch (statement) {
+        .return_statement => "return",
+        .break_statement => "break",
+        .continue_statement => "continue",
+        .expression => |written| if (written.value.* == .call and leavesByCall(written.value))
+            written.value.call.callee
+        else
+            null,
+        .conditional => |conditional| blk: {
+            const otherwise = conditional.else_block orelse break :blk null;
+            if (!alwaysExits(conditional.then_block)) break :blk null;
+            if (!alwaysExits(otherwise)) break :blk null;
+            break :blk "if";
+        },
+        else => null,
+    };
 }
 
 // ---------------------------------------------------------------------------

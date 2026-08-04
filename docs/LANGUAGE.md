@@ -104,6 +104,32 @@ struct Node:
     next: Node?
 ```
 
+That is one case of a rule the compiler applies at two scales: **a
+struct's *unconditional* size must be finite, and small.**  A plain
+field's payload is part of what the struct is, so it is counted, and
+counted through — a struct of two struct fields doubles per level.
+Past 4096 values the declaration is refused, exactly as a struct that
+contains itself is refused for being infinite.  An optional field
+counts as one whatever it holds, because its payload starts absent and
+arrives only when a program builds one.  So `?` is the answer to both
+refusals, and the diagnostics say so:
+
+```luce
+struct Big:                       # 4096 values
+    ...
+
+struct Pair:
+    a: Big
+    b: Big                        # refused: always holds 8192
+
+struct Pair:
+    a: Big?
+    b: Big?                       # fine: holds two `none` until told otherwise
+```
+
+The other answer is a container — a `List`, `Map` or `Array` is one
+reference however much it holds.
+
 **Narrowing is the feature.**  After a test, the name *is* its
 payload: no unwrapping operator, no second spelling.
 
@@ -627,6 +653,33 @@ immutable; `var` is mutable; loop variables are immutable inside the
 body.  Structs contain plain functions — there are no methods, no
 receivers, no inheritance; `Struct.func(...)` is a name, not a
 dispatch.
+
+### Unreachable code is refused
+
+A statement below one that never comes back — `return`, `break`,
+`continue`, `trap(...)`, `error(...)`, or an `if` whose arms all leave
+— is a compile error naming the terminator and its line.
+
+This follows from the compiler having **one severity**: every
+diagnostic stops the compile, because a warning is a rule the language
+did not commit to.  So the question is only which side of the line
+unreachable code falls on, and the line the language already draws is
+between code that is *misleading* and code that is merely *redundant*.
+`a < b < c` and `not a == b` are refused because the way they read and
+the way they run disagree; an unused local is accepted, because the
+program means what it says and does what it says.  A statement after
+`return` is the first kind: the author wrote it believing it runs.
+
+One terminator is one report, however many lines it stranded.  An `if`
+counts only when **every** arm leaves, so the ordinary early-return
+guard is untouched:
+
+```luce
+func clamp(n: Int) -> Int:
+    if n < 0:
+        return 0
+    return n                  # reachable: the guard has no else
+```
 
 ### File-scope constants
 

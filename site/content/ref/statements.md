@@ -191,6 +191,33 @@ Nothing is visible without an import. There is no shadowing anywhere.
 
 ## Dead code
 
+A statement below one that never comes back — `return`, `break`,
+`continue`, `trap(...)`, `error(...)`, or an `if` whose arms all leave
+— is refused, naming the terminator and its line.
+
+```luce fail
+func main():
+    let a = 1
+    return
+    let b = a
+```
+
+```output
+luce: compile failed
+main.luc:4:5: this cannot run: the return on line 3 leaves the block first; delete it, or move it above the return [luce.sema.unreachable]
+        let b = a
+        ^~~~~~~~~
+```
+
+The compiler has one severity, so this is a refusal or nothing. It is
+a refusal for the reason `a < b < c` is: the way the code reads and the
+way it runs disagree. An unused local is *not* refused — that is
+redundant rather than misleading.
+
+An `if` counts only when **every** arm leaves, so an early-return guard
+with no `else` is untouched, and one terminator is one report however
+many lines it stranded.
+
 Functions unreachable from the entry point never reach the compiled
 module, so an unused `import std.math` costs nothing to ship, decode
 or compile.

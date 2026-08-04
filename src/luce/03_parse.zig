@@ -53,6 +53,17 @@
 //!   blocks, so every complaint available here — starting with the
 //!   innermost block looking empty — would be the compiler describing
 //!   its own recovery.  The file was refused, by name, once.
+//! * **A statement stage 2 already complained about is not complained
+//!   about again.**  The rule above, per construct rather than per
+//!   file.  A stray character is *dropped*, so what arrives here is a
+//!   statement with a hole in it — `if a && a:` reached this stage as
+//!   `if a a:` — and the complaint about the hole is the first mistake
+//!   restated in words that cannot name the character, because the
+//!   character never became a token.  So a report is suppressed when
+//!   stage 2 spoke inside the source the current statement has
+//!   consumed.  Scoped to the statement, so a file with one bad line
+//!   still reports the next one, and a damaged statement does not
+//!   silence its siblings.
 //! * **Bounded recursion.**  Statements, conditionals, expressions,
 //!   prefix chains and type arguments all take their depth through
 //!   `Parser.enter`, so hostile or generated input reports

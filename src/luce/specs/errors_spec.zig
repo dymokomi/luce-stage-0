@@ -187,6 +187,54 @@ fn expectSayingAtOptions(
     }
 }
 
+/// `expectOnlySayingAt`, plus the column the underline **stops** at —
+/// one past the last character the reader sees marked.
+///
+/// The helpers above assert where a span starts, which pins every
+/// caret that can move sideways.  It does not pin a caret that can only
+/// grow: a diagnostic narrowed onto a binary expression's *left*
+/// operand starts exactly where the whole expression starts, so
+/// widening it back to the whole expression is a change no assertion
+/// about the start can see.  `n and true` would go on passing with the
+/// underline back under all three tokens, which is the regression the
+/// narrowing was the fix for.  Where the *width* of the underline is
+/// the claim, this is the assertion.
+///
+/// `end_column` is 1-based and half-open, matching `Rendered`: for a
+/// single-character operand at column 8 it is 9.  The span must start
+/// and end on the same line, which every diagnostic that narrows onto
+/// an operand does.
+fn expectOnlySayingAcross(
+    source: []const u8,
+    code: []const u8,
+    saying: []const u8,
+    line: usize,
+    column: usize,
+    end_column: usize,
+) !void {
+    var result = try compile_mod.compile(testing.allocator, source, script);
+    defer result.deinit();
+    switch (result) {
+        .success => {
+            std.debug.print("expected {s}, but this compiled:\n{s}", .{ code, source });
+            return error.TestUnexpectedResult;
+        },
+        .failure => |diagnostics| {
+            const first = diagnostics.at(0) orelse return error.TestUnexpectedResult;
+            errdefer printAll(&diagnostics);
+            try testing.expectEqualStrings(code, first.code);
+            try testing.expectEqualStrings(saying, first.message);
+            const at = source_mod.place(source, first.span.start);
+            try testing.expectEqual(line, at.line);
+            try testing.expectEqual(column, at.column);
+            const stop = source_mod.place(source, first.span.end);
+            try testing.expectEqual(line, stop.line);
+            try testing.expectEqual(end_column, stop.column);
+            try testing.expectEqual(@as(usize, 1), diagnostics.count());
+        },
+    }
+}
+
 /// `expectSayingAt`, plus: this is the *only* diagnostic the program
 /// produced.
 ///
@@ -364,7 +412,67 @@ test "luce.parse.top: only func/struct/let/import at file scope" {
 }
 
 test "luce.parse.expression: a missing expression is reported" {
-    try expectRejected("func main():\n    let a = @\n", "luce.parse.expression");
+    try expectRejected("func main():\n    let a = 1 +\n", "luce.parse.expression");
+}
+
+test "a character stage 2 refused is not refused twice" {
+    // `let a = @` is one mistake.  Stage 2 names the character it
+    // could not use and drops it; stage 3 then had a binding with no
+    // value and said "expected an expression", which is the same
+    // mistake in worse words — it cannot name `@`, because `@` never
+    // became a token.  One mistake, one report, and the report is the
+    // one that names the character.
+    try expectOnlySayingAt(
+        "func main():\n    let a = @\n",
+        "luce.lex.character",
+        "unexpected character '@'",
+        2,
+        13,
+    );
+    // The suppression is per construct, not per file: a later
+    // statement with a mistake of its own still reports.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 1 $ 2\n    let b = 1 +\n",
+        script,
+    );
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    try testing.expectEqual(@as(usize, 2), result.failure.count());
+    try testing.expectEqualStrings("luce.lex.character", result.failure.at(0).?.code);
+    try testing.expectEqualStrings("luce.parse.expression", result.failure.at(1).?.code);
+}
+
+test "a matched pair of typographic quotes is one mistake" {
+    // `let a = \u{201C}hello\u{201D}` is a string somebody typed in a
+    // word processor.  It used to be two stray-character reports
+    // naming neither the pair nor the string it delimits.
+    try expectOnlySayingAt(
+        "func main():\n    let a = \u{201C}hello\u{201D}\n    print(a)\n",
+        "luce.lex.character",
+        "typographic quotes (U+201C and U+201D) around a string; text is written \"like this\"",
+        2,
+        13,
+    );
+    // Unmatched, there is no pair to name and the single character
+    // keeps its own answer.
+    try expectSayingAt(
+        "func main():\n    let a = \u{201C}hello\n",
+        "luce.lex.character",
+        "unexpected character '\u{201C}' (U+201C): a typographic quote; text is written \"like this\"",
+        2,
+        13,
+    );
+    // And the search does not cross a line: an opening quote with its
+    // partner three lines down is two unrelated mistakes, not one
+    // literal swallowing the file.
+    try expectSayingAt(
+        "func main():\n    let a = \u{201C}x\n    let b = 1\n    let c = \u{201D}y\n",
+        "luce.lex.character",
+        "unexpected character '\u{201C}' (U+201C): a typographic quote; text is written \"like this\"",
+        2,
+        13,
+    );
 }
 
 test "luce.parse.expected: a malformed binding name is reported at the name" {
@@ -814,25 +922,42 @@ test "luce.sema.type: an annotation names only the conversion that exists" {
 
 // `and`/`or` used to underline both operands and name neither, in a
 // compiler where `condition must be Bool, not Int` already did both.
+//
+// The left-operand case pins its *end* as well as its start, because
+// those are the same column here: `n and true` and `n` both begin at
+// column 8, so only the width tells the narrowed span from the whole
+// expression it was narrowed out of.
 
 test "luce.sema.type: a bad left operand of and is named, and underlined alone" {
-    try expectOnlySayingAt(
+    try expectOnlySayingAcross(
         \\func main():
         \\    let n = 1
         \\    if n and true:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of and must be Bool, not Int", 3, 8);
+    , "luce.sema.type", "the left operand of and must be Bool, not Int", 3, 8, 9);
+}
+
+test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
+    // `total + 1` as the left operand: the underline stops at the end
+    // of the operand, not at the end of the condition.
+    try expectOnlySayingAcross(
+        \\func main():
+        \\    let total = 1
+        \\    if total + 1 or false:
+        \\        return
+        \\
+    , "luce.sema.type", "the left operand of or must be Bool, not Int", 3, 8, 17);
 }
 
 test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
-    try expectOnlySayingAt(
+    try expectOnlySayingAcross(
         \\func main():
         \\    let n = 1
         \\    if true or n:
         \\        return
         \\
-    , "luce.sema.type", "the right operand of or must be Bool, not Int", 3, 16);
+    , "luce.sema.type", "the right operand of or must be Bool, not Int", 3, 16, 17);
 }
 
 test "luce.sema.absent: a type name takes no article" {
@@ -1248,6 +1373,165 @@ test "luce.parse.expression: '!' is not an operator, in either position" {
     // `!` lexes now — it is the fallibility mark on a return type —
     // so the hint toward `not` moved to the parser with it.
     try expectRejected("func main():\n    let a = 3 ! 4\n", "luce.parse.expression");
+}
+
+// ---------------------------------------------------------------------------
+// Operators other languages have
+// ---------------------------------------------------------------------------
+//
+// Every one of these used to be answered by naming the second
+// character — "expected an expression, found '+'" for `x++`.  The
+// caret spans the whole operator as written, and the sentence names
+// what Luce writes instead.
+
+test "luce.parse.expression: '++' is answered with '+=', in either position" {
+    try expectOnlySayingAcross(
+        "func main():\n    var i = 0\n    i++\n",
+        "luce.parse.expression",
+        "there is no '++' operator: write 'x += 1' to increment",
+        3,
+        6,
+        8,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    var i = 0\n    ++i\n",
+        "luce.parse.expression",
+        "there is no '++' operator: write 'x += 1' to increment",
+        3,
+        5,
+        7,
+    );
+}
+
+test "luce.parse.expression: '--' is claimed only where it cannot be a negation" {
+    // Postfix, with nothing after it, is the decrement.
+    try expectOnlySayingAcross(
+        "func main():\n    var i = 0\n    i--\n",
+        "luce.parse.expression",
+        "there is no '--' operator: write 'x -= 1' to decrement",
+        3,
+        6,
+        8,
+    );
+    // `a--b` is `a - (-b)` and has always compiled.  Reading it as a
+    // decrement would break working code, so an operand after the pair
+    // is what tells the two apart.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 5\n    let b = 3\n    assert(a--b == 8)\n",
+        script,
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+    // And prefix `--a` is a double negation, for the same reason.
+    var twice = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let a = 5\n    assert(--a == 5)\n",
+        script,
+    );
+    defer twice.deinit();
+    if (twice == .failure) printAll(&twice.failure);
+    try testing.expect(twice == .success);
+}
+
+test "luce.parse.expression: the comparison operators of other languages" {
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    if a === 1:\n        return\n",
+        "luce.parse.expression",
+        "there is no '===' operator: '==' compares, and compares by value",
+        3,
+        10,
+        13,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    if a !== 1:\n        return\n",
+        "luce.parse.expression",
+        "there is no '!==' operator: '!=' compares, and compares by value",
+        3,
+        10,
+        13,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    if a <> 2:\n        return\n",
+        "luce.parse.expression",
+        "there is no '<>' operator: write '!=' to compare for difference",
+        3,
+        10,
+        12,
+    );
+}
+
+test "luce.parse.expression: '**' names the std function that does it" {
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 2 ** 3\n    print(str(a))\n",
+        "luce.parse.expression",
+        "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for Int",
+        2,
+        15,
+        17,
+    );
+}
+
+test "luce.parse.expression: the shifts say there are no bitwise operators" {
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 1\n    let b = a << 2\n",
+        "luce.parse.expression",
+        "there is no '<<' operator: Luce has no bitwise operators; multiply by a power of two",
+        3,
+        15,
+        17,
+    );
+    try expectOnlySayingAcross(
+        "func main():\n    let a = 8\n    let b = a >> 2\n",
+        "luce.parse.expression",
+        "there is no '>>' operator: Luce has no bitwise operators; divide by a power of two",
+        3,
+        15,
+        17,
+    );
+}
+
+test "the operator pair must touch to be read as one operator" {
+    // `a < > b` is two operators spaced out, not a `<>` — the reader
+    // who writes `<>` writes it closed up.  Answering the spaced form
+    // as a foreign operator would be inventing an intent.
+    try expectSaying(
+        "func main():\n    let a = 1\n    if a < > 2:\n        return\n",
+        "luce.parse.expression",
+        "expected an expression, found '>'",
+    );
+}
+
+test "luce.lex.character: '&&' and '||' name the Luce keyword" {
+    // These never become tokens at all, so the lexer is where they
+    // are answered — but the answer is the same shape as the parser's.
+    try expectSayingAt(
+        "func main():\n    let a = true\n    if a && a:\n        return\n",
+        "luce.lex.character",
+        "there is no '&&' operator: write 'and'",
+        3,
+        10,
+    );
+    try expectSayingAt(
+        "func main():\n    let a = true\n    if a || a:\n        return\n",
+        "luce.lex.character",
+        "there is no '||' operator: write 'or'",
+        3,
+        10,
+    );
+    // A single one keeps the general answer, and a longer run is
+    // still a run of noise rather than an operator.
+    try expectSaying(
+        "func main():\n    let a = 1 & 2\n",
+        "luce.lex.character",
+        "unexpected character '&' (there are no bitwise operators)",
+    );
+    try expectSaying(
+        "func main():\n    let a = 1 &&& 2\n",
+        "luce.lex.character",
+        "unexpected character '&' (there are no bitwise operators), repeated 3 times",
+    );
 }
 
 test "luce.lex.character: an unexpected symbol is rejected" {
@@ -2295,6 +2579,304 @@ test "storing a borrowed parameter is not told to give it" {
     , "borrowed parameter and can never be given away");
 }
 
+test "an f-string hole is underlined, not the whole literal" {
+    // The synthesized `str(...)` used to carry the whole f-string's
+    // span, so a reader with four holes on one line was shown all four
+    // and told one of them was wrong.
+    try expectHostSayingAt(
+        \\func main():
+        \\    let a = 1
+        \\    let b = 2
+        \\    let xs = [1]
+        \\    let c = 3
+        \\    print(f"{a} and {b} and {xs} and {c}")
+        \\    free(xs)
+        \\
+    ,
+        "luce.sema.type",
+        "str takes Int, Float, Bool, String, or Builder",
+        6,
+        30,
+    );
+}
+
+test "luce.parse.expected: a slice has no third field" {
+    // `s[0:4:2]` answered "expected ']' to close '['", which names the
+    // bracket and leaves the reader to find out that this language has
+    // two slice fields rather than three.
+    const say = "a slice is [start:end] and has no step; take every nth with a loop";
+    try expectSayingAt(
+        "func main():\n    let s = \"hello\"\n    let t = s[0:4:2]\n",
+        "luce.parse.expected",
+        say,
+        3,
+        18,
+    );
+    // The open-start form takes the same answer.
+    try expectSayingAt(
+        "func main():\n    let s = \"hello\"\n    let t = s[:4:2]\n",
+        "luce.parse.expected",
+        say,
+        3,
+        17,
+    );
+    // Both real slice shapes keep working.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        "func main():\n    let s = \"hello\"\n    assert(s[0:2] == \"he\")\n    assert(s[:2] == \"he\")\n    assert(s[3:] == \"lo\")\n",
+        script,
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+}
+
+test "luce.sema.fallible: a try with nothing to try says so, in either kind of function" {
+    // The order of these two checks *is* the diagnostic.  Asked the
+    // other way round, the same mistake in a plain `main` answered
+    // "main does not say it can fail; write '-> !'", which is wrong,
+    // and wrong in the expensive direction: following it changes a
+    // signature, recompiles, and produces the real message.
+    const say = "try applies to a call that can fail, and this one cannot; drop the try";
+    try expectOnlySayingAt(
+        \\func plain() -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = try plain()
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.sema.fallible",
+        say,
+        5,
+        13,
+    );
+    // The arm that was always right, kept honest.
+    try expectOnlySayingAt(
+        \\func plain() -> Int:
+        \\    return 1
+        \\
+        \\func main() -> !:
+        \\    let a = try plain()
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.sema.fallible",
+        say,
+        5,
+        13,
+    );
+    // And a try that really does hand an error up still says that.
+    try expectOnlySayingAt(
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = try risky()
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.sema.fallible",
+        "try hands the error to the caller, and main does not say it can fail; " ++
+            "write '-> !' (or '-> T!') on its signature, or handle it with catch",
+        5,
+        13,
+    );
+}
+
+test "luce.parse.expected: a catch block cannot initialize a binding" {
+    // The block form guards a statement or an assignment; it supplies
+    // no value, and a binding is nothing but a value (docs/FAILURE.md).
+    // The old answer was "expected end of line after the binding,
+    // found the keyword 'catch'", which leaves the reader to work out
+    // which of the two catch forms they have met.
+    try expectSayingAt(
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = risky() catch:
+        \\        assert(false)
+        \\    assert(a == 1)
+        \\
+    ,
+        "luce.parse.expected",
+        "a catch block supplies no value, so it cannot initialize a: " ++
+            "write 'let a = … catch VALUE', or declare a first and guard the assignment",
+        5,
+        21,
+    );
+    try expectSayingAt(
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    var total = risky() catch:
+        \\        assert(false)
+        \\    assert(total == 1)
+        \\
+    ,
+        "luce.parse.expected",
+        "a catch block supplies no value, so it cannot initialize total: " ++
+            "write 'var total = … catch VALUE', or declare total first and guard the assignment",
+        5,
+        25,
+    );
+    // Both fixes the message names actually compile.
+    var fallback = try compile_mod.compile(
+        testing.allocator,
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = risky() catch 0
+        \\    assert(a == 1)
+        \\
+    ,
+        script,
+    );
+    defer fallback.deinit();
+    if (fallback == .failure) printAll(&fallback.failure);
+    try testing.expect(fallback == .success);
+
+    var guarded = try compile_mod.compile(
+        testing.allocator,
+        \\func risky() -> Int!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    var a = 0
+        \\    a = risky() catch:
+        \\        a = -1
+        \\    assert(a == 1)
+        \\
+    ,
+        script,
+    );
+    defer guarded.deinit();
+    if (guarded == .failure) printAll(&guarded.failure);
+    try testing.expect(guarded == .success);
+}
+
+// ---------------------------------------------------------------------------
+// luce.sema.unreachable — a statement below one that never comes back
+// ---------------------------------------------------------------------------
+//
+// Refused rather than tolerated, because Luce has one severity and the
+// line it already draws puts this on the refusing side: it refuses
+// `a < b < c` and `not a == b`, where the way the code reads and the
+// way it runs disagree, and it accepts an unused local, which is
+// merely redundant.  A statement after `return` is the first kind.
+
+test "luce.sema.unreachable: each terminator is named, with its line" {
+    try expectOnlySayingAt(
+        "func main():\n    let a = 1\n    return\n    let b = a\n",
+        "luce.sema.unreachable",
+        "this cannot run: the return on line 3 leaves the block first; delete it, or move it above the return",
+        4,
+        5,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    trap(\"no\")\n    let b = 1\n",
+        "luce.sema.unreachable",
+        "this cannot run: the trap on line 2 leaves the block first; delete it, or move it above the trap",
+        3,
+        5,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    var i = 0\n    while i < 3:\n        break\n        i += 1\n",
+        "luce.sema.unreachable",
+        "this cannot run: the break on line 4 leaves the block first; delete it, or move it above the break",
+        5,
+        9,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    var i = 0\n    while i < 3:\n        i += 1\n        continue\n        i += 2\n",
+        "luce.sema.unreachable",
+        "this cannot run: the continue on line 5 leaves the block first; delete it, or move it above the continue",
+        6,
+        9,
+    );
+}
+
+test "luce.sema.unreachable: an if counts only when both arms leave" {
+    // Both arms return, so nothing below the `if` runs.
+    try expectOnlySayingAt(
+        \\func pick(n: Int) -> Int:
+        \\    if n > 0:
+        \\        return 1
+        \\    else:
+        \\        return 2
+        \\    let never = n
+        \\    return never
+        \\
+        \\func main():
+        \\    assert(pick(1) == 1)
+        \\
+    ,
+        "luce.sema.unreachable",
+        "this cannot run: the if on line 2 leaves the block first; delete it, or move it above the if",
+        6,
+        5,
+    );
+    // One arm falling through is the ordinary early-return guard, and
+    // it must keep compiling — this is the shape half the corpus is
+    // written in.
+    var guard = try compile_mod.compile(
+        testing.allocator,
+        \\func pick(n: Int) -> Int:
+        \\    if n > 0:
+        \\        return 1
+        \\    let reached = n
+        \\    return reached
+        \\
+        \\func main():
+        \\    assert(pick(0) == 0)
+        \\
+    ,
+        script,
+    );
+    defer guard.deinit();
+    if (guard == .failure) printAll(&guard.failure);
+    try testing.expect(guard == .success);
+}
+
+test "luce.sema.unreachable: one terminator is one mistake, however many lines it strands" {
+    try expectOnlySayingAt(
+        "func main():\n    return\n    let a = 1\n    let b = 2\n    let c = 3\n",
+        "luce.sema.unreachable",
+        "this cannot run: the return on line 2 leaves the block first; delete it, or move it above the return",
+        3,
+        5,
+    );
+}
+
+test "a terminator as the last statement of its block is the ordinary case" {
+    // Everything the rule must not touch: a `return` at the end of a
+    // function, a `break` at the end of a loop body, a `return` inside
+    // an arm with code after the `if`.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        \\func first(n: Int) -> Int:
+        \\    var i = 0
+        \\    while i < n:
+        \\        if i == 2:
+        \\            break
+        \\        i += 1
+        \\    return i
+        \\
+        \\func main():
+        \\    assert(first(5) == 2)
+        \\
+    ,
+        script,
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+}
+
 // ---------------------------------------------------------------------------
 // luce.sema.struct — a struct that cannot be built
 // ---------------------------------------------------------------------------
@@ -2312,6 +2894,130 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: S20\n");
     try expectRejected(text.items, "luce.sema.struct");
+}
+
+/// `struct S0: v: Int`, then `levels` layouts of two fields each, so
+/// `S{levels}` is exactly `2^levels` values.  The header of `S{k}` is
+/// on line `3k` and its first field on line `3k + 1`.
+fn doublingStructs(text: *std.ArrayList(u8), levels: usize) !void {
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    for (1..levels + 1) |level| {
+        var line: [64]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(
+            &line,
+            "struct S{d}:\n    a: S{d}\n    b: S{d}\n",
+            .{ level, level - 1, level - 1 },
+        ));
+    }
+}
+
+test "luce.sema.struct: the value limit is exact in both directions" {
+    // 2^12 is 4096, which is the limit and not past it; 2^13 is the
+    // first refusal.  A bound nobody stands on either side of drifts.
+    {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(testing.allocator);
+        try doublingStructs(&text, 12);
+        try text.appendSlice(testing.allocator, "func main():\n    var g: S12\n    assert(g.a.a.a.a.a.a.a.a.a.a.a.a.v == 0)\n");
+        var result = try compile_mod.compile(testing.allocator, text.items, script);
+        defer result.deinit();
+        if (result == .failure) printAll(&result.failure);
+        try testing.expect(result == .success);
+    }
+    {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(testing.allocator);
+        try doublingStructs(&text, 13);
+        try text.appendSlice(testing.allocator, "func main():\n    var g: S13\n");
+        // The caret is on the widest field, never the `struct`
+        // keyword: that is the line that gets edited, and `?` is one
+        // of the two edits that work.
+        try expectOnlySayingAt(
+            text.items,
+            "luce.sema.struct",
+            "struct S13 always holds more than 4096 values once its nested structs are counted; " ++
+                "a is S12, which is 4096 of them on its own; write a: S12? to hold those only when " ++
+                "they are there, or move bulk data into a List, Map, or Array, which is one reference",
+            40,
+            5,
+        );
+    }
+}
+
+test "luce.sema.struct: a struct too wide from its own fields names no field" {
+    // 4097 Int fields: nothing is nested, so there is no widest
+    // struct field to point at and the shorter sentence is the honest
+    // one.  Naming `f0: Int` as the culprit would be advice that does
+    // not work.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.appendSlice(testing.allocator, "struct Wide:\n");
+    for (0..4097) |index| {
+        var line: [32]u8 = undefined;
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: Int\n", .{index}));
+    }
+    try text.appendSlice(testing.allocator, "func main():\n    var g: Wide\n");
+    try expectOnlySayingAt(
+        text.items,
+        "luce.sema.struct",
+        "struct Wide always holds more than 4096 values; bulk data belongs in a List, Map, or Array, which is one reference",
+        1,
+        1,
+    );
+}
+
+test "the value limit counts what a struct always holds, so `?` is an answer" {
+    // The pair that reads as an inconsistency and is not one.  Both
+    // Holders describe the same data; only the first *always* holds
+    // it.  An optional field starts absent and its payload arrives
+    // when a program builds one, which is why `valueCount` stops
+    // there — and why the refusal above offers `?` as a fix.
+    //
+    // Flattening optionals too is not available: the shape walk closes
+    // a layout only after the layouts it contains, and `next: Node?`
+    // has no such order, so it would have to be reported as a cycle —
+    // destroying the fix the cycle diagnostic itself prescribes.  The
+    // last block is that fix, still compiling.
+    var plain: std.ArrayList(u8) = .empty;
+    defer plain.deinit(testing.allocator);
+    try doublingStructs(&plain, 13);
+    try plain.appendSlice(testing.allocator, "func main():\n    var g: S13\n");
+    try expectRejected(plain.items, "luce.sema.struct");
+
+    var optional: std.ArrayList(u8) = .empty;
+    defer optional.deinit(testing.allocator);
+    try optional.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    for (1..14) |level| {
+        var line: [64]u8 = undefined;
+        try optional.appendSlice(testing.allocator, try std.fmt.bufPrint(
+            &line,
+            "struct S{d}:\n    a: S{d}?\n    b: S{d}?\n",
+            .{ level, level - 1, level - 1 },
+        ));
+    }
+    try optional.appendSlice(testing.allocator, "func main():\n    var g: S13\n    assert(g.a == none)\n");
+    var result = try compile_mod.compile(testing.allocator, optional.items, script);
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+
+    // The recursive structure the whole rule exists to permit.
+    var recursive = try compile_mod.compile(
+        testing.allocator,
+        \\struct Node:
+        \\    value: Int
+        \\    next: Node?
+        \\
+        \\func main():
+        \\    var n: Node
+        \\    assert(n.next == none)
+        \\
+    ,
+        script,
+    );
+    defer recursive.deinit();
+    if (recursive == .failure) printAll(&recursive.failure);
+    try testing.expect(recursive == .success);
 }
 
 test "a wide struct graph with no cycle compiles, and quickly" {
