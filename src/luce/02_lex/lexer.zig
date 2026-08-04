@@ -50,9 +50,12 @@
 //!   with `chr(...)`.
 //! * **Comments** run from `#` to the end of the line; there is no
 //!   block comment form.  A `#!` first line therefore works by
-//!   construction.  `//` and `/* ... */` are each a `luce.lex.comment`
-//!   diagnostic that skips what their author meant to comment out,
-//!   rather than arithmetic that fails three tokens later.
+//!   construction.  `/* ... */` is a `luce.lex.comment` diagnostic
+//!   that skips what its author meant to comment out, rather than
+//!   arithmetic that fails three tokens later.  `//` used to be one
+//!   too and is now **floor division** (docs/NUMERICS.md); a line
+//!   that begins with it is answered by the parser, which is the only
+//!   place the comment reading is unambiguous.
 //! * **Line endings** are LF: stage 1 has already folded CRLF and
 //!   refused a lone CR.
 //! * **Layout** is indentation, and the four-space step is *enforced*,
@@ -480,7 +483,7 @@ const Lexer = struct {
             },
             '+' => try self.maybeAssign(.plus, .plus_assign),
             '*' => try self.maybeAssign(.star, .star_assign),
-            '/' => try self.foreignComment(),
+            '/' => try self.slashSomething(),
             '%' => try self.maybeAssign(.percent, .percent_assign),
             '-' => {
                 if (self.peek(1) == '>') {
@@ -575,21 +578,32 @@ const Lexer = struct {
         }
     }
 
-    /// `//` and `/* ... */` are not Luce.  Both are habits from other
-    /// languages that would otherwise lex as arithmetic and fail three
-    /// tokens later, so each gets its own diagnostic and is skipped the
+    /// The three things a `/` can begin.
+    ///
+    /// `//` is **floor division** (docs/NUMERICS.md), which is what it
+    /// costs to have that operator: this used to be the place a
+    /// reader who wrote a C-style comment was told there is no `//`
+    /// form, and the message served exactly the newcomer the operator
+    /// is otherwise courting.  It is not gone, it has moved — a line
+    /// that *starts* with `//` cannot be arithmetic, and the parser
+    /// says so where it meets one (`luce.parse.comment`).  That is the
+    /// only position the mistake is unambiguous in, and the one it is
+    /// nearly always made in.
+    ///
+    /// `/* ... */` keeps its arm and its diagnostic: nothing in the
+    /// language claims it, so it can still be named and skipped the
     /// way its author meant it to be read.
-    fn foreignComment(self: *Lexer) Error!void {
+    fn slashSomething(self: *Lexer) Error!void {
         const start = self.offset;
         switch (self.peek(1)) {
             '/' => {
-                try self.report(
-                    "luce.lex.comment",
-                    .{ .start = start, .end = start + 2 },
-                    "a comment starts with '#'; there is no '//' form",
-                    .{},
-                );
-                try self.skipComment();
+                if (self.peek(2) == '=') {
+                    try self.emit(.slash_slash_assign, .{ .start = start, .end = start + 3 });
+                    self.offset += 3;
+                } else {
+                    try self.emit(.slash_slash, .{ .start = start, .end = start + 2 });
+                    self.offset += 2;
+                }
             },
             '*' => {
                 try self.report(
@@ -2021,13 +2035,7 @@ test "a shebang line is an ordinary comment" {
     });
 }
 
-test "the comment forms Luce does not have are named, not mis-lexed as arithmetic" {
-    try lexWithDiagnostics(
-        testing.allocator,
-        "a = 1 // two\n",
-        &.{ .identifier, .assign, .int_literal, .newline, .end_of_file },
-        &.{"luce.lex.comment"},
-    );
+test "a block comment is named, not mis-lexed as arithmetic" {
     // A block comment is skipped to its terminator, so the prose
     // inside costs one message and not one per line.
     try lexWithDiagnostics(
@@ -2043,10 +2051,16 @@ test "the comment forms Luce does not have are named, not mis-lexed as arithmeti
         &.{ .identifier, .assign, .newline, .end_of_file },
         &.{"luce.lex.comment"},
     );
-    // Division still divides.
+    // Division still divides, and `//` is now the operator beside it
+    // rather than a diagnostic (docs/NUMERICS.md).
     try lexKinds(testing.allocator, "a = 6 / 2\nb /= 2\n", &.{
         .identifier,  .assign,     .int_literal,  .slash,       .int_literal,
         .newline,     .identifier, .slash_assign, .int_literal, .newline,
+        .end_of_file,
+    });
+    try lexKinds(testing.allocator, "a = 7 // 2\nb //= 2\n", &.{
+        .identifier,  .assign,     .int_literal,        .slash_slash, .int_literal,
+        .newline,     .identifier, .slash_slash_assign, .int_literal, .newline,
         .end_of_file,
     });
 }

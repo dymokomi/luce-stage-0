@@ -20,7 +20,7 @@ const Value = value.Value;
 /// Comparison answers a Bool; arithmetic answers the operand type.
 pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Value) Error!Value {
     switch (op) {
-        .add, .subtract, .multiply, .divide, .remainder => {},
+        .add, .subtract, .multiply, .divide, .floor_divide, .modulo => {},
         else => return Value.ofBoolean(compare(op, left, right)),
     }
 
@@ -50,12 +50,28 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
                     }
                     return Value.ofInt(@divTrunc(left_int, right_int));
                 },
-                .remainder => {
+                // `//` and `%` are the integer pair and they **floor**
+                // together (docs/NUMERICS.md §3): `-7 // 3` is `-3`
+                // and `-7 % 3` is `2`, so `%` takes the sign of the
+                // divisor and `b * (a // b) + (a % b) == a` holds for
+                // every pair of operands that does not trap.
+                .floor_divide => {
                     if (right_int == 0) return runtime.fail(.divide_by_zero);
                     if (left_int == std.math.minInt(i64) and right_int == -1) {
                         return runtime.fail(.integer_overflow);
                     }
-                    return Value.ofInt(@rem(left_int, right_int));
+                    return Value.ofInt(@divFloor(left_int, right_int));
+                },
+                .modulo => {
+                    if (right_int == 0) return runtime.fail(.divide_by_zero);
+                    // `minInt % -1` is `0` under flooring and cannot
+                    // overflow, but `@mod` computes it through a
+                    // division that can, so the pair is guarded
+                    // together and answers what `//` answers.
+                    if (left_int == std.math.minInt(i64) and right_int == -1) {
+                        return runtime.fail(.integer_overflow);
+                    }
+                    return Value.ofInt(@mod(left_int, right_int));
                 },
                 else => unreachable,
             }
@@ -69,7 +85,22 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
                 .subtract => left_float - right_float,
                 .multiply => left_float * right_float,
                 .divide => left_float / right_float,
-                .remainder => @rem(left_float, right_float),
+                // Float `%` floors with the integer one, or promotion
+                // would introduce a discontinuity: `-7 % 3` answering
+                // `2` and `-7 % 3.0` answering `-1.0`, with an
+                // invisible widening choosing between them.  It
+                // imports one known wart with it — floor-mod on
+                // floats can return the divisor, `-1e-100 % 1.0`
+                // being `1.0` exactly, because the true answer is a
+                // hair under 1.0 and rounds up.  Python has lived
+                // with it since 2.0; the two operators agreeing is
+                // worth more (docs/NUMERICS.md §3).
+                .modulo => floorMod(left_float, right_float),
+                // And `//` floors with it, for the same reason and to
+                // keep the identity above true of Floats as well.  It
+                // is IEEE like every other Float operation: `1.0 // 0.0`
+                // is `inf`, not a trap.
+                .floor_divide => @floor(left_float / right_float),
                 else => unreachable,
             };
             return Value.ofFloat(computed);
@@ -179,6 +210,65 @@ test "a struct holding none compares, in either order, instead of crashing" {
     try std.testing.expect(compare(.not_equal, present, absent));
 }
 
+/// Float `%`: the floor modulus, pairing with `//` exactly as the
+/// integer operators do (docs/NUMERICS.md §3).
+///
+/// **Not Zig's `@mod`.**  Zig's integer `@mod` floors and pairs with
+/// `@divFloor`, but its *float* `@mod` only forces a non-negative
+/// answer: `@mod(7.0, -3.0)` is `1.0` where flooring says `-2.0`.
+/// Using it would put the discontinuity promotion is meant to remove
+/// back one type over — `7 % -3` answering `-2` and `7 % -3.0`
+/// answering `1.0`.  So this is written out, and it is the one shape
+/// both engines call.
+///
+/// The result carries the sign of the **divisor**, zeros included:
+/// `-6.0 % 3.0` is `0.0` and `6.0 % -3.0` is `-0.0`, which is the rule
+/// stated without an exception and what Python answers.
+pub fn floorMod(left: f64, right: f64) f64 {
+    const remainder = @rem(left, right);
+    // `-0.0 == 0.0`, so this arm catches both zeros and the sign is
+    // then taken from the divisor rather than left to `@rem`.
+    if (remainder == 0.0) return std.math.copysign(@as(f64, 0.0), right);
+    // A NaN remainder compares false with everything, so it falls
+    // through the addition below and stays NaN either way.
+    if ((remainder < 0.0) != (right < 0.0)) return remainder + right;
+    return remainder;
+}
+
+test "float % floors with //, and the identity holds" {
+    const cases = [_][3]f64{
+        // left, right, expected
+        .{ 7.0, 3.0, 1.0 },
+        .{ -7.0, 3.0, 2.0 },
+        .{ 7.0, -3.0, -2.0 },
+        .{ -7.0, -3.0, -1.0 },
+        .{ 5.5, 2.0, 1.5 },
+        .{ -5.5, 2.0, 0.5 },
+    };
+    for (cases) |case| {
+        const left = case[0];
+        const right = case[1];
+        try std.testing.expectEqual(case[2], floorMod(left, right));
+        // `b * (a // b) + (a % b) == a`, the identity the pairing is
+        // chosen to keep.
+        try std.testing.expectEqual(left, right * @floor(left / right) + floorMod(left, right));
+    }
+
+    // Zeros take the divisor's sign, so the rule has no exception.
+    try std.testing.expect(!std.math.signbit(floorMod(-6.0, 3.0)));
+    try std.testing.expect(std.math.signbit(floorMod(6.0, -3.0)));
+
+    // The wart §3 records and accepts: the true answer is a hair under
+    // 1.0 and rounds up to it, so floor-mod can return the divisor.
+    try std.testing.expectEqual(@as(f64, 1.0), floorMod(-1e-100, 1.0));
+
+    // Infinities and NaN stay IEEE.
+    try std.testing.expectEqual(@as(f64, 5.0), floorMod(5.0, std.math.inf(f64)));
+    try std.testing.expectEqual(std.math.inf(f64), floorMod(-5.0, std.math.inf(f64)));
+    try std.testing.expect(std.math.isNan(floorMod(std.math.inf(f64), 3.0)));
+    try std.testing.expect(std.math.isNan(floorMod(1.0, 0.0)));
+}
+
 /// Comparison across the Int/Float line, on the mathematical values
 /// rather than on a conversion (docs/NUMERICS.md §5).
 ///
@@ -226,7 +316,7 @@ pub fn compareIntFloat(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
         .greater => order == .gt,
         .greater_equal => order != .lt,
         // The analyzer emits this intrinsic for comparisons only.
-        .add, .subtract, .multiply, .divide, .remainder => unreachable,
+        .add, .subtract, .multiply, .divide, .floor_divide, .modulo => unreachable,
     };
 }
 

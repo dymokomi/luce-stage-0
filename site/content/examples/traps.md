@@ -49,7 +49,7 @@ loom: trap: integer overflow [integer_overflow]
 
 ```luce trap
 func ratio(a: Int, b: Int) -> Int:
-    return a / b
+    return a // b
 
 func main():
     print(str(ratio(10, 2)))

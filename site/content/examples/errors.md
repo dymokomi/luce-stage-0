@@ -32,7 +32,7 @@ does, with one terminator changed. It needs a caller that said `!`.
 func inner(n: Int) -> Int!:
     if n == 0:
         error("inner refuses zero")
-    return 100 / n
+    return 100 // n
 
 func middle(n: Int) -> Int!:
     return try inner(n) + 1

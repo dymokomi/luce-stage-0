@@ -3557,10 +3557,28 @@ const Body = struct {
             .add => return self.emitChecked(.@"sadd.with.overflow", left, right),
             .subtract => return self.emitChecked(.@"ssub.with.overflow", left, right),
             .multiply => return self.emitChecked(.@"smul.with.overflow", left, right),
-            .divide, .remainder => {
+            .divide => {
                 try self.checkDivisor(left, right);
-                const tag: Tag = if (operation == .divide) .sdiv else .srem;
-                return self.wip.bin(tag, left, right, "int");
+                return self.wip.bin(.sdiv, left, right, "int");
+            },
+            // `//` and `%` floor together (docs/NUMERICS.md §3).  The
+            // chip only offers the truncating pair, so each gets the
+            // one correction that turns it into the flooring one, and
+            // both corrections fire on the same condition: the true
+            // quotient was negative and did not divide evenly.
+            .floor_divide, .modulo => {
+                try self.checkDivisor(left, right);
+                const truncated = try self.wip.bin(
+                    if (operation == .floor_divide) .sdiv else .srem,
+                    left,
+                    right,
+                    "int",
+                );
+                const remainder = if (operation == .modulo)
+                    truncated
+                else
+                    try self.wip.bin(.srem, left, right, "rem");
+                return self.correctToFloor(operation, truncated, remainder, right);
             },
             .equal,
             .not_equal,
@@ -3572,23 +3590,88 @@ const Body = struct {
         }
     }
 
+    /// Turn a truncating quotient or remainder into the flooring one.
+    ///
+    /// The two differ exactly when the remainder is non-zero and its
+    /// sign disagrees with the divisor's — which is to say when the
+    /// true quotient was negative and did not come out even.  There
+    /// the quotient is one *lower* than truncation gave (truncation
+    /// rounds toward zero, flooring away from it) and the remainder is
+    /// one divisor *higher*.
+    ///
+    /// It is branchless: two comparisons, an `and`, and a `select`.
+    /// LLVM recognises the shape and folds it to a mask for a constant
+    /// power-of-two divisor, which is why `x % 256` is `x & 255` here
+    /// for every `x`, negative ones included — the thing C's remainder
+    /// cannot do without a sign fixup.
+    fn correctToFloor(
+        self: *Body,
+        operation: mir.BinaryOp,
+        truncated: Builder.Value,
+        remainder: Builder.Value,
+        right: Builder.Value,
+    ) Error!Builder.Value {
+        const builder = self.module.builder;
+        const zero = try builder.intValue(.i64, 0);
+        const uneven = try self.wip.icmp(.ne, remainder, zero, "uneven");
+        // `(a ^ b) < 0` is "the signs disagree", in one instruction
+        // and without the two comparisons the words would take.
+        const signs = try self.wip.bin(.xor, remainder, right, "signs");
+        const opposed = try self.wip.icmp(.slt, signs, zero, "opposed");
+        const needs = try self.wip.bin(.@"and", uneven, opposed, "needs.floor");
+        // Plain `sub`/`add`, with no `nsw`: both arms of a `select`
+        // are computed, and the discarded one must be a defined value
+        // rather than poison.  Neither can wrap where it is chosen.
+        const corrected = if (operation == .floor_divide)
+            try self.wip.bin(.sub, truncated, try builder.intValue(.i64, 1), "floored")
+        else
+            try self.wip.bin(.add, remainder, right, "modded");
+        return self.wip.select(.normal, needs, corrected, truncated, "int");
+    }
+
     /// Float arithmetic is plain IEEE 754 and never traps: division by
     /// zero and overflow produce infinities and NaN, exactly as they do
-    /// in the interpreter.  `%` is `frem`, which is C's `fmod` — the
-    /// remainder carrying the sign of the dividend, which is what Zig's
-    /// `@rem` computes in `runtime/operators.zig`.
+    /// in the interpreter.
+    ///
+    /// Two of the six are not one instruction.  `%` is the **floor**
+    /// modulus, pairing with `//` so that promotion introduces no
+    /// discontinuity (docs/NUMERICS.md §3), and it is neither `frem`
+    /// nor any host `fmod`: it goes to `libluce_rt`, so there is one
+    /// implementation of a rule with a zero case and a sign
+    /// correction in it.  `//` is `floor(a / b)` and that really is
+    /// two instructions, so it stays here.
     fn emitFloatArithmetic(
         self: *Body,
         operation: mir.BinaryOp,
         left: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
+        switch (operation) {
+            .modulo => return self.callRuntime(
+                .luce_rt_float_mod,
+                .double,
+                &.{ left, right },
+                "float",
+            ),
+            .floor_divide => {
+                const quotient = try self.wip.bin(.fdiv, left, right, "quotient");
+                return self.wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    .floor,
+                    &.{.double},
+                    &.{quotient},
+                    "float",
+                );
+            },
+            else => {},
+        }
         const tag: Tag = switch (operation) {
             .add => .fadd,
             .subtract => .fsub,
             .multiply => .fmul,
             .divide => .fdiv,
-            .remainder => .frem,
+            .floor_divide, .modulo => unreachable, // answered above
             .equal,
             .not_equal,
             .less,
@@ -3657,7 +3740,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             };
             return self.wip.fcmp(.normal, condition, left, right, "compare");
@@ -3692,7 +3776,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
             .boolean => switch (operation.op) {
@@ -3707,7 +3792,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
             // Object equality is identity: same object, not same
@@ -3724,7 +3810,8 @@ const Body = struct {
                 .subtract,
                 .multiply,
                 .divide,
-                .remainder,
+                .floor_divide,
+                .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
             .float, .string, .strukt => unreachable, // answered above

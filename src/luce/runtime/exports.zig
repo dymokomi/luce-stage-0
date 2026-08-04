@@ -929,6 +929,20 @@ export fn luce_rt_compare(
     return @intFromBool(operators.compare(@enumFromInt(op), left.*, right.*));
 }
 
+/// Float `%`: the floor modulus (docs/NUMERICS.md §3).  Two scalars
+/// in, one out; it reads no memory and cannot fail.
+///
+/// **A call rather than an inline sequence**, which is unlike the
+/// other float arithmetic, because this operator's answer is not one
+/// machine instruction and not what any host `fmod` gives: it is a
+/// `frem`, a zero case that takes the divisor's sign, and a correction
+/// on opposed signs.  Written twice it would be two chances to differ
+/// on `-0.0` and the infinities, and `frem` is already a libm call, so
+/// what the extra frame buys is that there is only one of it.
+export fn luce_rt_float_mod(left: f64, right: f64) callconv(.c) f64 {
+    return operators.floorMod(left, right);
+}
+
 /// Comparison across the Int/Float line, exactly (docs/NUMERICS.md).
 /// Two scalars and an operator: it reads no memory at all, cannot
 /// fail, and takes no runtime.  The Int is always the left operand —

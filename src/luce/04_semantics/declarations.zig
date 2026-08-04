@@ -1269,7 +1269,7 @@ pub const Analyzer = struct {
                     left.value.boolean or right.value.boolean;
                 return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
             },
-            .add, .subtract, .multiply, .divide, .remainder => switch (left.value) {
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => switch (left.value) {
                 .int => |a| {
                     const b = right.value.int;
                     const folded: i64 = switch (binary.op) {
@@ -1295,12 +1295,22 @@ pub const Analyzer = struct {
                             }
                             break :blk @divTrunc(a, b);
                         },
-                        .remainder => blk: {
+                        // `//` and `%` floor together
+                        // (docs/NUMERICS.md §3); the folder answers
+                        // what a run answers.
+                        .floor_divide => blk: {
                             if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
                             if (a == std.math.minInt(i64) and b == -1) {
                                 return self.constantError(binary.span, "constant arithmetic overflows", .{});
                             }
-                            break :blk @rem(a, b);
+                            break :blk @divFloor(a, b);
+                        },
+                        .modulo => blk: {
+                            if (b == 0) return self.constantError(binary.span, "constant division by zero", .{});
+                            if (a == std.math.minInt(i64) and b == -1) {
+                                return self.constantError(binary.span, "constant arithmetic overflows", .{});
+                            }
+                            break :blk @mod(a, b);
                         },
                         else => unreachable,
                     };
@@ -1313,7 +1323,8 @@ pub const Analyzer = struct {
                         .subtract => a - b,
                         .multiply => a * b,
                         .divide => a / b,
-                        .remainder => @rem(a, b),
+                        .floor_divide => @floor(a / b),
+                        .modulo => @mod(a, b),
                         else => unreachable,
                     };
                     return .{ .value = .{ .float = folded }, .value_type = .float };

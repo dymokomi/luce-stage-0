@@ -68,12 +68,23 @@ legal, because the parentheses start a new chain.
 
 ## Arithmetic
 
-`+ - * / %` on `Int` and on `Float`. `+` also concatenates `String`s.
-Mixing `Int` and `Float` is a compile error.
+`+ - * / // %` on `Int` and on `Float`. `+` also concatenates
+`String`s. Mixing an `Int` and a `Float` widens the `Int`.
 
-`Int` arithmetic is checked: overflow, and division or remainder by
-zero, are traps in every build mode. `Float` arithmetic is IEEE and
-does not trap.
+`//` is **floor division** and `%` is the modulus that pairs with it:
+they floor together, so `%` takes the sign of the divisor and
+`b * (a // b) + (a % b) == a` holds for every pair.
+
+| `a` | `b` | `a // b` | `a % b` |
+|---:|---:|---:|---:|
+| 7 | 3 | 2 | 1 |
+| −7 | 3 | −3 | 2 |
+| 7 | −3 | −3 | −2 |
+| −7 | −3 | 2 | −1 |
+
+`Int` arithmetic is checked: overflow, and `//` or `%` by zero, are
+traps in every build mode. `Float` arithmetic is IEEE and does not
+trap.
 
 ## Comparison
 
@@ -100,7 +111,6 @@ than a complaint about the second character:
 | `<>` | `!=` |
 | `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `Int` |
 | `<<`, `>>`, `&`, `\|`, `^`, `~` | nothing: there are no bitwise operators |
-| `//` | `/`; `//` starts nothing, and a comment is `#` |
 
 ```luce fail
 func main():

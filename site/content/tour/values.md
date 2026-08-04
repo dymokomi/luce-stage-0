@@ -163,7 +163,7 @@ costs nothing to ship.
 
 ```luce run
 let width = 80
-let half = width / 2
+let half = width // 2
 let version = "2"
 let banner = "loom v" + version
 

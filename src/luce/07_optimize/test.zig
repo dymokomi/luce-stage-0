@@ -569,14 +569,14 @@ test "prune keeps everything the entry can reach, however it reaches it" {
 }
 
 test "dead keeps an unread instruction that can trap" {
-    // The sweep deletes only `pure` instructions.  A division is
+    // The sweep deletes only `pure` instructions.  Integer `//` is
     // `stable` — it answers the same thing every time but can trap —
     // so an unread one must survive: deleting it would delete a
     // `divide_by_zero` the program is entitled to.
     var program = try compileRaw(
         \\func main():
         \\    var divisor = 0
-        \\    let unused = 10 / divisor
+        \\    let unused = 10 // divisor
         \\    print("done")
         \\
     );
@@ -591,7 +591,7 @@ test "dead keeps an unread instruction that can trap" {
         for (function.blocks) |block| {
             for (block.items) |item| {
                 const instruction = function.instructions[item];
-                if (instruction == .binary and instruction.binary.op == .divide) divisions += 1;
+                if (instruction == .binary and instruction.binary.op == .floor_divide) divisions += 1;
             }
         }
     }

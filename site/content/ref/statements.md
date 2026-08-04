@@ -79,7 +79,7 @@ A **nested** place assigns a value (a number, a `String`, or a plain
 struct). To restock an *object* field use the single-level form:
 `bag.items = [1, 2]`.
 
-Compound assignment is `+= -= *= /= %=`, value-only arithmetic —
+Compound assignment is `+= -= *= /= //= %=`, value-only arithmetic —
 the place is a number, or a `String` for `+=` — and the place is
 evaluated once, so `counts[key] += 1` looks the key up a single time.
 

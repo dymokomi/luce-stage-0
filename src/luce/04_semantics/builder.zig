@@ -1955,7 +1955,8 @@ pub const FunctionBuilder = struct {
             .subtract => .subtract,
             .multiply => .multiply,
             .divide => .divide,
-            .remainder => .remainder,
+            .floor_divide => .floor_divide,
+            .modulo => .modulo,
             else => unreachable, // the parser only builds these five
         };
         const combined = try self.code.emit(.{ .binary = .{
@@ -3486,7 +3487,8 @@ pub const FunctionBuilder = struct {
             .subtract => .subtract,
             .multiply => .multiply,
             .divide => .divide,
-            .remainder => .remainder,
+            .floor_divide => .floor_divide,
+            .modulo => .modulo,
             .equal => .equal,
             .not_equal => .not_equal,
             .less => .less,
@@ -3528,7 +3530,7 @@ pub const FunctionBuilder = struct {
         if (try self.refusesAbsence(right, "this operator", binary.span, binary.right)) return null;
 
         const arithmetic = switch (operation) {
-            .add, .subtract, .multiply, .divide, .remainder => true,
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => true,
             else => false,
         };
         if (arithmetic) {

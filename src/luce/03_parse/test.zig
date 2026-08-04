@@ -324,7 +324,7 @@ test "every assignment place parses, nested and compound" {
     try testing.expectEqual(ast.BinaryOp.subtract, body.statements[10].assign.compound.?);
     try testing.expectEqual(ast.BinaryOp.multiply, body.statements[11].assign.compound.?);
     try testing.expectEqual(ast.BinaryOp.divide, body.statements[12].assign.compound.?);
-    try testing.expectEqual(ast.BinaryOp.remainder, body.statements[13].assign.compound.?);
+    try testing.expectEqual(ast.BinaryOp.modulo, body.statements[13].assign.compound.?);
     // The compound form is still one assignment, never a read plus a
     // write in the tree.
     try testing.expect(body.statements[9].assign.value.* == .int_literal);
@@ -503,7 +503,7 @@ test "the precedence table binds exactly as docs/LANGUAGE.md states" {
     try testing.expectEqual(ast.BinaryOp.subtract, e.op);
     try testing.expectEqual(ast.BinaryOp.subtract, e.left.binary.op);
     const f = body.statements[5].let.value.binary;
-    try testing.expectEqual(ast.BinaryOp.remainder, f.op);
+    try testing.expectEqual(ast.BinaryOp.modulo, f.op);
     try testing.expectEqual(ast.BinaryOp.multiply, f.left.binary.op);
     // Parentheses override: (1 + 2) * 3
     const g = body.statements[6].let.value.binary;
@@ -535,7 +535,7 @@ test "every adjacent pair of precedence levels binds the tighter one first" {
     // happened to depend on it.  The test above pins most of the
     // ladder; what it does not reach is `coalesce`, the level `else`
     // and `catch` share between comparison and arithmetic, and the
-    // remainder operator's place among its neighbours.
+    // modulo operator's place among its neighbours.
     var parsed = try expectClean(
         \\func main():
         \\    let a = p or q and r
@@ -570,17 +570,17 @@ test "every adjacent pair of precedence levels binds the tighter one first" {
     const d = body.statements[3].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.coalesce, d.op);
     try testing.expectEqual(ast.BinaryOp.add, d.right.binary.op);
-    // Additive is looser than multiplicative, remainder included:
+    // Additive is looser than multiplicative, modulo included:
     // p + (q % r).
     const e = body.statements[4].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.add, e.op);
-    try testing.expectEqual(ast.BinaryOp.remainder, e.right.binary.op);
-    // And remainder sits *with* the other multiplicative operators
+    try testing.expectEqual(ast.BinaryOp.modulo, e.right.binary.op);
+    // And modulo sits *with* the other multiplicative operators
     // rather than above or below them, so it associates left with
     // them: (p % q) * r.
     const f = body.statements[5].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.multiply, f.op);
-    try testing.expectEqual(ast.BinaryOp.remainder, f.left.binary.op);
+    try testing.expectEqual(ast.BinaryOp.modulo, f.left.binary.op);
     // `else` is the one operator that associates right, so a chain of
     // fallbacks is a real chain: p else (q else r).
     const g = body.statements[6].let.value.binary;

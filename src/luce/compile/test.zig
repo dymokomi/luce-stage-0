@@ -1494,7 +1494,7 @@ test "constant cycles, unknowns, and arithmetic faults are compile errors" {
         \\
     , "luce.sema.const");
     try failsWith(
-        \\let broken = 1 / 0
+        \\let broken = 1 // 0
         \\
         \\func main():
         \\    return

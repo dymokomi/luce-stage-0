@@ -49,7 +49,7 @@ fn binaryPrecedence(kind: Kind) Precedence {
         .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => .comparison,
         .keyword_else, .keyword_catch => .coalesce,
         .plus, .minus => .additive,
-        .star, .slash, .percent => .multiplicative,
+        .star, .slash, .slash_slash, .percent => .multiplicative,
         else => .none,
     };
 }
@@ -97,7 +97,8 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
         .minus => .subtract,
         .star => .multiply,
         .slash => .divide,
-        .percent => .remainder,
+        .slash_slash => .floor_divide,
+        .percent => .modulo,
         else => unreachable,
     };
 }
@@ -563,6 +564,24 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
         // word for it.
         .bang => {
             try bangIsNotAnOperator(self);
+            return null;
+        },
+        // `//` is floor division (docs/NUMERICS.md), and taking that
+        // spelling spent the lexer's *"a comment starts with '#';
+        // there is no '//' form"* — a good message aimed at exactly
+        // the newcomer the operator is otherwise courting.  It is not
+        // gone, it moved here, because **prefix position is where the
+        // comment reading is unambiguous**: an operator with nothing
+        // to its left cannot be arithmetic, and a `// comment` is
+        // written at the start of a line every time.  With a left
+        // operand, `a // b` is division and is meant to be.
+        .slash_slash => {
+            try self.report(
+                "luce.parse.comment",
+                self.peek().span,
+                "'//' is floor division and needs a number on its left; a comment starts with '#'",
+                .{},
+            );
             return null;
         },
         else => {

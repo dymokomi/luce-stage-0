@@ -975,6 +975,27 @@ test "luce.sema.return: a returned type takes no article either" {
     , "luce.sema.return", "return needs a value of type Int", 2, 5);
 }
 
+// `//` is floor division, and the message that used to greet a
+// C-style comment was spent buying that spelling (docs/NUMERICS.md
+// §3).  It is not gone: prefix position is where the comment reading
+// is unambiguous — an operator with nothing on its left cannot be
+// arithmetic — and that is where a `// comment` is written every
+// time.  With a left operand it is division, and meant to be.
+
+test "luce.parse.comment: a line that starts with // is told what // is" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    // this is a comment
+        \\    print("hi")
+        \\
+    ,
+        "luce.parse.comment",
+        "'//' is floor division and needs a number on its left; a comment starts with '#'",
+        2,
+        5,
+    );
+}
+
 test "luce.sema.type: a condition must be Bool" {
     try expectRejected("func main():\n    if 1:\n        return\n", "luce.sema.type");
 }

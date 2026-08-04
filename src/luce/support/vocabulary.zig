@@ -27,7 +27,16 @@ pub const BinaryOp = enum {
     subtract,
     multiply,
     divide,
-    remainder,
+    /// `//`.  The integer pair with `modulo`, and they floor together
+    /// (docs/NUMERICS.md §3) — the name of the thing is *floor
+    /// division*, and under the other pairing `a // b` would not be
+    /// `floor(a / b)` for negative operands.
+    floor_divide,
+    /// `%`.  A modulus and not a remainder: it takes the sign of the
+    /// **divisor**, so `-7 % 3` is `2`.  It was called `remainder`
+    /// while it was C's, and the two differ on exactly the negatives
+    /// the memo spent a table on.
+    modulo,
     equal,
     not_equal,
     less,
@@ -57,7 +66,7 @@ pub const BinaryOp = enum {
             .less_equal => .greater_equal,
             .greater => .less,
             .greater_equal => .less_equal,
-            .add, .subtract, .multiply, .divide, .remainder => unreachable,
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => unreachable,
         };
     }
 };

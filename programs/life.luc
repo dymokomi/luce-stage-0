@@ -17,7 +17,7 @@ struct World:
         return clamp(term_rows() - 2, 8, 40)
 
     func cols() -> Int:
-        return clamp((term_cols() - 1) / 2, 8, 60)
+        return clamp((term_cols() - 1) // 2, 8, 60)
 
     func seed(grid: Array(Bool, _, _)):
         # A glider...
@@ -27,7 +27,7 @@ struct World:
         grid[3, 2] = true
         grid[3, 3] = true
         # ...and a blinker.
-        let mid = grid.dim(0) / 2
+        let mid = grid.dim(0) // 2
         grid[mid, 6] = true
         grid[mid, 7] = true
         grid[mid, 8] = true

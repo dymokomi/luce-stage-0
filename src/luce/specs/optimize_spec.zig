@@ -179,7 +179,7 @@ test "traps keep their code, their message, and their place" {
         \\func main():
         \\    var n = 0
         \\    print("before")
-        \\    print(str(10 / n))
+        \\    print(str(10 // n))
         \\
         ,
         \\func main():

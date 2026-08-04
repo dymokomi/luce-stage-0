@@ -961,3 +961,51 @@ nothing in code that does not mix.
 but still refuse `T` into `T?` — `fit` would have given both, and
 admitting the second is a separate decision that has nothing to do
 with numbers.
+
+### Step 2 — `//`, `//=`, and floor `%` — **landed**
+
+`BinaryOp.floor_divide` arrived, `remainder` became `modulo`, and the
+two floor together in the runtime (`@divFloor`/`@mod`), in the
+constant folder, and in the lowering.  §3's table is a program in
+`specs/` on both engines, beside the identity `b * (a // b) + (a % b)
+== a` swept over every sign, and the mask property (`x % 256` in
+`[0, 256)` for every `x`) that made `bf.luc:42` the spelling its
+author meant.  Every integer `/` in the tree is now `//`: **35 sites**
+— nine in `.luc`, twenty in Zig specs, four on the site, two in
+`src/apps` — against the memo's estimate of 36, which was one out.
+The three `%` workarounds §3 named are gone, `math.luc:230-233` from
+four lines to one.  The benchmarks do not move and the C twins were
+not touched, as §11 predicted.
+
+**Three things the memo did not have right.**
+
+1. **Zig's float `@mod` is not floor-mod**, so the runtime could not
+   simply swap `@rem` for `@mod` in both arms as §10 says.  Zig's
+   *integer* `@mod` floors and pairs with `@divFloor` correctly, but
+   its float `@mod` only forces a non-negative answer:
+   `@mod(7.0, -3.0)` is `1.0` where flooring says `-2.0`.  Using it
+   would have put the discontinuity promotion exists to remove back
+   one type over.  `operators.floorMod` is written out instead, and
+   because its answer is a `frem`, a zero case that takes the
+   divisor's sign, and a correction on opposed signs — three chances
+   to differ if written twice — the compiled path **calls** it rather
+   than inlining it.  It is the only float operator that is a call.
+
+2. **`//` works on Floats.**  Rule 3 says `//` and `%` "answer `Int`
+   for `Int` operands" and the memo never says what `7 // 2.0` is.
+   It has to be something: `//` promotes like every other arithmetic
+   operator, and refusing the mixed form while `%` accepts it is the
+   arbitrary carve-out §1 argues against.  So Float `//` is
+   `floor(a / b)`, which keeps the §3 identity true of Floats as well
+   and is IEEE like the rest of them — `1.0 // 0.0` is `inf`, not a
+   trap.
+
+3. **The lexer's message did not die, it moved.**  §3 accepts spending
+   `luce.lex.comment` for the operator.  It did not have to be spent
+   outright: **prefix position** is where the comment reading is
+   unambiguous — an operator with nothing on its left cannot be
+   arithmetic — and a `// comment` is written at the start of a line
+   every time.  So a statement beginning `//` is `luce.parse.comment`,
+   *"'//' is floor division and needs a number on its left; a comment
+   starts with '#'"*, and `a // b` is division without a word about
+   it.  `/* */` keeps its lexer arm unchanged.

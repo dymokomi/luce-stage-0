@@ -62,7 +62,7 @@ struct Parse:
             if operator == 42:
                 left = Step(value = left.value * right.value, at = right.at)
             elif operator == 47:
-                left = Step(value = left.value / right.value, at = right.at)
+                left = Step(value = left.value // right.value, at = right.at)
             else:
                 left = Step(value = left.value % right.value, at = right.at)
             here = Scan.skip_spaces(text, left.at)

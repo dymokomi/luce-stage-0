@@ -585,10 +585,32 @@ binary or octal literals and no `_` digit separators — writing one
 is a `luce.lex.number` error naming the reason, not a silent
 misreading (docs/MISSING.md tier 3, item 11).
 
-Binary operators are `+ - * / %` (Int truncates toward zero, `%`
-follows the dividend's sign; Float is IEEE), the comparisons
-`== != < <= > >=` (ordering on Int, Float, String), and `and or not`
-(short-circuit).
+Binary operators are `+ - * / // %` (Int `/` truncates toward zero;
+Float is IEEE), the comparisons `== != < <= > >=` (ordering on Int,
+Float, String), and `and or not` (short-circuit).
+
+**`//` and `%` are the integer pair and they floor together**
+(docs/NUMERICS.md §3).  `//` is floor division — the floor of the
+quotient — and `%` is the modulus that pairs with it, so it takes the
+sign of the **divisor** and `b * (a // b) + (a % b) == a` holds for
+every pair of operands that does not trap:
+
+| `a` | `b` | `a // b` | `a % b` |
+|---:|---:|---:|---:|
+| 7 | 3 | 2 | 1 |
+| −7 | 3 | −3 | 2 |
+| 7 | −3 | −3 | −2 |
+| −7 | −3 | 2 | −1 |
+
+A positive divisor therefore never yields a negative answer, which is
+what makes `x % 256` a byte wrap for every `x` and `(row - 1) % height`
+a torus.  `//` and `%` by zero trap; on Floats they are IEEE and do
+not, and Float `%` floors with the integer one so promotion crosses
+the line without a seam in it.
+
+There is no `//` comment: a comment runs from `#` to the end of the
+line, and a line beginning `//` is answered by name
+(`luce.parse.comment`).
 
 **Numbers that mix** (docs/NUMERICS.md).  An `Int` widens to a `Float`
 wherever a `Float` is required — both operands of `+ - * / %`, a `let`
@@ -643,7 +665,8 @@ two Bools with `(a < b) == (c < d)` is still legal, because the
 parentheses start a new chain.
 
 Compound assignment applies an operator in place: `n += 1`, `n -= 1`,
-`n *= 2`, `n /= 2`, `n %= 3`, and `s += "!"` (String concat).  It is
+`n *= 2`, `n /= 2`, `n //= 2`, `n %= 3`, and `s += "!"` (String
+concat).  It is
 value-only arithmetic — the place is a number (or a String for `+=`),
 never an object — and the place is evaluated once, so
 `grid[row, col] += 1` reads and writes the same slot:

@@ -350,7 +350,7 @@ test "a standalone executable prints, and a trapping one reports and exits nonze
     // down — so the trace has something to say as well.
     var program = try compileScript(gpa,
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func main():
         \\    print("alive")
@@ -399,7 +399,7 @@ test "a release executable keeps the function names and drops the lines" {
 
     var program = try compileScript(gpa,
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func main():
         \\    print(str(divide(1, 0)))

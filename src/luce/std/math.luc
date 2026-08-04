@@ -93,7 +93,7 @@ func pow(x: Float, y: Float) -> Float:
         trap("pow: negative base needs a whole-number exponent")
     let magnitude = exp(y * ln(0.0 - x))
     # Odd whole exponents keep the sign.
-    if (Int(y) % 2 + 2) % 2 == 1:
+    if Int(y) % 2 == 1:
         return 0.0 - magnitude
     return magnitude
 
@@ -108,7 +108,7 @@ func ipow(base: Int, exponent: Int) -> Int:
     while left > 0:
         if left % 2 == 1:
             result *= square
-        left /= 2
+        left //= 2
         if left > 0:
             square *= square
     return result
@@ -227,10 +227,7 @@ func axpy(xs: Array(Float, _), factor: Float, ys: Array(Float, _)):
 
 # A fresh generator.  Any seed works; it is folded into [1, 2^31 - 2].
 func seed(from: Int) -> List(Int):
-    var folded = from % 2147483646
-    if folded < 0:
-        folded += 2147483646
-    return [folded + 1]
+    return [from % 2147483646 + 1]
 
 # The next raw state value in [1, 2^31 - 2].  Internal step; random
 # and random_int are the friendly faces.

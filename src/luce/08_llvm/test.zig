@@ -160,7 +160,7 @@ test "a release artifact carries no origin table, and a debug one does" {
     const gpa = std.testing.allocator;
     const source =
         \\func ratio(value: Int) -> Int:
-        \\    return 10 / value
+        \\    return 10 // value
         \\
         \\func main():
         \\    print(str(ratio(2)))
@@ -346,7 +346,7 @@ test "arithmetic, comparison, control flow, locals, and str(Int) run" {
         \\        index = index + 1
         \\    print(str(total))
         \\    print(str(-total))
-        \\    print(str(total / 4))
+        \\    print(str(total // 4))
         \\
     , &capture, .{});
 
@@ -429,7 +429,7 @@ test "division by zero traps with the interpreter's code and message" {
 
     const status = try run(
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func main():
         \\    print("before")
@@ -552,7 +552,7 @@ test "a debug build reports file, line, column, and the whole call stack" {
 
     const status = try runBuilt(
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func ratio(n: Int) -> Int:
         \\    return divide(n, 0)
@@ -577,7 +577,7 @@ test "a release build strips the lines and still names the functions" {
 
     const status = try runBuilt(
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func ratio(n: Int) -> Int:
         \\    return divide(n, 0)
@@ -997,7 +997,7 @@ test "min and max reductions over an array agree, signed zeros and all" {
         \\    var xs = new Array(Float, n)
         \\    for pattern in range(0, 32):
         \\        for i in range(0, n):
-        \\            xs[i] = control[(pattern / (i % 5 + 1)) % 2]
+        \\            xs[i] = control[(pattern // (i % 5 + 1)) % 2]
         \\        let low = lowest(xs)
         \\        let high = highest(xs)
         \\        print(str(low) + " " + str(1.0 / low) + " " +

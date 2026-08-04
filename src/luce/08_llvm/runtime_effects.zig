@@ -183,6 +183,7 @@ pub const Service = enum {
     // -- operators ----------------------------------------------------
     luce_rt_compare,
     luce_rt_compare_int_float,
+    luce_rt_float_mod,
 
     // -- value storage --------------------------------------------------
     luce_rt_own_storage,
@@ -630,6 +631,11 @@ pub fn describe(service: Service) Effect {
         .luce_rt_compare_int_float => .{
             .memory = reads_nothing,
             .parameters = &.{ .plain, .plain, .plain },
+        },
+        // Two scalars in, one out, and the same nothing read.
+        .luce_rt_float_mod => .{
+            .memory = reads_nothing,
+            .parameters = &.{ .plain, .plain },
         },
     };
 }

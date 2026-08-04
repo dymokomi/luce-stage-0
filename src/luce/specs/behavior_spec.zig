@@ -51,7 +51,7 @@ test "integers: the four operations and precedence" {
         \\    assert(2 + 3 == 5)
         \\    assert(10 - 4 == 6)
         \\    assert(6 * 7 == 42)
-        \\    assert(20 / 3 == 6)
+        \\    assert(20 // 3 == 6)
         \\    assert(2 + 3 * 4 == 14)
         \\    assert((2 + 3) * 4 == 20)
         \\    assert(-5 + 2 == -3)
@@ -60,17 +60,96 @@ test "integers: the four operations and precedence" {
     );
 }
 
-test "integers: division truncates toward zero, remainder follows the dividend" {
+// `//` and `%` are the integer pair and they **floor** together
+// (docs/NUMERICS.md §3).  This is the memo's table verbatim, on both
+// engines, plus the identity the pairing is chosen to keep.
+
+test "integers: // and % floor together, and the identity holds" {
     try agreeOk(
         \\func main():
-        \\    assert(7 / 2 == 3)
-        \\    assert(-7 / 2 == -3)
-        \\    assert(7 / -2 == -3)
-        \\    assert(-7 / -2 == 3)
+        \\    assert(7 // 3 == 2)
         \\    assert(7 % 3 == 1)
-        \\    assert(-7 % 3 == -1)
-        \\    assert(7 % -3 == 1)
+        \\    assert(-7 // 3 == -3)
+        \\    assert(-7 % 3 == 2)
+        \\    assert(7 // -3 == -3)
+        \\    assert(7 % -3 == -2)
+        \\    assert(-7 // -3 == 2)
+        \\    assert(-7 % -3 == -1)
         \\    assert(0 % 5 == 0)
+        \\    assert(6 % 3 == 0)
+        \\    assert(-6 % 3 == 0)
+        \\    assert(20 // 3 == 6)
+        \\
+    );
+}
+
+test "integers: b * (a // b) + (a % b) == a, over every sign" {
+    try agreeOk(
+        \\func main():
+        \\    for a in range(-9, 10):
+        \\        for b in range(-4, 5):
+        \\            if b != 0:
+        \\                assert(b * (a // b) + (a % b) == a)
+        \\                # `%` takes the sign of the divisor, so a
+        \\                # positive divisor never yields a negative.
+        \\                if b > 0:
+        \\                    assert(a % b >= 0)
+        \\                    assert(a % b < b)
+        \\                else:
+        \\                    assert(a % b <= 0)
+        \\                    assert(a % b > b)
+        \\
+    );
+}
+
+test "integers: floor-mod by a power of two is a mask, negatives included" {
+    // What C's remainder cannot do without a sign fixup, and the
+    // reason `bf.luc`'s byte decrement is `(x - 1) % 256` now.
+    try agreeOk(
+        \\func main():
+        \\    for x in range(-600, 600):
+        \\        let wrapped = x % 256
+        \\        assert(wrapped >= 0)
+        \\        assert(wrapped < 256)
+        \\    assert(-1 % 256 == 255)
+        \\    assert(0 % 256 == 0)
+        \\    assert(256 % 256 == 0)
+        \\
+    );
+}
+
+test "integers: // and %= and //= carry the same rule" {
+    try agreeOk(
+        \\func main():
+        \\    var n = -7
+        \\    n //= 3
+        \\    assert(n == -3)
+        \\    var m = -7
+        \\    m %= 3
+        \\    assert(m == 2)
+        \\
+    );
+}
+
+test "floats: % floors with the integer operator, and // is its floor" {
+    // Promotion would otherwise put a discontinuity here: `-7 % 3`
+    // answering 2 and `-7 % 3.0` answering -1.0, with an invisible
+    // widening choosing between them.
+    try agreeOk(
+        \\func main():
+        \\    assert(7.0 % 3.0 == 1.0)
+        \\    assert(-7.0 % 3.0 == 2.0)
+        \\    assert(7.0 % -3.0 == -2.0)
+        \\    assert(-7.0 % -3.0 == -1.0)
+        \\    assert(7.0 // 3.0 == 2.0)
+        \\    assert(-7.0 // 3.0 == -3.0)
+        \\    assert(7.0 // -3.0 == -3.0)
+        \\    assert(-7.0 // -3.0 == 2.0)
+        \\    assert(-5.5 % 2.0 == 0.5)
+        \\    # Promotion crosses the line without a seam in it.
+        \\    assert(-7 % 3.0 == 2.0)
+        \\    assert(-7.0 % 3 == 2.0)
+        \\    assert(-7 // 3.0 == -3.0)
         \\
     );
 }
@@ -97,7 +176,7 @@ test "integers: Int's minimum is written the way it reads" {
         \\    assert(low < 0)
         \\    assert(low + 1 == -9223372036854775807)
         \\    assert(low == 0 - 9223372036854775807 - 1)
-        \\    let step = -9223372036854775808 / 2
+        \\    let step = -9223372036854775808 // 2
         \\    assert(step == -4611686018427387904)
         \\
     );
@@ -964,7 +1043,7 @@ test "builders accumulate text" {
 test "file-scope constants fold and inline" {
     try agreeOk(
         \\let width = 80
-        \\let half = width / 2
+        \\let half = width // 2
         \\let name = "loom"
         \\let greeting = "hi " + name
         \\
@@ -2254,16 +2333,16 @@ test "trap: integer overflow taking abs of the minimum" {
     , .integer_overflow);
 }
 
-test "trap: divide by zero" {
+test "trap: // by zero" {
     try agreeTrap(
         \\func main():
         \\    var z = 0
-        \\    let bad = 1 / z
+        \\    let bad = 1 // z
         \\
     , .divide_by_zero);
 }
 
-test "trap: remainder by zero" {
+test "trap: % by zero" {
     try agreeTrap(
         \\func main():
         \\    var z = 0
@@ -3097,7 +3176,7 @@ test "file-scope constants fold every value kind" {
         \\let debug = not (width > 100)
         \\let greeting = "hello, " + "loom"
         \\let shout = greeting
-        \\let half_width = width / 2 - 1
+        \\let half_width = width // 2 - 1
         \\let truncated = Int(tau)
         \\let widened = Float(width)
         \\let roomy = width >= 80 and tau > 6.0
@@ -3152,7 +3231,7 @@ test "struct constants: the Theme case" {
 test "a trap reports its statement's line and the full call trace" {
     var session = try agree.compare(
         \\func divide(a: Int, b: Int) -> Int:
-        \\    return a / b
+        \\    return a // b
         \\
         \\func ratio(n: Int) -> Int:
         \\    return divide(100, n)
@@ -3175,7 +3254,7 @@ test "a trap reports its statement's line and the full call trace" {
 test "a stripped program still names its trap frames, without lines" {
     var compiled = try agree.program(
         \\func boom() -> Int:
-        \\    return 1 / 0
+        \\    return 1 // 0
         \\
         \\func main():
         \\    let x = boom()
