@@ -255,6 +255,14 @@ pub const Host = struct {
     /// and no CRLF is rewritten.  `file_read` hands back the file, and
     /// a program that reads a CSV and writes it again must get the
     /// same bytes out.
+    ///
+    /// **There is a size cap** (`max_file_size`, 64 MB), and a file
+    /// over it answers null and traps like any other unreadable one.
+    /// It is a host policy, not a language limit: `file_read` reads a
+    /// whole file into one buffer, so the cap is what stops a program
+    /// from being handed the machine's memory by naming a path.  A
+    /// program that needs more wants a streaming read, which is a
+    /// service the host does not offer yet.
     fn loadFile(self: *Host, path: []const u8) error{OutOfMemory}!?[]const u8 {
         const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
         defer file.close(self.io);
