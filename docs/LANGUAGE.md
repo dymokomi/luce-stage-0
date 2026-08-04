@@ -654,6 +654,33 @@ body.  Structs contain plain functions — there are no methods, no
 receivers, no inheritance; `Struct.func(...)` is a name, not a
 dispatch.
 
+### Unreachable code is refused
+
+A statement below one that never comes back — `return`, `break`,
+`continue`, `trap(...)`, `error(...)`, or an `if` whose arms all leave
+— is a compile error naming the terminator and its line.
+
+This follows from the compiler having **one severity**: every
+diagnostic stops the compile, because a warning is a rule the language
+did not commit to.  So the question is only which side of the line
+unreachable code falls on, and the line the language already draws is
+between code that is *misleading* and code that is merely *redundant*.
+`a < b < c` and `not a == b` are refused because the way they read and
+the way they run disagree; an unused local is accepted, because the
+program means what it says and does what it says.  A statement after
+`return` is the first kind: the author wrote it believing it runs.
+
+One terminator is one report, however many lines it stranded.  An `if`
+counts only when **every** arm leaves, so the ordinary early-return
+guard is untouched:
+
+```luce
+func clamp(n: Int) -> Int:
+    if n < 0:
+        return 0
+    return n                  # reachable: the guard has no else
+```
+
 ### File-scope constants
 
 `let` at the top level declares a **compile-time constant**:

@@ -1452,6 +1452,7 @@ pub const FunctionBuilder = struct {
 
     pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
         try self.pushScope();
+        try self.refuseUnreachable(block);
         for (block.statements) |statement| {
             // Fresh objects nothing adopted die with their statement
             // (S3); the release is a no-op for everything adopted.
@@ -1461,6 +1462,41 @@ pub const FunctionBuilder = struct {
         }
         try self.emitScopeEnd();
         self.popScope();
+    }
+
+    /// A statement below one that never comes back cannot run, and the
+    /// reader wrote it believing it does.
+    ///
+    /// **Why this is a refusal and not a tolerated wart.**  Luce has
+    /// one severity: every diagnostic stops the compile, because a
+    /// warning is a rule the language did not commit to
+    /// (`support/diagnostics.zig`).  So the only question is which side
+    /// of the line this falls on, and the language already draws that
+    /// line: it refuses `a < b < c` and `not a == b` because the way
+    /// they read and the way they run disagree, and it *accepts* an
+    /// unused local, which is merely redundant — the program means what
+    /// it says and does what it says.  Unreachable code is the first
+    /// kind, not the second.  A statement after `return` is one the
+    /// author believes runs, and it never does.
+    ///
+    /// Only the first is reported: one terminator, one mistake, however
+    /// many lines it stranded.
+    fn refuseUnreachable(self: *FunctionBuilder, block: ast.Block) Error!void {
+        for (block.statements, 0..) |statement, index| {
+            if (index + 1 == block.statements.len) return;
+            const leaves = helpers.exitingStatement(statement) orelse continue;
+            const stranded = block.statements[index + 1];
+            const at = self.analyzer.diagnostics.sources.place(
+                self.analyzer.diagnostics.scope,
+                statement.span().start,
+            );
+            return self.fail(
+                "luce.sema.unreachable",
+                stranded.span(),
+                "this cannot run: the {s} on line {d} leaves the block first; delete it, or move it above the {s}",
+                .{ leaves, at.line, leaves },
+            );
+        }
     }
 
     fn lowerStatement(self: *FunctionBuilder, statement: ast.Statement) Error!void {

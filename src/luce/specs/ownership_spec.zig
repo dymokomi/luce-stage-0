@@ -1921,7 +1921,6 @@ test "storage: a trap unwinds past every release and the bytes still come back" 
         \\    let held = name + "-held"
         \\    var tag = Tag(label = held, count = 1)
         \\    trap(tag.label)
-        \\    return 0
         \\
         \\func main():
         \\    let outer = "kept" + "-here"

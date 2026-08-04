@@ -2580,6 +2580,124 @@ test "storing a borrowed parameter is not told to give it" {
 }
 
 // ---------------------------------------------------------------------------
+// luce.sema.unreachable — a statement below one that never comes back
+// ---------------------------------------------------------------------------
+//
+// Refused rather than tolerated, because Luce has one severity and the
+// line it already draws puts this on the refusing side: it refuses
+// `a < b < c` and `not a == b`, where the way the code reads and the
+// way it runs disagree, and it accepts an unused local, which is
+// merely redundant.  A statement after `return` is the first kind.
+
+test "luce.sema.unreachable: each terminator is named, with its line" {
+    try expectOnlySayingAt(
+        "func main():\n    let a = 1\n    return\n    let b = a\n",
+        "luce.sema.unreachable",
+        "this cannot run: the return on line 3 leaves the block first; delete it, or move it above the return",
+        4,
+        5,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    trap(\"no\")\n    let b = 1\n",
+        "luce.sema.unreachable",
+        "this cannot run: the trap on line 2 leaves the block first; delete it, or move it above the trap",
+        3,
+        5,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    var i = 0\n    while i < 3:\n        break\n        i += 1\n",
+        "luce.sema.unreachable",
+        "this cannot run: the break on line 4 leaves the block first; delete it, or move it above the break",
+        5,
+        9,
+    );
+    try expectOnlySayingAt(
+        "func main():\n    var i = 0\n    while i < 3:\n        i += 1\n        continue\n        i += 2\n",
+        "luce.sema.unreachable",
+        "this cannot run: the continue on line 5 leaves the block first; delete it, or move it above the continue",
+        6,
+        9,
+    );
+}
+
+test "luce.sema.unreachable: an if counts only when both arms leave" {
+    // Both arms return, so nothing below the `if` runs.
+    try expectOnlySayingAt(
+        \\func pick(n: Int) -> Int:
+        \\    if n > 0:
+        \\        return 1
+        \\    else:
+        \\        return 2
+        \\    let never = n
+        \\    return never
+        \\
+        \\func main():
+        \\    assert(pick(1) == 1)
+        \\
+    ,
+        "luce.sema.unreachable",
+        "this cannot run: the if on line 2 leaves the block first; delete it, or move it above the if",
+        6,
+        5,
+    );
+    // One arm falling through is the ordinary early-return guard, and
+    // it must keep compiling — this is the shape half the corpus is
+    // written in.
+    var guard = try compile_mod.compile(
+        testing.allocator,
+        \\func pick(n: Int) -> Int:
+        \\    if n > 0:
+        \\        return 1
+        \\    let reached = n
+        \\    return reached
+        \\
+        \\func main():
+        \\    assert(pick(0) == 0)
+        \\
+    ,
+        script,
+    );
+    defer guard.deinit();
+    if (guard == .failure) printAll(&guard.failure);
+    try testing.expect(guard == .success);
+}
+
+test "luce.sema.unreachable: one terminator is one mistake, however many lines it strands" {
+    try expectOnlySayingAt(
+        "func main():\n    return\n    let a = 1\n    let b = 2\n    let c = 3\n",
+        "luce.sema.unreachable",
+        "this cannot run: the return on line 2 leaves the block first; delete it, or move it above the return",
+        3,
+        5,
+    );
+}
+
+test "a terminator as the last statement of its block is the ordinary case" {
+    // Everything the rule must not touch: a `return` at the end of a
+    // function, a `break` at the end of a loop body, a `return` inside
+    // an arm with code after the `if`.
+    var result = try compile_mod.compile(
+        testing.allocator,
+        \\func first(n: Int) -> Int:
+        \\    var i = 0
+        \\    while i < n:
+        \\        if i == 2:
+        \\            break
+        \\        i += 1
+        \\    return i
+        \\
+        \\func main():
+        \\    assert(first(5) == 2)
+        \\
+    ,
+        script,
+    );
+    defer result.deinit();
+    if (result == .failure) printAll(&result.failure);
+    try testing.expect(result == .success);
+}
+
+// ---------------------------------------------------------------------------
 // luce.sema.struct — a struct that cannot be built
 // ---------------------------------------------------------------------------
 
