@@ -194,6 +194,6 @@ func main():
 ```output
 about to take a logarithm
 loom: trap: ln of a non-positive number [explicit_trap]
-    at math.ln (std/math.luc:49:9)
+    at math.ln (std/math.luc:54:9)
     at main (main.luc:5:5)
 ```
