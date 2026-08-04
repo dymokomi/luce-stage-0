@@ -249,6 +249,16 @@ an audit; the rest follow from the shape of the ladder.
 > do arithmetic; bytes do bits.  Every mainstream precedent conflates
 > the two; Luce separates them on purpose.
 >
+> Confirmed in a further follow-up: the bits domain gets the full kit
+> — shifts and "the usual byte level stuff" — as first-class
+> operations *on* `Byte`.  And the owner's "(or on all values for
+> that matter)" is recorded as the one scope question for the bitwise
+> design memo: every value has bytes, so byte-level work on a
+> non-`Byte` goes through an explicit reinterpretation view (bits
+> out, operate, bits back) rather than defining shifts on `Float` —
+> the line stays crisp, and serialization, hashing and UTF-8 walks
+> get the door they want.
+>
 > Java's `byte` is signed −128..127 and is, by a distance, the most
 > regretted decision in its numeric tower; `Byte.toUnsignedInt` was
 > added in Java 8 to apologise for it. The owner's list is Java's
