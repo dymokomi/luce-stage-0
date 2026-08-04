@@ -928,3 +928,15 @@ export fn luce_rt_compare(
 ) callconv(.c) i32 {
     return @intFromBool(operators.compare(@enumFromInt(op), left.*, right.*));
 }
+
+/// Comparison across the Int/Float line, exactly (docs/NUMERICS.md).
+/// Two scalars and an operator: it reads no memory at all, cannot
+/// fail, and takes no runtime.  The Int is always the left operand —
+/// stage 4 mirrors the operator when the Float was written first.
+export fn luce_rt_compare_int_float(
+    op: i32,
+    left: i64,
+    right: f64,
+) callconv(.c) i32 {
+    return @intFromBool(operators.compareIntFloat(@enumFromInt(op), left, right));
+}

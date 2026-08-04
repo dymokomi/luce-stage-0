@@ -850,11 +850,14 @@ test "luce.sema.let: a let binding cannot be reassigned" {
 // Types and conversions
 // ---------------------------------------------------------------------------
 
-// A conversion is only offered where there is one to offer.
-// "(conversions are explicit)" was printed for every mismatch — `Int`
-// against `String` included, which sends the reader after a
-// `String(...)` that does not exist — and never named the operator or
-// spelled the conversion where there really was one.
+// The mismatch message ends with a fact, not with advice.  It used to
+// offer "conversions are explicit, so write Int(...) or Float(...)",
+// because `Int` against `Float` was the one mismatch a constructor
+// could repair; `Int` widens to `Float` on its own now
+// (docs/NUMERICS.md), so every pair that still reaches the message
+// genuinely has nothing between it, and the sentence says so.  What
+// those three programs do *instead* of failing is pinned in
+// behavior_spec.zig, on both engines.
 
 test "luce.sema.type: a mismatch with no conversion says so" {
     try expectOnlySayingAt(
@@ -871,39 +874,7 @@ test "luce.sema.type: a mismatch with no conversion says so" {
     );
 }
 
-test "luce.sema.type: a mismatch with a conversion spells it, and names the operator" {
-    try expectOnlySayingAt(
-        \\func main():
-        \\    let a = 1
-        \\    let b = 2.5
-        \\    let c = a * b
-        \\
-    ,
-        "luce.sema.type",
-        "operands of * are Int and Float; conversions are explicit, " ++
-            "so write Int(...) or Float(...) to make them one type",
-        4,
-        13,
-    );
-}
-
-test "luce.sema.const: a folded constant offers the same conversion advice" {
-    try expectOnlySayingAt(
-        \\let bad = 1 + 2.5
-        \\
-        \\func main():
-        \\    return
-        \\
-    ,
-        "luce.sema.const",
-        "operands of + are Int and Float; conversions are explicit, " ++
-            "so write Int(...) or Float(...) to make them one type",
-        1,
-        11,
-    );
-}
-
-test "luce.sema.type: an annotation names only the conversion that exists" {
+test "luce.sema.type: an annotation says so when nothing converts" {
     try expectOnlySayingAt(
         "func main():\n    let s: String = 1\n",
         "luce.sema.type",
@@ -911,13 +882,34 @@ test "luce.sema.type: an annotation names only the conversion that exists" {
         2,
         5,
     );
-    try expectOnlySayingAt(
-        "func main():\n    let f: Float = 1\n",
-        "luce.sema.type",
-        "f declared Float but initialized with Int; conversions are explicit, so write Float(...)",
-        2,
-        5,
-    );
+}
+
+// Promotion is one direction.  A `Float` never becomes an `Int`
+// without being asked, which is what stops float contagion silently:
+// it is refused at the first place an `Int` is required, by a message
+// that was already in the tree (docs/NUMERICS.md §9).
+
+test "luce.sema.type: a Float where an Int is required is still refused" {
+    try expectRejectedAt(
+        \\func take(n: Int) -> Int:
+        \\    return n
+        \\
+        \\func main():
+        \\    let x = 2.5
+        \\    let bad = take(x)
+        \\
+    , "luce.sema.type", 6, 20);
+    try expectRejected(
+        \\func main():
+        \\    var n = 10
+        \\    n += 1.5
+        \\
+    , "luce.sema.type");
+    try expectRejected(
+        \\func main():
+        \\    let n: Int = 2.5
+        \\
+    , "luce.sema.type");
 }
 
 // `and`/`or` used to underline both operands and name neither, in a
@@ -981,10 +973,6 @@ test "luce.sema.return: a returned type takes no article either" {
         \\    let x = f()
         \\
     , "luce.sema.return", "return needs a value of type Int", 2, 5);
-}
-
-test "luce.sema.type: no implicit numeric conversion" {
-    try expectRejected("func main():\n    let a = 1 + 2.0\n", "luce.sema.type");
 }
 
 test "luce.sema.type: a condition must be Bool" {
@@ -2447,7 +2435,7 @@ test "every statement is checked, not just the first that fails" {
     var result = try compile_mod.compile(testing.allocator,
         \\func main():
         \\    let a: Int = "x"
-        \\    let b: Float = 1
+        \\    let b: Bool = 1
         \\    let c = 1 < true
         \\
     , script);

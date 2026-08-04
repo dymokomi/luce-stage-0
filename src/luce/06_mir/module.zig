@@ -34,7 +34,7 @@ pub const magic = "LUCE";
 /// *type* the verifier demands of `key_read`'s result is not, so a
 /// module written under 17 would either fail verification or, worse,
 /// pass it and lower against the wrong shape.
-pub const format_version: u32 = 18;
+pub const format_version: u32 = 19;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -916,6 +916,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 18), format_version);
-    try testing.expectEqual(@as(u64, 17919741998905907687), hasher.final());
+    try testing.expectEqual(@as(u32, 19), format_version);
+    try testing.expectEqual(@as(u64, 16570781339708703694), hasher.final());
 }

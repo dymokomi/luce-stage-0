@@ -27,6 +27,13 @@ pub const Intrinsic = enum {
     sqrt,
     floor,
     ceil,
+    /// Comparison across the Int/Float line, exactly (docs/NUMERICS.md).
+    /// Three arguments — the operator as an `Int`, then the `Int`
+    /// operand, then the `Float` one — because `Binary` carries a
+    /// single `operand_type` and cannot say that its two sides are
+    /// different types.  Stage 4 mirrors the operator when the Float
+    /// was written on the left, so the Int is always argument one.
+    compare_int_float,
     len,
     string_slice,
     string_byte,

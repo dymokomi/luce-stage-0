@@ -4055,6 +4055,24 @@ const Body = struct {
             .floor => self.values[register] = try self.emitFloatCall(.floor, of[0]),
             .ceil => self.values[register] = try self.emitFloatCall(.ceil, of[0]),
 
+            // Comparison across the Int/Float line is exact, so it is
+            // a call and not a widening (docs/NUMERICS.md).  The
+            // operator arrives as an Int register — a constant every
+            // time — and narrows to the `i32` the C surface takes.
+            .compare_int_float => {
+                const answer = try self.callRuntime(.luce_rt_compare_int_float, .i32, &.{
+                    try self.wip.cast(.trunc, self.values[of[0]], .i32, "op"),
+                    self.values[of[1]],
+                    self.values[of[2]],
+                }, "compared");
+                self.values[register] = try self.wip.icmp(
+                    .ne,
+                    answer,
+                    try self.module.builder.intValue(.i32, 0),
+                    "compare",
+                );
+            },
+
             // -- traps and effects, generated here --------------------
             .print => {
                 const text, const length = try self.textParts(of[0], "print");

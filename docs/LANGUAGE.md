@@ -5,7 +5,8 @@ project plan; this file is the language.  Luce is **statically typed**
 with inference — every expression has one type known at compile time,
 annotations are optional where the initializer decides
 (`let n = 1` is an Int; `let n: Int = 1` says so out loud), and there
-are no implicit conversions (`Int(x)` / `Float(x)` are spelled).
+is exactly one implicit conversion: an `Int` widens to a `Float`
+wherever a `Float` is required (docs/NUMERICS.md).  Nothing narrows.
 
 ## Values and objects
 
@@ -587,8 +588,29 @@ misreading (docs/MISSING.md tier 3, item 11).
 Binary operators are `+ - * / %` (Int truncates toward zero, `%`
 follows the dividend's sign; Float is IEEE), the comparisons
 `== != < <= > >=` (ordering on Int, Float, String), and `and or not`
-(short-circuit).  There is no implicit numeric conversion — mixing
-Int and Float is a compile error; convert with `Int(x)`/`Float(x)`.
+(short-circuit).
+
+**Numbers that mix** (docs/NUMERICS.md).  An `Int` widens to a `Float`
+wherever a `Float` is required — both operands of `+ - * / %`, a `let`
+annotation, an argument, a return, a struct field, a list element, a
+compound assignment, `min`/`max`/`clamp`.  One direction: a `Float`
+never becomes an `Int` without `Int(x)` being written, so a `Float`
+that reached somewhere it should not be is refused at the first place
+an `Int` is required rather than quietly truncated.
+
+Promotion needs a place that expects a `Float`.  `let xs = [1, 2, 3]`
+is still a `List(Int)`; `let xs: List(Float) = [1, 2, 3]` is a
+`List(Float)`, and `[1, 2.5]` is one too, because one `Float` among
+numbers makes them all `Float`s wherever it stands.
+
+**Comparison across the line is exact.**  `1 < 1.5` is `true`, and so
+is `9007199254740993 != 9007199254740992.0` — those are two different
+numbers, and the first does not survive being widened.  Approximation
+in `+` is expected and understood; an `==` that answers `true` for two
+different numbers is a defect, so a mixed comparison compares the
+numbers rather than a conversion of them.  (The consequence, which
+Python has too: `a == b` is exact while `a + 0.0 == b` is not, because
+the addition really did widen.)
 
 ### Precedence, and the two places Luce refuses to guess
 
@@ -789,7 +811,8 @@ or any pipe or process substitution.  Diagnostics then name it
 
 First-class functions, closures, user-defined methods/receivers
 (`x.f()` is builtin sugar, not dispatch), exceptions (traps are
-final), implicit conversions, shadowing, mutable file-scope `var`
+final), implicit *narrowing* of a `Float` to an `Int`, shadowing,
+mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate
 decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads

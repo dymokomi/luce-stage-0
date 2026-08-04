@@ -33,27 +33,48 @@ There are no hexadecimal, binary or octal literals and no `_` digit
 separators — writing one is a `luce.lex.number` error naming the
 reason, rather than a silent misreading.
 
-## There are no implicit conversions
+## `Int` widens to `Float`, and never the other way
 
-Mixing an `Int` and a `Float` in one expression is a compile error.
-You convert with `Int(x)` and `Float(x)`, and the conversion is
-visible at the place it happens.
+Mix an `Int` and a `Float` and the `Int` widens: the answer is a
+`Float`, wherever the two meet — an operator, an annotation, an
+argument, a return, a field, a list element. It is the one conversion
+Luce makes without being asked, and it goes in one direction only.
+Nothing narrows a `Float` to an `Int` on its own, so a `Float` that
+wandered somewhere it should not be is a compile error at the first
+place an `Int` is required, not a silent truncation.
 
 ```luce run
 func main():
     let steps = 7
     let seconds = 2.5
-    print(str(Float(steps) * seconds))
-    print(str(Int(seconds)))       # truncates toward zero
+    print(str(steps * seconds))
+    let elapsed: Float = steps
+    print(str(elapsed))
+    print(str(Int(seconds)))       # asked for, and it truncates
 ```
 
 ```output
 17.5
+7
 2
 ```
 
-That rule is the same everywhere, including comparisons: `1 < 1.5` is
-a type error, not a promotion.
+Comparison crosses the line too — and it is **exact**. `1 < 1.5` is
+`true`; so is `9007199254740993 != 9007199254740992.0`, because those
+really are two different numbers even though the first does not
+survive being turned into a `Float`. Luce compares the numbers, not a
+conversion of them.
+
+```luce run
+func main():
+    print(str(1 < 1.5))
+    print(str(9007199254740993 == 9007199254740992.0))
+```
+
+```output
+true
+false
+```
 
 ## Arithmetic is checked
 

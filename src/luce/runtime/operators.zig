@@ -179,6 +179,87 @@ test "a struct holding none compares, in either order, instead of crashing" {
     try std.testing.expect(compare(.not_equal, present, absent));
 }
 
+/// Comparison across the Int/Float line, on the mathematical values
+/// rather than on a conversion (docs/NUMERICS.md §5).
+///
+/// The naive lowering — widen the Int with `sitofp`, then compare —
+/// is wrong from exactly 2^53 upward, where an `Int` no longer
+/// survives the trip: `9007199254740993 == 9007199254740992.0` is
+/// false mathematically and true under widening.  Approximation in
+/// `+` is expected; an `==` that answers true for two different
+/// numbers is a defect, and ordering has to agree with it or
+/// `a == b` and `not (a < b) and not (b < a)` part company.  Python's
+/// `float_richcompare` is the reference and reaches the same answers.
+///
+/// **The Int is always the left operand.**  Stage 4 mirrors the
+/// operator when the Float was written first, so there is one shape
+/// here and one to prove.
+pub fn compareIntFloat(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
+    // NaN is unordered with everything, itself included, so only `!=`
+    // is true of it — the same answer `compare` gives above.
+    if (std.math.isNan(right)) return op == .not_equal;
+
+    const order: std.math.Order = if (right >= 9223372036854775808.0)
+        // Past the top of the i64 range the Float wins on magnitude
+        // alone; +inf arrives here too.  2^63 is exactly
+        // representable, which is what makes `>=` the right edge.
+        .lt
+    else if (right < -9223372036854775808.0)
+        .gt
+    else compared: {
+        // In range, so the integral part converts exactly and the two
+        // integers decide it; a tie is broken by the fraction, whose
+        // sign says which side of the whole number the Float sits on.
+        const whole = @trunc(right);
+        const whole_as_int: i64 = @intFromFloat(whole);
+        if (left != whole_as_int) break :compared if (left < whole_as_int) .lt else .gt;
+        const fraction = right - whole;
+        if (fraction == 0.0) break :compared .eq;
+        break :compared if (fraction > 0.0) .lt else .gt;
+    };
+
+    return switch (op) {
+        .equal => order == .eq,
+        .not_equal => order != .eq,
+        .less => order == .lt,
+        .less_equal => order != .gt,
+        .greater => order == .gt,
+        .greater_equal => order != .lt,
+        // The analyzer emits this intrinsic for comparisons only.
+        .add, .subtract, .multiply, .divide, .remainder => unreachable,
+    };
+}
+
+test "mixed comparison is exact at 2^53, where widening stops being" {
+    const two53: i64 = 9007199254740992;
+    const as_float: f64 = 9007199254740992.0;
+
+    // The number that does not survive `sitofp`.
+    try std.testing.expect(!compareIntFloat(.equal, two53 + 1, as_float));
+    try std.testing.expect(compareIntFloat(.greater, two53 + 1, as_float));
+    try std.testing.expect(!compareIntFloat(.less_equal, two53 + 1, as_float));
+    // And the one that does.
+    try std.testing.expect(compareIntFloat(.equal, two53, as_float));
+    try std.testing.expect(compareIntFloat(.less_equal, two53, as_float));
+
+    // Fractions on both sides of zero.
+    try std.testing.expect(compareIntFloat(.less, 1, 1.5));
+    try std.testing.expect(compareIntFloat(.greater, -1, -1.5));
+    try std.testing.expect(compareIntFloat(.equal, 1, 1.0));
+
+    // The infinities and NaN.
+    try std.testing.expect(compareIntFloat(.less, std.math.maxInt(i64), std.math.inf(f64)));
+    try std.testing.expect(compareIntFloat(.greater, std.math.minInt(i64), -std.math.inf(f64)));
+    try std.testing.expect(compareIntFloat(.not_equal, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareIntFloat(.equal, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareIntFloat(.less, 0, std.math.nan(f64)));
+    try std.testing.expect(!compareIntFloat(.greater_equal, 0, std.math.nan(f64)));
+
+    // The i64 edges, where the bound itself is representable.
+    try std.testing.expect(compareIntFloat(.equal, std.math.minInt(i64), -9223372036854775808.0));
+    try std.testing.expect(compareIntFloat(.less, std.math.maxInt(i64), 9223372036854775808.0));
+}
+
 /// Ordering for sort: elements are Int, Float, or String (the
 /// analyzer guarantees it).
 pub fn orderedBefore(context: void, left: Value, right: Value) bool {

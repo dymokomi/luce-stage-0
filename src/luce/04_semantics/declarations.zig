@@ -26,6 +26,10 @@ const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 const diagnostics_mod = @import("../support/diagnostics.zig");
+// The folder answers what a run would answer, so where a judgment has
+// one implementation in `libluce_rt` the folder calls it rather than
+// keeping a second copy that could drift (docs/NUMERICS.md §5).
+const operators = @import("../runtime/operators.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = source_mod.Span;
@@ -1210,16 +1214,50 @@ pub const Analyzer = struct {
         if (binary.op == .catch_error) {
             return self.constantError(binary.span, "catch has nothing to do in a constant: nothing is called there", .{});
         }
-        const left = (try self.foldConstant(module, binary.left)) orelse return null;
+        var left = (try self.foldConstant(module, binary.left)) orelse return null;
         // Short-circuit folds without evaluating the other side's
         // side effects — there are none, so plain evaluation is fine.
-        const right = (try self.foldConstant(module, binary.right)) orelse return null;
+        var right = (try self.foldConstant(module, binary.right)) orelse return null;
+
+        // Numbers that mix, folded (docs/NUMERICS.md).  A constant has
+        // to reach the same answer a run would, so arithmetic widens
+        // the Int here too and comparison stays exact — the comparison
+        // calls the runtime's own function rather than a second copy
+        // of it, because two implementations of one judgment is how
+        // they come to disagree.
+        if ((left.value_type == .int and right.value_type == .float) or
+            (left.value_type == .float and right.value_type == .int))
+        {
+            if (helpers.comparisonOf(binary.op)) |written| {
+                const int_first = left.value_type == .int;
+                return .{
+                    .value = .{ .boolean = operators.compareIntFloat(
+                        if (int_first) written else written.mirrored(),
+                        if (int_first) left.value.int else right.value.int,
+                        if (int_first) right.value.float else left.value.float,
+                    ) },
+                    .value_type = .boolean,
+                };
+            }
+            // The widened number is computed *before* the assignment,
+            // because the struct literal writes into `left` field by
+            // field: reading `left.value.int` inside it would read a
+            // union whose active field the same expression had just
+            // changed.
+            if (left.value_type == .int) {
+                const widened: f64 = @floatFromInt(left.value.int);
+                left = .{ .value = .{ .float = widened }, .value_type = .float };
+            } else {
+                const widened: f64 = @floatFromInt(right.value.int);
+                right = .{ .value = .{ .float = widened }, .value_type = .float };
+            }
+        }
+
         if (!left.value_type.eql(right.value_type)) {
             return self.constantError(binary.span, mismatched_operands_message, .{
                 context.operatorText(binary.op),
                 try self.typeName(left.value_type),
                 try self.typeName(right.value_type),
-                context.conversionAdvice(left.value_type, right.value_type),
             });
         }
         switch (binary.op) {

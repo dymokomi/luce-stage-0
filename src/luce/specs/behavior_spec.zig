@@ -134,7 +134,11 @@ test "floats: arithmetic, IEEE division, and builtins" {
     );
 }
 
-test "floats and ints do not mix without explicit conversion" {
+// ---------------------------------------------------------------------------
+// Numbers that mix (docs/NUMERICS.md)
+// ---------------------------------------------------------------------------
+
+test "the conversions are still spelled where a program spells them" {
     try agreeOk(
         \\func main():
         \\    let n = 7
@@ -142,6 +146,180 @@ test "floats and ints do not mix without explicit conversion" {
         \\    assert(Float(n) / x == 3.5)
         \\    assert(Int(x) + n == 9)
         \\    assert(Float(Int(3.9)) == 3.0)
+        \\
+    );
+}
+
+test "mixing: Int widens to Float in every arithmetic operator" {
+    try agreeOk(
+        \\func main():
+        \\    let n = 7
+        \\    let x = 2.0
+        \\    assert(n + x == 9.0)
+        \\    assert(x + n == 9.0)
+        \\    assert(n - x == 5.0)
+        \\    assert(x - n == -5.0)
+        \\    assert(n * x == 14.0)
+        \\    assert(x * n == 14.0)
+        \\    assert(n / x == 3.5)
+        \\    assert(x / n == 0.2857142857142857)
+        \\    assert(n % x == 1.0)
+        \\    assert(x % n == 2.0)
+        \\
+    );
+}
+
+test "mixing: a promoted operator answers a Float, printed as one" {
+    // `str` of a whole Float is its shortest round-trip, so "8" and
+    // not "8.0" — the division below is what shows the type moved.
+    try agree.printsGiven(
+        \\func main():
+        \\    let n = 7
+        \\    print(str(n + 1.0))
+        \\    print(str(1 + 0.5))
+        \\    print(str(n / 2.0))
+        \\    var f = 2.0
+        \\    f += 1
+        \\    f *= 2
+        \\    print(str(f / 8.0))
+        \\
+    , budget, "8\n1.5\n3.5\n0.75\n");
+}
+
+test "mixing: promotion reaches annotations, arguments, returns, and fields" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\func scale(by: Float) -> Float:
+        \\    return by * 2
+        \\
+        \\func whole() -> Float:
+        \\    return 3
+        \\
+        \\func maybe_whole(present: Bool) -> Float?:
+        \\    if present:
+        \\        return 4
+        \\    return none
+        \\
+        \\func main():
+        \\    let f: Float = 1
+        \\    assert(f == 1.0)
+        \\    assert(scale(3) == 6.0)
+        \\    assert(whole() == 3.0)
+        \\    let p = Point(x = 1, y = 2.5)
+        \\    assert(p.x == 1.0)
+        \\    # The two widenings compose, in the one order that works.
+        \\    let held = maybe_whole(true)
+        \\    if held != none:
+        \\        assert(held == 4.0)
+        \\    assert(maybe_whole(false) == none)
+        \\
+    );
+}
+
+test "mixing: promotion reaches container elements and min/max/clamp" {
+    try agreeOk(
+        \\func main():
+        \\    var xs: List(Float) = [1, 2, 3]
+        \\    xs.append(4)
+        \\    xs[0] = 9
+        \\    assert(xs[0] == 9.0)
+        \\    assert(xs[3] == 4.0)
+        \\    assert(len(xs) == 4)
+        \\    let mixed = [1, 2.5, 3]
+        \\    assert(mixed[0] == 1.0)
+        \\    assert(mixed[2] == 3.0)
+        \\    let plain = [1, 2, 3]
+        \\    assert(plain[0] == 1)
+        \\    let x = 7.5
+        \\    assert(clamp(x, 0, 5) == 5.0)
+        \\    assert(min(x, 8) == 7.5)
+        \\    assert(max(1, x) == 7.5)
+        \\
+    );
+}
+
+// Comparison across the line is **exact**: it compares the numbers,
+// not a conversion of them.  The boundary is 2^53, where an Int stops
+// surviving `sitofp` — below it every answer agrees with widening and
+// above it they part company, which is the whole reason this is a
+// call and not a cast (docs/NUMERICS.md §5).
+
+test "mixing: comparison across the line is exact at 2^53, both sides" {
+    try agreeOk(
+        \\func main():
+        \\    var two53 = 9007199254740992
+        \\    var as_float = 9007199254740992.0
+        \\    assert(two53 == as_float)
+        \\    assert(two53 <= as_float)
+        \\    assert(as_float == two53)
+        \\    # The number that does not survive widening.
+        \\    assert(two53 + 1 != as_float)
+        \\    assert(two53 + 1 > as_float)
+        \\    assert(as_float < two53 + 1)
+        \\    assert(not (two53 + 1 == as_float))
+        \\    assert(not (two53 + 1 <= as_float))
+        \\    # And its neighbour on the other side.
+        \\    assert(two53 - 1 < as_float)
+        \\    assert(as_float > two53 - 1)
+        \\
+    );
+}
+
+test "mixing: ordering, equality, and the fraction that breaks a tie" {
+    try agreeOk(
+        \\func main():
+        \\    assert(1 < 1.5)
+        \\    assert(1.5 > 1)
+        \\    assert(2 > 1.5)
+        \\    assert(1.5 < 2)
+        \\    assert(1 == 1.0)
+        \\    assert(1.0 == 1)
+        \\    assert(1 != 1.5)
+        \\    assert(-1 > -1.5)
+        \\    assert(-2 < -1.5)
+        \\    assert(0 >= -0.0)
+        \\    assert(0 <= -0.0)
+        \\
+    );
+}
+
+test "mixing: infinity and NaN compare with an Int without widening it" {
+    try agreeOk(
+        \\func main():
+        \\    var one = 1.0
+        \\    var zero = 0.0
+        \\    let infinity = one / zero
+        \\    let nan = zero / zero
+        \\    var big = 9223372036854775807
+        \\    assert(big < infinity)
+        \\    assert(infinity > big)
+        \\    assert(0 - big - 1 > 0.0 - infinity)
+        \\    # NaN is unordered with everything, so only != holds.
+        \\    assert(0 != nan)
+        \\    assert(not (0 == nan))
+        \\    assert(not (0 < nan))
+        \\    assert(not (0 > nan))
+        \\    assert(not (0 >= nan))
+        \\    assert(not (0 <= nan))
+        \\
+    );
+}
+
+test "mixing: an exact comparison folds the same way in a constant" {
+    try agreeOk(
+        \\let below = 9007199254740992 == 9007199254740992.0
+        \\let above = 9007199254740993 == 9007199254740992.0
+        \\let ordered = 9007199254740992.0 < 9007199254740993
+        \\let widened = 1 + 2.5
+        \\
+        \\func main():
+        \\    assert(below)
+        \\    assert(not above)
+        \\    assert(ordered)
+        \\    assert(widened == 3.5)
         \\
     );
 }

@@ -100,21 +100,22 @@ does not turn off a single safety check. See
 
 ## Errors, at compile time
 
-Luce is statically typed with inference, and it has no implicit
-conversions at all. Mistakes are caught before anything runs, and the
-message tries to name the fix rather than the parser's predicament:
+Luce is statically typed with inference, and the only conversion it
+makes on its own is widening an `Int` to a `Float`. Mistakes are
+caught before anything runs, and the message tries to name the fix
+rather than the parser's predicament:
 
 ```luce fail
 func main():
     let n: Int = 1
-    let x: Float = 2.5
-    print(str(n + x))
+    let s: String = "two"
+    print(str(n + s))
 ```
 
 ```output
 luce: compile failed
-main.luc:4:15: operands of + are Int and Float; conversions are explicit, so write Int(...) or Float(...) to make them one type [luce.sema.type]
-        print(str(n + x))
+main.luc:4:15: operands of + are Int and String, and there is no conversion between them [luce.sema.type]
+        print(str(n + s))
                   ^~~~~
 ```
 

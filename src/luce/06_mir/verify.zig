@@ -470,6 +470,16 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .float);
             try expectType(result, .float);
         },
+        .compare_int_float => {
+            try exactly(arguments, 3);
+            // The operator travels as an Int because an intrinsic call
+            // carries registers and no immediates; which operator it
+            // names is trusted exactly as an instruction's type is.
+            try expectType(arguments[0], .int);
+            try expectType(arguments[1], .int);
+            try expectType(arguments[2], .float);
+            try expectType(result, .boolean);
+        },
         .len => {
             try exactly(arguments, 1);
             const measurable = arguments[0] == .string or arguments[0] == .heap;

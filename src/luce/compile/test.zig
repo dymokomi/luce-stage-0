@@ -618,10 +618,13 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     , dump);
 }
 
-test "no implicit conversion, no reassigned let, no shadowing" {
+test "no implicit narrowing, no reassigned let, no shadowing" {
+    // `Int` widens to `Float` on its own (docs/NUMERICS.md); nothing
+    // goes the other way without being asked, which is what keeps
+    // float contagion from ever being silent.
     try expectRejected(
         \\func main():
-        \\    let mixed = 1 + 2.0
+        \\    let narrowed: Int = 2.5
         \\
     , "luce.sema.type");
     try expectRejected(
@@ -637,11 +640,6 @@ test "no implicit conversion, no reassigned let, no shadowing" {
         \\        let name = 2
         \\
     , "luce.sema.duplicate");
-    try expectRejected(
-        \\func main():
-        \\    let value: Float = 3
-        \\
-    , "luce.sema.type");
 }
 
 test "return paths are checked on every branch" {
@@ -673,9 +671,11 @@ test "struct construction is complete, named, and typed" {
         \\    let doubled = Color(red = 1.0, red = 2.0, green = 3.0)
         \\
     , "luce.sema.construct");
+    // `red = 1` is a widening, not a mismatch (docs/NUMERICS.md); a
+    // String is still a String.
     try expectRejected(source_prefix ++
         \\func main():
-        \\    let wrong = Color(red = 1, green = 2.0)
+        \\    let wrong = Color(red = "x", green = 2.0)
         \\
     , "luce.sema.type");
     try expectRejected(

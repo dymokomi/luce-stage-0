@@ -47,32 +47,19 @@ pub const integer_range_message =
 pub const float_range_message =
     "float literal is not a finite number; Float holds up to about 1.8e308";
 
-/// Binary operand typing: the operator, the two types, and whether a
-/// conversion between them exists.  Pass two appends one more `{s}` of
-/// advice when one side is an optional; the sentence up to there is
-/// the same.
-pub const mismatched_operands_message = "operands of {s} are {s} and {s}{s}";
-
-/// Whether Luce converts between these two types at all.
+/// Binary operand typing: the operator and the two types.  Pass two
+/// appends one more `{s}` of advice when one side is an optional; the
+/// sentence up to there is the same.
 ///
-/// `Int()` takes a Float and `Float()` takes an Int, and that is the
-/// whole set (`builder.lowerConvert`).  It matters because
-/// "(conversions are explicit)" used to be printed for every mismatch,
-/// including `Int` against `String` — which sends the reader looking
-/// for a `String(...)` that does not exist, and never named the
-/// operator or spelled the conversion where there really was one.
-pub fn convertsBetween(left: Type, right: Type) bool {
-    return (left == .int and right == .float) or (left == .float and right == .int);
-}
-
-/// The tail of `mismatched_operands_message`: how to make two types
-/// one type, or that nothing will.
-pub fn conversionAdvice(left: Type, right: Type) []const u8 {
-    if (convertsBetween(left, right)) {
-        return "; conversions are explicit, so write Int(...) or Float(...) to make them one type";
-    }
-    return ", and there is no conversion between them";
-}
+/// **The sentence ends with a fact, not with advice.**  It used to
+/// offer "conversions are explicit, so write Int(...) or Float(...)",
+/// because `Int` against `Float` was the one mismatch a constructor
+/// could repair.  It is not a mismatch any more — `Int` widens to
+/// `Float` on its own (docs/NUMERICS.md) — so every pair that still
+/// reaches this message genuinely has nothing to convert between, and
+/// the tail says exactly that.
+pub const mismatched_operands_message =
+    "operands of {s} are {s} and {s}, and there is no conversion between them";
 
 /// How an operator is written, for a message that has to name it.
 pub fn operatorText(op: ast.BinaryOp) []const u8 {

@@ -894,3 +894,70 @@ correctly as `x % 256` for the first time (§3).
 **A `numeric` or `Number` supertype.** There is no subtyping in Luce
 beyond `T <: T?` and this would be the second, which is how a small
 type system stops being small.
+
+---
+
+## As built
+
+The ratified plan, landed step by step.  Each entry says what shipped
+and — where the memo met the code and lost — what the memo had wrong,
+corrected here rather than left for the next reader to re-derive.
+
+### Step 1 — promotion, and exact comparison — **landed**
+
+`fit` (`04_semantics/builder.zig`) grew its second arm and every site
+that already called it got promotion for free: annotation, argument,
+return, struct field.  `Intrinsic.compare_int_float` arrived with
+`operators.compareIntFloat` behind it, one implementation in
+`libluce_rt` that the constant folder calls too.  `format_version` is
+**19** and `abi.version` did not move, exactly as §10 predicted.  The
+benchmarks are unchanged to the tenth of a percent: promotion costs
+nothing in code that does not mix.
+
+**Five things the memo did not have right.**
+
+1. **`fit` is not the whole of it.**  Five places compare an operand's
+   type against a wanted type *without* calling `fit`, because they
+   lower before the wanted type is known: binary operands, compound
+   assignment through a nested place, `xs[i] = v`, `methodTakes`
+   (`xs.append(1)`), and `min`/`max`/`clamp`.  Each needed its own
+   line.  The memo's "promotion is a second arm on that function" is
+   true of half the sites and no more.
+
+2. **`min`, `max` and `clamp` are promotion sites**, and the memo does
+   not list them.  They are not `fit` sites — they have no expected
+   type, they unify — but `clamp(x, 0, 10)` being a type error for a
+   Float `x`, in a language where `x < 0` is not, is exactly the
+   arbitrary carve-out §1 argues against.  They unify like a binary
+   operator: one Float among them makes them all Floats.
+
+3. **A list literal needs the expected type pushed *into* it.**
+   §1's "`let xs: List(Float) = [1, 2, 3]` is `List(Float)`" cannot
+   come from `fit`: the literal is inferred bottom-up and hands back a
+   `List(Int)` that no widening turns into a `List(Float)` — a
+   container is not its element.  It works by a one-hop
+   `wanted_element` field on the builder, the same shape
+   `allow_fallible` already uses.  While there: `[1, 2.5]` was a type
+   error and `[2.5, 1]` would have been legal under the naive rule, so
+   the literal unifies over *all* its elements — one Float anywhere
+   makes them all Floats.
+
+4. **Nothing folds a promoted literal at compile time.**  §1 says
+   "`x * 2` with `x: Float` becomes `x * 2.0` in the constant folder";
+   there is no such folder for function bodies — `07_optimize` is
+   prune, ownership and dead, and none of them is constant folding.
+   The `convert` instruction is emitted and LLVM folds `sitofp` of a
+   constant before any machine code exists, so the *claim* (zero cost)
+   holds and the *mechanism* named does not.
+
+5. **The mirror belongs to the operator.**  §5 describes
+   `compare_int_float(op, i, f)` without saying what happens when the
+   Float is written first.  `BinaryOp.mirrored` answers it in one
+   place: the Int is always the left operand and an operator written
+   the other way round is turned around, rather than the runtime
+   growing a second implementation of the same judgment.
+
+**Deliberately not done here.**  Method arguments promote numerically
+but still refuse `T` into `T?` — `fit` would have given both, and
+admitting the second is a separate decision that has nothing to do
+with numbers.

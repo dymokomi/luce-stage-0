@@ -1,9 +1,9 @@
 # Types
 
 Luce is statically typed with inference. Every expression has exactly
-one type, known at compile time. There are **no implicit
-conversions**, anywhere, including between `Int` and `Float` and
-including in comparisons.
+one type, known at compile time. There is exactly **one implicit
+conversion**: an `Int` widens to a `Float` wherever a `Float` is
+required. Nothing narrows, and nothing else converts.
 
 An annotation is optional wherever the initializer decides the type,
 and required where nothing does — an empty list literal, a `var` with
@@ -34,10 +34,16 @@ freed by scope ownership: `List(T)`, `Map(K, V)`, `Array(T, ...)`,
 `Int` division truncates toward zero; `%` takes the sign of the
 dividend. Division or remainder by zero traps.
 
+Mixing the two promotes: `Int op Float` widens the `Int` and answers a
+`Float`, for `+ - * / %`. Comparison across the line does **not**
+widen — it is exact, so `9007199254740993 == 9007199254740992.0` is
+`false`, which widening would get wrong.
+
 ## Conversions
 
-`Int(x)` and `Float(x)` are the only numeric conversions, and both are
-written out. `Int(f)` truncates toward zero and traps if the value is
+`Int(x)` and `Float(x)` are the numeric conversions written out, and
+`Float(i)` is only ever needed where there is no operator to hang the
+widening on. `Int(f)` truncates toward zero and traps if the value is
 outside the `Int` range.
 
 ## struct

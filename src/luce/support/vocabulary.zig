@@ -41,6 +41,25 @@ pub const BinaryOp = enum {
             else => false,
         };
     }
+
+    /// The same comparison with its operands the other way round.
+    ///
+    /// Exact Int/Float comparison is implemented once, in one shape —
+    /// the Int on the left (docs/NUMERICS.md §5) — so a comparison
+    /// written the other way round arrives here rather than at a
+    /// second implementation of the same judgment.  Equality is its
+    /// own mirror image; arithmetic has none and is refused.
+    pub fn mirrored(self: BinaryOp) BinaryOp {
+        return switch (self) {
+            .equal => .equal,
+            .not_equal => .not_equal,
+            .less => .greater,
+            .less_equal => .greater_equal,
+            .greater => .less,
+            .greater_equal => .less_equal,
+            .add, .subtract, .multiply, .divide, .remainder => unreachable,
+        };
+    }
 };
 
 /// Why a call failed, from the closed set an error may carry
