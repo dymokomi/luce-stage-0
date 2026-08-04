@@ -38,9 +38,9 @@
 //! way — `emit` for the object, then `cc` for the loadable `.lc` or a
 //! standalone executable — and `loom run FILE.lc` opens exactly that.
 //! What makes an artifact safe to hand to a loader is
-//! `abi.Artifact`: the tag this stage stamps every
-//! module with, naming the machine, the host ABI, and the program it
-//! was built from, so the wrong one is refused by name.
+//! `artifact.Artifact`: the tag this stage stamps every module with,
+//! naming the machine, the host ABI, the code generator, and the
+//! program it was built from, so the wrong one is refused by name.
 //!
 //! **The numeric prefix is load-bearing; do not drop it.**  Zig derives
 //! symbol names from the source path and LLVM claims every symbol
@@ -53,8 +53,15 @@
 //! Flat pieces beside this file, in this module:
 //!
 //!   abi.zig    — the published host ABI a compiled artifact links
-//!                against: the `luce_main` entry point, the `LuceHost`
-//!                service table, and the artifact tag a loader reads.
+//!                against: the `luce_main` entry point and the
+//!                `LuceHost` service table.
+//!   artifact.zig
+//!             — the tag a compiled module carries and a loader reads
+//!               before it believes anything else: the machine, the
+//!               host ABI version, the code generator, and the program
+//!               it was built from.  A separate contract with its own
+//!               version number, because a loader has to read the tag
+//!               before it can trust the ABI version *in* the tag.
 //!   lower.zig  — typed MIR to LLVM IR, built with the pure-Zig
 //!                `std.zig.llvm.Builder`.  No libLLVM, no `else` arms.
 //!   loops.zig  — where a container resolution may be lifted to.
@@ -73,6 +80,7 @@
 //!                a shared library, loaded and run against a host.
 
 pub const abi = @import("08_llvm/abi.zig");
+pub const artifact = @import("08_llvm/artifact.zig");
 pub const effects = @import("08_llvm/runtime_effects.zig");
 
 pub const Options = @import("08_llvm/lower.zig").Options;
@@ -83,6 +91,7 @@ pub const lowerToText = @import("08_llvm/lower.zig").lowerToText;
 
 test {
     _ = abi;
+    _ = artifact;
     _ = effects;
     _ = @import("08_llvm/loops.zig");
 }

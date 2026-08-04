@@ -12,7 +12,7 @@
 //! **It is a seam, not a deliverable.**  What `luce build` writes is
 //! machine code (`docs/CODEGEN.md`); these bytes are the front end's
 //! hand-over to the back end and the artifact's cache key.  Two things
-//! ride on them and nothing else does: `abi.sourceHash` names the
+//! ride on them and nothing else does: `artifact.sourceHash` names the
 //! program an artifact was built from, and `loom` hands the compiler a
 //! module rather than a source file, which is what lets loom carry no
 //! code generator (`apps/loom/runner.zig`).  When one has to reach a

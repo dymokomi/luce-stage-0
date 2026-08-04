@@ -607,7 +607,7 @@ test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
 //
 // A native artifact is not portable and its name cannot be trusted to
 // say so, so every one carries a tag and a loader reads it before a
-// single instruction runs (`luce.llvm.abi.Artifact`).  Six ways an
+// single instruction runs (`luce.llvm.artifact.Artifact`).  Six ways an
 // artifact can be wrong, six sentences — and the sentences are the
 // whole point: "no" tells a person nothing, and "it was built for a
 // different machine" tells them what to do next.
@@ -645,7 +645,7 @@ fn corrupt(
     defer gpa.free(bytes);
 
     var magic_bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &magic_bytes, luce.llvm.abi.artifact_magic, .little);
+    std.mem.writeInt(u64, &magic_bytes, luce.llvm.artifact.magic, .little);
     const at = std.mem.indexOf(u8, bytes, &magic_bytes) orelse return error.NoArtifactTag;
     std.mem.writeInt(u64, bytes[at + offset ..][0..8], value, .little);
 
@@ -713,12 +713,12 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
         // machine's name.
         .{
             .offset = tag.machine_length,
-            .value = luce.llvm.abi.machine.len - 1,
+            .value = luce.llvm.artifact.machine.len - 1,
             .says = "it was built for a different machine",
         },
         .{
             .offset = tag.generator,
-            .value = ~luce.llvm.abi.generator,
+            .value = ~luce.llvm.artifact.generator,
             .says = "it was built by a different code generator",
         },
     };
@@ -760,6 +760,7 @@ test "an artifact with a tag and no entry point is not an artifact" {
     var install = try installTree(gpa, false);
     defer install.deinit(gpa);
 
+    const artifact = luce.llvm.artifact;
     const abi = luce.llvm.abi;
     const source = try std.fmt.allocPrint(gpa,
         \\#include <stdint.h>
@@ -785,12 +786,12 @@ test "an artifact with a tag and no entry point is not an artifact" {
         \\}};
         \\
     , .{
-        abi.machine,
-        abi.artifact_magic,
-        abi.artifact_format,
+        artifact.machine,
+        artifact.magic,
+        artifact.format,
         abi.version,
-        abi.machine.len,
-        abi.generator,
+        artifact.machine.len,
+        artifact.generator,
     });
     defer gpa.free(source);
     try install.write("hollow.c", source);

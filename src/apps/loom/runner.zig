@@ -13,7 +13,7 @@
 //! installed: the artifact carries its own tag, and a file built for
 //! another machine, another host ABI or another code generator is
 //! refused by name before a single instruction of it runs
-//! (`luce.llvm.abi.Artifact`, `native.open`).
+//! (`luce.llvm.artifact.Artifact`, `native.open`).
 //!
 //! ## loom does not carry a code generator
 //!
@@ -73,6 +73,7 @@ const report = @import("report");
 
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
+const artifact = luce.llvm.artifact;
 
 pub const compile_options: luce.types.CompileOptions = .{
     .allow_host = true,
@@ -276,7 +277,7 @@ fn artifactFor(
     encoded: []const u8,
     refusal: *?[]const u8,
 ) !?native.Loaded {
-    const source_hash = abi.sourceHash(encoded);
+    const source_hash = artifact.sourceHash(encoded);
     var places = try Places.of(gpa, io, policy.temporary_directory, name, source_hash);
     defer places.deinit(gpa);
     if (places.paths().len == 0) {

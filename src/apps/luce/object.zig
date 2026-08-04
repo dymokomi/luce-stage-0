@@ -18,6 +18,7 @@ const emit = @import("emit");
 
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
+const artifact = luce.llvm.artifact;
 
 pub const Result = union(enum) {
     /// The artifact was written to the path the caller named.
@@ -45,7 +46,7 @@ pub const Error = error{OutOfMemory};
 /// object was asked for — link it into `output`.
 ///
 /// `source_hash` is what the artifact's tag will claim it was built
-/// from (`abi.sourceHash` of the serialized module), so a loader can
+/// from (`artifact.sourceHash` of the serialized module), so a loader can
 /// tell a stale cache entry from a current one.  Pass zero when
 /// nothing will cache this.
 ///
@@ -245,18 +246,18 @@ test "a program links, loads with its tag intact, and runs" {
     defer program.deinit();
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
-    const hash = abi.sourceHash(encoded);
+    const hash = artifact.sourceHash(encoded);
 
     var scratch = testing.tmpDir(.{});
     defer scratch.cleanup();
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "product.lc" });
-    defer gpa.free(artifact);
+    const artifact_path = try std.fs.path.joinZ(gpa, &.{ directory, "product.lc" });
+    defer gpa.free(artifact_path);
 
     try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .library,
-        .output = artifact,
+        .output = artifact_path,
         .source_hash = hash,
     }));
 
@@ -273,7 +274,7 @@ test "a program links, loads with its tag intact, and runs" {
     }
     try testing.expectEqualStrings("product.lc ", left.items);
 
-    var loaded = switch (native.open(artifact, hash)) {
+    var loaded = switch (native.open(artifact_path, hash)) {
         .loaded => |opened| opened,
         .unopenable => return error.CouldNotLoad,
         .mismatch => |why| {
@@ -288,11 +289,11 @@ test "a program links, loads with its tag intact, and runs" {
     try testing.expectEqual(hash, loaded.tag.source_hash);
     // And what wrote it, which is the fact that decides whether a
     // `.lc` found beside a source file may be run or has to be rebuilt.
-    try testing.expectEqual(abi.artifact_format, loaded.tag.format);
-    try testing.expectEqual(abi.generator, loaded.tag.generator);
+    try testing.expectEqual(artifact.format, loaded.tag.format);
+    try testing.expectEqual(artifact.generator, loaded.tag.generator);
     try testing.expect(loaded.debug());
     try testing.expectEqualStrings(
-        abi.machine,
+        artifact.machine,
         loaded.tag.machine[0..@intCast(loaded.tag.machine_length)],
     );
 
@@ -314,19 +315,19 @@ test "an artifact built from another program is refused as stale" {
     defer scratch.cleanup();
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-    const artifact = try std.fs.path.joinZ(gpa, &.{ directory, "stale.lc" });
-    defer gpa.free(artifact);
+    const artifact_path = try std.fs.path.joinZ(gpa, &.{ directory, "stale.lc" });
+    defer gpa.free(artifact_path);
 
     try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .library,
-        .output = artifact,
+        .output = artifact_path,
         .source_hash = 0x1111_2222_3333_4444,
     }));
 
     // Content decides, and nothing else: the file is there, it loads,
     // it has a `luce_main` — and it is still the wrong program.
-    try testing.expectEqual(abi.Mismatch.source, native.open(artifact, 0xdead_beef).mismatch);
-    switch (native.open(artifact, 0x1111_2222_3333_4444)) {
+    try testing.expectEqual(artifact.Mismatch.source, native.open(artifact_path, 0xdead_beef).mismatch);
+    switch (native.open(artifact_path, 0x1111_2222_3333_4444)) {
         .loaded => |opened| {
             var loaded = opened;
             loaded.close();

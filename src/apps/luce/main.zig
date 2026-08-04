@@ -10,7 +10,7 @@
 //! no second, slower thing to write: the artifact is the deliverable
 //! and the tag is what makes it safe to hand around, because a loader
 //! refuses the wrong machine, the wrong host ABI, or another code
-//! generator's output by name (`luce.llvm.abi.Artifact`).
+//! generator's output by name (`luce.llvm.artifact.Artifact`).
 //!
 //! `--emit` says which of three shapes it takes, and it is the only
 //! thing that differs between them — the same program walks the same
@@ -270,7 +270,7 @@ fn buildNative(
     // that `loom luce` will then hit.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
-    const source_hash = luce.llvm.abi.sourceHash(encoded);
+    const source_hash = luce.llvm.artifact.sourceHash(encoded);
 
     var tools = try native.discover(gpa, io, request.library_directory, request.driver);
     defer tools.deinit(gpa);
@@ -306,7 +306,7 @@ fn buildNative(
     // One line, the same on every host: what went in and what came
     // out.  The machine is deliberately not in it — every artifact is
     // for the machine that built it, the tag is where that fact is
-    // written down, and a loader is what reads it (`llvm.abi.machine`).
+    // written down, and a loader is what reads it (`llvm.artifact.machine`).
     // A build line that named the host would also make every recorded
     // transcript of one host-specific, which the site's samples are
     // compared against byte for byte.

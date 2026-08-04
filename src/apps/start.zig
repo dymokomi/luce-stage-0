@@ -31,6 +31,7 @@ const report = @import("report");
 const streams = @import("streams");
 
 const abi = luce.llvm.abi;
+const artifact = luce.llvm.artifact;
 
 /// The program linked beside this shim.  Undefined here on purpose:
 /// the link is what supplies it, and a `libluce_start.a` linked
@@ -40,7 +41,7 @@ extern fn luce_main(host: *const abi.Host) callconv(.c) abi.Status;
 /// What the program says it is.  Checked before it is called, because
 /// a shim and an object from two different compilers link cleanly and
 /// then disagree about the shape of the table being handed over.
-extern const luce_artifact: abi.Artifact;
+extern const luce_artifact: artifact.Artifact;
 
 export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const gpa = std.heap.c_allocator;
@@ -68,7 +69,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         argument.* = std.mem.span(argv[index + 1]);
     }
 
-    if (abi.checkArtifact(&luce_artifact, null)) |mismatch| {
+    if (artifact.check(&luce_artifact, null)) |mismatch| {
         err.print(
             "luce: this executable was built from a mismatched artifact ({s}); rebuild it from source\n",
             .{@tagName(mismatch)},

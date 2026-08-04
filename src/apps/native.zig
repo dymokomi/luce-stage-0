@@ -34,6 +34,7 @@ const luce = @import("luce");
 
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
+const artifact = luce.llvm.artifact;
 
 // ---------------------------------------------------------------------------
 // What is being produced
@@ -426,7 +427,7 @@ fn writeWhole(io: std.Io, path: []const u8, bytes: []const u8) !void {
 pub const Loaded = struct {
     library: std.DynLib,
     entry: abi.Entry,
-    tag: *const abi.Artifact,
+    tag: *const artifact.Artifact,
 
     pub fn close(self: *Loaded) void {
         self.library.close();
@@ -446,7 +447,7 @@ pub const OpenResult = union(enum) {
     /// It opened, and it is not an artifact this loader may run.  The
     /// reason is the artifact tag's, which is the whole point of the
     /// tag: a wrong file says which way it is wrong.
-    mismatch: abi.Mismatch,
+    mismatch: artifact.Mismatch,
 };
 
 /// Open a compiled artifact and check its tag before handing back
@@ -458,8 +459,8 @@ pub const OpenResult = union(enum) {
 /// names one — the program it was built from.
 pub fn open(path: [:0]const u8, expect_hash: ?u64) OpenResult {
     var library = std.DynLib.open(path) catch return .unopenable;
-    const tag = library.lookup(*const abi.Artifact, abi.artifact_symbol);
-    if (abi.checkArtifact(tag, expect_hash)) |mismatch| {
+    const tag = library.lookup(*const artifact.Artifact, artifact.symbol);
+    if (artifact.check(tag, expect_hash)) |mismatch| {
         library.close();
         return .{ .mismatch = mismatch };
     }
@@ -471,7 +472,7 @@ pub fn open(path: [:0]const u8, expect_hash: ?u64) OpenResult {
 }
 
 /// A sentence for a person, for each way an artifact can be refused.
-pub fn explain(mismatch: abi.Mismatch) []const u8 {
+pub fn explain(mismatch: artifact.Mismatch) []const u8 {
     return switch (mismatch) {
         .not_an_artifact => "it is not a compiled Luce artifact",
         .format => "its tag is a layout this loader cannot read",
@@ -621,10 +622,10 @@ test "every refusal has a sentence, and each says which way the artifact is wron
         "it was built by a different code generator",
         "the program it was built from has changed",
     };
-    const fields = @typeInfo(abi.Mismatch).@"enum".fields;
+    const fields = @typeInfo(artifact.Mismatch).@"enum".fields;
     try testing.expectEqual(sentences.len, fields.len);
     inline for (fields, sentences) |field, sentence| {
-        try testing.expectEqualStrings(sentence, explain(@field(abi.Mismatch, field.name)));
+        try testing.expectEqualStrings(sentence, explain(@field(artifact.Mismatch, field.name)));
     }
     for (sentences, 0..) |sentence, index| {
         for (sentences[index + 1 ..]) |other| {

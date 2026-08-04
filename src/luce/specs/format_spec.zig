@@ -8,7 +8,7 @@
 //! This is the one fact about a `.lcm` that is a fact about the
 //! language: a module written out and read back is the same program —
 //! it computes the same answers, on both engines, and the artifact is
-//! keyed on those bytes (`abi.sourceHash`), so a round trip that
+//! keyed on those bytes (`artifact.sourceHash`), so a round trip that
 //! changed anything would change what a cached artifact runs.
 
 const std = @import("std");
