@@ -1324,9 +1324,25 @@ pub const Analyzer = struct {
         const declaration = self.functions.items[index].declaration;
         // The entry may be `func main():` or `func main() -> !:` — the
         // second is how a program says the world can stop it, and loom
-        // reports what it raised (docs/FAILURE.md).
-        if (declaration.parameters.len != 0 or declaration.return_type != null) {
-            try self.fail("luce.sema.main", declaration.span, "script entry must be exactly func main():", .{});
+        // reports what it raised (docs/FAILURE.md).  Two different
+        // mistakes reach here and they took one sentence between them,
+        // which named only the first legal form and put its caret on
+        // `func main` rather than on the part that is wrong.
+        if (declaration.parameters.len != 0) {
+            try self.fail(
+                "luce.sema.main",
+                declaration.parameters[0].span,
+                "main takes no parameters; a program reads its command line with arg_count() and arg(index)",
+                .{},
+            );
+        }
+        if (declaration.return_type) |written| {
+            try self.fail(
+                "luce.sema.main",
+                written.span,
+                "main returns nothing; the entry is func main(): or func main() -> !: when the world can stop it",
+                .{},
+            );
         }
     }
 

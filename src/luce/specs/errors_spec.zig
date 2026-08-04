@@ -402,6 +402,51 @@ test "luce.sema.main: a script needs exactly func main()" {
     try expectRejected("func main(x: Int):\n    return\n", "luce.sema.main");
 }
 
+// "script entry must be exactly func main():" was not true —
+// `func main() -> !:` is legal and `programs/dice.luc` writes it, as
+// the comment three lines above the message said.  It also answered
+// two different mistakes with one sentence, and pointed at `func main`
+// rather than at the part that is wrong.
+
+test "luce.sema.main: a return type on the entry names the other legal form" {
+    try expectOnlySayingAt(
+        \\func main() -> Int:
+        \\    return 1
+        \\
+    ,
+        "luce.sema.main",
+        "main returns nothing; the entry is func main(): or func main() -> !: when the world can stop it",
+        1,
+        16,
+    );
+}
+
+test "luce.sema.main: a parameter on the entry says where arguments come from" {
+    try expectOnlySayingAt(
+        \\func main(n: Int):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main takes no parameters; a program reads its command line with arg_count() and arg(index)",
+        1,
+        11,
+    );
+}
+
+test "luce.sema.main: the form the message names actually compiles" {
+    // `-> !:` is the second legal entry, and the message now says so.
+    var result = try compile_mod.compile(testing.allocator, "func main() -> !:\n    return\n", script);
+    defer result.deinit();
+    switch (result) {
+        .success => {},
+        .failure => |diagnostics| {
+            printAll(&diagnostics);
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Compound assignment (value-only arithmetic sugar)
 // ---------------------------------------------------------------------------
