@@ -425,6 +425,37 @@ test "luce.parse.nesting: pathological nesting is rejected, not overflowed" {
     try expectRejected(deep.items, "luce.parse.nesting");
 }
 
+test "luce.lex.indent: an over-nested file is one message, not a hundred and fifty" {
+    // The guard fired once per line past the bound with no once-only
+    // flag, and the recovery then handed the parser a run of bodyless
+    // block headers to complain about in turn: 62 diagnostics and
+    // 65 KB of output for one mistake.
+    const allocator = testing.allocator;
+    var deep: std.ArrayList(u8) = .empty;
+    defer deep.deinit(allocator);
+    try deep.appendSlice(allocator, "func main():\n");
+    for (1..140) |level| {
+        try deep.appendNTimes(allocator, ' ', level * 4);
+        try deep.appendSlice(allocator, "if true:\n");
+    }
+    try deep.appendNTimes(allocator, ' ', 140 * 4);
+    try deep.appendSlice(allocator, "return\n");
+
+    var result = try compile_mod.compile(allocator, deep.items, script);
+    defer result.deinit();
+    const diagnostics = result.failure;
+    errdefer printAll(&diagnostics);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+    try testing.expectEqualStrings("luce.lex.indent", diagnostics.at(0).?.code);
+    try testing.expectEqualStrings("blocks may not nest more than 100 deep", diagnostics.at(0).?.message);
+
+    // And the whole rendering stays small, which is the property a
+    // reader actually feels.  It used to be 65 KB.
+    const rendered = try diagnostics.render(allocator);
+    defer allocator.free(rendered);
+    try testing.expect(rendered.len < 1024);
+}
+
 // ---------------------------------------------------------------------------
 // Entry contract
 // ---------------------------------------------------------------------------

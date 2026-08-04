@@ -98,33 +98,104 @@ pub const Rendered = struct {
             self.code,
         });
         if (self.source_line.len == 0) return;
-        try text.print(allocator, "{s}{s}\n{s}", .{ gutter, self.source_line, gutter });
 
-        const before = self.source_line[0..@min(self.column - 1, self.source_line.len)];
-        for (before) |character| {
-            // Skip UTF-8 continuation bytes: one pad per character.
-            if (character & 0xC0 == 0x80) continue;
-            try text.append(allocator, if (character == '\t') '\t' else ' ');
-        }
-        try text.append(allocator, '^');
+        const caret_at = @min(self.column - 1, self.source_line.len);
         // A span that runs past this line is underlined to its end;
         // one that ends on it is underlined exactly.
         const stop = if (self.end_line == self.line)
             @min(self.end_column - 1, self.source_line.len)
         else
             self.source_line.len;
-        var at = @min(self.column, stop);
-        while (at < stop) : (at += 1) {
+
+        const shown = self.window(caret_at);
+        try text.print(allocator, "{s}{s}{s}{s}\n{s}", .{
+            gutter,
+            if (shown.start != 0) elision else "",
+            self.source_line[shown.start..shown.end],
+            if (shown.end != self.source_line.len) elision else "",
+            gutter,
+        });
+
+        if (shown.start != 0) {
+            for (elision) |_| try text.append(allocator, ' ');
+        }
+        for (self.source_line[shown.start..@min(caret_at, shown.end)]) |character| {
+            // Skip UTF-8 continuation bytes: one pad per character.
+            if (character & 0xC0 == 0x80) continue;
+            try text.append(allocator, if (character == '\t') '\t' else ' ');
+        }
+        try text.append(allocator, '^');
+        var at = @min(caret_at + 1, stop);
+        const underline_to = @min(stop, shown.end);
+        while (at < underline_to) : (at += 1) {
             if (self.source_line[at] & 0xC0 == 0x80) continue;
             try text.append(allocator, '~');
         }
         try text.append(allocator, '\n');
     }
 
+    /// The byte range of the source line to actually print.
+    ///
+    /// A line that fits is printed whole, which is every line a person
+    /// writes.  A generated or pathological one is not: a 300-deep
+    /// paren nest renders a 617-character line with the caret padded
+    /// out to column 268, and the padding makes the output longer than
+    /// the line it is under.  So a long line is windowed around the
+    /// caret, with context in front of it and `...` for what is cut.
+    ///
+    /// Measured in characters, not bytes, because the caret pads one
+    /// space per character.  Double-width characters are not accounted
+    /// for here any more than they are below; nothing portable can.
+    fn window(self: Rendered, caret_at: usize) struct { start: usize, end: usize } {
+        // A line of N bytes holds at most N characters, so this is the
+        // cheap test that lets every ordinary line skip the walk.
+        if (self.source_line.len <= max_line_width) {
+            return .{ .start = 0, .end = self.source_line.len };
+        }
+        const start = stepBack(self.source_line, caret_at, context_width);
+        const end = stepForward(self.source_line, start, max_line_width);
+        // A caret near the end of a long line would otherwise get a
+        // short window; give it a full one by pulling the start back.
+        if (end == self.source_line.len) {
+            return .{ .start = stepBack(self.source_line, end, max_line_width), .end = end };
+        }
+        return .{ .start = start, .end = end };
+    }
+
     /// The indent the source line and its caret share.  Same width as
     /// a trap trace's frames, so a terminal full of both lines up.
     const gutter = "    ";
+    /// What stands in for the part of a long line that is not shown.
+    /// ASCII, so it costs exactly one caret pad per byte and renders
+    /// the same in every terminal.
+    const elision = "...";
+    /// Characters of a source line worth printing, and how many of
+    /// them to keep in front of the caret.
+    const max_line_width = 100;
+    const context_width = 30;
 };
+
+/// The byte offset `count` characters before `at`, stopping at 0.
+fn stepBack(line: []const u8, at: usize, count: usize) usize {
+    var offset = at;
+    var moved: usize = 0;
+    while (offset > 0 and moved < count) : (moved += 1) {
+        offset -= 1;
+        while (offset > 0 and line[offset] & 0xC0 == 0x80) offset -= 1;
+    }
+    return offset;
+}
+
+/// The byte offset `count` characters after `at`, stopping at the end.
+fn stepForward(line: []const u8, at: usize, count: usize) usize {
+    var offset = at;
+    var moved: usize = 0;
+    while (offset < line.len and moved < count) : (moved += 1) {
+        offset += 1;
+        while (offset < line.len and line[offset] & 0xC0 == 0x80) offset += 1;
+    }
+    return offset;
+}
 
 pub const Diagnostic = struct {
     code: []const u8, // stable, e.g. "luce.parse.expected"
@@ -358,6 +429,84 @@ test "the caret lands under the span, through tabs and multi-byte text" {
         "main.luc:1:14: unknown name [luce.sema.name]\n" ++
             "    \tlet caf\xC3\xA9 = bad\n" ++
             "    \t           ^~~\n",
+        rendered,
+    );
+}
+
+test "a long line is windowed around the caret, at both ends and in the middle" {
+    const allocator = testing.allocator;
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(allocator);
+    // 300 'a's, a 'bad' to point at in the middle, 300 more, newline.
+    try line.appendNTimes(allocator, 'a', 300);
+    try line.appendSlice(allocator, "bad");
+    try line.appendNTimes(allocator, 'a', 300);
+    try line.append(allocator, '\n');
+
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    _ = try register(&diagnostics, .root, "", "main.luc", line.items);
+    try diagnostics.add("luce.sema.name", .{ .start = 300, .end = 303 }, "unknown name", .{});
+
+    const rendered = try diagnostics.render(allocator);
+    defer allocator.free(rendered);
+    // Cut at both ends, the caret 30 characters into the window, and
+    // the whole thing bounded rather than 600 columns of 'a' followed
+    // by 300 columns of padding.
+    try testing.expectEqualStrings(
+        "main.luc:1:301: unknown name [luce.sema.name]\n" ++
+            "    ..." ++ ("a" ** 30) ++ "bad" ++ ("a" ** 67) ++ "...\n" ++
+            "       " ++ (" " ** 30) ++ "^~~\n",
+        rendered,
+    );
+}
+
+test "a long line keeps a full window when the caret is at either end" {
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(allocator);
+    try line.appendSlice(allocator, "bad");
+    try line.appendNTimes(allocator, 'a', 300);
+    try line.append(allocator, '\n');
+    _ = try register(&diagnostics, .root, "", "main.luc", line.items);
+    // At the very start: nothing is cut in front, 100 characters shown.
+    try diagnostics.add("luce.sema.name", .{ .start = 0, .end = 3 }, "at the start", .{});
+    // At the very end: nothing is cut behind, still 100 characters.
+    try diagnostics.add("luce.sema.name", .{ .start = 302, .end = 303 }, "at the end", .{});
+
+    const rendered = try diagnostics.render(allocator);
+    defer allocator.free(rendered);
+    try testing.expectEqualStrings(
+        "main.luc:1:1: at the start [luce.sema.name]\n" ++
+            "    bad" ++ ("a" ** 97) ++ "...\n" ++
+            "    ^~~\n" ++
+            "main.luc:1:303: at the end [luce.sema.name]\n" ++
+            "    ..." ++ ("a" ** 100) ++ "\n" ++
+            "       " ++ (" " ** 99) ++ "^\n",
+        rendered,
+    );
+}
+
+test "a line that fits is printed whole, ellipsis and all" {
+    const allocator = testing.allocator;
+    var diagnostics = Diagnostics.init(allocator);
+    defer diagnostics.deinit();
+    // Exactly at the bound: still printed entire, with no marker.
+    var line: [101]u8 = undefined;
+    @memset(&line, 'a');
+    line[97] = 'b';
+    line[100] = '\n';
+    _ = try register(&diagnostics, .root, "", "main.luc", &line);
+    try diagnostics.add("luce.sema.name", .{ .start = 97, .end = 98 }, "unknown name", .{});
+
+    const rendered = try diagnostics.render(allocator);
+    defer allocator.free(rendered);
+    try testing.expectEqualStrings(
+        "main.luc:1:98: unknown name [luce.sema.name]\n" ++
+            "    " ++ ("a" ** 97) ++ "b" ++ ("a" ** 2) ++ "\n" ++
+            "    " ++ (" " ** 97) ++ "^\n",
         rendered,
     );
 }

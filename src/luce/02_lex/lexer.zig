@@ -162,7 +162,7 @@ const max_diagnostics = 100;
 /// compiler passes through that gate, and this stage is written to its
 /// guarantees rather than re-deciding them; Debug builds check the
 /// precondition here so a caller that skips stage 1 fails at the seam.
-pub fn lex(allocator: Allocator, source: []const u8, diagnostics: *Diagnostics) Error![]Token {
+pub fn lex(allocator: Allocator, source: []const u8, diagnostics: *Diagnostics) Error!Lexed {
     if (builtin.mode == .Debug and !isPrepared(source)) std.debug.panic(
         "lex() was handed raw bytes: its input must come from 01_source.prepare",
         .{},
@@ -175,8 +175,26 @@ pub fn lex(allocator: Allocator, source: []const u8, diagnostics: *Diagnostics) 
     defer lexer.indents.deinit(allocator);
     errdefer lexer.tokens.deinit(allocator);
     try lexer.run();
-    return lexer.tokens.toOwnedSlice(allocator);
+    return .{
+        .tokens = try lexer.tokens.toOwnedSlice(allocator),
+        .truncated = lexer.truncated,
+    };
 }
+
+/// What a lex produced.
+pub const Lexed = struct {
+    /// The tokens, always ending in `end_of_file` with every block
+    /// closed.  The caller owns the slice.
+    tokens: []Token,
+    /// True when a structural bound — the nesting depth — stopped the
+    /// scan before the end of the source.  The tokens are still well
+    /// formed, but the tail of them is this stage's own closing-up
+    /// rather than anything the author wrote, so **a stage that
+    /// reports on them must add nothing**: the file was refused, by
+    /// name, once already, and a hundred-deep nest closed by force
+    /// ends in a block that looks empty because the lexer stopped.
+    truncated: bool = false,
+};
 
 /// Whether `source` satisfies `lex()`'s precondition.  Only Debug
 /// builds pay for this: it is a second pass over the input, and its
@@ -218,6 +236,10 @@ const Lexer = struct {
     /// cap.  Counted here rather than read from `diagnostics`, which
     /// may already hold other modules' errors.
     reported: usize = 0,
+    /// Set when a structural bound stopped the scan before the end of
+    /// the source.  What follows in the token stream is this stage's
+    /// own closing-up, so the next stage must add nothing about it.
+    truncated: bool = false,
 
     fn run(self: *Lexer) Error!void {
         try self.indents.append(self.allocator, 0);
@@ -333,16 +355,28 @@ const Lexer = struct {
         const here: Span = .{ .start = line_begin, .end = self.offset };
         if (width > current) {
             if (self.indents.items.len >= max_indent_depth) {
-                // Refuse to open another block rather than grow the
-                // stack: the line joins the innermost one that is
-                // open, so indents and dedents still balance.
+                // A structural bound is one condition, not one per
+                // line that breaks it: report it once and stop, the
+                // way the parser's `nesting_reported` does.  Joining
+                // each over-deep line to the innermost open block
+                // instead used to report per line *and* leave the
+                // parser a stream of bodyless block headers to
+                // complain about — 62 diagnostics and 65 KB for one
+                // mistake.  Every block still closes below, so the
+                // token stream stays well formed.
+                // The caret goes on the block being opened, not on the
+                // indentation `here` covers: the other two messages on
+                // this line are *about* the whitespace, and this one
+                // is not — a caret under four hundred columns of
+                // spaces tells the reader nothing.
                 try self.report(
                     "luce.lex.indent",
-                    here,
+                    .{ .start = self.offset, .end = self.offset + 1 },
                     "blocks may not nest more than {d} deep",
                     .{max_indent_depth},
                 );
-                self.at_line_start = false;
+                self.truncated = true;
+                self.offset = self.source.len;
                 return;
             }
             // A tab already explains an odd column; do not say it
@@ -1226,7 +1260,7 @@ const testing = std.testing;
 fn lexKinds(allocator: Allocator, text: []const u8, expected: []const Kind) !void {
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, text, &diagnostics);
+    const tokens = (try lex(allocator, text, &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expectEqual(@as(usize, 0), diagnostics.count());
     var kinds: std.ArrayList(Kind) = .empty;
@@ -1245,7 +1279,7 @@ fn lexWithDiagnostics(
 ) !void {
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, text, &diagnostics);
+    const tokens = (try lex(allocator, text, &diagnostics)).tokens;
     defer allocator.free(tokens);
     var kinds: std.ArrayList(Kind) = .empty;
     defer kinds.deinit(allocator);
@@ -1310,7 +1344,7 @@ test "tabs, bad indentation, and unterminated strings diagnose" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "\tlet a = \"open\n  bad = 1\n", &diagnostics);
+    const tokens = (try lex(allocator, "\tlet a = \"open\n  bad = 1\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expect(diagnostics.count() >= 2);
 }
@@ -1386,7 +1420,7 @@ test "a leading zero in a decimal integer is refused, and only there" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "a = 0xFF\n", &diagnostics);
+    const tokens = (try lex(allocator, "a = 0xFF\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "hexadecimal") != null);
@@ -1402,7 +1436,7 @@ test "a fraction with no integer part names the fix and still yields an operand"
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "a = .5e2\n", &diagnostics);
+    const tokens = (try lex(allocator, "a = .5e2\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "write 0.5e2") != null);
     // Member access is untouched: a dot before a *name* is a dot.
@@ -1464,7 +1498,7 @@ test "the four escapes are accepted and every other one is reported" {
         const source = try std.fmt.bufPrint(&text, "a = \"{s}\"\n", .{escape});
         var diagnostics = Diagnostics.init(testing.allocator);
         defer diagnostics.deinit();
-        const tokens = try lex(testing.allocator, source, &diagnostics);
+        const tokens = (try lex(testing.allocator, source, &diagnostics)).tokens;
         defer testing.allocator.free(tokens);
         try testing.expect(diagnostics.count() >= 1);
         try testing.expectEqualStrings("luce.lex.escape", diagnostics.at(0).?.code);
@@ -1502,7 +1536,7 @@ test "a lone opening quote at end of input yields no unsliceable token" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "a = \"", &diagnostics);
+    const tokens = (try lex(allocator, "a = \"", &diagnostics)).tokens;
     defer allocator.free(tokens);
     for (tokens) |item| {
         if (item.kind == .string_literal) try testing.expect(item.span.end - item.span.start >= 2);
@@ -1536,7 +1570,7 @@ test "a backslash at the very end of input cannot run a span past the source" {
     for ([_][]const u8{ "a = f\"x\\", "a = f\"{\"y\\", "a = \"x\\" }) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
-        const tokens = try lex(allocator, source, &diagnostics);
+        const tokens = (try lex(allocator, source, &diagnostics)).tokens;
         defer allocator.free(tokens);
         for (tokens) |item| try testing.expect(item.span.end <= source.len);
         for (0..diagnostics.count()) |index| {
@@ -1564,12 +1598,12 @@ test "a Windows file lexes exactly like a Unix one, because stage 1 prepared it"
 
         var with_lf = Diagnostics.init(allocator);
         defer with_lf.deinit();
-        const lf = try lex(allocator, pair[0], &with_lf);
+        const lf = (try lex(allocator, pair[0], &with_lf)).tokens;
         defer allocator.free(lf);
 
         var with_crlf = Diagnostics.init(allocator);
         defer with_crlf.deinit();
-        const crlf = try lex(allocator, prepared_crlf, &with_crlf);
+        const crlf = (try lex(allocator, prepared_crlf, &with_crlf)).tokens;
         defer allocator.free(crlf);
 
         try testing.expectEqual(@as(usize, 0), with_lf.count());
@@ -1657,7 +1691,7 @@ test "a non-ASCII character is one diagnostic per codepoint, not per byte" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "a = \u{1F600}\n", &diagnostics);
+    const tokens = (try lex(allocator, "a = \u{1F600}\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "\u{1F600}") != null);
@@ -1676,7 +1710,7 @@ test "a quoted run in single quotes is one diagnostic and still an operand" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "a = '('\n", &diagnostics);
+    const tokens = (try lex(allocator, "a = '('\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "ord(") != null);
 }
@@ -1700,7 +1734,7 @@ test "habitual punctuation gets a hint toward the Luce spelling" {
     for ([_][]const u8{ "a = 1;\n", "a = 1 & 2\n", "a = {1}\n" }) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
-        const tokens = try lex(allocator, source, &diagnostics);
+        const tokens = (try lex(allocator, source, &diagnostics)).tokens;
         defer allocator.free(tokens);
         try testing.expect(diagnostics.count() >= 1);
         try testing.expectEqualStrings("luce.lex.character", diagnostics.at(0).?.code);
@@ -1712,7 +1746,7 @@ test "several malformed constructs on one line each get their own diagnostic" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, "a = 0xFF ; \"open\nb = 1_0 $ 2\nc = 3\n", &diagnostics);
+    const tokens = (try lex(allocator, "a = 0xFF ; \"open\nb = 1_0 $ 2\nc = 3\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     var codes: [8][]const u8 = undefined;
     var found: usize = 0;
@@ -1738,7 +1772,7 @@ test "a run of one stray character is one mistake, not four thousand" {
     @memset(&noise, '$');
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, &noise, &diagnostics);
+    const tokens = (try lex(allocator, &noise, &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "4096 times") != null);
@@ -1753,7 +1787,7 @@ test "reporting is capped so a file of noise cannot flood the diagnostics" {
     for (&noise, 0..) |*byte, index| byte.* = if (index % 2 == 0) '$' else '`';
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, &noise, &diagnostics);
+    const tokens = (try lex(allocator, &noise, &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expectEqual(max_diagnostics + 1, diagnostics.count());
     try testing.expectEqualStrings("luce.lex.limit", diagnostics.at(max_diagnostics).?.code);
@@ -1771,7 +1805,7 @@ test "arbitrary bytes never crash the lexer" {
     }
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, prepareInPlace(&noise), &diagnostics);
+    const tokens = (try lex(allocator, prepareInPlace(&noise), &diagnostics)).tokens;
     defer allocator.free(tokens);
     try testing.expect(tokens.len >= 1);
     try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
@@ -1797,7 +1831,7 @@ test "pathological inputs stay linear and terminate" {
     for ([_][]const u8{ long_line.items, brackets.items, staircase.items }) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
-        const tokens = try lex(allocator, source, &diagnostics);
+        const tokens = (try lex(allocator, source, &diagnostics)).tokens;
         defer allocator.free(tokens);
         try testing.expectEqual(Kind.end_of_file, tokens[tokens.len - 1].kind);
         // At most one token per input byte, plus the closing layout.
@@ -1866,10 +1900,16 @@ test "nesting is bounded, and the token stream stays balanced past the bound" {
     }
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, deep.items, &diagnostics);
+    const lexed = try lex(allocator, deep.items, &diagnostics);
+    const tokens = lexed.tokens;
     defer allocator.free(tokens);
-    try testing.expect(diagnostics.count() >= 1);
+    // One bound, one message: the guard used to fire once per line
+    // past it, twenty times over for this input.
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expectEqualStrings("luce.lex.indent", diagnostics.at(0).?.code);
+    // And the next stage is told, so it adds nothing about a tail this
+    // stage wrote itself.
+    try testing.expect(lexed.truncated);
     var depth: usize = 0;
     var deepest: usize = 0;
     for (tokens) |item| switch (item.kind) {
@@ -1938,7 +1978,7 @@ test "a bidirectional control is refused wherever it hides" {
     }) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
-        const tokens = try lex(allocator, source, &diagnostics);
+        const tokens = (try lex(allocator, source, &diagnostics)).tokens;
         defer allocator.free(tokens);
         try testing.expectEqual(@as(usize, 1), diagnostics.count());
         try testing.expectEqualStrings("luce.lex.bidi", diagnostics.at(0).?.code);
@@ -1974,7 +2014,7 @@ test "a look-alike character is named with the ASCII to write instead" {
     for (cases) |case| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
-        const tokens = try lex(allocator, case.source, &diagnostics);
+        const tokens = (try lex(allocator, case.source, &diagnostics)).tokens;
         defer allocator.free(tokens);
         try testing.expect(diagnostics.count() >= 1);
         const message = diagnostics.at(0).?.message;
@@ -2140,7 +2180,7 @@ fn expectInvariants(source: []u8) !void {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = try lex(allocator, source, &diagnostics);
+    const tokens = (try lex(allocator, source, &diagnostics)).tokens;
     defer allocator.free(tokens);
 
     // There is always at least the EOF token, and it is last.
@@ -2205,7 +2245,7 @@ fn expectInvariants(source: []u8) !void {
     // Lexing is a pure function of the bytes.
     var again = Diagnostics.init(allocator);
     defer again.deinit();
-    const repeat = try lex(allocator, source, &again);
+    const repeat = (try lex(allocator, source, &again)).tokens;
     defer allocator.free(repeat);
     try testing.expectEqual(tokens.len, repeat.len);
     for (tokens, repeat) |left, right| {

@@ -791,7 +791,7 @@ fn subExpression(self: *Parser, bytes: []const u8, offset: usize) Error!?*ast.Ex
         return null;
     }
     var scratch = Diagnostics.init(self.arena);
-    const raw_tokens = try lex_mod.lex(self.arena, bytes, &scratch);
+    const raw_tokens = (try lex_mod.lex(self.arena, bytes, &scratch)).tokens;
     if (scratch.hasErrors()) {
         try self.report("luce.parse.fstring", .{ .start = offset, .end = offset + bytes.len }, "malformed expression in f-string", .{});
         return null;

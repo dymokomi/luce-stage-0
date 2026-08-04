@@ -65,14 +65,15 @@ pub fn parse(
     source: []const u8,
     diagnostics: *Diagnostics,
 ) Error!ast.Program {
-    const tokens = try lex_mod.lex(temporary, source, diagnostics);
-    defer temporary.free(tokens);
+    const lexed = try lex_mod.lex(temporary, source, diagnostics);
+    defer temporary.free(lexed.tokens);
 
     var parser: Parser = .{
         .arena = arena,
         .source = source,
-        .tokens = tokens,
+        .tokens = lexed.tokens,
         .diagnostics = diagnostics,
+        .silenced = lexed.truncated,
     };
     return parser.program();
 }
@@ -102,6 +103,13 @@ pub const Parser = struct {
     /// Counted here rather than read from `diagnostics`, which the
     /// lexer has already written into.
     reported: usize = 0,
+    /// Set when stage 2 stopped early on a structural bound
+    /// (`lex_mod.Lexed.truncated`).  The file has been refused by
+    /// name; the tail of the token stream is the lexer closing its own
+    /// open blocks, and every complaint this stage could make about it
+    /// — starting with the innermost block looking empty — would be
+    /// the compiler talking to itself.  So it says nothing.
+    silenced: bool = false,
 
     pub const max_depth: u32 = 512;
 
@@ -174,6 +182,7 @@ pub const Parser = struct {
         comptime format: []const u8,
         arguments: anytype,
     ) Error!void {
+        if (self.silenced) return;
         if (self.reported > max_diagnostics) return;
         if (self.reported == max_diagnostics) {
             self.reported += 1;

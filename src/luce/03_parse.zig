@@ -47,7 +47,12 @@
 //!   unterminated string still yields an operand so the line parses;
 //!   this stage checks whether the literal really closed and stays
 //!   silent when it did not, instead of decoding the truncation and
-//!   reporting a second time.
+//!   reporting a second time.  And when stage 2 stopped early on a
+//!   structural bound (`Lexed.truncated`), this stage says nothing at
+//!   all: the tail of that stream is stage 2 closing its own open
+//!   blocks, so every complaint available here — starting with the
+//!   innermost block looking empty — would be the compiler describing
+//!   its own recovery.  The file was refused, by name, once.
 //! * **Bounded recursion.**  Statements, conditionals, expressions,
 //!   prefix chains and type arguments all take their depth through
 //!   `Parser.enter`, so hostile or generated input reports
