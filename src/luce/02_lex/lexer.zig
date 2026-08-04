@@ -431,10 +431,18 @@ const Lexer = struct {
             '?' => try self.single(.question),
             '.' => {
                 // A `.` is followed by a name (member access) or by
-                // nothing in particular; a digit here is only ever the
-                // `.5` mistake, so name it instead of handing the
-                // parser a dot it cannot use.
-                if (isDigit(self.peek(1))) try self.leadingPointNumber() else try self.single(.dot);
+                // nothing in particular.  A digit after it is one of
+                // two mistakes, and which one depends on what came
+                // before: a number just emitted makes this a second
+                // decimal point, and anything else makes it the `.5`
+                // fraction with nothing in front of it.
+                if (!isDigit(self.peek(1))) {
+                    try self.single(.dot);
+                } else if (self.afterNumberLiteral()) {
+                    try self.extraDecimalPoint();
+                } else {
+                    try self.leadingPointNumber();
+                }
             },
             '+' => try self.maybeAssign(.plus, .plus_assign),
             '*' => try self.maybeAssign(.star, .star_assign),
@@ -670,10 +678,36 @@ const Lexer = struct {
                 self.offset += 1;
             }
         }
+        // `1.` — a point with no fraction and nothing that could be a
+        // member name after it.  The dot used to be left for the
+        // parser, which answered "expected a field or function name
+        // after '.', found end of line" about what is plainly an
+        // unfinished float; `.5` has had the model message all along.
+        // A word start after the point really is member access
+        // (`5.foo`), and Int saying it has no fields is the right
+        // answer to that one, so it is left alone.
+        var unfinished_point = false;
+        if (!is_float and self.offset < self.source.len and self.source[self.offset] == '.' and
+            !isWordStart(self.peek(1)))
+        {
+            unfinished_point = true;
+            is_float = true;
+            self.offset += 1;
+        }
         const before_exponent = self.offset;
         self.scanExponent();
         if (self.offset != before_exponent) is_float = true;
         const span: Span = .{ .start = start, .end = self.offset };
+        if (unfinished_point) {
+            try self.report(
+                "luce.lex.number",
+                span,
+                "a float needs a digit after the point; write {s}0",
+                .{span.slice(self.source)},
+            );
+            try self.emit(.float_literal, span);
+            return;
+        }
 
         // A literal glued to identifier characters is one malformed
         // number, not a number and a word.
@@ -704,6 +738,47 @@ const Lexer = struct {
             );
         }
         try self.emit(if (is_float) .float_literal else .int_literal, span);
+    }
+
+    /// True when a numeric literal was just emitted and ends exactly
+    /// here, so the `.` under the cursor is glued to it.
+    fn afterNumberLiteral(self: *const Lexer) bool {
+        const emitted = self.tokens.items;
+        if (emitted.len == 0) return false;
+        const last = emitted[emitted.len - 1];
+        if (last.kind != .int_literal and last.kind != .float_literal) return false;
+        return last.span.end == self.offset;
+    }
+
+    /// `1.2.3` — a second decimal point on a number that already has
+    /// one.  This used to reach `leadingPointNumber`, which named the
+    /// wrong mistake and printed advice that made it worse: "write
+    /// 0.3" applied to `1.2.3` yields `1.20.3`.
+    ///
+    /// Every following `.digits` run is swallowed rather than emitted.
+    /// The well-formed number in front is already a token, so the
+    /// parser gets the operand it needs and no cascade — and a third
+    /// point is part of the same mistake, not a second one.
+    fn extraDecimalPoint(self: *Lexer) Error!void {
+        const literal_start = self.tokens.items[self.tokens.items.len - 1].span.start;
+        const kept: Span = .{ .start = literal_start, .end = self.offset };
+        const start = self.offset;
+        while (self.offset < self.source.len and self.source[self.offset] == '.' and
+            isDigit(self.peek(1)))
+        {
+            self.offset += 1; // the '.'
+            while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
+                self.offset += 1;
+            }
+            self.scanExponent();
+        }
+        const whole: Span = .{ .start = literal_start, .end = self.offset };
+        try self.report(
+            "luce.lex.number",
+            .{ .start = start, .end = self.offset },
+            "a number has one decimal point; {s} was read as {s}",
+            .{ whole.slice(self.source), kept.slice(self.source) },
+        );
     }
 
     /// `.5` — a fraction with nothing in front of it.  Report the fix
@@ -1343,6 +1418,39 @@ test "a malformed float keeps its well-formed prefix as the operand" {
         &.{ .identifier, .assign, .float_literal, .newline, .end_of_file },
         &.{"luce.lex.number"},
     );
+}
+
+test "a second decimal point is one diagnostic and no second operand" {
+    // `1.2.3` reached the `.5` handler, which named the wrong mistake
+    // and advised an edit that made it worse: "write 0.3" applied here
+    // yields `1.20.3`.  The extra run is swallowed, so the parser sees
+    // one operand and there is no cascade.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = 1.2.3\n",
+        &.{ .identifier, .assign, .float_literal, .newline, .end_of_file },
+        &.{"luce.lex.number"},
+    );
+    // A third point is the same mistake, not a second one.
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = 1.2.3.4\n",
+        &.{ .identifier, .assign, .float_literal, .newline, .end_of_file },
+        &.{"luce.lex.number"},
+    );
+}
+
+test "a point with no fraction is a number, not an unfinished member access" {
+    try lexWithDiagnostics(
+        testing.allocator,
+        "a = 1.\n",
+        &.{ .identifier, .assign, .float_literal, .newline, .end_of_file },
+        &.{"luce.lex.number"},
+    );
+    // A name after the point really is member access, and stays one.
+    try lexKinds(testing.allocator, "a = 5.foo\n", &.{
+        .identifier, .assign, .int_literal, .dot, .identifier, .newline, .end_of_file,
+    });
 }
 
 // --- strings ---------------------------------------------------------------

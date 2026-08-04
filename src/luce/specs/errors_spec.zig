@@ -283,6 +283,38 @@ test "luce.lex.number: a digit run glued to letters is one bad literal" {
     try expectRejected("func main():\n    let a = 12ab\n", "luce.lex.number");
 }
 
+test "luce.lex.number: a second decimal point names itself, and advises nothing harmful" {
+    // Was "a float needs a digit before the point; write 0.3" — the
+    // wrong mistake, and an edit that yields `1.20.3`.
+    try expectOnlySayingAt(
+        "func main():\n    let x = 1.2.3\n",
+        "luce.lex.number",
+        "a number has one decimal point; 1.2.3 was read as 1.2",
+        2,
+        16,
+    );
+}
+
+test "luce.lex.number: a trailing decimal point mirrors the leading one" {
+    try expectOnlySayingAt(
+        "func main():\n    let x = 1.\n",
+        "luce.lex.number",
+        "a float needs a digit after the point; write 1.0",
+        2,
+        13,
+    );
+}
+
+test "luce.lex.number: a leading decimal point keeps the message it always had" {
+    try expectOnlySayingAt(
+        "func main():\n    let x = .5\n",
+        "luce.lex.number",
+        "a float needs a digit before the point; write 0.5",
+        2,
+        13,
+    );
+}
+
 test "luce.lex.string: an unterminated string is caught" {
     try expectRejected("func main():\n    let a = \"open\n", "luce.lex.string");
 }
