@@ -51,7 +51,7 @@ const LocalId = mir.LocalId;
 /// One free builtin: what it is called, what it lowers to, how many
 /// arguments it takes, whether it needs the host gate, and whether a
 /// call to it can leave a container different from how it found it.
-const Builtin = struct {
+pub const Builtin = struct {
     name: []const u8,
     kind: mir.Intrinsic,
     arity: usize,
@@ -68,7 +68,13 @@ const Builtin = struct {
 /// the same thirty-nine names, 3,375 lines apart in this file, with
 /// nothing checking they agreed — so a builtin added to one and not the
 /// other silently changed the ownership analysis.
-const builtins = [_]Builtin{
+///
+/// Published, with the method tables below, because it is *what the
+/// language spells*: `tools/grammar.zig` generates the editor grammar
+/// from these tables rather than from a copy of them, and a copy is
+/// exactly how the old grammar came to highlight builtins the language
+/// had deleted (tools/vscode-luce/README.md).
+pub const builtins = [_]Builtin{
     .{ .name = "abs", .kind = .abs, .arity = 1 },
     .{ .name = "min", .kind = .min, .arity = 2 },
     .{ .name = "max", .kind = .max, .arity = 2 },
@@ -3908,6 +3914,27 @@ pub const FunctionBuilder = struct {
         return .value;
     }
 
+    /// The String methods the language keeps for itself, and what each
+    /// lowers to.  Everything else a program writes on a String routes
+    /// to the std `strings` module (`stringsCall`, docs/STD.md), so
+    /// this table is the whole closed set — a table rather than the two
+    /// `if`s it used to be, because it is the only place these two
+    /// names are written and the editor grammar reads it
+    /// (`tools/grammar.zig`).
+    pub const string_methods = [_]struct {
+        name: []const u8,
+        kind: mir.Intrinsic,
+        takes: []const Type,
+        result: Type,
+    }{
+        // The language's primitive byte access.
+        .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.int}, .result = .int },
+        // The scanning primitive that `byte_at` is the access
+        // primitive: std strings builds substring search on it, and it
+        // is the seam SIMD would enter through (docs/STD.md).
+        .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .int, .int }, .result = .int },
+    };
+
     /// Builtin methods on values: strings, lists, arrays, maps, and
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
@@ -3931,19 +3958,13 @@ pub const FunctionBuilder = struct {
 
         const found: MethodFound = blk: {
             if (receiver.value_type == .string) {
-                // byte_at is the language's primitive byte access;
-                // every other String method is library code —
-                // s.find(x) is strings.find(s, x) (docs/STD.md).
-                if (std.mem.eql(u8, method.name, "byte_at")) {
-                    if (!try self.methodTakes(method, arguments, &.{.int})) return null;
-                    break :blk .{ .kind = .string_byte, .result = .int };
-                }
-                // find_byte is the scanning primitive that byte_at is
-                // the access primitive: std strings builds substring
-                // search on it (docs/STD.md).
-                if (std.mem.eql(u8, method.name, "find_byte")) {
-                    if (!try self.methodTakes(method, arguments, &.{ .int, .int })) return null;
-                    break :blk .{ .kind = .string_find_byte, .result = .int };
+                // The primitives above, and nothing else: every other
+                // String method is library code — s.find(x) is
+                // strings.find(s, x) (docs/STD.md).
+                for (string_methods) |primitive| {
+                    if (!std.mem.eql(u8, method.name, primitive.name)) continue;
+                    if (!try self.methodTakes(method, arguments, primitive.takes)) return null;
+                    break :blk .{ .kind = primitive.kind, .result = primitive.result };
                 }
                 return self.stringsCall(method, values, as_statement);
             }
@@ -4212,13 +4233,17 @@ pub const FunctionBuilder = struct {
     /// below dispatch on them, and a "did you mean" needs the same
     /// list to measure against.  Kept beside the dispatch so the two
     /// cannot drift apart unnoticed.
-    const list_methods = [_][]const u8{
+    ///
+    /// Published for the same reason `builtins` is: these names are
+    /// what the language spells behind a `.`, and the editor grammar
+    /// is generated from them (`tools/grammar.zig`).
+    pub const list_methods = [_][]const u8{
         "append", "insert",  "remove", "pop",      "clear",
         "sort",   "reverse", "find",   "contains",
     };
-    const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
-    const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
-    const builder_methods = [_][]const u8{ "append", "append_ascii", "clear" };
+    pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
+    pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
+    pub const builder_methods = [_][]const u8{ "append", "append_ascii", "clear" };
 
     /// `descriptor` is the receiver's *shape*, which is everything the
     /// dispatch below turns on: a `List(Int)` and a `List(String)`

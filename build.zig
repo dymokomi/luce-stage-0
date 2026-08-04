@@ -134,6 +134,48 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = site_generator })).step);
 
+    // The editor grammar's generator (`tools/grammar.zig`).  Unlike the
+    // site generator above it *does* import `luce`: it verifies nothing
+    // about a running program, it turns the compiler's word tables into
+    // one JSON file, so reading the tables directly is both simpler and
+    // the whole point — the committed grammar spent a release cycle
+    // highlighting builtins the language had deleted, because it was a
+    // copy and nothing checked it.
+    //
+    // `zig build grammar` rewrites the committed file; the test in the
+    // module compares the two and fails the suite when they differ, so
+    // a language change that forgets the grammar cannot land quietly.
+    const grammar_generator = b.createModule(.{
+        .root_source_file = b.path("tools/grammar.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+    // The corpus the grammar is tested against sits above the tool's
+    // module root, and `@embedFile` does not leave a module — so it
+    // arrives under a name instead.
+    grammar_generator.addAnonymousImport("editor.luc", .{
+        .root_source_file = b.path("programs/editor.luc"),
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grammar_generator })).step);
+
+    const grammar_tool = b.addExecutable(.{
+        .name = "luce-grammar",
+        .root_module = grammar_generator,
+    });
+    const run_grammar = b.addRunArtifact(grammar_tool);
+    const grammar_file = run_grammar.addOutputFileArg("luce.tmLanguage.json");
+    const write_grammar = b.addUpdateSourceFiles();
+    write_grammar.addCopyFileToSource(grammar_file, "tools/vscode-luce/syntaxes/luce.tmLanguage.json");
+    const grammar_step = b.step(
+        "grammar",
+        "Regenerate the VS Code TextMate grammar from the language's tables",
+    );
+    grammar_step.dependOn(&write_grammar.step);
+
     // stdout and stderr, opened the same way by all three binaries —
     // `luce`, `loom`, and the `main` a compiled program links — so a
     // program's output does not depend on who started it.

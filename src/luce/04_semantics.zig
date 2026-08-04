@@ -72,6 +72,22 @@ pub const ModuleTree = @import("04_semantics/context.zig").ModuleTree;
 pub const analyze = @import("04_semantics/declarations.zig").analyze;
 pub const max_diagnostics = @import("04_semantics/declarations.zig").max_diagnostics;
 
+// What the language spells, published for the one tool that has to say
+// the same words the compiler does: `tools/grammar.zig` generates the
+// editor's TextMate grammar from these tables, so a name added to the
+// language reaches the grammar without anyone remembering to copy it.
+// Each table still lives beside the dispatch that reads it.
+pub const reserved_names = @import("04_semantics/context.zig").reserved_names;
+pub const isReserved = @import("04_semantics/context.zig").isReserved;
+pub const Builtin = @import("04_semantics/builder.zig").Builtin;
+pub const builtins = @import("04_semantics/builder.zig").builtins;
+const FunctionBuilder = @import("04_semantics/builder.zig").FunctionBuilder;
+pub const list_methods = FunctionBuilder.list_methods;
+pub const array_methods = FunctionBuilder.array_methods;
+pub const map_methods = FunctionBuilder.map_methods;
+pub const builder_methods = FunctionBuilder.builder_methods;
+pub const string_methods = FunctionBuilder.string_methods;
+
 test {
     _ = @import("04_semantics/context.zig");
     _ = @import("04_semantics/declarations.zig");
