@@ -575,7 +575,7 @@ test "luce.lex.indent: an over-nested file is one message, not a hundred and fif
 // Entry contract
 // ---------------------------------------------------------------------------
 
-test "luce.sema.main: a script needs exactly func main()" {
+test "luce.sema.main: a script needs func main(), with or without the command line" {
     try expectRejected("func other():\n    return\n", "luce.sema.main");
     try expectRejected("func main(x: Int):\n    return\n", "luce.sema.main");
 }
@@ -599,29 +599,82 @@ test "luce.sema.main: a return type on the entry names the other legal form" {
     );
 }
 
-test "luce.sema.main: a parameter on the entry says where arguments come from" {
+// The entry's parameter is the command line and its type is fixed
+// (docs/METHODS.md).  The name is free — `args` is a binding like any
+// other — so there is no misspelling of it to diagnose, and the three
+// mistakes that are left get one sentence each and a caret on the part
+// that is wrong.
+
+test "luce.sema.main: the entry's parameter is the command line and must be List(String)" {
     try expectOnlySayingAt(
         \\func main(n: Int):
         \\    return
         \\
     ,
         "luce.sema.main",
-        "main takes no parameters; a program reads its command line with arg_count() and arg(index)",
+        "main's parameter is the command line and must be List(String); it is Int here",
+        1,
+        14,
+    );
+    // A List of the wrong thing is the same mistake and says so with
+    // the type it was actually given.
+    try expectSaying(
+        \\func main(xs: List(Int)):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main's parameter is the command line and must be List(String); it is List(Int) here",
+    );
+}
+
+test "luce.sema.main: the entry takes at most the one parameter" {
+    try expectOnlySayingAt(
+        \\func main(a: List(String), b: Int):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main takes at most one parameter, the command line; it has 2",
+        1,
+        28,
+    );
+}
+
+test "luce.sema.main: the entry's parameter takes no verb" {
+    // S13 says `give` appears at both ends; the entry has one end.
+    try expectOnlySayingAt(
+        \\func main(args: give List(String)):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
         1,
         11,
     );
 }
 
-test "luce.sema.main: the form the message names actually compiles" {
-    // `-> !:` is the second legal entry, and the message now says so.
-    var result = try compile_mod.compile(testing.allocator, "func main() -> !:\n    return\n", script);
-    defer result.deinit();
-    switch (result) {
-        .success => {},
-        .failure => |diagnostics| {
-            printAll(&diagnostics);
-            return error.TestUnexpectedResult;
-        },
+test "luce.sema.main: all four legal entry shapes compile" {
+    // `-> !:` is how a program says the world can stop it, and the
+    // command line composes with it (docs/METHODS.md).  The parameter's
+    // name is the program's to choose.
+    for ([_][]const u8{
+        "func main():\n    return\n",
+        "func main() -> !:\n    return\n",
+        "func main(args: List(String)):\n    return\n",
+        "func main(command_line: List(String)) -> !:\n    return\n",
+    }) |source| {
+        var result = try compile_mod.compile(testing.allocator, source, script);
+        defer result.deinit();
+        switch (result) {
+            .success => {},
+            .failure => |diagnostics| {
+                std.debug.print("this should compile:\n{s}", .{source});
+                printAll(&diagnostics);
+                return error.TestUnexpectedResult;
+            },
+        }
     }
 }
 

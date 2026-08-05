@@ -924,7 +924,11 @@ const Module = struct {
     /// the same way — the host supplies effects, not memory.
     fn lowerEntry(self: *Module) Error!void {
         const entry = &self.program.functions[self.program.entry_function];
-        if (entry.parameter_count != 0) return self.fail("an entry function with parameters");
+        // `func main():` or `func main(args: List(String)):`, and
+        // nothing else — stage 4's `checkEntry` is what says so, and
+        // this is the shape that survived it (docs/METHODS.md).
+        if (entry.parameter_count > 1) return self.fail("an entry function with parameters");
+        const takes_arguments = entry.parameter_count == 1;
 
         const signature_type = try self.builder.fnType(.i32, &.{.ptr}, .normal);
         const wrapper = try self.builder.addFunction(
@@ -1014,7 +1018,10 @@ const Module = struct {
         // carries no trace.
         const refused = try wip.block(1, "too.deep");
         const calling = try wip.block(1, "calling");
-        const ending = try wip.block(2, "ended");
+        // Two ways in, or three when the command line has to be built:
+        // that build is the one thing between the depth check and the
+        // call that can run out of memory.
+        const ending = try wip.block(if (takes_arguments) 3 else 2, "ended");
         _ = try wip.brCond(
             try wip.icmp(.slt, limit, try self.builder.intValue(.i64, 1), "no.frames"),
             refused,
@@ -1038,6 +1045,59 @@ const Module = struct {
         try arguments.append(self.gpa, host);
         try arguments.append(self.gpa, started);
         try arguments.append(self.gpa, limit);
+        // `args` — the command line, built by `libluce_rt` out of the
+        // two vtable slots that already carry it, so nothing is added
+        // to the published ABI and `luce_main`'s signature does not
+        // move (OWNERSHIP.md S44, docs/METHODS.md).  A host that
+        // supplies neither service yields an empty list; the only way
+        // this can fail is running out of memory for the list itself.
+        if (takes_arguments) {
+            const box = try wip.alloca(
+                .normal,
+                self.value_type,
+                .none,
+                Body.value_alignment,
+                .default,
+                "args.box",
+            );
+            const built = try self.callService(&wip, .luce_rt_args_list, .i32, &.{
+                started,
+                context,
+                try self.loadHostSlot(&wip, host, .arg_count, "args.count.fn"),
+                try self.loadHostSlot(&wip, host, .arg, "args.get.fn"),
+                box,
+            }, "args.built");
+            const unbuilt = try wip.block(1, "args.unbuilt");
+            const entering = try wip.block(1, "entering");
+            _ = try wip.brCond(
+                try wip.icmp(.ne, built, try self.builder.intValue(.i32, 0), "args.failed"),
+                unbuilt,
+                entering,
+                .else_likely,
+            );
+            // Nothing ran, and the runtime has recorded that it ran out
+            // — `luce_rt_status` answers `exhausted` and `luce_rt_report`
+            // stays quiet, which is the same pair of answers a failed
+            // `luce_rt_open` gets.
+            wip.cursor = .{ .block = unbuilt };
+            _ = try wip.store(
+                .normal,
+                try self.builder.intValue(.i32, outcome_trapped),
+                outcome_slot,
+                word,
+            );
+            _ = try wip.br(ending);
+
+            wip.cursor = .{ .block = entering };
+            const handle_at = try wip.gepStruct(self.value_type, box, Body.box_bits, "args.at");
+            try arguments.append(self.gpa, try wip.load(
+                .normal,
+                .i64,
+                handle_at,
+                Body.value_alignment,
+                "args",
+            ));
+        }
         if (entry.return_type != .none) {
             try arguments.append(self.gpa, try wip.alloca(
                 .normal,
@@ -1667,7 +1727,9 @@ const Body = struct {
     // A Luce value travels into `libluce_rt` as a pointer to a 24-byte
     // `{ tag, bits, length }` in an entry-block slot.  `boxed` fills one
     // in and `unboxed` reads one back; between them they are the only
-    // two places in this file that know that layout.
+    // two places in this file that know that layout — with one named
+    // exception, `lowerEntry`, which reads `box_bits` alone to take the
+    // command line's handle out of the box `luce_rt_args_list` filled.
     //
     // The fill is split in two on purpose: `fillBoxShape` writes what
     // the *type* decides and goes in the entry block, `fillBoxValue`

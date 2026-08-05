@@ -84,6 +84,77 @@ test "an argument out of range traps, and a refused write is an error" {
 }
 
 // ---------------------------------------------------------------------------
+// The command line, as `main`'s parameter
+// ---------------------------------------------------------------------------
+//
+// `args` is *handed to* the program rather than called by it, which is
+// why none of this is behind the host gate and why a host with nothing
+// to offer supplies an empty list rather than a trap (OWNERSHIP.md
+// S44, docs/METHODS.md).  The list is built by `libluce_rt` on both
+// arms, so what is under test here is that the two hosts marshal the
+// same world into the same list — and, through the leak census, that
+// `main`'s scope gives it back.
+
+test "main receives the command line, and args[0] is the first user argument" {
+    var world: agree.World = .{};
+    world.arguments = &one_argument;
+
+    try agree.printsGiven(
+        \\func main(args: List(String)):
+        \\    print(String(len(args)))
+        \\    print(args[0])
+        \\
+    , .{ .world = world }, "1\nnotes.txt\n");
+}
+
+test "args iterates, slices and joins like any other List(String)" {
+    // The point of the parameter over `arg(index)`: it composes with
+    // everything `List` already has.
+    try agree.printsGiven(
+        \\import std.strings
+        \\
+        \\func main(argv: List(String)):
+        \\    for name in argv:
+        \\        print(name)
+        \\    print(strings.join(argv[1:len(argv)], "-"))
+        \\    print(String(argv.contains("beta")))
+        \\
+    , .{}, "alpha\nbeta\nbeta\ntrue\n");
+}
+
+test "a host with no arguments to offer hands main an empty list, not a trap" {
+    // Fail-closed for the host builtins means a trap; `args` is not one
+    // of them, and the entry cannot fail before `main` starts.
+    try agree.printsGiven(
+        \\func main(args: List(String)):
+        \\    print(String(len(args)))
+        \\
+    , .console_only, "0\n");
+}
+
+test "reading past the end of args is the language's own bounds trap" {
+    var world: agree.World = .{};
+    world.arguments = &one_argument;
+
+    try agree.trapGiven(
+        \\func main(args: List(String)):
+        \\    print(args[1])
+        \\
+    , .{ .world = world }, .index_bounds);
+}
+
+test "main's args compose with the raising entry" {
+    var world: agree.World = .withFile("notes.txt", "file body");
+    world.arguments = &one_argument;
+
+    try agree.printsGiven(
+        \\func main(args: List(String)) -> !:
+        \\    print(try file_read(args[0]))
+        \\
+    , .{ .world = world }, "file body\n");
+}
+
+// ---------------------------------------------------------------------------
 // Standard input, standard error, the clock, the environment
 // ---------------------------------------------------------------------------
 

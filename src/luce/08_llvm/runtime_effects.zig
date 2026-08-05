@@ -126,6 +126,7 @@ pub const Service = enum {
     luce_rt_intern_text,
     luce_rt_maybe_text,
     luce_rt_names_list,
+    luce_rt_args_list,
     luce_rt_set_key_text,
     luce_rt_key_text,
 
@@ -446,6 +447,14 @@ pub fn describe(service: Service) Effect {
         .luce_rt_names_list => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .bytes_in, .plain, .value_out },
+        },
+        // The command line, as the `List(String)` the entry receives.
+        // It calls back into the host through the two function pointers
+        // it is handed, so nothing about memory can be narrowed beyond
+        // "the heap moves": a host callback is anybody's code.
+        .luce_rt_args_list => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .unknown, .unknown, .unknown, .value_out },
         },
         .luce_rt_set_key_text => .{
             .memory = touches_text,

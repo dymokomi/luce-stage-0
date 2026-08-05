@@ -72,9 +72,21 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     }
     if (program.entry_function >= program.functions.len) return error.BadFunction;
     const entry = &program.functions[program.entry_function];
-    if (entry.parameter_count != 0) {
+    // The entry takes nothing, or it takes the command line and
+    // nothing else — the two shapes stage 4 lets through, said again
+    // here because a decoded module is not to be trusted about them
+    // (docs/METHODS.md, OWNERSHIP.md S44).
+    if (entry.parameter_count > 1) return error.BadFunction;
+    if (entry.parameter_count == 1 and !isCommandLine(program, entry.locals[0].local_type)) {
         return error.BadFunction;
     }
+}
+
+/// `List(String)` — the one type the entry's parameter may have.
+fn isCommandLine(program: *const Program, of: Type) bool {
+    if (of != .heap or of.heap >= program.heap_types.len) return false;
+    const descriptor = program.heap_types[of.heap];
+    return descriptor == .list and descriptor.list == .string;
 }
 
 fn verifyType(program: *const Program, of: Type) VerifyError!void {

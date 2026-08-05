@@ -733,6 +733,29 @@ This is the rule the analyzer already cites when it refuses a
 file-scope object; the restriction is ownership, not an arbitrary
 limit on what constants may say.
 
+**S44. The entry's arguments are handed in, and `main`'s scope owns
+them.**
+
+```luce
+func main(args: List(String)):
+    for name in args:
+        print(name)
+    # scope ends: the list is freed here, like any owned binding
+```
+
+`main`'s `args` is an owned binding of the kind S15 describes — a
+parameter that arrived owning its object — and the caller that gave it
+is the runtime rather than a call site, which is why the signature
+carries no `give` and why S13 has no second end to echo at.  Everything
+else follows unchanged: `args` may be read, iterated, indexed, sliced,
+given away or freed like any owned name, and whatever it still owns
+when `main` returns is freed by `main`'s scope (S1, S33).  A host that
+supplies no arguments supplies an **empty** list, never a null one
+(S41 stays impossible to write).
+
+`func main(args: give List(String)):` is refused.  The verb would be
+noise on a signature with nobody to say it back.
+
 ---
 
 ## Deliberately excluded from v1

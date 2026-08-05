@@ -1457,21 +1457,22 @@ pub const Analyzer = struct {
         defer parameter_types.deinit(self.arena);
         var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
         defer parameter_modes.deinit(self.arena);
-        if (!is_entry) {
-            for (declaration.parameters) |parameter| {
-                const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
-                if (parameter.mode == .give and !self.carriesObjects(resolved)) {
-                    try self.fail(
-                        "luce.sema.own",
-                        parameter.span,
-                        "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
-                        .{},
-                    );
-                    continue;
-                }
-                try parameter_types.append(self.arena, resolved);
-                try parameter_modes.append(self.arena, parameter.mode);
+        // The entry's parameter is collected like every other one: it
+        // is the command line, it has a type, and `checkEntry` below
+        // is what says which type it has to be (OWNERSHIP.md S44).
+        for (declaration.parameters) |parameter| {
+            const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
+            if (parameter.mode == .give and !self.carriesObjects(resolved)) {
+                try self.fail(
+                    "luce.sema.own",
+                    parameter.span,
+                    "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                    .{},
+                );
+                continue;
             }
+            try parameter_types.append(self.arena, resolved);
+            try parameter_modes.append(self.arena, parameter.mode);
         }
         var return_type: Type = .none;
         if (declaration.return_type) |written| {
@@ -1497,20 +1498,47 @@ pub const Analyzer = struct {
             try self.fail("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
             return;
         };
-        const declaration = self.functions.items[index].declaration;
-        // The entry may be `func main():` or `func main() -> !:` — the
-        // second is how a program says the world can stop it, and loom
-        // reports what it raised (docs/FAILURE.md).  Two different
-        // mistakes reach here and they took one sentence between them,
-        // which named only the first legal form and put its caret on
-        // `func main` rather than on the part that is wrong.
-        if (declaration.parameters.len != 0) {
+        const info = self.functions.items[index];
+        const declaration = info.declaration;
+        // Four shapes are legal: `func main():` and
+        // `func main(args: List(String)):`, each with or without `-> !`
+        // — the mark is how a program says the world can stop it, and
+        // loom reports what it raised (docs/FAILURE.md).  A program
+        // that never reads a command line says nothing about one, which
+        // is why the parameter is optional rather than Java's mandatory
+        // ceremony (docs/METHODS.md).
+        //
+        // The name is free and the type is fixed: `args` is a binding
+        // like any other, so there is no misspelling of it to diagnose.
+        if (declaration.parameters.len > 1) {
             try self.fail(
                 "luce.sema.main",
-                declaration.parameters[0].span,
-                "main takes no parameters; a program reads its command line with arg_count() and arg(index)",
-                .{},
+                declaration.parameters[1].span,
+                "main takes at most one parameter, the command line; it has {d}",
+                .{declaration.parameters.len},
             );
+        } else if (declaration.parameters.len == 1) {
+            const parameter = declaration.parameters[0];
+            if (parameter.mode == .give) {
+                // S13 says `give` appears at both ends, and the entry
+                // has one end: the runtime is the caller and there is
+                // no call site to say it back.
+                try self.fail(
+                    "luce.sema.main",
+                    parameter.span,
+                    "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
+                    .{},
+                );
+            } else if (info.parameter_types.len == 1 and
+                !self.isCommandLine(info.parameter_types[0]))
+            {
+                try self.fail(
+                    "luce.sema.main",
+                    parameter.type_name.span,
+                    "main's parameter is the command line and must be List(String); it is {s} here",
+                    .{try self.typeName(info.parameter_types[0])},
+                );
+            }
         }
         if (declaration.return_type) |written| {
             try self.fail(
@@ -1520,6 +1548,12 @@ pub const Analyzer = struct {
                 .{},
             );
         }
+    }
+
+    /// Whether a type is the one shape the entry's parameter may have.
+    fn isCommandLine(self: *const Analyzer, of: Type) bool {
+        const descriptor = self.heapOf(of) orelse return false;
+        return descriptor == .list and descriptor.list == .string;
     }
 
     pub fn typeName(self: *Analyzer, of: Type) Error![]const u8 {
@@ -1588,30 +1622,32 @@ pub const Analyzer = struct {
         try builder.code.openBlock();
         try builder.pushScope();
 
-        if (!info.is_entry) {
-            for (info.declaration.parameters, 0..) |parameter, index| {
-                if (index >= info.parameter_types.len) break;
-                const parameter_type = info.parameter_types[index];
-                const gives = info.parameter_modes[index] == .give;
-                const class: OwnershipClass = if (gives) .owned else .borrow_param;
-                // A parameter borrows its caller's storage, whichever
-                // way the object goes: the caller's binding outlives
-                // the call and gives the bytes back itself
-                // (docs/STRINGS.md).
-                const local = (try builder.declareLocalAs(
-                    parameter.name,
-                    parameter_type,
-                    false,
-                    class,
-                    .borrows,
-                    parameter.name_span,
-                )) orelse continue;
-                // A give parameter is an owned binding like any other
-                // (S15): take the object over from the caller on entry.
-                if (gives) {
-                    const value = try builder.code.load(local);
-                    try builder.code.bind(local, value);
-                }
+        for (info.declaration.parameters, 0..) |parameter, index| {
+            if (index >= info.parameter_types.len) break;
+            const parameter_type = info.parameter_types[index];
+            // The entry's `args` arrived owning its list: the runtime
+            // built it and nobody else names it, so `main`'s scope
+            // frees it on the way out, exactly as a `give` parameter's
+            // scope does (OWNERSHIP.md S44, S15).
+            const owns = info.parameter_modes[index] == .give or info.is_entry;
+            const class: OwnershipClass = if (owns) .owned else .borrow_param;
+            // A parameter borrows its caller's storage, whichever
+            // way the object goes: the caller's binding outlives
+            // the call and gives the bytes back itself
+            // (docs/STRINGS.md).
+            const local = (try builder.declareLocalAs(
+                parameter.name,
+                parameter_type,
+                false,
+                class,
+                .borrows,
+                parameter.name_span,
+            )) orelse continue;
+            // An owning parameter is an owned binding like any other
+            // (S15): take the object over from the caller on entry.
+            if (owns) {
+                const value = try builder.code.load(local);
+                try builder.code.bind(local, value);
             }
         }
 

@@ -378,6 +378,53 @@ pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
     return runtime.attachList(listed);
 }
 
+/// One program argument, borrowed for the length of the call — the
+/// shape `08_llvm/abi.zig`'s `ArgFn` already has, named here so this
+/// file needs nothing from the host ABI but the calling convention.
+/// Answers `abi.Answer`: anything but zero means the out-parameters
+/// were filled.
+pub const ArgumentFn = *const fn (
+    context: ?*anyopaque,
+    index: i64,
+    text: *[*]const u8,
+    length: *i64,
+) callconv(.c) i32;
+
+/// `main`'s `args`: the command line as the `List(String)` the entry
+/// receives, owned by `main`'s scope (OWNERSHIP.md S44).
+///
+/// A third spelling beside `listOfText` and `listOfJoinedText`, and for
+/// the same reason they are two: the host hands its arguments over one
+/// at a time and lends each one only for the moment of the call, so
+/// each is copied into the run as it arrives rather than collected
+/// first.  A host that offers neither service supplies an **empty**
+/// list and not a trap — the entry cannot fail before `main` starts.
+pub fn listOfArguments(
+    runtime: *Runtime,
+    count: i64,
+    context: ?*anyopaque,
+    get: ?ArgumentFn,
+) Error!Value {
+    var listed: std.ArrayList(Value) = .empty;
+    errdefer {
+        for (listed.items) |item| runtime.dropStorage(item);
+        listed.deinit(runtime.objects);
+    }
+    if (get) |callback| {
+        var index: i64 = 0;
+        while (index < count) : (index += 1) {
+            var text: [*]const u8 = undefined;
+            var size: i64 = 0;
+            // A host that says no about an index it counted itself has
+            // nothing left to say about the ones after it.
+            if (callback(context, index, &text, &size) == 0) break;
+            const borrowed = text[0..@intCast(size)];
+            try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(borrowed)));
+        }
+    }
+    return runtime.attachList(listed);
+}
+
 /// `m.values()` — the returned list independently owns its elements, so
 /// object values are deep-copied — two containers never own one object
 /// (S23, mirrors listSlice).
