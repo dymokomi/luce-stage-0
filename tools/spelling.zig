@@ -208,7 +208,7 @@ const testing = std.testing;
 /// assertion that holds look exactly alike; the fixture one runs
 /// against a tree built to be dirty and requires this to *fail*.  So
 /// the check itself is covered rather than merely executed.
-fn expectCurrentNames(gpa: std.mem.Allocator, base: []const u8) !void {
+fn expectCurrentNames(gpa: std.mem.Allocator, base: []const u8, say: bool) !void {
     var threaded: std.Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var found = try survey(gpa, threaded.io(), base);
@@ -220,17 +220,17 @@ fn expectCurrentNames(gpa: std.mem.Allocator, base: []const u8) !void {
     // Every one of them, not the first: a partial rename is the one
     // state from which the resize does damage, so the reader wants the
     // whole list in one run rather than one line per rebuild.
-    for (found.items) |item| {
+    if (say) for (found.items) |item| {
         std.debug.print(
             "{s}:{d}: {s} is written {s} now (docs/TYPES.md D8)\n",
             .{ item.file, item.line, item.was, item.now },
         );
-    }
+    };
     return error.TestUnexpectedResult;
 }
 
 test "no Luce source in the tree spells a builtin type the retired way" {
-    try expectCurrentNames(testing.allocator, ".");
+    try expectCurrentNames(testing.allocator, ".", true);
 }
 
 test "the guard finds a stale name in every scope it scans" {
@@ -274,7 +274,10 @@ test "the guard finds a stale name in every scope it scans" {
     }
     // And the same run through the assertion the real test makes, so
     // deleting that assertion fails here too.
-    try testing.expectError(error.TestUnexpectedResult, expectCurrentNames(gpa, "tools/testdata"));
+    // Quiet: this one is *meant* to fail, and six lines of
+    // "is written long now" on every green build reads like a
+    // breakage rather than a test doing its job.
+    try testing.expectError(error.TestUnexpectedResult, expectCurrentNames(gpa, "tools/testdata", false));
 }
 
 test "the scan reads only the part of a file that is Luce" {
