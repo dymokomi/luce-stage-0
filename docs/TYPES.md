@@ -406,11 +406,11 @@ an audit; the rest follow from the shape of the ladder.
 |---|---:|---|---|---|
 | `Byte` | 8 | unsigned integer | 0 … 255 | storage |
 | `Short` | 16 | signed integer | −32 768 … 32 767 | storage |
-| `Int` | 32 | signed integer | ±2.147e9 | arithmetic |
-| `Long` | 64 | signed integer | ±9.223e18 | arithmetic, **default** |
+| `Int` | 32 | signed integer | ±2.147e9 | arithmetic, **default** |
+| `Long` | 64 | signed integer | ±9.223e18 | arithmetic |
 | `Half` | 16 | binary16 | ±65 504, ~3 digits | storage |
-| `Float` | 32 | binary32 | ±3.4e38, ~7 digits | arithmetic |
-| `Double` | 64 | binary64 | ±1.8e308, ~16 digits | arithmetic, **default** |
+| `Float` | 32 | binary32 | ±3.4e38, ~7 digits | arithmetic, **default** |
+| `Double` | 64 | binary64 | ±1.8e308, ~16 digits | arithmetic |
 
 Seven names, exactly the seven the owner listed, at exactly the widths
 he listed them at. Two of them are the language's defaults and are not
@@ -419,7 +419,10 @@ the two with the shortest names, which is D2's cost and D2's argument.
 Five rules, and everything below is why:
 
 1. **A literal has no type until it meets one**; unconstrained, it is
-   a `Long` or a `Double`.
+   an `Int` or a `Float`.  (D2 proposed `Long` and `Double` and was
+   *overruled* — see *As built*.  §9's table below is about what
+   **builtins** answer and is unaffected: `len`, `clock_ms` and
+   `parse_int` still answer `Long`.)
 2. **`Byte`, `Short` and `Half` are storage**: an operator widens them
    to `Int` and `Float` before it does anything.
 3. **Widening is implicit along a ladder, and across the ladders only
@@ -428,7 +431,8 @@ Five rules, and everything below is why:
    type it produces: `Byte(x)`, `Short(x)`, `Int(x)`, `Half(x)`,
    `Float(x)`.
 5. **Everything the language hands you unbidden is a `Long` or a
-   `Double`** — `len`, `range`, `parse_int`, `clock_ms`, `ord`,
+   `Double`** — which, with rule 1 overruled, is the one place the two
+   meet and the reason an accumulator over `range` says `long` — `len`, `range`, `parse_int`, `clock_ms`, `ord`,
    `arg_count`. You ask for a narrow type; you are never given one.
    (`byte_at` is the single deliberate exception, §9.)
 
@@ -1206,9 +1210,7 @@ contact is worth more than one that looks like it did.
 
 ### Step 4 — the resize
 
-**In progress.**  The mechanism is complete and every bundled program
-and benchmark compiles; the executable specification has **not** been
-migrated (see *What is left* below).
+**Complete.**
 
 **The order that made it safe.**  `types.Type.int` was renamed to
 `.long` and `.float` to `.double` **first**, tree-wide, along with
@@ -1311,33 +1313,142 @@ carries a documented precision claim.
 | `bench/matmul.luc`, `bench/stats.luc` | `checksum` | `double` | D7: the printed number must not move |
 | `src/apps/loom/product.zig` | `total` in the installed-pair program | `long` | prints `total 30` and is compared |
 
-**What is left of step 4**, in the order it should be done:
+**Step 4 is complete.**  `zig build test` is 1152/1152, `bench/run.sh`
+is byte-identical, `./site/build.sh` verifies all 200 samples.
 
-1. **The executable specification.**  123 tests fail, every one a
-   program written when an unannotated integer was 64 bits.  Three
-   shapes: an accumulator meeting a `long` (annotate), a literal past
-   2^31 (annotate the place `long` — the new diagnostic names the
-   fix), and `[1, 2, 3]` reaching a `list(long)` parameter, which is
-   D6's no-covariance rule arriving early and wants the literal's
-   place annotated.  A handful of `errors_spec` messages moved text
-   and need re-pinning.
-2. **The site's 200 samples**, same three shapes, plus the ones whose
-   *recorded output* legitimately changes because an unannotated float
-   is now binary32 — `sqrt(2.0)` prints `1.4142135`, not
-   `1.4142135623730951`.  Each needs a decision: annotate `double` to
-   keep the lesson, or record the narrower answer because it is now
-   the language's own.
-3. **D7's gate.**  `bench/run.sh` byte-comparison and the 200-sample
-   site check, both against the recorded outputs.  The annotations
-   above are chosen to keep every one of them identical; that is a
-   claim and it has not yet been *run*.
-4. **The specs the memo asks for and this step has not written**: the
-   landing of a negated literal through a minus, the 2^24 exactness
-   boundary pinned on both engines, the wrong-width literal, and the
-   refused narrowing with its column.
-5. `docs/PIPELINE.md`, `CLAUDE.md`'s *"one implicit conversion and one
-   only"* sentence, and the mutation sweep.
+**The migration, and the rule that decided every edit.**  123 tests
+failed — the memo scoped the audit to the 19 `.luc` files and it also
+reached the executable specification, the compiler's own in-module
+tests, `src/apps/luce/product.zig`, the site's 200 samples and one
+benchmark the corpus ledger had missed (`bench/arrays.luc`'s `dot`,
+which needed the `double` its `sum` was given).
+
+The rule, stated once and applied everywhere: **the migration only
+ever adds an annotation; it never changes a type a program already
+wrote down.**  Where the `long` is the language's own — `len`,
+`range`, `clock_ms`, or a `list(long)` a signature in the same program
+declares — the binding that meets it says `long`.  Where the width
+*is* the subject, the test forks: the 64-bit half keeps its numbers
+and an `int` twin is written beside it at 2^31.  Everything else keeps
+the new 32-bit default, which is where the suite's `int` coverage
+comes from and why it is coverage rather than a rename.
+
+| | migrated | forked |
+|---|---:|---:|
+| `specs/behavior_spec.zig` | 29 | 6 |
+| `specs/ownership_spec.zig` | 43 | 0 |
+| `specs/errors_spec.zig` | 12 | 1 |
+| `specs/optimize_spec.zig`, `modules_spec.zig`, `std_spec.zig` | 8 | 0 |
+| in-module tests (`06_mir`, `07_optimize`, `08_llvm`, `compile`, `interpreter`) | 20 | 0 |
+| `src/apps/luce/product.zig` | 1 | 0 |
+| `site/content/**` | 26 | 0 |
+
+The six forks are the ones whose subject is the width: `//` by −1 at
+`minInt`, the range of each integer type, each one's minimum written
+the way it reads, overflow on `+`, on negation and on `abs`, and the
+multiply that overflows at 46,341 and not at 46,341² — plus the two
+new exactness rows, 2^24 for `int` against `float` and the `int`
+against `double` that is exact everywhere.
+
+**Five holes the migration walked into**, fixed at the source rather
+than annotated around.  Each one is a place the resize left a rule
+naming one width where it meant a family:
+
+- **`foldIntLiteral` landed a literal on *any* annotation.**
+  `let flag: bool = 3` folded to a bool-typed 3 and type-checked.  A
+  literal lands on a numeric place or it does not land.
+- **`n /= 2` checked for a `long` place by name.**  At `int` — the
+  default the resize had just created — the guard did not fire and `/`
+  emitted an *integer divide*.  The one silent truncation in a
+  language whose whole safety story is that it has none.
+- **`foldConvert` knew two destinations.**  `int(x)` and `float(x)`
+  fell into the `double` arm and produced a `double`-typed constant,
+  and `long(x)`'s range check was i64's whatever it was converting to.
+  It now mirrors `runtime/operators.zig` per width, and refuses to
+  route a `long` through f64 on its way to an `int`.
+- **`sqrt`, `floor`, `ceil` and `trunc` widened to `double`** and
+  always answered one, which is not §9.  They answer whichever float
+  width they were given; `sqrt` of a `float` is `llvm.sqrt.f32`, and
+  the lowering test pins both intrinsics.
+- **A map read compared its key exactly while a map store landed
+  one**, so `m[1] = "one"` compiled and `m[1]` did not.
+
+**Landing reaches every place that writes a type down.**  §1's *"an
+argument takes the parameter's type"* was taken at its word, which the
+handoff had read as D6's no-covariance rule arriving early — it is
+not.  D6 is about a *named* `list(int)` not being a `list(long)`, and
+that stays refused; a literal has no element type until it lands, the
+same way a scalar literal has no width.  So the element hop now
+travels with the scalar hop into arguments, returns, struct fields and
+multi-value returns; subscripts land through a new
+`Landing.subscripts`, the read half of `stored_element`; a conversion
+constructor lands its argument, so `double(0.1)` is binary64's 0.1 and
+`long(3000000000)` is no longer refused for overflowing an `int`
+nobody wrote; and the width-polymorphic builtins land theirs, so
+`let x: double = sqrt(2.0)` computes at binary64 instead of widening
+binary32's answer into a place that asked for more.  That last one is
+the same silent-precision bug `methodParameters` was built to stop,
+one level up.
+
+**Two diagnostics the ladder made necessary**, both pinned to the word
+and the column:
+
+- A literal past the width it landed on names *the width that would
+  hold it* — and stops naming one at the top of each ladder, where
+  there is none.
+- A refused narrowing stopped claiming *"there is no conversion
+  between them"*, which was true when `long` against `double` was the
+  only mismatch a constructor could repair and is false the moment
+  there is a ladder.  It says what is true: **narrowing is never
+  implicit — write `int(…)`.**  A pair with genuinely nothing between
+  it still says so, so the two sentences stay distinguishable.
+
+**What D7's gate measured.**  All six benchmark rows' Luce output is
+byte-identical to the C twins, which D7 left untouched: 462794501,
+1050605, `4688890 400001 4288890 300000 4688890 3088890`, 25625000000,
+225000000, `7750000 0 31 202913304`.  The harness refuses to time a
+row whose two sides disagree, so a green `bench/run.sh` *is* the
+comparison rather than something beside it.
+
+Three site samples needed a decision rather than an edit, and all
+three were decided the same way — **show both widths**, because the
+width is now the lesson.  `ref/builtins.md` prints `sqrt(2.0)` and
+`sqrt(two)` beside each other; `std/strings.md` and
+`examples/text.md` print `1.0 / 3.0` at both.  "The shortest text that
+round-trips" is a sentence about a width and only reads as one when
+there are two of them.
+
+**The four owed specs are written**: the landing of a negated literal
+through a minus (an equivalent mutant at two widths, load-bearing at
+four); the 2^24 boundary for `int` against `float` on both engines,
+beside 2^53's; the wrong-width literal at both ends of both ladders;
+and the refused narrowing with its column.
 
 ### Steps 5–7
 
-Not started.
+**Step 7 landed early, and grew.**  `docs/PIPELINE.md`'s stage-5 row
+and `CLAUDE.md`'s *"one implicit conversion and one only"* sentence
+describe the ladder; `docs/LANGUAGE.md` and the site's
+`tour/values.md` carry the four-type table and the literal rule.  The
+prose sweep the owner asked for became **machinery**: every fenced
+`luce` block in every document is now compiled by `zig build test`
+(`tools/doccheck.zig`, 96 blocks — 42 whole, 4 fragments, 18 that must
+be *refused*, 32 tagged `historical` and every one of those in a
+decision record), and `tools/spelling.zig` reads a living document's
+prose as well as its code.  `CONTRIBUTING.md` documents the taxonomy.
+
+**Steps 5 and 6 are not started**, and are each a step's worth of
+work rather than a remainder:
+
+- **Step 5 — `byte`, `short`, `half`.**  `ElementKind` from four arms
+  to nine and the six parallel switches with it, `byte_at` answering
+  `byte`, `array(byte, n)` at one byte an element and into
+  `08_llvm/loops.zig`'s vectorisation gate, and the binary16 softfloat
+  routines verified on a baseline x86-64 build (§7) before it is
+  called done.
+- **Step 6 — opt down, and the 32-bit benchmark rows.**  Every
+  conversion pair with its rounding and its range trap pinned in both
+  directions; `programs/bf.luc`'s tape as `array(byte, cells)`;
+  `editor.luc`'s offsets as `int`; and **new** `bench/` rows against
+  new `float`/`int` C twins rather than converted ones (D7), with the
+  first snapshot in `docs/CODEGEN.md`.
