@@ -14,6 +14,7 @@ const source_mod = @import("../01_source.zig");
 const lex_mod = @import("../02_lex.zig");
 const ast = @import("ast.zig");
 const diagnostics_mod = @import("../support/diagnostics.zig");
+const types = @import("../support/types.zig");
 
 const Parser = grammar.Parser;
 const Span = source_mod.Span;
@@ -714,16 +715,17 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
     defer dims.deinit(self.arena);
 
     var closing_end = name.span.end;
-    if (std.mem.eql(u8, kind, "Builder")) {
+    const builtin = types.builtinNamed(kind);
+    if (builtin == .builder) {
         _ = self.advance();
         if (self.accept(.left_paren)) |opener| {
             const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
             closing_end = closing.span.end;
         }
-    } else if (std.mem.eql(u8, kind, "List") or std.mem.eql(u8, kind, "Map")) {
+    } else if (builtin == .list or builtin == .map) {
         written = (try self.typeName()) orelse return null;
         closing_end = written.span.end;
-    } else if (std.mem.eql(u8, kind, "Array")) {
+    } else if (builtin == .array) {
         _ = self.advance();
         const opener = (try self.expect(.left_paren, "'(' after Array")) orelse return null;
         const element = (try self.typeName()) orelse return null;

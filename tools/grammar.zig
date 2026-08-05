@@ -25,7 +25,7 @@
 //!
 //!   keywords  `02_lex/token.zig`'s `keywords`, by kind
 //!   verbs     the same table's `new`/`give`/`copy`, plus `free`
-//!   types     the capitalised half of `reserved_names`
+//!   types     `support/types.zig`'s `builtin_names`, plus `None`
 //!   builtins  `04_semantics/builder.zig`'s `builtins`
 //!   methods   the same file's five method tables
 //!
@@ -230,12 +230,17 @@ fn spelling(kind: luce.lex.Kind) []const u8 {
 /// the reserved list.  Any *other* capitalised name is a type too —
 /// that is the convention the language enforces for structs — and the
 /// grammar has a second, looser rule for those.
+/// The builtin type names, read from the compiler's own table rather
+/// than guessed from a name's case.  It used to take every reserved
+/// name that began with a capital, which stopped being a description
+/// of anything the moment the language's own names became lowercase
+/// (docs/TYPES.md D8) — `long` is a type and `String` is one only
+/// until the rename retires it, and neither fact is in a first letter.
 fn typeNames(gpa: Allocator) Allocator.Error!Words {
     var words: Words = .{ .gpa = gpa };
     errdefer words.deinit();
-    for (luce.semantics.reserved_names) |name| {
-        if (std.ascii.isUpper(name[0])) try words.add(name);
-    }
+    try words.addAll(&luce.types.builtin_names);
+    try words.add("None");
     return words;
 }
 

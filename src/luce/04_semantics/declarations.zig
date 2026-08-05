@@ -263,65 +263,65 @@ pub const Analyzer = struct {
     }
 
     fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
-        const table = [_]struct { name: []const u8, resolved: Type }{
-            .{ .name = "Bool", .resolved = .boolean },
-            .{ .name = "Int", .resolved = .int },
-            .{ .name = "Float", .resolved = .float },
-            .{ .name = "String", .resolved = .string },
-        };
-        for (table) |entry| {
-            if (std.mem.eql(u8, written.name, entry.name)) {
+        if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
+            .boolean, .long, .double, .string => {
                 if (written.arguments.len != 0 or written.wildcards != 0) {
                     try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
                     return null;
                 }
-                return entry.resolved;
-            }
-        }
-        if (std.mem.eql(u8, written.name, "List")) {
-            if (written.arguments.len != 1 or written.wildcards != 0) {
-                try self.fail("luce.sema.type", written.span, "List takes one element type: List(Int)", .{});
-                return null;
-            }
-            const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
-            if (try self.refuseOptionalPart(element, written.arguments[0], "list element")) return null;
-            return try self.internHeapType(.{ .list = element });
-        }
-        if (std.mem.eql(u8, written.name, "Map")) {
-            if (written.arguments.len != 2 or written.wildcards != 0) {
-                try self.fail("luce.sema.type", written.span, "Map takes key and value types: Map(String, Int)", .{});
-                return null;
-            }
-            const key = (try self.resolveType(module, written.arguments[0])) orelse return null;
-            if (key != .int and key != .string) {
-                try self.fail("luce.sema.type", written.arguments[0].span, "Map keys are Int or String", .{});
-                return null;
-            }
-            const value = (try self.resolveType(module, written.arguments[1])) orelse return null;
-            if (try self.refuseOptionalPart(value, written.arguments[1], "map value")) return null;
-            return try self.internHeapType(.{ .map = .{ .key = key, .value = value } });
-        }
-        if (std.mem.eql(u8, written.name, "Array")) {
-            if (written.arguments.len != 1 or written.wildcards == 0 or written.wildcards > 4) {
-                try self.fail(
-                    "luce.sema.type",
-                    written.span,
-                    "Array spells element and shape: Array(Int, _) up to Array(Int, _, _, _, _)",
-                    .{},
-                );
-                return null;
-            }
-            const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
-            if (try self.refuseOptionalPart(element, written.arguments[0], "array element")) return null;
-            return try self.internHeapType(.{ .array = .{ .element = element, .rank = written.wildcards } });
-        }
-        if (std.mem.eql(u8, written.name, "Builder")) {
-            if (written.arguments.len != 0 or written.wildcards != 0) {
-                try self.fail("luce.sema.type", written.span, "Builder takes no type arguments", .{});
-                return null;
-            }
-            return try self.internHeapType(.builder);
-        }
+                return switch (builtin) {
+                    .boolean => .boolean,
+                    .long => .int,
+                    .double => .float,
+                    .string => .string,
+                    .list, .map, .array, .builder => unreachable, // answered by the outer switch
+                };
+            },
+            .list => {
+                if (written.arguments.len != 1 or written.wildcards != 0) {
+                    try self.fail("luce.sema.type", written.span, "List takes one element type: List(Int)", .{});
+                    return null;
+                }
+                const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
+                if (try self.refuseOptionalPart(element, written.arguments[0], "list element")) return null;
+                return try self.internHeapType(.{ .list = element });
+            },
+            .map => {
+                if (written.arguments.len != 2 or written.wildcards != 0) {
+                    try self.fail("luce.sema.type", written.span, "Map takes key and value types: Map(String, Int)", .{});
+                    return null;
+                }
+                const key = (try self.resolveType(module, written.arguments[0])) orelse return null;
+                if (key != .int and key != .string) {
+                    try self.fail("luce.sema.type", written.arguments[0].span, "Map keys are Int or String", .{});
+                    return null;
+                }
+                const value = (try self.resolveType(module, written.arguments[1])) orelse return null;
+                if (try self.refuseOptionalPart(value, written.arguments[1], "map value")) return null;
+                return try self.internHeapType(.{ .map = .{ .key = key, .value = value } });
+            },
+            .array => {
+                if (written.arguments.len != 1 or written.wildcards == 0 or written.wildcards > 4) {
+                    try self.fail(
+                        "luce.sema.type",
+                        written.span,
+                        "Array spells element and shape: Array(Int, _) up to Array(Int, _, _, _, _)",
+                        .{},
+                    );
+                    return null;
+                }
+                const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
+                if (try self.refuseOptionalPart(element, written.arguments[0], "array element")) return null;
+                return try self.internHeapType(.{ .array = .{ .element = element, .rank = written.wildcards } });
+            },
+            .builder => {
+                if (written.arguments.len != 0 or written.wildcards != 0) {
+                    try self.fail("luce.sema.type", written.span, "Builder takes no type arguments", .{});
+                    return null;
+                }
+                return try self.internHeapType(.builder);
+            },
+        };
         if (written.arguments.len != 0 or written.wildcards != 0) {
             try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
             return null;
@@ -349,9 +349,7 @@ pub const Analyzer = struct {
     /// see.  A misremembered `Str` or `Bolean` is the commonest of all
     /// type errors and the cheapest to answer well.
     fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!void {
-        const builtin_types = [_][]const u8{
-            "Bool", "Int", "Float", "String", "List", "Map", "Array", "Builder",
-        };
+        const builtin_types = types.builtin_names;
         const prefix = self.modules[module].prefix;
         var suggestion = helpers.Suggestion.init(written.name);
         suggestion.offerAll(&builtin_types);
@@ -480,6 +478,19 @@ pub const Analyzer = struct {
             for (module.tree.structs) |*declaration| {
                 if (isReserved(declaration.name)) {
                     try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
+                    continue;
+                }
+                // A struct may not take a builtin type's name.  It is
+                // refused here rather than shadowed silently, because
+                // `resolveBase` answers first and the declaration
+                // would be a type nothing could ever write down.
+                if (types.builtinNamed(declaration.name) != null) {
+                    try self.fail(
+                        "luce.sema.reserved",
+                        declaration.name_span,
+                        "{s} is a builtin type; a struct of your own takes a name of its own",
+                        .{declaration.name},
+                    );
                     continue;
                 }
                 const qualified = try self.qualify(module.prefix, declaration.name);
@@ -1104,10 +1115,7 @@ pub const Analyzer = struct {
             },
             .binary => |binary| return self.foldBinary(module, binary, wanted),
             .call => |call| {
-                if (std.mem.eql(u8, call.callee, "Int") or
-                    std.mem.eql(u8, call.callee, "Float") or
-                    std.mem.eql(u8, call.callee, "String"))
-                {
+                if (types.conversionNamed(call.callee) != null) {
                     if (call.arguments.len != 1 or call.arguments[0].name != null) {
                         return self.constantError(call.span, "{s}(value) takes one argument", .{call.callee});
                     }
@@ -1164,7 +1172,8 @@ pub const Analyzer = struct {
     }
 
     fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
-        if (std.mem.eql(u8, call.callee, "String")) {
+        const produces = types.conversionNamed(call.callee).?;
+        if (produces == .string) {
             // The same text a run would print, spelled by the same
             // rules — but from a constant, so it is arena-owned here
             // rather than made by the runtime.
@@ -1181,8 +1190,7 @@ pub const Analyzer = struct {
             };
             return .{ .value = .{ .string = printed }, .value_type = .string };
         }
-        const to_int = std.mem.eql(u8, call.callee, "Int");
-        if (to_int) {
+        if (produces == .long) {
             switch (operand.value) {
                 .int => return operand,
                 .float => |value| {

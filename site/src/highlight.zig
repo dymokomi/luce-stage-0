@@ -42,8 +42,12 @@ const verbs = [_][]const u8{ "give", "copy", "free", "new" };
 /// identifier is highlighted as a type too — that is the convention
 /// the language enforces for structs.
 const type_names = [_][]const u8{
-    "Bool", "Int", "Float", "String",
-    "List", "Map", "Array", "Builder",
+    // The language's own, lowercase (docs/TYPES.md D8).
+    "bool", "long", "double", "string",
+    "list", "map",  "array",  "builder",
+    // Retiring: the rename step takes these with it.
+    "Bool", "Int",  "Float",  "String",
+    "List", "Map",  "Array",  "Builder",
 };
 
 /// Everything callable by name on its own: the free builtins, the
@@ -310,18 +314,19 @@ test "every name the language spells has a class here" {
     // the language keeps for itself, which no program may redeclare
     // and every one of which may therefore appear in a sample.
     const reserved = [_][]const u8{
-        "range",      "Int",         "Float",       "Bool",        "String",
-        "List",       "Map",         "Array",       "Builder",     "None",
-        "abs",        "min",         "max",         "clamp",       "sqrt",
-        "floor",      "ceil",        "len",         "byte_at",     "assert",
-        "trap",       "str",         "parse_int",   "parse_float", "chr",
-        "ord",        "append",      "pop",         "insert",      "remove",
-        "has",        "dim",         "free",        "print",       "file_read",
-        "file_write", "file_exists", "arg",         "arg_count",   "key_read",
-        "key_text",   "error",       "read_line",   "print_error", "clock_ms",
-        "sleep_ms",   "env",         "file_append", "file_delete", "file_rename",
-        "dir_list",   "term_rows",   "term_cols",   "term_clear",  "term_move",
-        "term_style", "term_write",  "term_flush",
+        "range",       "Int",         "Float",       "Bool",       "String",
+        "List",        "Map",         "Array",       "Builder",    "None",
+        "long",        "double",      "string",      "abs",        "min",
+        "max",         "clamp",       "sqrt",        "floor",      "ceil",
+        "len",         "byte_at",     "assert",      "trap",       "str",
+        "parse_int",   "parse_float", "chr",         "ord",        "append",
+        "pop",         "insert",      "remove",      "has",        "dim",
+        "free",        "print",       "file_read",   "file_write", "file_exists",
+        "arg",         "arg_count",   "key_read",    "key_text",   "error",
+        "read_line",   "print_error", "clock_ms",    "sleep_ms",   "env",
+        "file_append", "file_delete", "file_rename", "dir_list",   "term_rows",
+        "term_cols",   "term_clear",  "term_move",   "term_style", "term_write",
+        "term_flush",
     };
     // The receiver methods `reserved_names` does not carry: a program
     // *may* declare these, because they are resolved by receiver type

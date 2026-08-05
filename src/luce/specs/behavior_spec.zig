@@ -538,6 +538,52 @@ test "mixing: promotion reaches annotations, arguments, returns, and fields" {
     );
 }
 
+// The names the language answers to are lowercase (docs/TYPES.md D8):
+// `long` and `double` for the two widths it has had all along, and
+// `bool`, `string`, `list`, `map`, `array`, `builder` beside them.  A
+// TitleCase name is always a struct of the reader's own, which is what
+// makes the case of a type name say who defined it.
+//
+// The TitleCase spellings still resolve while the tree is being
+// renamed onto these; when they go, this program is unchanged.
+test "types: the language's own names are lowercase" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: double
+        \\    y: double
+        \\
+        \\func total(xs: list(long)) -> long:
+        \\    var sum: long = 0
+        \\    for x in xs:
+        \\        sum += x
+        \\    return sum
+        \\
+        \\func main():
+        \\    let n: long = 7
+        \\    let r: double = 2.5
+        \\    let s: string = "hi"
+        \\    let b: bool = true
+        \\    var xs = new list(long)
+        \\    xs.append(n)
+        \\    xs.append(3)
+        \\    var grid = new array(double, 2, 2)
+        \\    grid[0, 0] = 1.5
+        \\    var counts = new map(string, long)
+        \\    counts["a"] = 1
+        \\    var text = new builder()
+        \\    text.append(s)
+        \\    let p = Point(x = 1, y = r)
+        \\    assert(total(xs) == 10)
+        \\    assert(long(r) == 3)
+        \\    assert(double(n) == 7.0)
+        \\    assert(string(grid[0, 0] + p.x) == "2.5")
+        \\    assert(counts["a"] == 1)
+        \\    assert(text.build() == "hi")
+        \\    assert(b)
+        \\
+    );
+}
+
 // A numeric literal has no type of its own: it takes the type of the
 // place it lands in, and its *text* is read at that type
 // (docs/TYPES.md D3).  With one integer width and one float width the

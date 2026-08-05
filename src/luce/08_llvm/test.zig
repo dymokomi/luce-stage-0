@@ -1970,8 +1970,8 @@ test "text carried across a try keeps the form it was in" {
         \\    let short = try file_read("notes.txt")
         \\    print(short + "/" + String(len(short)))
         \\    try file_write("notes.txt", "a string well past the inline capacity of a value")
-        \\    let long = try file_read("notes.txt")
-        \\    print(long + "/" + String(len(long)))
+        \\    let lengthy = try file_read("notes.txt")
+        \\    print(lengthy + "/" + String(len(lengthy)))
         \\    print(String(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
         \\
     );

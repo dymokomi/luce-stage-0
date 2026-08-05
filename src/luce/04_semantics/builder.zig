@@ -14,6 +14,7 @@ const std = @import("std");
 const source_mod = @import("../01_source.zig");
 const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
+const conversionNamed = types.conversionNamed;
 const mir = @import("../06_mir.zig");
 const helpers = @import("helpers.zig");
 
@@ -1165,7 +1166,7 @@ pub const FunctionBuilder = struct {
     fn isPureBuiltin(callee: []const u8) bool {
         // `Int(...)` and `Float(...)` are conversions rather than
         // intrinsics, so they are not in the table above; both are pure.
-        if (std.mem.eql(u8, callee, "Int") or std.mem.eql(u8, callee, "Float")) return true;
+        if (conversionNamed(callee)) |produces| return produces != .string;
         for (builtins) |builtin| {
             if (std.mem.eql(u8, callee, builtin.name)) return builtin.pure;
         }
@@ -3915,7 +3916,7 @@ pub const FunctionBuilder = struct {
     fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         var object_type: Type = undefined;
         var dims: []Register = &.{};
-        if (std.mem.eql(u8, new.type_name.name, "Array")) {
+        if (types.builtinNamed(new.type_name.name) == .array) {
             if (new.dims.len == 0 or new.dims.len > 4) {
                 try self.fail("luce.sema.new", new.span, "new Array takes 1 to 4 dimension sizes: new Array(Int, 5, 5)", .{});
                 return null;
@@ -4511,12 +4512,7 @@ pub const FunctionBuilder = struct {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
-            if (std.mem.eql(u8, call.callee, "Int") or
-                std.mem.eql(u8, call.callee, "Float") or
-                std.mem.eql(u8, call.callee, "String"))
-            {
-                return self.lowerConvert(call);
-            }
+            if (conversionNamed(call.callee) != null) return self.lowerConvert(call);
             switch (try self.lowerIntrinsic(call, as_statement, fallible_allowed)) {
                 .not_builtin => {},
                 .failed => return null,
@@ -5743,7 +5739,8 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
-        if (std.mem.eql(u8, call.callee, "String")) {
+        const produces = conversionNamed(call.callee).?;
+        if (produces == .string) {
             switch (value.value_type) {
                 .string => return value,
                 .int, .float, .boolean => {},
@@ -5774,8 +5771,7 @@ pub const FunctionBuilder = struct {
             try self.parkFreshStorage(answer);
             return answer;
         }
-        const to_int = std.mem.eql(u8, call.callee, "Int");
-        if (to_int) {
+        if (produces == .long) {
             if (value.value_type == .int) return value;
             if (value.value_type != .float) return self.failConvert(call, value);
             return .{
@@ -5796,7 +5792,7 @@ pub const FunctionBuilder = struct {
     /// not X" — which stopped being true the moment `Int(Int)` was an
     /// identity and `Int` accepted both numeric types.
     fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Typed {
-        const takes: []const u8 = if (std.mem.eql(u8, call.callee, "String"))
+        const takes: []const u8 = if (conversionNamed(call.callee).? == .string)
             "Int, Float, Bool, or String"
         else
             "an Int or a Float";

@@ -340,7 +340,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:Int|Float|Bool|String|List|Map|Array|Builder|None)\\b"
+          "match": "\\b(?:bool|long|double|string|list|map|array|builder|Bool|Int|Float|String|List|Map|Array|Builder|None)\\b"
         },
         {
           "name": "entity.name.type.luce",

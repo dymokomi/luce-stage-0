@@ -24,16 +24,16 @@ test "a module encoded and decoded again is the same program on both engines" {
         \\    x: Int
         \\    y: Int
         \\
-        \\func double(value: Int) -> Int:
+        \\func twice(value: Int) -> Int:
         \\    return value * 2
         \\
         \\func main():
         \\    var xs = new List(Int)
         \\    for i in range(0, 8):
-        \\        xs.append(double(i))
+        \\        xs.append(twice(i))
         \\    let here = Point(x = xs[3], y = len(xs))
         \\    assert(here.x == 6 and here.y == 8)
-        \\    assert(double(21) == 42)
+        \\    assert(twice(21) == 42)
         \\    print(String(xs[7]) + " " + String(here.x))
         \\
     );

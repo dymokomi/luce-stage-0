@@ -2394,6 +2394,26 @@ test "luce.sema.reserved: a struct cannot take a type keyword's name" {
     try expectRejected("struct Int:\n    x: Int\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
+test "luce.sema.reserved: a struct cannot take a builtin type's name" {
+    // Lowercase names are the language's (docs/TYPES.md D8).  A struct
+    // spelled `list` would be a type nothing could write down, because
+    // `resolveBase` answers that name first — so it is refused where it
+    // is declared rather than shadowed where it is used.
+    try expectRejected("struct list:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct double:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct builder:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
+}
+
+test "luce.sema.reserved: a function cannot take a conversion's name" {
+    // The container names are not reserved as callables — `files.list`
+    // is the right name for what it does and collides with nothing —
+    // but the three conversions are answers to a bare call and a
+    // declaration would stand in front of one.
+    try expectRejected("func long():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("func double():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("func string():\n    return\n\nfunc main():\n    return\n", "luce.sema.reserved");
+}
+
 test "luce.sema.reserved: a function cannot take a terminal service's name" {
     // The seven `term_*` builtins were dispatched and not reserved, so
     // this program compiled and the declaration stood in front of the
@@ -4375,13 +4395,13 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
 
 test "luce.sema.call: a user function agrees with itself about one argument" {
     try expectSayingAt(
-        \\func double(a: Int) -> Int:
+        \\func twice(a: Int) -> Int:
         \\    return a * 2
         \\
         \\func main():
-        \\    let x = double(1, 2)
+        \\    let x = twice(1, 2)
         \\
-    , "luce.sema.call", "double takes 1 argument, got 2", 5, 13);
+    , "luce.sema.call", "twice takes 1 argument, got 2", 5, 13);
 }
 
 test "luce.sema.own: the checks that have no name to suggest still say what to do" {

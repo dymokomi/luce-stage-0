@@ -374,7 +374,7 @@ test "the entry is exactly func main(), and nothing else will do" {
 test "struct namespaces collect functions and reject invalid members" {
     var program = try expectCompiles(
         \\struct Math:
-        \\    func double(value: Int) -> Int:
+        \\    func twice(value: Int) -> Int:
         \\        return value * 2
         \\
         \\struct Pair:
@@ -383,11 +383,11 @@ test "struct namespaces collect functions and reject invalid members" {
         \\        return left + right
         \\
         \\func main():
-        \\    assert(Math.double(Pair.sum(3, 4)) == 14)
+        \\    assert(Math.twice(Pair.sum(3, 4)) == 14)
         \\
     );
     defer program.deinit();
-    try testing.expectEqualStrings("Math.double", program.functions[1].name);
+    try testing.expectEqualStrings("Math.twice", program.functions[1].name);
 
     try expectRejected(
         \\struct Bad:
@@ -939,7 +939,7 @@ const geo_module: TestModule = .{ .name = "geo", .source =
     \\    y: Float
     \\
     \\struct Text:
-    \\    func double(value: Int) -> Int:
+    \\    func twice(value: Int) -> Int:
     \\        return value * 2
     \\
     \\func make(x: Float, y: Float) -> Point:

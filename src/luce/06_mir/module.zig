@@ -654,11 +654,11 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
 
 test "debug origins round-trip; strip removes them and shrinks the module" {
     var program = try compileScript(
-        \\func double(value: Int) -> Int:
+        \\func twice(value: Int) -> Int:
         \\    return value * 2
         \\
         \\func main():
-        \\    let sum = double(4) + double(5)
+        \\    let sum = twice(4) + twice(5)
         \\
     );
     defer program.deinit();

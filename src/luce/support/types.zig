@@ -150,6 +150,90 @@ pub const StructLayout = struct {
     }
 };
 
+// ---------------------------------------------------------------------------
+// The names the language answers to
+// ---------------------------------------------------------------------------
+
+/// Which builtin a written type name names.  Not a `Type` — `list`,
+/// `map` and `array` take arguments and only become types once those
+/// are resolved — so this answers *which builtin*, and the analyzer
+/// finishes the job.
+///
+/// **One table, in one place.**  The parser has to know that `new
+/// list(...)` spells a container before any type exists, and the
+/// analyzer has to resolve the same spelling to the same thing; when
+/// each carried its own list, a name could be a type in one stage and
+/// an unknown struct in the other.
+pub const Builtin = enum {
+    boolean,
+    long,
+    double,
+    string,
+    list,
+    map,
+    array,
+    builder,
+};
+
+/// The builtin a name spells, or null when it names nothing builtin —
+/// a struct of the reader's own, or a mistake.
+///
+/// **Lowercase names are the language's; TitleCase names are yours**
+/// (docs/TYPES.md D8).  The TitleCase spellings below are the ones the
+/// language shipped with and are on their way out: every one of them
+/// is renamed across the tree in the step after this, and these rows
+/// go with them.
+pub fn builtinNamed(text: []const u8) ?Builtin {
+    for (builtin_table) |entry| {
+        if (std.mem.eql(u8, text, entry.name)) return entry.is;
+    }
+    return null;
+}
+
+const builtin_table = [_]struct { name: []const u8, is: Builtin }{
+    .{ .name = "bool", .is = .boolean },
+    .{ .name = "long", .is = .long },
+    .{ .name = "double", .is = .double },
+    .{ .name = "string", .is = .string },
+    .{ .name = "list", .is = .list },
+    .{ .name = "map", .is = .map },
+    .{ .name = "array", .is = .array },
+    .{ .name = "builder", .is = .builder },
+    // Retiring, and every one of these rows is deleted by the rename
+    // step (docs/TYPES.md, Order 3).
+    .{ .name = "Bool", .is = .boolean },
+    .{ .name = "Int", .is = .long },
+    .{ .name = "Float", .is = .double },
+    .{ .name = "String", .is = .string },
+    .{ .name = "List", .is = .list },
+    .{ .name = "Map", .is = .map },
+    .{ .name = "Array", .is = .array },
+    .{ .name = "Builder", .is = .builder },
+};
+
+/// The builtin a **conversion constructor** produces, or null when the
+/// name is not one.  A conversion is named for the type it produces
+/// (docs/NUMERICS.md §7), so this is `builtinNamed` narrowed to the
+/// scalars — one table, asked a second question, rather than the three
+/// hard-coded string comparisons that used to disagree.
+pub fn conversionNamed(text: []const u8) ?Builtin {
+    const builtin = builtinNamed(text) orelse return null;
+    return switch (builtin) {
+        .long, .double, .string => builtin,
+        .boolean, .list, .map, .array, .builder => null,
+    };
+}
+
+/// The names offered back to a reader who wrote a type name that
+/// spells nothing.  Derived from the one table, so a spelling the
+/// language answers to can never be one it declines to suggest.
+pub const builtin_names = names: {
+    var offered: [builtin_table.len][]const u8 = undefined;
+    for (builtin_table, 0..) |entry, index| offered[index] = entry.name;
+    const settled = offered;
+    break :names settled;
+};
+
 /// The written name of a type, for diagnostics.  Struct names resolve
 /// through the layout table; heap type names render recursively
 /// (`List(Int)`, `Map(String, List(Int))`, `Array(Float, _, _)`), an

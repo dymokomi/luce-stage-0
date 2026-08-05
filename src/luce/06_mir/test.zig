@@ -526,9 +526,9 @@ test "a call agrees with the callee it names, argument for argument" {
             .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
         }),
     };
-    // f1: double(value: Int) -> Int
+    // f1: twice(value: Int) -> Int
     functions[1] = .{
-        .name = "double",
+        .name = "twice",
         .parameter_count = 1,
         .return_type = .int,
         .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .int }}),

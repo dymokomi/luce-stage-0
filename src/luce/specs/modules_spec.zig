@@ -21,7 +21,7 @@ const geo: agree.File = .{ .name = "geo", .source =
     \\    y: Float
     \\
     \\struct Text:
-    \\    func double(value: Int) -> Int:
+    \\    func twice(value: Int) -> Int:
     \\        return value * 2
     \\
     \\func make(x: Float, y: Float) -> Point:
@@ -42,7 +42,7 @@ test "a file is a module: imports, qualified names, and shared types run" {
         \\    let direct = geo.Point(x = 1.0, y = 2.0)
         \\    let copied: geo.Point = direct
         \\    assert(copied.y == 2.0)
-        \\    assert(geo.Text.double(21) == 42)
+        \\    assert(geo.Text.twice(21) == 42)
         \\
     , &.{geo});
     defer program.deinit();
