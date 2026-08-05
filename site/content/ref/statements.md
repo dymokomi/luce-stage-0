@@ -19,9 +19,15 @@ There is no second entry mode.
 ```
 func name(param: Type, ...) -> Type:
 func name(param: Type, ...) -> Type!:
+func name(param: Type, ...) -> (Type, Type, ...):
+func name(param: Type, ...) -> (Type, Type, ...)!:
 func name(param: Type, ...) -> !:
 func name(param: Type, ...):
 ```
+
+A parenthesised list of **two or more** types is a
+[return shape](../types/#return-shapes): the function answers that
+many values. It is not a type, and it may be written nowhere but here.
 
 A parameter may be prefixed `give` to take ownership of an object.
 Every path through a function that declares a value return type must
@@ -44,11 +50,52 @@ struct Name:
 Fields and namespaced functions, in one indented block. Construction
 names every field.
 
+## Methods {#methods}
+
+A function declared inside a `struct` is a **method** exactly when its
+first parameter is the keyword `self`.
+
+```
+func name(self) -> Type:              # reads the receiver
+func name(var self, param: Type):     # writes it back
+func name(param: Type):               # a namespace function
+```
+
+`self` is bare and untyped — inside `struct Point` it can be nothing
+but a `Point`, so `self: Point` is refused, and it must come first.
+
+`p.length()` **means** `Point.length(p)`: the same call, resolved at
+compile time. There is no dispatch and no bound method value.
+`Point.length(p)` stays callable and means the same thing.
+
+`var self` writes the receiver back — `p.scale(2.0)` means
+`p = Point.scale(p, 2.0)`. Its receiver must be a place whose root is
+a mutable local, so a `let` receiver and a call result are both
+refused, and the static form `Point.scale(p, 2.0)` is refused because
+it has no place to write to. The struct must carry no objects; one
+that does mutates through its fields from a plain `self`.
+
+A `var self` method may answer values of its own, and then its
+receiver is result zero: `let roll = rng.next()` writes `rng` back and
+binds `roll`, and the declared arity is what the call site sees.
+
 ## let and var
 
 `let name = expr` and `let name: Type = expr` bind once. `var` allows
 reassignment. `var name: Type` with no initializer declares the
 binding and leaves the slot at its type's zero value.
+
+```
+let low, high = minmax(xs)
+var row, column = grid.find(target)
+```
+
+Two or more names is a **destructuring bind**, and the only place a
+call answering a [return shape](../types/#return-shapes) may hand its
+values to names. One keyword governs the whole bind — `let a, var b`
+is refused — and the names take their types from the call, so they
+carry no annotations. There is no `_`: an unused name costs nothing
+and says what was ignored.
 
 Neither freezes what the name points at: `let xs = [1, 2]` still
 permits `xs.append(3)`, and refuses `xs = [9]`. This is JavaScript's
@@ -58,6 +105,10 @@ No name may shadow one from an enclosing scope. A loop variable is
 immutable inside its body.
 
 ## Assignment
+
+Plain multi-assignment is **not** a statement: `low, high = f()` is
+refused, because a destructuring bind declares its names. What Go
+needs multi-assignment for is `v, err = f()`, and Luce has no `err`.
 
 The target is a **place**: a name, a field, or an index, nested
 freely.

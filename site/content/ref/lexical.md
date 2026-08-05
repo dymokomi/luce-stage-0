@@ -67,9 +67,14 @@ cannot be re-declared in an inner one.
 ```
 and      break    catch    continue copy     elif     else
 false    for      func     give     if       import   in
-let      new      none     not      or       return   struct
-true     try      var      while
+let      new      none     not      or       return   self
+struct   true     try      var      while
 ```
+
+`self` is the receiver of a [method](../statements/#methods). It is a
+keyword rather than a convention so that nothing can shadow it and no
+declaration can call something else by that name — which is what makes
+`p.length()` readable as a call on `p` and nothing else.
 
 ## Reserved names
 

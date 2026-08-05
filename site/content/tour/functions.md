@@ -64,9 +64,16 @@ initialization and no default.
 
 ## Functions inside a struct
 
-A struct may hold functions. They are plain functions in the struct's
-namespace — not methods. There is no receiver, no `self`, no dispatch
-and no inheritance; `Point.length(p)` is a name.
+A struct may hold functions, and they come in two kinds — told apart
+by one word.
+
+A function whose first parameter is `self` is a **method**: the struct
+is a type and the receiver is the thing in front of the dot. A
+function without one is a **namespace function**: the struct is a
+folder and its first argument is an ordinary argument. Luce has both,
+they share a syntax, and `self` is the only thing that distinguishes
+them. There is still no dispatch and no inheritance — `p.length()`
+*means* `Point.length(p)`, resolved at compile time.
 
 ```luce run
 struct Point:

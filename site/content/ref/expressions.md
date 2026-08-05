@@ -146,13 +146,45 @@ module.Struct.name(args)    both
 receiver.method(args)       sugar; see below
 ```
 
+## Calls that answer more than one value
+
+A call whose signature is a [return shape](../types/#return-shapes)
+may stand in exactly two places:
+
+```
+let low, high = minmax(xs)      # the right of a destructuring bind
+rng.next()                      # a statement, all values discarded
+```
+
+Everywhere else is `luce.sema.call`, including `return minmax(xs)`
+from a function with the same shape. Go allows that pass-through and
+pays for it with a rule saying a multi-valued call used as arguments
+must be the only arguments; refusing it is what leaves this rule with
+no exceptions. Bind the values, then return them.
+
+`catch` supplies one value and so cannot supply a shape: a fallible
+multi-return is propagated with `try`, or discarded as a statement.
+
 ## Method sugar
 
 `receiver.method(args)` is resolved by the receiver's type into a
 plain function with the receiver first. It is sugar, not dispatch.
 
+That is true of a **user** method too: `p.length()` *means*
+`Point.length(p)`, resolved at compile time, and `Point.length(p)`
+stays callable. A function declared inside a struct is a method
+exactly when its first parameter is `self`
+([statements](../statements/#methods)).
+
 A namespaced `Struct.func` or `module.func` call shares the syntax and
-wins when the head names a declaration.
+wins when the head names a declaration. The two are worth telling
+apart out loud, because a struct in Luce is used for both:
+
+> `Struct.func(x)` is a **namespace** call — the struct is a folder
+> and `x` is an ordinary first argument. `x.foo()` is a **method**
+> call — the struct is a type and `x` is its receiver. The only thing
+> that distinguishes them is whether the declaration's first parameter
+> is the word `self`.
 
 String methods other than `byte_at` and `find_byte` route to the
 `strings` standard module: `s.split(",")` *is* `strings.split(s, ",")`

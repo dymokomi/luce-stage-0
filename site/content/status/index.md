@@ -68,6 +68,13 @@ quarters. The repository records that the prediction was too strong.
 
 These are decisions with reasons written down, not gaps.
 
+- **Tuples.** A function may answer more than one value, but the shape
+  it answers them in is not a type: it cannot annotate anything, nest,
+  or be written as an expression. An anonymous structural product type
+  would be the first structural type in a language with no generics
+  and no sum types, and every one of those asks whether it nests,
+  whether a container holds it, and whether it compares. A pair that
+  travels together is a struct.
 - **Garbage collection and reference counting**, at every layer, in
   the language and in the runtime alike. Also copy-on-write and
   automatic reference counting. Scope ownership is the model.
@@ -130,14 +137,17 @@ workaround-dense and the proof that the language moved.
    truth tables.
 2. **No character classes in the library.** `is_digit`/`is_alpha`
    re-derived by hand three times. Five functions would fix it.
-3. **No receivers on user structs.** 88 namespaced `Struct.func(…)`
-   calls across `programs/`, with the receiver written out as the
-   first argument wherever there is one — ten of `editor.luc`'s
-   eleven `Text` functions take the same `value: String` first. Nine
-   of twelve structs in `programs/` have **no fields at all** —
-   namespaces impersonating types.
-4. **No multiple returns.** One program declares a struct solely to
-   return two `Int`s, constructed at 8 sites and destructured at 15.
+3. ~~**No receivers on user structs.**~~ **Shipped.** A function is a
+   method exactly when its first parameter is `self`; `var self`
+   writes the receiver back. The 88 namespaced calls turned out **not**
+   to be 88 waiting method calls — they are calls on folders, and not
+   one function in the corpus took its own struct first. What the
+   feature bought was the restructuring it permits.
+4. ~~**No multiple returns.**~~ **Shipped.** `-> (A, B)`,
+   `return a, b`, `let low, high = f()`. The struct that existed
+   solely to carry a return — constructed at 8 sites and taken apart
+   by 25 field reads, not the 15 this page used to claim — is
+   deleted.
 5. **No sort with a comparator.** `wordcount.luc` produces a top-five
    listing by **destroying the map**. The one place the absence of
    first-class functions draws blood.
@@ -185,8 +195,8 @@ stale — it still lists builtins from a removed era.
 1. The cheap slice: character classes, a frozen container or a `Set`,
    `exit`, and path manipulation.
 2. `m.get(k) -> V?`, and a corpus sweep.
-3. Decide receivers, multiple returns, and integer-division spelling —
-   one memo each.
+3. ~~Decide receivers and multiple returns~~ — shipped; the
+   integer-division spelling is decided too.
 4. Sum types, if the experience with `T?` says the hole is still
    there.
 5. The faithful syntax tree, which a formatter and a language server

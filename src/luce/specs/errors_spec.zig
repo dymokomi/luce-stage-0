@@ -734,6 +734,34 @@ test "luce.sema.return: the return's arity is the signature's" {
         \\    return
         \\
     , "luce.sema.return", "this function returns nothing");
+
+    // Two shapes that disagree, which is the count this check is
+    // actually about: the two cases above are each answered a step
+    // earlier, by the arms that route a `return` to the single-value
+    // channel or refuse a comma outright.
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2, 3
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "minmax answers 2 values, got 3");
+
+    // And the same count inside a `var self` method, where the
+    // receiver rides in front and the *declared* arity is what a
+    // `return` is measured against.
+    try expectSaying(
+        \\struct Rng:
+        \\    state: Int
+        \\
+        \\    func next(var self) -> Int:
+        \\        return self.state, 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "next answers 1 value, got 2");
 }
 
 test "luce.sema.call: two places, and no exceptions" {

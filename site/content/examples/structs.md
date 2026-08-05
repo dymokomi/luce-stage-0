@@ -8,30 +8,47 @@ struct Rect:
     width: Float
     height: Float
 
-    func area(r: Rect) -> Float:
-        return r.width * r.height
+    func area(self) -> Float:
+        return self.width * self.height
 
-    func scaled(r: Rect, factor: Float) -> Rect:
-        return Rect(width = r.width * factor, height = r.height * factor)
+    func scaled(self, factor: Float) -> Rect:
+        return Rect(width = self.width * factor, height = self.height * factor)
+
+    func grow(var self, factor: Float):
+        self.width = self.width * factor
+        self.height = self.height * factor
 
 func main():
     let unit = Rect(width = 2.0, height = 3.0)
     var copy_of = unit
     copy_of.width = 10.0
 
-    print(f"unit {Rect.area(unit)}, copy {Rect.area(copy_of)}")
-    let big = Rect.scaled(unit, 3.0)
-    print(f"scaled {big.width}x{big.height} area {Rect.area(big)}")
+    print(f"unit {unit.area()}, copy {copy_of.area()}")
+    let big = unit.scaled(3.0)
+    print(f"scaled {big.width}x{big.height} area {big.area()}")
+
+    var growing = Rect(width = 1.0, height = 1.0)
+    growing.grow(4.0)
+    print(f"grown {growing.width}x{growing.height}")
 ```
 
 ```output
 unit 6, copy 30
 scaled 6x9 area 54
+grown 4x4
 ```
 
-Functions declared inside a struct live in its namespace. They are
-plain functions — no receiver, no `self`, no dispatch, no inheritance.
-`Rect.area(r)` is a name.
+A function declared inside a struct is a **method** when its first
+parameter is `self`, and a **namespace function** when it is not.
+`unit.area()` *means* `Rect.area(unit)` — the same call, resolved at
+compile time, with no dispatch and no inheritance. The long form stays
+callable, which is what lets a struct convert one function at a time.
+
+`var self` marks a method that writes its receiver back: `growing.grow(4.0)`
+means `growing = Rect.grow(growing, 4.0)`, copy in and copy out. Its
+receiver has to be a `var`, and its struct has to carry no objects —
+which is the same rule that already governs assignment and ownership,
+not a new one.
 
 ## Nested places
 
