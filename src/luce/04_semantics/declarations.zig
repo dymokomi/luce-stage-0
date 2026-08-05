@@ -943,18 +943,25 @@ pub const Analyzer = struct {
             self.constant_infos.items[index].state = .failed;
             return null;
         }
-        const folded = try self.foldConstant(module, declaration.value);
+        // The annotation is resolved *before* the fold, not after,
+        // because it is the landing type: `let x: Float = 1` reads its
+        // literal at a float rather than folding an integer and being
+        // told the two disagree (docs/TYPES.md D3).
+        var annotated: ?Type = null;
+        if (declaration.annotation) |written| {
+            annotated = (try self.resolveType(module, written)) orelse {
+                self.constant_infos.items[index].state = .failed;
+                return null;
+            };
+        }
+        const folded = try self.foldConstant(module, declaration.value, annotated);
         // The map may have grown while folding dependencies; re-find.
         const settled = &self.constant_infos.items[index];
         const result = folded orelse {
             settled.state = .failed;
             return null;
         };
-        if (declaration.annotation) |written| {
-            const expected = (try self.resolveType(module, written)) orelse {
-                settled.state = .failed;
-                return null;
-            };
+        if (annotated) |expected| {
             if (!result.value_type.eql(expected)) {
                 try self.fail("luce.sema.type", declaration.span, "{s} declared {s} but its value is {s}", .{
                     declaration.name,
@@ -971,6 +978,29 @@ pub const Analyzer = struct {
         return result;
     }
 
+    /// Fold an integer literal at the type it lands on — the constant
+    /// folder's twin of the builder's `lowerIntLiteral`, and it has to
+    /// be a twin, because a file-scope `let` is folded here and a local
+    /// one is lowered there and the two must agree on what `1` is.
+    fn foldIntLiteral(
+        self: *Analyzer,
+        literal: ast.Literal,
+        span: Span,
+        negated: bool,
+        wanted: ?Type,
+    ) Error!?TypedConstant {
+        if (wanted != null and wanted.? == .float) {
+            const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated) orelse {
+                return self.constantError(span, "{s}", .{float_range_message});
+            };
+            return .{ .value = .{ .float = parsed }, .value_type = .float };
+        }
+        const parsed = helpers.parseIntLiteral(literal.text, negated) orelse {
+            return self.constantError(span, "{s}", .{integer_range_message});
+        };
+        return .{ .value = .{ .int = parsed }, .value_type = .int };
+    }
+
     fn constantError(self: *Analyzer, span: Span, comptime format: []const u8, arguments: anytype) Error!?TypedConstant {
         try self.fail("luce.sema.const", span, format, arguments);
         return null;
@@ -981,14 +1011,19 @@ pub const Analyzer = struct {
     /// comparisons, string concatenation, `Int`/`Float` conversions,
     /// and value-struct construction.  Objects and calls are not
     /// constants.
-    fn foldConstant(self: *Analyzer, module: usize, expression: *const ast.Expression) Error!?TypedConstant {
+    ///
+    /// `wanted` is the type the constant lands on when the declaration
+    /// wrote one down — a numeric literal has no type of its own and
+    /// takes its context's (docs/TYPES.md D3).  Null means there is no
+    /// context and each literal takes the default.
+    fn foldConstant(
+        self: *Analyzer,
+        module: usize,
+        expression: *const ast.Expression,
+        wanted: ?Type,
+    ) Error!?TypedConstant {
         switch (expression.*) {
-            .int_literal => |literal| {
-                const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
-                    return self.constantError(literal.span, "{s}", .{integer_range_message});
-                };
-                return .{ .value = .{ .int = parsed }, .value_type = .int };
-            },
+            .int_literal => |literal| return self.foldIntLiteral(literal, literal.span, false, wanted),
             .float_literal => |literal| {
                 const parsed = helpers.parseFloatLiteral(literal.text) orelse {
                     return self.constantError(literal.span, "{s}", .{float_range_message});
@@ -1027,7 +1062,7 @@ pub const Analyzer = struct {
                     }
                 }
                 // ...or a field of a struct constant.
-                const target = (try self.foldConstant(module, field.target)) orelse return null;
+                const target = (try self.foldConstant(module, field.target, null)) orelse return null;
                 if (target.value != .strukt) {
                     return self.constantError(field.span, "{s} has no fields here", .{try self.typeName(target.value_type)});
                 }
@@ -1044,13 +1079,12 @@ pub const Analyzer = struct {
                 // -9223372036854775808 is one literal, not a negated
                 // one: the sign folds in before the range is checked.
                 if (unary.op == .negate and unary.operand.* == .int_literal) {
-                    const literal = unary.operand.int_literal;
-                    const parsed = helpers.parseIntLiteral(literal.text, true) orelse {
-                        return self.constantError(unary.span, "{s}", .{integer_range_message});
-                    };
-                    return .{ .value = .{ .int = parsed }, .value_type = .int };
+                    return self.foldIntLiteral(unary.operand.int_literal, unary.span, true, wanted);
                 }
-                const operand = (try self.foldConstant(module, unary.operand)) orelse return null;
+                // A minus does not move where a literal lands, so the
+                // landing type passes straight through it.
+                const inner_wanted = if (unary.op == .negate) wanted else null;
+                const operand = (try self.foldConstant(module, unary.operand, inner_wanted)) orelse return null;
                 switch (unary.op) {
                     .negate => switch (operand.value) {
                         .int => |value| {
@@ -1068,7 +1102,7 @@ pub const Analyzer = struct {
                     },
                 }
             },
-            .binary => |binary| return self.foldBinary(module, binary),
+            .binary => |binary| return self.foldBinary(module, binary, wanted),
             .call => |call| {
                 if (std.mem.eql(u8, call.callee, "Int") or
                     std.mem.eql(u8, call.callee, "Float") or
@@ -1077,7 +1111,7 @@ pub const Analyzer = struct {
                     if (call.arguments.len != 1 or call.arguments[0].name != null) {
                         return self.constantError(call.span, "{s}(value) takes one argument", .{call.callee});
                     }
-                    const operand = (try self.foldConstant(module, call.arguments[0].value)) orelse return null;
+                    const operand = (try self.foldConstant(module, call.arguments[0].value, null)) orelse return null;
                     return self.foldConvert(call, operand);
                 }
                 // ord is the one builtin that folds, so a character
@@ -1087,7 +1121,7 @@ pub const Analyzer = struct {
                     if (call.arguments.len != 1 or call.arguments[0].name != null) {
                         return self.constantError(call.span, "ord(text) takes one argument", .{});
                     }
-                    const operand = (try self.foldConstant(module, call.arguments[0].value)) orelse return null;
+                    const operand = (try self.foldConstant(module, call.arguments[0].value, null)) orelse return null;
                     if (operand.value != .string) {
                         return self.constantError(call.span, "ord takes a String, not {s}", .{
                             try self.typeName(operand.value_type),
@@ -1207,7 +1241,7 @@ pub const Analyzer = struct {
             if (seen[field_index]) {
                 return self.constantError(argument.span, duplicate_field_message, .{name});
             }
-            const value = (try self.foldConstant(module, argument.value)) orelse return null;
+            const value = (try self.foldConstant(module, argument.value, null)) orelse return null;
             if (!value.value_type.eql(layout.fields[field_index].field_type)) {
                 return self.constantError(argument.span, "{s}.{s} is {s}, got {s}", .{
                     layout.name,
@@ -1232,7 +1266,7 @@ pub const Analyzer = struct {
         };
     }
 
-    fn foldBinary(self: *Analyzer, module: usize, binary: ast.Binary) Error!?TypedConstant {
+    fn foldBinary(self: *Analyzer, module: usize, binary: ast.Binary, wanted: ?Type) Error!?TypedConstant {
         // A constant is a value that is there, so there is nothing for
         // a fallback to be a fallback *for*.
         if (binary.op == .coalesce) {
@@ -1243,10 +1277,10 @@ pub const Analyzer = struct {
         if (binary.op == .catch_error) {
             return self.constantError(binary.span, "catch has nothing to do in a constant: nothing is called there", .{});
         }
-        var left = (try self.foldConstant(module, binary.left)) orelse return null;
+        var left = (try self.foldConstant(module, binary.left, wanted)) orelse return null;
         // Short-circuit folds without evaluating the other side's
         // side effects — there are none, so plain evaluation is fine.
-        var right = (try self.foldConstant(module, binary.right)) orelse return null;
+        var right = (try self.foldConstant(module, binary.right, wanted)) orelse return null;
 
         // Numbers that mix, folded (docs/NUMERICS.md).  A constant has
         // to reach the same answer a run would, so arithmetic widens

@@ -1544,8 +1544,20 @@ test "constants share the one namespace and stay immutable" {
         \\    return
         \\
     , "luce.sema.reserved");
+    // The annotation is checked, and it is the *landing type*: `3`
+    // has no type of its own and becomes a Float here (docs/TYPES.md
+    // D3), so what this proves is the direction that stays refused —
+    // a float value does not land on an integer annotation, because
+    // narrowing is never implicit.
     try failsWith(
-        \\let wrong: Float = 3
+        \\let wrong: Int = 3.5
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.type");
+    try failsWith(
+        \\let wrong: Bool = 3
         \\
         \\func main():
         \\    return

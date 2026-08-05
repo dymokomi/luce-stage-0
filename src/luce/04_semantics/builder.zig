@@ -234,6 +234,18 @@ pub const FunctionBuilder = struct {
     /// Inference where nothing is expected is untouched — `let xs =
     /// [1, 2, 3]` is still a `List(Int)`.
     wanted_element: ?Type = null,
+    /// The scalar type the next expression lands on, when the place it
+    /// is going into names one — `let x: Float = 7` (docs/TYPES.md §1,
+    /// D3).  **A numeric literal has no type of its own**; it takes the
+    /// type of its context if it fits, and this is how the context
+    /// reaches it.
+    ///
+    /// Set for exactly one hop, the way `wanted_element` is:
+    /// `lowerExpressionInner` reads and clears it, so it reaches the
+    /// literal it was raised in front of and nothing nested inside it
+    /// that has a landing width of its own.  Inference where nothing is
+    /// expected is untouched — `let n = 1` still takes the default.
+    wanted: ?Type = null,
     /// What a fallible call left for the `try` or `catch` in front of
     /// it to finish.  Set by `openFallible` and consumed once.
     opened: ?Opened = null,
@@ -1492,6 +1504,25 @@ pub const FunctionBuilder = struct {
         return if (descriptor == .list) descriptor.list else null;
     }
 
+    /// The scalar type a literal going into `expected` lands on, or
+    /// null when `expected` names no scalar for it to land on
+    /// (docs/TYPES.md D3).
+    ///
+    /// `T?` looks through to its `T`: `let x: Float? = 1` lands the
+    /// literal at a float and wraps it, which is the same order `fit`
+    /// composes its two widenings in.
+    fn landingType(expected: Type) ?Type {
+        return switch (expected) {
+            .int, .float => expected,
+            .optional => |payload| switch (payload) {
+                .int => .int,
+                .float => .float,
+                .boolean, .string, .strukt, .heap => null,
+            },
+            .none, .boolean, .string, .strukt, .heap => null,
+        };
+    }
+
     /// Bring two numeric operands to one type, when one of them is an
     /// `Int` and the other a `Float`.  True when it did something.
     fn unifyNumeric(self: *FunctionBuilder, left: *Typed, right: *Typed) Error!bool {
@@ -1542,6 +1573,7 @@ pub const FunctionBuilder = struct {
             };
         }
         self.wanted_element = self.elementOf(expected);
+        self.wanted = landingType(expected);
         const value = (try self.lowerExpression(expression, false)) orelse return null;
         const fitted = (try self.fit(value, expected)) orelse {
             try self.fail("luce.sema.type", span, "{s} is {s} but the value is {s}{s}", .{
@@ -1636,6 +1668,11 @@ pub const FunctionBuilder = struct {
         }
 
         for (expressions, 0..) |expression, index| {
+            // An argument and a returned value are both places with a
+            // type written down, so a literal going into one lands
+            // there (docs/TYPES.md D3) rather than taking the default
+            // and widening afterwards.
+            if (expected) |places| self.wanted = landingType(places[index]);
             const value = if (expression.* == .none_literal and expected != null)
                 ((try self.lowerTyped(expression, expected.?[index], expression.span(), "this place")) orelse
                     return null).value
@@ -1845,6 +1882,7 @@ pub const FunctionBuilder = struct {
                     return self.forgetName(name)).value;
             } else {
                 self.wanted_element = self.elementOf(expected);
+                self.wanted = landingType(expected);
                 const initializer = (try self.lowerExpression(value_expression, false)) orelse
                     return self.forgetName(name);
                 value = (try self.fit(initializer, expected)) orelse {
@@ -2890,6 +2928,7 @@ pub const FunctionBuilder = struct {
                 });
                 return;
             }
+            self.wanted = landingType(self.code.return_type);
             const lowered = (try self.lowerExpression(expression, false)) orelse return;
             const value = (try self.fit(lowered, self.code.return_type)) orelse {
                 try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}{s}", .{
@@ -3324,6 +3363,37 @@ pub const FunctionBuilder = struct {
         return value;
     }
 
+    /// Materialise an integer literal at the type it lands on
+    /// (docs/TYPES.md D3).  `negated` folds the minus in first, so
+    /// `Int`'s minimum stays writable; `wanted` is the landing type the
+    /// context asked for, and null means there is no context and the
+    /// literal takes the default.
+    ///
+    /// The float landing reads the **digits**, not `parseIntLiteral`'s
+    /// result: an integer literal past `Int`'s range still lands
+    /// correctly on a float that has room for it, and the rule "parsed
+    /// at the width it lands on" keeps its one spelling.
+    fn lowerIntLiteral(
+        self: *FunctionBuilder,
+        literal: ast.Literal,
+        span: Span,
+        negated: bool,
+        wanted: ?Type,
+    ) Error!?Typed {
+        if (wanted != null and wanted.? == .float) {
+            const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated) orelse {
+                try self.fail("luce.sema.literal", span, "{s}", .{context.float_range_message});
+                return null;
+            };
+            return .{ .register = try self.code.emit(.{ .const_float = parsed }, .float), .value_type = .float };
+        }
+        const parsed = helpers.parseIntLiteral(literal.text, negated) orelse {
+            try self.fail("luce.sema.literal", span, "{s}", .{context.integer_range_message});
+            return null;
+        };
+        return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
+    }
+
     fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Typed {
         // The permission a `try` or `catch` raised reaches exactly the
         // expression it was written in front of.  Read and cleared
@@ -3334,14 +3404,10 @@ pub const FunctionBuilder = struct {
         self.shape_position = .refused;
         const wanted_element = self.wanted_element;
         self.wanted_element = null;
+        const wanted = self.wanted;
+        self.wanted = null;
         switch (expression.*) {
-            .int_literal => |literal| {
-                const parsed = helpers.parseIntLiteral(literal.text, false) orelse {
-                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.integer_range_message});
-                    return null;
-                };
-                return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
-            },
+            .int_literal => |literal| return self.lowerIntLiteral(literal, literal.span, false, wanted),
             .float_literal => |literal| {
                 const parsed = helpers.parseFloatLiteral(literal.text) orelse {
                     try self.fail("luce.sema.literal", literal.span, "{s}", .{context.float_range_message});
@@ -3408,7 +3474,7 @@ pub const FunctionBuilder = struct {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
                 return self.lowerBinary(binary);
             },
-            .unary => |unary| return self.lowerUnary(unary),
+            .unary => |unary| return self.lowerUnary(unary, wanted),
             .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed, shape_position),
             .new_object => |new| return self.lowerNew(new),
             .list_literal => |literal| return self.lowerListLiteral(literal, wanted_element),
@@ -4392,19 +4458,18 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary) Error!?Typed {
+    fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error!?Typed {
         // -9223372036854775808 is one literal, not a negated one: the
         // magnitude alone is past Int's maximum, so the sign has to
         // fold in before the range is checked or the smallest Int is
         // the one number nobody can write.
         if (unary.op == .negate and unary.operand.* == .int_literal) {
-            const literal = unary.operand.int_literal;
-            const parsed = helpers.parseIntLiteral(literal.text, true) orelse {
-                try self.fail("luce.sema.literal", unary.span, "{s}", .{context.integer_range_message});
-                return null;
-            };
-            return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
+            return self.lowerIntLiteral(unary.operand.int_literal, unary.span, true, wanted);
         }
+        // A minus does not change where a literal lands, so the
+        // landing type passes straight through it: `let x: Float =
+        // -1.5` reads its text at a float exactly as `1.5` would.
+        if (unary.op == .negate) self.wanted = wanted;
         const operand = (try self.lowerExpression(unary.operand, false)) orelse return null;
         switch (unary.op) {
             .negate => {

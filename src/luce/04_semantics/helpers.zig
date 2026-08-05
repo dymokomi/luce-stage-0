@@ -172,10 +172,30 @@ pub fn parseIntLiteral(text: []const u8, negated: bool) ?i64 {
 /// rejected here rather than silently believed.  Underflow to zero is
 /// ordinary IEEE rounding and stays accepted.  Null means malformed or
 /// not finite.
+///
+/// **The text is parsed at the width the literal lands on**, never at
+/// binary64 and then rounded down to it (docs/TYPES.md §1).  Decimal →
+/// binary64 → binary32 is a double rounding and disagrees with the
+/// correctly-rounded answer for real inputs; reading the source text
+/// once, at the destination width, is the same one line and cannot.
 pub fn parseFloatLiteral(text: []const u8) ?f64 {
     const parsed = std.fmt.parseFloat(f64, text) catch return null;
     if (!std.math.isFinite(parsed)) return null;
     return parsed;
+}
+
+/// An **integer** literal's text read as a float, because that is the
+/// type it landed on: `let x: Float = 7`.
+///
+/// Reads the digits rather than converting `parseIntLiteral`'s result,
+/// so a literal too large for an `Int` still lands correctly on a
+/// float that has room for it — and so the one rule "a literal is
+/// parsed at the width it lands on" has no exception for the integer
+/// spelling.  Null means malformed or not finite.
+pub fn parseIntLiteralAsFloat(text: []const u8, negated: bool) ?f64 {
+    const magnitude = std.fmt.parseFloat(f64, text) catch return null;
+    if (!std.math.isFinite(magnitude)) return null;
+    return if (negated) -magnitude else magnitude;
 }
 
 /// The codepoint `ord` would read from a string literal, or null when
@@ -382,6 +402,21 @@ test "a float literal that is not finite is refused, and underflow is not" {
     try testing.expectEqual(@as(?f64, 0.0), parseFloatLiteral("1e-400"));
     try testing.expectEqual(@as(?f64, 1.5), parseFloatLiteral("1.5"));
     try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense"));
+}
+
+test "an integer literal landing on a float reads its digits, not an Int" {
+    // The ordinary cases agree with parseIntLiteral, sign and all.
+    try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false));
+    try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true));
+    try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true));
+    // And the case that is the whole reason it reads the digits: a
+    // magnitude past Int's range is not an Int, but it is a perfectly
+    // ordinary float, and the type it landed on is the float.
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false));
+    try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false));
+    // Past every float as well is still refused, and so is nonsense.
+    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false));
+    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false));
 }
 
 test "ord reads the first codepoint of a literal, and nothing from an empty one" {

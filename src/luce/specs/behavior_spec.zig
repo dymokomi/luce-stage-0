@@ -538,6 +538,41 @@ test "mixing: promotion reaches annotations, arguments, returns, and fields" {
     );
 }
 
+// A numeric literal has no type of its own: it takes the type of the
+// place it lands in, and its *text* is read at that type
+// (docs/TYPES.md D3).  With one integer width and one float width the
+// two readings agree on every value, so nothing here is a claim about
+// rounding yet — what it pins is that the landing happens at all, in
+// every place a type is written down, including the file-scope `let`
+// that used to refuse an integer spelling outright.
+test "literals: a number lands on the type its context names" {
+    try agreeOk(
+        \\let whole: Float = 7
+        \\let negative: Float = -3
+        \\let folded: Float = 2 * 3 + 1
+        \\let plain = 7
+        \\
+        \\func takes(x: Float) -> Float:
+        \\    return x
+        \\
+        \\func answers() -> Float:
+        \\    return 12
+        \\
+        \\func main():
+        \\    assert(whole == 7.0)
+        \\    assert(negative == -3.0)
+        \\    assert(folded == 7.0)
+        \\    assert(plain == 7)
+        \\    let local: Float = 5
+        \\    assert(local == 5.0)
+        \\    let held: Float? = 6
+        \\    assert(held == 6.0)
+        \\    assert(takes(8) == 8.0)
+        \\    assert(answers() == 12.0)
+        \\
+    );
+}
+
 test "mixing: promotion reaches container elements and min/max/clamp" {
     try agreeOk(
         \\func main():
