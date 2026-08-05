@@ -247,6 +247,18 @@ test "the guard finds a stale name in every scope it scans" {
         for (found.items) |item| gpa.free(item.file);
         found.deinit(gpa);
     }
+    // **Both numbers are written down rather than derived**, and that
+    // is the whole point of them.  A per-tree check that walks `trees`
+    // passes vacuously when a row is deleted — it asks the table it is
+    // testing what to expect — which a sweep proved five times over.
+    // The count of trees and the count of sightings are stated here,
+    // so removing a scope fails before anything is walked.
+    try testing.expectEqual(@as(usize, 5), trees.len);
+    // One `Int` in each of the three `.luc` fixtures; `list(Int)` in
+    // the page's luce fence is a sighting for each name; one `Float`
+    // in the spec's program.
+    try testing.expectEqual(@as(usize, 6), found.items.len);
+
     var per_tree: [trees.len]usize = @splat(0);
     for (found.items) |item| {
         for (trees, 0..) |tree, index| {

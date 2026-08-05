@@ -4482,6 +4482,15 @@ pub const FunctionBuilder = struct {
         // A minus does not change where a literal lands, so the
         // landing type passes straight through it: `let x: double =
         // -1.5` reads its text at a float exactly as `1.5` would.
+        //
+        // **No test kills this line yet, and none can.**  A negated
+        // *integer* literal takes the branch above; what is left is a
+        // negated float literal, which lands on a float whether it was
+        // told to or not, and a negated name, which widens afterwards
+        // to the same value.  At one integer width and one float width
+        // the line is an equivalent mutant — it becomes load-bearing
+        // at the resize, where landing and widening-afterwards stop
+        // agreeing, and a spec for it belongs in that step.
         if (unary.op == .negate) self.wanted = wanted;
         const operand = (try self.lowerExpression(unary.operand, false)) orelse return null;
         switch (unary.op) {
