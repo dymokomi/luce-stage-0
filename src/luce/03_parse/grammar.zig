@@ -662,6 +662,21 @@ pub const Parser = struct {
         if (!try self.enter("type")) return null;
         defer self.leave();
 
+        // `(Int, Int)` where a type belongs.  A return shape is
+        // written in exactly one place — after `->` in a declaration —
+        // and it is not a type: it cannot annotate a binding, fill a
+        // parameter or a field, or stand inside a container
+        // (docs/RETURNS.md).  Without this the reader is told a type
+        // name was expected, which does not say why.
+        if (self.peekKind() == .left_paren) {
+            try self.report(
+                "luce.parse.type",
+                self.peek().span,
+                "a return shape is not a type: a pair that travels together is a struct",
+                .{},
+            );
+            return null;
+        }
         const item = (try self.expect(.identifier, "a type name")) orelse return null;
         var written: ast.TypeName = .{ .name = self.text(item), .span = item.span };
         // module.Struct — one dotted level reaches an imported type.
@@ -875,14 +890,19 @@ pub const Parser = struct {
         if (try self.missingSeparator(previous_end)) return null;
         if ((try self.expectClose(.right_paren, opener)) == null) return null;
 
-        // `-> T`, `-> T!`, or a bare `-> !`: the mark says the call may
-        // fail, the type says what it hands back when it does not, and
-        // either may be absent (docs/FAILURE.md).
-        var return_type: ?ast.TypeName = null;
+        // `-> T`, `-> T!`, `-> (A, B)`, `-> (A, B)!`, or a bare
+        // `-> !`: the mark says the call may fail, the list says what
+        // it hands back when it does not, and either may be absent
+        // (docs/FAILURE.md, docs/RETURNS.md).
+        var returns: std.ArrayList(ast.TypeName) = .empty;
+        defer returns.deinit(self.arena);
         var fallible = false;
         if (self.accept(.arrow) != null) {
-            if (self.peekKind() != .bang) {
-                return_type = (try self.typeName()) orelse return null;
+            if (self.peekKind() == .left_paren) {
+                if (!try self.returnShape(&returns)) return null;
+            } else if (self.peekKind() != .bang) {
+                const only = (try self.typeName()) orelse return null;
+                try returns.append(self.arena, only);
             }
             fallible = self.accept(.bang) != null;
         }
@@ -891,11 +911,78 @@ pub const Parser = struct {
             .name = self.text(name),
             .name_span = name.span,
             .parameters = try parameters.toOwnedSlice(self.arena),
-            .return_type = return_type,
+            .returns = try returns.toOwnedSlice(self.arena),
             .fallible = fallible,
             .body = body,
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
+    }
+
+    /// `-> (A, B)` — two or more types a function answers together.
+    ///
+    /// **There is no tuple.**  This is the one place the shape may be
+    /// written, and every way of asking for it to be more than that
+    /// gets its own sentence rather than falling into a generic one:
+    /// an empty list, a list of one, a list that nests, and a list
+    /// somebody tried to mark absent (docs/RETURNS.md).
+    ///
+    /// False after reporting.
+    fn returnShape(self: *Parser, into: *std.ArrayList(ast.TypeName)) Error!bool {
+        const opener = self.advance(); // (
+        if (self.peekKind() == .right_paren) {
+            const closing = self.advance();
+            try self.report(
+                "luce.parse.type",
+                .{ .start = opener.span.start, .end = closing.span.end },
+                "a function that answers nothing writes no arrow",
+                .{},
+            );
+            return false;
+        }
+        var previous_end = opener.span.end;
+        while (!expr.endsList(self.peekKind(), .right_paren)) {
+            // `-> ((Int, Int), Int)`.  `typeName` refuses a `(` where a
+            // type belongs and says a return shape is not a type; here
+            // the reader was writing one, so the sentence is the rule
+            // they crossed rather than the one they misused.
+            if (self.peekKind() == .left_paren) {
+                try self.report(
+                    "luce.parse.type",
+                    self.peek().span,
+                    "return shapes do not nest: there are no tuples",
+                    .{},
+                );
+                return false;
+            }
+            const element = (try self.typeName()) orelse return false;
+            try into.append(self.arena, element);
+            previous_end = element.span.end;
+            if (self.accept(.comma) == null) break;
+        }
+        if (try self.missingSeparator(previous_end)) return false;
+        const closing = (try self.expectClose(.right_paren, opener)) orelse return false;
+        if (into.items.len == 1) {
+            try self.report(
+                "luce.parse.type",
+                .{ .start = opener.span.start, .end = closing.span.end },
+                "one value needs no parentheses: write -> {s}",
+                .{self.source[into.items[0].span.start..into.items[0].span.end]},
+            );
+            return false;
+        }
+        // `-> (Int, Int)?` — the `?` would be marking the *shape*, and
+        // a shape is not a value that can be absent.  Each element may
+        // carry one of its own, and `Int?` among them is ordinary.
+        if (self.peekKind() == .question) {
+            try self.report(
+                "luce.parse.type",
+                self.peek().span,
+                "'?' marks a value that may be absent, and a return shape is not a value",
+                .{},
+            );
+            return false;
+        }
+        return true;
     }
 
     // Statements -----------------------------------------------------------
@@ -989,9 +1076,27 @@ pub const Parser = struct {
     pub fn binding(self: *Parser, mutable: bool) Error!?ast.Statement {
         const start = self.advance(); // let or var
         const name = (try self.expect(.identifier, "a binding name")) orelse return null;
+        // `let low, high = minmax(xs)` — a destructuring bind, and one
+        // of exactly two places a multi-valued call may stand
+        // (docs/RETURNS.md).
+        if (self.peekKind() == .comma) return self.destructure(start, name, mutable);
         var annotation: ?ast.TypeName = null;
         if (self.accept(.colon) != null) {
             annotation = (try self.typeName()) orelse return null;
+            // `let low: Int, high: Int = minmax(xs)`.  There is one
+            // place a return shape is written and it is the signature;
+            // the bind takes its types from the call
+            // (docs/RETURNS.md).  An annotation on a *single* `let` is
+            // untouched.
+            if (self.peekKind() == .comma) {
+                try self.report(
+                    "luce.parse.type",
+                    annotation.?.span,
+                    "a destructuring bind takes its types from the call",
+                    .{},
+                );
+                return null;
+            }
         }
         // var name: Type — a late declaration; the slot starts at the
         // type's zero value (OWNERSHIP.md S40).  let always initializes.
@@ -1054,6 +1159,72 @@ pub const Parser = struct {
             .annotation = annotation,
             .value = value,
             .span = span,
+        } };
+    }
+
+    /// `let a, b = f()` / `var a, b = f()`, from the comma on.
+    ///
+    /// **One keyword governs the whole bind.**  Zig lets each element
+    /// carry its own `const` or `var` and buys exactness at one token;
+    /// it loses here because every binding statement in Luce begins
+    /// with the keyword that governs it and the statement dispatch
+    /// reads that keyword at position zero.  Refusing first is
+    /// reversible — `let a, var b = f()` is a strict superset, so if
+    /// the corpus asks for it nothing written before then changes
+    /// meaning (docs/RETURNS.md).
+    fn destructure(
+        self: *Parser,
+        start: Token,
+        first: Token,
+        mutable: bool,
+    ) Error!?ast.Statement {
+        var names: std.ArrayList(ast.Name) = .empty;
+        defer names.deinit(self.arena);
+        try names.append(self.arena, .{ .text = self.text(first), .span = first.span });
+        while (self.accept(.comma) != null) {
+            if (self.peekKind() == .keyword_let or self.peekKind() == .keyword_var) {
+                try self.report(
+                    "luce.parse.assign",
+                    self.peek().span,
+                    "one let or one var governs the whole bind",
+                    .{},
+                );
+                return null;
+            }
+            const next = (try self.expect(.identifier, "a binding name")) orelse return null;
+            if (self.peekKind() == .colon) {
+                try self.report(
+                    "luce.parse.type",
+                    self.peek().span,
+                    "a destructuring bind takes its types from the call",
+                    .{},
+                );
+                return null;
+            }
+            try names.append(self.arena, .{ .text = self.text(next), .span = next.span });
+        }
+        if ((try self.expect(.assign, "'=' with the call the names come from")) == null) return null;
+        const value = (try self.expression()) orelse return null;
+        // `let a, b = f() catch 0, 0`.  A fallback for two values is a
+        // comma list standing to the right of an operator, which has no
+        // reading that does not first invent a tuple expression and
+        // then give it a precedence — so the comma is where the rule is
+        // met (docs/RETURNS.md).
+        if (self.peekKind() == .comma) {
+            try self.report(
+                "luce.parse.assign",
+                self.peek().span,
+                "a destructuring bind takes one call on the right, and catch can supply only one value: write try, or handle it as a statement",
+                .{},
+            );
+            return null;
+        }
+        try self.endOfStatement("end of line after the binding");
+        return .{ .destructure = .{
+            .names = try names.toOwnedSlice(self.arena),
+            .mutable = mutable,
+            .value = value,
+            .span = .{ .start = start.span.start, .end = value.span().end },
         } };
     }
 
@@ -1202,13 +1373,24 @@ pub const Parser = struct {
     pub fn returnStatement(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         if (self.accept(.newline) != null) {
-            return .{ .return_statement = .{ .value = null, .span = start.span } };
+            return .{ .return_statement = .{ .values = &.{}, .span = start.span } };
         }
+        var values: std.ArrayList(*ast.Expression) = .empty;
+        defer values.deinit(self.arena);
         const value = (try self.expression()) orelse return null;
+        try values.append(self.arena, value);
+        // `return a, b` — one expression per value the signature
+        // declared, and stage 4 is what compares the two counts
+        // (docs/RETURNS.md).
+        var last = value;
+        while (self.accept(.comma) != null) {
+            last = (try self.expression()) orelse return null;
+            try values.append(self.arena, last);
+        }
         try self.endOfStatement("end of line after return");
         return .{ .return_statement = .{
-            .value = value,
-            .span = .{ .start = start.span.start, .end = value.span().end },
+            .values = try values.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = last.span().end },
         } };
     }
 
@@ -1217,6 +1399,21 @@ pub const Parser = struct {
     // one dotted field on a name, or an indexed expression.
     pub fn assignOrExpression(self: *Parser) Error!?ast.Statement {
         const left = (try self.expression()) orelse return null;
+        // `low, high = minmax(xs)` — plain multi-assignment, which is
+        // refused: what Go needs it for is `v, err = f()`, and Luce
+        // has no `err` (docs/FAILURE.md put the error in its own
+        // channel on purpose).  A destructuring bind declares its
+        // names, and saying so is more use than "cannot assign to this
+        // expression" (docs/RETURNS.md).
+        if (self.peekKind() == .comma) {
+            try self.report(
+                "luce.parse.assign",
+                self.peek().span,
+                "a destructuring bind declares its names: write let or var in front",
+                .{},
+            );
+            return null;
+        }
         // `call catch:` — the handler form, for a recovery that is more
         // than one expression.  The Pratt loop declined the `catch` on
         // seeing the colon behind it, so it is still here.

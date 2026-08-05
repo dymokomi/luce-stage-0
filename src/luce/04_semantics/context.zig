@@ -210,6 +210,14 @@ pub const FunctionDeclInfo = struct {
     /// level.  Set for namespace functions too — `self` outside a
     /// struct is refused by asking this, not by asking the receiver.
     enclosing: ?u32 = null,
+    /// What the function answers, in order: empty for a function that
+    /// answers nothing, one entry for `-> T`, two or more for a return
+    /// shape (docs/RETURNS.md).  This is the arity a call site sees.
+    results: []Type = &.{},
+    /// The one type that travels in the value channel.  For a return
+    /// shape it is the compiler-synthesized struct the values ride in
+    /// (`(Int, Int)`), which is why nothing below stage 4 grows a case
+    /// for multiple results: there is one value, as there always was.
     return_type: Type,
     /// Written `-> T!` or `-> !`: every call site must say `try` or
     /// `catch`, which is what makes a swallowed failure unwritable

@@ -402,7 +402,7 @@ test "edit distance stops counting once it is past the limit" {
 
 test "a block leaves only when every path does" {
     const marker: Span = .{ .start = 0, .end = 0 };
-    const returned: ast.Statement = .{ .return_statement = .{ .value = null, .span = marker } };
+    const returned: ast.Statement = .{ .return_statement = .{ .values = &.{}, .span = marker } };
     const broke: ast.Statement = .{ .break_statement = .{ .span = marker } };
     const continued: ast.Statement = .{ .continue_statement = .{ .span = marker } };
     var condition: ast.Expression = .{ .bool_literal = .{ .value = true, .span = marker } };

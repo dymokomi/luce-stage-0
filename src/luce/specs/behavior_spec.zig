@@ -1068,6 +1068,159 @@ test "structs: namespaced functions and nested structs" {
 }
 
 // ---------------------------------------------------------------------------
+// Answering more than one thing
+// ---------------------------------------------------------------------------
+//
+// `-> (A, B)`, `return a, b`, `let low, high = f()`.  **There is no
+// tuple**: the values exist only in flight, produced by a `return` and
+// consumed by a bind, with no moment in between at which a program can
+// hold them (docs/RETURNS.md).
+//
+// Underneath they are one compiler-synthesized struct, which is why
+// the oracle needed no edit for any of this either.
+
+test "returns: a shape is declared, returned, and bound" {
+    try agreeOk(
+        \\func minmax(xs: List(Int)) -> (Int, Int):
+        \\    var low = xs[0]
+        \\    var high = xs[0]
+        \\    for value in xs:
+        \\        low = min(low, value)
+        \\        high = max(high, value)
+        \\    return low, high
+        \\
+        \\func main():
+        \\    var xs = [3, 1, 4, 1, 5]
+        \\    let low, high = minmax(xs)
+        \\    assert(low == 1 and high == 5)
+        \\    # `var` governs the whole bind, and both names reassign.
+        \\    var a, b = minmax(xs)
+        \\    a = a + 1
+        \\    b = b + 1
+        \\    assert(a == 2 and b == 6)
+        \\    free(xs)
+        \\
+    );
+}
+
+test "returns: three values, mixed types, and a shape of shapes' worth of nesting" {
+    try agreeOk(
+        \\func spread(n: Int) -> (Int, Float, String):
+        \\    return n, Float(n) / 2.0, String(n)
+        \\
+        \\func main():
+        \\    let count, half, written = spread(7)
+        \\    assert(count == 7)
+        \\    assert(half == 3.5)
+        \\    assert(written == "7")
+        \\
+    );
+}
+
+test "returns: a discarded call is a statement temporary and dies with its statement" {
+    // S3/S19, unextended: under the lowering the discarded value is
+    // one struct, so the walk that already releases an object-carrying
+    // struct temporary releases the whole shape.  The leak census is
+    // what proves it.
+    try agreeOk(
+        \\func two() -> (List(Int), List(Int)):
+        \\    var head = [1]
+        \\    var tail = [2]
+        \\    return head, tail
+        \\
+        \\func main():
+        \\    two()
+        \\    two()
+        \\    assert(true)
+        \\
+    );
+}
+
+test "returns: each value moves, and the caller's two names own one each" {
+    try agreeOk(
+        \\func halves(n: Int) -> (List(Int), List(Int)):
+        \\    var head = [n]
+        \\    var tail = [n + 1]
+        \\    return head, tail
+        \\
+        \\func main():
+        \\    let head, tail = halves(7)
+        \\    assert(head[0] == 7 and tail[0] == 8)
+        \\    head.append(9)
+        \\    assert(len(head) == 2 and len(tail) == 1)
+        \\    free(head)
+        \\    free(tail)
+        \\
+    );
+}
+
+test "returns: T! composes, and try is the only composition there is" {
+    try agreeOk(
+        \\func pair(n: Int) -> (Int, Int)!:
+        \\    if n < 0:
+        \\        error("negative")
+        \\    return n, n * 2
+        \\
+        \\func doubled(n: Int) -> (Int, Int)!:
+        \\    let a, b = try pair(n)
+        \\    return b, a
+        \\
+        \\func main() -> !:
+        \\    let x, y = try pair(3)
+        \\    assert(x == 3 and y == 6)
+        \\    let p, q = try doubled(4)
+        \\    assert(p == 8 and q == 4)
+        \\    # A statement discards the values; the handler runs where
+        \\    # it raised, and supplies none.
+        \\    pair(-1) catch:
+        \\        assert(true)
+        \\
+    );
+}
+
+test "returns: T? is an ordinary element of a shape" {
+    // Absence *is* a value, so a `T?` among the elements needs no rule
+    // at all — while `-> (Int, Int)?` is refused, because there the
+    // `?` would be marking the shape (docs/RETURNS.md §2).
+    try agreeOk(
+        \\func lookup(m: Map(String, Int), key: String) -> (Int?, Bool):
+        \\    if m.has(key):
+        \\        return m[key], true
+        \\    return none, false
+        \\
+        \\func main():
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    let found, present = lookup(ages, "ada")
+        \\    assert(present and (found else 0) == 36)
+        \\    let missing, there = lookup(ages, "bob")
+        \\    assert(not there and missing == none)
+        \\    free(ages)
+        \\
+    );
+}
+
+test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
+    // The case docs/RETURNS.md's first rule tripped on: loop-carried is
+    // not disqualifying, and two `var`s carry a pair as well as one
+    // struct did.
+    try agreeOk(
+        \\func step(value: Int, at: Int) -> (Int, Int):
+        \\    return value + at, at + 1
+        \\
+        \\func main():
+        \\    var value, at = step(0, 0)
+        \\    while at < 5:
+        \\        let next_value, next_at = step(value, at)
+        \\        value = next_value
+        \\        at = next_at
+        \\    assert(at == 5)
+        \\    assert(value == 10)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Methods: `self`
 // ---------------------------------------------------------------------------
 //

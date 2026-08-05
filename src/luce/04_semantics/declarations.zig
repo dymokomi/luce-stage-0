@@ -170,6 +170,7 @@ pub const Analyzer = struct {
         try self.collectStructs();
         try self.collectConstants();
         try self.collectFunctions();
+        try self.synthesizeShapes();
         if (self.diagnostics.hasErrors()) return null;
 
         var lowered: std.ArrayList(mir.build.Lowering) = .empty;
@@ -1502,10 +1503,17 @@ pub const Analyzer = struct {
             try parameter_types.append(self.arena, resolved);
             try parameter_modes.append(self.arena, parameter.mode);
         }
-        var return_type: Type = .none;
-        if (declaration.return_type) |written| {
-            return_type = (try self.resolveType(module, written)) orelse .none;
+        var results: std.ArrayList(Type) = .empty;
+        defer results.deinit(self.arena);
+        for (declaration.returns) |written| {
+            const resolved = (try self.resolveType(module, written)) orelse continue;
+            try results.append(self.arena, resolved);
         }
+        // The synthesized layout a return shape rides in is settled
+        // after every signature is collected — `synthesizeShapes`
+        // below — because the layout table must not grow while a body
+        // is being lowered against a snapshot of it.
+        const return_type: Type = if (results.items.len == 1) results.items[0] else .none;
 
         const index: u32 = @intCast(self.functions.items.len);
         try self.function_names.put(self.temporary, name, index);
@@ -1517,6 +1525,7 @@ pub const Analyzer = struct {
             .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
             .receiver = receiver,
             .enclosing = enclosing,
+            .results = try results.toOwnedSlice(self.arena),
             .return_type = return_type,
             .fallible = declaration.fallible,
             .is_entry = is_entry,
@@ -1570,14 +1579,137 @@ pub const Analyzer = struct {
                 );
             }
         }
-        if (declaration.return_type) |written| {
+        if (declaration.returnsSpan()) |written| {
             try self.fail(
                 "luce.sema.main",
-                written.span,
+                written,
                 "main returns nothing; the entry is func main(): or func main() -> !: when the world can stop it",
                 .{},
             );
         }
+    }
+
+    // -- pass one and a half: the layouts a return shape rides in -------
+    //
+    // `(Float, Float)` **is** a two-field product value, so it is
+    // lowered as one: `return low, high` is a `struct_make` and
+    // `let low, high = …` is two `struct_get`s.  Nothing below stage 4
+    // grows a case for multiple results — no MIR instruction, no wire
+    // change, no ABI field — and the oracle needs no edit at all,
+    // which is why it is the arm that proves this resolved right
+    // (docs/RETURNS.md §4).
+    //
+    // The alternative was multiple result registers on `call` and
+    // `ret`.  What kills it is not its size: **LLVM has no multiple
+    // returns either**, so it would build in stage 6 a shape stage 8
+    // has to collapse back into an aggregate.
+
+    /// Give every function that answers a return shape the synthesized
+    /// layout its values travel in.
+    ///
+    /// **Between `collectFunctions` and any lowering, and that is
+    /// load-bearing.**  `Lowering.structs` is a snapshot slice taken
+    /// per function and documented as settled before lowering runs, so
+    /// appending a layout while a body is in flight would reallocate
+    /// the list and leave that slice stale and short.  Every shape a
+    /// program can return is known from the signatures alone, so there
+    /// is no reason to.
+    fn synthesizeShapes(self: *Analyzer) Error!void {
+        for (self.functions.items) |*info| {
+            if (info.results.len < 2) continue;
+            self.diagnostics.scope = self.modules[info.module].file;
+            info.return_type = (try self.internShape(info)) orelse continue;
+        }
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// The layout for one return shape, interned by the name the shape
+    /// is written with.
+    ///
+    /// **The name is the shape as written** — `(Float, Float)` — and it
+    /// is unforgeable from source: a struct name is an identifier,
+    /// qualified with a module prefix, so nothing a program can declare
+    /// collides with a name containing `(`.  It reads correctly in
+    /// `luce ir` and it reads correctly if it ever reaches a
+    /// diagnostic through `types.typeName`.  Two functions with the
+    /// same shape intern to one layout, as heap type shapes already do.
+    fn internShape(self: *Analyzer, info: *const FunctionDeclInfo) Error!?Type {
+        const name = try self.writtenResults(info);
+        for (self.structs.items, 0..) |layout, index| {
+            if (std.mem.eql(u8, layout.name, name)) return .{ .strukt = @intCast(index) };
+        }
+
+        var fields: std.ArrayList(types.StructField) = .empty;
+        defer fields.deinit(self.arena);
+        var values: u32 = 0;
+        var carries = false;
+        for (info.results, 0..) |result, position| {
+            try fields.append(self.arena, .{
+                .name = try std.fmt.allocPrint(self.arena, "field{d}", .{position}),
+                .field_type = result,
+            });
+            values +|= self.valueCount(result);
+            if (self.carriesObjects(result)) carries = true;
+        }
+        // The same bound every other width in the language takes, and
+        // for the same reason: `zeroOf` emits one instruction per
+        // counted leaf.  A signature that approaches it has other
+        // problems, but the bound must be the same bound and not a
+        // second number.
+        if (values > helpers.max_struct_values) {
+            try self.fail(
+                "luce.sema.return",
+                info.declaration.returnsSpan() orelse info.declaration.span,
+                "{s} answers {d} values in all, past the limit of {d}",
+                .{ info.declaration.name, values, helpers.max_struct_values },
+            );
+            return null;
+        }
+
+        const index: u32 = @intCast(self.structs.items.len);
+        try self.structs.append(self.arena, .{
+            .name = name,
+            .fields = try fields.toOwnedSlice(self.arena),
+        });
+        // `carriesObjects` and `valueCount` index this table directly,
+        // and the ownership walk asks both of a returned shape — so a
+        // layout without a shape entry is an out-of-bounds read the
+        // first time `lowerReturn` asks whether it carries objects.
+        try self.struct_shapes.append(self.temporary, .{ .carries = carries, .values = values });
+        return .{ .strukt = index };
+    }
+
+    /// What a function answers, as a reader wrote it: `Int` for one
+    /// value, `(Int, Int)` for a shape, `None` for nothing.  Also the
+    /// synthesized layout's name, so the two can never disagree.
+    pub fn writtenResults(self: *Analyzer, info: *const FunctionDeclInfo) Error![]const u8 {
+        if (info.results.len == 0) return "None";
+        if (info.results.len == 1) return self.typeName(info.results[0]);
+        var written: std.ArrayList(u8) = .empty;
+        errdefer written.deinit(self.arena);
+        try written.append(self.arena, '(');
+        for (info.results, 0..) |result, position| {
+            if (position != 0) try written.appendSlice(self.arena, ", ");
+            try written.appendSlice(self.arena, try self.typeName(result));
+        }
+        try written.append(self.arena, ')');
+        return written.toOwnedSlice(self.arena);
+    }
+
+    /// The layout behind a return shape, or null for every other type
+    /// — including every struct a program declared.
+    ///
+    /// Told apart by the name, which is the shape as written and
+    /// therefore **unforgeable from source**: a struct name is an
+    /// identifier, qualified with a module prefix, so nothing a
+    /// program can declare begins with `(`.  That is what lets a
+    /// return shape be a struct underneath and still not be a type a
+    /// program can name (docs/RETURNS.md).
+    pub fn returnShapeOf(self: *const Analyzer, of: Type) ?types.StructLayout {
+        if (of != .strukt) return null;
+        const layout = self.structs.items[of.strukt];
+        if (layout.name.len == 0 or layout.name[0] != '(') return null;
+        return layout;
     }
 
     /// Whether a type is the one shape the entry's parameter may have.
@@ -1635,6 +1767,7 @@ pub const Analyzer = struct {
             .analyzer = self,
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
+            .results = info.results,
             .code = .{
                 .arena = self.arena,
                 .pool = self.pool,
@@ -1690,12 +1823,12 @@ pub const Analyzer = struct {
         // function that is the claim being broken, and it is what the
         // reader has to change if they meant something else.
         if (info.return_type != .none and !helpers.returnsOnAllPaths(info.declaration.body)) {
-            const at = if (info.declaration.return_type) |written| written.span else info.declaration.span;
+            const at = info.declaration.returnsSpan() orelse info.declaration.span;
             try self.fail(
                 "luce.sema.return",
                 at,
                 "{s} must return {s} on every path, and some path reaches the end of its body without returning",
-                .{ info.declaration.name, try self.typeName(info.return_type) },
+                .{ info.declaration.name, try self.writtenResults(&info) },
             );
         }
         // Everything from here — sealing the open blocks, freezing the

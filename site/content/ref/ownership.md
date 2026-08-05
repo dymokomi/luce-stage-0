@@ -565,6 +565,56 @@ it still owns when `main` returns is freed by `main`'s scope
 `func main(args: give List(String)):` is refused. The verb would be
 noise on a signature with nobody to say it back.
 
+### S45 — a multiple return moves each value, and no object twice {#s45}
+
+```luce run
+func halves(n: Int) -> (List(Int), List(Int)):
+    var head = [n]
+    var tail = [n + 1]
+    return head, tail        # both move; the caller's two names own them
+
+func main():
+    let head, tail = halves(7)
+    print(f"{head[0]} {tail[0]}")
+    free(head)
+    free(tail)
+```
+
+```output
+7 8
+```
+
+`return a, b` is [S16](#s16) said once per value and nothing more. Each
+value moves independently, a borrowed parameter or an alias in any
+position is [S17](#s17) exactly, and a destructuring bind creates one
+owning binding per name ([S1](#s1)).
+
+The one fact the single-value channel never had to state is that **the
+values must be distinct objects**: two moves of one handle would leave
+two bindings owning it and free it twice, which [S23](#s23) forbids and
+which only a comma can now write.
+
+```luce fail
+func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+    return xs, xs
+
+func main():
+    var mine = [1]
+    let a, b = bad(give mine)
+    free(a)
+    free(b)
+```
+
+```output
+luce: compile failed
+main.luc:2:16: xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45] [luce.sema.own]
+        return xs, xs
+                   ^~
+```
+
+A call whose values nobody binds is a statement temporary per
+[S3](#s3)/[S19](#s19), released whole at the end of its statement.
+
 ---
 
 ## Deliberately excluded

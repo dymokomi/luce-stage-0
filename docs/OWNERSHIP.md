@@ -756,6 +756,33 @@ supplies no arguments supplies an **empty** list, never a null one
 `func main(args: give List(String)):` is refused.  The verb would be
 noise on a signature with nobody to say it back.
 
+**S45. A multiple return moves each value, left to right, and no
+object may travel twice.**
+
+```luce
+func halves(text: give String) -> (List(String), List(String)):
+    var head = text[0:middle].split(" ")
+    var tail = text[middle:len(text)].split(" ")
+    return head, tail        # both move; the caller's two names own them
+
+func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+    let alias = xs
+    return xs, alias         # COMPILE error: one object, two moves
+```
+
+`return a, b` is S16 said once per value and nothing more.  Each value
+moves independently, a borrowed parameter or an alias in any position
+is S17 exactly and says so with the words it already had, and a
+destructuring bind creates one owning binding per name (S1).  The one
+fact the single-value channel never had to state is that **the values
+must be distinct objects**: two moves of one handle would leave two
+bindings owning it and free it twice, which S23 forbids and which only
+a comma can now write.  It is also the one thing here that is genuinely
+new to check, because `return` is a terminator and therefore never had
+to poison what it moved — with one value there was nothing after it.  A
+call whose values nobody binds is a statement temporary per S3/S19,
+released whole at the end of its statement.
+
 ---
 
 ## Deliberately excluded from v1

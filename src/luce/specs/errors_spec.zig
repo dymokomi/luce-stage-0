@@ -572,6 +572,242 @@ test "luce.lex.indent: an over-nested file is one message, not a hundred and fif
 }
 
 // ---------------------------------------------------------------------------
+// Return shapes: there is no tuple
+// ---------------------------------------------------------------------------
+//
+// Every clause of the rule is a diagnostic (docs/RETURNS.md §1): a
+// return shape is written in exactly one place, it cannot annotate
+// anything, it cannot nest, it cannot take a `?`, and there is no
+// expression that produces one.
+
+test "luce.parse.type: the four shapes a return list is not" {
+    try expectSaying(
+        \\func f() -> ():
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "a function that answers nothing writes no arrow");
+
+    try expectSaying(
+        \\func f() -> (Int):
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "one value needs no parentheses: write -> Int");
+
+    try expectSaying(
+        \\func f() -> ((Int, Int), Int):
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "return shapes do not nest: there are no tuples");
+
+    try expectSaying(
+        \\func f() -> (Int, Int)?:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "'?' marks a value that may be absent, and a return shape is not a value");
+}
+
+test "luce.parse.type: a return shape is not a type, in any position" {
+    // A binding, a parameter, a struct field, a container element.
+    // The sentence to keep is the second half.
+    for ([_][]const u8{
+        "func main():\n    let p: (Int, Int) = 1\n",
+        "func f(p: (Int, Int)):\n    return\n\nfunc main():\n    return\n",
+        "struct Pair:\n    both: (Int, Int)\n\nfunc main():\n    return\n",
+        "func main():\n    var xs: List((Int, Int)) = []\n",
+    }) |source| {
+        try expectSaying(
+            source,
+            "luce.parse.type",
+            "a return shape is not a type: a pair that travels together is a struct",
+        );
+    }
+}
+
+test "luce.parse.expression: there are still no tuples, and the parser already said so" {
+    try expectSaying(
+        "func main():\n    let p = (1, 2)\n",
+        "luce.parse.expression",
+        "there are no tuples: group values in a list '[a, b]' or a struct",
+    );
+}
+
+test "luce.parse.assign: a destructuring bind declares its names, and one keyword governs it" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var low = 0
+        \\    var high = 0
+        \\    low, high = minmax()
+        \\
+    , "luce.parse.assign", "a destructuring bind declares its names: write let or var in front");
+
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, var b = minmax()
+        \\
+    , "luce.parse.assign", "one let or one var governs the whole bind");
+
+    try expectSaying(
+        \\func minmax() -> (Int, Int)!:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, b = minmax() catch 0, 0
+        \\
+    , "luce.parse.assign", "catch can supply only one value: write try, or handle it as a statement");
+}
+
+test "luce.parse.type: a destructuring bind takes its types from the call" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let low: Int, high: Int = minmax()
+        \\
+    , "luce.parse.type", "a destructuring bind takes its types from the call");
+}
+
+test "luce.sema.shape: the bind's arity is the call's" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, b, c = minmax()
+        \\
+    , "luce.sema.shape", "minmax answers 2 values, got 3 names");
+
+    // One value, two names: the call is named, because that is what
+    // makes the sentence actionable.
+    try expectSaying(
+        \\func one() -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a, b = one()
+        \\
+    , "luce.sema.shape", "one answers 1 value, got 2 names");
+}
+
+test "luce.sema.return: the return's arity is the signature's" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "minmax answers 2 values, got 1");
+
+    try expectSaying(
+        \\func count() -> Int:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "count answers 1 value, got 2");
+
+    try expectSaying(
+        \\func nothing():
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "this function returns nothing");
+}
+
+test "luce.sema.call: two places, and no exceptions" {
+    // An argument, an operand, a container element — and the
+    // pass-through, which Go allows and this language does not,
+    // because refusing it is what makes the rule have no exceptions.
+    for ([_][]const u8{
+        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    assert(minmax() == 1)\n",
+        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    let x = minmax() + 1\n",
+        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    var xs = [1]\n    xs.append(minmax())\n",
+    }) |source| {
+        try expectSaying(
+            source,
+            "luce.sema.call",
+            "minmax answers 2 values, and only a let or a var can receive them",
+        );
+    }
+
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func pass() -> (Int, Int):
+        \\    return minmax()
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.call",
+        "minmax answers 2 values, and only a let or a var can receive them — bind them, then return them",
+    );
+}
+
+test "luce.sema.own: one object cannot be owned twice, and only a comma can write it" {
+    // The one genuinely new ownership check.  `return` is a
+    // terminator, so with one value there was never anything after it
+    // to poison; the comma is what puts something after a return for
+    // the first time (OWNERSHIP.md S45).
+    try expectSaying(
+        \\func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+        \\    return xs, xs
+        \\
+        \\func main():
+        \\    var mine = [1]
+        \\    let a, b = bad(give mine)
+        \\    free(a)
+        \\    free(b)
+        \\
+    , "luce.sema.own", "xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]");
+
+    // The two beside it need no new check at all: the alias arm and
+    // the borrow arm are the existing ones, reached per position.
+    try expectSaying(
+        \\func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+        \\    let alias = xs
+        \\    return xs, alias
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "alias aliases an object it does not own; return copy alias or return the owning name [OWNERSHIP.md S16, S17]");
+
+    try expectSaying(
+        \\func bad(xs: give List(Int), borrowed: List(Int)) -> (List(Int), List(Int)):
+        \\    return xs, borrowed
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "borrowed is a borrowed parameter; return copy borrowed, or take the parameter as give [OWNERSHIP.md S17]");
+}
+
+// ---------------------------------------------------------------------------
 // Methods: `self`
 // ---------------------------------------------------------------------------
 //
