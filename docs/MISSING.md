@@ -233,16 +233,23 @@ the proof the language moved.
    tables.  Cheap if scoped to a frozen container.
 2. **No character classes in std.**  `is_digit`/`is_alpha` re-derived by
    hand three times.  Trivial — five functions.
-3. **No receivers on user structs.**  88 namespaced `Struct.func(…)`
-   calls across `programs/`, with the receiver written out as the
-   first argument wherever there is one: 10 of `struct Text`'s 11
-   functions take the same `value: String` first, and all 4 of
-   `struct Handle`'s take `state: State`.  Nine of twelve structs in
-   `programs/` have **no fields at all** — namespaces impersonating
-   types.
-4. **No multiple returns.**  `calc.luc:20` declares `struct Step`
-   solely to return two Ints, constructed at 8 sites and taken apart
-   by 25 field reads.
+3. ~~**No receivers on user structs.**~~ **Done** (docs/METHODS.md).
+   A function is a method exactly when its first parameter is `self`,
+   and `var self` writes the receiver back by copy-in/copy-out.  The
+   88 namespaced calls were **not** 88 waiting method calls — they are
+   calls on *folders*, and a folder has no receiver; not one function
+   in the corpus had the enclosing struct as its first parameter.  The
+   harvest was the restructuring the feature permits: `Handle`'s four
+   functions and two of `Draw`'s merged into `struct State`, and
+   `std/math.luc`'s `List(Int)`-as-a-cell workaround became
+   `struct Rng`.
+4. ~~**No multiple returns.**~~ **Done** (docs/RETURNS.md).
+   `-> (A, B)`, `return a, b`, `let low, high = f()`, lowered as a
+   compiler-synthesized struct.  `calc.luc`'s `struct Step` is
+   deleted, and with it four more disguises of the same missing
+   sentence: a heap object as a mutable cell, a second value dropped
+   and guessed, a second value thrown away and fetched again, and two
+   traversals for one pass.
 5. **No sort with a comparator.**  `wordcount.luc:61-70` produces a
    top-5 listing by **destroying the map** — `heaviest` scans, the
    caller prints, `counts.remove(word)`, repeat.  The one place
@@ -662,7 +669,9 @@ multi-user — all deferred by design in `docs/V2.md`.
 9. **Share one `libluce_rt` between artifacts** instead of copying it
    into each.  The other one from `docs/CODEGEN.md`, and the reason a
    `.lc` is mostly runtime by size.
-10. **Decide receivers and multiple returns** — one memo each.
+10. ~~**Decide receivers and multiple returns**~~ — **done**, one
+    memo each and one implementation between them
+    (docs/METHODS.md, docs/RETURNS.md).
     Integer-division spelling is decided and shipped
     (docs/NUMERICS.md).
 11. **Sum types**, if the `T?` experience says the hole is still there.

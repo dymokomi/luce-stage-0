@@ -14,20 +14,20 @@ import std.strings
 func bar(count: Int) -> String:
     return "#".repeat(count)
 
-func main() -> !:
+func main(args: List(String)) -> !:
     var seed = 2026
     var count = 20
-    if arg_count() > 0:
-        seed = parse_int(arg(0)) else seed
-    if arg_count() > 1:
-        count = parse_int(arg(1)) else count
+    if len(args) > 0:
+        seed = parse_int(args[0]) else seed
+    if len(args) > 1:
+        count = parse_int(args[1]) else count
 
-    var rng = math.seed(seed)
+    var rng = math.Rng(state = seed)
     var rolls: List(String) = []
     var histogram = new Array(Int, 7)
     var total = 0
     for i in range(0, count):
-        let roll = math.random_int(rng, 1, 7)
+        let roll = rng.in_range(1, 7)
         rolls.append(String(roll))
         histogram[roll] += 1
         total += roll

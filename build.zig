@@ -107,6 +107,14 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // The flagship program, as bytes the specification can run.  A
+    // build-system import rather than a relative `@embedFile`, for the
+    // reason `loom`'s shell takes one: a spec that pinned its own
+    // inline copy of the editor would pin nothing.
+    specs.addAnonymousImport("editor.luc", .{
+        .root_source_file = b.path("programs/editor.luc"),
+    });
+
     // Where the specification finds the library to link a compiled
     // program against.  A path rather than a linked dependency: the
     // harness drives `cc` itself, because the link is part of what it

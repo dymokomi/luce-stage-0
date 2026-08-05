@@ -10,27 +10,37 @@ A missing service does not silently do nothing: it traps
 
 ## Printing and arguments
 
-```luce run args=3 fig
-func main():
-    print(f"{arg_count()} arguments")
-    for index in range(0, arg_count()):
-        print(f"  {index}: {arg(index)}")
+The command line is not a service the program asks for: it is handed
+to it. A program that reads one declares
+`func main(args: List(String)):`, and `args` is an ordinary
+`List(String)` — `len`, indexing, slicing, `for … in`, everything.
+`args[0]` is the first word the person typed **after** the program's
+own name.
 
-    let count = parse_int(arg(0)) else 1
+```luce run args=3 fig
+func main(args: List(String)):
+    print(f"{len(args)} arguments")
+    for name in args:
+        print(f"  {name}")
+
+    let count = parse_int(args[0]) else 1
     for i in range(0, count):
-        print(arg(1))
+        print(args[1])
 ```
 
 ```output
 2 arguments
-  0: 3
-  1: fig
+  3
+  fig
 fig
 fig
 fig
 ```
 
-`arg(i)` outside the range traps — the count is right there to check.
+A program that never reads a command line writes `func main():` and
+says nothing about one. Reading past the end of `args` is the
+language's own `index_bounds` trap — `len(args)` is right there to
+check against.
 
 ## Files
 

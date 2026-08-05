@@ -170,6 +170,7 @@ pub const Analyzer = struct {
         try self.collectStructs();
         try self.collectConstants();
         try self.collectFunctions();
+        try self.synthesizeShapes();
         if (self.diagnostics.hasErrors()) return null;
 
         var lowered: std.ArrayList(mir.build.Lowering) = .empty;
@@ -1412,16 +1413,19 @@ pub const Analyzer = struct {
             self.diagnostics.scope = module.file;
             for (module.tree.functions) |*declaration| {
                 const qualified = try self.qualify(module.prefix, declaration.name);
-                try self.collectFunction(declaration, qualified, module_index, true);
+                try self.collectFunction(declaration, qualified, module_index, true, null);
             }
             for (module.tree.structs) |*declaration| {
+                const owner = self.struct_names.get(
+                    try self.qualify(module.prefix, declaration.name),
+                );
                 for (declaration.functions) |*function| {
                     const member = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
                         declaration.name,
                         function.name,
                     });
                     const qualified = try self.qualify(module.prefix, member);
-                    try self.collectFunction(function, qualified, module_index, false);
+                    try self.collectFunction(function, qualified, module_index, false, owner);
                 }
             }
         }
@@ -1435,6 +1439,10 @@ pub const Analyzer = struct {
         name: []const u8,
         module: usize,
         top_level: bool,
+        /// The struct this declaration sits inside, or null at file
+        /// scope.  It is what gives `self` its type, and what makes
+        /// `self` at file scope a diagnostic rather than a crash.
+        enclosing: ?u32,
     ) Error!void {
         const in_root = self.modules[module].prefix.len == 0;
         if (isReserved(declaration.name)) {
@@ -1457,26 +1465,80 @@ pub const Analyzer = struct {
         defer parameter_types.deinit(self.arena);
         var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
         defer parameter_modes.deinit(self.arena);
-        if (!is_entry) {
-            for (declaration.parameters) |parameter| {
-                const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
-                if (parameter.mode == .give and !self.carriesObjects(resolved)) {
+        // The entry's parameter is collected like every other one: it
+        // is the command line, it has a type, and `checkEntry` below
+        // is what says which type it has to be (OWNERSHIP.md S44).
+        var receiver: ast.Receiver = .not;
+        for (declaration.parameters) |parameter| {
+            // `self` is parameter zero of a method, and its type is the
+            // struct around it — there is nothing written to resolve.
+            // Stage 3 has already refused one anywhere but first and
+            // one with an annotation, so a receiver reaching here is in
+            // the only place it can be (docs/METHODS.md).
+            if (parameter.receiver != .not) {
+                const owner = enclosing orelse {
                     try self.fail(
-                        "luce.sema.own",
+                        "luce.sema.self",
                         parameter.span,
-                        "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                        "self is only a parameter of a function declared inside a struct",
                         .{},
                     );
                     continue;
+                };
+                // A `var self` method writes its receiver back to
+                // the receiver's place, and that write is a pure value
+                // store — which it can only be if the struct carries
+                // no object handles.  Not a restriction invented for
+                // the feature: it is where S17 and S28 already put the
+                // corpus, and a struct that *does* carry objects
+                // mutates through its fields from a plain `self` (S38),
+                // which needs no write-back at all (docs/METHODS.md).
+                if (parameter.receiver == .writes and self.carriesObjects(.{ .strukt = owner })) {
+                    try self.fail(
+                        "luce.sema.self",
+                        parameter.span,
+                        "{s} carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
+                        .{self.structs.items[owner].name},
+                    );
+                    continue;
                 }
-                try parameter_types.append(self.arena, resolved);
-                try parameter_modes.append(self.arena, parameter.mode);
+                receiver = parameter.receiver;
+                try parameter_types.append(self.arena, .{ .strukt = owner });
+                try parameter_modes.append(self.arena, .borrow);
+                continue;
             }
+            const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
+            if (parameter.mode == .give and !self.carriesObjects(resolved)) {
+                try self.fail(
+                    "luce.sema.own",
+                    parameter.span,
+                    "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                    .{},
+                );
+                continue;
+            }
+            try parameter_types.append(self.arena, resolved);
+            try parameter_modes.append(self.arena, parameter.mode);
         }
-        var return_type: Type = .none;
-        if (declaration.return_type) |written| {
-            return_type = (try self.resolveType(module, written)) orelse .none;
+        var results: std.ArrayList(Type) = .empty;
+        defer results.deinit(self.arena);
+        for (declaration.returns) |written| {
+            const resolved = (try self.resolveType(module, written)) orelse continue;
+            try results.append(self.arena, resolved);
         }
+        // A `var self` method's receiver is result zero: its results
+        // are `[receiver] ++ declared`, and they travel in one
+        // synthesized layout, so there is no receiver mechanism
+        // separate from the return mechanism (docs/RETURNS.md §5).
+        var channel: std.ArrayList(Type) = .empty;
+        defer channel.deinit(self.arena);
+        if (receiver == .writes) try channel.append(self.arena, .{ .strukt = enclosing.? });
+        try channel.appendSlice(self.arena, results.items);
+        // The synthesized layout a return shape rides in is settled
+        // after every signature is collected — `synthesizeShapes`
+        // below — because the layout table must not grow while a body
+        // is being lowered against a snapshot of it.
+        const return_type: Type = if (channel.items.len == 1) channel.items[0] else .none;
 
         const index: u32 = @intCast(self.functions.items.len);
         try self.function_names.put(self.temporary, name, index);
@@ -1486,6 +1548,10 @@ pub const Analyzer = struct {
             .module = module,
             .parameter_types = try parameter_types.toOwnedSlice(self.arena),
             .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
+            .receiver = receiver,
+            .enclosing = enclosing,
+            .results = try results.toOwnedSlice(self.arena),
+            .channel = try channel.toOwnedSlice(self.arena),
             .return_type = return_type,
             .fallible = declaration.fallible,
             .is_entry = is_entry,
@@ -1497,29 +1563,185 @@ pub const Analyzer = struct {
             try self.fail("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
             return;
         };
-        const declaration = self.functions.items[index].declaration;
-        // The entry may be `func main():` or `func main() -> !:` — the
-        // second is how a program says the world can stop it, and loom
-        // reports what it raised (docs/FAILURE.md).  Two different
-        // mistakes reach here and they took one sentence between them,
-        // which named only the first legal form and put its caret on
-        // `func main` rather than on the part that is wrong.
-        if (declaration.parameters.len != 0) {
+        const info = self.functions.items[index];
+        const declaration = info.declaration;
+        // Four shapes are legal: `func main():` and
+        // `func main(args: List(String)):`, each with or without `-> !`
+        // — the mark is how a program says the world can stop it, and
+        // loom reports what it raised (docs/FAILURE.md).  A program
+        // that never reads a command line says nothing about one, which
+        // is why the parameter is optional rather than Java's mandatory
+        // ceremony (docs/METHODS.md).
+        //
+        // The name is free and the type is fixed: `args` is a binding
+        // like any other, so there is no misspelling of it to diagnose.
+        if (declaration.parameters.len > 1) {
             try self.fail(
                 "luce.sema.main",
-                declaration.parameters[0].span,
-                "main takes no parameters; a program reads its command line with arg_count() and arg(index)",
-                .{},
+                declaration.parameters[1].span,
+                "main takes at most one parameter, the command line; it has {d}",
+                .{declaration.parameters.len},
             );
+        } else if (declaration.parameters.len == 1) {
+            const parameter = declaration.parameters[0];
+            if (parameter.mode == .give) {
+                // S13 says `give` appears at both ends, and the entry
+                // has one end: the runtime is the caller and there is
+                // no call site to say it back.
+                try self.fail(
+                    "luce.sema.main",
+                    parameter.span,
+                    "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
+                    .{},
+                );
+            } else if (info.parameter_types.len == 1 and
+                !self.isCommandLine(info.parameter_types[0]))
+            {
+                try self.fail(
+                    "luce.sema.main",
+                    parameter.type_name.span,
+                    "main's parameter is the command line and must be List(String); it is {s} here",
+                    .{try self.typeName(info.parameter_types[0])},
+                );
+            }
         }
-        if (declaration.return_type) |written| {
+        if (declaration.returnsSpan()) |written| {
             try self.fail(
                 "luce.sema.main",
-                written.span,
+                written,
                 "main returns nothing; the entry is func main(): or func main() -> !: when the world can stop it",
                 .{},
             );
         }
+    }
+
+    // -- pass one and a half: the layouts a return shape rides in -------
+    //
+    // `(Float, Float)` **is** a two-field product value, so it is
+    // lowered as one: `return low, high` is a `struct_make` and
+    // `let low, high = …` is two `struct_get`s.  Nothing below stage 4
+    // grows a case for multiple results — no MIR instruction, no wire
+    // change, no ABI field — and the oracle needs no edit at all,
+    // which is why it is the arm that proves this resolved right
+    // (docs/RETURNS.md §4).
+    //
+    // The alternative was multiple result registers on `call` and
+    // `ret`.  What kills it is not its size: **LLVM has no multiple
+    // returns either**, so it would build in stage 6 a shape stage 8
+    // has to collapse back into an aggregate.
+
+    /// Give every function that answers a return shape the synthesized
+    /// layout its values travel in.
+    ///
+    /// **Between `collectFunctions` and any lowering, and that is
+    /// load-bearing.**  `Lowering.structs` is a snapshot slice taken
+    /// per function and documented as settled before lowering runs, so
+    /// appending a layout while a body is in flight would reallocate
+    /// the list and leave that slice stale and short.  Every shape a
+    /// program can return is known from the signatures alone, so there
+    /// is no reason to.
+    fn synthesizeShapes(self: *Analyzer) Error!void {
+        for (self.functions.items) |*info| {
+            if (info.channel.len < 2) continue;
+            self.diagnostics.scope = self.modules[info.module].file;
+            info.return_type = (try self.internShape(info)) orelse continue;
+        }
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// The layout for one return shape, interned by the name the shape
+    /// is written with.
+    ///
+    /// **The name is the shape as written** — `(Float, Float)` — and it
+    /// is unforgeable from source: a struct name is an identifier,
+    /// qualified with a module prefix, so nothing a program can declare
+    /// collides with a name containing `(`.  It reads correctly in
+    /// `luce ir` and it reads correctly if it ever reaches a
+    /// diagnostic through `types.typeName`.  Two functions with the
+    /// same shape intern to one layout, as heap type shapes already do.
+    fn internShape(self: *Analyzer, info: *const FunctionDeclInfo) Error!?Type {
+        const name = try self.writtenResults(info);
+        for (self.structs.items, 0..) |layout, index| {
+            if (std.mem.eql(u8, layout.name, name)) return .{ .strukt = @intCast(index) };
+        }
+
+        var fields: std.ArrayList(types.StructField) = .empty;
+        defer fields.deinit(self.arena);
+        var values: u32 = 0;
+        var carries = false;
+        for (info.channel, 0..) |result, position| {
+            try fields.append(self.arena, .{
+                .name = try std.fmt.allocPrint(self.arena, "field{d}", .{position}),
+                .field_type = result,
+            });
+            values +|= self.valueCount(result);
+            if (self.carriesObjects(result)) carries = true;
+        }
+        // The same bound every other width in the language takes, and
+        // for the same reason: `zeroOf` emits one instruction per
+        // counted leaf.  A signature that approaches it has other
+        // problems, but the bound must be the same bound and not a
+        // second number.
+        if (values > helpers.max_struct_values) {
+            try self.fail(
+                "luce.sema.return",
+                info.declaration.returnsSpan() orelse info.declaration.span,
+                "{s} answers {d} values in all, past the limit of {d}",
+                .{ info.declaration.name, values, helpers.max_struct_values },
+            );
+            return null;
+        }
+
+        const index: u32 = @intCast(self.structs.items.len);
+        try self.structs.append(self.arena, .{
+            .name = name,
+            .fields = try fields.toOwnedSlice(self.arena),
+        });
+        // `carriesObjects` and `valueCount` index this table directly,
+        // and the ownership walk asks both of a returned shape — so a
+        // layout without a shape entry is an out-of-bounds read the
+        // first time `lowerReturn` asks whether it carries objects.
+        try self.struct_shapes.append(self.temporary, .{ .carries = carries, .values = values });
+        return .{ .strukt = index };
+    }
+
+    /// What a function answers, as a reader wrote it: `Int` for one
+    /// value, `(Int, Int)` for a shape, `None` for nothing.  Also the
+    /// synthesized layout's name, so the two can never disagree.
+    pub fn writtenResults(self: *Analyzer, info: *const FunctionDeclInfo) Error![]const u8 {
+        if (info.channel.len == 0) return "None";
+        if (info.channel.len == 1) return self.typeName(info.channel[0]);
+        var written: std.ArrayList(u8) = .empty;
+        errdefer written.deinit(self.arena);
+        try written.append(self.arena, '(');
+        for (info.channel, 0..) |result, position| {
+            if (position != 0) try written.appendSlice(self.arena, ", ");
+            try written.appendSlice(self.arena, try self.typeName(result));
+        }
+        try written.append(self.arena, ')');
+        return written.toOwnedSlice(self.arena);
+    }
+
+    /// The layout behind a return shape, or null for every other type
+    /// — including every struct a program declared.
+    ///
+    /// Told apart by the name, which is the shape as written and
+    /// therefore **unforgeable from source**: a struct name is an
+    /// identifier, qualified with a module prefix, so nothing a
+    /// program can declare begins with `(`.  That is what lets a
+    /// return shape be a struct underneath and still not be a type a
+    /// program can name (docs/RETURNS.md).
+    pub fn returnShapeOf(self: *const Analyzer, of: Type) ?types.StructLayout {
+        if (of != .strukt) return null;
+        const layout = self.structs.items[of.strukt];
+        if (layout.name.len == 0 or layout.name[0] != '(') return null;
+        return layout;
+    }
+
+    /// Whether a type is the one shape the entry's parameter may have.
+    fn isCommandLine(self: *const Analyzer, of: Type) bool {
+        const descriptor = self.heapOf(of) orelse return false;
+        return descriptor == .list and descriptor.list == .string;
     }
 
     pub fn typeName(self: *Analyzer, of: Type) Error![]const u8 {
@@ -1571,6 +1793,9 @@ pub const Analyzer = struct {
             .analyzer = self,
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
+            .results = info.results,
+            .channel = info.channel,
+            .writes_receiver = info.receiver == .writes,
             .code = .{
                 .arena = self.arena,
                 .pool = self.pool,
@@ -1588,34 +1813,62 @@ pub const Analyzer = struct {
         try builder.code.openBlock();
         try builder.pushScope();
 
-        if (!info.is_entry) {
-            for (info.declaration.parameters, 0..) |parameter, index| {
-                if (index >= info.parameter_types.len) break;
-                const parameter_type = info.parameter_types[index];
-                const gives = info.parameter_modes[index] == .give;
-                const class: OwnershipClass = if (gives) .owned else .borrow_param;
-                // A parameter borrows its caller's storage, whichever
-                // way the object goes: the caller's binding outlives
-                // the call and gives the bytes back itself
-                // (docs/STRINGS.md).
-                const local = (try builder.declareLocalAs(
-                    parameter.name,
-                    parameter_type,
-                    false,
-                    class,
-                    .borrows,
-                    parameter.name_span,
-                )) orelse continue;
-                // A give parameter is an owned binding like any other
-                // (S15): take the object over from the caller on entry.
-                if (gives) {
-                    const value = try builder.code.load(local);
-                    try builder.code.bind(local, value);
-                }
+        for (info.declaration.parameters, 0..) |parameter, index| {
+            if (index >= info.parameter_types.len) break;
+            const parameter_type = info.parameter_types[index];
+            // The entry's `args` arrived owning its list: the runtime
+            // built it and nobody else names it, so `main`'s scope
+            // frees it on the way out, exactly as a `give` parameter's
+            // scope does (OWNERSHIP.md S44, S15).
+            const owns = info.parameter_modes[index] == .give or info.is_entry;
+            const class: OwnershipClass = if (owns) .owned else .borrow_param;
+            // A parameter borrows its caller's storage, whichever
+            // way the object goes: the caller's binding outlives
+            // the call and gives the bytes back itself
+            // (docs/STRINGS.md).
+            // Parameters are immutable, with one exception: `var self`
+            // says the method may reassign its receiver, and `self =
+            // Point(x = 0.0, y = 0.0)` inside one means what it says
+            // (docs/METHODS.md).
+            const writes_back = parameter.receiver == .writes;
+            // And that exception decides the *storage* too.  Every
+            // other parameter borrows its caller's — the caller's
+            // binding outlives the call and gives the bytes back
+            // itself (docs/STRINGS.md).  A `var self` receiver is
+            // written to, and every write frees what it replaced, so
+            // the slot has to own what it holds or the first
+            // `self.x = …` would give the caller's run back.  It takes
+            // a copy on entry, which is exactly the `var moved =
+            // state` the corpus writes by hand at every mutation site
+            // it has (docs/METHODS.md).
+            const local = (try builder.declareLocalAs(
+                parameter.name,
+                parameter_type,
+                writes_back,
+                class,
+                if (writes_back) .owns else .borrows,
+                parameter.name_span,
+            )) orelse continue;
+            if (writes_back) {
+                const arrived = try builder.code.load(local);
+                try builder.code.store(local, try builder.code.ownStorage(arrived));
+            }
+            // An owning parameter is an owned binding like any other
+            // (S15): take the object over from the caller on entry.
+            if (owns) {
+                const value = try builder.code.load(local);
+                try builder.code.bind(local, value);
             }
         }
 
         try builder.lowerBlock(info.declaration.body);
+        // `func step(var self):` names no result, so its body ends
+        // without a `return` — but its receiver still has to leave.
+        // One implicit `return self` at the end, which is the same
+        // instruction an explicit one emits (docs/RETURNS.md §5).
+        if (info.receiver == .writes and info.results.len == 0) {
+            try builder.returnReceiver();
+        }
         try builder.emitScopeEnd();
         builder.popScope();
 
@@ -1623,13 +1876,13 @@ pub const Analyzer = struct {
         // written return type rather than the `func` line: in a long
         // function that is the claim being broken, and it is what the
         // reader has to change if they meant something else.
-        if (info.return_type != .none and !helpers.returnsOnAllPaths(info.declaration.body)) {
-            const at = if (info.declaration.return_type) |written| written.span else info.declaration.span;
+        if (info.results.len != 0 and !helpers.returnsOnAllPaths(info.declaration.body)) {
+            const at = info.declaration.returnsSpan() orelse info.declaration.span;
             try self.fail(
                 "luce.sema.return",
                 at,
                 "{s} must return {s} on every path, and some path reaches the end of its body without returning",
-                .{ info.declaration.name, try self.typeName(info.return_type) },
+                .{ info.declaration.name, try self.writtenResults(&info) },
             );
         }
         // Everything from here — sealing the open blocks, freezing the

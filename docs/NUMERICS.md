@@ -14,8 +14,11 @@ there are three failure mechanisms and not one. This is the memo for
 the rule those two never had to touch, and it is the first one that
 **overturns a ratified decision** rather than filling a hole.
 
-This is `docs/MISSING.md` Tier 5 item 10, in part — *"decide … integer
-division spelling — one memo each"* — and it swallows item 9 whole.
+This is `docs/MISSING.md`'s **"The order to work down"** item 10, in
+part — *"decide … integer division spelling — one memo each"* — and it
+swallows item 9 whole.  (It said "Tier 5 item 10"; that list is in no
+Tier, and `docs/METHODS.md` said "Tier 4" for the same line.  Both are
+corrected.)
 
 ## What the owner decided
 

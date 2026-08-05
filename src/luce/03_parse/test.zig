@@ -143,7 +143,7 @@ test "the plan's scale example parses" {
     try testing.expectEqual(@as(usize, 2), parsed.program.structs[0].fields.len);
     try testing.expectEqualStrings("scale_point", parsed.program.functions[0].name);
     try testing.expectEqual(@as(usize, 2), parsed.program.functions[0].parameters.len);
-    try testing.expect(parsed.program.functions[0].return_type != null);
+    try testing.expectEqual(@as(usize, 1), parsed.program.functions[0].returns.len);
 
     // main's third statement is a field assignment.
     const entry = parsed.program.functions[1];
@@ -201,8 +201,8 @@ test "parameter modes, return types, and dotted type names parse" {
     try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
     try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
     try testing.expectEqualStrings("shapes.Point", stash.parameters[2].type_name.name);
-    try testing.expectEqualStrings("List", stash.return_type.?.name);
-    try testing.expectEqualStrings("Int", stash.return_type.?.arguments[0].name);
+    try testing.expectEqualStrings("List", stash.returns[0].name);
+    try testing.expectEqualStrings("Int", stash.returns[0].arguments[0].name);
 }
 
 test "struct bodies parse fields and namespaced functions" {
@@ -423,8 +423,8 @@ test "return, break, and continue parse with and without a value" {
     const loop = parsed.program.functions[0].body.statements[0].while_loop;
     try testing.expect(loop.body.statements[0].conditional.then_block.statements[0] == .break_statement);
     try testing.expect(loop.body.statements[1] == .continue_statement);
-    try testing.expect(parsed.program.functions[0].body.statements[1].return_statement.value == null);
-    try testing.expect(parsed.program.functions[1].body.statements[0].return_statement.value.?.* == .binary);
+    try testing.expectEqual(@as(usize, 0), parsed.program.functions[0].body.statements[1].return_statement.values.len);
+    try testing.expect(parsed.program.functions[1].body.statements[0].return_statement.values[0].* == .binary);
 }
 
 test "ownership verbs parse: give/copy expressions, free calls, give parameters" {
@@ -1598,7 +1598,7 @@ test "a trailing ? makes a type optional, and there is no second one" {
     try testing.expect(found.parameters[0].type_name.optional);
     try testing.expectEqualStrings("Map", found.parameters[0].type_name.name);
     try testing.expect(!found.parameters[1].type_name.optional);
-    try testing.expect(found.return_type.?.optional);
+    try testing.expect(found.returns[0].optional);
     try testing.expect(found.body.statements[0].variable.annotation.?.optional);
     try testing.expect(found.body.statements[0].variable.value.?.* == .none_literal);
 
@@ -1656,6 +1656,103 @@ test "an else block still reads as a block, not as a fallback" {
     try testing.expect(conditional.else_block != null);
     try testing.expectEqual(@as(usize, 1), conditional.then_block.statements.len);
     try testing.expectEqual(@as(usize, 1), conditional.else_block.?.statements.len);
+}
+
+// ---------------------------------------------------------------------------
+// The receiver
+// ---------------------------------------------------------------------------
+//
+// Two facts about `self` are the parser's, because both are facts
+// about the *shape* of a parameter list and neither needs a struct to
+// be resolved: it comes first, and it carries no type.  Everything
+// else about a method is stage 4's (docs/METHODS.md).
+
+test "self and var self are parameter zero, bare and untyped" {
+    var parsed = try expectClean(
+        \\struct Point:
+        \\    x: Float
+        \\
+        \\    func length(self) -> Float:
+        \\        return self.x
+        \\
+        \\    func scale(var self, factor: Float):
+        \\        self.x = self.x * factor
+        \\
+        \\    func origin() -> Point:
+        \\        return Point(x = 0.0)
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+
+    const functions = parsed.program.structs[0].functions;
+    try testing.expectEqual(@as(usize, 3), functions.len);
+
+    try testing.expectEqual(ast.Receiver.reads, functions[0].parameters[0].receiver);
+    try testing.expectEqualStrings("self", functions[0].parameters[0].name);
+    try testing.expectEqual(@as(usize, 1), functions[0].parameters.len);
+
+    try testing.expectEqual(ast.Receiver.writes, functions[1].parameters[0].receiver);
+    try testing.expectEqual(@as(usize, 2), functions[1].parameters.len);
+    // The parameter beside it is an ordinary one and says so.
+    try testing.expectEqual(ast.Receiver.not, functions[1].parameters[1].receiver);
+
+    // A function with no `self` is a namespace function, unchanged —
+    // which is the rule that keeps every existing declaration
+    // compiling.
+    try testing.expectEqual(@as(usize, 0), functions[2].parameters.len);
+}
+
+test "self comes first, and takes no type" {
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(a: Int, self):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 20,
+        .contains = "self is the receiver, so it comes first in the parameter list",
+    }});
+
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(self: Point):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 16,
+        .contains = "self takes no type annotation: inside a struct it is that struct",
+    }});
+
+    // `var self` is refused in the same place and for the same reason.
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(a: Int, var self):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 20,
+        .contains = "comes first",
+    }});
+}
+
+test "self is a keyword, so nothing else may be called one" {
+    // Reserving the word costs the corpus nothing — `grep -rniw self`
+    // over every `.luc` in the tree finds none — and it is what makes
+    // `p.length()` readable as a call on `p` and nothing else.
+    try expectDiagnostics(
+        \\func main():
+        \\    let self = 3
+        \\
+    , &.{.{ .code = "luce.parse.expected", .line = 2, .column = 9 }});
 }
 
 test "every token kind has a name a diagnostic can print" {

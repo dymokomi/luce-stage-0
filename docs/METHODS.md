@@ -8,8 +8,11 @@
 > call with the receiver first, and there is still no dispatch, no
 > reference type, and no function value.
 
-`docs/MISSING.md` Tier 4 item 10 reads *"Decide receivers, multiple
-returns, and integer-division spelling — one memo each."* This is the
+`docs/MISSING.md`'s **"The order to work down"** item 10 reads
+*"Decide receivers and multiple returns — one memo each."*  (This memo
+first called it "Tier 4 item 10"; that list is in no Tier at all, and
+`docs/NUMERICS.md` invented a different Tier for the same line.  Both
+are corrected here and in that file.)  This is the
 receivers memo, and it carries the entry's arguments with it because
 the two decisions are the same sentence said twice.
 
@@ -459,8 +462,19 @@ right way to write it and needs no write-back at all.
 
 ### `var self` methods return nothing
 
-`func next(var self) -> Int:` is refused. Luce has one return channel
-and the receiver is travelling in it.
+> **Corrected once built.**  This restriction was **never shipped**.
+> `docs/RETURNS.md` landed *with* this work rather than after it, so
+> `func next(var self) -> Int:` was legal on the day `var self` was:
+> a method's results are `[receiver] ++ declared` and they travel in
+> one return shape, which is the sense in which `self` was always
+> waiting for that memo (`docs/RETURNS.md` §5, which asked in as many
+> words that the refusal below never exist in the tree).  The
+> reasoning is kept because it is what made the restriction's end
+> schedulable, and a restriction with a scheduled end is the only kind
+> worth writing down.
+
+`func next(var self) -> Int:` was to be refused. Luce had one return
+channel and the receiver was travelling in it.
 
 This is the feature's real cost and it should be paid in the open.
 The canonical loser is the mutate-and-answer method — a random number
@@ -523,7 +537,6 @@ New code `luce.sema.self`, plus two improvements to existing messages.
 | `Point.scale(p, 2.0)` | `scale takes var self and writes back to its receiver; call it as p.scale(2.0)` |
 | `q.scale(2.0)`, `q` let-bound | `q is let-bound; scale takes var self and writes back to its receiver — use var` (`luce.sema.let`, composing with the existing wording) |
 | `Point.origin().scale(2.0)` | `scale takes var self, so its receiver must be a variable, a field, or an element — not a call result` |
-| `func next(var self) -> Int:` | `a var self method returns nothing; its receiver is its result` |
 | `var self` on an object-carrying struct | `Bag carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]` |
 | `let f = p.length` | `functions are not values; call it, or pass what it needs` |
 
@@ -640,7 +653,8 @@ it retires machinery Decision 2 would otherwise have to keep working.
    **~1.5 days.**
 7. **`var self` writes back.** The place rule reusing
    `lowerAssignChain`'s root check, the returning-edge-only store, the
-   returns-nothing rule, the carries-no-objects rule. S39's clarifying
+   carries-no-objects rule (**not** the returns-nothing rule:
+   `docs/RETURNS.md` §5 says do not build it, and it was not). S39's clarifying
    paragraph. *Tests:* `specs/ownership_spec.zig` for the write-back
    and for the raising method that leaves its receiver alone;
    `specs/agree.zig` for both arms; errors_spec rows 6-10; **and the

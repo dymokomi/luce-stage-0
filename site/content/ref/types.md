@@ -143,6 +143,36 @@ operations take.
 
 Accumulates text. `String(builder)` hands back the `String`.
 
+## Return shapes {#return-shapes}
+
+`(Int, Int)` after a function's `->` says it answers two values.
+
+**It is not a type.** It is a shape a *signature* has, and it may be
+written nowhere else: not on a binding, not on a parameter, not on a
+struct field, not inside a `List`, not nested inside another shape,
+and not with a `?` (which would be marking the shape rather than a
+value). There is no expression that produces one.
+
+```luce fail
+func main():
+    let p: (Int, Int) = 1
+```
+
+```output
+luce: compile failed
+main.luc:2:12: a return shape is not a type: a pair that travels together is a struct [luce.parse.type]
+        let p: (Int, Int) = 1
+               ^
+```
+
+A pair that travels together is a struct. A pair that only ever
+travels *outward* — never a parameter, never a field, never a
+container element, only ever read one value at a time — is a return
+shape, and the question is greppable rather than a matter of taste.
+
+Every element is an ordinary type, so `-> (Int?, Bool)` is fine, and
+`-> (A, B)!` composes with `try` like any other fallible signature.
+
 ## Optionals: `T?`
 
 A trailing `?` makes a type nullable. `none` is the absent value, and

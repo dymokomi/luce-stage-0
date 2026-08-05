@@ -170,7 +170,7 @@ Python needs `??` because `or` is broken there by truthiness, and Luce
 has no truthiness and no ternary.
 
 ```luce
-let count = parse_int(arg(0)) else 10
+let count = parse_int(args[0]) else 10
 let first = parse_int(a) else parse_int(b) else 0   # right-associative
 let must = parse_int(text) else trap("not a number")
 ```
@@ -197,8 +197,8 @@ never spent on absence, which is `?`'s job (docs/FAILURE.md).
 func read(path: String) -> String!:
     return try file_read(path)
 
-func main() -> !:
-    let text = try files.read(arg(0))
+func main(args: List(String)) -> !:
+    let text = try files.read(args[0])
     let cfg  = files.read("settings") catch ""
 ```
 
@@ -305,6 +305,116 @@ already a parameter of the unwinder (docs/OWNERSHIP.md S4).
 
 `programs/calc.luc` is the worked example, and `docs/FAILURE.md` is
 the decision record.
+
+## Answering more than one thing
+
+A function may answer more than one value.
+
+```luce
+func minmax(xs: Array(Float, _)) -> (Float, Float):
+    ...
+    return low, high
+
+let low, high = minmax(temperatures)
+```
+
+**There is no tuple.**  `(Float, Float)` is a shape a *signature* has,
+not a type a program can name: it cannot annotate a binding, fill a
+parameter or a field, stand inside a container, nest inside itself, or
+take a `?`, and there is no expression that produces one.  A pair that
+travels together is a struct.
+
+A call that answers more than one value may stand in **exactly two
+places** — the right of a destructuring bind, and a statement of its
+own — and nowhere else.  `print(minmax(xs))`, `minmax(xs) + 1`,
+`return minmax(xs)` and `low, high = minmax(xs)` are all refused.  Go
+allows the pass-through and pays for it with a rule in its
+specification saying that a multi-valued call used as arguments must
+be the *only* arguments; refusing it is what makes this rule one a
+reader can hold, because it has no exceptions.  The cost is one line:
+
+```luce
+let low, high = minmax(xs)
+return low, high
+```
+
+**One keyword governs the whole bind**: `let a, b` makes both
+immutable, `var a, b` makes both reassignable, and `let a, var b` is
+refused.  A bind takes its types from the call, so it carries no
+annotations.  There is no `_`: Luce has no unused-binding diagnostic,
+so a name costs nothing and tells the next reader what was ignored.
+
+`-> (A, B)!` is legal and composes with `try`; `catch` supplies one
+value and so cannot supply a shape, which leaves a fallible
+multi-return propagatable or discardable and not handleable with
+values.  An element may be a `T?` — absence is an ordinary value — but
+`-> (Int, Int)?` is refused, because there the `?` would be marking
+the shape.
+
+Ownership is `docs/OWNERSHIP.md` S45: each value moves independently
+(S16 per value), each name owns what it received (S1 per name), a
+borrow or an alias in any position is S17 exactly, and **no object may
+travel twice** — `return xs, xs` is a compile error, because two moves
+of one handle would free it twice.
+
+## Methods
+
+A function declared inside a struct is a **method** exactly when its
+first parameter is `self`.  Everything else in a struct is the
+namespace function it has always been.
+
+```luce
+struct Point:
+    x: Float
+    y: Float
+
+    func length(self) -> Float:              # a method: reads self
+        return sqrt(self.x * self.x + self.y * self.y)
+
+    func scale(var self, factor: Float):     # a method: writes self back
+        self.x = self.x * factor
+        self.y = self.y * factor
+
+    func origin() -> Point:                  # a namespace function
+        return Point(x = 0.0, y = 0.0)
+```
+
+`self` is a keyword, bare, and its type is the enclosing struct;
+`self: Point` is refused, because inside `struct Point` it can be
+nothing else.  `p.length()` **means** `Point.length(p)` — the same
+call, resolved at compile time.  There is no dispatch, no reference
+type, and no function value: `let f = p.length` is refused for the
+same reason `let f = Point.length` is.
+
+**The difference between a namespace and a method is visible in
+exactly one place**, and it is worth saying plainly because a struct
+in Luce is used for both:
+
+> `Struct.func(x)` is a **namespace** call — the struct is a folder
+> and `x` is an ordinary first argument.  `x.foo()` is a **method**
+> call — the struct is a type and `x` is its receiver.  Luce has both,
+> they share a syntax, and the only thing that tells them apart is
+> whether the declaration's first parameter is the word `self`.
+
+`Point.length(p)` stays callable and means what `p.length()` means,
+which is what lets a struct convert one function at a time.
+
+**`var self` writes the receiver back.**  `p.scale(2.0)` means
+`p = Point.scale(p, 2.0)`: copy in, copy out, with no reference
+anywhere.  The receiver must be a place whose root is a mutable local
+— the rule an assignment target already keeps — so a `let` receiver
+and a call result are both refused, and `Point.scale(p, 2.0)` is
+refused too, because the static form has no place to write back to.
+A `var self` struct must carry no objects, which is where S17 and S28
+already put such code; a struct that does carry objects mutates
+through its fields from a plain `self` (S38) and needs no write-back.
+
+A `var self` method may answer values of its own, and then **its
+receiver is result zero**: `let roll = rng.next()` means
+`rng, roll = Rng.next(rng)` internally, and the two travel in one
+return shape.  There is no receiver mechanism separate from the return
+mechanism.  A method that raises leaves its receiver as it was — the
+write-back stands on the returning edge only.
 
 ## Collections
 
@@ -498,7 +608,7 @@ implies it, so absence carries all the information there is
 (docs/FAILURE.md).  Read the answer with `else`, or test it:
 
 ```luce
-let count = parse_int(arg(0)) else 10
+let count = parse_int(args[0]) else 10
 let n = parse_int(text)
 if n == none:
     print("not a number: " + text)
@@ -516,9 +626,27 @@ to one type is a method on it.
 
 ## The host
 
-Every effect is a host service, every service is optional, and one the
-host does not offer traps `host_unavailable` rather than touching
-anything.  The whole set, and what each answers:
+**The command line is not one of them.**  A program that reads its
+arguments declares them:
+
+```luce
+func main(args: List(String)):     # and `-> !` composes with it
+    for name in args:
+        print(name)
+```
+
+`args` is an ordinary `List(String)`, so `len`, indexing, slicing,
+`for … in`, `contains` and `strings.join` all work on it, and
+`args[0]` is the first word after the program's own name.  It is
+*handed to* the program rather than called *by* it, which is why the
+host gate does not cover it and why a host with no arguments to offer
+supplies an **empty** list instead of a trap; reading past the end is
+the language's own `index_bounds` (OWNERSHIP.md S44).  A program that
+ignores its arguments writes `func main():` and says nothing false.
+
+Every other effect is a host service, every service is optional, and
+one the host does not offer traps `host_unavailable` rather than
+touching anything.  The whole set, and what each answers:
 
 ```luce
 print(text)                  # a line to standard output
@@ -529,7 +657,6 @@ env(name)                    # String?  — none when unset
 clock_ms()                   # Int, monotonic, unspecified origin
 sleep_ms(milliseconds)       # waits at least that long
 
-arg_count()   arg(index)     # the command line
 file_read(path)              # String!
 file_write(path, content)    # !
 file_append(path, content)   # !
@@ -887,8 +1014,8 @@ or any pipe or process substitution.  Diagnostics then name it
 
 ## Deliberately absent (for now)
 
-First-class functions, closures, user-defined methods/receivers
-(`x.f()` is builtin sugar, not dispatch), exceptions (traps are
+First-class functions, closures, **tuples** (a return shape is not a
+type — see "Answering more than one thing"), exceptions (traps are
 final), implicit *narrowing* of a `Float` to an `Int`, shadowing,
 mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate

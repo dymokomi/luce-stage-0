@@ -44,10 +44,10 @@ error naming the reason. There are no semicolons and no braces.
 Put this in `hello.luc` and hand it to the compiler.
 
 ```luce module file=hello.luc
-func main():
+func main(args: List(String)):
     var name = "loom"
-    if arg_count() > 0:
-        name = arg(0)
+    if len(args) > 0:
+        name = args[0]
     print("hello, " + name)
 ```
 

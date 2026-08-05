@@ -105,8 +105,6 @@ pub const Intrinsic = enum {
     file_read,
     file_write,
     file_exists,
-    arg_count,
-    arg_get,
     term_rows,
     term_cols,
     term_clear,

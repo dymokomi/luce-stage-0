@@ -87,6 +87,7 @@ twins.
 | `math.sum(xs) -> Float` | |
 | `math.mean(xs) -> Float?` | `none` for an empty array |
 | `math.vmin(xs) -> Float?`, `math.vmax(xs) -> Float?` | extrema; `min`/`max` are the scalar builtins |
+| `math.minmax(xs) -> (Float?, Float?)` | both, in **one** traversal. There could not have been one before multiple returns: writing it would have meant inventing a bag struct in the standard library |
 | `math.dot(xs, ys) -> Float` | a shape mismatch traps |
 | `math.norm(xs) -> Float` | Euclidean |
 | `math.variance(xs) -> Float?`, `math.stddev(xs) -> Float?` | population |
@@ -137,16 +138,20 @@ mean of nothing: -1
 
 ## Randomness
 
-A Lehmer/MINSTD generator whose state lives in a `List(Int)` the
-caller owns. Mutation through a borrow is ordinary Luce, so there are
-no hidden globals and every stream is deterministic from its seed.
+A Lehmer/MINSTD generator whose state is one `Int` in a struct. Every
+draw is a `var self` method, so the state
+is *written back* rather than mutated through a reference: there are
+no hidden globals, no allocation, and every stream is deterministic
+from its seed.
 
 | Signature | Notes |
 |---|---|
-| `math.seed(value: Int) -> List(Int)` | the state; the caller owns it. Any seed works — it is folded into `[1, 2³¹ − 2]` |
-| `math.random(state) -> Float` | in the open interval (0, 1) |
-| `math.random_int(state, low, high) -> Int` | in `[low, high)`, `high` exclusive like `range`; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses |
-| `math.random_step(state) -> Int` | the raw next state in `[1, 2³¹ − 2]`; the other two are the friendly faces over it |
+| `math.Rng(state: Int)` | a generator. Any seed works — `folded` puts it in `[1, 2³¹ − 2]` |
+| `rng.next() -> Int` | the raw next state in `[1, 2³¹ − 2]`; the two below are the friendly faces over it |
+| `rng.real() -> Float` | in the open interval (0, 1) |
+| `rng.in_range(low, high) -> Int` | in `[low, high)`, `high` exclusive like `range`; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses |
+
+The receiver must be a `var`: `var rng = math.Rng(state = 42)`.
 
 Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
 
@@ -154,10 +159,10 @@ Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
 import std.math
 
 func main():
-    var rng = math.seed(2026)
+    var rng = math.Rng(state = 2026)
     var rolls: List(Int) = []
     for i in range(0, 8):
-        rolls.append(math.random_int(rng, 1, 7))
+        rolls.append(rng.in_range(1, 7))
 
     var text = new Builder()
     for roll in rolls:
@@ -166,20 +171,20 @@ func main():
     print(text.build())
 
     # The same seed gives the same stream, always.
-    var again = math.seed(2026)
-    print(f"first roll again: {math.random_int(again, 1, 7)}")
+    var again = math.Rng(state = 2026)
+    print(f"first roll again: {again.in_range(1, 7)}")
 ```
 
 ```output
-6 3 1 5 6 2 3 6 
-first roll again: 6
+5 3 1 5 6 3 4 1 
+first roll again: 5
 ```
 
 ## The traps that remain
 
 Seven, and each is a domain the caller was handed and could have
 checked: `ln` of a non-positive number, `pow` and `ipow` outside
-theirs, a shape mismatch in `dot` or `axpy`, and `random_int` with an
+theirs, a shape mismatch in `dot` or `axpy`, and `in_range` with an
 empty range. Those are bugs, and
 [bugs trap](/guide/failure/).
 
@@ -194,6 +199,6 @@ func main():
 ```output
 about to take a logarithm
 loom: trap: ln of a non-positive number [explicit_trap]
-    at math.ln (std/math.luc:66:9)
+    at math.ln (std/math.luc:67:9)
     at main (main.luc:5:5)
 ```

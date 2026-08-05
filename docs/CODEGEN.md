@@ -794,7 +794,7 @@ capability a host may withhold.
   which is not a trap and ends the run the way the runtime's own arena
   failure does).  Strings a service hands back are borrowed for the
   call only; generated code copies them into the run's arena.
-  Services that cannot fail — `arg_count`, `term_rows`, `term_cols` —
+  Services that cannot fail — `term_rows`, `term_cols`, `clock_ms` —
   answer their value directly.
 
 `finished` is the one outbound-only slot: the object leak census at

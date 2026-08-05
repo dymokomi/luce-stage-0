@@ -68,6 +68,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_true,
         .keyword_false,
         .keyword_none,
+        .keyword_self,
         .keyword_new,
         .keyword_not,
         .keyword_give,
@@ -530,6 +531,18 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
         .fstring => {
             const item = self.advance();
             return expandFString(self, item);
+        },
+        // `self` reads as the name it is: a parameter binding of the
+        // enclosing struct's type, which stage 4 declared as parameter
+        // zero.  A keyword rather than an identifier so nothing can
+        // shadow it, but an ordinary name everywhere it is *used* —
+        // `self.x`, `self.items.append(1)`, `f(self)` all work with no
+        // case of their own (docs/METHODS.md).  It is never a call:
+        // `self(...)` is not a thing, and falls to the same
+        // "unknown function" a bare `self()` would.
+        .keyword_self => {
+            const item = self.advance();
+            return make(self, .{ .name = .{ .text = "self", .span = item.span } });
         },
         .identifier => {
             const item = self.advance();

@@ -11,16 +11,19 @@ func main():
 hello, loom
 ```
 
-`arg_count()` and `arg(i)` reach the command line. `arg(i)` outside
-the range traps, and the count is right there to check against.
+The command line reaches a program as `main`'s parameter. Declare it
+and it is an ordinary `List(String)`; leave it out and the program
+says nothing about arguments it never reads.
 
 ```luce run args=fig pear plum
-func main():
-    if arg_count() == 0:
+func main(args: List(String)):
+    if len(args) == 0:
         print("usage: greet NAME [NAME ...]")
         return
-    for index in range(0, arg_count()):
-        print(f"{index + 1}. hello, {arg(index)}")
+    var index = 0
+    for name in args:
+        index = index + 1
+        print(f"{index}. hello, {name}")
 ```
 
 ```output
@@ -34,8 +37,8 @@ Arguments arrive as `String`s. Turning one into a number is
 number at all — `else` supplies the fallback.
 
 ```luce run args=4
-func main():
-    let times = parse_int(arg(0)) else 1
+func main(args: List(String)):
+    let times = parse_int(args[0]) else 1
     for i in range(0, times):
         print(f"line {i}")
 ```

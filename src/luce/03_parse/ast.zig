@@ -229,7 +229,22 @@ pub const ForEach = struct {
     body: Block,
     span: Span,
 };
-pub const Return = struct { value: ?*Expression, span: Span };
+/// `return`, `return x`, or `return a, b` — one expression per value
+/// the function answers (docs/RETURNS.md).  Empty is a bare `return`.
+pub const Return = struct { values: []*Expression, span: Span };
+
+/// `let low, high = minmax(xs)` — a destructuring bind.
+///
+/// Two or more names, **one** keyword governing all of them, and a
+/// call on the right whose arity matches.  It is one of exactly two
+/// places a multi-valued call may stand; the other is a statement of
+/// its own (docs/RETURNS.md).
+pub const Destructure = struct {
+    names: []Name,
+    mutable: bool,
+    value: *Expression,
+    span: Span,
+};
 /// A statement and an indented handler that runs where the one call
 /// in it raised — the statement form of `catch`, for a recovery that
 /// is more than one expression.
@@ -250,6 +265,9 @@ pub const Statement = union(enum) {
     /// var name: Type with no value is a late declaration: the slot
     /// holds the type's zero value until assigned (OWNERSHIP.md S40).
     variable: Variable,
+    /// let a, b = f() / var a, b = f() — one keyword, two or more
+    /// names, one call.
+    destructure: Destructure,
     assign: Assign,
     conditional: Conditional,
     while_loop: While,
@@ -300,10 +318,24 @@ pub const StructDecl = struct {
 /// pass something fresh).  See OWNERSHIP.md S11-S15.
 pub const ParameterMode = enum { borrow, give };
 
+/// Whether a parameter is the method's receiver, and if so whether the
+/// method writes it back (docs/METHODS.md).
+///
+/// `self` and `var self` carry no type: inside `struct Point` the
+/// receiver can be nothing but a `Point`, so there is nothing to
+/// resolve and `type_name` below is not read for one.  Stage 4 fills
+/// the type in from the enclosing struct.
+pub const Receiver = enum { not, reads, writes };
+
 pub const Parameter = struct {
     name: []const u8,
     name_span: Span,
     mode: ParameterMode = .borrow,
+    /// `.not` for every ordinary parameter; `.reads` for `self` and
+    /// `.writes` for `var self`.  When it is not `.not`, `type_name`
+    /// is a placeholder nothing reads — the enclosing struct is the
+    /// type, and stage 4 is where that is known.
+    receiver: Receiver = .not,
     type_name: TypeName,
     span: Span,
 };
@@ -312,14 +344,29 @@ pub const FuncDecl = struct {
     name: []const u8,
     name_span: Span,
     parameters: []Parameter,
-    return_type: ?TypeName,
+    /// What the function answers, in order.  Empty answers nothing;
+    /// one is `-> T`; two or more is a **return shape**, `-> (A, B)`
+    /// — which is a shape a signature has and not a type a program
+    /// can name (docs/RETURNS.md).
+    returns: []TypeName = &.{},
     /// Written `-> T!` or `-> !`.  Fallibility is an attribute of the
-    /// function, never part of `return_type`: there is no `T!` type
+    /// function, never part of what it returns: there is no `T!` type
     /// to resolve, so nothing downstream of here grows a case for one
     /// (docs/FAILURE.md).
     fallible: bool = false,
     body: Block,
     span: Span,
+
+    /// The span of everything after `->`, for a diagnostic about the
+    /// claim rather than about the declaration.  Null when the
+    /// function answers nothing.
+    pub fn returnsSpan(self: FuncDecl) ?Span {
+        if (self.returns.len == 0) return null;
+        return .{
+            .start = self.returns[0].span.start,
+            .end = self.returns[self.returns.len - 1].span.end,
+        };
+    }
 };
 
 /// An import, in either namespace: `import geo` binds the sibling

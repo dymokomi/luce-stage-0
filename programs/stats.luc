@@ -5,23 +5,22 @@
 
 import mathx
 
-func main():
-    if arg_count() == 0:
+func main(args: List(String)):
+    if len(args) == 0:
         print("usage: stats NUMBER [NUMBER ...]")
         return
     var values: List(Float) = []
-    for index in range(0, arg_count()):
-        let written = arg(index)
+    for written in args:
         let number = parse_float(written)
         if number == none:
             print("stats: not a number: " + written)
             return
         values.append(number)
 
-    var ordered = mathx.sorted(values)
+    let lowest, highest = mathx.extremes(values)
     print("count   " + String(len(values)))
-    print("lowest  " + String(ordered[0]))
-    print("highest " + String(ordered[len(ordered) - 1]))
+    print("lowest  " + String(lowest))
+    print("highest " + String(highest))
     print("mean    " + String(mathx.mean(values)))
     print("median  " + String(mathx.median(values)))
     print("stddev  " + String(mathx.deviation(values)))

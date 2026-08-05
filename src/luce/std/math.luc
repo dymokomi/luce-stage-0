@@ -10,9 +10,10 @@
 # answers a plausible number that is simply wrong.  Reduce angles to
 # a revolution before calling if magnitudes run large.
 #
-# Randomness is a Lehmer generator whose state lives in a List(Int)
-# the caller owns: `var rng = math.seed(42)` then `math.random(rng)`.
-# Mutating borrowed state is ordinary Luce; no hidden globals.
+# Randomness is a Lehmer generator in a struct: `var rng =
+# math.Rng(state = 42)` then `rng.next()`.  The state is a value that
+# is written back, not an object that is mutated through a borrow; no
+# hidden globals.
 
 let pi = 3.14159265358979323846
 let tau = 6.28318530717958647692
@@ -184,6 +185,20 @@ func vmax(xs: Array(Float, _)) -> Float?:
         largest = max(largest, xs[i])
     return largest
 
+# The smallest and the largest, in one pass.  `vmin` and `vmax` walk
+# the same array twice, and there could not have been a `minmax`
+# before: writing one would have meant inventing a bag struct in the
+# standard library (docs/RETURNS.md).
+func minmax(xs: Array(Float, _)) -> (Float?, Float?):
+    if len(xs) == 0:
+        return none, none
+    var smallest = xs[0]
+    var largest = xs[0]
+    for i in range(1, len(xs)):
+        smallest = min(smallest, xs[i])
+        largest = max(largest, xs[i])
+    return smallest, largest
+
 # The dot product; lengths must agree.
 func dot(xs: Array(Float, _), ys: Array(Float, _)) -> Float:
     if len(xs) != len(ys):
@@ -236,25 +251,47 @@ func axpy(xs: Array(Float, _), factor: Float, ys: Array(Float, _)):
 #
 # Lehmer / MINSTD: state' = state * 48271 mod (2^31 - 1).  Period
 # 2^31 - 2; not cryptographic — games and shuffles, not secrets.
+#
+# The state is one `Int` in a struct, and every draw writes it back:
+#
+#     var rng = math.Rng(state = 42)
+#     let roll = rng.in_range(1, 7)
+#
+# This was a one-element `List(Int)`, allocated by a `seed` function
+# and kept alive for the life of `main`, whose entire purpose was to
+# give an `Int` reference semantics so the *state* could go out
+# through a borrow while the *draw* went out through `return`.  Two
+# values, two channels, one allocation.  `var self` and a second
+# return position between them delete all three (docs/RETURNS.md).
+struct Rng:
+    # The generator's whole state.  Any seed works: one out of range
+    # is brought into range on first use.
+    state: Int
 
-# A fresh generator.  Any seed works; it is folded into [1, 2^31 - 2].
-func seed(from: Int) -> List(Int):
-    return [from % 2147483646 + 1]
+    # The next raw state value in [1, 2^31 - 2].
+    func next(var self) -> Int:
+        # A Lehmer generator has no zero state and none at or past its
+        # modulus, so a seed of either shape would stick or wrap.  In
+        # range this is the identity — which is the property that
+        # matters, because every state the recurrence below produces is
+        # already in range and must pass through untouched.
+        if self.state < 1 or self.state >= 2147483647:
+            self.state = self.state % 2147483646
+            if self.state < 0:
+                self.state = self.state + 2147483646
+            self.state = self.state + 1
+        self.state = self.state * 48271 % 2147483647
+        return self.state
 
-# The next raw state value in [1, 2^31 - 2].  Internal step; random
-# and random_int are the friendly faces.
-func random_step(rng: List(Int)) -> Int:
-    rng[0] = rng[0] * 48271 % 2147483647
-    return rng[0]
+    # A Float uniform in (0, 1).
+    func real(var self) -> Float:
+        return Float(self.next()) / 2147483647.0
 
-# A Float uniform in (0, 1).
-func random(rng: List(Int)) -> Float:
-    return Float(random_step(rng)) / 2147483647.0
+    # An Int uniform in [low, high) — high is exclusive, like range.
+    # (Slight modulo bias; fine for games, meaningless for spans that
+    # small anyway.)
+    func in_range(var self, low: Int, high: Int) -> Int:
+        if high <= low:
+            trap("in_range needs low < high")
+        return low + self.next() % (high - low)
 
-# An Int uniform in [low, high) — high is exclusive, like range.
-# (Slight modulo bias; fine for games, meaningless for spans that
-# small anyway.)
-func random_int(rng: List(Int), low: Int, high: Int) -> Int:
-    if high <= low:
-        trap("random_int needs low < high")
-    return low + random_step(rng) % (high - low)

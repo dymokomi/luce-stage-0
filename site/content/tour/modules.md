@@ -63,15 +63,15 @@ func main():
     print(String(math.ipow(2, 10)))
     print(strings.format_float(math.ln(math.e), 1))
 
-    var rng = math.seed(42)
-    print(f"three rolls: {math.random_int(rng, 1, 7)} {math.random_int(rng, 1, 7)} {math.random_int(rng, 1, 7)}")
+    var rng = math.Rng(state = 42)
+    print(f"three rolls: {rng.in_range(1, 7)} {rng.in_range(1, 7)} {rng.in_range(1, 7)}")
 ```
 
 ```output
 3.14159
 1024
 1.0
-three rolls: 2 4 6
+three rolls: 1 4 6
 ```
 
 The import **binds the bare name**, so call sites read `math.sqrt(x)`

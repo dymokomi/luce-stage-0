@@ -1068,6 +1068,428 @@ test "structs: namespaced functions and nested structs" {
 }
 
 // ---------------------------------------------------------------------------
+// Answering more than one thing
+// ---------------------------------------------------------------------------
+//
+// `-> (A, B)`, `return a, b`, `let low, high = f()`.  **There is no
+// tuple**: the values exist only in flight, produced by a `return` and
+// consumed by a bind, with no moment in between at which a program can
+// hold them (docs/RETURNS.md).
+//
+// Underneath they are one compiler-synthesized struct, which is why
+// the oracle needed no edit for any of this either.
+
+test "returns: a shape is declared, returned, and bound" {
+    try agreeOk(
+        \\func minmax(xs: List(Int)) -> (Int, Int):
+        \\    var low = xs[0]
+        \\    var high = xs[0]
+        \\    for value in xs:
+        \\        low = min(low, value)
+        \\        high = max(high, value)
+        \\    return low, high
+        \\
+        \\func main():
+        \\    var xs = [3, 1, 4, 1, 5]
+        \\    let low, high = minmax(xs)
+        \\    assert(low == 1 and high == 5)
+        \\    # `var` governs the whole bind, and both names reassign.
+        \\    var a, b = minmax(xs)
+        \\    a = a + 1
+        \\    b = b + 1
+        \\    assert(a == 2 and b == 6)
+        \\    free(xs)
+        \\
+    );
+}
+
+test "returns: three values, mixed types, and a shape of shapes' worth of nesting" {
+    try agreeOk(
+        \\func spread(n: Int) -> (Int, Float, String):
+        \\    return n, Float(n) / 2.0, String(n)
+        \\
+        \\func main():
+        \\    let count, half, written = spread(7)
+        \\    assert(count == 7)
+        \\    assert(half == 3.5)
+        \\    assert(written == "7")
+        \\
+    );
+}
+
+test "returns: a discarded call is a statement temporary and dies with its statement" {
+    // S3/S19, unextended: under the lowering the discarded value is
+    // one struct, so the walk that already releases an object-carrying
+    // struct temporary releases the whole shape.  The leak census is
+    // what proves it.
+    try agreeOk(
+        \\func two() -> (List(Int), List(Int)):
+        \\    var head = [1]
+        \\    var tail = [2]
+        \\    return head, tail
+        \\
+        \\func main():
+        \\    two()
+        \\    two()
+        \\    assert(true)
+        \\
+    );
+}
+
+test "returns: each value moves, and the caller's two names own one each" {
+    try agreeOk(
+        \\func halves(n: Int) -> (List(Int), List(Int)):
+        \\    var head = [n]
+        \\    var tail = [n + 1]
+        \\    return head, tail
+        \\
+        \\func main():
+        \\    let head, tail = halves(7)
+        \\    assert(head[0] == 7 and tail[0] == 8)
+        \\    head.append(9)
+        \\    assert(len(head) == 2 and len(tail) == 1)
+        \\    free(head)
+        \\    free(tail)
+        \\
+    );
+}
+
+test "returns: T! composes, and try is the only composition there is" {
+    try agreeOk(
+        \\func pair(n: Int) -> (Int, Int)!:
+        \\    if n < 0:
+        \\        error("negative")
+        \\    return n, n * 2
+        \\
+        \\func doubled(n: Int) -> (Int, Int)!:
+        \\    let a, b = try pair(n)
+        \\    return b, a
+        \\
+        \\func main() -> !:
+        \\    let x, y = try pair(3)
+        \\    assert(x == 3 and y == 6)
+        \\    let p, q = try doubled(4)
+        \\    assert(p == 8 and q == 4)
+        \\    # A statement discards the values; the handler runs where
+        \\    # it raised, and supplies none.
+        \\    pair(-1) catch:
+        \\        assert(true)
+        \\
+    );
+}
+
+test "returns: T? is an ordinary element of a shape" {
+    // Absence *is* a value, so a `T?` among the elements needs no rule
+    // at all — while `-> (Int, Int)?` is refused, because there the
+    // `?` would be marking the shape (docs/RETURNS.md §2).
+    try agreeOk(
+        \\func lookup(m: Map(String, Int), key: String) -> (Int?, Bool):
+        \\    if m.has(key):
+        \\        return m[key], true
+        \\    return none, false
+        \\
+        \\func main():
+        \\    var ages = new Map(String, Int)
+        \\    ages["ada"] = 36
+        \\    let found, present = lookup(ages, "ada")
+        \\    assert(present and (found else 0) == 36)
+        \\    let missing, there = lookup(ages, "bob")
+        \\    assert(not there and missing == none)
+        \\    free(ages)
+        \\
+    );
+}
+
+test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
+    // The case docs/RETURNS.md's first rule tripped on: loop-carried is
+    // not disqualifying, and two `var`s carry a pair as well as one
+    // struct did.
+    try agreeOk(
+        \\func step(value: Int, at: Int) -> (Int, Int):
+        \\    return value + at, at + 1
+        \\
+        \\func main():
+        \\    var value, at = step(0, 0)
+        \\    while at < 5:
+        \\        let next_value, next_at = step(value, at)
+        \\        value = next_value
+        \\        at = next_at
+        \\    assert(at == 5)
+        \\    assert(value == 10)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Methods: `self`
+// ---------------------------------------------------------------------------
+//
+// `p.length()` **is** `Point.length(p)` — the same MIR call, resolved
+// in stage 4 (docs/METHODS.md).  Nothing below is a second semantics,
+// which is why the oracle needed no edit for any of it and is
+// therefore the arm that proves the sugar resolved right.
+
+test "methods: a receiver reads its struct, and the static form is the same call" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\    func length(self) -> Float:
+        \\        return sqrt(self.x * self.x + self.y * self.y)
+        \\
+        \\    func plus(self, other: Point) -> Point:
+        \\        return Point(x = self.x + other.x, y = self.y + other.y)
+        \\
+        \\    func origin() -> Point:
+        \\        return Point(x = 0.0, y = 0.0)
+        \\
+        \\func main():
+        \\    let p = Point(x = 3.0, y = 4.0)
+        \\    assert(p.length() == 5.0)
+        \\    # The long way round means exactly the same thing, which is
+        \\    # what lets a struct convert one function at a time.
+        \\    assert(Point.length(p) == 5.0)
+        \\    let q = p.plus(Point(x = 1.0, y = 1.0))
+        \\    assert(q.x == 4.0 and q.y == 5.0)
+        \\    # A namespace function beside the methods, untouched.
+        \\    assert(Point.origin().length() == 0.0)
+        \\    # And a method on a call result, which needs no place.
+        \\    assert(Point.origin().plus(p).length() == 5.0)
+        \\
+    );
+}
+
+test "methods: a receiver is a value, so the method sees a copy" {
+    try agreeOk(
+        \\struct Counter:
+        \\    count: Int
+        \\
+        \\    func bumped(self) -> Counter:
+        \\        var next = self
+        \\        next.count = next.count + 1
+        \\        return next
+        \\
+        \\func main():
+        \\    let one = Counter(count = 1)
+        \\    let two = one.bumped()
+        \\    assert(two.count == 2)
+        \\    # `self` was a copy: nothing about `one` moved.
+        \\    assert(one.count == 1)
+        \\
+    );
+}
+
+test "methods: a receiver may be a field, an element, or a chain of both" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func doubled(self) -> Int:
+        \\        return self.x * 2
+        \\
+        \\struct Box:
+        \\    corner: Point
+        \\
+        \\func main():
+        \\    let box = Box(corner = Point(x = 3))
+        \\    assert(box.corner.doubled() == 6)
+        \\    var cells = [Point(x = 5)]
+        \\    assert(cells[0].doubled() == 10)
+        \\    free(cells)
+        \\
+    );
+}
+
+test "methods: a method may take and answer objects, and ownership is the plain-call rule" {
+    try agreeOk(
+        \\struct Tally:
+        \\    total: Int
+        \\
+        \\    func over(self, values: List(Int)) -> Int:
+        \\        var sum = self.total
+        \\        for value in values:
+        \\            sum = sum + value
+        \\        return sum
+        \\
+        \\    func spread(self) -> List(Int):
+        \\        var made = [self.total, self.total]
+        \\        return made
+        \\
+        \\func main():
+        \\    let tally = Tally(total = 10)
+        \\    var numbers = [1, 2, 3]
+        \\    assert(tally.over(numbers) == 16)
+        \\    var pair = tally.spread()
+        \\    assert(len(pair) == 2 and pair[0] == 10)
+        \\    free(pair)
+        \\    free(numbers)
+        \\
+    );
+}
+
+test "methods: a method can fail, and try and catch reach it through the receiver" {
+    try agreeOk(
+        \\struct Reader:
+        \\    limit: Int
+        \\
+        \\    func check(self, n: Int) -> Int!:
+        \\        if n > self.limit:
+        \\            error("over the limit")
+        \\        return n
+        \\
+        \\func under() -> Int!:
+        \\    let reader = Reader(limit = 5)
+        \\    return try reader.check(3)
+        \\
+        \\func main():
+        \\    let reader = Reader(limit = 5)
+        \\    assert((under() catch 0) == 3)
+        \\    assert((reader.check(9) catch -1) == -1)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `var self`: the receiver is result zero
+// ---------------------------------------------------------------------------
+//
+// `p.scale(2.0)` means `p = Point.scale(p, 2.0)` — copy in, copy out,
+// with no reference anywhere.  With a declared result beside it,
+// `let roll = rng.next()` means `rng, roll = Rng.next(rng)`, and under
+// the lowering that is not a second channel at all: the method's
+// results are `[receiver] ++ declared` and they travel in one
+// synthesized layout (docs/METHODS.md, docs/RETURNS.md §5).
+
+test "var self: the receiver is written back, and nothing about it is a reference" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\    func scale(var self, factor: Float):
+        \\        self.x = self.x * factor
+        \\        self.y = self.y * factor
+        \\
+        \\    func reset(var self):
+        \\        # `self` is the one parameter a method may reassign.
+        \\        self = Point(x = 0.0, y = 0.0)
+        \\
+        \\func main():
+        \\    var p = Point(x = 1.0, y = 2.0)
+        \\    p.scale(2.0)
+        \\    assert(p.x == 2.0 and p.y == 4.0)
+        \\    # A copy taken before the call is untouched by it.
+        \\    let before = p
+        \\    p.scale(0.5)
+        \\    assert(p.x == 1.0 and before.x == 2.0)
+        \\    p.reset()
+        \\    assert(p.x == 0.0 and p.y == 0.0)
+        \\
+    );
+}
+
+test "var self: the motivating case, end to end" {
+    // The RNG of docs/RETURNS.md §5.  One call where the workaround
+    // had a one-element `List(Int)` allocated to give an `Int`
+    // reference semantics.
+    try agreeOk(
+        \\struct Rng:
+        \\    state: Int
+        \\
+        \\    func next(var self) -> Int:
+        \\        self.state = self.state * 48271 % 2147483647
+        \\        return self.state
+        \\
+        \\    func in_range(var self, low: Int, high: Int) -> Int:
+        \\        if high <= low:
+        \\            trap("in_range needs low < high")
+        \\        return low + self.next() % (high - low)
+        \\
+        \\func main():
+        \\    var rng = Rng(state = 42)
+        \\    let roll = rng.in_range(1, 7)
+        \\    assert(roll >= 1 and roll < 7)
+        \\    # The write-back is invisible at the call site, and it
+        \\    # happened: 42 * 48271 is where the state went.
+        \\    assert(rng.state == 2027382)
+        \\    let second = rng.next()
+        \\    assert(second == rng.state)
+        \\    assert(second != 2027382)
+        \\    # At statement position the declared value is discarded
+        \\    # and result zero is still stored.
+        \\    let third = rng.state
+        \\    rng.next()
+        \\    assert(rng.state != third)
+        \\
+    );
+}
+
+test "var self: a receiver may be a field or an element of a var root" {
+    try agreeOk(
+        \\struct Counter:
+        \\    n: Int
+        \\
+        \\    func bump(var self):
+        \\        self.n = self.n + 1
+        \\
+        \\func main():
+        \\    var c = Counter(n = 1)
+        \\    c.bump()
+        \\    c.bump()
+        \\    assert(c.n == 3)
+        \\
+    );
+}
+
+test "var self: a method that raises leaves its receiver as it was" {
+    // All or nothing, and for free: the write-back stands on the
+    // returning edge only, which is what `catch`'s branch already
+    // gives (docs/FAILURE.md, docs/METHODS.md).
+    try agreeOk(
+        \\struct Meter:
+        \\    reading: Int
+        \\
+        \\    func take(var self, n: Int) -> Int!:
+        \\        if n < 0:
+        \\            error("negative")
+        \\        self.reading = self.reading + n
+        \\        return self.reading
+        \\
+        \\func main():
+        \\    var meter = Meter(reading = 10)
+        \\    let ok = meter.take(5) catch -1
+        \\    assert(ok == 15 and meter.reading == 15)
+        \\    let bad = meter.take(-1) catch -1
+        \\    assert(bad == -1)
+        \\    # Nothing about the receiver moved on the errored edge.
+        \\    assert(meter.reading == 15)
+        \\
+    );
+}
+
+test "var self: the read-only static form of a plain method is still the same call" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func doubled(self) -> Int:
+        \\        return self.x * 2
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    var p = Point(x = 3)
+        \\    assert(p.doubled() == 6)
+        \\    assert(Point.doubled(p) == 6)
+        \\    p.grow()
+        \\    assert(p.x == 4)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Nested-place assignment
 // ---------------------------------------------------------------------------
 

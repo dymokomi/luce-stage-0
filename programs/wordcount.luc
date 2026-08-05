@@ -30,24 +30,26 @@ func count_words(content: String, counts: Map(String, Int)):
         else:
             at = at + 1
 
-# The most frequent remaining word (first seen wins ties).
-func heaviest(counts: Map(String, Int)) -> String:
+# The most frequent remaining word, and how often (first seen wins
+# ties).  It computed both and could answer only one, so every caller
+# did a second hash lookup for the count this already had.
+func heaviest(counts: Map(String, Int)) -> (String, Int):
     var best = ""
     var best_count = 0
     for word in counts:
         if counts[word] > best_count:
             best = word
             best_count = counts[word]
-    return best
+    return best, best_count
 
-func main() -> !:
-    if arg_count() == 0:
+func main(args: List(String)) -> !:
+    if len(args) == 0:
         print("usage: wordcount FILE [TOP_N]")
         return
-    let path = arg(0)
+    let path = args[0]
     var top = 5
-    if arg_count() > 1:
-        top = parse_int(arg(1)) else top
+    if len(args) > 1:
+        top = parse_int(args[1]) else top
 
     # One read, and its answer is the whole story.  The exists-then-
     # read this used to write had a window between the two calls that
@@ -59,10 +61,10 @@ func main() -> !:
 
     var shown = 0
     while shown < top and len(counts) > 0:
-        let word = heaviest(counts)
+        let word, count = heaviest(counts)
         var line = new Builder()
         line.append("  ")
-        line.append(String(counts[word]))
+        line.append(String(count))
         line.append("  ")
         line.append(word)
         print(line.build())

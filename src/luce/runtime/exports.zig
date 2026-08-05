@@ -348,6 +348,29 @@ export fn luce_rt_names_list(
     return survived;
 }
 
+/// `main`'s `args`: the command line as the `List(String)` the entry's
+/// parameter receives (OWNERSHIP.md S44).
+///
+/// The two vtable slots are handed straight over rather than read out
+/// of a `LuceHost` here, because effects travel in that table and
+/// semantics do not: this library never learns the table's shape, and
+/// building a list out of borrowed text is the semantic.  A null
+/// `count` or `get` yields an **empty** list — a program compiled
+/// without the host gate reads no arguments and touches nothing, which
+/// is strictly better than the trap `arg(0)` used to give it.
+export fn luce_rt_args_list(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    count: ?*const fn (context: ?*anyopaque) callconv(.c) i64,
+    get: ?containers.ArgumentFn,
+    out: *Value,
+) callconv(.c) i32 {
+    const total: i64 = if (count) |callback| callback(context) else 0;
+    out.* = containers.listOfArguments(runtime, total, context, get) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
 /// Remember the text payload of the key just read, for `key_text`.
 /// One owned slot: the previous payload goes back as this one arrives.
 export fn luce_rt_set_key_text(

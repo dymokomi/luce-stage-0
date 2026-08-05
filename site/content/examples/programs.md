@@ -71,14 +71,14 @@ loom.
 ```
 
 ```output
-12 rolls from seed 7: 3 1 3 2 2 4 1 2 3 6 3 1
-total 31, mean 2.58
-1: ###
-2: ###
-3: ####
+12 rolls from seed 7: 2 1 3 2 2 5 3 4 5 1 2 3
+total 33, mean 2.75
+1: ##
+2: ####
+3: ###
 4: #
-5: 
-6: #
+5: ##
+6: 
 rolls written to dice_rolls.txt
 ```
 

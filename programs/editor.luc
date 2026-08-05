@@ -178,7 +178,7 @@ struct Words:
             return true
         if word == "file_read" or word == "file_write" or word == "file_exists":
             return true
-        if word == "arg" or word == "arg_count" or word == "key_read" or word == "key_text":
+        if word == "key_read" or word == "key_text" or word == "dir_list":
             return true
         if word == "term_write" or word == "term_move" or word == "term_style":
             return true
@@ -196,6 +196,19 @@ struct Words:
             return 3
         return 0
 
+# The editor's whole state, and the operations on it.
+#
+# `Handle` used to stand at the bottom of this file with four
+# functions that all took `state: State`, opened with `var next =
+# state` and ended with `return next`; every call site wrote `state =
+# Handle.key(state, …)`.  Those were the two halves of a write-back
+# spelled by hand at seven sites (docs/METHODS.md), and `var self`
+# writes them: `state.key(…)` means `state = State.key(state, …)`.
+#
+# `State` carries only String, Int and Bool — all values — which is
+# what `var self` requires and where S17 and S28 had already put this
+# code: had it carried a `List`, `return next` would already have been
+# refused.
 struct State:
     path: String
     content: String
@@ -205,6 +218,145 @@ struct State:
     message: String
     quit_pending: Bool
     quit: Bool
+
+    func vertical(var self, target_line: Int):
+        let total = Text.count_lines(self.content)
+        let wanted = Text.column_of(self.content, self.cursor)
+        let landing = clamp(target_line, 0, total - 1)
+        let start = Text.line_at(self.content, landing)
+        self.cursor = Text.at_column(self.content, start, wanted)
+
+    # Early return on failure is the shape errors are for: the handler
+    # says what went wrong and leaves, and the success lines below it
+    # run only where the write landed (docs/FAILURE.md).
+    func save(var self):
+        file_write(self.path, self.content) catch:
+            self.message = "cannot write " + self.path
+            return
+        self.dirty = false
+        self.message = "saved " + self.path
+
+    func key(var self, name: String, inserted: String, visible: Int):
+        let line = Text.line_of(self.content, self.cursor)
+        if name != "ctrl_q":
+            self.quit_pending = false
+        if len(self.message) > 0 and name != "ctrl_q" and name != "ctrl_s":
+            self.message = ""
+
+        if name == "left":
+            self.cursor = Text.previous_boundary(self.content, self.cursor)
+        elif name == "right":
+            self.cursor = Text.next_boundary(self.content, self.cursor)
+        elif name == "up":
+            self.vertical(line - 1)
+        elif name == "down":
+            self.vertical(line + 1)
+        elif name == "page_up":
+            self.vertical(line - visible)
+        elif name == "page_down":
+            self.vertical(line + visible)
+        elif name == "home":
+            self.cursor = Text.line_start(self.content, self.cursor)
+        elif name == "end":
+            self.cursor = Text.line_end(self.content, self.cursor)
+        elif name == "backspace":
+            if self.cursor > 0:
+                # **The line docs/METHODS.md named.**  This measures
+                # against the content as it was *before* the erase, and
+                # the copy-and-return shape gave that snapshot away for
+                # free: `state` was still the old one while `next` was
+                # the new.  Under `var self` there is one name, so the
+                # snapshot has to be taken out loud — and a conversion
+                # that missed it would move the cursor by the wrong
+                # number of bytes with nothing to catch it, which is
+                # why the editor got a behavioural test first.
+                let before = self.content
+                self.content = Editing.erase_before(self.content, self.cursor)
+                self.cursor = Text.previous_boundary(before, self.cursor)
+                self.dirty = true
+        elif name == "delete":
+            if self.cursor < len(self.content):
+                self.content = Editing.erase_at(self.content, self.cursor)
+                self.dirty = true
+        elif name == "enter":
+            self.content = Editing.splice(self.content, self.cursor, "\n")
+            self.cursor = self.cursor + 1
+            self.dirty = true
+        elif name == "tab":
+            self.content = Editing.splice(self.content, self.cursor, "    ")
+            self.cursor = self.cursor + 4
+            self.dirty = true
+        elif name == "text":
+            self.content = Editing.splice(self.content, self.cursor, inserted)
+            self.cursor = self.cursor + len(inserted)
+            self.dirty = true
+        elif name == "ctrl_s":
+            self.save()
+        elif name == "ctrl_q":
+            if self.dirty and not self.quit_pending:
+                self.quit_pending = true
+                self.message = "unsaved changes; Ctrl-Q again to discard"
+            else:
+                self.quit = true
+
+    func adjust(var self, visible: Int):
+        let cursor_line = Text.line_of(self.content, self.cursor)
+        if cursor_line < self.scroll:
+            self.scroll = cursor_line
+        elif cursor_line >= self.scroll + visible:
+            self.scroll = cursor_line - visible + 1
+
+    # The two `Draw` functions that took a `State`: they read it and
+    # answer nothing, so they take a plain `self` and write nothing
+    # back.  Everything else in `Draw` operates on text and columns
+    # rather than on the editor, and stays the namespace function it
+    # is — which is the whole rule, said once.
+    func status(self, rows: Int, cols: Int, line: Int, column: Int):
+        term_move(rows - 1, 0)
+        var flag = ""
+        if self.dirty:
+            flag = " +"
+        var left = " " + self.path + flag + "  " + String(line + 1) + ":" + String(column + 1)
+        if len(self.message) > 0:
+            left = left + "  — " + self.message
+        let hint = "Ctrl-S save  Ctrl-Q quit "
+        var pad = cols - Text.width(left) - Text.width(hint)
+        while pad > 0:
+            left = left + " "
+            pad = pad - 1
+        let bar = left + hint
+        term_style(theme.status_fg, theme.status_bg, false)
+        let ignored = Draw.emit(bar, 0, len(bar), cols)
+
+    func frame(self):
+        let rows = max(term_rows(), 2)
+        let cols = max(term_cols(), 10)
+        let visible = rows - 1
+        let side = 5
+        let text_width = max(cols - side, 1)
+        let cursor_line = Text.line_of(self.content, self.cursor)
+        let cursor_column = Text.column_of(self.content, self.cursor)
+        let total = Text.count_lines(self.content)
+
+        term_clear()
+        var at = Text.line_at(self.content, self.scroll)
+        for row in range(0, visible):
+            let line_index = self.scroll + row
+            term_move(row, 0)
+            if line_index < total:
+                Draw.gutter(line_index + 1, line_index == cursor_line)
+                let finish = Text.line_end(self.content, at)
+                Draw.line(self.content, at, finish, text_width)
+                at = finish + 1
+            else:
+                term_style(theme.gutter, -1, false)
+                term_write("   ~")
+        self.status(rows, cols, cursor_line, cursor_column)
+        term_move(
+            clamp(cursor_line - self.scroll, 0, visible - 1),
+            clamp(side + cursor_column, 0, cols - 1),
+        )
+        term_flush()
 
 struct Draw:
     # Write [from, to) clipped to `remaining` display columns; returns
@@ -281,144 +433,11 @@ struct Draw:
             term_style(theme.gutter, -1, false)
         term_write(Fmt.pad_left(String(number), 4) + " ")
 
-    func status(state: State, rows: Int, cols: Int, line: Int, column: Int):
-        term_move(rows - 1, 0)
-        var flag = ""
-        if state.dirty:
-            flag = " +"
-        var left = " " + state.path + flag + "  " + String(line + 1) + ":" + String(column + 1)
-        if len(state.message) > 0:
-            left = left + "  — " + state.message
-        let hint = "Ctrl-S save  Ctrl-Q quit "
-        var pad = cols - Text.width(left) - Text.width(hint)
-        while pad > 0:
-            left = left + " "
-            pad = pad - 1
-        let bar = left + hint
-        term_style(theme.status_fg, theme.status_bg, false)
-        let ignored = Draw.emit(bar, 0, len(bar), cols)
-
-    func frame(state: State):
-        let rows = max(term_rows(), 2)
-        let cols = max(term_cols(), 10)
-        let visible = rows - 1
-        let side = 5
-        let text_width = max(cols - side, 1)
-        let cursor_line = Text.line_of(state.content, state.cursor)
-        let cursor_column = Text.column_of(state.content, state.cursor)
-        let total = Text.count_lines(state.content)
-
-        term_clear()
-        var at = Text.line_at(state.content, state.scroll)
-        for row in range(0, visible):
-            let line_index = state.scroll + row
-            term_move(row, 0)
-            if line_index < total:
-                Draw.gutter(line_index + 1, line_index == cursor_line)
-                let finish = Text.line_end(state.content, at)
-                Draw.line(state.content, at, finish, text_width)
-                at = finish + 1
-            else:
-                term_style(theme.gutter, -1, false)
-                term_write("   ~")
-        Draw.status(state, rows, cols, cursor_line, cursor_column)
-        term_move(
-            clamp(cursor_line - state.scroll, 0, visible - 1),
-            clamp(side + cursor_column, 0, cols - 1),
-        )
-        term_flush()
-
-struct Handle:
-    func vertical(state: State, target_line: Int) -> State:
-        var moved = state
-        let total = Text.count_lines(moved.content)
-        let wanted = Text.column_of(moved.content, moved.cursor)
-        let landing = clamp(target_line, 0, total - 1)
-        let start = Text.line_at(moved.content, landing)
-        moved.cursor = Text.at_column(moved.content, start, wanted)
-        return moved
-
-    # Early return on failure is the shape errors are for: the handler
-    # says what went wrong and leaves, and the success lines below it
-    # run only where the write landed (docs/FAILURE.md).
-    func save(state: State) -> State:
-        var next = state
-        file_write(next.path, next.content) catch:
-            next.message = "cannot write " + next.path
-            return next
-        next.dirty = false
-        next.message = "saved " + next.path
-        return next
-
-    func key(state: State, name: String, inserted: String, visible: Int) -> State:
-        var next = state
-        let line = Text.line_of(next.content, next.cursor)
-        if name != "ctrl_q":
-            next.quit_pending = false
-        if len(next.message) > 0 and name != "ctrl_q" and name != "ctrl_s":
-            next.message = ""
-
-        if name == "left":
-            next.cursor = Text.previous_boundary(next.content, next.cursor)
-        elif name == "right":
-            next.cursor = Text.next_boundary(next.content, next.cursor)
-        elif name == "up":
-            next = Handle.vertical(next, line - 1)
-        elif name == "down":
-            next = Handle.vertical(next, line + 1)
-        elif name == "page_up":
-            next = Handle.vertical(next, line - visible)
-        elif name == "page_down":
-            next = Handle.vertical(next, line + visible)
-        elif name == "home":
-            next.cursor = Text.line_start(next.content, next.cursor)
-        elif name == "end":
-            next.cursor = Text.line_end(next.content, next.cursor)
-        elif name == "backspace":
-            if next.cursor > 0:
-                next.content = Editing.erase_before(next.content, next.cursor)
-                next.cursor = Text.previous_boundary(state.content, next.cursor)
-                next.dirty = true
-        elif name == "delete":
-            if next.cursor < len(next.content):
-                next.content = Editing.erase_at(next.content, next.cursor)
-                next.dirty = true
-        elif name == "enter":
-            next.content = Editing.splice(next.content, next.cursor, "\n")
-            next.cursor = next.cursor + 1
-            next.dirty = true
-        elif name == "tab":
-            next.content = Editing.splice(next.content, next.cursor, "    ")
-            next.cursor = next.cursor + 4
-            next.dirty = true
-        elif name == "text":
-            next.content = Editing.splice(next.content, next.cursor, inserted)
-            next.cursor = next.cursor + len(inserted)
-            next.dirty = true
-        elif name == "ctrl_s":
-            next = Handle.save(next)
-        elif name == "ctrl_q":
-            if next.dirty and not next.quit_pending:
-                next.quit_pending = true
-                next.message = "unsaved changes; Ctrl-Q again to discard"
-            else:
-                next.quit = true
-        return next
-
-    func adjust(state: State, visible: Int) -> State:
-        var next = state
-        let cursor_line = Text.line_of(next.content, next.cursor)
-        if cursor_line < next.scroll:
-            next.scroll = cursor_line
-        elif cursor_line >= next.scroll + visible:
-            next.scroll = cursor_line - visible + 1
-        return next
-
-func main():
-    if arg_count() != 1:
+func main(args: List(String)):
+    if len(args) != 1:
         print("usage: editor FILE")
         return
-    let path = arg(0)
+    let path = args[0]
     # One read, and what it answers decides the greeting.  The
     # exists-then-read this used to write had a window between the two
     # calls that nothing could close, and it could not tell "not
@@ -439,8 +458,8 @@ func main():
     )
     while not state.quit:
         let visible = max(term_rows() - 1, 1)
-        state = Handle.adjust(state, visible)
-        Draw.frame(state)
+        state.adjust(visible)
+        state.frame()
         # `key_read` answers `String?`: `none` is the keyboard running
         # dry — a pipe that ended, a terminal that closed — and there
         # is no one left to ask what to do about unsaved work, so the
@@ -448,4 +467,4 @@ func main():
         let name = key_read()
         if name == none:
             break
-        state = Handle.key(state, name, key_text(), visible)
+        state.key(name, key_text(), visible)

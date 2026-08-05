@@ -266,6 +266,37 @@ pub const Machine = struct {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
 
+    /// The `List(String)` `main`'s parameter receives (OWNERSHIP.md
+    /// S44).
+    ///
+    /// A host with no arguments to offer — including no host at all —
+    /// supplies an **empty** list rather than a trap: `args` is handed
+    /// to the program, not called by it, so the gate that covers the
+    /// host builtins does not cover this and the entry cannot fail
+    /// before `main` starts.  The list itself is `libluce_rt`'s, the
+    /// same construction a compiled artifact reaches through
+    /// `luce_rt_args_list`.
+    fn commandLine(self: *Machine) EvalError!RuntimeValue {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.arena);
+        if (self.host) |host| {
+            if (host.arg_count) |count| {
+                if (host.arg) |get| {
+                    const total = count(host.context);
+                    var index: u32 = 0;
+                    while (index < total) : (index += 1) {
+                        // A host that says no about an index it counted
+                        // itself has nothing left to say about the ones
+                        // after it.
+                        const name = (try get(host.context, self.arena, index)) orelse break;
+                        try names.append(self.arena, name);
+                    }
+                }
+            }
+        }
+        return containers.listOfText(&self.runtime, names.items);
+    }
+
     fn terminal(self: *Machine) EvalError!interpreter.Terminal {
         const host = try self.service();
         return host.terminal orelse return self.runtime.fail(.host_unavailable);
@@ -321,7 +352,19 @@ pub const Machine = struct {
     // -- the dispatch loop ----------------------------------------------
 
     pub fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
-        if (try self.pushFrame(entry, &.{}, 0)) |failed| return failed;
+        // `func main(args: List(String)):` receives the command line;
+        // `func main():` receives nothing, and those are the only two
+        // shapes stage 4 lets through (docs/METHODS.md).  The list is
+        // built the same way the compiled arm builds it — `libluce_rt`
+        // owns the semantic and each engine hands it what its own host
+        // spells the arguments in (OWNERSHIP.md S44).
+        var received: [1]RuntimeValue = .{.none};
+        var arguments: []const RuntimeValue = &.{};
+        if (self.program.functions[entry].parameter_count == 1) {
+            received[0] = self.commandLine() catch |mistake| return self.caught(mistake);
+            arguments = &received;
+        }
+        if (try self.pushFrame(entry, arguments, 0)) |failed| return failed;
 
         dispatch: while (true) {
             // Re-derived every time round the dispatch loop: pushing a
@@ -918,22 +961,6 @@ pub const Machine = struct {
                 const host = try self.service();
                 const callback = host.file_exists orelse return self.runtime.fail(.host_unavailable);
                 return .ofBoolean(callback(host.context, registers[arguments[0]].asString()));
-            },
-            .arg_count => {
-                const host = try self.service();
-                const callback = host.arg_count orelse return self.runtime.fail(.host_unavailable);
-                return .ofInt(callback(host.context));
-            },
-            .arg_get => {
-                const host = try self.service();
-                const callback = host.arg orelse return self.runtime.fail(.host_unavailable);
-                const index = registers[arguments[0]].asInt();
-                if (index < 0 or index > std.math.maxInt(u32)) {
-                    return self.runtime.fail(.argument_bounds);
-                }
-                const value = (try callback(host.context, self.arena, @intCast(index))) orelse
-                    return self.runtime.fail(.argument_bounds);
-                return self.runtime.ownValue(.ofString(value));
             },
             .term_rows => {
                 const screen = try self.terminal();

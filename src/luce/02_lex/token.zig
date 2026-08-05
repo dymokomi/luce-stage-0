@@ -53,6 +53,14 @@ pub const Kind = enum {
     /// `try CALL` — propagate what a fallible call raised
     /// (docs/FAILURE.md).
     keyword_try,
+    /// The receiver of a method: the first parameter of a function
+    /// declared inside a struct, whose type is the enclosing struct
+    /// and is never written (docs/METHODS.md).  A keyword rather than
+    /// a name, so nothing can shadow it and no declaration can call
+    /// something else `self` — the word means one thing wherever it
+    /// appears, which is what makes `p.length()` readable as a call on
+    /// `p` and nothing else.
+    keyword_self,
     /// `a catch b`, and `EXPR catch:` opening a handler block.  A
     /// keyword rather than a reuse of `else`, because the two are
     /// different acts: `else` says "no value here, use this instead",
@@ -149,6 +157,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "none", .kind = .keyword_none },
     .{ .word = "try", .kind = .keyword_try },
     .{ .word = "catch", .kind = .keyword_catch },
+    .{ .word = "self", .kind = .keyword_self },
 };
 
 /// The same table, arranged for lookup.  `keywords` stays the

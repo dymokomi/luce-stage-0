@@ -17,8 +17,8 @@ as host services, gated at compile time.
 ## What you have not
 
 There are no first-class functions or closures, no generics for user
-code, no enums or tagged unions or `match`, no user-defined methods or
-receivers, no operator overloading, no exceptions, no shadowing, no
+code, no enums or tagged unions or `match`, no tuples, no
+operator overloading, no exceptions, no shadowing, no
 mutable file-scope `var`, and no `defer`. Some of those are permanent
 decisions with reasons written down; some are simply not built. The
 [status page](/status/) says which is which, and it does not round up.

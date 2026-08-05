@@ -25,9 +25,20 @@
 # conditions no caller could handle and every one of which ended the
 # program with "trap:" in front of a message about the user's typing.
 
-struct Step:
-    value: Float
-    at: Int
+# `struct Step { value: Float, at: Int }` used to stand here, with no
+# methods, no invariant and no meaning outside a signature: a scanner
+# hands back *what it read* and *where it stopped*.  It was constructed
+# at eight sites and taken apart by twenty-five field reads over
+# fourteen lines, binding seven names that existed only to be
+# dismantled on the next.
+#
+# It qualified as a return shape on the one rule that decides it —
+# **it was never an input**.  No function here took a `Step`;
+# `Parse.term(text: String, at: Int)` takes the halves separately, and
+# every read was `left.value` or `right.at`, never a whole one handed
+# on.  Being held across a loop is not disqualifying: `expression`'s
+# accumulator is two `var`s now and the body is shorter, because only
+# the value differed between the arms (docs/RETURNS.md §6).
 
 struct Scan:
     func skip_spaces(text: String, at: Int) -> Int:
@@ -36,29 +47,30 @@ struct Scan:
             here = here + 1
         return here
 
-    func number(text: String, at: Int) -> Step!:
+    func number(text: String, at: Int) -> (Float, Int)!:
         var stop = at
         while stop < len(text) and text.byte_at(stop) >= 48 and text.byte_at(stop) <= 57:
             stop = stop + 1
         if stop == at:
             error("expected a number at position " + String(at))
         let digits = text[at:stop]
-        return Step(value = parse_int(digits) else error("not a number: " + digits), at = stop)
+        return parse_int(digits) else error("not a number: " + digits), stop
 
 struct Parse:
     # expression = term (("+" | "-") term)*
-    func expression(text: String, at: Int) -> Step!:
-        var left = try Parse.term(text, at)
-        var here = Scan.skip_spaces(text, left.at)
+    func expression(text: String, at: Int) -> (Float, Int)!:
+        var value, stopped = try Parse.term(text, at)
+        var here = Scan.skip_spaces(text, stopped)
         while here < len(text) and (text.byte_at(here) == 43 or text.byte_at(here) == 45):
             let operator = text.byte_at(here)
-            let right = try Parse.term(text, here + 1)
+            let right_value, right_at = try Parse.term(text, here + 1)
             if operator == 43:
-                left = Step(value = left.value + right.value, at = right.at)
+                value = value + right_value
             else:
-                left = Step(value = left.value - right.value, at = right.at)
-            here = Scan.skip_spaces(text, left.at)
-        return left
+                value = value - right_value
+            stopped = right_at
+            here = Scan.skip_spaces(text, stopped)
+        return value, stopped
 
     # term = factor (("*" | "/" | "%") factor)*
     #
@@ -68,43 +80,48 @@ struct Parse:
     # trap, because these are Floats — which is the right answer for a
     # calculator: a user who divides by zero has asked a question, not
     # broken the program.
-    func term(text: String, at: Int) -> Step!:
-        var left = try Parse.factor(text, at)
-        var here = Scan.skip_spaces(text, left.at)
+    func term(text: String, at: Int) -> (Float, Int)!:
+        var value, stopped = try Parse.factor(text, at)
+        var here = Scan.skip_spaces(text, stopped)
         while here < len(text) and (text.byte_at(here) == 42 or text.byte_at(here) == 47 or text.byte_at(here) == 37):
             let operator = text.byte_at(here)
-            let right = try Parse.factor(text, here + 1)
+            let right_value, right_at = try Parse.factor(text, here + 1)
             if operator == 42:
-                left = Step(value = left.value * right.value, at = right.at)
+                value = value * right_value
             elif operator == 47:
-                left = Step(value = left.value / right.value, at = right.at)
+                value = value / right_value
             else:
-                left = Step(value = left.value % right.value, at = right.at)
-            here = Scan.skip_spaces(text, left.at)
-        return left
+                value = value % right_value
+            stopped = right_at
+            here = Scan.skip_spaces(text, stopped)
+        return value, stopped
 
     # factor = number | "(" expression ")" | "-" factor
-    func factor(text: String, at: Int) -> Step!:
+    func factor(text: String, at: Int) -> (Float, Int)!:
         let here = Scan.skip_spaces(text, at)
         if here < len(text) and text.byte_at(here) == 45:
-            let inner = try Parse.factor(text, here + 1)
-            return Step(value = 0.0 - inner.value, at = inner.at)
+            let inner_value, inner_at = try Parse.factor(text, here + 1)
+            return 0.0 - inner_value, inner_at
         if here < len(text) and text.byte_at(here) == 40:
-            let inner = try Parse.expression(text, here + 1)
-            let close = Scan.skip_spaces(text, inner.at)
+            let inner_value, inner_at = try Parse.expression(text, here + 1)
+            let close = Scan.skip_spaces(text, inner_at)
             if close >= len(text) or text.byte_at(close) != 41:
                 error("expected ) at position " + String(close))
-            return Step(value = inner.value, at = close + 1)
-        return try Scan.number(text, here)
+            return inner_value, close + 1
+        # The pass-through `return Scan.number(text, here)` is refused
+        # on purpose, and this is what it costs: one line
+        # (docs/RETURNS.md §1).
+        let scanned, stopped = try Scan.number(text, here)
+        return scanned, stopped
 
 # Evaluate one line and print what it came to.  Fallible, so every
 # `error(...)` four frames down arrives here whole.
 func evaluate(text: String) -> !:
-    let result = try Parse.expression(text, 0)
-    let rest = Scan.skip_spaces(text, result.at)
+    let value, stopped = try Parse.expression(text, 0)
+    let rest = Scan.skip_spaces(text, stopped)
     if rest != len(text):
         error("unexpected character at position " + String(rest))
-    print(text + " = " + String(result.value))
+    print(text + " = " + String(value))
 
 # The interactive loop.  `read_line` answers `String?`, so end of input
 # — a pipe running dry, Ctrl-D at a terminal — is `none` and ends the
@@ -128,8 +145,8 @@ func repl():
             evaluate(typed) catch:
                 print_error("cannot compute: " + typed)
 
-func main() -> !:
-    if arg_count() == 0:
+func main(args: List(String)) -> !:
+    if len(args) == 0:
         repl()
         return
-    try evaluate(arg(0))
+    try evaluate(args[0])

@@ -538,6 +538,83 @@ either, and the reason is [S4](#s4): the unwinder was already static,
 already emitted at compile time, and already knew the one thing an
 error path needs to know.
 
+### S44 — the entry's arguments are handed in, and `main`'s scope owns them {#s44}
+
+```luce run args=fig date
+func main(args: List(String)):
+    for name in args:
+        print(name)
+    # scope ends: the list is freed here, like any owned binding
+```
+
+```output
+fig
+date
+```
+
+`main`'s `args` is an owned binding of the kind [S15](#s15) describes —
+a parameter that arrived owning its object — and the caller that gave
+it is the runtime rather than a call site, which is why the signature
+carries no `give` and why [S13](#s13) has no second end to echo at.
+Everything else follows unchanged: `args` may be read, iterated,
+indexed, sliced, given away or freed like any owned name, and whatever
+it still owns when `main` returns is freed by `main`'s scope
+([S1](#s1), [S33](#s33)). A host that supplies no arguments supplies an
+**empty** list, never a null one.
+
+`func main(args: give List(String)):` is refused. The verb would be
+noise on a signature with nobody to say it back.
+
+### S45 — a multiple return moves each value, and no object twice {#s45}
+
+```luce run
+func halves(n: Int) -> (List(Int), List(Int)):
+    var head = [n]
+    var tail = [n + 1]
+    return head, tail        # both move; the caller's two names own them
+
+func main():
+    let head, tail = halves(7)
+    print(f"{head[0]} {tail[0]}")
+    free(head)
+    free(tail)
+```
+
+```output
+7 8
+```
+
+`return a, b` is [S16](#s16) said once per value and nothing more. Each
+value moves independently, a borrowed parameter or an alias in any
+position is [S17](#s17) exactly, and a destructuring bind creates one
+owning binding per name ([S1](#s1)).
+
+The one fact the single-value channel never had to state is that **the
+values must be distinct objects**: two moves of one handle would leave
+two bindings owning it and free it twice, which [S23](#s23) forbids and
+which only a comma can now write.
+
+```luce fail
+func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+    return xs, xs
+
+func main():
+    var mine = [1]
+    let a, b = bad(give mine)
+    free(a)
+    free(b)
+```
+
+```output
+luce: compile failed
+main.luc:2:16: xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45] [luce.sema.own]
+        return xs, xs
+                   ^~
+```
+
+A call whose values nobody binds is a statement temporary per
+[S3](#s3)/[S19](#s19), released whole at the end of its statement.
+
 ---
 
 ## Deliberately excluded

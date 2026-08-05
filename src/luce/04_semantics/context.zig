@@ -140,18 +140,18 @@ pub fn writeMissingFields(
 /// not here — `sort` and `has` are resolved by receiver type, so a
 /// function called `sort` collides with nothing.
 pub const reserved_names = [_][]const u8{
-    "range",      "Int",         "Float",       "Bool",        "String",
-    "List",       "Map",         "Array",       "Builder",     "None",
-    "abs",        "min",         "max",         "clamp",       "sqrt",
-    "floor",      "ceil",        "trunc",       "len",         "byte_at",
-    "assert",     "trap",        "parse_int",   "parse_float", "chr",
-    "ord",        "append",      "pop",         "insert",      "remove",
-    "has",        "dim",         "free",        "print",       "file_read",
-    "file_write", "file_exists", "arg",         "arg_count",   "key_read",
-    "key_text",   "error",       "read_line",   "print_error", "clock_ms",
-    "sleep_ms",   "env",         "file_append", "file_delete", "file_rename",
-    "dir_list",   "term_rows",   "term_cols",   "term_clear",  "term_move",
-    "term_style", "term_write",  "term_flush",
+    "range",       "Int",         "Float",       "Bool",        "String",
+    "List",        "Map",         "Array",       "Builder",     "None",
+    "abs",         "min",         "max",         "clamp",       "sqrt",
+    "floor",       "ceil",        "trunc",       "len",         "byte_at",
+    "assert",      "trap",        "parse_int",   "parse_float", "chr",
+    "ord",         "append",      "pop",         "insert",      "remove",
+    "has",         "dim",         "free",        "print",       "file_read",
+    "file_write",  "file_exists", "key_read",    "key_text",    "error",
+    "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
+    "file_append", "file_delete", "file_rename", "dir_list",    "term_rows",
+    "term_cols",   "term_clear",  "term_move",   "term_style",  "term_write",
+    "term_flush",
 };
 
 pub fn isReserved(name: []const u8) bool {
@@ -196,6 +196,37 @@ pub const FunctionDeclInfo = struct {
     module: usize,
     parameter_types: []Type,
     parameter_modes: []ast.ParameterMode,
+    /// Whether this function's first parameter is `self`, and whether
+    /// it writes it back (docs/METHODS.md).  `.not` for every one of
+    /// the namespace functions a struct has always been able to hold —
+    /// which is the rule that keeps them all compiling untouched.
+    ///
+    /// A method is a plain call with the receiver first, and the
+    /// receiver's *type* is `parameter_types[0]` like any other
+    /// parameter's; this field is what says the call site may spell it
+    /// `x.f(…)`.
+    receiver: ast.Receiver = .not,
+    /// The struct this function was declared inside, or null at top
+    /// level.  Set for namespace functions too — `self` outside a
+    /// struct is refused by asking this, not by asking the receiver.
+    enclosing: ?u32 = null,
+    /// What the function answers, in order: empty for a function that
+    /// answers nothing, one entry for `-> T`, two or more for a return
+    /// shape (docs/RETURNS.md).  This is the arity a call site sees.
+    results: []Type = &.{},
+    /// What actually travels in the value channel, in order: the
+    /// receiver first when the method writes it back, then `results`.
+    ///
+    /// **A `var self` method's receiver is result zero** — there is no
+    /// receiver mechanism separate from the return mechanism, which is
+    /// the sense in which `self` was always waiting for multiple
+    /// returns (docs/RETURNS.md §5).  For everything else this is
+    /// `results` exactly.
+    channel: []Type = &.{},
+    /// The one type that travels in the value channel.  For a return
+    /// shape it is the compiler-synthesized struct the values ride in
+    /// (`(Int, Int)`), which is why nothing below stage 4 grows a case
+    /// for multiple results: there is one value, as there always was.
     return_type: Type,
     /// Written `-> T!` or `-> !`: every call site must say `try` or
     /// `catch`, which is what makes a swallowed failure unwritable

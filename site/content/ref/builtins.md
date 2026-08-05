@@ -78,13 +78,15 @@ End of input is absence, not failure — nothing went wrong, there is
 just nothing more — so `read_line` answers `T?` and
 `read_line("> ") else ""` is the whole handling.
 
-### Arguments and environment
+### The environment
 
 | Signature | Notes |
 |---|---|
-| `arg(index: Int) -> String` | traps `argument_bounds` outside the range |
-| `arg_count() -> Int` | |
 | `env(name: String) -> String?` | one environment variable; `none` when it is unset. There is no setter and no way to read the whole environment |
+
+**The command line is not a builtin.** It is `main`'s parameter — write
+`func main(args: List(String)):` and read `args` like any other list
+([S44](../ownership/#s44)).
 
 ### The clock
 

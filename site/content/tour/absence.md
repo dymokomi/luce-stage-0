@@ -88,8 +88,8 @@ because `or` is broken there by truthiness, and Luce has neither
 truthiness nor a ternary.
 
 ```luce run args=hello
-func main():
-    let count = parse_int(arg(0)) else 10
+func main(args: List(String)):
+    let count = parse_int(args[0]) else 10
     let pair = parse_int("x") else parse_int("41") else 0
     print(f"count {count}, pair {pair}")
 ```

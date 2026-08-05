@@ -43,6 +43,9 @@ pub const modules = @import("specs/modules_spec.zig");
 pub const optimizer = @import("specs/optimize_spec.zig");
 /// A serialized module read back from bytes is the same program.
 pub const module_format = @import("specs/format_spec.zig");
+/// The flagship program, driven by a scripted keyboard: the only
+/// thing that says what `programs/editor.luc` *does*.
+pub const editor = @import("specs/editor_spec.zig");
 
 test {
     _ = agree;
@@ -54,6 +57,7 @@ test {
     _ = modules;
     _ = optimizer;
     _ = module_format;
+    _ = editor;
 
     // The backend's end-to-end proof: source to machine code to a
     // loaded shared library.  It stays beside the backend it proves

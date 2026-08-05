@@ -572,10 +572,483 @@ test "luce.lex.indent: an over-nested file is one message, not a hundred and fif
 }
 
 // ---------------------------------------------------------------------------
+// Return shapes: there is no tuple
+// ---------------------------------------------------------------------------
+//
+// Every clause of the rule is a diagnostic (docs/RETURNS.md §1): a
+// return shape is written in exactly one place, it cannot annotate
+// anything, it cannot nest, it cannot take a `?`, and there is no
+// expression that produces one.
+
+test "luce.parse.type: the four shapes a return list is not" {
+    try expectSaying(
+        \\func f() -> ():
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "a function that answers nothing writes no arrow");
+
+    try expectSaying(
+        \\func f() -> (Int):
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "one value needs no parentheses: write -> Int");
+
+    try expectSaying(
+        \\func f() -> ((Int, Int), Int):
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "return shapes do not nest: there are no tuples");
+
+    try expectSaying(
+        \\func f() -> (Int, Int)?:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.type", "'?' marks a value that may be absent, and a return shape is not a value");
+}
+
+test "luce.parse.type: a return shape is not a type, in any position" {
+    // A binding, a parameter, a struct field, a container element.
+    // The sentence to keep is the second half.
+    for ([_][]const u8{
+        "func main():\n    let p: (Int, Int) = 1\n",
+        "func f(p: (Int, Int)):\n    return\n\nfunc main():\n    return\n",
+        "struct Pair:\n    both: (Int, Int)\n\nfunc main():\n    return\n",
+        "func main():\n    var xs: List((Int, Int)) = []\n",
+    }) |source| {
+        try expectSaying(
+            source,
+            "luce.parse.type",
+            "a return shape is not a type: a pair that travels together is a struct",
+        );
+    }
+}
+
+test "luce.parse.expression: there are still no tuples, and the parser already said so" {
+    try expectSaying(
+        "func main():\n    let p = (1, 2)\n",
+        "luce.parse.expression",
+        "there are no tuples: group values in a list '[a, b]' or a struct",
+    );
+}
+
+test "luce.parse.assign: a destructuring bind declares its names, and one keyword governs it" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var low = 0
+        \\    var high = 0
+        \\    low, high = minmax()
+        \\
+    , "luce.parse.assign", "a destructuring bind declares its names: write let or var in front");
+
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, var b = minmax()
+        \\
+    , "luce.parse.assign", "one let or one var governs the whole bind");
+
+    try expectSaying(
+        \\func minmax() -> (Int, Int)!:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, b = minmax() catch 0, 0
+        \\
+    , "luce.parse.assign", "catch can supply only one value: write try, or handle it as a statement");
+}
+
+test "luce.parse.type: a destructuring bind takes its types from the call" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let low: Int, high: Int = minmax()
+        \\
+    , "luce.parse.type", "a destructuring bind takes its types from the call");
+}
+
+test "luce.sema.shape: the bind's arity is the call's" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let a, b, c = minmax()
+        \\
+    , "luce.sema.shape", "minmax answers 2 values, got 3 names");
+
+    // One value, two names: the call is named, because that is what
+    // makes the sentence actionable.
+    try expectSaying(
+        \\func one() -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a, b = one()
+        \\
+    , "luce.sema.shape", "one answers 1 value, got 2 names");
+}
+
+test "luce.sema.return: the return's arity is the signature's" {
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "minmax answers 2 values, got 1");
+
+    try expectSaying(
+        \\func count() -> Int:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "count answers 1 value, got 2");
+
+    try expectSaying(
+        \\func nothing():
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "this function returns nothing");
+
+    // Two shapes that disagree, which is the count this check is
+    // actually about: the two cases above are each answered a step
+    // earlier, by the arms that route a `return` to the single-value
+    // channel or refuse a comma outright.
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2, 3
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "minmax answers 2 values, got 3");
+
+    // And the same count inside a `var self` method, where the
+    // receiver rides in front and the *declared* arity is what a
+    // `return` is measured against.
+    try expectSaying(
+        \\struct Rng:
+        \\    state: Int
+        \\
+        \\    func next(var self) -> Int:
+        \\        return self.state, 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.return", "next answers 1 value, got 2");
+}
+
+test "luce.sema.call: two places, and no exceptions" {
+    // An argument, an operand, a container element — and the
+    // pass-through, which Go allows and this language does not,
+    // because refusing it is what makes the rule have no exceptions.
+    for ([_][]const u8{
+        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    assert(minmax() == 1)\n",
+        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    let x = minmax() + 1\n",
+        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    var xs = [1]\n    xs.append(minmax())\n",
+    }) |source| {
+        try expectSaying(
+            source,
+            "luce.sema.call",
+            "minmax answers 2 values, and only a let or a var can receive them",
+        );
+    }
+
+    try expectSaying(
+        \\func minmax() -> (Int, Int):
+        \\    return 1, 2
+        \\
+        \\func pass() -> (Int, Int):
+        \\    return minmax()
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.call",
+        "minmax answers 2 values, and only a let or a var can receive them — bind them, then return them",
+    );
+}
+
+test "luce.sema.own: one object cannot be owned twice, and only a comma can write it" {
+    // The one genuinely new ownership check.  `return` is a
+    // terminator, so with one value there was never anything after it
+    // to poison; the comma is what puts something after a return for
+    // the first time (OWNERSHIP.md S45).
+    try expectSaying(
+        \\func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+        \\    return xs, xs
+        \\
+        \\func main():
+        \\    var mine = [1]
+        \\    let a, b = bad(give mine)
+        \\    free(a)
+        \\    free(b)
+        \\
+    , "luce.sema.own", "xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]");
+
+    // The two beside it need no new check at all: the alias arm and
+    // the borrow arm are the existing ones, reached per position.
+    try expectSaying(
+        \\func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+        \\    let alias = xs
+        \\    return xs, alias
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "alias aliases an object it does not own; return copy alias or return the owning name [OWNERSHIP.md S16, S17]");
+
+    try expectSaying(
+        \\func bad(xs: give List(Int), borrowed: List(Int)) -> (List(Int), List(Int)):
+        \\    return xs, borrowed
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "borrowed is a borrowed parameter; return copy borrowed, or take the parameter as give [OWNERSHIP.md S17]");
+}
+
+// ---------------------------------------------------------------------------
+// Methods: `self`
+// ---------------------------------------------------------------------------
+//
+// The whole family, each sentence pinned (docs/METHODS.md).  The two
+// structural refusals — `self` anywhere but first, and `self` with a
+// type — are stage 3's and live in `03_parse/test.zig`.
+
+test "luce.sema.self: self is only a parameter of a function inside a struct" {
+    try expectOnlySayingAt(
+        \\func loose(self) -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.self",
+        "self is only a parameter of a function declared inside a struct",
+        1,
+        12,
+    );
+}
+
+test "luce.sema.self: a namespace function called as a method says which it is" {
+    // The one sentence that would have prevented this memo's own
+    // commissioning error: `Struct.func(x)` is a folder and an
+    // ordinary first argument; `x.foo()` is a type and a receiver.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func doubled(p: Point) -> Int:
+        \\        return p.x * 2
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.doubled() == 2)
+        \\
+    ,
+        "luce.sema.self",
+        "Point.doubled is a namespace function, not a method; it takes no self — call it as Point.doubled(p, …)",
+    );
+}
+
+test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
+    // This replaces "Point has no methods", which was true until a
+    // struct could have one, and matches the List/Map/Builder family.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func length(self) -> Int:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.lenght() == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "Point has no method lenght; did you mean length?",
+    );
+    // With nothing close, the sentence still names both.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.frobnicate() == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "Point has no method frobnicate",
+    );
+}
+
+test "luce.sema.name: there are no bound method values" {
+    // `let f = p.length` is a closure over `p` by another name, and
+    // first among the things docs/LANGUAGE.md deliberately refuses.
+    // The sentence is the one `let f = Point.length` already gets.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func length(self) -> Int:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let f = p_of().length
+        \\
+        \\func p_of() -> Point:
+        \\    return Point(x = 1)
+        \\
+    ,
+        "luce.sema.name",
+        "is a function, and Luce has no function values",
+    );
+}
+
+test "luce.sema.self: a var self receiver must be a writable place" {
+    // The rule is the one `lowerAssignChain` already enforces for
+    // `cells[0].value = 3` — a place whose root is a mutable local —
+    // so a receiver is legal in precisely the positions an assignment
+    // target is, and the two can never drift (docs/METHODS.md).
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    let q = Point(x = 1)
+        \\    q.grow()
+        \\
+    , "luce.sema.let", "q is let-bound; grow takes var self and writes back to its receiver — use var");
+
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func origin() -> Point:
+        \\        return Point(x = 0)
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    Point.origin().grow()
+        \\
+    , "luce.sema.self", "grow takes var self, so its receiver must be a variable — not a call result or a temporary");
+}
+
+test "luce.sema.self: the static form of a var self method is refused" {
+    // It would take a copy, mutate it, and discard it, in silence —
+    // the one shape where allowing both spellings would mean two
+    // semantics rather than one.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    var p = Point(x = 1)
+        \\    Point.grow(p)
+        \\
+    , "luce.sema.self", "grow takes var self and writes back to its receiver; call it as p.grow(…)");
+}
+
+test "luce.sema.self: var self needs a struct that carries no objects" {
+    // Not a restriction invented for the feature: it is where S17 and
+    // S28 already put the corpus, and the diagnostic cites them.
+    try expectSaying(
+        \\struct Bag:
+        \\    items: List(Int)
+        \\
+        \\    func stash(var self, n: Int):
+        \\        self.items.append(n)
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.self",
+        "Bag carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
+    );
+}
+
+test "luce.sema.self: the receiver is written back, not returned" {
+    // The declared arity is the arity at the call site.  If the
+    // receiver were nameable there it would be a second way to spell
+    // `rng`, which is what `Point.scale(p, 2.0)` was refused for.
+    try expectSaying(
+        \\struct Rng:
+        \\    state: Int
+        \\
+        \\    func next(var self) -> Int:
+        \\        self.state = self.state + 1
+        \\        return self.state
+        \\
+        \\func main():
+        \\    var rng = Rng(state = 1)
+        \\    let receiver, roll = rng.next()
+        \\
+    , "luce.sema.shape", "next answers 1 value, got 2 names");
+}
+
+test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func moved(self, dx: Int, dy: Int) -> Int:
+        \\        return self.x + dx + dy
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.moved(1) == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "moved takes 2 arguments, got 1",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Entry contract
 // ---------------------------------------------------------------------------
 
-test "luce.sema.main: a script needs exactly func main()" {
+test "luce.sema.main: a script needs func main(), with or without the command line" {
     try expectRejected("func other():\n    return\n", "luce.sema.main");
     try expectRejected("func main(x: Int):\n    return\n", "luce.sema.main");
 }
@@ -599,22 +1072,97 @@ test "luce.sema.main: a return type on the entry names the other legal form" {
     );
 }
 
-test "luce.sema.main: a parameter on the entry says where arguments come from" {
+// The entry's parameter is the command line and its type is fixed
+// (docs/METHODS.md).  The name is free — `args` is a binding like any
+// other — so there is no misspelling of it to diagnose, and the three
+// mistakes that are left get one sentence each and a caret on the part
+// that is wrong.
+
+test "luce.sema.main: the entry's parameter is the command line and must be List(String)" {
     try expectOnlySayingAt(
         \\func main(n: Int):
         \\    return
         \\
     ,
         "luce.sema.main",
-        "main takes no parameters; a program reads its command line with arg_count() and arg(index)",
+        "main's parameter is the command line and must be List(String); it is Int here",
+        1,
+        14,
+    );
+    // A List of the wrong thing is the same mistake and says so with
+    // the type it was actually given.
+    try expectSaying(
+        \\func main(xs: List(Int)):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main's parameter is the command line and must be List(String); it is List(Int) here",
+    );
+}
+
+test "luce.sema.main: the entry takes at most the one parameter" {
+    try expectOnlySayingAt(
+        \\func main(a: List(String), b: Int):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main takes at most one parameter, the command line; it has 2",
+        1,
+        28,
+    );
+}
+
+test "luce.sema.main: the entry's parameter takes no verb" {
+    // S13 says `give` appears at both ends; the entry has one end.
+    try expectOnlySayingAt(
+        \\func main(args: give List(String)):
+        \\    return
+        \\
+    ,
+        "luce.sema.main",
+        "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
         1,
         11,
     );
 }
 
-test "luce.sema.main: the form the message names actually compiles" {
-    // `-> !:` is the second legal entry, and the message now says so.
-    var result = try compile_mod.compile(testing.allocator, "func main() -> !:\n    return\n", script);
+test "luce.sema.retired: arg and arg_count name their replacement" {
+    // A name the language used to spell is not a typo, and the site
+    // still teaches the old one; a bare `unknown function arg` points
+    // nowhere.  One release of a pointer (docs/METHODS.md).
+    try expectHostSaying(
+        \\func main():
+        \\    print(arg(0))
+        \\
+    ,
+        "luce.sema.retired",
+        "arg was retired: declare func main(args: List(String)): and index args",
+    );
+    try expectHostSaying(
+        \\func main():
+        \\    print(String(arg_count()))
+        \\
+    ,
+        "luce.sema.retired",
+        "arg_count was retired: declare func main(args: List(String)): and write len(args)",
+    );
+}
+
+test "arg is an ordinary word again, and a program that declares one gets its own" {
+    // The retirement message is reached only once nothing else
+    // resolved: the two names left `reserved_names` with the builtins,
+    // so they are available to a program like any other.
+    var result = try compile_mod.compile(testing.allocator,
+        \\func arg(index: Int) -> Int:
+        \\    return index * 2
+        \\
+        \\func main():
+        \\    let arg_count = arg(3)
+        \\    assert(arg_count == 6)
+        \\
+    , script);
     defer result.deinit();
     switch (result) {
         .success => {},
@@ -622,6 +1170,29 @@ test "luce.sema.main: the form the message names actually compiles" {
             printAll(&diagnostics);
             return error.TestUnexpectedResult;
         },
+    }
+}
+
+test "luce.sema.main: all four legal entry shapes compile" {
+    // `-> !:` is how a program says the world can stop it, and the
+    // command line composes with it (docs/METHODS.md).  The parameter's
+    // name is the program's to choose.
+    for ([_][]const u8{
+        "func main():\n    return\n",
+        "func main() -> !:\n    return\n",
+        "func main(args: List(String)):\n    return\n",
+        "func main(command_line: List(String)) -> !:\n    return\n",
+    }) |source| {
+        var result = try compile_mod.compile(testing.allocator, source, script);
+        defer result.deinit();
+        switch (result) {
+            .success => {},
+            .failure => |diagnostics| {
+                std.debug.print("this should compile:\n{s}", .{source});
+                printAll(&diagnostics);
+                return error.TestUnexpectedResult;
+            },
+        }
     }
 }
 

@@ -96,8 +96,6 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
     .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
     .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
-    .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
-    .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
     .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
     .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
     .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
@@ -118,6 +116,23 @@ pub const builtins = [_]Builtin{
     .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
 };
 
+/// Names the language spelled once and does not any more, and what to
+/// write instead.
+///
+/// **A table to empty, never to grow.**  A deleted builtin is normally
+/// just an unknown name, and that is the right answer for a private
+/// program — but these two are on a public documentation site, and
+/// `unknown function arg` points nowhere.  One release of a pointer is
+/// worth more here than the purity of having deleted the row; the row
+/// itself comes out when the site no longer teaches the old spelling.
+pub const retired_builtins = [_]struct {
+    name: []const u8,
+    instead: []const u8,
+}{
+    .{ .name = "arg", .instead = "declare func main(args: List(String)): and index args" },
+    .{ .name = "arg_count", .instead = "declare func main(args: List(String)): and write len(args)" },
+};
+
 // ---------------------------------------------------------------------------
 // FunctionBuilder
 // ---------------------------------------------------------------------------
@@ -130,6 +145,10 @@ const Typed = struct {
     value_type: Type,
 };
 
+/// The two places a call answering a return shape may stand, and the
+/// one that is worth a longer sentence (docs/RETURNS.md).
+const ShapePosition = enum { refused, bind, returning };
+
 pub const FunctionBuilder = struct {
     analyzer: *Analyzer,
     module: usize,
@@ -138,6 +157,18 @@ pub const FunctionBuilder = struct {
     /// on it in the order it is reached; the only things ever read
     /// back are a register's type and a local's type.
     code: mir.build.Lowering,
+    /// What this function answers, in order — the arity a `return`
+    /// is checked against.  `code.return_type` is the one value the
+    /// channel carries, which for two or more is the synthesized
+    /// layout they ride in (docs/RETURNS.md).
+    results: []const Type = &.{},
+    /// What actually leaves: `[self] ++ results` in a `var self`
+    /// method, `results` in everything else.
+    channel: []const Type = &.{},
+    /// True in a `var self` method, where every `return` carries the
+    /// receiver out in front of whatever the reader wrote — its
+    /// receiver *is* result zero (docs/RETURNS.md §5).
+    writes_receiver: bool = false,
     scopes: std.ArrayList(Scope) = .empty,
     loops: std.ArrayList(LoopFrame) = .empty,
     /// Statement temporaries (S3): every fresh, unowned object is
@@ -172,6 +203,25 @@ pub const FunctionBuilder = struct {
     /// permission reaches the call they are written in front of and
     /// nothing nested inside it (docs/FAILURE.md).
     allow_fallible: bool = false,
+    /// Where a multi-valued call currently stands.
+    ///
+    /// A call that answers a return shape may stand in exactly two
+    /// places — the right of a destructuring bind, and a statement of
+    /// its own — and nowhere else (docs/RETURNS.md).  Statement
+    /// position is `as_statement`, which this walk already carries;
+    /// this is the other one.
+    ///
+    /// Set for exactly one hop the way `allow_fallible` is, so the
+    /// permission reaches the call it was raised in front of and
+    /// nothing nested inside it: `let a, b = f(g())` binds `f`'s two
+    /// values and still refuses `g`'s.
+    ///
+    /// `.returning` is `.refused` with one extra clause on the
+    /// sentence.  `return minmax(xs)` is the pass-through Go allows
+    /// and this language does not — Go pays for it with a rule saying
+    /// a multi-valued call used as arguments must be the *only*
+    /// arguments — and the reader is owed the one line that fixes it.
+    shape_position: ShapePosition = .refused,
     /// The element type the next list literal should be built at, when
     /// the place it is going into names one — `let xs: List(Float) =
     /// [1, 2, 3]` (docs/NUMERICS.md).  A literal has no annotation of
@@ -566,6 +616,16 @@ pub const FunctionBuilder = struct {
     /// Report a call whose callee names no declaration, offering the
     /// closest function or struct the reader could have meant.
     fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Span) Error!void {
+        // A name the language used to spell is not a typo, and the
+        // reader is owed the replacement rather than a guess at what
+        // they might have meant.  Reached only once nothing else
+        // resolved, because `arg` is an ordinary word now and a program
+        // that declares one gets its own.
+        for (retired_builtins) |gone| {
+            if (!std.mem.eql(u8, written, gone.name)) continue;
+            try self.fail("luce.sema.retired", span, "{s} was retired: {s}", .{ gone.name, gone.instead });
+            return;
+        }
         var suggestion = helpers.Suggestion.init(written);
         var functions = self.analyzer.function_names.keyIterator();
         while (functions.next()) |key| {
@@ -608,7 +668,7 @@ pub const FunctionBuilder = struct {
     /// *object* moves to the caller (S16), but its storage does not —
     /// the return took a copy — so the slot still gives its bytes back
     /// (docs/STRINGS.md).
-    fn emitScopeReleases(self: *FunctionBuilder, from: usize, moved: ?LocalId) Error!void {
+    fn emitScopeReleases(self: *FunctionBuilder, from: usize, moved: []const LocalId) Error!void {
         var scope_index = self.scopes.items.len;
         while (scope_index > from) {
             scope_index -= 1;
@@ -617,7 +677,7 @@ pub const FunctionBuilder = struct {
             while (owned_index > 0) {
                 owned_index -= 1;
                 const release = owned[owned_index];
-                const keeps_objects = moved != null and release.local == moved.?;
+                const keeps_objects = std.mem.indexOfScalar(LocalId, moved, release.local) != null;
                 try self.code.release(
                     release.local,
                     release.objects and !keeps_objects,
@@ -630,7 +690,7 @@ pub const FunctionBuilder = struct {
     /// Emit releases for the innermost scope, in reverse declaration
     /// order, without popping it: the normal end of a block.
     pub fn emitScopeEnd(self: *FunctionBuilder) Error!void {
-        try self.emitScopeReleases(self.scopes.items.len - 1, null);
+        try self.emitScopeReleases(self.scopes.items.len - 1, &.{});
     }
 
     /// Park a fresh value in a hidden local so the end of the statement
@@ -846,7 +906,6 @@ pub const FunctionBuilder = struct {
                 .str_value,
                 .chr_code,
                 .file_read,
-                .arg_get,
                 .key_read,
                 .read_line,
                 .env_get,
@@ -1051,6 +1110,13 @@ pub const FunctionBuilder = struct {
         return false;
     }
 
+    fn anyMutates(expressions: []const *ast.Expression) bool {
+        for (expressions) |expression| {
+            if (mayMutateContainers(expression)) return true;
+        }
+        return false;
+    }
+
     fn statementMayMutateContainers(statement: ast.Statement) bool {
         return switch (statement) {
             // A write through a place is exactly a container or field
@@ -1058,13 +1124,13 @@ pub const FunctionBuilder = struct {
             .assign => |assign| assign.target != .name or
                 mayMutateContainers(assign.value),
             .let => |binding| mayMutateContainers(binding.value),
+            .destructure => |bind| mayMutateContainers(bind.value),
             .variable => |binding| binding.value != null and
                 mayMutateContainers(binding.value.?),
             .expression => |expression| mayMutateContainers(expression.value),
             .guarded => |guarded| statementMayMutateContainers(guarded.attempt.*) or
                 blockMayMutateContainers(guarded.handler),
-            .return_statement => |returned| returned.value != null and
-                mayMutateContainers(returned.value.?),
+            .return_statement => |returned| anyMutates(returned.values),
             .conditional => |conditional| mayMutateContainers(conditional.condition) or
                 blockMayMutateContainers(conditional.then_block) or
                 (conditional.else_block != null and
@@ -1191,6 +1257,7 @@ pub const FunctionBuilder = struct {
                 for (fresh_object_methods) |name| {
                     if (std.mem.eql(u8, method.name, name)) break :blk true;
                 }
+                if (self.structMethodYieldsObject(method.name)) break :blk true;
                 break :blk self.routedMethodYieldsObject(method.name);
             },
             else => false,
@@ -1214,6 +1281,28 @@ pub const FunctionBuilder = struct {
         const written = std.fmt.bufPrint(&qualified, "strings.{s}", .{name}) catch return false;
         const index = self.analyzer.function_names.get(written) orelse return false;
         return self.analyzer.carriesObjects(self.analyzer.functions.items[index].return_type);
+    }
+
+    /// True when some struct in this program declares a **method** by
+    /// this name whose result carries objects — `p.spread()` answering
+    /// a fresh `List(Int)`, which the caller owns like any other call
+    /// result (S16, docs/METHODS.md).
+    ///
+    /// Asked of the name rather than of the receiver, and for the same
+    /// reason `routedMethodYieldsObject` is: this question is put
+    /// *before* a give argument is lowered, so the receiver's type is
+    /// not yet known and cannot be.  Answering yes for a name some
+    /// other struct also spells costs nothing — every caller has
+    /// already established that the value in hand carries objects, and
+    /// a call's result is owned whenever it does.
+    fn structMethodYieldsObject(self: *const FunctionBuilder, name: []const u8) bool {
+        for (self.analyzer.functions.items) |candidate| {
+            if (candidate.receiver == .not) continue;
+            const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
+            if (!std.mem.eql(u8, candidate.name[dot + 1 ..], name)) continue;
+            if (self.analyzer.carriesObjects(candidate.return_type)) return true;
+        }
+        return false;
     }
 
     /// Side-effect-free twin of methodNamespace: does target.name(...)
@@ -1663,6 +1752,7 @@ pub const FunctionBuilder = struct {
                     );
                 }
             },
+            .destructure => |bind| try self.lowerDestructure(bind),
             .assign => |assign| try self.lowerAssign(assign),
             .conditional => |conditional| try self.lowerConditional(conditional),
             .while_loop => |loop| try self.lowerWhile(loop),
@@ -1678,7 +1768,7 @@ pub const FunctionBuilder = struct {
                 // Early exits unwind what the scopes they leave still
                 // own (S4).
                 try self.emitTempReleases(frame.temps_depth);
-                try self.emitScopeReleases(frame.scope_depth, null);
+                try self.emitScopeReleases(frame.scope_depth, &.{});
                 try self.code.jump(frame.exit_block);
             },
             .continue_statement => |continued| {
@@ -1688,7 +1778,7 @@ pub const FunctionBuilder = struct {
                 }
                 const frame = self.loops.items[self.loops.items.len - 1];
                 try self.emitTempReleases(frame.temps_depth);
-                try self.emitScopeReleases(frame.scope_depth, null);
+                try self.emitScopeReleases(frame.scope_depth, &.{});
                 try self.code.jump(frame.continue_block);
             },
             .expression => |expression| {
@@ -1808,6 +1898,102 @@ pub const FunctionBuilder = struct {
         // fact, and the reader should not have to test what they just
         // wrote.
         if (widened) try self.narrow(local);
+    }
+
+    /// `let low, high = minmax(xs)` — the one place a call answering a
+    /// return shape hands its values to names (docs/RETURNS.md).
+    ///
+    /// Under the lowering the shape is one struct, so this is one
+    /// `call` and one `struct_get` per name: S1 per name, as it says.
+    fn lowerDestructure(self: *FunctionBuilder, bind: ast.Destructure) Error!void {
+        self.shape_position = .bind;
+        const value = (try self.lowerExpression(bind.value, false)) orelse {
+            for (bind.names) |name| try self.forgetName(name.text);
+            return;
+        };
+        const shape = self.analyzer.returnShapeOf(value.value_type) orelse {
+            // One value, two names.  Naming the call is what makes the
+            // sentence actionable, and the call is right there.
+            try self.fail(
+                "luce.sema.shape",
+                bind.span,
+                "{s} answers 1 value, got {d} names",
+                .{ try self.calledName(bind.value), bind.names.len },
+            );
+            for (bind.names) |name| try self.forgetName(name.text);
+            return;
+        };
+        if (shape.fields.len != bind.names.len) {
+            try self.fail(
+                "luce.sema.shape",
+                bind.span,
+                "{s} answers {d} values, got {d} name{s}",
+                .{
+                    try self.calledName(bind.value),
+                    shape.fields.len,
+                    bind.names.len,
+                    helpers.plural(bind.names.len),
+                },
+            );
+            for (bind.names) |name| try self.forgetName(name.text);
+            return;
+        }
+
+        // Each value moves independently to its own binding, and each
+        // binding owns what it received and is freed by its scope
+        // (S16 per value, S1 per name, S45).  The struct the values
+        // rode in is a statement temporary and dies with the
+        // statement; it owns nothing once the fields are out.
+        for (bind.names, shape.fields, 0..) |name, field, position| {
+            const held = try self.code.emit(.{ .struct_get = .{
+                .target = value.register,
+                .layout = value.value_type.strukt,
+                .field = @intCast(position),
+            } }, field.field_type);
+            const carried = self.analyzer.carriesObjects(field.field_type);
+            const local = (try self.declareLocal(
+                name.text,
+                field.field_type,
+                bind.mutable,
+                if (carried) .owned else .alias,
+                name.span,
+            )) orelse continue;
+            const stored: Typed = .{ .register = held, .value_type = field.field_type };
+            try self.storeOwned(local, stored);
+            if (carried) try self.code.bind(local, held);
+        }
+        // The shape itself never owned the objects its fields carried —
+        // each name did, from the moment it was bound — so the
+        // temporary must not release them a second time.
+        try self.disownShape(value.register);
+    }
+
+    /// A destructured call's struct temporary hands its objects to the
+    /// names and keeps only its own field run, which the statement's
+    /// end still reclaims (docs/STRINGS.md).
+    fn disownShape(self: *FunctionBuilder, register: Register) Error!void {
+        var index = self.temps.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.temps.items[index].register != register) continue;
+            if (self.temps.items[index].storage) {
+                self.temps.items[index].objects = false;
+            } else {
+                _ = self.temps.orderedRemove(index);
+            }
+            return;
+        }
+    }
+
+    /// The name a reader would recognise the call by, for a message
+    /// about its arity.
+    fn calledName(self: *FunctionBuilder, expression: *const ast.Expression) Error![]const u8 {
+        return switch (expression.*) {
+            .call => |call| call.callee,
+            .method => |method| method.name,
+            .try_call => |attempt| self.calledName(attempt.operand),
+            else => "this",
+        };
     }
 
     /// var name: Type — a late declaration (OWNERSHIP.md S40): the
@@ -2669,7 +2855,14 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
-        if (returned.value) |expression| {
+        // A `var self` method's receiver rides out in front of
+        // whatever the reader wrote, so every `return` in one is a
+        // shape however many values it names — including a bare one
+        // (docs/RETURNS.md §5).
+        if (self.writes_receiver) return self.lowerReturnShape(returned);
+        if (returned.values.len >= 2) return self.lowerReturnShape(returned);
+        if (returned.values.len == 1) {
+            const expression = returned.values[0];
             if (self.code.return_type == .none) {
                 // Still lower it: an expression with a mistake in it
                 // deserves its own message before this one.
@@ -2685,8 +2878,16 @@ pub const FunctionBuilder = struct {
                     "this function's result",
                 )) orelse return;
                 try self.emitTempReleases(0);
-                try self.emitScopeReleases(0, null);
+                try self.emitScopeReleases(0, &.{});
                 try self.code.ret(absent.value.register);
+                return;
+            }
+            if (self.results.len >= 2) {
+                self.shape_position = .returning;
+                _ = try self.lowerExpression(expression, false);
+                try self.fail("luce.sema.return", returned.span, "{s} answers {d} values, got 1", .{
+                    self.code.name, self.results.len,
+                });
                 return;
             }
             const lowered = (try self.lowerExpression(expression, false)) orelse return;
@@ -2702,7 +2903,8 @@ pub const FunctionBuilder = struct {
             // Whatever a function returns, the caller owns (S16, S17):
             // an owned name moves out, fresh values flow out, borrows
             // are compile errors.
-            var moved: ?LocalId = null;
+            var moved_storage: [1]LocalId = undefined;
+            var moved: []const LocalId = &.{};
             if (self.analyzer.carriesObjects(value.value_type)) {
                 switch (expression.*) {
                     .name => |name| {
@@ -2714,7 +2916,10 @@ pub const FunctionBuilder = struct {
                         // when one of them turns out to be wrong.
                         const found = self.findLocal(name.text) orelse return;
                         switch (found.info.class) {
-                            .owned => moved = found.info.local,
+                            .owned => {
+                                moved_storage[0] = found.info.local;
+                                moved = moved_storage[0..1];
+                            },
                             .borrow_param => {
                                 try self.fail(
                                     "luce.sema.own",
@@ -2797,8 +3002,280 @@ pub const FunctionBuilder = struct {
             return;
         }
         try self.emitTempReleases(0);
-        try self.emitScopeReleases(0, null);
+        try self.emitScopeReleases(0, &.{});
         try self.code.ret(null);
+    }
+
+    /// `return a, b` — S16 said once per value, and nothing more
+    /// (OWNERSHIP.md S45, docs/RETURNS.md §3).
+    ///
+    /// Each value moves independently to the caller; a borrowed
+    /// parameter or an alias in any position is S17 exactly and says
+    /// so with the words it already had.  The one fact the single-value
+    /// channel never had to state is that **the values must be distinct
+    /// objects**: two moves of one handle would leave two caller
+    /// bindings owning it and free it twice.  That is the only
+    /// genuinely new check here, and it is where `moved` already is.
+    fn lowerReturnShape(self: *FunctionBuilder, returned: ast.Return) Error!void {
+        if (self.writes_receiver) return self.lowerReceiverReturn(returned);
+        if (self.results.len < 2) {
+            for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
+            if (self.results.len == 0) {
+                try self.fail("luce.sema.return", returned.span, "this function returns nothing", .{});
+                return;
+            }
+            try self.fail("luce.sema.return", returned.span, "{s} answers 1 value, got {d}", .{
+                self.code.name, returned.values.len,
+            });
+            return;
+        }
+        if (returned.values.len != self.results.len) {
+            for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
+            try self.fail("luce.sema.return", returned.span, "{s} answers {d} values, got {d}", .{
+                self.code.name, self.results.len, returned.values.len,
+            });
+            return;
+        }
+
+        // One walk, so an operand that splits blocks cannot strand the
+        // ones before it — the same rule every other operand run keeps.
+        const values = (try self.lowerOperandsInto(returned.values, self.results)) orelse return;
+        const registers = try self.arena().alloc(Register, values.len);
+
+        var moved: std.ArrayList(LocalId) = .empty;
+        defer moved.deinit(self.temporary());
+        for (values, returned.values, 0..) |lowered, expression, position| {
+            const value = (try self.fit(lowered, self.results[position])) orelse {
+                try self.fail(
+                    "luce.sema.type",
+                    expression.span(),
+                    "value {d} of this return is {s}, and {s} answers {s} there{s}",
+                    .{
+                        position + 1,
+                        try self.analyzer.typeName(lowered.value_type),
+                        self.code.name,
+                        try self.analyzer.typeName(self.results[position]),
+                        try self.absenceAdvice(lowered.value_type, expression),
+                    },
+                );
+                return;
+            };
+            if (try self.movesOut(expression, value, &moved)) |register| {
+                registers[position] = register;
+            } else return;
+        }
+
+        // The shape is one value in the slot, so everything below the
+        // comma is the single-value channel unchanged: the struct is
+        // made here, it is what `ret` hands over, and the unwinder
+        // skips every object it just gave away.
+        const shape = try self.code.emit(
+            .{ .struct_make = .{ .layout = self.code.return_type.strukt, .fields = registers } },
+            self.code.return_type,
+        );
+        // Exported before the releases: the shape's field run and
+        // whatever text rides in it have to be able to leave a frame
+        // whose slots are about to go (docs/STRINGS.md).
+        const handed_out = try self.code.exportStorage(shape);
+        try self.emitTempReleases(0);
+        try self.emitScopeReleases(0, moved.items);
+        try self.code.ret(handed_out);
+    }
+
+    /// The implicit `return self` a `var self` method with no declared
+    /// result ends on.  Written here rather than in stage 6 because it
+    /// is a fact about the language, not about the tape.
+    pub fn returnReceiver(self: *FunctionBuilder) Error!void {
+        try self.lowerReceiverReturn(.{ .values = &.{}, .span = self.currentSpan() });
+    }
+
+    fn currentSpan(self: *const FunctionBuilder) Span {
+        return .{ .start = self.code.origin, .end = self.code.origin };
+    }
+
+    /// `return` inside a `var self` method: the receiver goes out in
+    /// front of whatever the reader wrote (docs/RETURNS.md §5).
+    ///
+    /// `func step(var self):` answers arity one — the receiver alone —
+    /// and lowers exactly as `docs/METHODS.md` said it would.
+    /// `func next(var self) -> Int:` answers `(Rng, Int)`, and the call
+    /// site takes result zero back to the receiver's place and result
+    /// one to the name.  There is one mechanism, not two.
+    ///
+    /// The receiver is a value struct that carries no objects — that is
+    /// what `var self` requires — so the write-back is a pure value
+    /// store and none of the ownership walk above applies to it.
+    fn lowerReceiverReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
+        if (returned.values.len != self.results.len) {
+            for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
+            try self.fail("luce.sema.return", returned.span, "{s} answers {d} value{s}, got {d}", .{
+                self.code.name,
+                self.results.len,
+                helpers.plural(self.results.len),
+                returned.values.len,
+            });
+            return;
+        }
+        const receiver = self.findLocal("self") orelse return;
+
+        // Arity one: the receiver alone, and the channel is the plain
+        // single return the language already had.
+        if (self.results.len == 0) {
+            // Exported **before** the releases, not after: `self` owns
+            // its run and the scope is about to give it back, so a
+            // value read out afterwards would be a view of freed
+            // storage.  This is the order the single-value return has
+            // always kept (docs/STRINGS.md).
+            const alone = try self.code.load(receiver.info.local);
+            const handed_out = try self.code.exportStorage(try self.ownedForStore(.{
+                .register = alone,
+                .value_type = self.code.return_type,
+            }));
+            try self.emitTempReleases(0);
+            try self.emitScopeReleases(0, &.{});
+            try self.code.ret(handed_out);
+            return;
+        }
+
+        // **The values first, and the receiver after them.**  A
+        // returned expression may call another `var self` method on
+        // `self` — `return low + self.next() % span` is the shape —
+        // and reading the receiver before that runs would hand the
+        // caller back the state the method started with.
+        const values = (try self.lowerOperandsInto(returned.values, self.results)) orelse return;
+        const registers = try self.arena().alloc(Register, values.len + 1);
+        // The receiver goes into the shape as a *store*, so it takes
+        // its storage first: `ownValue` deep-copies a struct's run, and
+        // without that the shape would carry a view of the slot this
+        // frame is about to release (docs/STRINGS.md).
+        registers[0] = try self.ownedForStore(.{
+            .register = try self.code.load(receiver.info.local),
+            .value_type = self.channel[0],
+        });
+        var moved: std.ArrayList(LocalId) = .empty;
+        defer moved.deinit(self.temporary());
+        for (values, returned.values, 0..) |lowered, expression, position| {
+            const value = (try self.fit(lowered, self.results[position])) orelse {
+                try self.fail(
+                    "luce.sema.type",
+                    expression.span(),
+                    "value {d} of this return is {s}, and {s} answers {s} there{s}",
+                    .{
+                        position + 1,
+                        try self.analyzer.typeName(lowered.value_type),
+                        self.code.name,
+                        try self.analyzer.typeName(self.results[position]),
+                        try self.absenceAdvice(lowered.value_type, expression),
+                    },
+                );
+                return;
+            };
+            // The *declared* results may carry objects freely and move
+            // under S16/S28 like any other return: a method may answer
+            // a fresh List while writing back a value-only receiver,
+            // and the two facts do not interact.
+            if (try self.movesOut(expression, value, &moved)) |register| {
+                registers[position + 1] = register;
+            } else return;
+        }
+        const shape = try self.code.emit(
+            .{ .struct_make = .{ .layout = self.code.return_type.strukt, .fields = registers } },
+            self.code.return_type,
+        );
+        // Exported before the releases: the shape's field run and
+        // whatever text rides in it have to be able to leave a frame
+        // whose slots are about to go (docs/STRINGS.md).
+        const handed_out = try self.code.exportStorage(shape);
+        try self.emitTempReleases(0);
+        try self.emitScopeReleases(0, moved.items);
+        try self.code.ret(handed_out);
+    }
+
+    /// One position of a `return a, b`: check that this value may
+    /// leave, record the binding whose object it takes with it, and
+    /// answer the register to put in the shape.  Null after reporting.
+    fn movesOut(
+        self: *FunctionBuilder,
+        expression: *const ast.Expression,
+        value: Typed,
+        moved: *std.ArrayList(LocalId),
+    ) Error!?Register {
+        if (!self.analyzer.carriesObjects(value.value_type)) {
+            return try self.ownedForStore(value);
+        }
+        switch (expression.*) {
+            .name => |name| {
+                const found = self.findLocal(name.text) orelse return null;
+                switch (found.info.class) {
+                    .owned => {
+                        // The genuinely new check.  `return` is a
+                        // terminator, so with one value there was
+                        // never anything after it to poison — the
+                        // comma is what puts something after a return
+                        // for the first time (docs/RETURNS.md §3).
+                        if (std.mem.indexOfScalar(LocalId, moved.items, found.info.local) != null) {
+                            try self.fail(
+                                "luce.sema.own",
+                                expression.span(),
+                                "{s} is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]",
+                                .{name.text},
+                            );
+                            return null;
+                        }
+                        try moved.append(self.temporary(), found.info.local);
+                    },
+                    .borrow_param => {
+                        try self.fail(
+                            "luce.sema.own",
+                            expression.span(),
+                            "{s} is a borrowed parameter; return copy {s}, or take the parameter as give [OWNERSHIP.md S17]",
+                            .{ name.text, name.text },
+                        );
+                        return null;
+                    },
+                    .alias => {
+                        try self.fail(
+                            "luce.sema.own",
+                            expression.span(),
+                            "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
+                            .{ name.text, name.text },
+                        );
+                        return null;
+                    },
+                }
+            },
+            else => {
+                if (!(try self.yieldsOwnership(expression))) {
+                    try self.fail(
+                        "luce.sema.own",
+                        expression.span(),
+                        "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
+                        .{},
+                    );
+                    return null;
+                }
+                self.disownTemp(value.register);
+            },
+        }
+        return try self.ownedForStore(value);
+    }
+
+    /// A fresh value this return is handing over: the object moves to
+    /// the caller, so the statement's unwinding must not free it.  Its
+    /// *storage* still goes back — the return took a copy of that
+    /// (docs/STRINGS.md).
+    fn disownTemp(self: *FunctionBuilder, register: Register) void {
+        var index = self.temps.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.temps.items[index].register != register) continue;
+            if (self.temps.items[index].storage) {
+                self.temps.items[index].objects = false;
+            } else {
+                _ = self.temps.orderedRemove(index);
+            }
+            return;
+        }
     }
 
     // Expressions: the dispatch --------------------------------------------
@@ -2853,6 +3330,8 @@ pub const FunctionBuilder = struct {
         // here, before anything nested can see it.
         const fallible_allowed = self.allow_fallible;
         self.allow_fallible = false;
+        const shape_position = self.shape_position;
+        self.shape_position = .refused;
         const wanted_element = self.wanted_element;
         self.wanted_element = null;
         switch (expression.*) {
@@ -2924,20 +3403,20 @@ pub const FunctionBuilder = struct {
                 return null;
             },
             .field => |field| return self.lowerField(field),
-            .call => |call| return self.lowerCall(call, as_statement, fallible_allowed),
+            .call => |call| return self.lowerCall(call, as_statement, fallible_allowed, shape_position),
             .binary => |binary| {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
                 return self.lowerBinary(binary);
             },
             .unary => |unary| return self.lowerUnary(unary),
-            .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed),
+            .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed, shape_position),
             .new_object => |new| return self.lowerNew(new),
             .list_literal => |literal| return self.lowerListLiteral(literal, wanted_element),
             .index => |index| return self.lowerIndex(index),
             .slice_range => |slice| return self.lowerSliceRange(slice),
             .give => |give| return self.lowerGive(give),
             .copy => |copied| return self.lowerCopy(copied),
-            .try_call => |attempt| return self.lowerTry(attempt, as_statement),
+            .try_call => |attempt| return self.lowerTry(attempt, as_statement, shape_position),
         }
     }
 
@@ -3010,11 +3489,18 @@ pub const FunctionBuilder = struct {
         span: Span,
         verb: []const u8,
         as_statement: bool,
+        shape_position: ShapePosition,
     ) Error!?struct { value: ?Typed, opened: Opened } {
         self.opened = null;
         self.allow_fallible = true;
+        // `try f()` hands back exactly what `f()` does, so where the
+        // `try` stands is where the call stands: `let a, b = try f()`
+        // is a destructuring bind of a fallible call, and the whole of
+        // what the two features owe each other (docs/RETURNS.md §2).
+        self.shape_position = shape_position;
         const lowered = try self.lowerExpression(operand, as_statement);
         self.allow_fallible = false;
+        self.shape_position = .refused;
         const opened = self.opened orelse {
             // A mistake inside the operand has already been reported;
             // adding "this cannot fail" to it would be noise.
@@ -3036,7 +3522,12 @@ pub const FunctionBuilder = struct {
     /// `lowerReturn`'s three lines with one terminator changed:
     /// release the temporaries, release the scopes innermost first,
     /// leave (docs/FAILURE.md).
-    fn lowerTry(self: *FunctionBuilder, attempt: ast.Try, as_statement: bool) Error!?Typed {
+    fn lowerTry(
+        self: *FunctionBuilder,
+        attempt: ast.Try,
+        as_statement: bool,
+        shape_position: ShapePosition,
+    ) Error!?Typed {
         // Whether the operand can fail is asked **first**, and the
         // order is the diagnostic.  Asked the other way round, `try
         // plain()` inside a plain `main` answered "main does not say it
@@ -3051,6 +3542,7 @@ pub const FunctionBuilder = struct {
             attempt.span,
             "try",
             as_statement,
+            shape_position,
         )) orelse return null;
         if (!self.code.fallible) {
             try self.fail(
@@ -3065,7 +3557,7 @@ pub const FunctionBuilder = struct {
         const resume_at = self.code.current;
         self.code.switchTo(attempted.opened.handler);
         try self.emitTempReleasesUpTo(0, attempted.opened.temps_floor);
-        try self.emitScopeReleases(0, null);
+        try self.emitScopeReleases(0, &.{});
         try self.code.unwind();
         self.code.switchTo(resume_at);
         return attempted.value;
@@ -3079,6 +3571,13 @@ pub const FunctionBuilder = struct {
             binary.span,
             "catch",
             as_statement,
+            // `catch` supplies **one** value, so a multi-valued call
+            // never stands behind it: `f() catch 0, 0` is a comma list
+            // to the right of an operator, which has no reading that
+            // does not first invent a tuple and then give it a
+            // precedence (docs/RETURNS.md §2).  `.refused` is what
+            // makes the call itself say so.
+            .refused,
         )) orelse return null;
         const value = attempted.value orelse return null;
 
@@ -3557,6 +4056,20 @@ pub const FunctionBuilder = struct {
         const layout_index = target.value_type.strukt;
         const layout = self.analyzer.structs.items[layout_index];
         const field_index = layout.findField(field.name) orelse {
+            // `let f = p.length` — a *bound method value*, which is a
+            // closure over `p` by another name and first among the
+            // things docs/LANGUAGE.md deliberately does not have.  The
+            // sentence is the one `let f = Point.length` already gets,
+            // reached through the same helper (docs/METHODS.md).
+            const member = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, field.name });
+            // Spelled the way the reader wrote it where the receiver
+            // has a name, and by its struct where it does not:
+            // "the receiver.length" is not a phrase anybody typed.
+            const written = switch (field.target.*) {
+                .name => |name| try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ name.text, field.name }),
+                else => member,
+            };
+            if (try self.failNotAValue(written, member, field.span)) return null;
             try self.failUnknownField("luce.sema.field", layout, field.name, field.span);
             return null;
         };
@@ -3928,6 +4441,7 @@ pub const FunctionBuilder = struct {
         call: ast.Call,
         as_statement: bool,
         fallible_allowed: bool,
+        shape_position: ShapePosition,
     ) Error!?Typed {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
@@ -3961,6 +4475,7 @@ pub const FunctionBuilder = struct {
             call.span,
             as_statement,
             fallible_allowed,
+            shape_position,
         );
     }
 
@@ -3972,10 +4487,38 @@ pub const FunctionBuilder = struct {
         span: Span,
         as_statement: bool,
         fallible_allowed: bool,
+        shape_position: ShapePosition,
     ) Error!?Typed {
         const info = self.analyzer.functions.items[function_index];
         if (info.is_entry) {
             try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
+            return null;
+        }
+        // `Point.length(p)` stays callable and means exactly what
+        // `p.length()` means: the method form is sugar with one
+        // semantics under it, which is what makes converting a struct
+        // one function at a time possible (docs/METHODS.md).
+        //
+        // `Point.scale(p, 2.0)` is the one exception, and it is why
+        // this check exists: a `var self` method writes back to its
+        // receiver's place, and the static form has no place to write
+        // to.  It would take a copy, mutate it and discard it, in
+        // silence — which is the one shape where allowing both
+        // spellings would mean two semantics instead of one.
+        if (info.receiver == .writes) {
+            try self.fail(
+                "luce.sema.self",
+                span,
+                "{s} takes var self and writes back to its receiver; call it as {s}.{s}(…)",
+                .{
+                    info.declaration.name,
+                    if (call_arguments.len != 0)
+                        try self.writtenTarget(call_arguments[0].value)
+                    else
+                        "the receiver",
+                    info.declaration.name,
+                },
+            );
             return null;
         }
         // See `callUser`: a call that can fail has to say which of
@@ -4051,6 +4594,24 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
             return null;
         }
+        // A call that answers a return shape may stand in exactly two
+        // places: the right of a destructuring bind, and a statement
+        // of its own (docs/RETURNS.md).  Everything else — an
+        // argument, an operand, a `return` — is refused, which is what
+        // keeps the rule one a reader can hold: it has no exceptions.
+        if (info.results.len >= 2 and !as_statement and shape_position != .bind) {
+            try self.fail(
+                "luce.sema.call",
+                span,
+                "{s} answers {d} values, and only a let or a var can receive them{s}",
+                .{
+                    name,
+                    info.results.len,
+                    if (shape_position == .returning) " — bind them, then return them" else "",
+                },
+            );
+            return null;
+        }
         const call = try self.code.emit(
             .{ .call = .{ .function = function_index, .arguments = registers } },
             info.return_type,
@@ -4069,6 +4630,7 @@ pub const FunctionBuilder = struct {
         method: ast.Method,
         as_statement: bool,
         fallible_allowed: bool,
+        shape_position: ShapePosition,
     ) Error!?Typed {
         switch (try self.methodNamespace(method)) {
             .resolved => |resolved| {
@@ -4083,10 +4645,11 @@ pub const FunctionBuilder = struct {
                     method.span,
                     as_statement,
                     fallible_allowed,
+                    shape_position,
                 );
             },
             .reported => return null,
-            .value => return self.lowerValueMethod(method, as_statement),
+            .value => return self.lowerValueMethod(method, as_statement, fallible_allowed, shape_position),
         }
     }
 
@@ -4183,7 +4746,13 @@ pub const FunctionBuilder = struct {
     /// Builtin methods on values: strings, lists, arrays, maps, and
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
-    fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Typed {
+    fn lowerValueMethod(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        as_statement: bool,
+        fallible_allowed: bool,
+        shape_position: ShapePosition,
+    ) Error!?Typed {
         const expressions = try self.arena().alloc(*ast.Expression, method.arguments.len + 1);
         expressions[0] = method.target;
         for (method.arguments, 0..) |argument, index| {
@@ -4225,6 +4794,17 @@ pub const FunctionBuilder = struct {
                     break :blk found;
                 }
                 return null;
+            }
+            // A struct value: `p.length()` *is* `Point.length(p)`, the
+            // same MIR call resolved here rather than a second
+            // semantics (docs/METHODS.md).
+            //
+            // It can never race a built-in method, and by construction
+            // rather than by ordering: `types.StructLayout` has no
+            // functions field and `heapOf` answers null for a struct,
+            // so the two arms above are unreachable for one.
+            if (receiver.value_type == .strukt) {
+                return self.lowerReceiverCall(method, values, as_statement, fallible_allowed, shape_position);
             }
             try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
                 try self.analyzer.typeName(receiver.value_type),
@@ -4282,6 +4862,316 @@ pub const FunctionBuilder = struct {
             .register = try self.code.emit(.{ .intrinsic = .{ .kind = found.kind, .arguments = registers } }, found.result),
             .value_type = found.result,
         };
+    }
+
+    // Methods on a struct value ---------------------------------------------
+    //
+    // `p.length()` means `Point.length(p)` — not "is compiled like",
+    // *means*: the same call, resolved in this stage.  There is no
+    // dispatch, no reference, and no second semantics
+    // (docs/METHODS.md).
+
+    /// `x.f(a, b)` where `x` is a struct value.  `values` is the whole
+    /// operand run with the receiver at zero, already lowered by
+    /// `lowerValueMethod` — a method's arguments take their types from
+    /// the values, exactly as every other method's do.
+    fn lowerReceiverCall(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        values: []Typed,
+        as_statement: bool,
+        fallible_allowed: bool,
+        shape_position: ShapePosition,
+    ) Error!?Typed {
+        const layout_index = values[0].value_type.strukt;
+        const layout = self.analyzer.structs.items[layout_index];
+        const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, method.name });
+        const function_index = self.analyzer.function_names.get(qualified) orelse {
+            try self.failUnknownMethod(layout_index, layout, method);
+            return null;
+        };
+        const info = self.analyzer.functions.items[function_index];
+        // The whole difference between a namespace and a method is
+        // whether the declaration's first parameter is the word `self`,
+        // and this is where a reader who has not learned that finds out
+        // (docs/METHODS.md).
+        if (info.receiver == .not) {
+            try self.fail(
+                "luce.sema.self",
+                method.span,
+                "{s}.{s} is a namespace function, not a method; it takes no self — call it as {s}({s}, …)",
+                .{ layout.name, method.name, qualified, try self.writtenReceiver(method) },
+            );
+            return null;
+        }
+        if (info.fallible and !fallible_allowed) {
+            try self.fail(
+                "luce.sema.fallible",
+                method.span,
+                "{s} can fail: write 'try {s}.{s}(…)' to pass the error on, or '{s}.{s}(…) catch …' to handle it",
+                .{
+                    method.name,
+                    try self.writtenReceiver(method),
+                    method.name,
+                    try self.writtenReceiver(method),
+                    method.name,
+                },
+            );
+            return null;
+        }
+
+        // The receiver is parameter zero, so the arity a reader wrote
+        // is one less than the one the declaration has.
+        const wanted = info.parameter_types[1..];
+        const arguments = values[1..];
+        if (arguments.len != wanted.len) {
+            try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
+                method.name,
+                wanted.len,
+                helpers.plural(wanted.len),
+                arguments.len,
+            });
+            return null;
+        }
+
+        // Ownership at the call site is the plain-call rule said once
+        // per argument: a give parameter needs `give`/`copy`/something
+        // fresh, and a borrow parameter refuses a `give` (S13, S14).
+        // The receiver never takes a verb — it is a struct value.
+        for (method.arguments, 0..) |argument, index| {
+            if (info.parameter_modes[index + 1] == .give) {
+                if (!(try self.yieldsOwnership(argument.value))) {
+                    try self.failNeedsOwnership(
+                        argument.span,
+                        try std.fmt.allocPrint(
+                            self.arena(),
+                            "argument {d} of {s} takes ownership",
+                            .{ index + 1, method.name },
+                        ),
+                        argument.value,
+                        "S13, S14",
+                    );
+                    return null;
+                }
+            } else if (argument.value.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
+                    .{method.name},
+                );
+                return null;
+            }
+        }
+
+        const registers = try self.arena().alloc(Register, values.len);
+        registers[0] = values[0].register;
+        for (arguments, wanted, 0..) |value, want, index| {
+            const fitted = (try self.fit(value, want)) orelse {
+                try self.fail("luce.sema.type", method.arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
+                    index + 1,
+                    method.name,
+                    try self.analyzer.typeName(want),
+                    try self.analyzer.typeName(value.value_type),
+                    try self.absenceAdvice(value.value_type, method.arguments[index].value),
+                });
+                return null;
+            };
+            registers[index + 1] = fitted.register;
+        }
+        if (info.results.len == 0 and !as_statement) {
+            try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
+            return null;
+        }
+        if (info.results.len >= 2 and !as_statement and shape_position != .bind) {
+            try self.fail(
+                "luce.sema.call",
+                method.span,
+                "{s} answers {d} values, and only a let or a var can receive them{s}",
+                .{
+                    method.name,
+                    info.results.len,
+                    if (shape_position == .returning) " — bind them, then return them" else "",
+                },
+            );
+            return null;
+        }
+        const call = try self.code.emit(
+            .{ .call = .{ .function = function_index, .arguments = registers } },
+            info.return_type,
+        );
+        const answered: Typed = if (info.fallible)
+            try self.openFallible(call, info.return_type)
+        else
+            .{ .register = call, .value_type = info.return_type };
+        if (info.receiver != .writes) return answered;
+        return self.writeReceiverBack(method, info, answered, as_statement);
+    }
+
+    /// `p.scale(2.0)` means `p = Point.scale(p, 2.0)` — copy in, copy
+    /// out (docs/METHODS.md).
+    ///
+    /// Not a new mechanism: it is transcribed from what the corpus
+    /// writes by hand at every mutation site it has, `var moved =
+    /// state` on one side and `state = Handle.…(state, …)` on the
+    /// other.  The compiler writes the two halves the programmer was
+    /// writing already.
+    ///
+    /// **It is not observably by-reference.**  Inside a method the only
+    /// inputs are its parameters; struct values copy on every store;
+    /// there are no globals, no references, no closures and no threads.
+    /// No expression inside the callee can name the receiver's place,
+    /// so copy-in/copy-out and by-reference give the same answers on
+    /// every program that can be written here.
+    ///
+    /// **The store stands on the returning edge only.**  A method that
+    /// raises leaves its receiver as it was, all or nothing, and for
+    /// free: `openFallible` has already branched, and this runs on the
+    /// side where the call came back.
+    fn writeReceiverBack(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        info: context.FunctionDeclInfo,
+        answered: Typed,
+        as_statement: bool,
+    ) Error!?Typed {
+        const place = (try self.receiverPlace(method, info)) orelse return null;
+        // The channel value is a statement temporary like any other
+        // fresh struct: its field run, and the receiver copy inside it,
+        // go back at the end of the statement (S3, docs/STRINGS.md).
+        // The caller of this walk never sees it — what it hands back is
+        // a *field* of it — so nothing else would park it.
+        try self.parkFreshStorage(.{
+            .register = answered.register,
+            .value_type = info.return_type,
+        });
+        // Arity one — `func step(var self):` — is the plain single
+        // return the language already had: the whole answer is the
+        // receiver.
+        if (info.results.len == 0) {
+            // A store into a place that outlives the statement takes
+            // its storage first: the struct's field run belongs to the
+            // value the call answered, and that value is a statement
+            // temporary (docs/STRINGS.md).
+            try self.code.rebuild(place.root, place.accessors, try self.ownedForStore(answered));
+            return .{ .register = answered.register, .value_type = .none };
+        }
+        const shape = info.return_type.strukt;
+        const layout = self.analyzer.structs.items[shape];
+        const back = try self.code.emit(.{ .struct_get = .{
+            .target = answered.register,
+            .layout = shape,
+            .field = 0,
+        } }, layout.fields[0].field_type);
+        try self.code.rebuild(place.root, place.accessors, try self.ownedForStore(.{
+            .register = back,
+            .value_type = layout.fields[0].field_type,
+        }));
+
+        // One declared result is the ordinary single value a reader
+        // binds with `let roll = rng.next()`; two or more is a shape,
+        // and the receiver is not part of it — the declared arity is
+        // the arity at the call site.
+        if (info.results.len == 1) {
+            return .{
+                .register = try self.code.emit(.{ .struct_get = .{
+                    .target = answered.register,
+                    .layout = shape,
+                    .field = 1,
+                } }, layout.fields[1].field_type),
+                .value_type = layout.fields[1].field_type,
+            };
+        }
+        _ = as_statement;
+        try self.fail(
+            "luce.sema.self",
+            method.span,
+            "{s} writes its receiver back and answers {d} values; a method may do one or the other",
+            .{ method.name, info.results.len },
+        );
+        return null;
+    }
+
+    /// Where a `var self` method writes its receiver back to.
+    ///
+    /// The rule is not one invented for the feature: it is the rule
+    /// `lowerAssignChain` already enforces for `cells[0].value = 3` — a
+    /// place whose root is a mutable local.  Reusing it exactly means a
+    /// receiver is legal in precisely the positions an assignment
+    /// target is, and the two can never drift.
+    fn receiverPlace(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        info: context.FunctionDeclInfo,
+    ) Error!?struct { root: LocalId, accessors: []const mir.build.Lowering.Step } {
+        _ = info;
+        switch (method.target.*) {
+            .name => |name| {
+                const found = self.findLocal(name.text) orelse return null;
+                if (!found.info.mutable) {
+                    try self.fail(
+                        "luce.sema.let",
+                        name.span,
+                        "{s} is let-bound; {s} takes var self and writes back to its receiver — use var",
+                        .{ name.text, method.name },
+                    );
+                    return null;
+                }
+                return .{ .root = found.info.local, .accessors = &.{} };
+            },
+            else => {
+                try self.fail(
+                    "luce.sema.self",
+                    method.span,
+                    "{s} takes var self, so its receiver must be a variable — not a call result or a temporary",
+                    .{method.name},
+                );
+                return null;
+            },
+        }
+    }
+
+    /// How the reader spelled the receiver, for a message that has to
+    /// hand back the static form: the bare name where there is one,
+    /// and the struct's own word where the receiver is an expression.
+    fn writtenReceiver(self: *FunctionBuilder, method: ast.Method) Error![]const u8 {
+        return self.writtenTarget(method.target);
+    }
+
+    fn writtenTarget(self: *FunctionBuilder, target: *const ast.Expression) Error![]const u8 {
+        _ = self;
+        return switch (target.*) {
+            .name => |name| name.text,
+            else => "the receiver",
+        };
+    }
+
+    /// `p.foo()` where `Point` has no `foo` at all.
+    ///
+    /// **This replaces "Point has no methods"**, which was true until
+    /// a struct could have one and would now be a lie.  It offers the
+    /// closest method there actually is, which is what the List, Map
+    /// and Builder families already do.
+    fn failUnknownMethod(
+        self: *FunctionBuilder,
+        layout_index: u32,
+        layout: StructLayout,
+        method: ast.Method,
+    ) Error!void {
+        var suggestion = helpers.Suggestion.init(method.name);
+        for (self.analyzer.functions.items) |candidate| {
+            if (candidate.enclosing != layout_index) continue;
+            if (candidate.receiver == .not) continue;
+            const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
+            suggestion.offer(candidate.name[dot + 1 ..]);
+        }
+        if (suggestion.best()) |closest| {
+            try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{
+                layout.name, method.name, closest,
+            });
+            return;
+        }
+        try self.fail("luce.sema.method", method.span, "{s} has no method {s}", .{ layout.name, method.name });
     }
 
     /// Which argument of a method is a *store* into the receiver —
@@ -5142,13 +6032,8 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "file_exists takes a String path");
                 result = .boolean;
             },
-            .arg_count, .term_rows, .term_cols => {
+            .term_rows, .term_cols => {
                 result = .int;
-            },
-            .arg_get => {
-                if (arguments[0].value_type != .int)
-                    return self.failIntrinsic(call, "arg takes an Int index");
-                result = .string;
             },
             .term_clear, .term_flush => {
                 result = .none;
@@ -5259,7 +6144,7 @@ pub const FunctionBuilder = struct {
             // instruction above, so the releases below cannot take
             // them back out from under the error (docs/FAILURE.md).
             try self.emitTempReleases(0);
-            try self.emitScopeReleases(0, null);
+            try self.emitScopeReleases(0, &.{});
             try self.code.unwind();
             return .{ .value = .{ .register = emitted, .value_type = .none } };
         }
