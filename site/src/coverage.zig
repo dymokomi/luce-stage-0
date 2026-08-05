@@ -177,7 +177,13 @@ fn builtins(repository: Repository) !Names {
     const source = try repository.read("src/luce/04_semantics/builder.zig");
     defer repository.gpa.free(source);
 
-    const table = between(source, "const builtins = [_]Builtin{", "\n        };") orelse
+    // The table's own closing brace, at column zero — not the first
+    // `};` at *any* indentation, which is what this used to look for
+    // and which ran past the end of the table into whatever declaration
+    // came next.  It happened to be right while nothing followed;
+    // `retired_builtins` moved in beside it and the reading silently
+    // grew two names the language no longer has.
+    const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
         return error.BuiltinTableNotFound;
 
     var lines = std.mem.splitScalar(u8, table, '\n');

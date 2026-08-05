@@ -962,22 +962,6 @@ pub const Machine = struct {
                 const callback = host.file_exists orelse return self.runtime.fail(.host_unavailable);
                 return .ofBoolean(callback(host.context, registers[arguments[0]].asString()));
             },
-            .arg_count => {
-                const host = try self.service();
-                const callback = host.arg_count orelse return self.runtime.fail(.host_unavailable);
-                return .ofInt(callback(host.context));
-            },
-            .arg_get => {
-                const host = try self.service();
-                const callback = host.arg orelse return self.runtime.fail(.host_unavailable);
-                const index = registers[arguments[0]].asInt();
-                if (index < 0 or index > std.math.maxInt(u32)) {
-                    return self.runtime.fail(.argument_bounds);
-                }
-                const value = (try callback(host.context, self.arena, @intCast(index))) orelse
-                    return self.runtime.fail(.argument_bounds);
-                return self.runtime.ownValue(.ofString(value));
-            },
             .term_rows => {
                 const screen = try self.terminal();
                 return .ofInt(screen.term_rows(screen.context));

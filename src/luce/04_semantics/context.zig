@@ -140,18 +140,18 @@ pub fn writeMissingFields(
 /// not here — `sort` and `has` are resolved by receiver type, so a
 /// function called `sort` collides with nothing.
 pub const reserved_names = [_][]const u8{
-    "range",      "Int",         "Float",       "Bool",        "String",
-    "List",       "Map",         "Array",       "Builder",     "None",
-    "abs",        "min",         "max",         "clamp",       "sqrt",
-    "floor",      "ceil",        "trunc",       "len",         "byte_at",
-    "assert",     "trap",        "parse_int",   "parse_float", "chr",
-    "ord",        "append",      "pop",         "insert",      "remove",
-    "has",        "dim",         "free",        "print",       "file_read",
-    "file_write", "file_exists", "arg",         "arg_count",   "key_read",
-    "key_text",   "error",       "read_line",   "print_error", "clock_ms",
-    "sleep_ms",   "env",         "file_append", "file_delete", "file_rename",
-    "dir_list",   "term_rows",   "term_cols",   "term_clear",  "term_move",
-    "term_style", "term_write",  "term_flush",
+    "range",       "Int",         "Float",       "Bool",        "String",
+    "List",        "Map",         "Array",       "Builder",     "None",
+    "abs",         "min",         "max",         "clamp",       "sqrt",
+    "floor",       "ceil",        "trunc",       "len",         "byte_at",
+    "assert",      "trap",        "parse_int",   "parse_float", "chr",
+    "ord",         "append",      "pop",         "insert",      "remove",
+    "has",         "dim",         "free",        "print",       "file_read",
+    "file_write",  "file_exists", "key_read",    "key_text",    "error",
+    "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
+    "file_append", "file_delete", "file_rename", "dir_list",    "term_rows",
+    "term_cols",   "term_clear",  "term_move",   "term_style",  "term_write",
+    "term_flush",
 };
 
 pub fn isReserved(name: []const u8) bool {

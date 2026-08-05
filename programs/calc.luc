@@ -128,8 +128,8 @@ func repl():
             evaluate(typed) catch:
                 print_error("cannot compute: " + typed)
 
-func main() -> !:
-    if arg_count() == 0:
+func main(args: List(String)) -> !:
+    if len(args) == 0:
         repl()
         return
-    try evaluate(arg(0))
+    try evaluate(args[0])

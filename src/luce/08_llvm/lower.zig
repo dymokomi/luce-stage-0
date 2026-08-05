@@ -4578,41 +4578,6 @@ const Body = struct {
                 const answer = try self.callHost(.file_exists, &.{ path, path_length }, "exists");
                 self.values[register] = try self.saidYes(answer);
             },
-            .arg_count => {
-                self.values[register] = try self.callHostNumber(.arg_count, "argument.count");
-            },
-            .arg_get => {
-                // The interpreter refuses an index no argument could
-                // have before it asks the host anything.
-                const builder = self.module.builder;
-                const index = self.values[of[0]];
-                const negative = try self.wip.icmp(
-                    .slt,
-                    index,
-                    try builder.intValue(.i64, 0),
-                    "below",
-                );
-                const enormous = try self.wip.icmp(
-                    .sgt,
-                    index,
-                    try builder.intValue(.i64, std.math.maxInt(u32)),
-                    "above",
-                );
-                try self.check(
-                    try self.wip.bin(.@"or", negative, enormous, "out.of.range"),
-                    .argument_bounds,
-                );
-
-                const argument = try self.hostText("argument");
-                const answer = try self.callHost(
-                    .arg,
-                    &.{ index, argument.text, argument.length },
-                    "argument",
-                );
-                try self.check(try self.saidNo(answer), .argument_bounds);
-                const bytes, const size = try argument.load(self);
-                try self.callAnswering(register, .luce_rt_intern_text, &.{ rt, bytes, size });
-            },
             .term_rows => {
                 self.values[register] = try self.callHostNumber(.term_rows, "rows");
             },

@@ -655,6 +655,51 @@ test "luce.sema.main: the entry's parameter takes no verb" {
     );
 }
 
+test "luce.sema.retired: arg and arg_count name their replacement" {
+    // A name the language used to spell is not a typo, and the site
+    // still teaches the old one; a bare `unknown function arg` points
+    // nowhere.  One release of a pointer (docs/METHODS.md).
+    try expectHostSaying(
+        \\func main():
+        \\    print(arg(0))
+        \\
+    ,
+        "luce.sema.retired",
+        "arg was retired: declare func main(args: List(String)): and index args",
+    );
+    try expectHostSaying(
+        \\func main():
+        \\    print(String(arg_count()))
+        \\
+    ,
+        "luce.sema.retired",
+        "arg_count was retired: declare func main(args: List(String)): and write len(args)",
+    );
+}
+
+test "arg is an ordinary word again, and a program that declares one gets its own" {
+    // The retirement message is reached only once nothing else
+    // resolved: the two names left `reserved_names` with the builtins,
+    // so they are available to a program like any other.
+    var result = try compile_mod.compile(testing.allocator,
+        \\func arg(index: Int) -> Int:
+        \\    return index * 2
+        \\
+        \\func main():
+        \\    let arg_count = arg(3)
+        \\    assert(arg_count == 6)
+        \\
+    , script);
+    defer result.deinit();
+    switch (result) {
+        .success => {},
+        .failure => |diagnostics| {
+            printAll(&diagnostics);
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
 test "luce.sema.main: all four legal entry shapes compile" {
     // `-> !:` is how a program says the world can stop it, and the
     // command line composes with it (docs/METHODS.md).  The parameter's

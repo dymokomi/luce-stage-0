@@ -5,13 +5,12 @@
 
 import mathx
 
-func main():
-    if arg_count() == 0:
+func main(args: List(String)):
+    if len(args) == 0:
         print("usage: stats NUMBER [NUMBER ...]")
         return
     var values: List(Float) = []
-    for index in range(0, arg_count()):
-        let written = arg(index)
+    for written in args:
         let number = parse_float(written)
         if number == none:
             print("stats: not a number: " + written)

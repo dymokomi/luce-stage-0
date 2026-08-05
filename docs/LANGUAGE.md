@@ -170,7 +170,7 @@ Python needs `??` because `or` is broken there by truthiness, and Luce
 has no truthiness and no ternary.
 
 ```luce
-let count = parse_int(arg(0)) else 10
+let count = parse_int(args[0]) else 10
 let first = parse_int(a) else parse_int(b) else 0   # right-associative
 let must = parse_int(text) else trap("not a number")
 ```
@@ -197,8 +197,8 @@ never spent on absence, which is `?`'s job (docs/FAILURE.md).
 func read(path: String) -> String!:
     return try file_read(path)
 
-func main() -> !:
-    let text = try files.read(arg(0))
+func main(args: List(String)) -> !:
+    let text = try files.read(args[0])
     let cfg  = files.read("settings") catch ""
 ```
 
@@ -498,7 +498,7 @@ implies it, so absence carries all the information there is
 (docs/FAILURE.md).  Read the answer with `else`, or test it:
 
 ```luce
-let count = parse_int(arg(0)) else 10
+let count = parse_int(args[0]) else 10
 let n = parse_int(text)
 if n == none:
     print("not a number: " + text)
@@ -516,9 +516,27 @@ to one type is a method on it.
 
 ## The host
 
-Every effect is a host service, every service is optional, and one the
-host does not offer traps `host_unavailable` rather than touching
-anything.  The whole set, and what each answers:
+**The command line is not one of them.**  A program that reads its
+arguments declares them:
+
+```luce
+func main(args: List(String)):     # and `-> !` composes with it
+    for name in args:
+        print(name)
+```
+
+`args` is an ordinary `List(String)`, so `len`, indexing, slicing,
+`for … in`, `contains` and `strings.join` all work on it, and
+`args[0]` is the first word after the program's own name.  It is
+*handed to* the program rather than called *by* it, which is why the
+host gate does not cover it and why a host with no arguments to offer
+supplies an **empty** list instead of a trap; reading past the end is
+the language's own `index_bounds` (OWNERSHIP.md S44).  A program that
+ignores its arguments writes `func main():` and says nothing false.
+
+Every other effect is a host service, every service is optional, and
+one the host does not offer traps `host_unavailable` rather than
+touching anything.  The whole set, and what each answers:
 
 ```luce
 print(text)                  # a line to standard output
@@ -529,7 +547,6 @@ env(name)                    # String?  — none when unset
 clock_ms()                   # Int, monotonic, unspecified origin
 sleep_ms(milliseconds)       # waits at least that long
 
-arg_count()   arg(index)     # the command line
 file_read(path)              # String!
 file_write(path, content)    # !
 file_append(path, content)   # !

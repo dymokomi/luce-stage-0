@@ -96,8 +96,6 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
     .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
     .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
-    .{ .name = "arg_count", .kind = .arg_count, .arity = 0, .host = true },
-    .{ .name = "arg", .kind = .arg_get, .arity = 1, .host = true },
     .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
     .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
     .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
@@ -116,6 +114,23 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
     .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
     .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
+};
+
+/// Names the language spelled once and does not any more, and what to
+/// write instead.
+///
+/// **A table to empty, never to grow.**  A deleted builtin is normally
+/// just an unknown name, and that is the right answer for a private
+/// program — but these two are on a public documentation site, and
+/// `unknown function arg` points nowhere.  One release of a pointer is
+/// worth more here than the purity of having deleted the row; the row
+/// itself comes out when the site no longer teaches the old spelling.
+pub const retired_builtins = [_]struct {
+    name: []const u8,
+    instead: []const u8,
+}{
+    .{ .name = "arg", .instead = "declare func main(args: List(String)): and index args" },
+    .{ .name = "arg_count", .instead = "declare func main(args: List(String)): and write len(args)" },
 };
 
 // ---------------------------------------------------------------------------
@@ -566,6 +581,16 @@ pub const FunctionBuilder = struct {
     /// Report a call whose callee names no declaration, offering the
     /// closest function or struct the reader could have meant.
     fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Span) Error!void {
+        // A name the language used to spell is not a typo, and the
+        // reader is owed the replacement rather than a guess at what
+        // they might have meant.  Reached only once nothing else
+        // resolved, because `arg` is an ordinary word now and a program
+        // that declares one gets its own.
+        for (retired_builtins) |gone| {
+            if (!std.mem.eql(u8, written, gone.name)) continue;
+            try self.fail("luce.sema.retired", span, "{s} was retired: {s}", .{ gone.name, gone.instead });
+            return;
+        }
         var suggestion = helpers.Suggestion.init(written);
         var functions = self.analyzer.function_names.keyIterator();
         while (functions.next()) |key| {
@@ -846,7 +871,6 @@ pub const FunctionBuilder = struct {
                 .str_value,
                 .chr_code,
                 .file_read,
-                .arg_get,
                 .key_read,
                 .read_line,
                 .env_get,
@@ -5142,13 +5166,8 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "file_exists takes a String path");
                 result = .boolean;
             },
-            .arg_count, .term_rows, .term_cols => {
+            .term_rows, .term_cols => {
                 result = .int;
-            },
-            .arg_get => {
-                if (arguments[0].value_type != .int)
-                    return self.failIntrinsic(call, "arg takes an Int index");
-                result = .string;
             },
             .term_clear, .term_flush => {
                 result = .none;

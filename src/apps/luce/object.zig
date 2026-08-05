@@ -352,9 +352,9 @@ test "a standalone executable prints, and a trapping one reports and exits nonze
         \\func divide(a: Int, b: Int) -> Int:
         \\    return a // b
         \\
-        \\func main():
+        \\func main(args: List(String)):
         \\    print("alive")
-        \\    if arg_count() == 1:
+        \\    if len(args) == 1:
         \\        print(String(divide(1, 0)))
         \\
     );

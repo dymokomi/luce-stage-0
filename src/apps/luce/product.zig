@@ -564,19 +564,17 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
 }
 
 test "a standalone binary reads the arguments it was given, past its own name" {
-    // `arg(0)` is the first thing the person typed after the program,
+    // `args[0]` is the first thing the person typed after the program,
     // which is what `loom run PROGRAM a b` gives too — a program's
-    // behaviour must not depend on who started it.
+    // behaviour must not depend on who started it (OWNERSHIP.md S44).
     const gpa = testing.allocator;
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("echo.luc",
-        \\func main():
-        \\    print(String(arg_count()))
-        \\    var index = 0
-        \\    while index < arg_count():
-        \\        print(arg(index))
-        \\        index = index + 1
+        \\func main(args: List(String)):
+        \\    print(String(len(args)))
+        \\    for word in args:
+        \\        print(word)
         \\
     );
     const program = try tree.at(gpa, "echo.luc");

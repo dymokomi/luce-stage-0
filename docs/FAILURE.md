@@ -104,8 +104,8 @@ assert-unwrap, and it is greppable.
 func read(path: String) -> String!:
     return try host_read(path)
 
-func main() -> !:
-    let text = try files.read(arg(0))
+func main(args: List(String)) -> !:
+    let text = try files.read(args[0])
     let cfg  = files.read("cfg") catch ""
 ```
 

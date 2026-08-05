@@ -477,12 +477,10 @@ test "the words after a program are the program's, not loom's" {
     var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("echo.luc",
-        \\func main():
-        \\    print(String(arg_count()))
-        \\    var index = 0
-        \\    while index < arg_count():
-        \\        print(arg(index))
-        \\        index = index + 1
+        \\func main(args: List(String)):
+        \\    print(String(len(args)))
+        \\    for word in args:
+        \\        print(word)
         \\
     );
     const program = try install.at(gpa, "echo.luc");
@@ -578,8 +576,8 @@ test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
     var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("mine.luc",
-        \\func main():
-        \\    print("editing " + arg(0))
+        \\func main(args: List(String)):
+        \\    print("editing " + args[0])
         \\
     );
     const editor = try install.at(gpa, "mine.luc");

@@ -772,8 +772,8 @@ test "host builtins type-check and stay host-gated" {
     , "luce.sema.host");
 
     var hosted = try compile_mod.compile(testing.allocator,
-        \\func main() -> !:
-        \\    print("hello " + arg(0))
+        \\func main(args: List(String)) -> !:
+        \\    print("hello " + args[0])
         \\    let text = file_read("notes.txt") catch ""
         \\    try file_write("copy.txt", text)
         \\    print("copied")

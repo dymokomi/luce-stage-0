@@ -50,9 +50,9 @@ test "print, arguments, and files flow through the host" {
     world.arguments = &one_argument;
 
     var session = try agree.compare(
-        \\func main() -> !:
-        \\    print("args: " + String(arg_count()))
-        \\    let path = arg(0)
+        \\func main(args: List(String)) -> !:
+        \\    print("args: " + String(len(args)))
+        \\    let path = args[0]
         \\    if file_exists(path):
         \\        print(try file_read(path))
         \\    try file_write("out.txt", "saved")
@@ -70,16 +70,18 @@ test "an argument out of range traps, and a refused write is an error" {
     // The two failures a host can hand back, and the line between
     // them: an index no argument could have is the program's mistake,
     // and a write the world would not take is not (docs/FAILURE.md).
+    // The command line is an ordinary List now, so the first of those
+    // is the language's own bounds trap (docs/METHODS.md).
     var session = try agree.compare(
-        \\func main():
+        \\func main(args: List(String)):
         \\    file_write("out.txt", "ignored") catch:
         \\        print("refused")
-        \\    let missing = arg(5)
+        \\    let missing = args[5]
         \\
     , .{ .world = .{ .refuse_writes = true } });
     defer session.deinit();
 
-    try testing.expectEqual(mir.TrapCode.argument_bounds, session.end.trapped);
+    try testing.expectEqual(mir.TrapCode.index_bounds, session.end.trapped);
     try testing.expectEqualStrings("refused\n", session.printed());
 }
 

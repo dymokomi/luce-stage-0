@@ -46,8 +46,8 @@ An early-exit guard narrows everything below it, which is the shape
 most real code takes.
 
 ```luce run args=17
-func main():
-    let raw = arg(0)
+func main(args: List(String)):
+    let raw = args[0]
     let n = parse_int(raw)
     if n == none:
         print(f"not a number: {raw}")

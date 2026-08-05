@@ -131,10 +131,10 @@ files, arguments, the screen — only exist as host builtins that loom,
 the trusted boundary, implements; the language itself stays pure:
 
 ```python
-func main():
+func main(args: List(String)):
     var name = "loom"
-    if arg_count() > 0:
-        name = arg(0)
+    if len(args) > 0:
+        name = args[0]
     print("hello, " + name)
 ```
 

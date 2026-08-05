@@ -75,8 +75,8 @@ test "checked integer arithmetic lowers to the overflow intrinsics" {
 test "an optional lowers to its payload beside a presence bit" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
-        \\func main():
-        \\    let n = parse_int(arg(0))
+        \\func main(args: List(String)):
+        \\    let n = parse_int(args[0])
         \\    print(String(n else 0))
         \\
     )).?;
@@ -96,10 +96,10 @@ test "floats, structs, and the host services all lower" {
         \\    x: Float
         \\    y: Float
         \\
-        \\func main():
+        \\func main(args: List(String)):
         \\    let p = Point(x = 1.5, y = -0.0)
         \\    print(String(p.x * 2.0) + String(Int(p.y)) + String(sqrt(4.0)))
-        \\    print(arg(0) + String(arg_count()) + String(file_exists("nowhere")))
+        \\    print(args[0] + String(len(args)) + String(file_exists("nowhere")))
         \\    term_move(term_rows(), term_cols())
         \\    term_flush()
         \\
@@ -112,7 +112,7 @@ test "floats, structs, and the host services all lower" {
         "fptosi",
         "llvm.sqrt.f64",
         "declare i32 @luce_rt_struct_make",
-        "declare i32 @luce_rt_intern_text",
+        "declare i32 @luce_rt_args_list",
     }) |wanted| {
         if (std.mem.indexOf(u8, rendered, wanted) == null) {
             std.debug.print("missing: {s}\n", .{wanted});
@@ -1696,8 +1696,8 @@ test "the null object put in a T? is present, because absence is not a handle" {
 
 test "files, arguments, the screen, and the keyboard agree" {
     try agree(
-        \\func main() -> !:
-        \\    print(String(arg_count()) + " " + arg(0) + "," + arg(1))
+        \\func main(args: List(String)) -> !:
+        \\    print(String(len(args)) + " " + args[0] + "," + args[1])
         \\    print(String(file_exists("notes.txt")))
         \\    try file_write("notes.txt", "hello world")
         \\    print(String(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
@@ -2012,11 +2012,13 @@ test "a fallible call handing back an object gives it up on both paths" {
     );
 }
 
-test "an argument index out of range traps argument_bounds on both engines" {
+test "an argument index out of range traps index_bounds on both engines" {
+    // `args` is an ordinary List, so reading past it is the language's
+    // own bounds trap and not a channel of its own (docs/METHODS.md).
     try agree(
-        \\func main():
-        \\    print(arg(0))
-        \\    print(arg(9))
+        \\func main(args: List(String)):
+        \\    print(args[0])
+        \\    print(args[9])
         \\
     );
 }
@@ -2027,11 +2029,6 @@ test "a withheld service group fails closed on both engines" {
         \\    print(String(file_exists("notes.txt")))
         \\
     , .{ .files = false });
-    try agreeGiven(
-        \\func main():
-        \\    print(String(arg_count()))
-        \\
-    , .{ .arguments = false });
     try agreeGiven(
         \\func main():
         \\    print(String(term_rows()))

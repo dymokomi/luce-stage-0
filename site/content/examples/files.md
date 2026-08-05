@@ -81,12 +81,12 @@ the fox and the dog
 import std.files
 import std.strings
 
-func main() -> !:
-    if arg_count() == 0:
+func main(args: List(String)) -> !:
+    if len(args) == 0:
         print("usage: wc FILE")
         return
 
-    let path = arg(0)
+    let path = args[0]
     let text = try files.read(path)
 
     var counts = new Map(String, Int)

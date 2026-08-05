@@ -825,14 +825,9 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .string);
             try expectType(result, .boolean);
         },
-        .arg_count, .term_rows, .term_cols => {
+        .term_rows, .term_cols => {
             try exactly(arguments, 0);
             try expectType(result, .int);
-        },
-        .arg_get => {
-            try exactly(arguments, 1);
-            try expectType(arguments[0], .int);
-            try expectType(result, .string);
         },
         .term_clear, .term_flush => {
             try exactly(arguments, 0);

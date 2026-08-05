@@ -5,10 +5,10 @@ at the speed of C, and gives memory back without a garbage collector
 and without reference counting anywhere.
 
 ```luce run args=world
-func main():
+func main(args: List(String)):
     var greeting = "hello"
-    if arg_count() > 0:
-        greeting = greeting + ", " + arg(0)
+    if len(args) > 0:
+        greeting = greeting + ", " + args[0]
     print(greeting)
 
     var counts = new Map(String, Int)

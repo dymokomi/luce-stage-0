@@ -34,7 +34,13 @@ pub const magic = "LUCE";
 /// *type* the verifier demands of `key_read`'s result is not, so a
 /// module written under 17 would either fail verification or, worse,
 /// pass it and lower against the wrong shape.
-pub const format_version: u32 = 19;
+///
+/// 20 — the command line stopped being an ambient service and became
+/// `main`'s parameter (docs/METHODS.md).  Two intrinsics left the set
+/// (`arg_count`, `arg_get`) and one trap code with them
+/// (`argument_bounds`), so every instruction tag after them renumbers;
+/// the entry may now carry one parameter, which the verifier checks.
+pub const format_version: u32 = 20;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -916,6 +922,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 19), format_version);
-    try testing.expectEqual(@as(u64, 1242059040041295902), hasher.final());
+    try testing.expectEqual(@as(u32, 20), format_version);
+    try testing.expectEqual(@as(u64, 5072236016799722047), hasher.final());
 }

@@ -178,7 +178,7 @@ struct Words:
             return true
         if word == "file_read" or word == "file_write" or word == "file_exists":
             return true
-        if word == "arg" or word == "arg_count" or word == "key_read" or word == "key_text":
+        if word == "key_read" or word == "key_text" or word == "dir_list":
             return true
         if word == "term_write" or word == "term_move" or word == "term_style":
             return true
@@ -414,11 +414,11 @@ struct Handle:
             next.scroll = cursor_line - visible + 1
         return next
 
-func main():
-    if arg_count() != 1:
+func main(args: List(String)):
+    if len(args) != 1:
         print("usage: editor FILE")
         return
-    let path = arg(0)
+    let path = args[0]
     # One read, and what it answers decides the greeting.  The
     # exists-then-read this used to write had a window between the two
     # calls that nothing could close, and it could not tell "not

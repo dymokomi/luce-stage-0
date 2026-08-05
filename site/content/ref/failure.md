@@ -39,7 +39,6 @@ the rest.
 | `string_bounds` | string index out of bounds | a `String` index or slice past the end |
 | `string_boundary` | string slice splits a UTF-8 sequence | a `String` slice cutting a character |
 | `host_unavailable` | host service unavailable | an effect the host does not implement |
-| `argument_bounds` | program argument out of range | `arg(i)` with `i` at or past `arg_count()` |
 | `index_bounds` | index out of bounds | a list or array index past the end |
 | `key_missing` | key not found in map | indexing a map with an absent key |
 | `empty_collection` | pop from an empty list | `pop()` on an empty list |

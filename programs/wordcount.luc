@@ -40,14 +40,14 @@ func heaviest(counts: Map(String, Int)) -> String:
             best_count = counts[word]
     return best
 
-func main() -> !:
-    if arg_count() == 0:
+func main(args: List(String)) -> !:
+    if len(args) == 0:
         print("usage: wordcount FILE [TOP_N]")
         return
-    let path = arg(0)
+    let path = args[0]
     var top = 5
-    if arg_count() > 1:
-        top = parse_int(arg(1)) else top
+    if len(args) > 1:
+        top = parse_int(args[1]) else top
 
     # One read, and its answer is the whole story.  The exists-then-
     # read this used to write had a window between the two calls that
