@@ -26,7 +26,7 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
 | `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `int(x)`, `long(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` takes a scalar |
+| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` takes a scalar and prints it at its own width |
 
 The four numeric builtins that answer their operand's own type land
 their arguments where the whole call lands, so `let x: double =
@@ -259,8 +259,8 @@ The language keeps only these:
 | `== != < <= > >=` | comparison and ordering |
 | `s[a:b]` | slice; checks UTF-8 boundaries |
 | `len(s)` | in bytes |
-| `s.byte_at(index) -> long` | raw byte |
-| `s.find_byte(byte, start) -> long` | offset of the first `byte` at or after `start`, or `-1`; traps if `byte` is outside 0..255 or `start` is outside the string |
+| `s.byte_at(index) -> byte` | raw byte. The one builtin that answers a `byte`, because its result is definitionally one; it reaches a `long` parameter or a comparison with nothing written down |
+| `s.find_byte(byte, start) -> long` | offset of the first `byte` at or after `start`, or `-1`; the byte looked for is a `byte`, so "outside 0..255" is refused where it is written rather than trapping where it is read. Traps if `start` is outside the string |
 
 Every other string method routes to [`std.strings`](/std/strings/) and
 needs `import std.strings` in scope.

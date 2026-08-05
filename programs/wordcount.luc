@@ -4,7 +4,7 @@
 
 import std.files
 
-func is_word_byte(byte: long) -> bool:
+func is_word_byte(byte: byte) -> bool:
     if byte >= 97 and byte <= 122:
         return true
     if byte >= 65 and byte <= 90:

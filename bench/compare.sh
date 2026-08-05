@@ -63,7 +63,11 @@ build_quietly "$base" "the base ($ref)"
 echo "building working tree..."
 build_quietly "$root" "the working tree"
 
-names="loops math strings arrays matmul stats"
+# The same list run.sh times.  A row the base does not have is
+# skipped rather than failed — every loop below guards on the base's
+# artifact existing — so comparing against a commit from before the
+# 32-bit rows landed still works and simply reports fewer rows.
+names="loops math strings arrays arrays32 matmul matmul32 stats"
 mkdir -p build/bench "$base/build/bench"
 # Each side writes its own `.lc` and each side's tag names its own code
 # generator, so neither can run the other's artifact — or one its own

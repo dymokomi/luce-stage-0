@@ -23,8 +23,11 @@ func main():
 | Type | What it is |
 |---|---|
 | `bool` | `true` or `false`. No truthiness: nothing else is a condition. |
+| `byte` | An unsigned 8-bit number, 0 … 255. Storage — see below. |
+| `short` | A signed 16-bit number. Storage. |
 | `int` | A signed 32-bit integer, **checked**: overflow is a trap, not a wrap. |
 | `long` | A signed 64-bit integer, checked the same way. |
+| `half` | IEEE 754 binary16, about three digits. Storage. |
 | `float` | IEEE 754 binary32, about seven digits. |
 | `double` | IEEE 754 binary64, about sixteen. |
 | `string` | Immutable UTF-8 text. A value, not an object. |
@@ -40,14 +43,57 @@ octal literals and no `_` digit separators — writing one is a
 `luce.lex.number` error naming the reason, rather than a silent
 misreading.
 
+## Three of them are storage, not arithmetic
+
+`byte`, `short` and `half` are places to *keep* a number, not widths
+to compute at. An operator widens them first — `byte` and `short` to
+`int`, `half` to `float` — so no expression ever has one of these
+types, and there are four arithmetic types rather than seven.
+
+That is why nothing wraps. A `byte` holding 255 plus one is 256, not
+zero, because the addition never had type `byte` in the first place.
+
+```luce run
+func main():
+    var full: byte = 255
+    print(string(full + 1))
+    print(string(full * full))
+```
+
+```output
+256
+65025
+```
+
+What you gain by writing one down is memory. An `array(byte, n)` is
+one byte an element where an `array(long, n)` is eight, and that
+eightfold difference is the whole reason the narrow types exist —
+image data, byte buffers, the dense numeric arrays a GPU wants.
+
+```luce run
+func main():
+    var pixels = new array(byte, 4)
+    pixels[0] = 255
+    pixels[1] = 128
+    print(string(pixels[0] + pixels[1]))
+```
+
+```output
+383
+```
+
+Storing into one is the other side of the bargain: a value that does
+not fit is a trap, never a truncation. `byte(300)` stops the program;
+`byte(x % 256)` is how you say you meant it to wrap.
+
 ## Widening is up the ladder, and never back down
 
-Two ladders — `int` to `long`, `float` to `double` — and one rule
-across them: **a mixed pair meets at `double`**, whichever way round
-it was written. Those four conversions are the whole of what Luce does
-without being asked, and they happen wherever a value meets a type: an
-operator, an annotation, an argument, a return, a field, a list
-element.
+Two ladders — `byte` to `short` to `int` to `long`, and `half` to
+`float` to `double` — and one rule across them: **a mixed pair meets
+at `double`**, whichever way round it was written. Those conversions
+are the whole of what Luce does without being asked, and they happen
+wherever a value meets a type: an operator, an annotation, an
+argument, a return, a field, a list element.
 
 **Nothing narrows on its own** — not `long` into `int`, not `double`
 into `float`, not `double` into `long`. A value that reached somewhere

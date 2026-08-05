@@ -531,3 +531,68 @@ test "an option is recognised by shape, and a sentence about one is not" {
     try std.testing.expect(!isOption("-"));
     try std.testing.expect(!isOption("build"));
 }
+
+/// Every name the language answers to as a *type*, out of the one
+/// table both the parser and the analyzer resolve through.
+///
+/// These reach a program two ways and the reference owes a reader
+/// both: as an annotation (`var n: short = 1`) and, for the scalars,
+/// as the conversion constructor named for the type it produces
+/// (`short(x)` — docs/NUMERICS.md §7).  Neither was checked until the
+/// ladder grew to seven, and the gap was the same shape as the one
+/// this file was written for: `byte`, `short` and `half` landed in the
+/// compiler and `ref/builtins.md` went on listing four conversions.
+fn typeNames(repository: Repository) !Names {
+    var names: Names = .{ .gpa = repository.gpa };
+    errdefer names.deinit();
+
+    const source = try repository.read("src/luce/support/types.zig");
+    defer repository.gpa.free(source);
+
+    const table = between(source, "const builtin_table = [_]struct { name: []const u8, is: Builtin }{", "\n};") orelse
+        return error.TypeTableNotFound;
+
+    var lines = std.mem.splitScalar(u8, table, '\n');
+    while (lines.next()) |line| {
+        const marker = ".{ .name = \"";
+        const start = std.mem.indexOf(u8, line, marker) orelse continue;
+        const rest = line[start + marker.len ..];
+        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
+        try names.add(rest[0..stop]);
+    }
+    if (names.items.items.len < 10) return error.TypeTableTooSmall;
+    return names;
+}
+
+test "the reference names every type the language answers to" {
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    var names = try typeNames(repository);
+    defer names.deinit();
+
+    try expectDocumented(repository, "ref/types.md", names, &.{});
+}
+
+test "the reference names every conversion constructor" {
+    // The scalars from the same table are also functions — `byte(x)`,
+    // `half(x)`, `string(x)` — and `ref/builtins.md` is where a reader
+    // looks for a function.  `bool` and the four containers are not
+    // conversions (`types.conversionNamed` refuses them), so they are
+    // exempt here and covered by the type test above.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    var names = try typeNames(repository);
+    defer names.deinit();
+
+    try expectDocumented(repository, "ref/builtins.md", names, &.{
+        "bool",
+        "list",
+        "map",
+        "array",
+        "builder",
+    });
+}

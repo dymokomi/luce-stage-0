@@ -1125,3 +1125,51 @@ test "a trace keeps the innermost frames and counts the rest" {
     luce_rt_report(runtime, &reported, Reported.take);
     try testing.expectEqual(@as(i64, 7), reported.dropped);
 }
+
+test "an array's cells are exactly as wide as its element, which is the prize" {
+    // The 8x saving `array(byte, n)` exists for is a *layout* claim,
+    // and nothing else in the suite would notice it going away: a
+    // wider cell over-allocates and still reads back the right value,
+    // so every behavioural test stays green while the memory quietly
+    // doubles.  This asserts the widths themselves.
+    const Kind = heap.Object.ElementKind;
+    try testing.expectEqual(@as(usize, 1), Kind.width(.byte));
+    try testing.expectEqual(@as(usize, 1), Kind.width(.boolean));
+    try testing.expectEqual(@as(usize, 2), Kind.width(.short));
+    try testing.expectEqual(@as(usize, 2), Kind.width(.half));
+    try testing.expectEqual(@as(usize, 4), Kind.width(.int));
+    try testing.expectEqual(@as(usize, 4), Kind.width(.float));
+    try testing.expectEqual(@as(usize, 8), Kind.width(.long));
+    try testing.expectEqual(@as(usize, 8), Kind.width(.double));
+    try testing.expectEqual(@as(usize, 24), Kind.width(.value));
+
+    // And the element zero's tag is what picks the kind, because the
+    // runtime is handed a zero and never the program's type table.
+    try testing.expectEqual(Kind.byte, Kind.of(Value.ofByte(0)));
+    try testing.expectEqual(Kind.short, Kind.of(Value.ofShort(0)));
+    try testing.expectEqual(Kind.half, Kind.of(Value.ofHalf(0.0)));
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // End to end: a byte array of a thousand elements occupies a
+    // thousand bytes and a long array of the same length eight
+    // thousand.  The ratio is the measurement, and it is 8.
+    const bytes = try runtime.newArray(&.{1000}, Value.ofByte(0));
+    const longs = try runtime.newArray(&.{1000}, Value.ofLong(0));
+    const byte_row = try runtime.resolve(bytes);
+    const long_row = try runtime.resolve(longs);
+    try testing.expectEqual(@as(usize, 1000), byte_row.array.elements.len);
+    try testing.expectEqual(@as(usize, 8000), long_row.array.elements.len);
+
+    // Every value a byte can hold survives the round trip through a
+    // one-byte cell, which is what says the width is honest rather
+    // than merely small.  128 and 255 are the two that would come
+    // back negative if anything on the way read the bits as signed.
+    for (0..256) |at| byte_row.array.put(at, Value.ofByte(@intCast(at)));
+    try testing.expectEqual(@as(u8, 0), byte_row.array.at(0).asByte());
+    try testing.expectEqual(@as(u8, 128), byte_row.array.at(128).asByte());
+    try testing.expectEqual(@as(u8, 255), byte_row.array.at(255).asByte());
+}

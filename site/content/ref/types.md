@@ -1,9 +1,9 @@
 # Types
 
 Luce is statically typed with inference. Every expression has exactly
-one type, known at compile time. There is exactly **one implicit
-conversion**: an `long` widens to a `double` wherever a `double` is
-required. Nothing narrows, and nothing else converts.
+one type, known at compile time. Widening is implicit along each
+numeric ladder and, across the two, only into `double`. **Nothing
+narrows implicitly** — not in any direction and not in any context.
 
 An annotation is optional wherever the initializer decides the type,
 and required where nothing does — an empty list literal, a `var` with
@@ -13,9 +13,9 @@ no value.
 
 The line between them decides everything about memory.
 
-**Values** copy on assignment and on call, and nobody frees them:
-`bool`, `long`, `double`, `string`, and `struct`s. A value
-never takes an ownership word.
+**Values** copy on assignment and on call, and nobody frees them: the
+seven numbers, `bool`, `string`, and `struct`s. A value never takes an
+ownership word.
 
 **Heap objects** are referenced, created with `new` or a literal, and
 freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
@@ -27,26 +27,123 @@ freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
 | Type | Definition |
 |---|---|
 | `bool` | `true` or `false`. The only type a condition may have. |
-| `long` | Signed 64-bit, two's complement, **checked**: overflow traps. |
+| `byte` | Unsigned 8-bit, 0 … 255. **Storage.** |
+| `short` | Signed 16-bit, −32 768 … 32 767. **Storage.** |
+| `int` | Signed 32-bit, **checked**: overflow traps. The default for an integer literal. |
+| `long` | Signed 64-bit, **checked**: overflow traps. |
+| `half` | IEEE 754 binary16, ±65 504. **Storage.** |
+| `float` | IEEE 754 binary32. Does not trap. The default for a float literal. |
 | `double` | IEEE 754 binary64. Does not trap. |
 | `string` | Immutable UTF-8. A value. |
 
-`/` is real division and always answers a `double`. `//` is floor
-division and `%` the modulus that pairs with it — both answer an `long`
-for `long` operands, both floor, so `%` takes the sign of the divisor,
-and both trap on a zero divisor. `/` does not trap: `1 / 0` is `inf`.
+`byte` is the one unsigned type there is and the only one there will
+be: a byte is 0 … 255 in files, sockets, images and UTF-8 alike, and
+that is the one domain where the answer is unanimous.
 
-Mixing the two promotes: `long op double` widens the `long` and answers a
-`double`, for `+ - * / %`. Comparison across the line does **not**
-widen — it is exact, so `9007199254740993 == 9007199254740992.0` is
-`false`, which widening would get wrong.
+## Storage and arithmetic
+
+Three of the seven — `byte`, `short` and `half` — are **storage
+types**. They are what an annotation, a parameter, a struct field and
+above all an array element may say, and an operator widens them before
+it does anything: `byte` and `short` compute at `int`, `half` at
+`float`. So there are four arithmetic types and not seven, no checked
+arithmetic at 8 or 16 bits, and no binary16 arithmetic on any machine.
+
+Nothing wraps. `byte` 255 plus 1 is 256, an `int`, because the
+addition never had type `byte` to overflow.
+
+```luce run
+func main():
+    var a: byte = 255
+    var b: byte = 1
+    print(string(a + b))
+    var h: half = 0.5
+    print(string(h + h))
+```
+
+```output
+256
+1
+```
+
+What they are *for* is `array(byte, n)` at one byte an element — an
+eighth of what the same array of `long` costs, and the same vector
+register holding four `float`s where it held two `double`s.
+
+## Promotion
+
+Along a ladder, every rung reaches every rung above it, exactly:
+`byte` → `short` → `int` → `long`, and `half` → `float` → `double`.
+Across the two ladders the answer is always `double`, which is exact
+for every integer but `long` and, for `long`, exact below 2^53 — the
+language's one lossy implicit conversion.
+
+`int` does **not** widen to `float`. It would fit, but the rule is
+that there is one cross-family answer rather than a rule about which
+values happen to fit — and Java's `int → float`, which loses
+everything above 2^24, is the widening this declines to grow.
+
+`/` is real division and always answers a float. `//` is floor
+division and `%` the modulus that pairs with it — both answer the
+promoted integer type, both floor, so `%` takes the sign of the
+divisor, and both trap on a zero divisor. `/` does not trap:
+`1 / 0` is `inf`.
+
+Comparison across the ladders does **not** widen — it is exact, so
+`9007199254740993 == 9007199254740992.0` is `false`, which widening
+would get wrong.
 
 ## Conversions
 
-`long(x)` and `double(x)` are the numeric conversions written out, and
-`double(i)` is only ever needed where there is no operator to hang the
-widening on. `long(f)` truncates toward zero and traps if the value is
-outside the `long` range.
+Each conversion is named for the type it produces: `byte(x)`,
+`short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`,
+and `string(x)`. One rule per family, not one per pair:
+
+- **Float to integer** rounds half away from zero and **traps**
+  `conversion_range` outside the target — NaN and the infinities
+  included.
+- **Integer to an integer that cannot hold it** traps the same way:
+  `byte(300)` is not 44, it is a program that stops.
+- **Integer to float** never traps.
+- **Float to a narrower float** rounds to nearest, ties to even, and
+  reaches `inf` rather than trapping, because `/` is already IEEE
+  without traps and the language does not keep a second story about
+  infinity.
+
+A widening constructor never traps and is redundant with promotion,
+but it stays: it is how you widen where there is no operator to hang
+it on.
+
+```luce trap
+func main():
+    var over: long = 300
+    print(string(byte(over)))
+```
+
+```output
+loom: trap: conversion out of range [conversion_range]
+    at main (main.luc:3:5)
+```
+
+`string(x)` prints a number with the shortest text that round-trips
+**at its own width**, so the width is visible in the answer:
+
+```luce run
+func main():
+    print(string(1.0 / 3.0))
+    print(string(double(1.0) / double(3.0)))
+    print(string(half(65504.0)))
+```
+
+```output
+0.33333334
+0.3333333333333333
+65500
+```
+
+The last line is not a rounding mistake. 65504 is the largest finite
+binary16, and no other binary16 lies nearer to 65500 — so four digits
+name it exactly, and reading them back gives 65504.
 
 ## struct
 

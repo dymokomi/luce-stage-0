@@ -26,7 +26,10 @@ func matching_backward(code: string, pc: long) -> long:
     return at
 
 func interpret(code: string, cells: long) -> string:
-    var tape = new array(long, cells)
+    # A Brainfuck cell *is* a byte, so the tape says so: one byte an
+    # element instead of eight, and the type now carries the range the
+    # `% 256` below used to be the only evidence of.
+    var tape = new array(byte, cells)
     var pointer = 0
     var pc: long = 0
     var out = new builder()
@@ -37,9 +40,13 @@ func interpret(code: string, cells: long) -> string:
         elif op == 60:
             pointer = pointer - 1
         elif op == 43:
-            tape[pointer] = (tape[pointer] + 1) % 256
+            # `%` floors, so a cell stepping below zero wraps to 255
+            # rather than going negative — which is what leaves the
+            # arithmetic (an `int`, because a `byte` never does any)
+            # inside the range `byte()` will accept.
+            tape[pointer] = byte((tape[pointer] + 1) % 256)
         elif op == 45:
-            tape[pointer] = (tape[pointer] - 1) % 256
+            tape[pointer] = byte((tape[pointer] - 1) % 256)
         elif op == 46:
             out.append(chr(tape[pointer]))
         elif op == 91:

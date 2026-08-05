@@ -719,3 +719,76 @@ test "the side tables are exactly as long as the instruction pool" {
     program.functions[0].origins = &.{};
     try verify_mod.verify(testing.allocator, &program);
 }
+
+test "no operator computes at a storage width, and the verifier says so" {
+    // D5 is a promise about IR, not only about source: stage 4 widens
+    // `byte` and `short` to `int` and `half` to `float` before it
+    // emits anything, so a binary, a negation or a math builtin
+    // wearing a storage width is damage.  Refusing it here is what
+    // makes the storage-width arms in `08_llvm/lower.zig` and the
+    // `unreachable`s in `runtime/operators.zig` unreachable rather
+    // than merely unreached — neither engine has 8-bit checked
+    // arithmetic or binary16 arithmetic to fall back on, so a
+    // hand-made module reaching one would abort the process instead
+    // of being turned away (docs/TYPES.md D5).
+    var program = try programOf(.{
+        .instructions = &.{
+            .{ .const_long = 3 }, // r0
+            .{ .const_long = 4 }, // r1
+            .{ .binary = .{ .op = .add, .operand_type = .int, .left = 0, .right = 1 } }, // r2
+            .{ .ret = 2 }, // r3
+        },
+        .result_types = &.{ .int, .int, .int, .none },
+        .blocks = &.{&.{ 0, 1, 2, 3 }},
+        .locals = &.{},
+        .return_type = .int,
+    });
+    defer program.deinit();
+    // At `int` — the width `byte` and `short` promote *to* — it
+    // verifies, so what follows is about the width and nothing else.
+    try verify_mod.verify(testing.allocator, &program);
+
+    for ([_]types.Type{ .byte, .short, .half }) |storage| {
+        const numeric: types.Type = if (storage == .half) .half else storage;
+        program.functions[0].result_types[0] = numeric;
+        program.functions[0].result_types[1] = numeric;
+        program.functions[0].result_types[2] = numeric;
+        program.functions[0].return_type = numeric;
+        program.functions[0].instructions[0] = if (storage == .half)
+            .{ .const_double = 3.0 }
+        else
+            .{ .const_long = 3 };
+        program.functions[0].instructions[1] = if (storage == .half)
+            .{ .const_double = 4.0 }
+        else
+            .{ .const_long = 4 };
+        program.functions[0].instructions[2] =
+            .{ .binary = .{ .op = .add, .operand_type = numeric, .left = 0, .right = 1 } };
+        try testing.expectError(
+            error.TypeMismatch,
+            verify_mod.verify(testing.allocator, &program),
+        );
+
+        // A comparison is the same rule: it unifies its operands
+        // first, so it never arrives at a storage width either.
+        program.functions[0].result_types[2] = .boolean;
+        program.functions[0].return_type = .boolean;
+        program.functions[0].instructions[2] =
+            .{ .binary = .{ .op = .less, .operand_type = numeric, .left = 0, .right = 1 } };
+        try testing.expectError(
+            error.TypeMismatch,
+            verify_mod.verify(testing.allocator, &program),
+        );
+
+        // And negation, whose answer a `byte` could not hold in any
+        // case — it has no negatives.
+        program.functions[0].result_types[2] = numeric;
+        program.functions[0].return_type = numeric;
+        program.functions[0].instructions[2] =
+            .{ .unary = .{ .op = .negate, .operand = 0 } };
+        try testing.expectError(
+            error.TypeMismatch,
+            verify_mod.verify(testing.allocator, &program),
+        );
+    }
+}

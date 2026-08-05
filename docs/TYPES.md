@@ -1557,8 +1557,117 @@ trips *at its own width*" caught in the act, and it is pinned.
 
 ### Step 6 — opt down, and the 32-bit benchmark rows
 
-**Not started.**  Every conversion pair with its rounding and its
-range trap pinned in both directions; `programs/bf.luc`'s tape as
-`array(byte, cells)`; `editor.luc`'s offsets as `int`; and **new**
-`bench/` rows against new `float`/`int` C twins rather than converted
-ones (D7), with the first snapshot in `docs/CODEGEN.md`.
+**Complete.**
+
+**The opt-downs, and the one the memo asked for that was wrong.**
+
+- **`programs/bf.luc`'s tape is `array(byte, cells)`**, which is what
+  §11's table said it wanted, and the program prints the same
+  `Hello World!` and passes the same assertion it always did.  The
+  `% 256` stays and now reads as what it always was — the *wrap*
+  Brainfuck semantics require — while the type carries the range the
+  `% 256` used to be the only evidence of.  The store is written
+  `byte((tape[pointer] + 1) % 256)`: the arithmetic is an `int`
+  because a `byte` never does any, `%` floors so stepping below zero
+  gives 255 rather than −1, and the `byte()` therefore cannot fail.
+- **`editor.luc`'s byte predicates take a `byte`** — `continuation`,
+  `is_digit`, `is_upper`, `is_alpha`, `is_word_start`, `is_word`,
+  `continuation_byte` — and so do `std/strings.luc`'s
+  `is_space_byte` and `wordcount.luc`'s `is_word_byte`.  All nine were
+  `byte: long` receiving a `byte_at` result, which is the exact
+  idiom the type was added for.
+- **`editor.luc`'s *offsets* are not `int`, and the memo was wrong to
+  say they should be.**  §11's table says "rows/columns/offsets are
+  `Int`", but every offset in that program is `len()`, `term_rows()`
+  or `term_cols()` arriving or being compared against one, and all
+  three answer `long` by rule 5.  Narrowing them would mean writing
+  `int(len(...))` at each boundary — trading no memory (they are
+  scalars in a frame, not array elements) for a `conversion_range`
+  trap that cannot happen but has to be read anyway.  The As-built
+  ledger for step 4 had already annotated `at` and `used` as `long`
+  for exactly this reason; this step declines to undo it.  **The
+  opt-down that pays is the one where the width is the storage, and
+  in `editor.luc` that is the byte predicates and nothing else.**
+
+**The 32-bit benchmark rows.**  `bench/arrays32.{luc,c}` and
+`bench/matmul32.{luc,c}`, added to `run.sh` and `compare.sh` — never
+substituted for the rows that existed (D7), whose sources, C twins and
+numbers are untouched and verified so by `bench/compare.sh main`,
+every row inside 2%.
+
+Both new rows are sized so their answers are **exact at 32 bits**,
+which is not fussiness: the harness compares stdout, so an inexact
+32-bit accumulation would make the cross-check a test of two
+compilers' rounding.  `matmul32`'s factors are 0..3 and every element
+of C is a whole number no larger than 1800, well inside binary32's 24
+bits; `arrays32`'s per-rep sum is 512 500 000, a quarter of the way to
+an `int`'s ceiling, because Luce's checked arithmetic would *trap*
+rather than wrap and a benchmark whose failure mode is a trap has
+stopped measuring.
+
+The first snapshot is in `docs/CODEGEN.md`.  In short: **`matmul32` is
+1.07x compute and unremarkable**, which is the good news — the
+binary32 inner loop vectorizes and Luce keeps pace.  **`arrays32` is
+8.14x, and it is not a 32-bit problem**: Luce is scalar at *both*
+integer widths (41.8 ms at `int`, 41.1 ms at `long`) while C is
+vectorized at both (6.2 and 18.1 ms), so the narrow integer buys Luce
+nothing and buys C a factor of 2.9.  The cause is checked integer
+arithmetic, which stops a reduction being reassociated; `arrays`
+does not show it because a *float* reduction cannot be reassociated by
+C either.  It is a standing cost of the safety guarantee, now priced.
+The 32-bit rows earned their place by finding it.
+
+**The coverage machinery did not cover the types, and now does.**  The
+memo assumed adding `byte`, `short` and `half` would fail the site
+build until they were documented.  It did not: `site/src/coverage.zig`
+read `builder.zig`'s `builtins` table, and the conversion constructors
+are not in it — they are resolved through `types.zig`'s
+`builtin_table` by `conversionNamed`.  So the type surface was never
+checked at all, and the gap was older than this step: **`ref/types.md`
+still described `long` and `double` as the only numbers and named
+neither `int` nor `float`**, four steps after the resize made them
+real.  Two tests now read `builtin_table` — every name must appear on
+`ref/types.md`, and every name that is also a conversion on
+`ref/builtins.md` — and both were verified to fail by adding a name
+the compiler has and the pages do not.  `ref/types.md` is rewritten
+for seven types; `tour/values.md` gains the storage section.
+
+**The kill table.**  Fifteen mutations over two rounds from committed
+HEAD, all fifteen dead.  The first round left five alive and every one
+of them was a real hole rather than an equivalent mutant, which is the
+sweep doing its job:
+
+| mutation | killed by |
+|---|---|
+| a widening that flips `zext` to `sext` | the UTF-8 edit spec |
+| a narrow store that stops range-checking | `byte(256)` traps |
+| byte arithmetic accepted (`unified` stops promoting) | the embedded editor stops compiling |
+| a literal parsed at the wrong width | the `:.Nf` f-string spec |
+| float-to-integer forgets `fptoui` | narrowing to a byte |
+| the half bound test stops including its bound | a failing step |
+| `conversionTraps` ignores byte's bounds | a failing step |
+| integer-to-float forgets `uitofp` | *(round 1: survived)* → a byte reaches a float as a magnitude |
+| the verifier admits storage-width arithmetic | *(survived)* → the new `06_mir` verifier test |
+| the verifier admits storage-width negation | the same test |
+| `byte` widens into a narrow `float` | *(survived)* → the new refusal spec |
+| an `ElementKind` arm confused (byte sized as short) | *(survived)* → the new cell-width test |
+| a half store rounding twice through binary32 | *(round 1's mutant was equivalent)* → the rewritten witness |
+| `byte` loses its own range (−128..127) | the embedded editor stops compiling |
+| an `array(byte)` cell becomes an `i32` | bytes 0..255 through an array |
+
+Three of those five survivors are worth naming, because each is a
+class of hole a behavioural suite structurally cannot see.
+**`ElementKind`'s width is a layout claim**: a wider cell
+over-allocates and still reads back the right value, so every test
+stays green while the memory quietly doubles and the whole point of
+the step is lost — it needed an assertion about bytes, and now has
+one.  **The verifier's storage-width guard is defence against damaged
+IR**, which no source program can produce, so it needed a test that
+builds the IR by hand.  And **the half double-rounding spec did not
+prove its claim**: it used 1 + 2^-11, where a detour through binary32
+gives the same answer.  The witness that separates them is
+1 + 2^-11 + 2^-30 — above the binary16 midpoint, so one `fptrunc`
+rounds up to 1.0009765625, while binary32 first drops the 2^-30, lands
+exactly on the midpoint, and ties to even down to 1.0.  A test named
+for a property it cannot distinguish is worse than no test, and the
+sweep is what found it.

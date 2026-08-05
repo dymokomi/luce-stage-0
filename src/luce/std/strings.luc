@@ -66,7 +66,7 @@ func count(s: string, needle: string) -> long:
         at = find_from(s, needle, at + len(needle))
     return found
 
-func is_space_byte(byte: long) -> bool:
+func is_space_byte(byte: byte) -> bool:
     return byte == 32 or byte == 9 or byte == 13 or byte == 10
 
 # ASCII whitespace off both ends.

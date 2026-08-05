@@ -5,23 +5,29 @@ project plan; this file is the language.  Luce is **statically typed**
 with inference — every expression has one type known at compile time,
 annotations are optional where the initializer decides
 (`let n = 1` is an `int`; `let n: long = 1` says otherwise out loud),
-and the implicit conversions are the four in `types.Type.widensTo`:
-`int` widens to `long`, `float` to `double`, and across the two
-ladders the answer is always `double` (docs/TYPES.md §2).  **Nothing
-narrows**, in any direction or context.
+and the implicit conversions are the ones in `types.Type.widensTo`:
+along a ladder every rung reaches every rung above it — `byte` to
+`short` to `int` to `long`, `half` to `float` to `double` — and across
+the two ladders the answer is always `double` (docs/TYPES.md §2).
+**Nothing narrows**, in any direction or context.
 
 ## Values and objects
 
 Two kinds of data, with a deliberate line between them:
 
-- **Values** — `bool`, the four numbers, `string` (immutable UTF-8),
+- **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
   and user `struct`s.  Values copy on assignment and call; nobody
-  frees a value.  The numbers are two ladders of two, and each is
-  checked at its own width: `int` (signed 32-bit) and `long` (signed
-  64-bit) trap on overflow and on division by zero; `float`
-  (IEEE binary32) and `double` (IEEE binary64) follow IEEE without
-  traps.  `int` and `float` are what a literal takes when nothing
-  tells it otherwise (docs/TYPES.md).
+  frees a value.  The numbers are two ladders, and four of them do
+  arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
+  overflow and on division by zero; `float` (IEEE binary32) and
+  `double` (IEEE binary64) follow IEEE without traps.  `int` and
+  `float` are what a literal takes when nothing tells it otherwise.
+  The other three — `byte` (unsigned 8-bit), `short` (signed 16-bit)
+  and `half` (IEEE binary16) — are **storage**: an operator widens
+  them to `int` and `float` before it does anything, so no expression
+  ever has one and there is no arithmetic at 8 or 16 bits to define.
+  What they are for is `array(byte, n)` at one byte an element
+  (docs/TYPES.md D5).
 - **Heap objects** — `list(T)`, `map(K, V)`, `array(T, ...)`, and
   `builder`.  Variables hold *references*.  Objects are created with
   `new ...` or a literal and freed automatically by **scope
@@ -549,9 +555,11 @@ per step, but which elements you visit is your problem.
 Strings are immutable UTF-8 values.  The *language* provides the
 primitives — literals and f-strings, `+` concatenation, comparison,
 UTF-8-boundary-checked slices `s[a:b]`, `len(s)` in bytes,
-`s.byte_at(i)` for raw byte access, and `s.find_byte(byte, start)`
+`s.byte_at(i)` for raw byte access — the one builtin that answers a
+`byte` (docs/TYPES.md §9) — and `s.find_byte(byte, start)`
 for raw byte *search* (the offset of the first `byte` at or after
-`start`, or -1; the byte must be 0..255 and `start` within the
+`start`, or -1; the byte looked for is a `byte`, so being outside
+0..255 is refused where it is written, and `start` must be within the
 string, or it traps).  Search is a primitive for the same reason
 access is: the library builds substring matching on it, and the
 runtime is free to vectorize it.
@@ -857,13 +865,16 @@ There is no `//` comment: a comment runs from `#` to the end of the
 line, and a line beginning `//` is answered by name
 (`luce.parse.comment`).
 
-**Numbers that mix** (docs/TYPES.md §2, docs/NUMERICS.md).  Four
-arithmetic types on two ladders, and four implicit conversions stated
-once: `int` widens to `long`, `float` widens to `double`, and a mixed
-pair meets at `double` whichever way round it was written.  That is
-the whole of it — everywhere a value meets a type, from both operands
-of `+ - * / %` to a `let` annotation, an argument, a return, a struct
-field, a list element, a compound assignment and `min`/`max`/`clamp`.
+**Numbers that mix** (docs/TYPES.md §2, docs/NUMERICS.md).  Seven
+types on two ladders, four of which do arithmetic, and the implicit
+conversions stated once: along a ladder every rung reaches every rung
+above it, and a mixed pair meets at `double` whichever way round it
+was written.  That is the whole of it — everywhere a value meets a
+type, from both operands of `+ - * / %` to a `let` annotation, an
+argument, a return, a struct field, a list element, a compound
+assignment and `min`/`max`/`clamp`.  A storage width is promoted
+before any of that happens, so `byte + byte` is an `int` and
+`half * half` a `float`.
 
 What is deliberately *not* there is Java's `int → float` and
 `long → float`, which lose everything above 2^24 from sources that

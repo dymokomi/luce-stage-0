@@ -4848,3 +4848,39 @@ test "luce.sema.type: narrowing into a storage width is refused like any other" 
         5,
     );
 }
+
+test "luce.sema.type: a byte reaches a double unbidden but never a float" {
+    // Rule 3 of the ladder: widening is implicit along a ladder, and
+    // *across* the two only into `double`.  A `byte` is exact in a
+    // `float`, which is exactly why this has to be refused on purpose
+    // rather than by accident — the rule is about there being one
+    // cross-family answer, not about which values happen to fit.
+    // Java's `int -> float` is the widening this declines to grow, one
+    // rung lower down.  The allowed direction, `double d = b`, is in
+    // behavior_spec beside the rest of the promotion.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var b: byte = 7
+        \\    var f: float = b
+        \\
+    ,
+        "luce.sema.type",
+        "f declared float but initialized with byte; narrowing is never implicit — write float(…)",
+        3,
+        5,
+    );
+    // A `short` is the same decision one rung up, and a `half` is the
+    // mirror image on the other ladder: it reaches a `float` and a
+    // `double` and no integer at all.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var h: half = 1.5
+        \\    var n: long = h
+        \\
+    ,
+        "luce.sema.type",
+        "n declared long but initialized with half; narrowing is never implicit — write long(…)",
+        3,
+        5,
+    );
+}

@@ -897,25 +897,74 @@ change moves.  Absolute times mean nothing off this host — for a
 before/after, use `bench/compare.sh GIT-REF`, which interleaves the
 two on the machine in front of you.
 
-**Taken at `f333e12`.**  This table is the one number: where a
-document quotes a benchmark row it quotes the `compute` column here,
-and says which column it is.
+**Taken at the `byte`/`short`/`half` step (docs/TYPES.md step 5-6).**
+This table is the one number: where a document quotes a benchmark row
+it quotes the `compute` column here, and says which column it is.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  83.1 ms |  87.3 ms |  1.05x |   1.04x |
-| math      | 142.5 ms | 111.6 ms |  0.78x |   0.77x |
-| strings   |  21.3 ms |  53.7 ms |  2.52x |   2.73x |
-| arrays    |  44.3 ms |  47.4 ms |  1.07x |   1.06x |
-| matmul    |  11.1 ms |  12.0 ms |  1.08x |   1.02x |
-| stats     |  33.9 ms |  35.9 ms |  1.06x |   1.04x |
-| floor     |   2.9 ms |   3.6 ms |      - |       - |
+| loops     |  78.8 ms |  81.3 ms |  1.03x |   1.02x |
+| math      | 135.0 ms | 105.8 ms |  0.78x |   0.77x |
+| strings   |  20.1 ms |  50.6 ms |  2.51x |   2.74x |
+| arrays    |  42.5 ms |  45.3 ms |  1.06x |   1.05x |
+| arrays32  |   7.7 ms |  41.8 ms |  5.44x |   8.14x |
+| matmul    |  10.3 ms |  11.3 ms |  1.09x |   1.03x |
+| matmul32  |   6.5 ms |   7.5 ms |  1.15x |   1.07x |
+| stats     |  31.3 ms |  33.2 ms |  1.06x |   1.04x |
+| floor     |   3.0 ms |   3.7 ms |      - |       - |
 
-`strings` is the one row that is genuinely behind, and it is
-allocation-bound rather than code-generation-bound.  Everything else
-is at parity or ahead, and `math` is ahead because Luce's transcendental
-calls land in the same libm C's do while the surrounding loop
-vectorizes.
+The six 64-bit rows are unchanged within noise from the previous
+snapshot at `f333e12`, which is what D7 required of them: the 32-bit
+rows were *added* beside them and neither the `.luc` sources nor the C
+twins of the originals were touched.
+
+`strings` is allocation-bound rather than code-generation-bound.
+Everything else at 64 bits is at parity or ahead, and `math` is ahead
+because Luce's transcendental calls land in the same libm C's do while
+the surrounding loop vectorizes.
+
+### What the two new rows measured
+
+**`matmul32` is the good news and it is unremarkable, which is the
+point.**  1.07x compute against 1.03x for the `double` twin: the
+binary32 inner loop vectorizes on both sides, four lanes where the
+64-bit one got two, and Luce keeps pace.  Whatever the resize cost, it
+did not cost this.
+
+**`arrays32` is 8.14x, and it is not a 32-bit problem.**  The
+measurement that says so:
+
+| dot product | C       | luce    |
+|-------------|---------|---------|
+| `int32`     |  6.2 ms | 41.8 ms |
+| `int64`     | 18.1 ms | 41.1 ms |
+
+**Luce is scalar at both widths and C is vectorized at both.**  The
+narrow integer buys Luce nothing here — 41.8 against 41.1 ms is noise
+— while it buys C a factor of 2.9, so the *ratio* gets worse exactly
+because C got better.
+
+The cause is **checked integer arithmetic**, and this row is the first
+in the suite to price it.  Every `+` and `*` in Luce carries an
+overflow test, so an integer reduction cannot be reassociated and
+cannot be vectorized; the loop stays one element per iteration with
+two branches on top.  C's `int32_t` addition wraps on overflow, which
+is undefined behaviour it is free to assume never happens, so LLVM
+reassociates the sum and fills four lanes.
+
+That is also why no existing row showed it.  `arrays` is a *float*
+dot product, and a left-to-right float reduction cannot be
+reassociated **by C either** — so both sides stay scalar and the row
+sits at 1.05x.  `loops` and `stats` are checked integer loops too, but
+neither is a reduction C can vectorize.  It took an integer reduction
+to separate the two, and that is what `arrays32` is.
+
+**Nothing here is a regression and nothing here is fixed by widening
+back.**  It is a standing cost of the safety guarantee, now measured
+rather than assumed, and the options if it is ever worth spending on
+are the ordinary ones: prove the bound and drop the check, or offer a
+reduction that is allowed to reassociate.  Neither is in this step,
+and both are language decisions rather than code-generation ones.
 
 > **What the previous snapshot said, and why it was replaced.**  The
 > table here read `20.6 / 47.4 ms, 2.31x / 2.49x` for `strings` and

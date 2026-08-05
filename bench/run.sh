@@ -31,7 +31,12 @@ if [ ! -x build/luce ] || [ ! -x build/loom ]; then
 fi
 mkdir -p build/bench
 
-names="loops math strings arrays matmul stats"
+# The 32-bit rows are *additions*, never conversions (docs/TYPES.md
+# D7): `arrays` and `matmul` keep their `double`/`long` sources, their
+# C twins and their recorded numbers, and `arrays32`/`matmul32` are
+# the comparison that was missing rather than a rewrite of the one
+# that existed.
+names="loops math strings arrays arrays32 matmul matmul32 stats"
 
 # -ffp-contract=off: Luce's determinism guarantee is strict IEEE
 # (no fused multiply-add), so C plays by the same float rules —

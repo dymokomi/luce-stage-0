@@ -4395,6 +4395,27 @@ test "storage: narrowing to a byte keeps its range and traps outside it" {
     );
 }
 
+test "storage: a byte reaches a float as a magnitude, not as a sign" {
+    // The other half of D4, and the half an integer-to-integer test
+    // cannot reach: a `byte` above 127 has its top bit set, so a
+    // conversion that read the bits as signed would answer -56 for
+    // 200 — and `double(b)` is the widening every mixed expression
+    // inserts for itself.
+    try agreeOk(
+        \\func main():
+        \\    var high: byte = 200
+        \\    assert(double(high) == 200.0)
+        \\    assert(float(high) == 200.0)
+        \\    assert(high * 1.0 == 200.0)
+        \\    assert(double(byte(255)) == 255.0)
+        \\    var top: byte = 128
+        \\    assert(double(top) == 128.0)
+        \\    var widened: double = top
+        \\    assert(widened == 128.0)
+        \\
+    );
+}
+
 test "storage: byte(256) traps rather than wrapping to zero" {
     try agreeTrap(
         \\func main():
@@ -4509,14 +4530,24 @@ test "half: rounds to nearest, ties to even" {
 }
 
 test "half: double to half rounds once, not twice through binary32" {
-    // The §7 claim, made checkable: 1 + 2^-11 is a tie at binary16 and
-    // resolves to even, and 1 + 2^-10 is exactly representable.
+    // §7's claim, with a value that can tell the difference — the
+    // first draft of this test used 1 + 2^-11 and proved nothing,
+    // because a detour through binary32 gives the same answer there.
+    //
+    // 1 + 2^-11 + 2^-30 is *above* the midpoint between 1.0 and
+    // 1 + 2^-10, so rounding it straight to binary16 goes up.  Round
+    // it to binary32 first and the 2^-30 falls off — binary32 keeps
+    // 23 bits — landing exactly on the midpoint, which then ties to
+    // even and goes *down*.  One `fptrunc` answers 1.0009765625; two
+    // answer 1.0.
     try agreeOk(
         \\func main():
+        \\    var just_above: double = 1.0004882821813226
+        \\    assert(double(half(just_above)) == 1.0009765625)
         \\    var tie: double = 1.00048828125
         \\    assert(double(half(tie)) == 1.0)
-        \\    var above: double = 1.0009765625
-        \\    assert(double(half(above)) == 1.0009765625)
+        \\    var exact: double = 1.0009765625
+        \\    assert(double(half(exact)) == 1.0009765625)
         \\
     );
 }
