@@ -300,10 +300,24 @@ pub const StructDecl = struct {
 /// pass something fresh).  See OWNERSHIP.md S11-S15.
 pub const ParameterMode = enum { borrow, give };
 
+/// Whether a parameter is the method's receiver, and if so whether the
+/// method writes it back (docs/METHODS.md).
+///
+/// `self` and `var self` carry no type: inside `struct Point` the
+/// receiver can be nothing but a `Point`, so there is nothing to
+/// resolve and `type_name` below is not read for one.  Stage 4 fills
+/// the type in from the enclosing struct.
+pub const Receiver = enum { not, reads, writes };
+
 pub const Parameter = struct {
     name: []const u8,
     name_span: Span,
     mode: ParameterMode = .borrow,
+    /// `.not` for every ordinary parameter; `.reads` for `self` and
+    /// `.writes` for `var self`.  When it is not `.not`, `type_name`
+    /// is a placeholder nothing reads — the enclosing struct is the
+    /// type, and stage 4 is where that is known.
+    receiver: Receiver = .not,
     type_name: TypeName,
     span: Span,
 };

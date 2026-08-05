@@ -74,6 +74,11 @@ const Class = enum {
     /// the language's one genuinely unusual idea (docs/OWNERSHIP.md),
     /// and a reader scanning a file should see every one of them.
     ownership,
+    /// `self` — a name the language supplies rather than the program.
+    /// `variable.language` is the scope every grammar since TextMate's
+    /// own has given Python's `self`, Ruby's `self` and JavaScript's
+    /// `this`, so a theme already has a colour for it.
+    receiver,
 
     fn scope(self: Class) []const u8 {
         return switch (self) {
@@ -84,6 +89,7 @@ const Class = enum {
             .exception => "keyword.control.exception.luce",
             .constant => "constant.language.luce",
             .ownership => "keyword.other.ownership.luce",
+            .receiver => "variable.language.luce",
         };
     }
 };
@@ -91,7 +97,8 @@ const Class = enum {
 /// Every class, in the order their rules are written.  Iterated rather
 /// than listed twice, so a new class cannot be added without a rule.
 const classes = [_]Class{
-    .control, .word_operator, .storage, .import, .exception, .constant, .ownership,
+    .control,   .word_operator, .storage,   .import,
+    .exception, .constant,      .ownership, .receiver,
 };
 
 /// The class each keyword the lexer reserves belongs to.
@@ -124,6 +131,8 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_true, .keyword_false, .keyword_none => .constant,
 
         .keyword_new, .keyword_give, .keyword_copy => .ownership,
+
+        .keyword_self => .receiver,
 
         else => null,
     };

@@ -167,6 +167,10 @@
         {
           "name": "keyword.other.ownership.luce",
           "match": "\\b(?:new|give|copy|free)\\b"
+        },
+        {
+          "name": "variable.language.luce",
+          "match": "\\b(?:self)\\b"
         }
       ]
     },

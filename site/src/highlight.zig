@@ -30,7 +30,7 @@ const keywords = [_][]const u8{
     "func",     "struct", "let", "var",   "if",     "elif",
     "else",     "while",  "for", "in",    "return", "break",
     "continue", "and",    "or",  "not",   "true",   "false",
-    "import",   "none",   "try", "catch",
+    "import",   "none",   "try", "catch", "self",
 };
 
 /// The words that move ownership.  They get a class of their own

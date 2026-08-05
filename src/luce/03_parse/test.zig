@@ -1658,6 +1658,103 @@ test "an else block still reads as a block, not as a fallback" {
     try testing.expectEqual(@as(usize, 1), conditional.else_block.?.statements.len);
 }
 
+// ---------------------------------------------------------------------------
+// The receiver
+// ---------------------------------------------------------------------------
+//
+// Two facts about `self` are the parser's, because both are facts
+// about the *shape* of a parameter list and neither needs a struct to
+// be resolved: it comes first, and it carries no type.  Everything
+// else about a method is stage 4's (docs/METHODS.md).
+
+test "self and var self are parameter zero, bare and untyped" {
+    var parsed = try expectClean(
+        \\struct Point:
+        \\    x: Float
+        \\
+        \\    func length(self) -> Float:
+        \\        return self.x
+        \\
+        \\    func scale(var self, factor: Float):
+        \\        self.x = self.x * factor
+        \\
+        \\    func origin() -> Point:
+        \\        return Point(x = 0.0)
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+
+    const functions = parsed.program.structs[0].functions;
+    try testing.expectEqual(@as(usize, 3), functions.len);
+
+    try testing.expectEqual(ast.Receiver.reads, functions[0].parameters[0].receiver);
+    try testing.expectEqualStrings("self", functions[0].parameters[0].name);
+    try testing.expectEqual(@as(usize, 1), functions[0].parameters.len);
+
+    try testing.expectEqual(ast.Receiver.writes, functions[1].parameters[0].receiver);
+    try testing.expectEqual(@as(usize, 2), functions[1].parameters.len);
+    // The parameter beside it is an ordinary one and says so.
+    try testing.expectEqual(ast.Receiver.not, functions[1].parameters[1].receiver);
+
+    // A function with no `self` is a namespace function, unchanged —
+    // which is the rule that keeps every existing declaration
+    // compiling.
+    try testing.expectEqual(@as(usize, 0), functions[2].parameters.len);
+}
+
+test "self comes first, and takes no type" {
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(a: Int, self):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 20,
+        .contains = "self is the receiver, so it comes first in the parameter list",
+    }});
+
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(self: Point):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 16,
+        .contains = "self takes no type annotation: inside a struct it is that struct",
+    }});
+
+    // `var self` is refused in the same place and for the same reason.
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(a: Int, var self):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 20,
+        .contains = "comes first",
+    }});
+}
+
+test "self is a keyword, so nothing else may be called one" {
+    // Reserving the word costs the corpus nothing — `grep -rniw self`
+    // over every `.luc` in the tree finds none — and it is what makes
+    // `p.length()` readable as a call on `p` and nothing else.
+    try expectDiagnostics(
+        \\func main():
+        \\    let self = 3
+        \\
+    , &.{.{ .code = "luce.parse.expected", .line = 2, .column = 9 }});
+}
+
 test "every token kind has a name a diagnostic can print" {
     // describe() is exhaustive by construction (no else arm), so this
     // guards the other half: that no name is empty, and that keyword

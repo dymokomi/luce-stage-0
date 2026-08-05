@@ -791,6 +791,49 @@ pub const Parser = struct {
         };
     }
 
+    /// `self` or `var self` in a parameter list.  `already` is how many
+    /// parameters stand in front of it, which is the one thing about a
+    /// receiver this stage can decide: a receiver is parameter zero or
+    /// it is a mistake.
+    ///
+    /// The type is deliberately not written and not accepted.  Inside
+    /// `struct Point` a receiver can be nothing but a `Point`, so
+    /// `self: Point` says something the compiler already knows — and
+    /// allowing it would mean allowing someone to write a different
+    /// one (docs/METHODS.md).
+    fn receiverParameter(self: *Parser, already: usize) Error!?ast.Parameter {
+        const start = self.peek();
+        const writes = self.accept(.keyword_var) != null;
+        const word = self.advance(); // self
+        if (already != 0) {
+            try self.report(
+                "luce.parse.self",
+                .{ .start = start.span.start, .end = word.span.end },
+                "self is the receiver, so it comes first in the parameter list",
+                .{},
+            );
+            return null;
+        }
+        if (self.peekKind() == .colon) {
+            try self.report(
+                "luce.parse.self",
+                self.peek().span,
+                "self takes no type annotation: inside a struct it is that struct",
+                .{},
+            );
+            return null;
+        }
+        return .{
+            .name = "self",
+            .name_span = word.span,
+            .receiver = if (writes) .writes else .reads,
+            // Never resolved: stage 4 reads `receiver` first and fills
+            // the type in from the enclosing struct.
+            .type_name = .{ .name = "self", .span = word.span },
+            .span = .{ .start = start.span.start, .end = word.span.end },
+        };
+    }
+
     pub fn funcDecl(self: *Parser) Error!?ast.FuncDecl {
         const start = self.advance(); // func
         const name = (try self.expect(.identifier, "a function name")) orelse return null;
@@ -801,6 +844,19 @@ pub const Parser = struct {
         defer parameters.deinit(self.arena);
         var previous_end = opener.span.end;
         while (!expr.endsList(self.peekKind(), .right_paren)) {
+            // `self` and `var self` — the receiver, bare and untyped.
+            // Position is checked here because "first" is a fact about
+            // the list the parser is holding; everything else about a
+            // receiver is stage 4's (docs/METHODS.md).
+            if (self.peekKind() == .keyword_self or
+                (self.peekKind() == .keyword_var and self.peekAhead(1) == .keyword_self))
+            {
+                const receiver = (try self.receiverParameter(parameters.items.len)) orelse return null;
+                try parameters.append(self.arena, receiver);
+                previous_end = receiver.span.end;
+                if (self.accept(.comma) == null) break;
+                continue;
+            }
             const parameter_name = (try self.expect(.identifier, "a parameter name")) orelse
                 return null;
             if ((try self.expect(.colon, "':' after the parameter name")) == null) return null;
@@ -1405,6 +1461,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_and => "the keyword 'and'",
         .keyword_or => "the keyword 'or'",
         .keyword_not => "the keyword 'not'",
+        .keyword_self => "the keyword 'self'",
         .keyword_true => "'true'",
         .keyword_false => "'false'",
         .keyword_new => "the keyword 'new'",
