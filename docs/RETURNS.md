@@ -1,5 +1,14 @@
 # Answering more than one thing
 
+> **Spellings, since this was decided.**  The builtin type names are
+> lowercase (`long`, `double`, `string`, `list`, `map`, `array`,
+> `builder` — docs/TYPES.md D8), and the two numeric types became four:
+> `int` and `float` are 32 bits and are what a literal takes with
+> nothing to tell it otherwise, `long` and `double` are the 64-bit
+> types this memo calls `Int` and `Float`.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > **The rule.** A function may answer more than one value —
 > `-> (Float, Float)`, `return low, high`, `let low, high = minmax(xs)`.
 > **There is no tuple.** `(Float, Float)` is a shape a *signature* has,
@@ -79,7 +88,7 @@ fields at all — namespaces impersonating types. Two are real domain
 types. **One exists to carry a return**, and it is the exhibit
 `docs/MISSING.md:227-229` filed:
 
-```luce
+```luce historical
 # programs/calc.luc:20-22
 struct Step:
     value: Int
@@ -192,7 +201,7 @@ therefore never writes that sentence.
 
 ### The declaration
 
-```luce
+```luce historical
 func minmax(xs: Array(Float, _)) -> (Float, Float):
     var low = xs[0]
     var high = xs[0]
@@ -231,7 +240,7 @@ bound and not a second number.
 
 ### The bind
 
-```luce
+```luce historical
 let low, high = minmax(temperatures)
 var row, column = grid.find(target)
 ```
@@ -276,14 +285,14 @@ reader want it twice in a row, and it is worth a sentence on the page.
 
 Two places, and they are enumerable:
 
-```luce
+```luce historical
 let low, high = minmax(xs)      # 1. the right of a destructuring bind
 rng.next()                      # 2. a statement, all values discarded
 ```
 
 Everything else is `luce.sema.call`:
 
-```luce
+```luce historical
 print(minmax(xs))               # refused
 let x = minmax(xs) + 1.0        # refused
 return minmax(xs)               # refused, even from -> (Float, Float)
@@ -300,7 +309,7 @@ mix a multi-valued expression with ordinary ones. That carve-out is the
 whole cost of the pass-through, and the pass-through's whole benefit is
 one saved line:
 
-```luce
+```luce historical
 let low, high = minmax(xs)
 return low, high
 ```
@@ -316,7 +325,7 @@ own channel precisely so it would never occupy a return position. What
 is left is loop-carried state, which is the case `var self` methods now
 serve directly (§5), and the residue is one extra name:
 
-```luce
+```luce historical
 let value, next = Scan.number(text, position)
 position = next
 ```
@@ -339,7 +348,7 @@ anywhere in stage 4, and a call whose result is discarded at statement
 position is accepted silently today. The reason for `_` therefore does
 not exist here, and what is left is a name:
 
-```luce
+```luce historical
 let word, count = heaviest(counts)
 print(word)                       # count is simply not used
 ```
@@ -412,7 +421,7 @@ error travels out of band: the outcome word is the compiled function's
 in the caller. **The two channels are already orthogonal**, and a
 return shape is a value-channel fact. So:
 
-```luce
+```luce historical
 func read_pair(path: String) -> (Int, Int)!:
     let text = try file_read(path)
     …
@@ -461,7 +470,7 @@ A destructuring bind is a `let`, so it is already excluded, for a
 reason that is doubly true when there are two names. What remains is
 legal and useful:
 
-```luce
+```luce historical
 rng.reseed_from(path) catch:              # a statement; values discarded
     print("keeping the old seed")
 ```
@@ -486,7 +495,7 @@ the other side.
 table says so, and S43 says holding `none` owns nothing) — so it needs
 no rule at all:
 
-```luce
+```luce historical
 func lookup(m: Map(String, Int), k: String) -> (Int?, Bool):
 ```
 
@@ -506,7 +515,7 @@ value that can be absent.
 of §1 — so there is nothing for `else` to stand on. Per-element
 fallbacks are written on the names, where they read better anyway:
 
-```luce
+```luce historical
 let first, second = parse_pair(line)
 let a = first else 0
 ```
@@ -551,7 +560,7 @@ which is what the shape lowers to.
 
 Only a comma can write this:
 
-```luce
+```luce historical
 func bad(xs: give List(Int)) -> (List(Int), List(Int)):
     let alias = xs
     return xs, alias        # one object, two moves
@@ -822,7 +831,7 @@ This is why the memo exists. The RNG, end to end.
 
 ### Today
 
-```luce
+```luce historical
 # src/luce/std/math.luc:229-239
 func seed(from: Int) -> List(Int):
     var folded = from % 2147483646
@@ -843,7 +852,7 @@ borrow while the *draw* goes out through `return`. The module header
 
 ### Under `docs/METHODS.md` alone
 
-```luce
+```luce historical
 struct Rng:
     state: Int
 
@@ -857,7 +866,7 @@ was occupying the only return channel there was.
 
 ### Under this memo
 
-```luce
+```luce historical
 struct Rng:
     state: Int
 
@@ -873,7 +882,7 @@ struct Rng:
 
 and the call site:
 
-```luce
+```luce historical
 var rng = Rng(state = 42)
 let roll = rng.in_range(1, 7)
 ```
@@ -1025,7 +1034,7 @@ because it is the case the broken rule tripped on. `Parse.expression`'s
 accumulator becomes two `var`s, and the body gets *shorter*, because
 only the value differed between the arms:
 
-```luce
+```luce historical
 func expression(text: String, at: Int) -> (Int, Int)!:
     var value, here = try Parse.term(text, at)
     var scan = Scan.skip_spaces(text, here)

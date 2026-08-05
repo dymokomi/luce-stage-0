@@ -1,5 +1,14 @@
 # Numbers that mix
 
+> **Spellings, since this was decided.**  The builtin type names are
+> lowercase (`long`, `double`, `string`, `list`, `map`, `array`,
+> `builder` — docs/TYPES.md D8), and the two numeric types became four:
+> `int` and `float` are 32 bits and are what a literal takes with
+> nothing to tell it otherwise, `long` and `double` are the 64-bit
+> types this memo calls `Int` and `Float`.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > **The rule.** `Int` converts to `Float` implicitly, in one direction,
 > wherever a `Float` is required — and nowhere does a `Float` become an
 > `Int` without being asked. `/` is real division and always answers
@@ -299,7 +308,7 @@ That is the kind of seam that produces bug reports for a decade.
 **Two — three corpus sites are already hand-written workarounds for
 the C rule, and this deletes all three.** This is not a hypothetical:
 
-```luce
+```luce historical
 # src/luce/std/math.luc:96 — sign-safe parity, today
 if (Int(y) % 2 + 2) % 2 == 1:
 # under floor-mod
@@ -580,7 +589,7 @@ the larger version of the same mistake.
 
 **Recommended: format specs inside f-strings**, and nowhere else.
 
-```luce
+```luce historical
 print(f"mean = {mean:.2f}")        # "mean = 23.99"
 print(f"{count} rolls, {rate:.3f}/s")
 ```
@@ -638,7 +647,7 @@ from the first arm to no arm at all.
 promotion makes newly possible is caught by a message that already
 exists, because the type system refuses the continuation:
 
-```luce
+```luce historical
 let mid = (lo + hi) / 2      # Float now
 grid[mid]                    # index is Float — refused, existing message
 func f(n: Int)

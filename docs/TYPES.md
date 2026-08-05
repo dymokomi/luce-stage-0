@@ -1,5 +1,14 @@
 # Seven numbers, and the two that are still spelled `Int` and `Float`
 
+> **Spellings, since this was written.**  The sections above *As
+> built* use the TitleCase names the language had while they were
+> being decided; D8 made the builtin type names lowercase and the
+> resize gave `int` and `float` their 32-bit meanings.  A reader
+> wanting the current spelling of anything here wants *As built* at
+> the end, which is written in it.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > **The rule.** There are seven numeric types on two ladders —
 > `Byte` `Short` `Int` `Long` and `Half` `Float` `Double` — sized the
 > way Java sizes them, which means **`Int` becomes 32 bits and `Float`
@@ -429,7 +438,7 @@ Go's model, adopted for the reason Go adopted it: a language with more
 than one integer width and no untyped constants makes its users write
 casts around numbers they wrote correctly.
 
-```luce
+```luce historical
 let x: Float = 1.5              # 1.5 is a binary32
 let y: Half = 0.25              # a binary16
 var count: Short = 1000         # fits; a Short

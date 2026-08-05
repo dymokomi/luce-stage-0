@@ -43,7 +43,7 @@ and each says so in its own preamble.
 |---|---|
 | [ENGINE.md](ENGINE.md) | Why there is one engine. Written before the nine steps that retired the interpreter; its seven "Hat" sections describe the world it measured, not this one. |
 | [MEMORY.md](MEMORY.md) | Why scope ownership won over reference counting, tracing GC, arenas and borrow checking. |
-| [STRINGS.md](STRINGS.md) | Why String bytes have an owner, phase by phase, with the timing after each step. |
+| [STRINGS.md](STRINGS.md) | Why string bytes have an owner, phase by phase, with the timing after each step. |
 
 ## History
 

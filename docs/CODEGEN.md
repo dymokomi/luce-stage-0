@@ -395,7 +395,7 @@ instruction level is a call into `libluce_rt`.
 
 ## Inline access
 
-An `Array` element and the String primitives are **generated, not
+An `array` element and the string primitives are **generated, not
 called**.  `a[i]`, `grid[r, c]`, `len(a)`, `a.dim(k)`, `s.byte_at(i)`,
 `s[a:b]` and `len(s)` all lower to the bounds check and the load they
 are, with no boxed subscript and no call.
@@ -411,25 +411,25 @@ no `getelementptr` and no pointer: the transformation is not
 expressible above LLVM IR.  And it is not LLVM's work either, because
 the object's kind lives in MIR's type table and nowhere in the emitted
 IR — `heap_types` says statically that a handle is an
-`Array(Float, _)`, which collapses the runtime's four-way switch to one
+`array(double, _)`, which collapses the runtime's four-way switch to one
 arm before an instruction is emitted.
 
 Three things make it pay, and all three are needed together:
 
 - **The row is walked directly.**  `runtime.layout` (in
   `runtime/heap.zig`) gives the byte offsets of the object table's
-  base, a row's `alive` byte, and an Array's `dims`, `elements` and
+  base, a row's `alive` byte, and an array's `dims`, `elements` and
   `count`.  Every one is measured from the Zig types with `@offsetOf`
   and checked against a real `Runtime` by a test beside them, so the
-  two cannot drift.  An Array's storage is a field of the row rather
+  two cannot drift.  An array's storage is a field of the row rather
   than a payload inside the `data` union for exactly this reason: Zig
   promises a layout for a struct field and none for a tagged union's
   payload.
-- **Elements are stored as themselves.**  An `Array(Float)` is `f64`s,
-  an `Array(Int)` is `i64`s, an `Array(Bool)` is bytes; only Strings,
+- **Elements are stored as themselves.**  An `array(double)` is `f64`s,
+  an `array(long)` is `i64`s, an `array(bool)` is bytes; only Strings,
   structs and objects keep the 24-byte slot.  `Value` is the
   *boundary* type — how an element crosses into a caller — never the
-  storage type.  Reading a Float element becomes one `ldr d0`, the
+  storage type.  Reading a double element becomes one `ldr d0`, the
   memory traffic is a third of a boxed array's, and an array of
   untagged doubles is the only kind that can ever reach a SIMD unit or
   a GPU.
@@ -441,7 +441,7 @@ Three things make it pay, and all three are needed together:
   `std.zig.llvm.Builder` attaches metadata to branches and to nothing
   else.  So the compiler does it: the row is read once in the
   preheader of the outermost loop that cannot disturb it — nothing
-  that attaches an object, frees one, or replaces an Array's storage
+  that attaches an object, frees one, or replaces an array's storage
   (`optimize.effects.viewStable`).
 
 **The loads move; the checks stay.**  A lifted resolution reads a row
@@ -473,14 +473,14 @@ figure**, `strings` least of all: copy-on-store and small-string
 optimisation both landed afterwards and moved that row twice.  The
 snapshot below is the live table.
 
-`Map` is deliberately not on the inline path: a hash probe is genuinely
-call-worthy.  Neither is `List`, whose buffer moves under `append`, nor
+`map` is deliberately not on the inline path: a hash probe is genuinely
+call-worthy.  Neither is `list`, whose buffer moves under `append`, nor
 `find_byte`, which is a vectorized `memchr` in the runtime and would be
 slower unrolled here.
 
 ## The extrema, and why a `min` reduction vectorizes
 
-`min`, `max` and `clamp` on Float are generated too, and *which*
+`min`, `max` and `clamp` on double are generated too, and *which*
 intrinsic they are generated as is a decision about meaning before it
 is one about speed.
 
@@ -495,7 +495,7 @@ is both at once: `-0.0` below `+0.0`, and a NaN as an identity rather
 than an absorber.  That is what Luce's `min` means and what the
 interpreter's `@min` does, so that is what is emitted, and `clamp` is
 the two composed in the interpreter's order.  It is declared by name
-rather than through `Builder.Intrinsic`, whose table in the pinned
+rather than through `builder.Intrinsic`, whose table in the pinned
 standard library predates the 2019 pair; LLVM recognizes an
 `llvm.`-prefixed name as the intrinsic it spells and attaches that
 intrinsic's own attributes, so the module is the one the enum would
@@ -578,7 +578,7 @@ lost optimization but a miscompile — it would let LLVM conclude that
 `luce_rt_append` cannot disturb an element this module just stored — so
 anything that resolves a handle now names the *default* location
 instead, and `inaccessiblemem` is left holding only what generated code
-still cannot see: the value arena, a List's, Map's or Builder's own
+still cannot see: the value arena, a list's, map's or builder's own
 buffer, and the unwind trace.
 
 The distinction that survives is the one that pays.  A reader
@@ -610,12 +610,12 @@ is **present** and traps `null_object` when used — and a program can
 put one inside a `T?` without a diagnostic:
 
 ```luce
-func look(xs: List(Int)?) -> Bool:
+func look(xs: list(long)?) -> bool:
     return xs == none
 
 func main():
-    var raw: List(Int)          # the null handle
-    print(String(look(raw)))       # interpreter: false — it is *there*
+    var raw: list(long)          # the null handle
+    print(string(look(raw)))       # interpreter: false — it is *there*
 ```
 
 Absence on the interpreter is `Value.Tag.none`, a tag beside the
@@ -623,7 +623,7 @@ payload, so that program prints `false`.  A sentinel lowering would
 print `true`, and the two engines would part company on the one program
 that distinguishes them.  There is an agree test named for it.
 
-Nor would the sentinel have paid.  Int, Float, Bool, String and structs
+Nor would the sentinel have paid.  long, double, bool, string and structs
 have no spare value to encode absence in, so `{T, i1}` is forced for
 six of the seven payloads; spending the seventh differently buys a word
 that SROA was going to eliminate anyway, in exchange for the one
@@ -635,7 +635,7 @@ tag zero, no payload, no length, byte for byte what the interpreter
 parks in the same slot.  **That is what makes ownership cost nothing.**
 The runtime's ownership walks switch on the tag and fall through on
 `none`, so "holding `none` owns nothing" (S43) is already true on both
-engines with no code written for it, and a present `List(T)?` binds and
+engines with no code written for it, and a present `list(T)?` binds and
 releases exactly as the bare handle does.  It is the one place the box
 is filled entirely at the value site rather than partly in the entry
 block, because neither its tag nor its length is a fact about the type.
@@ -672,7 +672,7 @@ The message travels as `libluce_rt`, not as generated code:
 `luce_rt_raise_error` takes the words and copies them, and
 `luce_rt_raise_io` builds `cannot read PATH` itself.  Both copies are
 mandatory rather than tidy: an error unwinds *through* releases, so
-`error("x: " + String(n))` hands over bytes a statement temporary is
+`error("x: " + string(n))` hands over bytes a statement temporary is
 about to give back.  Building the words in one place is also what
 makes both engines report the same sentence about the same path.
 
@@ -700,7 +700,7 @@ still the `.none` its frame started at.
 The slot that carries the value is the slot that **owns** it, and that
 is where errors meet small-string optimisation.  An owning slot holds
 a whole `runtime.Value`; a borrowing one holds the register shape,
-which for a String is `{ptr, i64}` and cannot say the text is *inside*
+which for a string is `{ptr, i64}` and cannot say the text is *inside*
 the value it came from.  Carrying a result in a borrowing slot marked
 short text as outside text, and the release at the end of the
 statement freed a pointer into the frame (docs/STRINGS.md).
@@ -710,8 +710,8 @@ statement freed a pointer into the frame (docs/STRINGS.md).
 `src/luce/runtime.zig` plus
 `runtime/{value,heap,containers,text,operators,exports}.zig`.  Luce's
 semantics below the instruction level live here: the object heap,
-ownership and serials (docs/OWNERSHIP.md), `List`/`Map`/`Array`/
-`Builder`, string storage and the String primitives,
+ownership and serials (docs/OWNERSHIP.md), `list`/`map`/`array`/
+`builder`, string storage and the string primitives,
 `str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 the trap channel they all report through.
 
@@ -746,7 +746,7 @@ so a host can tell "the program failed" from "the machine ran out".
 A Luce value crosses the boundary as a pointer to a 24-byte
 `runtime.Value` in an entry-block `alloca`.  The layout is asserted
 against the Zig struct, so the two cannot drift.  Its tag is one byte
-and the twenty-two after it are where a String's text lives when it
+and the twenty-two after it are where a string's text lives when it
 fits; generated code only ever *writes* the other form, and reads both
 (docs/STRINGS.md).
 
@@ -817,7 +817,7 @@ call trace and is called once when the program has stopped, and
 is only worth having if the recursion traps in the first place.  **5**
 made the artifact tag name its machine the way Zig names one, so a
 loader answers "is this mine?" without libLLVM in the process.  **6**
-put a short String in the value itself.  **7** gave a run a third way
+put a short string in the value itself.  **7** gave a run a third way
 to end: `raised` arrived beside `trap`, and `luce_main` answers `3` for
 a program that raised something nobody caught.  Three and not two —
 docs/FAILURE.md predicted `2`, which `exhausted` had held since
@@ -850,12 +850,12 @@ the conventions already there rather than inventing new ones:
 - **A directory listing travels as bytes.**  Every service that hands
   text back hands back a pointer and a length, and `dir_list` answers
   the names **NUL-separated in one buffer**; `luce_rt_names_list`
-  splits it into the `List(String)` the program asked for.  A second
+  splits it into the `list(string)` the program asked for.  A second
   convention — a vector of pointers, a callback per name — would be a
   second thing every host author has to get right, and NUL is the one
   byte a file name may not contain, so the joining loses nothing.
 - **A service that may have nothing to say clears its out-parameters
-  first.**  `read_line` and `env` answer a `String?`, and their `no`
+  first.**  `read_line` and `env` answer a `string?`, and their `no`
   side leaves `text`/`length` untouched — so the lowering stores a
   null and a zero before the call and hands the answer to
   `luce_rt_maybe_text` as a `present` flag.  Two stores in front of a
@@ -868,7 +868,7 @@ the conventions already there rather than inventing new ones:
 ## The lowering is total
 
 There is no list here any more.  Everything a program can say lowers:
-Int, Float, String, structs, all four container kinds, `T?`, `T!`,
+long, double, string, structs, all four container kinds, `T?`, `T!`,
 ownership, the math builtins, and every host service.  The two things
 that did not — `Bytes` and the evaluator ports — were cut rather than
 grown (docs/ENGINE.md steps 1 and 2), because nothing constructed a

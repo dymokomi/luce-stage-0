@@ -122,8 +122,8 @@ means **a machine that only runs Luce programs needs neither LLVM nor
 `luce` installed** — a shipped `.lc` needs a loader and nothing else.
 
 A Luce program is a script with a `main` entry.  The language is
-statically typed with inference, has structs, `List`/`Map`/`Array`/
-`Builder` heap objects created with `new` and freed by scope
+statically typed with inference, has structs, `list`/`map`/`array`/
+`builder` heap objects created with `new` and freed by scope
 ownership (`give`/`copy`/`free`, docs/OWNERSHIP.md), slices, and
 checked traps — `docs/LANGUAGE.md` is the
 reference.  Effects — console,
@@ -131,7 +131,7 @@ files, arguments, the screen — only exist as host builtins that loom,
 the trusted boundary, implements; the language itself stays pure:
 
 ```python
-func main(args: List(String)):
+func main(args: list(string)):
     var name = "loom"
     if len(args) > 0:
         name = args[0]

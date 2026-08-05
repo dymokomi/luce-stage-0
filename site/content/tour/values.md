@@ -23,25 +23,37 @@ func main():
 | Type | What it is |
 |---|---|
 | `bool` | `true` or `false`. No truthiness: nothing else is a condition. |
-| `long` | A signed 64-bit integer, **checked**: overflow is a trap, not a wrap. |
-| `double` | IEEE 754 double precision. |
+| `int` | A signed 32-bit integer, **checked**: overflow is a trap, not a wrap. |
+| `long` | A signed 64-bit integer, checked the same way. |
+| `float` | IEEE 754 binary32, about seven digits. |
+| `double` | IEEE 754 binary64, about sixteen. |
 | `string` | Immutable UTF-8 text. A value, not an object. |
 
-Number literals are decimal. A fraction or an exponent makes a
-`double`: `12` is an `long`, `1.5` and `1e10` and `1.5e-3` are `double`s.
-There are no hexadecimal, binary or octal literals and no `_` digit
-separators — writing one is a `luce.lex.number` error naming the
-reason, rather than a silent misreading.
+**A literal has no type until it lands on one.** It is read from its
+text at the width of the place it reaches, so `let x: double = 0.1` is
+binary64's 0.1 and not binary32's widened. With nothing to land on,
+`12` is an `int` and `1.5` is a `float`.
 
-## `long` widens to `double`, and never the other way
+Number literals are decimal, and a fraction or an exponent makes a
+float: `1.5`, `1e10`, `1.5e-3`. There are no hexadecimal, binary or
+octal literals and no `_` digit separators — writing one is a
+`luce.lex.number` error naming the reason, rather than a silent
+misreading.
 
-Mix an `long` and a `double` and the `long` widens: the answer is a
-`double`, wherever the two meet — an operator, an annotation, an
-argument, a return, a field, a list element. It is the one conversion
-Luce makes without being asked, and it goes in one direction only.
-Nothing narrows a `double` to an `long` on its own, so a `double` that
-wandered somewhere it should not be is a compile error at the first
-place an `long` is required, not a silent truncation.
+## Widening is up the ladder, and never back down
+
+Two ladders — `int` to `long`, `float` to `double` — and one rule
+across them: **a mixed pair meets at `double`**, whichever way round
+it was written. Those four conversions are the whole of what Luce does
+without being asked, and they happen wherever a value meets a type: an
+operator, an annotation, an argument, a return, a field, a list
+element.
+
+**Nothing narrows on its own** — not `long` into `int`, not `double`
+into `float`, not `double` into `long`. A value that reached somewhere
+narrower than itself is a compile error at the first place it did not
+fit, naming the constructor that would put it there, and never a
+silent truncation.
 
 ```luce run
 func main():
@@ -80,9 +92,9 @@ false
 
 ## Arithmetic is checked
 
-`long` arithmetic traps on overflow and on division by zero. There is
-no build mode in which it does not — Luce is always what Zig would
-call `ReleaseSafe`.
+Integer arithmetic traps on overflow and on division by zero, at both
+widths. There is no build mode in which it does not — Luce is always
+what Zig would call `ReleaseSafe`.
 
 ```luce trap
 func main():

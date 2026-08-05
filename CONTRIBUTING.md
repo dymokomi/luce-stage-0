@@ -95,6 +95,31 @@ or command-line option the compiler has and the reference does not is
 a failed build.  If you add one, the test will tell you which page
 wants it.
 
+### Luce in `docs/` is compiled too
+
+`tools/doccheck.zig` runs in `zig build test` and compiles **every**
+fenced `luce` block in every document.  The site *runs* its samples
+and compares their output; a document's snippets only have to be real,
+so a fence says which of four things it is:
+
+| Fence | What it means |
+|---|---|
+| ```` ```luce ```` | A whole file — declarations, and `func main()` if it wants one.  Must compile. |
+| ```` ```luce fragment ```` | Statements from inside a function body.  Dedented, indented into a `func main():`, and compiled. |
+| ```` ```luce refused ```` | A program the compiler must **reject**.  Showing a mistake is a claim about the compiler and goes stale the same way working code does.  Combines with `fragment`. |
+| ```` ```luce historical ```` | Code a **decision record** shows as an illustration: an older spelling, a refused syntax, a fragment from a program nobody wrote.  Never compiled. |
+
+Anything that is not Luce — an API index, a syntax sketch with `…` in
+it — is a ```` ```text ```` fence and no business of the checker's.
+
+`historical` is the only exemption there is, and it belongs to
+decision records alone: `grep -rn 'luce historical' docs/` lists every
+use of it in one line each, and the living documents carry none.
+Which documents are which is written down twice, in `doccheck.zig` and
+in `tools/spelling.zig` — the second refuses a retired TitleCase type
+name in a living document's *prose* as well as its code, because a
+sentence in a reference page is as normative as a sample in one.
+
 ## Committing
 
 Single-developer repository: changes go directly to `main`, no feature

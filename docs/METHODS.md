@@ -1,5 +1,14 @@
 # Receivers, and the arguments `main` is handed
 
+> **Spellings, since this was decided.**  The builtin type names are
+> lowercase (`long`, `double`, `string`, `list`, `map`, `array`,
+> `builder` — docs/TYPES.md D8), and the two numeric types became four:
+> `int` and `float` are 32 bits and are what a literal takes with
+> nothing to tell it otherwise, `long` and `double` are the 64-bit
+> types this memo calls `Int` and `Float`.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > **The rule.** A function names what it operates on. The program's
 > arguments stop being an ambient service and become `main`'s
 > parameter; a function that works on a struct stops carrying its
@@ -76,7 +85,7 @@ what this memo changes.
 
 ## Both forms stay legal
 
-```luce
+```luce historical
 func main():                              # a program that ignores them
 func main(args: List(String)):            # a program that reads them
 func main() -> !:                         # and each with `-> !`
@@ -293,7 +302,7 @@ keyword.
 
 ## The declaration
 
-```luce
+```luce historical
 struct Point:
     x: Float
     y: Float
@@ -365,7 +374,7 @@ mutable local** — which is not a new rule to invent, but the rule
 precisely the positions an assignment target is legal, and the two can
 never drift:
 
-```luce
+```luce historical
 var p = Point(x = 1.0, y = 2.0)
 p.scale(2.0)                  # a var local
 cells[0].scale(2.0)           # an element of a var root
@@ -402,7 +411,7 @@ That sentence is not a new mechanism. It is **transcribed from the
 corpus**, which writes it by hand at every mutation site it has
 (`programs/editor.luc:332-415`):
 
-```luce
+```luce historical
     func vertical(state: State, target_line: Int) -> State:
         var moved = state
         ...
@@ -481,7 +490,7 @@ The canonical loser is the mutate-and-answer method — a random number
 generator, a scanner's `take()`. `std/math.luc:237`'s
 `random_step(rng: List(Int))` becomes:
 
-```luce
+```luce historical
 struct Rng:
     state: Int
 
@@ -564,7 +573,7 @@ because the receiver rule leans on it:
 
 `programs/editor.luc:380` reads:
 
-```luce
+```luce historical
                 next.cursor = Text.previous_boundary(state.content, next.cursor)
 ```
 

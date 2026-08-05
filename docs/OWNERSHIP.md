@@ -10,8 +10,8 @@ document.  Optionals (`T?`) are Phase 3, designed together with
 error handling; global scope is Phase 2 (see docs/V2.md).
 
 Vocabulary used throughout:
-- **object** — a heap value: `List`, `Map`, `Array`, `Builder`.
-  Everything else (`Int`, `Float`, `Bool`, `String`, structs)
+- **object** — a heap value: `list`, `map`, `array`, `builder`.
+  Everything else (`long`, `double`, `bool`, `string`, structs)
   is a *value*: copied freely, never freed by the program — the
   runtime reclaims a value's storage when the place holding it dies
   (docs/STRINGS.md) — never verbed.
@@ -52,7 +52,7 @@ Decision: this is the default that makes casual code effortless.
 ```luce
 func main():
     if true:
-        let inner = new Builder()
+        let inner = new builder()
         inner.append("hi")
         # inner's block ends: builder freed here
     print("later")            # builder long gone
@@ -61,11 +61,13 @@ Decision: scope means *lexical block*, not function.
 
 **S3. Unbound temporary dies at the end of its statement.**
 ```luce
+import std.strings
+
 func main():
     for word in "a b c".split(""):   # the list is never named
         print(word)
     # the split list is freed when the for statement completes
-    print(String(len("xy".split(""))))  # freed at the end of this line
+    print(string(len("xy".split(""))))  # freed at the end of this line
 ```
 Decision: expression temporaries live exactly as long as the
 statement that created them.  Precise wording: "end of the
@@ -73,13 +75,15 @@ outermost statement containing the expression."
 
 **S4. Early exits unwind scopes.**
 ```luce
-func first_line(path: String) -> String!:
+import std.strings
+
+func first_line(path: string) -> string!:
     var lines = (try file_read(path)).split("\n")   # `try` is one too
     if len(lines) == 0:
         return ""             # lines is freed on the way out
-    return copy lines[0]      # (S22: element out via copy — String is
-                              # a value, so plain `return lines[0]` is
-                              # fine here; shown for shape only)
+    return lines[0]           # (S22: a string is a value, so it comes
+                              # out by itself; an *object* element would
+                              # need `copy`)
 ```
 Decision: `return`, `break`, `continue` — and `try`, which arrived
 with errors — free what the scopes they exit still own.  No
@@ -96,21 +100,26 @@ this unwinder.
 
 **S5. Reassigning an owning `var` frees the old object immediately.**
 ```luce
+func step(grid: array(bool, _, _)) -> array(bool, _, _):
+    var next = new array(bool, 10, 10)
+    next[0, 0] = grid[0, 0]
+    return next
+
 func main():
-    var grid = new Array(Bool, 10, 10)
-    grid = World.step(grid)   # old grid freed right here, new one owned
+    var grid = new array(bool, 10, 10)
+    grid = step(grid)         # old grid freed right here, new one owned
 ```
 Decision: drop-on-reassign.  This deletes the `let old = grid /
 free(old)` dance from life.luc.
 
 **S6. `free(x)` survives as early release.**
-```luce
+```luce refused
 func main():
     var big = file_read("huge.bin").split("\n")
     let count = len(big)
     free(big)                 # done early, on purpose
     # big is poisoned from here on: `big[0]` is a COMPILE error
-    print(String(count))
+    print(string(count))
 ```
 Decision: `free` is legal only on owned names and poisons the name
 like `give`.  Casual code never needs it.
@@ -119,7 +128,7 @@ like `give`.  Casual code never needs it.
 ```luce
 func main():
     for i in range(0, 1000):
-        var row = new Array(Int, 512)   # fresh each iteration
+        var row = new array(long, 512)   # fresh each iteration
         row.fill(i)
         # row freed here, every time around — memory stays flat
 ```
@@ -166,11 +175,11 @@ than reused, because a one-in-four-billion aliasing hole is not a
 price S9 pays.
 
 **S10. `let x = give y` — transfer between names; the giver dies.**
-```luce
+```luce refused
 func main():
     var temp = [1, 2, 3]
     let final_hits = give temp   # final_hits owns now
-    print(String(temp[0]))          # COMPILE error: temp was given away
+    print(string(temp[0]))          # COMPILE error: temp was given away
 ```
 Decision (yours, verbatim): after `give y`, touching `y` is a compile
 error.  People who write `give` know what they are doing.
@@ -181,23 +190,23 @@ error.  People who write `give` know what they are doing.
 
 **S11. Passing an object to a function is a borrow.  Free, silent.**
 ```luce
-func total(values: List(Int)) -> Int:
-    var sum = 0
+func total(values: list(long)) -> long:
+    var sum: long = 0
     for v in values:
         sum = sum + v
     return sum
 
 func main():
-    var xs = [1, 2, 3]
-    print(String(total(xs)))     # no verb; xs still owned by main
+    var xs: list(long) = [1, 2, 3]
+    print(string(total(xs)))     # no verb; xs still owned by main
 ```
 Decision: borrows are the default at every call.  Mutating through a
 borrow is allowed (`values.append(...)` inside would be legal —
 borrows are about *lifetime*, not immutability).
 
 **S12. A callee cannot keep a borrowed parameter.**
-```luce
-func stash(index: Map(String, List(Int)), hits: List(Int)):
+```luce refused
+func stash(index: map(string, list(long)), hits: list(long)):
     index["latest"] = hits    # COMPILE error: hits is borrowed;
                               # give it at the call site (S13) or
                               # store `copy hits`
@@ -208,21 +217,27 @@ contents, and pass along as borrows.
 
 **S13. Taking ownership is declared in the signature and echoed at
 the call site.**
-```luce
-func stash(index: Map(String, List(Int)), hits: give List(Int)):
+```luce refused
+func stash(index: map(string, list(long)), hits: give list(long)):
     index["latest"] = give hits    # legal: this function owns hits
 
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     var mine = [1, 2]
     stash(index, give mine)   # caller says it out loud too
-    print(String(len(mine)))     # COMPILE error: mine was given away
+    print(string(len(mine)))     # COMPILE error: mine was given away
 ```
 Decision: `give` appears at **both ends** — the parameter type and
 the call site.  Ownership handoffs are never invisible.
 
 **S14. A fresh argument satisfies a `give` parameter with no verb.**
 ```luce
+func stash(index: map(string, list(long)), hits: give list(long)):
+    index["latest"] = give hits
+
+func main():
+    var index = new map(string, list(long))
+    var mine: list(long) = [1, 2]
     stash(index, [7, 8])      # fresh: nobody owns it yet, no verb
     stash(index, copy mine)   # or: hand over a duplicate, keep mine
 ```
@@ -233,8 +248,8 @@ give-parameters alike).
 **S15. A `give` parameter the callee does not pass on dies with the
 callee.**
 ```luce
-func consume(xs: give List(Int)):
-    print(String(len(xs)))
+func consume(xs: give list(long)):
+    print(string(len(xs)))
     # xs freed here — the callee owned it and let it die
 ```
 Decision: a `give` parameter is an owned binding like any other.
@@ -245,42 +260,49 @@ Decision: a `give` parameter is an owned binding like any other.
 
 **S16. Returning something you own moves it to the caller.  No verb.**
 ```luce
-func load_lines(path: String) -> List(String):
-    var lines = file_read(path).split("\n")
+import std.strings
+
+func load_lines(path: string) -> list(string)!:
+    var lines = (try file_read(path)).split("\n")
     return lines              # moves out; caller's binding owns it
 
-func main():
-    var lines = load_lines("notes.txt")   # main owns lines now
+func main() -> !:
+    var lines = try load_lines("notes.txt")   # main owns lines now
     # freed at main's end
 ```
 Decision: `return` is an automatic move — the one place transfer
 needs no keyword, because it is unambiguous.
 
 **S17. Returning a borrowed parameter is a compile error.**
-```luce
-func pick(xs: List(Int)) -> List(Int):
+```luce refused
+func pick(xs: list(long)) -> list(long):
     return xs                 # COMPILE error: xs is borrowed;
-                              # `return copy xs`, or take `xs: give List(Int)`
+                              # `return copy xs`, or take `xs: give list(long)`
 ```
 Decision: whatever a function returns, the caller owns — no
 exceptions, so the guarantee of S16 is absolute.
 
-This is a rule about objects.  A String return copies instead of
-erroring, because a String has no verb to demand (S32): `strings.trim`
+This is a rule about objects.  A string return copies instead of
+erroring, because a string has no verb to demand (S32): `strings.trim`
 ends `return s[first:last]`, a view of its parameter, and what comes
 out is a copy the caller owns (docs/STRINGS.md).
 
 **S18. Returning a `give` parameter is legal (you own it).**
 ```luce
-func sorted(values: give List(Float)) -> List(Float):
+func sorted(values: give list(double)) -> list(double):
     values.sort()
     return values             # owned in, owned out
 ```
 
 **S19. An ignored returned object is a temporary (S3).**
 ```luce
-func main():
-    load_lines("notes.txt")   # nobody binds it: freed end of statement
+import std.strings
+
+func load_lines(path: string) -> list(string)!:
+    return (try file_read(path)).split("\n")
+
+func main() -> !:
+    try load_lines("notes.txt")   # nobody binds it: freed end of statement
 ```
 Decision: no leak, no warning needed.  (Style may frown; memory
 doesn't care.)
@@ -291,21 +313,24 @@ doesn't care.)
 
 **S20. Containers adopt fresh values silently.**
 ```luce
+import std.strings
+
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     index["a.luc"] = [12, 40]         # map owns the list
-    index["b.luc"] = "1 2 3".split("")  # map owns the split result
-    var grid = new List(List(Int))
-    grid.append(new List(Int))       # outer owns inner
+    var words = new map(string, list(string))
+    words["b.luc"] = "1 2 3".split("")  # the map owns the split result
+    var grid = new list(list(long))
+    grid.append(new list(long))       # outer owns inner
     # freeing/dropping index and grid frees everything they own
 ```
 Decision: container adoption of fresh objects is automatic, and
 freeing a container frees the objects it owns, recursively.
 
 **S21. Storing a bare name is a compile error — say what you mean.**
-```luce
+```luce refused
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     var hits = [12, 40]
     index["a.luc"] = hits         # COMPILE error:
                                   #   hits is owned by its binding;
@@ -321,7 +346,7 @@ own their object elements** — a dangling element is unrepresentable.
 element overwrite frees the old element.**
 ```luce
 func main():
-    var rows = new List(List(Int))
+    var rows = new list(list(long))
     rows.append([1, 2])
     let peek = rows[0]        # borrow; rows still owns the element
     var taken = rows.pop()    # ownership moves OUT to taken  [NEW]
@@ -345,16 +370,16 @@ borrow positions (builtin arguments, non-adopting method arguments,
 operator operands): a give must always have an owner to receive it.
 
 **S23. One object cannot end up owned twice.**
-```luce
+```luce refused
 func main():
-    var a = new List(List(Int))
-    var b = new List(List(Int))
+    var a = new list(list(long))
+    var b = new list(list(long))
     var item = [1]
     a.append(give item)       # a owns it; item poisoned
     b.append(give item)       # COMPILE error: item was given away
 ```
 And the alias dodge is caught too — at compile time:
-```luce
+```luce refused fragment
     var item2 = [2]
     let alias = item2
     a.append(give item2)      # fine; item2 poisoned
@@ -413,10 +438,10 @@ against the runtime's C ABI (`runtime/test.zig`).
 
 **S24. Structs are values; object fields follow the same verb rule at
 construction.**
-```luce
+```luce refused
 struct Bag:
-    label: String
-    items: List(Int)
+    label: string
+    items: list(long)
 
 func main():
     var bag = Bag(label = "a", items = [1, 2])   # fresh: bag's binding
@@ -432,7 +457,7 @@ struct owns the objects put into it fresh or by verb.
 
 **S25. Field assignment follows the verb rule; the old owned field
 value is freed.**
-```luce
+```luce refused fragment
     bag.items = [5, 6]        # old list freed, new fresh one owned
     bag.items = give loose2   # transfer into the field
     bag.items = loose3        # COMPILE error (S21)
@@ -440,6 +465,12 @@ value is freed.**
 
 **S26. Struct copies alias the same objects.**
 ```luce
+struct Bag:
+    label: string
+    items: list(long)
+
+func main():
+    var bag = Bag(label = "a", items = [1, 2])
     let copy_of_bag = bag     # struct copies by value;
     copy_of_bag.items.append(9)
     assert(len(bag.items) == 3)   # same list — aliases (S8)
@@ -454,11 +485,11 @@ Object fields alias; value fields — Strings and nested plain structs
 
 **S27. A struct that carries objects is itself subject to the verb
 rule when *kept*.**
-```luce
+```luce refused
 func main():
-    var bags = new List(Bag)
+    var bags = new list(Bag)
     var bag = Bag(label = "x", items = [1])
-    bags.append(bag)          # COMPILE error: Bag carries a List;
+    bags.append(bag)          # COMPILE error: Bag carries a list;
                               # `give bag` or `copy bag`
     bags.append(give bag)     # ownership of bag's list moves into bags
     bags.append(Bag(label = "y", items = [2]))   # fresh: silent
@@ -470,6 +501,10 @@ carrying struct deep-copies its owned objects.
 
 **S28. Returning an object-carrying struct moves the whole tree.**
 ```luce
+struct Bag:
+    label: string
+    items: list(long)
+
 func make_bag() -> Bag:
     var bag = Bag(label = "n", items = [1, 2])
     return bag                # struct value + owned list move together
@@ -483,23 +518,23 @@ func main():
 ## G. give/copy mechanics
 
 **S29. Poisoning is source-order and branch-insensitive.**
-```luce
+```luce refused
 func main():
     var xs = [1]
-    var sink = new List(List(Int))
+    var sink = new list(list(long))
     if len(xs) > 0:
         sink.append(give xs)  # give inside a branch...
-    print(String(len(xs)))       # ...still a COMPILE error after the if:
+    print(string(len(xs)))       # ...still a COMPILE error after the if:
                               # give poisons to end of scope, period
 ```
 Decision: blunt and predictable beats flow-sensitive and clever.
 `copy` is always the escape hatch.
 
 **S30. Giving an outer name from inside a loop is a compile error.**
-```luce
+```luce refused
 func main():
     var xs = [1]
-    var sink = new List(List(Int))
+    var sink = new list(list(long))
     for i in range(0, 3):
         sink.append(give xs)  # COMPILE error: the second iteration
                               # would use a given-away name
@@ -508,7 +543,8 @@ func main():
 
 **S31. `copy` is a deep copy and is always legal on readable objects.**
 ```luce
-    var nested = new List(List(Int))
+func show(borrowed_param: list(long)):
+    var nested = new list(list(long))
     nested.append([1, 2])
     let dup = copy nested     # copies the outer list AND its owned
                               # children; dup is fully independent
@@ -519,11 +555,11 @@ recursively.  Its cost is visible at the call site — that is the
 point.
 
 **S32. Values never take verbs.**
-```luce
-    let name = "loom"         # String is a value
+```luce refused fragment
+    let name = "loom"         # string is a value
     let title = name          # plain copy; both live independently
     give name                 # COMPILE error: give applies to
-                              # List/Map/Array/Builder (and carrying
+                              # list/map/array/builder (and carrying
                               # structs), not to values
 ```
 
@@ -534,10 +570,11 @@ point.
 **S36. Assigning into an outer-declared variable: the object lives in
 the variable's declaration scope.**
 ```luce
-func main():
-    var report = new Builder()      # declared (and initialized) here
+func main(args: list(string)):
+    let verbose = len(args) > 1
+    var report = new builder()      # declared (and initialized) here
     if verbose:
-        report = new Builder()      # old freed (S5); new one owned by
+        report = new builder()      # old freed (S5); new one owned by
         report.append("details")    # report — which lives in MAIN's scope
     print(report.build())              # object survives the if: ownership
                                     # follows the BINDING, and the binding
@@ -550,29 +587,29 @@ S40.
 **S37. Values into containers: no ownership, no verbs, ever.**
 ```luce
 func main():
-    var x: List(Int) = []
+    var x: list(long) = []
     for i in range(0, 10):
-        x.append(i)                 # appends a COPY of the Int value;
+        x.append(i)                 # appends a COPY of the long value;
                                     # i "dying" each iteration is
                                     # irrelevant — values are copied,
                                     # never owned
-    var names: List(String) = []
-    names.append("ada")             # String is a value: same story
+    var names: list(string) = []
+    names.append("ada")             # string is a value: same story
 ```
-Decision: `give`/`copy`/ownership apply to objects (List, Map,
-Array, Builder, carrying structs) only.  Values — Int, Float, Bool,
-String, plain structs — copy into containers with zero
+Decision: `give`/`copy`/ownership apply to objects (list, map,
+array, builder, carrying structs) only.  Values — long, double, bool,
+string, plain structs — copy into containers with zero
 ceremony.
 
 **S38. A borrowed parameter may mutate contents — borrows restrict
 keeping, not editing.**
 ```luce
-func fill_list(xs: List(Int)):      # borrow
+func fill_list(xs: list(long)):      # borrow
     for i in range(0, 10):
         xs.append(i)                # editing contents: always legal
 
 func main():
-    var x: List(Int) = []
+    var x: list(long) = []
     fill_list(x)                    # no verb at either end
     assert(len(x) == 10)            # main still owns x
 ```
@@ -584,11 +621,12 @@ undecided question — see below.)
 
 **S40. Late initialization: `var name: Type` with no value.**
 ```luce
-func main():
-    var inner: Builder          # declares name, type, and SCOPE;
+func main(args: list(string)):
+    let condition = len(args) > 1
+    var inner: builder          # declares name, type, and SCOPE;
                                 # holds the null object until assigned
     if condition:
-        inner = new Builder()   # the only new; inner (outer scope) owns it
+        inner = new builder()   # the only new; inner (outer scope) owns it
         inner.append("details")
     # condition true:  builder freed at the end of THIS scope
     # condition false: inner is still null — nothing freed, and
@@ -606,7 +644,7 @@ contradiction).  This is zero-initialization, not `nil` semantics:
 a slot that may genuinely hold nothing is a `T?` and says so (S43).
 
 **S39. `let` vs `var` freezes the binding, not the object.**
-```luce
+```luce refused
 func main():
     let xs = [1, 2]
     xs.append(3)                    # legal today: let pins the NAME,
@@ -625,35 +663,37 @@ chosen for now.
 
 **S41. "Uninitialized" is a state, not a value — and it cannot be
 said.**
-```luce
-var inner: Builder            # unfilled slot (S40)
+```luce fragment
+var inner: builder            # unfilled slot (S40)
 # There is NO null literal, no `inner == null`, no nullable returns.
-# A parameter or return typed Builder is ALWAYS a real Builder —
+# A parameter or return typed builder is ALWAYS a real builder —
 # every signature stays trustworthy, nobody checks.
 inner.append("x")             # RUNTIME trap: null_object — a bug with
                               # a line number, like index out of bounds
 ```
 Decision: the unfilled state is non-denotable and trapping.  The
 "did I set it?" information always already exists as ordinary
-program state — the Bool you branched on — and that is where it
+program state — the bool you branched on — and that is where it
 belongs:
 ```luce
-var report: Builder
-if verbose:
-    report = new Builder()
-if verbose:
-    print(report.build())        # guarded by the same condition; no null
-                              # concept needed anywhere
+func main(args: list(string)):
+    let verbose = len(args) > 1
+    var report: builder
+    if verbose:
+        report = new builder()
+    if verbose:
+        print(report.build())    # guarded by the same condition; no null
+                                 # concept needed anywhere
 ```
 
 **S42. Verbs and borrows on unfilled slots.**
-```luce
-var inner: Builder
-free(inner)                   # RUNTIME trap: null_object (freed nothing)
-sink.append(give inner)       # RUNTIME trap: null_object (gave nothing)
-helper(inner)                 # passing does NOT trap; the callee traps
-                              # at first USE — same as null array
-                              # elements today
+```text
+var inner: builder
+free(inner)                   RUNTIME trap: null_object (freed nothing)
+sink.append(give inner)       RUNTIME trap: null_object (gave nothing)
+helper(inner)                 passing does NOT trap; the callee traps
+                              at first USE — same as null array
+                              elements today
 ```
 Decision: `give`/`copy`/`free` demand an object and trap on null;
 borrows trap at use, not at handoff.  (The alternative — eager trap
@@ -665,7 +705,7 @@ rules.**
 - Scope exit or reassignment of an unfilled slot frees nothing.
 - Freeing a container skips null elements (already true for fresh
   object-typed Arrays).
-- Optionals inherit S1–S42 unchanged: a `Builder?` holding an object
+- Optionals inherit S1–S42 unchanged: a `builder?` holding an object
   owns it like any binding; holding `none` owns nothing.  Nothing in
   this document changed when `T?` arrived, which is the strongest
   thing that can be said about it.
@@ -681,13 +721,13 @@ through a hidden slot, and that slot is the one that **owns** it (S3):
 one place rather than two, with the statement's temporary recorded on
 the returning side, so the failing side never releases what it never
 stored.  And one value is parked once, because `try f()` hands back
-what `f()` produced and two hidden locals claiming one String's bytes
+what `f()` produced and two hidden locals claiming one string's bytes
 free them twice.
 
 **Optionals, as they shipped** (docs/FAILURE.md, docs/LANGUAGE.md).
 When absence is part of a *contract* — `parse_int(s)` on text that is
 not a number — the answer is a distinct type, not implicit
-nullability: `Builder?` is not `Builder`, and `none` is legal only
+nullability: `builder?` is not `builder`, and `none` is legal only
 where a `T?` is expected, so a plain type can never hold it and the
 billion-dollar mistake stays impossible.  A `T?` is tested
 (`x == none`) and **narrowed** — inside `if x != none:` the name *is*
@@ -725,7 +765,7 @@ temporary — every one of them lives inside a function.  A top-level
 `let` has no scope to die at, so it cannot own, and therefore cannot
 be or carry an object: `new`, list literals, slices and indexing are
 all refused there, as is a struct whose layout carries objects.  What
-remains — scalars, String, and object-free structs — folds at compile
+remains — scalars, string, and object-free structs — folds at compile
 time and inlines at its use sites, which is why an unused constant
 costs nothing to ship.
 
@@ -737,7 +777,7 @@ limit on what constants may say.
 them.**
 
 ```luce
-func main(args: List(String)):
+func main(args: list(string)):
     for name in args:
         print(name)
     # scope ends: the list is freed here, like any owned binding
@@ -753,19 +793,19 @@ when `main` returns is freed by `main`'s scope (S1, S33).  A host that
 supplies no arguments supplies an **empty** list, never a null one
 (S41 stays impossible to write).
 
-`func main(args: give List(String)):` is refused.  The verb would be
+`func main(args: give list(string)):` is refused.  The verb would be
 noise on a signature with nobody to say it back.
 
 **S45. A multiple return moves each value, left to right, and no
 object may travel twice.**
 
-```luce
-func halves(text: give String) -> (List(String), List(String)):
+```luce refused
+func halves(text: give string) -> (list(string), list(string)):
     var head = text[0:middle].split(" ")
     var tail = text[middle:len(text)].split(" ")
     return head, tail        # both move; the caller's two names own them
 
-func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+func bad(xs: give list(long)) -> (list(long), list(long)):
     let alias = xs
     return xs, alias         # COMPILE error: one object, two moves
 ```

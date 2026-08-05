@@ -47,7 +47,7 @@ clamp` stay builtins; math adds what they lack).  Series are
 range-reduced: `exp`/`ln` hold to ~1e-14 relative, trig to ~1e-12
 absolute.
 
-```luce
+```text
 import std.math
 
 math.pi   math.tau   math.e            # constants (folded)
@@ -58,54 +58,58 @@ math.ln(x)             # natural log; x <= 0 traps
 math.log2(x)  math.log10(x)
 math.pow(x, y)         # x^y; negative x needs whole y (else trap),
                        # 0^negative traps, 0^0 == 1
-math.ipow(base, n)     # Int power by squaring; checked (overflow
+math.ipow(base, n)     # long power by squaring; checked (overflow
                        # traps); negative n traps
 math.sin(x)  math.cos(x)  math.tan(x)  # radians, any magnitude
 ```
 
 ### Vectors and statistics
 
-Whole-array operations over `Array(Float, _)`, the numeric vector
+Whole-array operations over `array(double, _)`, the numeric vector
 type — the numpy-shaped tranche.  Reductions accumulate left to
 right (bit-reproducible, and against the benchmark C twins); operations with no empty answer trap on empty arrays, and
 shape mismatches trap.
 
-```luce
+```text
 import std.math
 
-math.sum(xs)            math.mean(xs)      -> Float?  (empty: none)
-math.vmin(xs)           math.vmax(xs)      -> Float?  extrema; min/max
-math.minmax(xs)         -> (Float?, Float?)         both, one traversal
+math.sum(xs)            math.mean(xs)      -> double?  (empty: none)
+math.vmin(xs)           math.vmax(xs)      -> double?  extrema; min/max
+math.minmax(xs)         -> (double?, double?)         both, one traversal
                                            # are the scalar builtins
 math.dot(xs, ys)        math.norm(xs)      # Euclidean
-math.variance(xs)       math.stddev(xs)    -> Float?  population
+math.variance(xs)       math.stddev(xs)    -> double?  population
 math.fill(xs, value)    math.scale(xs, factor)
 math.axpy(xs, factor, ys)                  # xs[i] += factor * ys[i]
 ```
 
 **Randomness** is a Lehmer/MINSTD generator whose state lives in a
-`List(Int)` the caller owns — mutation through a borrow is ordinary
+`list(long)` the caller owns — mutation through a borrow is ordinary
 Luce, so there are no hidden globals and every stream is
 deterministic from its seed:
 
 ```luce
-var rng = math.Rng(state = 42)   # any Int seed
-let f = rng.real()               # Float in (0, 1)
-let roll = rng.in_range(1, 7)    # Int in [low, high)
+import std.math
+
+func main():
+    var rng = math.Rng(state = 42)   # any long seed
+    let f = rng.real()               # double in (0, 1)
+    let roll = rng.in_range(1, 7)    # long in [low, high)
+    print(string(f) + " " + string(roll))
 ```
 
 Period 2^31 − 2; games and shuffles, never secrets.
 
 ## strings
 
-The language keeps the String **primitives**: literals and f-strings,
+The language keeps the string **primitives**: literals and f-strings,
 `+`, comparison, boundary-checked slices `s[a:b]`, `len(s)`,
 `s.byte_at(i)`, and `s.find_byte(byte, start)`.  Everything built on
 top of them is ordinary Luce in this module — and the familiar
 method spelling is sugar for it:
 with `import std.strings` in scope, `s.find(x)` *is* `strings.find(s, x)`
 (and `parts.join(sep)` is `strings.join(parts, sep)`).  Using a
-String method without the import is a compile error that says so.
+string method without the import is a compile error that says so.
 
 All offsets are byte offsets, like the primitives.  The module never
 splits a UTF-8 character: it slices at ASCII positions or at match
@@ -115,16 +119,16 @@ Two primitives carry the weight.  `find_from` locates a needle's
 first byte with `find_byte` and only then compares the rest, so the
 scan itself is one call the runtime may vectorize rather than a Luce
 loop over `byte_at`; `fold_case` emits folded bytes with
-`append_ascii`, which needs no String per character.  Both are why
+`append_ascii`, which needs no string per character.  Both are why
 the module is fast enough to stay written in Luce (docs/CODEGEN.md
 §10).
 
-```luce
+```text
 import std.strings
 
 strings.find(s, needle)          # first byte offset, or -1
 strings.find_from(s, needle, start)
-strings.contains(s, needle)      # Bool
+strings.contains(s, needle)      # bool
 strings.starts_with(s, prefix)   strings.ends_with(s, suffix)
 strings.count(s, needle)         # non-overlapping occurrences
 strings.trim(s)                  # ASCII whitespace off both ends
@@ -133,10 +137,10 @@ strings.lower(s)  strings.upper(s)   # ASCII folding; multibyte
 strings.replace(s, old, replacement) # every occurrence; empty old
                                      # changes nothing
 strings.repeat(s, times)         # zero or fewer -> ""
-strings.split(s, separator)      # List(String), keeps empty pieces;
+strings.split(s, separator)      # list(string), keeps empty pieces;
                                  # "" separator = whitespace runs,
                                  # empties dropped (Python's split())
-strings.join(parts, separator)   # List(String) -> String
+strings.join(parts, separator)   # list(string) -> string
 strings.pad_left(s, width)  strings.pad_right(s, width)
 strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
                                      # half away from zero
@@ -149,17 +153,17 @@ resolves paths relative to the current directory).
 
 Everything that touches a file says `!`: the world decides whether a
 read or a write lands, so `try` it or `catch` it (docs/LANGUAGE.md).
-`exists` answers a plain Bool and is the exception — but it is a
+`exists` answers a plain bool and is the exception — but it is a
 question about the past, never a guard for the call after it. Read
 the file and handle what the read says.
 
-```luce
+```text
 import std.files
 
-files.exists(path)               # Bool — a question, not a guard
-files.read(path)                 # String!
+files.exists(path)               # bool — a question, not a guard
+files.read(path)                 # string!
 files.write(path, text)          # !
-files.read_lines(path)           # List(String)!, newlines stripped; a
+files.read_lines(path)           # list(string)!, newlines stripped; a
                                  # trailing final newline adds no
                                  # phantom empty line
 files.write_lines(path, lines)   # !; joined with newlines, ends with
@@ -174,12 +178,12 @@ files.delete(path)               # !
 files.rename(from, to)           # !; replaces `to` if it exists, so
                                  # write-then-rename replaces a file
                                  # without ever leaving half of one
-files.list(path)                 # List(String)!, sorted; plain names,
+files.list(path)                 # list(string)!, sorted; plain names,
                                  # not paths, and no "." or ".."
 ```
 
 `append_text` is spelled that way because `append` is a **reserved
-name** — it is `xs.append(v)`, the List method — and nothing
+name** — it is `xs.append(v)`, the list method — and nothing
 user-declared may take one, module-qualified or not.  It is a wart and
 it is recorded as one in `docs/MISSING.md`.
 
@@ -208,12 +212,12 @@ would be inventing it.
 4. Document it here.
 
 Deliberate constraints, until the language grows the features:
-no module state (top-level `let` is constant — the RNG's List-state
+no module state (top-level `let` is constant — the RNG's list-state
 pattern is the idiom for mutable state), and a function that may find
 nothing answers a `T?` while one that may *fail* says `!`
 (docs/LANGUAGE.md) — `files` is written that way throughout. `math` has been revisited too: the five
 reductions over an array — `mean`, `vmin`, `vmax`, `variance`,
-`stddev` — answer `Float?`, because an empty array has no mean and
+`stddev` — answer `double?`, because an empty array has no mean and
 "there is nothing there" is the same fact every time with no reason
 worth carrying.  The seven traps left are domains a caller was handed
 and could have checked: `ln` of a non-positive number, `pow` and

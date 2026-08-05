@@ -164,6 +164,23 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spelling_guard })).step);
 
+    // The guard on the documentation: every Luce sample in every living
+    // document is compiled by the compiler this build just made
+    // (`tools/doccheck.zig`).  It imports `luce` for the same reason
+    // the grammar generator does — it asks the front end a question
+    // rather than watching a program run, so linking the language in is
+    // both simpler and the point.  A document that shows code which
+    // does not compile fails `zig build test`, not only `site/build.sh`.
+    const documentation_guard = b.createModule(.{
+        .root_source_file = b.path("tools/doccheck.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+        },
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = documentation_guard })).step);
+
     const grammar_generator = b.createModule(.{
         .root_source_file = b.path("tools/grammar.zig"),
         .target = target,

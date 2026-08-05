@@ -4,19 +4,26 @@ The reference for Luce as it exists in this tree.  docs/V2.md is the
 project plan; this file is the language.  Luce is **statically typed**
 with inference — every expression has one type known at compile time,
 annotations are optional where the initializer decides
-(`let n = 1` is an Int; `let n: Int = 1` says so out loud), and there
-is exactly one implicit conversion: an `Int` widens to a `Float`
-wherever a `Float` is required (docs/NUMERICS.md).  Nothing narrows.
+(`let n = 1` is an `int`; `let n: long = 1` says otherwise out loud),
+and the implicit conversions are the four in `types.Type.widensTo`:
+`int` widens to `long`, `float` to `double`, and across the two
+ladders the answer is always `double` (docs/TYPES.md §2).  **Nothing
+narrows**, in any direction or context.
 
 ## Values and objects
 
 Two kinds of data, with a deliberate line between them:
 
-- **Values** — `Bool`, `Int` (checked i64), `Float` (IEEE f64),
-  `String` (immutable UTF-8), and user `struct`s.  Values
-  copy on assignment and call; nobody frees a value.
-- **Heap objects** — `List(T)`, `Map(K, V)`, `Array(T, ...)`, and
-  `Builder`.  Variables hold *references*.  Objects are created with
+- **Values** — `bool`, the four numbers, `string` (immutable UTF-8),
+  and user `struct`s.  Values copy on assignment and call; nobody
+  frees a value.  The numbers are two ladders of two, and each is
+  checked at its own width: `int` (signed 32-bit) and `long` (signed
+  64-bit) trap on overflow and on division by zero; `float`
+  (IEEE binary32) and `double` (IEEE binary64) follow IEEE without
+  traps.  `int` and `float` are what a literal takes when nothing
+  tells it otherwise (docs/TYPES.md).
+- **Heap objects** — `list(T)`, `map(K, V)`, `array(T, ...)`, and
+  `builder`.  Variables hold *references*.  Objects are created with
   `new ...` or a literal and freed automatically by **scope
   ownership** (next section).  Copying a struct that contains a list
   copies the *reference* — both structs see the same list.
@@ -54,7 +61,7 @@ it):
 - **Calls borrow by default.**  A borrowed parameter may read and
   mutate contents but never keep, give, free, or return its object.
   Taking ownership is declared in the signature *and* echoed at the
-  call site: `func stash(hits: give List(Int))` /
+  call site: `func stash(hits: give list(long))` /
   `stash(give mine)`.
 - **`return` moves.**  Whatever a function returns, the caller owns —
   returning a borrow or alias is a compile error (`return copy x` is
@@ -68,8 +75,8 @@ it):
   holds the type's zero value — the null object for object types —
   and using it before assignment traps `null_object`.  A `T?` says
   "there may be nothing here" out loud instead (next section), and
-  holding `none` owns nothing (S43), so a `List(T)?` obeys every rule
-  above exactly as a `List(T)` does.
+  holding `none` owns nothing (S43), so a `list(T)?` obeys every rule
+  above exactly as a `list(T)` does.
 
 One dynamic backstop covers what static rules cannot see: every verb
 demands a filled slot, or traps `null_object`.  The second one is
@@ -82,15 +89,19 @@ not a program diagnostic.
 
 ## Absence: `T?` and `none`
 
-A trailing `?` makes a type nullable: `Int?` is an `Int` that may not
+A trailing `?` makes a type nullable: `long?` is a `long` that may not
 be there, and `none` is the value that is not.  `?` means nullable and
 **only** nullable — failure is `!` and is never spelled with a `?`
 (see the next section).
 
 ```luce
-var user: User? = none
-var limit: Int? = 10
-let parsed = parse_int(text)      # Int?
+struct User:
+    name: string
+
+func main(args: list(string)):
+    var user: User? = none
+    var limit: long? = 10
+    let parsed = parse_int(args[0])   # long?
 ```
 
 `T?` may be a local, a parameter, a return type, or a struct field.
@@ -104,7 +115,7 @@ counting.
 
 ```luce
 struct Node:
-    value: Int
+    value: long
     next: Node?
 ```
 
@@ -118,7 +129,7 @@ counts as one whatever it holds, because its payload starts absent and
 arrives only when a program builds one.  So `?` is the answer to both
 refusals, and the diagnostics say so:
 
-```luce
+```luce refused
 struct Big:                       # 4096 values
     ...
 
@@ -131,30 +142,34 @@ struct Pair:
     b: Big?                       # fine: holds two `none` until told otherwise
 ```
 
-The other answer is a container — a `List`, `Map` or `Array` is one
+The other answer is a container — a `list`, `map` or `array` is one
 reference however much it holds.
 
 **Narrowing is the feature.**  After a test, the name *is* its
 payload: no unwrapping operator, no second spelling.
 
 ```luce
-if user != none:
-    print(user.name)              # user is User here, not User?
-else:
-    print("nobody")               # and User? there
+struct User:
+    name: string
+
+func greet(user: User?):
+    if user != none:
+        print(user.name)          # user is User here, not User?
+    else:
+        print("nobody")           # and User? there
 ```
 
 Five shapes narrow, and they are the ones real code writes:
 
-```luce
-if x != none: ...                 # the then arm
-if x == none: ...                 # the else arm
-if x == none:                     # an early-exit guard narrows
-    return                        #   everything below it
-print(String(x))                     #   (break and continue too)
-if x != none and x > 3: ...       # the rest of the condition
-while x != none: ...              # the loop body
-x = 3                             # an assignment of a plain value
+```text
+if x != none: …                   the then arm
+if x == none: …                   the else arm
+if x == none:                     an early-exit guard narrows
+    return                          everything below it
+                                    (break and continue too)
+if x != none and x > 3: …         the rest of the condition
+while x != none: …                the loop body
+x = 3                             an assignment of a plain value
 ```
 
 Narrowing applies to **locals and parameters only** — not to fields or
@@ -170,9 +185,10 @@ Python needs `??` because `or` is broken there by truthiness, and Luce
 has no truthiness and no ternary.
 
 ```luce
-let count = parse_int(args[0]) else 10
-let first = parse_int(a) else parse_int(b) else 0   # right-associative
-let must = parse_int(text) else trap("not a number")
+func main(args: list(string)):
+    let count = parse_int(args[0]) else 10
+    let first = parse_int(args[1]) else parse_int(args[2]) else 0   # right-associative
+    let must = parse_int(args[3]) else trap("not a number")
 ```
 
 `else` binds looser than `+` and tighter than the comparisons, so
@@ -189,21 +205,23 @@ code, not caution.
 ## Failure: `T!`, `try`, `catch`
 
 A trailing `!` on a return type says the call may not succeed:
-`String!` hands back a String or an error, and a bare `-> !` hands
+`string!` hands back a string or an error, and a bare `-> !` hands
 back nothing or an error. `!` means *failure* and only failure — it is
 never spent on absence, which is `?`'s job (docs/FAILURE.md).
 
 ```luce
-func read(path: String) -> String!:
+import std.files
+
+func read(path: string) -> string!:
     return try file_read(path)
 
-func main(args: List(String)) -> !:
+func main(args: list(string)) -> !:
     let text = try files.read(args[0])
     let cfg  = files.read("settings") catch ""
 ```
 
 **`T!` is not a type.** Fallibility is an attribute of the *function*,
-so there is no `T!` to declare a variable of, put in a List, or write
+so there is no `T!` to declare a variable of, put in a list, or write
 in a struct field — and `return x` in a `-> T!` function just returns
 `x`, with nothing to wrap it in.
 
@@ -230,11 +248,26 @@ reasons of its own.)
 **A call that can fail must say which it means.** Ignoring the outcome
 is not a spelling the grammar has:
 
+The first of these is the one the grammar refuses:
+
+```luce refused
+import std.files
+
+func main(path: string, text: string):
+    files.write(path, text)        # luce.sema.fallible
+```
+
+The two that say which they mean:
+
 ```luce
-files.write(path, text)            # luce.sema.fallible
-try files.write(path, text)        # pass it to my caller
-files.write(path, text) catch:     # handle it here
-    print("cannot write " + path)
+import std.files
+
+func pass_on(path: string, text: string) -> !:
+    try files.write(path, text)    # pass it to my caller
+
+func handle(path: string, text: string):
+    files.write(path, text) catch:     # handle it here
+        print("cannot write " + path)
 ```
 
 `try` propagates: it releases what this frame owns, innermost scope
@@ -246,13 +279,19 @@ terminator changed. It needs a caller that said `!`, or it is
 forms, for the two shapes recovery takes:
 
 ```luce
-let text = files.read(path) catch ""        # a fallback value
+import std.files
 
-files.write(path, text) catch:              # a handler block
-    print("cannot write " + path)
+func handle_both(path: string):
+    let text = files.read(path) catch ""        # a fallback value
 
-opening = files.read(path) catch:           # …after a plain assignment
-    greeting = "new file"
+    files.write(path, text) catch:              # a handler block
+        print("cannot write " + path)
+
+    var greeting = "old file"
+    var opening = ""
+    opening = files.read(path) catch:           # …after a plain assignment
+        greeting = "new file"
+    print(greeting + opening)
 ```
 
 The block form guards exactly one call, which is what separates it
@@ -269,9 +308,9 @@ hands over a fresh object, the fallback must too.
 **`error("…")` raises**, with the program's own words:
 
 ```luce
-func check(n: Int) -> Int!:
+func check(n: long) -> long!:
     if n < 0:
-        error("negative: " + String(n))
+        error("negative: " + string(n))
     return n
 ```
 
@@ -310,15 +349,15 @@ the decision record.
 
 A function may answer more than one value.
 
-```luce
-func minmax(xs: Array(Float, _)) -> (Float, Float):
-    ...
+```text
+func minmax(xs: array(double, _)) -> (double, double):
+    …
     return low, high
 
 let low, high = minmax(temperatures)
 ```
 
-**There is no tuple.**  `(Float, Float)` is a shape a *signature* has,
+**There is no tuple.**  `(double, double)` is a shape a *signature* has,
 not a type a program can name: it cannot annotate a binding, fill a
 parameter or a field, stand inside a container, nest inside itself, or
 take a `?`, and there is no expression that produces one.  A pair that
@@ -334,8 +373,19 @@ be the *only* arguments; refusing it is what makes this rule one a
 reader can hold, because it has no exceptions.  The cost is one line:
 
 ```luce
-let low, high = minmax(xs)
-return low, high
+func minmax(xs: array(double, _)) -> (double, double):
+    var low = xs[0]
+    var high = xs[0]
+    for x in xs:
+        low = min(low, x)
+        high = max(high, x)
+    return low, high
+
+func main():
+    var xs = new array(double, 4)
+    xs.fill(1.5)
+    let low, high = minmax(xs)
+    print(string(low) + " " + string(high))
 ```
 
 **One keyword governs the whole bind**: `let a, b` makes both
@@ -348,7 +398,7 @@ so a name costs nothing and tells the next reader what was ignored.
 value and so cannot supply a shape, which leaves a fallible
 multi-return propagatable or discardable and not handleable with
 values.  An element may be a `T?` — absence is an ordinary value — but
-`-> (Int, Int)?` is refused, because there the `?` would be marking
+`-> (long, long)?` is refused, because there the `?` would be marking
 the shape.
 
 Ownership is `docs/OWNERSHIP.md` S45: each value moves independently
@@ -365,13 +415,13 @@ namespace function it has always been.
 
 ```luce
 struct Point:
-    x: Float
-    y: Float
+    x: double
+    y: double
 
-    func length(self) -> Float:              # a method: reads self
+    func length(self) -> double:              # a method: reads self
         return sqrt(self.x * self.x + self.y * self.y)
 
-    func scale(var self, factor: Float):     # a method: writes self back
+    func scale(var self, factor: double):     # a method: writes self back
         self.x = self.x * factor
         self.y = self.y * factor
 
@@ -418,12 +468,12 @@ write-back stands on the returning edge only.
 
 ## Collections
 
-```luce
-var xs = [1, 2, 3]                 # List(Int), inferred from elements
-var ys: List(String) = []          # empty literal needs an annotation
-var m = new Map(String, Int)       # insertion-ordered dictionary
-var grid = new Array(Int, 5, 5)    # fixed 5x5, zero-initialized
-var b = new Builder()              # string builder
+```luce fragment
+var xs = [1, 2, 3]                 # list(long), inferred from elements
+var ys: list(string) = []          # empty literal needs an annotation
+var m = new map(string, long)       # insertion-ordered dictionary
+var grid = new array(long, 5, 5)    # fixed 5x5, zero-initialized
+var b = new builder()              # string builder
 
 xs.append(4)                       # [1, 2, 3, 4]
 let first = xs[0]                  # index (bounds-checked)
@@ -438,59 +488,59 @@ grid[2, 3] = 7                     # multi-dimensional index
 let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
-let text = b.build()                  # builder -> String
+let text = b.build()                  # builder -> string
 # scope ownership frees xs, m, grid, and b here — no free() needed
 ```
 
 Type-specific operations are **methods** (Python's split: `len`,
-`String`, `print` and friends stay free functions; everything that
+`string`, `print` and friends stay free functions; everything that
 belongs to one type is called on it — and like Zig, `xs.append(v)` is
 sugar for a plain function with the receiver first, not dispatch):
 
-- `List(T)`: `append(v)`, `insert(i, v)`, `remove(i)`, `pop()` (traps
-  when empty), `sort()` (in place, **stable**; Int/Float/String
+- `list(T)`: `append(v)`, `insert(i, v)`, `remove(i)`, `pop()` (traps
+  when empty), `sort()` (in place, **stable**; long/double/string
   elements),
-  `reverse()`, `find(v) -> Int` (-1 when absent), `contains(v)`,
+  `reverse()`, `find(v) -> long` (-1 when absent), `contains(v)`,
   `clear()`, plus `len`, index, slice.
-- rank-1 `Array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
+- rank-1 `array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
   `contains(v)`, `fill(v)` (value elements only — an array of
-  objects stores each slot separately); every Array has `dim(axis)`.
-- `Map(K, V)`: `K` is `Int` or `String`.  Index get (traps on a
+  objects stores each slot separately); every array has `dim(axis)`.
+- `map(K, V)`: `K` is `long` or `string`.  Index get (traps on a
   missing key), index set (insert or update), `has(k)`, `get(k,
   default) -> V` (the value or the default — no trap), `remove(k)`
-  (no-op when absent), `keys() -> List(K)`, `values() -> List(V)`,
+  (no-op when absent), `keys() -> list(K)`, `values() -> list(V)`,
   `clear()`, `len`.  Iteration order is insertion order, and the
   lookups (index, `has`, `get`, index-set) are O(1): the entries
   stay a dense array in arrival order with a hash index over it.
-- `Builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
-  `b.build()`.  `append_ascii` puts one ASCII byte in without the String
+- `builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
+  `b.build()`.  `append_ascii` puts one ASCII byte in without the string
   a `chr()` would allocate; it traps `bad_codepoint` outside 0..127,
-  because a Builder's bytes become a String and String is valid
+  because a builder's bytes become a string and string is valid
   UTF-8.  Wider characters go through `append(chr(code))`.
-- `Array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
-  values at `new`, elements zero-initialized (numbers 0, Bool false,
-  String "", structs zeroed field by field, object elements start null
+- `array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
+  values at `new`, elements zero-initialized (numbers 0, bool false,
+  string "", structs zeroed field by field, object elements start null
   — using a null element traps until you store something).  In type
   annotations the shape is spelled with `_`:
-  `func total(grid: Array(Int, _, _)) -> Int`.
+  `func total(grid: array(long, _, _)) -> long`.
 - `==` / `!=` on objects compare *identity* (same object), never
   contents.
 - Slices copy: `xs[a:b]` allocates a new list the receiver owns —
   deeply, when elements are objects (two containers can never own one
-  object); `s[a:b]` on a String stays a value.
+  object); `s[a:b]` on a string stays a value.
 
 ## Iteration
 
-```luce
-for i in range(0, 10):      # ints, as before
-for x in xs:                # list / rank-1 array elements, in order
-for key in m:               # map keys, insertion order
-for i, x in xs:             # index and element together (enumerate)
-for key, value in m:        # both, no second lookup
+```text
+for i in range(0, 10):      ints, as before
+for x in xs:                list / rank-1 array elements, in order
+for key in m:               map keys, insertion order
+for i, x in xs:             index and element together (enumerate)
+for key, value in m:        both, no second lookup
 ```
 
 The two-name form binds a *position* then a *payload*: a sequence's
-Int index and its element, or a map's key and its value.  Don't grow,
+long index and its element, or a map's key and its value.  Don't grow,
 shrink, or free a collection while iterating it; bounds stay checked
 per step, but which elements you visit is your problem.
 
@@ -513,25 +563,25 @@ with `chr(...)`).  Everything built on top of the primitives lives in
 the standard library's `strings` module (docs/STD.md), written in
 ordinary Luce:
 
-```luce
+```text
 import std.strings
 
 s.find(sub)          # byte offset of first occurrence, -1 if absent
 s.find_from(sub, i)  # first occurrence at or after offset i
-s.contains(sub)      # Bool
-s.starts_with(p)     # Bool
-s.ends_with(p)       # Bool
+s.contains(sub)      # bool
+s.starts_with(p)     # bool
+s.ends_with(p)       # bool
 s.count(sub)         # non-overlapping occurrences
 s.trim()             # ASCII whitespace off both ends
 s.lower()            # ASCII case fold down; multibyte passes whole
 s.upper()            # ASCII case fold up
 s.replace(old, replacement)  # every occurrence; empty old is a no-op
 s.repeat(n)          # n copies (n <= 0 is "")
-s.split(sep)         # List(String); empty sep splits on whitespace
+s.split(sep)         # list(string); empty sep splits on whitespace
 s.pad_left(w)        # space-padded to w bytes
 s.pad_right(w)
-words.join(", ")     # List(String) -> String
-strings.format_float(x, 2)   # fixed-point Float display: "2.50"
+words.join(", ")     # list(string) -> string
+strings.format_float(x, 2)   # fixed-point double display: "2.50"
 ```
 
 The method spelling is the same sugar as everywhere else:
@@ -541,23 +591,29 @@ error pointing at the missing import otherwise.  Only `byte_at` and
 `find_byte` are built in.
 
 **Interpolation.**  An `f"..."` string splices expressions in `{...}`,
-each converted with `String(...)`:
+each converted with `string(...)`:
 
 ```luce
-f"x = {x}, y = {y}"       # "x = 7, y = 3"
-f"sum = {a + b}"          # any scalar expression: Int, Float, Bool,
-                          # String — a List is a type error
-f"name is {user.name}"    # methods, calls, fields all work
-f"{{literal braces}}"     # double a brace for a literal { or }
-f"mean = {mean:.2f}"      # a Float to two decimal places
+import std.strings
+
+struct User:
+    name: string
+
+func show(x: long, y: long, a: long, b: long, user: User, mean: double):
+    print(f"x = {x}, y = {y}")       # "x = 7, y = 3"
+    print(f"sum = {a + b}")          # any scalar expression: long, double,
+                                     # bool, string — a list is a type error
+    print(f"name is {user.name}")    # methods, calls, fields all work
+    print(f"{{literal braces}}")     # double a brace for a literal { or }
+    print(f"mean = {mean:.2f}")      # a double to two decimal places
 ```
 
 The hole is one expression; nested `"..."` strings inside a hole are
-fine.  `f"..."` desugars to plain `+` concatenation of `String(...)`
-pieces, so it is a String like any other.
+fine.  `f"..."` desugars to plain `+` concatenation of `string(...)`
+pieces, so it is a string like any other.
 
 **Format specs.**  A hole may end `:.Nf` — N decimal places of a
-`Float`, rounded half away from zero (docs/NUMERICS.md §8).  That is
+`double`, rounded half away from zero (docs/NUMERICS.md §8).  That is
 the whole spec language: no width, no fill, no alignment, no `%`, no
 `e`, no thousands separator, and anything else is a
 `luce.parse.fstring` naming the one form that exists.  The `f` is
@@ -569,7 +625,7 @@ divergence.
 A spec lowers to `strings.format_float(value, N)`, so it needs
 `import std.strings` for the same reason `s.split(",")` does, and says
 so through the same diagnostic.  Formatting is where formatting
-happens: there is no `String.format`, and `%` stays an arithmetic
+happens: there is no `string.format`, and `%` stays an arithmetic
 operator.
 
 A colon *inside* brackets belongs to the brackets, so `f"{s[1:3]}"` is
@@ -578,27 +634,27 @@ a slice and `f"{m[k]}"` a lookup.
 ## Conversions and generic builtins
 
 **Three conversion constructors, each named for the type it
-produces**: `Int(x)`, `Float(x)`, `String(x)` (docs/NUMERICS.md §7).
+produces**: `long(x)`, `double(x)`, `string(x)` (docs/NUMERICS.md §7).
 They are the only ones, and none of them is a builtin — the compiler
 matches the three names before it resolves anything, which is why all
 three are reserved.
 
-`Int(x)` **rounds half away from zero** — `Int(2.5)` is `3` and
-`Int(-2.5)` is `-3`, the same rounding `math.round` does — and traps
-`conversion_range` on NaN, an infinity, or a value outside the `Int`
+`long(x)` **rounds half away from zero** — `long(2.5)` is `3` and
+`long(-2.5)` is `-3`, the same rounding `math.round` does — and traps
+`conversion_range` on NaN, an infinity, or a value outside the `long`
 range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
 `trunc` and round are four spellings for four different answers.
-`Float(x)` widens and never traps.  `String(x)` prints an `Int`, a
-`Float`, a `Bool` or a `String`, and takes a **scalar only**: a
-`Builder` is a heap object and hands over its text with `b.build()`.
-An f-string hole is a `String(...)` the reader did not write, so the
+`double(x)` widens and never traps.  `string(x)` prints a `long`, a
+`double`, a `bool` or a `string`, and takes a **scalar only**: a
+`builder` is a heap object and hands over its text with `b.build()`.
+An f-string hole is a `string(...)` the reader did not write, so the
 same rule decides what may stand in one.
 
-```luce
-String(42)          # "42"        (Int, Float, Bool, Builder, String)
-parse_int("42")  # 42          Int?   — none when the text is not a number
-parse_float("2.5")               # Float?
-chr(955)         # "λ"         codepoint -> String; traps on invalid
+```luce fragment
+string(42)          # "42"        (long, double, bool, builder, string)
+parse_int("42")  # 42          long?   — none when the text is not a number
+parse_float("2.5")               # double?
+chr(955)         # "λ"         codepoint -> string; traps on invalid
 ord("λ")         # 955         first codepoint; traps on empty
 ```
 
@@ -608,19 +664,21 @@ implies it, so absence carries all the information there is
 (docs/FAILURE.md).  Read the answer with `else`, or test it:
 
 ```luce
-let count = parse_int(args[0]) else 10
-let n = parse_int(text)
-if n == none:
-    print("not a number: " + text)
-    return
-print(String(n * 2))
+func main(args: list(string)):
+    let count = parse_int(args[0]) else 10
+    let text = args[1]
+    let n = parse_int(text)
+    if n == none:
+        print("not a number: " + text)
+        return
+    print(string(n * 2) + string(count))
 ```
 
 The free builtins are the generic, cross-type set — Python's own
 split of capability: `len print range assert trap free abs
 min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
 the
-conversions `Int(x)`/`Float(x)`, and the host-gated file, argument,
+conversions `long(x)`/`double(x)`, and the host-gated file, argument,
 terminal, and key builtins (see docs/V2.md).  Everything that belongs
 to one type is a method on it.
 
@@ -630,12 +688,12 @@ to one type is a method on it.
 arguments declares them:
 
 ```luce
-func main(args: List(String)):     # and `-> !` composes with it
+func main(args: list(string)):     # and `-> !` composes with it
     for name in args:
         print(name)
 ```
 
-`args` is an ordinary `List(String)`, so `len`, indexing, slicing,
+`args` is an ordinary `list(string)`, so `len`, indexing, slicing,
 `for … in`, `contains` and `strings.join` all work on it, and
 `args[0]` is the first word after the program's own name.  It is
 *handed to* the program rather than called *by* it, which is why the
@@ -648,26 +706,26 @@ Every other effect is a host service, every service is optional, and
 one the host does not offer traps `host_unavailable` rather than
 touching anything.  The whole set, and what each answers:
 
-```luce
-print(text)                  # a line to standard output
-print_error(text)            # a line to standard error
-read_line(prompt)            # String?  — none at end of input
-env(name)                    # String?  — none when unset
+```text
+print(text)                  a line to standard output
+print_error(text)            a line to standard error
+read_line(prompt)            # string?  — none at end of input
+env(name)                    # string?  — none when unset
 
-clock_ms()                   # Int, monotonic, unspecified origin
+clock_ms()                   # long, monotonic, unspecified origin
 sleep_ms(milliseconds)       # waits at least that long
 
-file_read(path)              # String!
+file_read(path)              # string!
 file_write(path, content)    # !
 file_append(path, content)   # !
 file_delete(path)            # !
 file_rename(from, to)        # !
-file_exists(path)            # Bool — a question, never a guard
-dir_list(path)               # List(String)! — plain names, unsorted
+file_exists(path)            # bool — a question, never a guard
+dir_list(path)               # list(string)! — plain names, unsorted
 
 term_rows()   term_cols()   term_clear()   term_move(row, col)
 term_style(fg, bg, bold)   term_write(text)   term_flush()
-key_read()   key_text()          # key_read is String?
+key_read()   key_text()          # key_read is string?
 ```
 
 Three shapes and one rule behind them (docs/FAILURE.md).  A file
@@ -677,7 +735,7 @@ because "there is nothing there" is the whole of what they have to
 say — end of input, and a variable nobody set, carry no reason worth a
 message.  Everything else either cannot fail or is an effect.
 
-`key_read` is `String?` for the same fact `read_line` is, off the same
+`key_read` is `string?` for the same fact `read_line` is, off the same
 descriptor: a keyboard runs dry when the pipe driving it ends or the
 terminal closes, and the host cannot tell those apart and has no
 reason to.  It is deliberately **not** one more name in the closed set
@@ -746,23 +804,33 @@ they are a service the host does not offer yet.
 
 ## Arithmetic and assignment
 
-Number literals are decimal: `12` is an Int, and a fraction or an
-exponent makes a Float (`1.5`, `1e10`, `1.5e-3`).  A `.` only starts
+**A literal has no type until it lands on one** (docs/TYPES.md §1).
+It is read from its text at the width of the place it reaches — an
+annotation, an argument, a return, a struct field, a container
+element, a subscript, a conversion constructor — so no decimal ever
+travels through binary64 on its way to a binary32, and `double(0.1)`
+is binary64's 0.1 rather than binary32's widened.  With no place to
+land on, `12` is an `int` and `1.5` is a `float`; a literal past the
+width it landed on is refused at compile time by a message naming the
+width that would hold it.
+
+Number literals are decimal, and a fraction or an exponent makes a
+float (`1.5`, `1e10`, `1.5e-3`).  A `.` only starts
 a fraction when a digit follows it.  There are no hexadecimal,
 binary or octal literals and no `_` digit separators — writing one
 is a `luce.lex.number` error naming the reason, not a silent
 misreading (docs/MISSING.md tier 3, item 11).
 
 Binary operators are `+ - * / // %`, the comparisons
-`== != < <= > >=` (ordering on Int, Float, String), and `and or not`
+`== != < <= > >=` (ordering on long, double, string), and `and or not`
 (short-circuit).
 
-**`/` is real division and always answers a Float**, whatever it
+**`/` is real division and always answers a double**, whatever it
 divides (docs/NUMERICS.md §2): `1 / 2` is `0.5`, `total / len(xs)` is
 the average, and there is no integer `/` in the language at all.  It
 follows IEEE without traps — `1 / 0` is `inf` and `0 / 0` is NaN —
-because the operators that trap are the ones that answer an Int, and
-`/` is not one of them.  `n /= 2` on an Int place is therefore a
+because the operators that trap are the ones that answer a long, and
+`/` is not one of them.  `n /= 2` on a long place is therefore a
 compile error naming `//=`, which is the whole of what the change
 costs and the whole of why it is safe.
 
@@ -782,25 +850,36 @@ every pair of operands that does not trap:
 A positive divisor therefore never yields a negative answer, which is
 what makes `x % 256` a byte wrap for every `x` and `(row - 1) % height`
 a torus.  `//` and `%` by zero trap; on Floats they are IEEE and do
-not, and Float `%` floors with the integer one so promotion crosses
+not, and double `%` floors with the integer one so promotion crosses
 the line without a seam in it.
 
 There is no `//` comment: a comment runs from `#` to the end of the
 line, and a line beginning `//` is answered by name
 (`luce.parse.comment`).
 
-**Numbers that mix** (docs/NUMERICS.md).  An `Int` widens to a `Float`
-wherever a `Float` is required — both operands of `+ - * / %`, a `let`
-annotation, an argument, a return, a struct field, a list element, a
-compound assignment, `min`/`max`/`clamp`.  One direction: a `Float`
-never becomes an `Int` without `Int(x)` being written, so a `Float`
-that reached somewhere it should not be is refused at the first place
-an `Int` is required rather than quietly truncated.
+**Numbers that mix** (docs/TYPES.md §2, docs/NUMERICS.md).  Four
+arithmetic types on two ladders, and four implicit conversions stated
+once: `int` widens to `long`, `float` widens to `double`, and a mixed
+pair meets at `double` whichever way round it was written.  That is
+the whole of it — everywhere a value meets a type, from both operands
+of `+ - * / %` to a `let` annotation, an argument, a return, a struct
+field, a list element, a compound assignment and `min`/`max`/`clamp`.
 
-Promotion needs a place that expects a `Float`.  `let xs = [1, 2, 3]`
-is still a `List(Int)`; `let xs: List(Float) = [1, 2, 3]` is a
-`List(Float)`, and `[1, 2.5]` is one too, because one `Float` among
-numbers makes them all `Float`s wherever it stands.
+What is deliberately *not* there is Java's `int → float` and
+`long → float`, which lose everything above 2^24 from sources that
+reach it routinely; a program that wants a narrow float writes
+`float(x)` and says so.
+
+**Narrowing is implicit in no direction and no context** — not `long`
+into `int`, not `double` into `float`, not at a store, an argument or
+a return.  A value that reached somewhere narrower than itself is
+refused at the first place it did not fit, by a message naming the
+constructor that would do it.
+
+Promotion needs a place that expects a `double`.  `let xs = [1, 2, 3]`
+is still a `list(long)`; `let xs: list(double) = [1, 2, 3]` is a
+`list(double)`, and `[1, 2.5]` is one too, because one `double` among
+numbers makes them all `double`s wherever it stands.
 
 **Comparison across the line is exact.**  `1 < 1.5` is `true`, and so
 is `9007199254740993 != 9007199254740992.0` — those are two different
@@ -829,12 +908,12 @@ both are fixed by one pair of parentheses.
 binds *tighter* than `==` — the C, Zig and Rust reading.  Python's
 `not` binds *looser* than comparison, so a Python reader reads
 `not a == b` as `not (a == b)` and gets the opposite answer whenever
-both operands are Bool.  Writing it bare is `luce.parse.precedence`;
+both operands are bool.  Writing it bare is `luce.parse.precedence`;
 write `(not a) == b` or `not (a == b)`.
 
 **Chained comparison.**  `a < b < c` is one comparison in Python
 (`a < b and b < c`, with `b` evaluated once) and two in C
-(`(a < b) < c`, comparing a Bool with an Int).  Luce has neither: the
+(`(a < b) < c`, comparing a bool with a long).  Luce has neither: the
 comparisons are **non-associative**, and chaining them is
 `luce.parse.chain`.  Write `a < b and b < c`.  This costs nothing —
 `(a < b) < c` was always a type error one stage later, and comparing
@@ -842,18 +921,20 @@ two Bools with `(a < b) == (c < d)` is still legal, because the
 parentheses start a new chain.
 
 Compound assignment applies an operator in place: `n += 1`, `n -= 1`,
-`n *= 2`, `n /= 2`, `n //= 2`, `n %= 3`, and `s += "!"` (String
+`n *= 2`, `n /= 2`, `n //= 2`, `n %= 3`, and `s += "!"` (string
 concat).  It is
-value-only arithmetic — the place is a number (or a String for `+=`),
+value-only arithmetic — the place is a number (or a string for `+=`),
 never an object — and the place is evaluated once, so
 `grid[row, col] += 1` reads and writes the same slot:
 
-```luce
+```luce fragment
 var total = 0
 total += 5          # total == 5
 var s = "a"
 s += "b"            # s == "ab"
-counts[key] += 1    # key evaluated once
+var counts = new map(string, long)
+counts["k"] = 0
+counts["k"] += 1    # the key is evaluated once
 ```
 
 Assignment targets a **place**: a name, a field, or an index, nested
@@ -861,7 +942,7 @@ freely — `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag =
 "x"`.  The place is read once (every subscript evaluated once), then
 rebuilt: value structs update functionally up to their root binding,
 and the innermost container element is written in place.  A nested
-place assigns a **value** (a number, String, or plain struct); to
+place assigns a **value** (a number, string, or plain struct); to
 restock an *object* field use the single-level form
 (`bag.items = [1, 2]`).
 
@@ -897,7 +978,7 @@ counts only when **every** arm leaves, so the ordinary early-return
 guard is untouched:
 
 ```luce
-func clamp(n: Int) -> Int:
+func floor_at_zero(n: long) -> long:
     if n < 0:
         return 0
     return n                  # reachable: the guard has no else
@@ -908,18 +989,23 @@ func clamp(n: Int) -> Int:
 `let` at the top level declares a **compile-time constant**:
 
 ```luce
+struct Theme:
+    keyword: long
+    comment: long
+
 let width = 80
 let tau = 2.0 * pi          # constants may reference each other,
 let pi = 3.14159            # in any order — never in a cycle
+let version = "2"
 let banner = "loom " + version
 let theme = Theme(keyword = 176, comment = 244)   # value structs too
 ```
 
 Initializers fold at compile time: literals, other constants
 (including `module.constant` through imports), arithmetic,
-comparisons, `and`/`or`, string concatenation, `Int()`/`Float()`,
-and value-struct construction.  Calls, objects (`List`, `Map`,
-`Array`, `Builder`, object-carrying structs), and verbs are not
+comparisons, `and`/`or`, string concatenation, `long()`/`double()`,
+and value-struct construction.  Calls, objects (`list`, `map`,
+`array`, `builder`, object-carrying structs), and verbs are not
 constant — constants are values, so ownership never applies to them.
 Constants share the file's one namespace with structs and functions,
 are reachable as `module.name` through imports, and cannot be
@@ -940,7 +1026,7 @@ One of those is **defense-only**: no source program can still reach
 2026-08-04.  It remains in the runtime for a module the front end did
 not produce, which is a real thing to defend against — the IR
 verifier trusts instruction types, and a `.lc` is an executable.
-Long-standing codes:
+long-standing codes:
 integer overflow, divide by zero, conversion range, assertion failed,
 string bounds/boundary, call depth.  Call depth is a
 *policy* limit, not a native-stack accident: compiled code carries
@@ -1016,12 +1102,12 @@ or any pipe or process substitution.  Diagnostics then name it
 
 First-class functions, closures, **tuples** (a return shape is not a
 type — see "Answering more than one thing"), exceptions (traps are
-final), implicit *narrowing* of a `Float` to an `Int`, shadowing,
+final), implicit *narrowing* of a `double` to a `long`, shadowing,
 mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate
 decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
 beyond the message, garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
-and enums/unions.  (String interpolation shipped: see f-strings
+and enums/unions.  (string interpolation shipped: see f-strings
 above.)

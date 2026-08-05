@@ -1,5 +1,14 @@
 # String storage: values copy, literally
 
+> **Spellings, since this was decided.**  The builtin type names are
+> lowercase (`long`, `double`, `string`, `list`, `map`, `array`,
+> `builder` — docs/TYPES.md D8), and the two numeric types became four:
+> `int` and `float` are 32 bits and are what a literal takes with
+> nothing to tell it otherwise, `long` and `double` are the 64-bit
+> types this memo calls `Int` and `Float`.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > **The rule.** A String's bytes have exactly one owner — the binding,
 > container element, struct field, or map key that holds them, or the
 > statement that produced them — and any store into something that
@@ -144,7 +153,7 @@ death point, and the churn loop and the editor both go flat.
 A *register* can hold a borrow of container or field bytes across a
 mutation of that container, inside one statement:
 
-```luce
+```luce historical
 f(pieces[0], drop_first(pieces))    # drop_first calls pieces.remove(0)
 ```
 
@@ -339,7 +348,7 @@ Go, which shipped `strings.Clone` in 1.18 precisely because a
 
 `src/luce/std/strings.luc` settles this by itself:
 
-```luce
+```luce historical
 func trim(s: String) -> String:
     ...
     return s[first:last]        # a borrow of a parameter

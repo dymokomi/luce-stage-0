@@ -1,5 +1,14 @@
 # The memory model decision
 
+> **Spellings, since this was decided.**  The builtin type names are
+> lowercase (`long`, `double`, `string`, `list`, `map`, `array`,
+> `builder` — docs/TYPES.md D8), and the two numeric types became four:
+> `int` and `float` are 32 bits and are what a literal takes with
+> nothing to tell it otherwise, `long` and `double` are the 64-bit
+> types this memo calls `Int` and `Float`.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > **Decided and implemented.**  The situation-by-situation
 > specification distilled from this memo lives in `docs/OWNERSHIP.md`
 > (ratified S1–S43) and is live in the compiler and in `libluce_rt`,

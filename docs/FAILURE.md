@@ -1,5 +1,14 @@
 # Absence, failure, and the line between them
 
+> **Spellings, since this was decided.**  The builtin type names are
+> lowercase (`long`, `double`, `string`, `list`, `map`, `array`,
+> `builder` — docs/TYPES.md D8), and the two numeric types became four:
+> `int` and `float` are 32 bits and are what a literal takes with
+> nothing to tell it otherwise, `long` and `double` are the 64-bit
+> types this memo calls `Int` and `Float`.  A fenced block tagged
+> `luce historical` is shown as it was written and is not compiled;
+> every other one in this file is (`tools/doccheck.zig`).
+
 > Three mechanisms, one rule for choosing. `T?` says a value may not be
 > there. `T!` says a call may not succeed. A trap says the program is
 > wrong. This memo records why there are three and not one, and what
@@ -62,7 +71,7 @@ both.**
 
 ## Optionals
 
-```luce
+```luce historical
 var user: User? = none
 if user != none:              # narrowing: user is User inside
     print(user.name)
@@ -100,7 +109,7 @@ assert-unwrap, and it is greppable.
 
 ## Errors
 
-```luce
+```luce historical
 func read(path: String) -> String!:
     return try host_read(path)
 

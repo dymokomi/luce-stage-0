@@ -25,7 +25,7 @@ The **runtime is not done**, but the wall is down.  Tier 0 held two
 items, both properties of what existed rather than missing features,
 and **both are now closed**: the C-parity backend is reachable from
 `loom run` and from `luce build --emit=exe`, and memory is given back
-— object identity was reclaimed first, String bytes and struct field
+— object identity was reclaimed first, string bytes and struct field
 runs second.  A Luce program can run all day.
 
 ---
@@ -36,7 +36,7 @@ runs second.  A Luce program can run all day.
 
 `runtime.Memory` still splits storage in two, but the line moved:
 `Memory.objects` now holds everything with a death point — container
-contents, the object table, **and every String's bytes and every
+contents, the object table, **and every string's bytes and every
 struct value's field run** — while `Memory.arena` keeps only what a
 program cannot grow without bound (a trap's words, the per-layout
 struct zero templates, host text on its way into owned storage).
@@ -49,8 +49,8 @@ struct zero templates, host text on its way into owned storage).
   row's (docs/MEMORY.md).  Measured on a loop making and freeing one
   list per iteration: **281 MB → 21.2 MB at 1M iterations, 593 MB →
   21.3 MB at 4M**, flat where it was linear.
-- ~~String bytes go to a run-lifetime arena and are never reclaimed~~
-  — **closed.**  A String's bytes and a struct's field run have
+- ~~string bytes go to a run-lifetime arena and are never reclaimed~~
+  — **closed.**  A string's bytes and a struct's field run have
   exactly one owner, and any store into something that outlives the
   current statement copies them, so no owner ever holds a view of
   bytes it did not allocate (`docs/STRINGS.md`).  The same churn loop
@@ -75,8 +75,8 @@ six benchmarks moved less than 1%, and `bench/strings` went **2.35× C
 → 3.40× C**.  That was allocation, not copying — 800,000 small
 allocate-and-free pairs where there used to be unreclaimed bump
 allocations and shared views — and **small-string optimisation took
-most of it back**: a String of 22 bytes or fewer now lives inside the
-`Value` holding it, `String(Int)` and `chr` never allocate at all, and
+most of it back**: a string of 22 bytes or fewer now lives inside the
+`Value` holding it, `string(long)` and `chr` never allocate at all, and
 `bench/strings` came back to **within 12% of where it stood before
 copy-on-store** (step 5 of `docs/STRINGS.md`, which records the
 phase-by-phase measurement).  What is left is the copying itself —
@@ -120,7 +120,7 @@ linker willing to take it.
 **Optionals are done.**  `T?`, `none`, narrowing and `else` lower to
 `{T, i1}` through LLVM, so a
 program that says `T?` is compiled like any other — `parse_int` and
-`parse_float` answer `Int?`/`Float?` and every bundled program that
+`parse_float` answer `long?`/`double?` and every bundled program that
 calls them runs as native code.  What the lowering cost that
 `docs/FAILURE.md` did not predict is one refused shortcut, recorded in
 docs/CODEGEN.md: the null handle cannot stand in for absence, because
@@ -141,7 +141,7 @@ The corpus that argued for it, item by item:
 
 - `dice.luc:41` — `if files.write_lines(...)` with **no else**, a
   silently swallowed write failure.  **Fixed, and unwritable**: the
-  call answers nothing, so there is no Bool to test and no branch to
+  call answers nothing, so there is no bool to test and no branch to
   forget, and `main() -> !` reports what the disk said.
 - `editor.luc`, `wordcount.luc` — `file_exists` then
   `file_read`.  **Both gone.**  One read each, and what it answers
@@ -165,11 +165,11 @@ The corpus that argued for it, item by item:
 - `wordcount.luc:35` — `var best = ""` as "no answer",
   indistinguishable from an empty key.
 - ~~11 `trap(...)` calls in `std/math.luc`~~ — **settled.**  The five
-  reductions answer `Float?`: an empty array has no mean, and that is
+  reductions answer `double?`: an empty array has no mean, and that is
   absence rather than failure, so they took `?` and not `!`.  The
   seven left are domains the caller was handed and could have
   checked, which is the rule's definition of a bug.
-- `strings.find` returns `-1` because `Int?` did not exist.  It does
+- `strings.find` returns `-1` because `long?` did not exist.  It does
   now, so the sentinel is a wart with nothing holding it up any more.
   The overload is `find_from`'s, not `find`'s: `strings.luc:19-20`
   returns `-1` for a `start` outside the string, which is an *argument
@@ -211,7 +211,7 @@ The corpus pays constantly:
   string comparisons** with no final `else`.  A misspelled
   `"page_dwon"` compiles and silently does nothing.
 - `editor.luc:189` — `# 1 keyword, 2 type name, 3 builtin, 0 plain.`  An
-  enum written as an Int with a comment.
+  enum written as a long with a comment.
 - `editor.luc:159-187` — `is_keyword`/`is_builtin` as **46 `word == "…"`
   comparisons**: a hash set written as a truth table.
 
@@ -241,7 +241,7 @@ the proof the language moved.
    in the corpus had the enclosing struct as its first parameter.  The
    harvest was the restructuring the feature permits: `Handle`'s four
    functions and two of `Draw`'s merged into `struct State`, and
-   `std/math.luc`'s `List(Int)`-as-a-cell workaround became
+   `std/math.luc`'s `list(long)`-as-a-cell workaround became
    `struct Rng`.
 4. ~~**No multiple returns.**~~ **Done** (docs/RETURNS.md).
    `-> (A, B)`, `return a, b`, `let low, high = f()`, lowered as a
@@ -311,7 +311,7 @@ the proof the language moved.
    that pairs with it, so both workarounds this item named by line are
    gone: `bf.luc:42` is `(tape[pointer] - 1) % 256`, the spelling its
    author meant, and `math.luc`'s sign-safe parity is
-   `Int(y) % 2 == 1`.  `/` became real division in the same memo.
+   `long(y) % 2 == 1`.  `/` became real division in the same memo.
 10. **No visibility.**  std leaks `is_space_byte` and `fold_case`.
     Cheap, and matters before userland libraries exist.
 11. **No bitwise operators, no hex literals, no digit separators.**
@@ -349,7 +349,7 @@ the proof the language moved.
 ## Resolved since the last edition
 
 - **`key_read` can say the keyboard has run dry, and no longer wakes
-  ten times a second doing nothing.**  It answers `String?`: `none` is
+  ten times a second doing nothing.**  It answers `string?`: `none` is
   end of input, the same fact `read_line` answers `none` for off the
   same descriptor (docs/FAILURE.md).  The two halves were one bug.
   Raw mode was `VMIN = 0, VTIME = 1`, so a read of zero bytes meant
@@ -365,7 +365,7 @@ the proof the language moved.
   character codes remain across four programs.  std's own
   `is_space_byte` still reads `byte == 32 or byte == 9 or …`.  The
   remaining work is a corpus sweep, not a language change.
-- **`Int.min` writable** — the sign folds before the range check.
+- **`long.min` writable** — the sign folds before the range check.
 - **`1e400` refused** — non-finite float literals are rejected.
 - **`not a == b` and `a < b < c` are compile errors**, with messages
   naming both readings.
@@ -375,7 +375,7 @@ the proof the language moved.
   std.math` binds the library, both together is a collision.
 - **Trap locations and call traces**; **runaway recursion traps**
   rather than overflowing the machine's stack.
-- **Map is O(1)**, open-addressed over insertion-ordered entries.
+- **map is O(1)**, open-addressed over insertion-ordered entries.
   **Sort is O(n log n) and stable by guarantee.**
 - **Build modes are settled, not pending.**  Luce is always
   `ReleaseSafe`; `--release` is closer to `-fstrip`.
@@ -388,7 +388,7 @@ the proof the language moved.
 
 - **Generics for user code.**  The argument against has strengthened:
   `types.Type` is a closed union with twenty exhaustive switches
-  depending on it, and `List(T)` is a monomorphic heap object rather
+  depending on it, and `list(T)` is a monomorphic heap object rather
   than a generic.  `T?` did become a variant of `Type` — one, whose
   payload is a union of its own so `T??` is unrepresentable — and it
   opened no door at all: nothing about it generalizes.  What would pay
@@ -496,18 +496,18 @@ wording and column:
   the extra run is swallowed so the parser adds nothing.  Its mirror
   `1.` gets `.5`'s model message; `5.foo` is still member access.
 - ~~`and`/`or` will not say which side or what it is~~ — *the left
-  operand of and must be Bool, not Int*, underlining that operand
+  operand of and must be bool, not long*, underlining that operand
   alone, with the absence advice the right side never had.
 - ~~Duplicate-name diagnostics never point at the first
   declaration~~ — all four spellings do, naming the file too when the
   first is in another one.
-- ~~`operands are String and Int (conversions are explicit)`~~ — names
+- ~~`operands are string and long (conversions are explicit)`~~ — names
   the operator, and offers a conversion only where one exists
-  (`Int()` takes a Float and `Float()` takes an Int, and that is the
-  whole set).  `let` no longer offers a `String(...)` by name.
-- ~~Grammar: "a Int", "a Int?"~~ — standardised on the variants that
+  (`long()` takes a double and `double()` takes a long, and that is the
+  whole set).  `let` no longer offers a `string(...)` by name.
+- ~~Grammar: "a long", "a long?"~~ — standardised on the variants that
   sidestep the article.
-- ~~Long source lines are never windowed~~ — past 100 characters a
+- ~~long source lines are never windowed~~ — past 100 characters a
   line is windowed around the caret with 30 characters of context and
   `...` for what is cut, measured in characters because the caret pads
   per character.
@@ -573,7 +573,7 @@ plus four found while sweeping:
   binding, found the keyword 'catch'".  Now names the binding and
   both shapes that work.
 - ~~An f-string hole is underlined by underlining the whole
-  literal~~ — the synthesized `String(...)` carried the f-string's span,
+  literal~~ — the synthesized `string(...)` carried the f-string's span,
   so four holes on one line were all underlined and one of them was
   wrong.  It takes the hole's span now.
 - ~~`s[0:4:2]` blames the bracket~~ — says the language has two slice
@@ -582,7 +582,7 @@ plus four found while sweeping:
 **Still open**, ranked:
 
 1. **`"value %d" % a` is answered as a type error.**  "operands of %
-   are String and Int, and there is no conversion between them" is
+   are string and long, and there is no conversion between them" is
    true, and a reader arriving from Python or C wrote a format string.
    The foreign-operator machinery now in `expressions.zig` is the
    shape of the answer, but this one is a *type* mistake rather than a
@@ -595,11 +595,11 @@ plus four found while sweeping:
    report is even right here is the question to settle first — they
    are two characters on two statements, and the statement-scoped
    cascade rule deliberately lets a second statement speak.
-3. ~~**`str takes Int, Float, Bool, String, or Builder` does not say
+3. ~~**`str takes long, double, bool, string, or builder` does not say
    what it got.**~~  **Closed** by docs/NUMERICS.md, which retired
-   `str` for `String(x)`: the constructor's message names the type in
-   hand — *"String() converts Int, Float, Bool, or String, not
-   List(Int)"* — and an f-string hole reports it at the hole.
+   `str` for `string(x)`: the constructor's message names the type in
+   hand — *"string() converts long, double, bool, or string, not
+   list(long)"* — and an f-string hole reports it at the hole.
 4. **`give b.items` says "give moves a named object; use copy for
    other expressions".**  A field *is* named, and the real reason is
    that a nested place cannot be moved out of (S21, S25) — the fix
@@ -642,15 +642,15 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ## The order to work down
 
-1. ~~**Give String storage a reclaimable lifetime**~~ — **done**, and
+1. ~~**Give string storage a reclaimable lifetime**~~ — **done**, and
    so is the **small-string optimisation** that paid for it; see Tier
    0 and step 5 of `docs/STRINGS.md`.  Twenty-two bytes of text live
    in the `Value` that already travels, which cost an `abi.version`
    bump and a `format_version` bump and removed every allocation
-   the benchmark's 400,000 `String(i)` results were making.
+   the benchmark's 400,000 `string(i)` results were making.
 2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**;
-   `parse_int` and `parse_float` answer `Int?`/`Float?`, and a `T?`
+   `parse_int` and `parse_float` answer `long?`/`double?`, and a `T?`
    lowers to `{T, i1}`.
 4. **The cheap Tier-3 slice:** character classes, and a frozen
    container or `Set`.  ~~`read_line`, `clock`, `sleep`, `env`,

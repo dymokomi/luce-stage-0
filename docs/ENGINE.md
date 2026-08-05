@@ -108,7 +108,7 @@ It has caught real bugs, and the tests are named after them:
   `xs == none` answers `false` on the interpreter and would have
   answered `true` compiled. One program in the language distinguishes
   the two designs and the oracle is the thing that runs it.
-- `"an error path releases the objects and the String storage it
+- `"an error path releases the objects and the string storage it
   owns"`, `"a caught error leaves the value it never produced
   releasable"`, `"a fallible call's result is carried, not taken"` —
   the use-after-free in the errors lowering. `docs/STRINGS.md`:
@@ -566,7 +566,7 @@ samples finds zero uses. The suite and the site build are the check.
 *What it took, in contact with the code:* the `Value` tag went too, so
 `strukt`/`object` renumbered (nothing hard-codes a tag number — every
 site is `@intFromEnum`), and `const_data`'s `data_type` field went with
-it: the field existed only to tell String from Bytes, so the
+it: the field existed only to tell string from Bytes, so the
 instruction is now `const_string: u32` and one more `fail` site went
 with the field. `Bytes` also left `reserved_names`.
 
@@ -918,7 +918,7 @@ message, trace frame for frame, leak census, and the world left
 behind. That is the lowering being total rather than the harness being
 weak, and the proof is the negative control: swapping `.smin` for
 `.smax` in `lower.zig`'s `emitExtremum` is caught by
-`behavior_spec`'s "abs, min, max, clamp on Int", by "loops, recursion,
+`behavior_spec`'s "abs, min, max, clamp on long", by "loops, recursion,
 strings, and builtins compute", and by a *generated* program in
 `optimize_spec`'s fuzz — not only by `08_llvm`'s own agree tests. The
 specs police the shipping engine now.

@@ -19,9 +19,19 @@
 //!   * multiline string literals in `src/luce/specs/**.zig` — the
 //!     executable specification's programs.
 //!
+//! **And in the prose of the living documents**, every line of them.
+//! A document that describes the language as it is may not spell a
+//! type a way the language would refuse, in a sentence any more than
+//! in a sample: a reader cannot tell a stale sentence from a current
+//! one, and `func main(args: List(String))` in a reference page is a
+//! lie told with more authority than a comment.  The decision records
+//! are deliberately *not* here — `docs/NUMERICS.md` and its siblings
+//! describe what was decided and when, and quoting the spelling of
+//! the day is what they are for.
+//!
 //! It deliberately does *not* read Zig prose or the compiler's own
-//! sources: `std.zig.llvm.Builder` is a real name and the memo's
-//! sentences about the old spellings have to be able to say them.
+//! sources, and a name reached through a dot is somebody else's:
+//! `std.zig.llvm.Builder` is Zig's and stays.
 //!
 //! Paths are relative to the repository root, which is where the build
 //! runs its tests from — the same assumption `tools/grammar.zig`'s pin
@@ -49,6 +59,10 @@ const retired = [_]struct { was: []const u8, now: []const u8 }{
 const Scope = enum {
     /// Every line.
     whole_file,
+    /// Every line of a Markdown document — prose as well as code,
+    /// because a living document's sentences are as normative as its
+    /// samples.
+    markdown_prose,
     /// Only the lines inside a fenced ```luce block.
     fenced_luce,
     /// Only the lines that are Zig multiline-string continuations.
@@ -63,6 +77,24 @@ const trees = [_]Tree{
     .{ .path = "src/luce/std", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "site/content", .suffix = ".md", .scope = .fenced_luce },
     .{ .path = "src/luce/specs", .suffix = ".zig", .scope = .zig_multiline },
+};
+
+/// The living documents, by name.  A list rather than a directory,
+/// because `docs/` holds both kinds and only one of them is bound by
+/// this — `tools/doccheck.zig` reads the same distinction and the two
+/// lists are meant to be read together.
+const living = [_][]const u8{
+    "docs/LANGUAGE.md",
+    "docs/OWNERSHIP.md",
+    "docs/STD.md",
+    "docs/CODEGEN.md",
+    "docs/MISSING.md",
+    "docs/ENGINE.md",
+    "docs/MODES.md",
+    "docs/PIPELINE.md",
+    "docs/README.md",
+    "README.md",
+    "CLAUDE.md",
 };
 
 /// One place a retired name still appears.
@@ -90,6 +122,13 @@ pub fn survey(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !std.ArrayLi
         const where = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ base, tree.path });
         defer gpa.free(where);
         try surveyTree(gpa, io, &found, tree, where);
+    }
+    for (living) |document| {
+        const where = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ base, document });
+        defer gpa.free(where);
+        const text = std.Io.Dir.cwd().readFileAlloc(io, where, gpa, .unlimited) catch continue;
+        defer gpa.free(text);
+        try scan(gpa, &found, where, text, .markdown_prose);
     }
     return found;
 }
@@ -154,7 +193,7 @@ fn scan(
         if (suppressed) continue;
         const trimmed = std.mem.trimStart(u8, line, " \t");
         const looking = switch (scope) {
-            .whole_file => true,
+            .whole_file, .markdown_prose => true,
             .fenced_luce => fence: {
                 if (std.mem.startsWith(u8, trimmed, "```")) {
                     // A fence either opens a luce block or closes one.
@@ -187,6 +226,10 @@ fn wordIn(line: []const u8, word: []const u8) bool {
     while (std.mem.indexOfPos(u8, line, at, word)) |found| {
         at = found + 1;
         if (found > 0 and isWordByte(line[found - 1])) continue;
+        // A name reached through a dot belongs to somebody else:
+        // `std.zig.llvm.Builder` is Zig's type and this guard has no
+        // business renaming it.
+        if (found > 0 and line[found - 1] == '.') continue;
         const after = found + word.len;
         if (after < line.len and isWordByte(line[after])) continue;
         return true;
@@ -254,10 +297,12 @@ test "the guard finds a stale name in every scope it scans" {
     // The count of trees and the count of sightings are stated here,
     // so removing a scope fails before anything is walked.
     try testing.expectEqual(@as(usize, 5), trees.len);
+    try testing.expectEqual(@as(usize, 11), living.len);
     // One `Int` in each of the three `.luc` fixtures; `list(Int)` in
     // the page's luce fence is a sighting for each name; one `Float`
-    // in the spec's program.
-    try testing.expectEqual(@as(usize, 6), found.items.len);
+    // in the spec's program; and `List(String)` in a living
+    // document's *prose*, which is a sighting for each name.
+    try testing.expectEqual(@as(usize, 8), found.items.len);
 
     var per_tree: [trees.len]usize = @splat(0);
     for (found.items) |item| {
@@ -270,6 +315,17 @@ test "the guard finds a stale name in every scope it scans" {
     for (per_tree, trees) |count, tree| {
         if (count != 0) continue;
         std.debug.print("the guard read nothing under {s}\n", .{tree.path});
+        return error.TestUnexpectedResult;
+    }
+    // And the living documents, whose scope is a list rather than a
+    // tree and would otherwise go unexercised — emptying `living`
+    // would pass every assertion above it.
+    var read_a_document = false;
+    for (found.items) |item| {
+        if (std.mem.endsWith(u8, item.file, "docs/LANGUAGE.md")) read_a_document = true;
+    }
+    if (!read_a_document) {
+        std.debug.print("the guard read none of the living documents\n", .{});
         return error.TestUnexpectedResult;
     }
     // And the same run through the assertion the real test makes, so
