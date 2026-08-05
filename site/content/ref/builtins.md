@@ -16,17 +16,23 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `trap(message: string)` | never returns; traps `explicit_trap` |
 | `error(message: string)` | never returns; raises `user_error` |
 | `free(x)` | early release of an owned object; poisons the name |
-| `abs(x)` | `long` or `double` |
-| `min(a, b)`, `max(a, b)` | `long` or `double`, both the same |
-| `clamp(x, low, high)` | |
-| `sqrt(x: double) -> double` | |
-| `floor(x: double) -> double`, `ceil(x: double) -> double` | |
-| `trunc(x: double) -> double` | toward zero; `math.round` is the fourth |
+| `abs(x)` | any number; answers its operand's type |
+| `min(a, b)`, `max(a, b)` | any two numbers of the same type |
+| `clamp(x, low, high)` | any three numbers of the same type |
+| `sqrt(x)` | a `float` or a `double`, and **the same width back** |
+| `floor(x)`, `ceil(x)` | ″ |
+| `trunc(x)` | ″; toward zero, and `math.round` is the fourth |
 | `chr(code: long) -> string` | traps `bad_codepoint` on an invalid codepoint |
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
 | `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `long(x)`, `double(x)`, `string(x)` | the three conversion constructors, each named for what it produces. `long(x)` rounds half away from zero and traps outside range; `string(x)` takes a scalar |
+| `int(x)`, `long(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` takes a scalar |
+
+The four numeric builtins that answer their operand's own type land
+their arguments where the whole call lands, so `let x: double =
+sqrt(2.0)` reads `2.0` at binary64 rather than widening binary32's
+answer into it. Unannotated, a float literal is a `float`, which is
+what the fourth line below prints.
 
 ```luce run
 func main():
@@ -34,6 +40,8 @@ func main():
     print(string(min(3, 9)) + " " + string(max(3, 9)))
     print(string(clamp(42, 0, 10)))
     print(string(sqrt(2.0)))
+    let two: double = 2.0
+    print(string(sqrt(two)))
     print(string(floor(-2.5)) + " " + string(ceil(-2.5)) + " " + string(trunc(-2.5)))
     print(string(long(2.5)) + " " + string(long(-2.5)) + " " + string(long(2.4)))
     print(chr(9731))
@@ -46,6 +54,7 @@ func main():
 7
 3 9
 10
+1.4142135
 1.4142135623730951
 -3 -2 -2
 3 -3 2

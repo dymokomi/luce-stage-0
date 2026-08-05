@@ -68,10 +68,10 @@ func main():
     var rows = new list(list(long))
     rows.append([1, 2])              # fresh: no word needed
 
-    var loose = [3, 4]
+    var loose: list(long) = [3, 4]
     rows.append(give loose)          # transfer
 
-    var template = [0]
+    var template: list(long) = [0]
     rows.append(copy template)       # duplicate; template stays mine
     template.append(1)
 

@@ -25,7 +25,7 @@ Up to four dimensions. In a type annotation the shape is spelled with
 
 ```luce run
 func sum(grid: array(long, _, _)) -> long:
-    var total = 0
+    var total: long = 0
     for row in range(0, grid.dim(0)):
         for column in range(0, grid.dim(1)):
             total += grid[row, column]

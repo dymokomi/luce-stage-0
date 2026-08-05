@@ -273,7 +273,7 @@ cannot be given again.
 func main():
     var a = new list(list(long))
     var b = new list(list(long))
-    var item = [1]
+    var item: list(long) = [1]
     a.append(give item)
     b.append(give item)
 ```
@@ -293,7 +293,7 @@ the compiler knows it is one where it stands:
 func main():
     var a = new list(list(long))
     var b = new list(list(long))
-    var item = [1]
+    var item: list(long) = [1]
     let alias = item
     a.append(give item)
     b.append(give alias)
@@ -333,7 +333,7 @@ func take(xs: give list(long)) -> long:
     return len(xs)
 
 func main():
-    var xs = [1, 2]
+    var xs: list(long) = [1, 2]
     let view = xs
     print(string(len(view)))
     print(string(take(give xs)))
@@ -599,7 +599,7 @@ func bad(xs: give list(long)) -> (list(long), list(long)):
     return xs, xs
 
 func main():
-    var mine = [1]
+    var mine: list(long) = [1]
     let a, b = bad(give mine)
     free(a)
     free(b)

@@ -27,7 +27,7 @@ func main():
 ```luce run
 func main():
     var index = new map(string, list(long))
-    var hits = [12, 40]
+    var hits: list(long) = [12, 40]
     index["a.luc"] = give hits    # the map owns it now
     print(f"stored {len(index["a.luc"])}")
 ```
@@ -42,7 +42,7 @@ is a compile error, not a runtime surprise.
 ```luce fail
 func main():
     var sink = new list(list(long))
-    var xs = [1, 2]
+    var xs: list(long) = [1, 2]
     sink.append(give xs)
     print(string(len(xs)))
 ```
@@ -102,7 +102,7 @@ func remember(store: list(list(long)), values: list(long)):
 
 func main():
     var store = new list(list(long))
-    var mine = [1, 2, 3]
+    var mine: list(long) = [1, 2, 3]
     remember(store, mine)
     mine.append(4)
     print(f"stored {len(store[0])}, mine {len(mine)}")
@@ -128,7 +128,7 @@ func consume(values: give list(long)):
 func main():
     var store = new list(list(long))
     stash(store, [1, 2])           # fresh: no word
-    var mine = [3, 4, 5]
+    var mine: list(long) = [3, 4, 5]
     stash(store, give mine)        # named: said at both ends
     consume([9])
     print(f"{len(store)} stored")
@@ -200,7 +200,7 @@ because an alias is an alias where it is written:
 func main():
     var first = new list(list(long))
     var second = new list(list(long))
-    var item = [1]
+    var item: list(long) = [1]
     let alias = item
     first.append(give item)        # first owns it now
     second.append(give alias)      # …and alias never owned anything
@@ -219,7 +219,7 @@ Say `copy alias` and both containers get a list of their own:
 func main():
     var first = new list(list(long))
     var second = new list(list(long))
-    var item = [1]
+    var item: list(long) = [1]
     let alias = item
     second.append(copy alias)
     first.append(give item)

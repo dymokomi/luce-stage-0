@@ -119,10 +119,10 @@ The two answers are `give` and `copy`:
 func main():
     var index = new map(string, list(long))
 
-    var hits = [12, 40]
+    var hits: list(long) = [12, 40]
     index["a.luc"] = give hits      # transfer: the map owns it now
 
-    var template = [0, 0]
+    var template: list(long) = [0, 0]
     index["b.luc"] = copy template  # a duplicate; template stays mine
     template.append(1)
 
@@ -143,7 +143,7 @@ reason about which arm of an `if` ran.
 ```luce fail
 func main():
     var sink = new list(list(long))
-    var xs = [1]
+    var xs: list(long) = [1]
     if len(xs) > 0:
         sink.append(give xs)
     print(string(len(xs)))
@@ -173,7 +173,7 @@ func fill(xs: list(long), upto: long):
         xs.append(i * i)
 
 func total(values: list(long)) -> long:
-    var sum = 0
+    var sum: long = 0
     for value in values:
         sum += value
     return sum
@@ -198,7 +198,7 @@ func stash(index: map(string, list(long)), hits: give list(long)):
 
 func main():
     var index = new map(string, list(long))
-    var mine = [1, 2]
+    var mine: list(long) = [1, 2]
     stash(index, give mine)          # said at both ends
     stash(index, [3, 4])             # fresh needs no word
     print(f"latest has {len(index["latest"])}")

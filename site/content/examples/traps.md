@@ -15,7 +15,7 @@ func depth_one(values: list(long)) -> long:
     return depth_two(values)
 
 func main():
-    var values = [1, 2, 3]
+    var values: list(long) = [1, 2, 3]
     print("before")
     print(string(depth_one(values)))
 ```
@@ -36,7 +36,7 @@ build mode — there is no `--release` that turns them off.
 
 ```luce trap
 func main():
-    let a = 4611686018427387904
+    let a: long = 4611686018427387904
     print("doubling")
     print(string(a * 2))
 ```

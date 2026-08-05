@@ -115,7 +115,7 @@ the seam where the runtime may vectorize.
 ```luce run
 func main():
     let text = "a,bb,ccc"
-    var start = 0
+    var start: long = 0
     var pieces = 0
     while true:
         let comma = text.find_byte(44, start)
@@ -138,7 +138,9 @@ piece: ccc
 
 ## Formatting numbers
 
-`str` gives the shortest round-trip form of a `double`.
+`string(x)` gives the shortest round-trip form **at the value's own
+width** — nine digits for a `float`, sixteen for a `double`, because
+those are what it takes to name each number again.
 `strings.format_float(x, decimals)` gives fixed point, rounding half
 away from zero.
 
@@ -147,12 +149,15 @@ import std.strings
 
 func main():
     print(string(1.0 / 3.0))
+    let wide: double = 1.0 / 3.0
+    print(string(wide))
     print(strings.format_float(1.0 / 3.0, 4))
     print(strings.format_float(2.5, 0))
     print(strings.format_float(-2.345, 2))
 ```
 
 ```output
+0.33333334
 0.3333333333333333
 0.3333
 3

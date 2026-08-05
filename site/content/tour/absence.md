@@ -157,7 +157,7 @@ func main():
     let first = Node(value = 1, next = second)
 
     var here: Node? = first
-    var total = 0
+    var total: long = 0
     while here != none:
         total += here.value
         here = here.next

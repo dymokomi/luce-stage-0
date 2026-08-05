@@ -160,7 +160,7 @@ func outer(values: list(long)) -> long:
     return inner(values)
 
 func main():
-    var values = [1, 2, 3]
+    var values: list(long) = [1, 2, 3]
     print(string(outer(values)))
 ```
 

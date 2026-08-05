@@ -67,8 +67,10 @@ conversion of them.
 
 ```luce run
 func main():
+    let after: long = 9007199254740993
+    let rounded: double = 9007199254740992.0
     print(string(1 < 1.5))
-    print(string(9007199254740993 == 9007199254740992.0))
+    print(string(after == rounded))
 ```
 
 ```output
@@ -84,7 +86,7 @@ call `ReleaseSafe`.
 
 ```luce trap
 func main():
-    var n = 9223372036854775807
+    var n: long = 9223372036854775807
     print("about to add one")
     n += 1
     print(string(n))

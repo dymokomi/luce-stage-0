@@ -95,7 +95,7 @@ struct Bag:
 func main():
     var bag = Bag(label = "a", items = [1, 2])   # fresh: bag owns it
 
-    var loose = [3, 4]
+    var loose: list(long) = [3, 4]
     var second = Bag(label = "b", items = give loose)
 
     let alias = bag                # a struct copy aliases the same list

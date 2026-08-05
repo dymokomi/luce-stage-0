@@ -158,6 +158,8 @@ func main():
     print(strings.format_float(-2.345, 2))
     print(strings.format_float(9.99, 0))
     print(string(1.0 / 3.0))
+    let third: double = 1.0 / 3.0
+    print(string(third))
 ```
 
 ```output
@@ -165,8 +167,15 @@ func main():
 0.33333
 -2.35
 10
+0.33333334
 0.3333333333333333
 ```
+
+The last two lines are the same division at two widths. `string(x)`
+prints the shortest text that round-trips **at the value's own width**,
+so an unannotated `1.0 / 3.0` is a `float` and nine digits are enough
+to name it again; the `double` needs sixteen. Neither is rounded for
+display — both are exact descriptions of different numbers.
 
 ## Why this module is fast enough to stay in Luce
 

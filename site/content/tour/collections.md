@@ -122,7 +122,7 @@ shape is spelled with `_`.
 
 ```luce run
 func total(grid: array(long, _, _)) -> long:
-    var sum = 0
+    var sum: long = 0
     for row in range(0, grid.dim(0)):
         for column in range(0, grid.dim(1)):
             sum += grid[row, column]

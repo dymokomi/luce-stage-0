@@ -137,7 +137,7 @@ import std.strings
 
 func main():
     let haystack = "alpha;beta;gamma;delta"
-    var at = 0
+    var at: long = 0
     var found = 0
     while true:
         let next = haystack.find_from(";", at)
