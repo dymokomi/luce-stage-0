@@ -36,11 +36,22 @@ pub const CompileOptions = struct {
 pub const Type = union(enum) {
     none,
     boolean,
-    /// The four arithmetic types, in ladder order: two integer widths
-    /// and two float widths, sized as Java, C, C#, GLSL and every GPU
-    /// API size them (docs/TYPES.md).
+    /// The seven numeric types, in ladder order: four integer widths
+    /// and three float widths, sized as Java, C, C#, GLSL and every
+    /// GPU API size them (docs/TYPES.md).
+    ///
+    /// **`byte`, `short` and `half` are storage, not arithmetic**
+    /// (D5): an operator widens them to `int` and `float` before it
+    /// does anything, so no expression ever *has* one of these types
+    /// and there is no checked arithmetic at 8 or 16 bits.  They are
+    /// what an annotation, a parameter, a struct field and above all
+    /// an array element may say — `array(byte, n)` at one byte an
+    /// element is what the three are for (§10).
+    byte,
+    short,
     int,
     long,
+    half,
     float,
     double,
     string,
@@ -56,8 +67,11 @@ pub const Type = union(enum) {
     /// write a second.
     pub const Payload = union(enum) {
         boolean,
+        byte,
+        short,
         int,
         long,
+        half,
         float,
         double,
         string,
@@ -67,8 +81,11 @@ pub const Type = union(enum) {
         pub fn asType(self: Payload) Type {
             return switch (self) {
                 .boolean => .boolean,
+                .byte => .byte,
+                .short => .short,
                 .int => .int,
                 .long => .long,
+                .half => .half,
                 .float => .float,
                 .double => .double,
                 .string => .string,
@@ -99,14 +116,23 @@ pub const Type = union(enum) {
         return self.isInteger() or self.isFloating();
     }
 
-    /// The signed integers, and nothing else — `bool` is not a small
-    /// integer here and never has been.
+    /// The integers, and nothing else — `bool` is not a small integer
+    /// here and never has been.  Three are signed; `byte` is the one
+    /// unsigned type there is and the only one there will be (D4).
     pub fn isInteger(self: Type) bool {
-        return self == .int or self == .long;
+        return self == .byte or self == .short or self == .int or self == .long;
     }
 
     pub fn isFloating(self: Type) bool {
-        return self == .float or self == .double;
+        return self == .half or self == .float or self == .double;
+    }
+
+    /// Whether the bits of an integer type are read as a magnitude.
+    /// Only `byte` is, which is what "unsigned" means about it and the
+    /// whole of what is numeric about it (D4): widening a `byte` is a
+    /// `zext`, widening a `short` a `sext`.
+    pub fn isUnsigned(self: Type) bool {
+        return self == .byte;
     }
 
     /// How wide a numeric type is, in bits.  Asked only of one:
@@ -115,9 +141,50 @@ pub const Type = union(enum) {
     /// being stopped by it.
     pub fn numericBits(self: Type) u16 {
         return switch (self) {
+            .byte => 8,
+            .short, .half => 16,
             .int, .float => 32,
             .long, .double => 64,
             .none, .boolean, .string, .strukt, .heap, .optional => 0,
+        };
+    }
+
+    /// The closed range an integer type holds, as the one statement of
+    /// it in the tree.  Carried at `i128` because `long`'s bounds are
+    /// `i64`'s extremes and comparing them to another type's must not
+    /// itself overflow.
+    ///
+    /// Asked only of an integer; the caller has tested `isInteger`.
+    pub fn integerRange(self: Type) struct { low: i128, high: i128 } {
+        return switch (self) {
+            .byte => .{ .low = 0, .high = 255 },
+            .short => .{ .low = -32768, .high = 32767 },
+            .int => .{ .low = -2147483648, .high = 2147483647 },
+            .long => .{
+                .low = std.math.minInt(i64),
+                .high = std.math.maxInt(i64),
+            },
+            .none, .boolean, .half, .float, .double, .string, .strukt, .heap, .optional => unreachable,
+        };
+    }
+
+    /// The type an operator computes this one at — D5's collapse from
+    /// a seven-by-seven promotion table to four arithmetic types.
+    /// `byte` and `short` compute at `int`, `half` at `float`, and the
+    /// four arithmetic types compute at themselves.  Null for
+    /// everything that is not a number.
+    ///
+    /// This is why there is no checked arithmetic at 8 or 16 bits and
+    /// no binary16 arithmetic on any target: no expression ever has
+    /// one of the three storage types, so there is nothing for either
+    /// to be defined on.
+    pub fn arithmeticType(self: Type) ?Type {
+        return switch (self) {
+            .byte, .short, .int => .int,
+            .long => .long,
+            .half, .float => .float,
+            .double => .double,
+            .none, .boolean, .string, .strukt, .heap, .optional => null,
         };
     }
 
@@ -125,9 +192,10 @@ pub const Type = union(enum) {
     /// written down** — the whole of the language's implicit
     /// conversion, stated once (docs/TYPES.md §2).
     ///
-    /// Four pairs, and the two that are missing are the point.  Along
-    /// a ladder: `int` widens to `long`, `float` to `double`, both
-    /// exactly.  Across the ladders the answer is always `double`:
+    /// Along a ladder, every rung reaches every rung above it and
+    /// exactly: `byte` into `short`, `int` and `long`, `short` into
+    /// `int` and `long`, `int` into `long`; `half` into `float`.
+    /// Across the ladders the answer is always `double`:
     /// `int` is exact in it and `long` is exact below 2^53, which is
     /// the one lossy implicit conversion the language has and the one
     /// `docs/NUMERICS.md` §6 ratified.  What is *not* here is Java's
@@ -140,22 +208,33 @@ pub const Type = union(enum) {
     /// or a return.
     pub fn widensTo(self: Type, to: Type) bool {
         return switch (self) {
+            .byte => to == .short or to == .int or to == .long or to == .double,
+            .short => to == .int or to == .long or to == .double,
             .int => to == .long or to == .double,
             .long => to == .double,
+            .half => to == .float or to == .double,
             .float => to == .double,
             .double, .none, .boolean, .string, .strukt, .heap, .optional => false,
         };
     }
 
     /// The type two numeric operands meet at, or null when either is
-    /// not a number.  Same type, same answer; two integers meet at the
-    /// wider; two floats meet at the wider; a mixed pair meets at
-    /// `double`, whichever way round it was written.
+    /// not a number.
+    ///
+    /// **Each operand goes to its arithmetic type first** (D5), so a
+    /// storage type never survives an operator: `byte + byte` is an
+    /// `int`, `half * half` a `float`, and neither 8-bit arithmetic
+    /// nor binary16 arithmetic is ever asked for.  After that the
+    /// rule is the four-type one it always was — same type, same
+    /// answer; two integers meet at the wider; two floats meet at the
+    /// wider; a mixed pair meets at `double`, whichever way round it
+    /// was written.
     pub fn unified(left: Type, right: Type) ?Type {
-        if (!left.isNumeric() or !right.isNumeric()) return null;
-        if (left.eql(right)) return left;
-        if (left.isInteger() and right.isInteger()) return .long;
-        if (left.isFloating() and right.isFloating()) return .double;
+        const wide_left = left.arithmeticType() orelse return null;
+        const wide_right = right.arithmeticType() orelse return null;
+        if (wide_left.eql(wide_right)) return wide_left;
+        if (wide_left.isInteger() and wide_right.isInteger()) return .long;
+        if (wide_left.isFloating() and wide_right.isFloating()) return .double;
         return .double;
     }
 
@@ -184,7 +263,16 @@ pub const Type = union(enum) {
     pub fn conversionTraps(from: Type, to: Type) bool {
         std.debug.assert(from.isNumeric() and to.isNumeric());
         if (from.isFloating()) return to.isInteger();
-        return to.isInteger() and to.numericBits() < from.numericBits();
+        if (to.isFloating()) return false;
+        // Integer to integer: it traps exactly when the destination
+        // cannot hold every value the source can.  Comparing the two
+        // *ranges* rather than their widths is what keeps `byte`
+        // honest in both directions — `short(b)` is a widening
+        // although `byte` is unsigned, and `byte(s)` is not although
+        // `short` is wider.
+        const source = from.integerRange();
+        const target = to.integerRange();
+        return target.low > source.low or target.high < source.high;
     }
 
     /// `T` written as `T?`, or null when there is no such type: `None`
@@ -193,8 +281,11 @@ pub const Type = union(enum) {
         return switch (base) {
             .none, .optional => null,
             .boolean => .{ .optional = .boolean },
+            .byte => .{ .optional = .byte },
+            .short => .{ .optional = .short },
             .int => .{ .optional = .int },
             .long => .{ .optional = .long },
+            .half => .{ .optional = .half },
             .float => .{ .optional = .float },
             .double => .{ .optional = .double },
             .string => .{ .optional = .string },
@@ -265,8 +356,11 @@ pub const StructLayout = struct {
 /// an unknown struct in the other.
 pub const Builtin = enum {
     boolean,
+    byte,
+    short,
     int,
     long,
+    half,
     float,
     double,
     string,
@@ -293,8 +387,11 @@ pub fn builtinNamed(text: []const u8) ?Builtin {
 
 const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "bool", .is = .boolean },
+    .{ .name = "byte", .is = .byte },
+    .{ .name = "short", .is = .short },
     .{ .name = "int", .is = .int },
     .{ .name = "long", .is = .long },
+    .{ .name = "half", .is = .half },
     .{ .name = "float", .is = .float },
     .{ .name = "double", .is = .double },
     .{ .name = "string", .is = .string },
@@ -345,7 +442,7 @@ pub fn retiredSpelling(text: []const u8) ?[]const u8 {
 pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
-        .int, .long, .float, .double, .string => builtin,
+        .byte, .short, .int, .long, .half, .float, .double, .string => builtin,
         .boolean, .list, .map, .array, .builder => null,
     };
 }
@@ -387,8 +484,11 @@ fn writeTypeName(
     switch (of) {
         .none => try written.appendSlice(allocator, "None"),
         .boolean => try written.appendSlice(allocator, "bool"),
+        .byte => try written.appendSlice(allocator, "byte"),
+        .short => try written.appendSlice(allocator, "short"),
         .int => try written.appendSlice(allocator, "int"),
         .long => try written.appendSlice(allocator, "long"),
+        .half => try written.appendSlice(allocator, "half"),
         .float => try written.appendSlice(allocator, "float"),
         .double => try written.appendSlice(allocator, "double"),
         .string => try written.appendSlice(allocator, "string"),

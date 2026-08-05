@@ -70,6 +70,14 @@ pub const Tag = enum(u8) {
     /// `double` would silently allocate eight-byte cells.
     int = 7,
     float = 8,
+    /// The three storage widths (docs/TYPES.md D5), appended in their
+    /// turn.  No expression ever has one of these types — an operator
+    /// widens them first — so a `Value` wears one only where storage
+    /// does: an `array(byte, n)`'s zero, a boxed field, a boxed
+    /// element crossing into a caller.
+    byte = 9,
+    short = 10,
+    half = 11,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -172,6 +180,22 @@ pub const Value = extern struct {
         return .{ .tag = .float, .bits = @as(u32, @bitCast(held)) };
     }
 
+    /// The storage widths.  A `byte` is the one whose bits are read
+    /// back as a magnitude (D4); a `short` sign-extends, and a `half`
+    /// keeps its sixteen binary16 bits and is widened by whoever
+    /// reads it.
+    pub fn ofByte(held: u8) Value {
+        return .{ .tag = .byte, .bits = held };
+    }
+
+    pub fn ofShort(held: i16) Value {
+        return .{ .tag = .short, .bits = @as(u16, @bitCast(held)) };
+    }
+
+    pub fn ofHalf(held: f16) Value {
+        return .{ .tag = .half, .bits = @as(u16, @bitCast(held)) };
+    }
+
     /// Text that lives somewhere else — a program constant, an owned
     /// allocation, a borrow of either.  This is the form every *view*
     /// takes, because a view must not copy.
@@ -242,6 +266,18 @@ pub const Value = extern struct {
 
     pub fn asFloat(self: Value) f32 {
         return @bitCast(@as(u32, @truncate(self.bits)));
+    }
+
+    pub fn asByte(self: Value) u8 {
+        return @truncate(self.bits);
+    }
+
+    pub fn asShort(self: Value) i16 {
+        return @bitCast(@as(u16, @truncate(self.bits)));
+    }
+
+    pub fn asHalf(self: Value) f16 {
+        return @bitCast(@as(u16, @truncate(self.bits)));
     }
 
     /// The text this value holds.
@@ -329,8 +365,11 @@ pub const Value = extern struct {
         return switch (self.tag) {
             .none => .none,
             .boolean => .{ .boolean = self.asBoolean() },
+            .byte => .{ .byte = self.asByte() },
+            .short => .{ .short = self.asShort() },
             .int => .{ .int = self.asInt() },
             .long => .{ .long = self.asLong() },
+            .half => .{ .half = self.asHalf() },
             .float => .{ .float = self.asFloat() },
             .double => .{ .double = self.asDouble() },
             .string => .{ .string = self.asString() },
@@ -345,8 +384,11 @@ pub const Value = extern struct {
 pub const View = union(enum) {
     none,
     boolean: bool,
+    byte: u8,
+    short: i16,
     int: i32,
     long: i64,
+    half: f16,
     float: f32,
     double: f64,
     string: []const u8,

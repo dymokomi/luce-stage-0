@@ -40,7 +40,17 @@ pub const magic = "LUCE";
 /// (`arg_count`, `arg_get`) and one trap code with them
 /// (`argument_bounds`), so every instruction tag after them renumbers;
 /// the entry may now carry one parameter, which the verifier checks.
-pub const format_version: u32 = 21;
+///
+/// 22 — `byte`, `short` and `half` join `types.Type` (docs/TYPES.md
+/// step 5).  A type travels as a bare `u8` of its tag's ordinal, and
+/// the three land *in ladder order* rather than on the end, so every
+/// tag from `int` up renumbers.  That is safe here for exactly one
+/// reason and it is this line: the version moved with them, so a
+/// module written under 21 is refused by name instead of decoded
+/// against the wrong tags.  Appending would have been the rule had
+/// the version *not* moved — it is what `runtime.Value.Tag`, which is
+/// ABI rather than wire, still does.
+pub const format_version: u32 = 22;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -347,8 +357,11 @@ const Reader = struct {
         return switch (tag) {
             .none => .none,
             .boolean => .boolean,
+            .byte => .byte,
+            .short => .short,
             .int => .int,
             .long => .long,
+            .half => .half,
             .float => .float,
             .double => .double,
             .string => .string,
@@ -937,6 +950,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 21), format_version);
+    try testing.expectEqual(@as(u32, 22), format_version);
     try testing.expectEqual(@as(u64, 1599781513622071021), hasher.final());
 }

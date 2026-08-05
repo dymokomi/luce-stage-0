@@ -230,7 +230,21 @@ fn writesPlainElement(
     const target = instruction.intrinsic.arguments[0];
     const shape = arrayShape(program, function.result_types[target]) orelse return false;
     return switch (shape.element) {
-        .boolean, .int, .long, .float, .double, .string => true,
+        // The storage widths join the plain kinds: a `byte`, a `short`
+        // and a `half` own nothing to free, so writing one cannot
+        // disturb the row a hoist resolved — which is what puts
+        // `array(byte, n)` inside the vectorisation gate rather than
+        // outside it (docs/TYPES.md §6).
+        .boolean,
+        .byte,
+        .short,
+        .int,
+        .long,
+        .half,
+        .float,
+        .double,
+        .string,
+        => true,
         .none, .strukt, .heap, .optional => false,
     };
 }

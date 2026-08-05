@@ -4439,7 +4439,7 @@ test "luce.sema.method: each receiver kind names the methods it has" {
         \\    var s = "abc"
         \\    let bad = s.find_byte("x", 0)
         \\
-    , "luce.sema.type", "argument 1 of find_byte is long, got string", 3, 27);
+    , "luce.sema.type", "argument 1 of find_byte is byte, got string", 3, 27);
     try expectSaying(
         \\func main():
         \\    var grid = new array(long, 2, 2)
@@ -4767,4 +4767,84 @@ test "luce.sema.duplicate: two file-scope constants cannot share a name" {
         \\    return
         \\
     , "luce.sema.duplicate", "duplicate name width");
+}
+
+// The storage widths' own diagnostics (docs/TYPES.md step 5).  These
+// are the three rungs `rangeMessage` used to answer for with `long`'s
+// sentence — a literal past a `byte` was told about nine quintillion,
+// and a `half` literal was called an integer.
+test "luce.sema.literal: an integer past a byte names byte's range and a short" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var b: byte = 300
+        \\
+    ,
+        "luce.sema.literal",
+        "integer literal out of range; byte holds 0 to 255 — write the place as a short",
+        2,
+        19,
+    );
+    // A byte is the one unsigned type there is (D4), so below zero is
+    // out of range in exactly the same way as above 255.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var b: byte = -1
+        \\
+    ,
+        "luce.sema.literal",
+        "integer literal out of range; byte holds 0 to 255 — write the place as a short",
+        2,
+        19,
+    );
+}
+
+test "luce.sema.literal: an integer past a short names short's range and an int" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var s: short = 32768
+        \\
+    ,
+        "luce.sema.literal",
+        "integer literal out of range; short holds -32768 to 32767 — write the place as an int",
+        2,
+        20,
+    );
+}
+
+test "luce.sema.literal: a float past a half names half's range and a float" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var h: half = 100000.0
+        \\
+    ,
+        "luce.sema.literal",
+        "float literal is not a finite half; half holds up to about 65504 — write the place as a float",
+        2,
+        19,
+    );
+}
+
+test "luce.sema.type: narrowing into a storage width is refused like any other" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var wide: long = 5
+        \\    var narrow: byte = wide
+        \\
+    ,
+        "luce.sema.type",
+        "narrow declared byte but initialized with long; narrowing is never implicit — write byte(…)",
+        3,
+        5,
+    );
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var wide: double = 5.0
+        \\    var narrow: half = wide
+        \\
+    ,
+        "luce.sema.type",
+        "narrow declared half but initialized with double; narrowing is never implicit — write half(…)",
+        3,
+        5,
+    );
 }

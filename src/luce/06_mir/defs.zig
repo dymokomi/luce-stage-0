@@ -25,8 +25,11 @@ pub fn boxTag(of: Type) ?value.Tag {
     return switch (of) {
         .none => .none,
         .boolean => .boolean,
+        .byte => .byte,
+        .short => .short,
         .int => .int,
         .long => .long,
+        .half => .half,
         .float => .float,
         .double => .double,
         .string => .string,

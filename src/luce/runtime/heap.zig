@@ -222,6 +222,9 @@ pub const Object = struct {
                 .long => Value.ofLong(self.cells(i64)[index]),
                 .float => Value.ofFloat(self.cells(f32)[index]),
                 .int => Value.ofInt(self.cells(i32)[index]),
+                .half => Value.ofHalf(self.cells(f16)[index]),
+                .short => Value.ofShort(self.cells(i16)[index]),
+                .byte => Value.ofByte(self.cells(u8)[index]),
                 .boolean => Value.ofBoolean(self.cells(u8)[index] != 0),
             };
         }
@@ -236,6 +239,9 @@ pub const Object = struct {
                 .long => self.cells(i64)[index] = held.asLong(),
                 .float => self.cells(f32)[index] = held.asFloat(),
                 .int => self.cells(i32)[index] = held.asInt(),
+                .half => self.cells(f16)[index] = held.asHalf(),
+                .short => self.cells(i16)[index] = held.asShort(),
+                .byte => self.cells(u8)[index] = held.asByte(),
                 .boolean => self.cells(u8)[index] = @intFromBool(held.asBoolean()),
             }
         }
@@ -249,6 +255,9 @@ pub const Object = struct {
                 .long => @memset(self.cells(i64), held.asLong()),
                 .float => @memset(self.cells(f32), held.asFloat()),
                 .int => @memset(self.cells(i32), held.asInt()),
+                .half => @memset(self.cells(f16), held.asHalf()),
+                .short => @memset(self.cells(i16), held.asShort()),
+                .byte => @memset(self.cells(u8), held.asByte()),
                 .boolean => @memset(self.cells(u8), @intFromBool(held.asBoolean())),
             }
         }
@@ -277,6 +286,14 @@ pub const Object = struct {
         /// register (docs/TYPES.md §6).
         float,
         int,
+        /// The storage widths, appended in their turn.  These are what
+        /// the narrow types are *for* (§10): an `array(byte, n)` is one
+        /// byte an element, an eighth of what the same array of `long`
+        /// costs, and the same vector register that holds two `double`s
+        /// holds eight `half`s.
+        half,
+        short,
+        byte,
 
         /// The cell type `Array.cells` reads, so a switch with an
         /// `inline else` gets the storage type for free.
@@ -287,6 +304,9 @@ pub const Object = struct {
                 .long => i64,
                 .float => f32,
                 .int => i32,
+                .half => f16,
+                .short => i16,
+                .byte => u8,
                 .boolean => u8,
             };
         }
@@ -298,6 +318,9 @@ pub const Object = struct {
                 .long => @sizeOf(i64),
                 .float => @sizeOf(f32),
                 .int => @sizeOf(i32),
+                .half => @sizeOf(f16),
+                .short => @sizeOf(i16),
+                .byte => 1,
                 .boolean => 1,
             };
         }
@@ -315,6 +338,9 @@ pub const Object = struct {
                 .long => .long,
                 .float => .float,
                 .int => .int,
+                .half => .half,
+                .short => .short,
+                .byte => .byte,
                 .boolean => .boolean,
                 .none, .string, .strukt, .object => .value,
             };

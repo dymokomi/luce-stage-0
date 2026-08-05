@@ -156,8 +156,11 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
         return if (op == .equal) same else !same;
     }
     switch (left.view()) {
+        .byte => |held| return ordered(op, held, right.asByte()),
+        .short => |held| return ordered(op, held, right.asShort()),
         .int => |held| return ordered(op, held, right.asInt()),
         .long => |held| return ordered(op, held, right.asLong()),
+        .half => |held| return ordered(op, held, right.asHalf()),
         .float => |held| return ordered(op, held, right.asFloat()),
         .double => |held| return ordered(op, held, right.asDouble()),
         .string => |held| {
@@ -357,8 +360,11 @@ test "mixed comparison is exact at 2^53, where widening stops being" {
 pub fn orderedBefore(context: void, left: Value, right: Value) bool {
     _ = context;
     return switch (left.view()) {
+        .byte => |held| held < right.asByte(),
+        .short => |held| held < right.asShort(),
         .int => |held| held < right.asInt(),
         .long => |held| held < right.asLong(),
+        .half => |held| held < right.asHalf(),
         .float => |held| held < right.asFloat(),
         .double => |held| held < right.asDouble(),
         .string => |held| std.mem.order(u8, held, right.asString()) == .lt,
@@ -389,9 +395,12 @@ pub fn logicalNot(operand: Value) Value {
 }
 
 /// Every numeric conversion, from the value's own tag to the tag `to`
-/// names — the whole of `long(x)`, `int(x)`, `float(x)`, `double(x)`
-/// and the widenings the language inserts for itself (docs/TYPES.md
-/// §3).
+/// names — the whole of `byte(x)`, `short(x)`, `int(x)`, `long(x)`,
+/// `half(x)`, `float(x)`, `double(x)` and the widenings the language
+/// inserts for itself (docs/TYPES.md §3).  Seven types is up to
+/// forty-two ordered pairs; what is written below is four functions,
+/// because a conversion is a *family* question and only then a width
+/// one.
 ///
 /// The runtime speaks tags rather than the program's types, which is
 /// all it needs: the source is what the value is carrying and the
@@ -402,49 +411,113 @@ pub fn logicalNot(operand: Value) Value {
 /// an integer, and an integer landing on a narrower one — and both
 /// answer `conversion_range`.  The other two always have an answer.
 pub fn convert(runtime: *Runtime, operand: Value, to: value.Tag) Error!Value {
-    return switch (to) {
-        .double => switch (operand.tag) {
-            .int => Value.ofDouble(@floatFromInt(operand.asInt())),
-            .long => Value.ofDouble(@floatFromInt(operand.asLong())),
-            .float => Value.ofDouble(operand.asFloat()),
-            else => unreachable,
-        },
-        .float => switch (operand.tag) {
-            .int => Value.ofFloat(@floatFromInt(operand.asInt())),
-            .long => Value.ofFloat(@floatFromInt(operand.asLong())),
-            // Rounds to nearest, ties to even, and reaches `inf`
-            // rather than trapping: IEEE, with no second story about
-            // infinity bolted on.
-            .double => Value.ofFloat(@floatCast(operand.asDouble())),
-            else => unreachable,
-        },
-        .long => switch (operand.tag) {
-            .int => Value.ofLong(operand.asInt()),
-            .float => floatToInteger(runtime, i64, operand.asFloat()),
-            .double => floatToInteger(runtime, i64, operand.asDouble()),
-            else => unreachable,
-        },
-        .int => switch (operand.tag) {
-            .long => narrowInteger(runtime, operand.asLong()),
-            .float => floatToInteger(runtime, i32, operand.asFloat()),
-            .double => floatToInteger(runtime, i32, operand.asDouble()),
-            else => unreachable,
-        },
+    // Each family is read at its widest member first, which is exact
+    // for every source: every integer width fits an `i64`, and `half`
+    // and `float` are both exactly representable in `f64`.  So the
+    // conversion that follows is the *only* rounding there is, and the
+    // double-rounding a decimal → binary64 → binary32 path would have
+    // is unreachable by construction (docs/TYPES.md §1's argument, one
+    // stage down).
+    if (integerTag(operand.tag)) {
+        const whole = wideInteger(operand);
+        if (integerTag(to)) return narrowInteger(runtime, whole, to);
+        return floatFromInteger(whole, to);
+    }
+    const held = wideFloat(operand);
+    if (integerTag(to)) return floatToInteger(runtime, held, to);
+    return narrowFloat(held, to);
+}
+
+/// Whether a tag names an integer.  `byte` is one of them and is
+/// unsigned; the other three are signed (docs/TYPES.md D4).
+fn integerTag(tag: value.Tag) bool {
+    return switch (tag) {
+        .byte, .short, .int, .long => true,
+        .half, .float, .double => false,
+        .none, .boolean, .string, .strukt, .object => unreachable,
+    };
+}
+
+/// An integer of any width, read at `i64` — exact for all four,
+/// with `byte` read as the magnitude its bits are (D4).
+fn wideInteger(operand: Value) i64 {
+    return switch (operand.tag) {
+        .byte => operand.asByte(),
+        .short => operand.asShort(),
+        .int => operand.asInt(),
+        .long => operand.asLong(),
         else => unreachable,
     };
 }
 
-/// A `long` landing on an `int`: outside the range it stops, because
-/// `int(3000000000)` is not three billion modulo anything.
-fn narrowInteger(runtime: *Runtime, held: i64) Error!Value {
-    if (held < std.math.minInt(i32) or held > std.math.maxInt(i32)) {
-        return runtime.fail(.conversion_range);
-    }
-    return Value.ofInt(@intCast(held));
+/// A float of any width, read at `f64` — exact for all three.
+fn wideFloat(operand: Value) f64 {
+    return switch (operand.tag) {
+        .half => operand.asHalf(),
+        .float => operand.asFloat(),
+        .double => operand.asDouble(),
+        else => unreachable,
+    };
 }
 
-/// `long(x)` **rounds half away from zero** and traps outside the i64
-/// range — NaN and infinities included (docs/NUMERICS.md §7).
+/// An integer landing on an integer: outside the destination's range
+/// it stops, because `int(3000000000)` is not three billion modulo
+/// anything and `byte(300)` is not 44.  A widening cannot fail and
+/// takes the same path, which is what keeps one statement of the
+/// bounds rather than one per direction.
+fn narrowInteger(runtime: *Runtime, held: i64, to: value.Tag) Error!Value {
+    switch (to) {
+        .byte => {
+            if (held < 0 or held > 255) return runtime.fail(.conversion_range);
+            return Value.ofByte(@intCast(held));
+        },
+        .short => {
+            if (held < std.math.minInt(i16) or held > std.math.maxInt(i16)) {
+                return runtime.fail(.conversion_range);
+            }
+            return Value.ofShort(@intCast(held));
+        },
+        .int => {
+            if (held < std.math.minInt(i32) or held > std.math.maxInt(i32)) {
+                return runtime.fail(.conversion_range);
+            }
+            return Value.ofInt(@intCast(held));
+        },
+        .long => return Value.ofLong(held),
+        else => unreachable,
+    }
+}
+
+/// An integer landing on a float: one `@floatFromInt` straight to the
+/// destination width, so there is exactly one rounding.  Never traps —
+/// every integer has a nearest float, `inf` included once the
+/// magnitude passes the top of a `half`.
+fn floatFromInteger(held: i64, to: value.Tag) Value {
+    return switch (to) {
+        .half => Value.ofHalf(@floatFromInt(held)),
+        .float => Value.ofFloat(@floatFromInt(held)),
+        .double => Value.ofDouble(@floatFromInt(held)),
+        else => unreachable,
+    };
+}
+
+/// A float landing on a narrower float: rounds to nearest, ties to
+/// even, and reaches `inf` rather than trapping — IEEE, with no
+/// second story about infinity bolted on.  `double` to `half` is one
+/// `@floatCast` and therefore one rounding, not a detour through
+/// binary32 (docs/TYPES.md §7).
+fn narrowFloat(held: f64, to: value.Tag) Value {
+    return switch (to) {
+        .half => Value.ofHalf(@floatCast(held)),
+        .float => Value.ofFloat(@floatCast(held)),
+        .double => Value.ofDouble(held),
+        else => unreachable,
+    };
+}
+
+/// `long(x)` and its four siblings **round half away from zero** and
+/// trap outside the destination's range — NaN and infinities included
+/// (docs/NUMERICS.md §7).
 ///
 /// Half away from zero, and not IEEE's half-to-even, for one reason
 /// that outranks the numerical arguments: `math.round` already
@@ -460,18 +533,29 @@ fn narrowInteger(runtime: *Runtime, held: i64) Error!Value {
 /// the infinities survive `@round` unchanged so the one check still
 /// catches them, and a value rounding carried past the top of the
 /// range is refused rather than wrapped.
-fn floatToInteger(runtime: *Runtime, comptime T: type, held: anytype) Error!Value {
-    const Float = @TypeOf(held);
-    const rounded = roundHalfAway(Float, held);
-    // One past the top, tested with `>=`, because 2^63 and 2^31 are
-    // both exactly representable in either float width while `maxInt`
-    // itself is not.
-    const lowest: Float = @floatFromInt(std.math.minInt(T));
-    const past_top: comptime_float = if (T == i32) 2147483648.0 else 9223372036854775808.0;
-    if (std.math.isNan(rounded) or rounded < lowest or rounded >= past_top) {
+fn floatToInteger(runtime: *Runtime, held: f64, to: value.Tag) Error!Value {
+    const rounded = roundHalfAway(f64, held);
+    // The bottom of the range and *one past* the top, tested with
+    // `>=`: every one of those eight bounds is a small integer or a
+    // power of two and therefore exact in binary64, while `maxInt`
+    // itself is not once the width reaches 64.
+    const bounds: struct { lowest: f64, past_top: f64 } = switch (to) {
+        .byte => .{ .lowest = 0.0, .past_top = 256.0 },
+        .short => .{ .lowest = -32768.0, .past_top = 32768.0 },
+        .int => .{ .lowest = -2147483648.0, .past_top = 2147483648.0 },
+        .long => .{ .lowest = -9223372036854775808.0, .past_top = 9223372036854775808.0 },
+        else => unreachable,
+    };
+    if (std.math.isNan(rounded) or rounded < bounds.lowest or rounded >= bounds.past_top) {
         return runtime.fail(.conversion_range);
     }
-    return boxInteger(T, @intFromFloat(rounded));
+    return switch (to) {
+        .byte => Value.ofByte(@intFromFloat(rounded)),
+        .short => Value.ofShort(@intFromFloat(rounded)),
+        .int => Value.ofInt(@intFromFloat(rounded)),
+        .long => Value.ofLong(@intFromFloat(rounded)),
+        else => unreachable,
+    };
 }
 
 /// Round half away from zero: `2.5` to `3.0`, `-2.5` to `-3.0`.

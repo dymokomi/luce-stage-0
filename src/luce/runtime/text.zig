@@ -71,7 +71,7 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
 pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
     const text = held.asString();
     if (index < 0 or index >= text.len) return runtime.fail(.string_bounds);
-    return Value.ofLong(text[@intCast(index)]);
+    return Value.ofByte(text[@intCast(index)]);
 }
 
 /// `s.find_byte(b, from)` — the scanning primitive std's substring
@@ -103,6 +103,8 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         // Twenty digits and a sign is the longest an i64 gets, so a
         // number's text always fits inside the value and `string(i)` in
         // a loop allocates nothing at all.
+        .byte => |number| return digitsOf(number),
+        .short => |number| return digitsOf(number),
         .int => |number| return digitsOf(number),
         .long => |number| return digitsOf(number),
         // `{d}` on a float is the shortest representation that round
@@ -110,6 +112,7 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         // which is width-generic, so `string(float(1.0) / float(3.0))`
         // is "0.33333334" and not binary64's seventeen digits
         // (docs/TYPES.md §3).
+        .half => |number| return floatText(runtime, number),
         .float => |number| return floatText(runtime, number),
         .double => |number| return floatText(runtime, number),
         .boolean => |held_bool| return runtime.ownValue(

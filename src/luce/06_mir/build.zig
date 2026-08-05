@@ -358,8 +358,8 @@ pub const Lowering = struct {
         return switch (of) {
             .none => unreachable, // no annotation resolves to None
             .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
-            .int, .long => try self.emit(.{ .const_long = 0 }, of),
-            .float, .double => try self.emit(.{ .const_double = 0.0 }, of),
+            .byte, .short, .int, .long => try self.emit(.{ .const_long = 0 }, of),
+            .half, .float, .double => try self.emit(.{ .const_double = 0.0 }, of),
             .string => try self.emit(.{ .const_string = try self.pool.intern("") }, .string),
             .heap => try self.emit(
                 .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },

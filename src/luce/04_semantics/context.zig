@@ -48,22 +48,38 @@ pub const Error = error{OutOfMemory};
 /// the sentence: a reader who wrote `3000000000` did not make a
 /// mistake about arithmetic, they made one about a width, and the fix
 /// is a word (docs/TYPES.md §11).
+pub const byte_range_message =
+    "integer literal out of range; byte holds 0 to 255 — write the place as a short";
+pub const short_range_message =
+    "integer literal out of range; short holds -32768 to 32767 — write the place as an int";
 pub const int_range_message =
     "integer literal out of range; int holds -2147483648 to 2147483647 — write the place as a long";
 pub const long_range_message =
     "integer literal out of range; long holds -9223372036854775808 to 9223372036854775807";
+pub const half_range_message =
+    "float literal is not a finite half; half holds up to about 65504 — write the place as a float";
 pub const float_range_message =
     "float literal is not a finite float; float holds up to about 3.4e38 — write the place as a double";
 pub const double_range_message =
     "float literal is not a finite number; double holds up to about 1.8e308";
 
 /// The sentence for a literal that did not fit the type it landed on.
+///
+/// **Exhaustive on purpose.**  This used to end in an `else` that
+/// answered `long`, which is why a literal past a `byte` was once told
+/// about `long`'s range and a `half` literal was called an integer.
+/// Every width names its own range and the next rung up, and the two
+/// at the top of their ladders name no rung because there is none.
 pub fn rangeMessage(landed: Type) []const u8 {
     return switch (landed) {
+        .byte => byte_range_message,
+        .short => short_range_message,
         .int => int_range_message,
+        .long => long_range_message,
+        .half => half_range_message,
         .float => float_range_message,
         .double => double_range_message,
-        else => long_range_message,
+        .none, .boolean, .string, .strukt, .heap, .optional => long_range_message,
     };
 }
 

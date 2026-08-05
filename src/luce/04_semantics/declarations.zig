@@ -276,15 +276,18 @@ pub const Analyzer = struct {
             return null;
         }
         if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
-            .boolean, .int, .long, .float, .double, .string => {
+            .boolean, .byte, .short, .int, .long, .half, .float, .double, .string => {
                 if (written.arguments.len != 0 or written.wildcards != 0) {
                     try self.fail("luce.sema.type", written.span, "{s} takes no type arguments", .{written.name});
                     return null;
                 }
                 return switch (builtin) {
                     .boolean => .boolean,
+                    .byte => .byte,
+                    .short => .short,
                     .int => .int,
                     .long => .long,
+                    .half => .half,
                     .float => .float,
                     .double => .double,
                     .string => .string,
@@ -1272,8 +1275,11 @@ pub const Analyzer = struct {
         // takes any number (docs/TYPES.md §3): four destinations and
         // one rule, not sixteen pairs.
         const target: Type = switch (produces) {
+            .byte => .byte,
+            .short => .short,
             .int => .int,
             .long => .long,
+            .half => .half,
             .float => .float,
             .double => .double,
             .boolean, .string, .list, .map, .array, .builder => unreachable, // answered above
@@ -1288,23 +1294,25 @@ pub const Analyzer = struct {
             // Float to narrower float rounds to nearest, ties to even,
             // and reaches `inf` rather than trapping — the same
             // `@floatCast` `runtime/operators.zig` performs, so the
-            // fold and the run answer the same bits.  A `float` is
-            // carried in the wide slot at its own precision, exactly
-            // as a `float` literal is.
-            const narrowed: f64 = if (target == .float)
-                @as(f32, @floatCast(held))
-            else
-                held;
+            // fold and the run answer the same bits.  A narrow float
+            // is carried in the wide slot at its own precision,
+            // exactly as its literal is.
+            const narrowed: f64 = switch (target) {
+                .half => @as(f16, @floatCast(held)),
+                .float => @as(f32, @floatCast(held)),
+                .double => held,
+                else => unreachable, // isFloating names three
+            };
             return .{ .value = .{ .double = narrowed }, .value_type = target };
         }
 
         // An integer destination.  The two sources fail differently
         // and neither may travel through the other's arithmetic: a
         // `long` past 2^53 does not survive a detour through f64.
-        const to_int = target == .int;
+        const bounds = target.integerRange();
         if (operand.value_type.isInteger()) {
             const whole = operand.value.long;
-            if (to_int and (whole < std.math.minInt(i32) or whole > std.math.maxInt(i32))) {
+            if (whole < bounds.low or whole > bounds.high) {
                 return self.constantError(call.span, "constant conversion out of range", .{});
             }
             return .{ .value = .{ .long = whole }, .value_type = target };
@@ -1316,10 +1324,11 @@ pub const Analyzer = struct {
         // through the runtime's own function so there is one of it,
         // with the range checked *after* it.
         const rounded = operators.roundHalfAway(f64, operand.value.double);
-        // One past the top, tested with `>=`: 2^31 and 2^63 are both
-        // exactly representable where `maxInt` itself is not.
-        const lowest: f64 = if (to_int) -2147483648.0 else -9223372036854775808.0;
-        const past_top: f64 = if (to_int) 2147483648.0 else 9223372036854775808.0;
+        // One past the top, tested with `>=`: every bound here is a
+        // small integer or a power of two and so exact in binary64,
+        // where `maxInt` itself stops being once the width reaches 64.
+        const lowest: f64 = @floatFromInt(bounds.low);
+        const past_top: f64 = @floatFromInt(bounds.high + 1);
         if (std.math.isNan(rounded) or rounded < lowest or rounded >= past_top) {
             return self.constantError(call.span, "constant conversion out of range", .{});
         }

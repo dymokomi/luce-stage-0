@@ -245,14 +245,19 @@ fn operandType(function: *const Function, defined: *const std.AutoHashMapUnmanag
     return result;
 }
 
+/// Whether a type is one an operator never computes at: `byte`,
+/// `short` and `half` are storage, and promotion has removed them
+/// before any arithmetic or comparison is emitted (docs/TYPES.md D5).
+fn isStorageWidth(of: Type) bool {
+    return of == .byte or of == .short or of == .half;
+}
+
 /// Whether an integer constant, carried as an `i64`, is exactly what
 /// a register of type `at` would hold.
 fn fitsInteger(held: i64, at: Type) bool {
-    return switch (at) {
-        .long => true,
-        .int => held >= std.math.minInt(i32) and held <= std.math.maxInt(i32),
-        .none, .boolean, .float, .double, .string, .strukt, .heap, .optional => false,
-    };
+    if (!at.isInteger()) return false;
+    const bounds = at.integerRange();
+    return held >= bounds.low and held <= bounds.high;
 }
 
 /// The same question for a float constant carried as an `f64`.  A NaN
@@ -263,7 +268,8 @@ fn fitsFloat(held: f64, at: Type) bool {
     return switch (at) {
         .double => true,
         .float => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
-        .none, .boolean, .int, .long, .string, .strukt, .heap, .optional => false,
+        .half => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
+        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .optional => false,
     };
 }
 
@@ -316,6 +322,15 @@ fn verifyInstruction(
             const right = try operandType(function, defined, binary.right);
             try expectType(left, binary.operand_type);
             try expectType(right, binary.operand_type);
+            // **No operator computes at a storage width** (D5): stage
+            // 4 promotes `byte` and `short` to `int` and `half` to
+            // `float` before it emits anything, so IR that says
+            // otherwise is damaged.  Refusing it here is what makes
+            // the backend's storage-width arms unreachable rather
+            // than merely unreached, and what stops a hand-made
+            // module asking either engine for 8-bit checked
+            // arithmetic neither of them has.
+            if (isStorageWidth(binary.operand_type)) return error.TypeMismatch;
             if (binary.op.isComparison()) {
                 switch (binary.op) {
                     .equal, .not_equal => {},
@@ -343,6 +358,7 @@ fn verifyInstruction(
             switch (unary.op) {
                 .negate => {
                     if (!operand.isNumeric()) return error.TypeMismatch;
+                    if (isStorageWidth(operand)) return error.TypeMismatch;
                     try expectType(result, operand);
                 },
                 .logic_not => {
@@ -499,20 +515,27 @@ fn verifyIntrinsic(
     const arguments = buffer[0..call.arguments.len];
 
     switch (call.kind) {
+        // The math builtins compute like operators, so a storage
+        // width never reaches one: stage 4 promotes it first (D5), and
+        // refusing it here is what makes the runtime's per-width
+        // switches total rather than merely lucky.
         .abs => {
             try exactly(arguments, 1);
             if (!arguments[0].isNumeric()) return error.BadIntrinsic;
+            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(result, arguments[0]);
         },
         .min, .max => {
             try exactly(arguments, 2);
             if (!arguments[0].isNumeric()) return error.BadIntrinsic;
+            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(arguments[1], arguments[0]);
             try expectType(result, arguments[0]);
         },
         .clamp => {
             try exactly(arguments, 3);
             if (!arguments[0].isNumeric()) return error.BadIntrinsic;
+            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(arguments[1], arguments[0]);
             try expectType(arguments[2], arguments[0]);
             try expectType(result, arguments[0]);
@@ -522,6 +545,7 @@ fn verifyIntrinsic(
             // Whichever float width it was given, and the same one
             // back: `sqrt` of a `float` is a `float` (docs/TYPES.md §9).
             if (!arguments[0].isFloating()) return error.BadIntrinsic;
+            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(result, arguments[0]);
         },
         .compare_long_double => {
@@ -551,12 +575,16 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             try expectType(arguments[0], .string);
             try expectType(arguments[1], .long);
-            try expectType(result, .long);
+            // The one intrinsic that answers a `byte` (docs/TYPES.md §9).
+            try expectType(result, .byte);
         },
         .string_find_byte => {
             try exactly(arguments, 3);
             try expectType(arguments[0], .string);
-            try expectType(arguments[1], .long);
+            // The byte looked for is a `byte`, so "outside 0..255" is
+            // refused where it is written instead of trapping where it
+            // is read.
+            try expectType(arguments[1], .byte);
             try expectType(arguments[2], .long);
             try expectType(result, .long);
         },
@@ -810,7 +838,7 @@ fn verifyIntrinsic(
         .str_value => {
             try exactly(arguments, 1);
             const stringable = switch (arguments[0]) {
-                .int, .long, .float, .double, .boolean, .string => true,
+                .byte, .short, .int, .long, .half, .float, .double, .boolean, .string => true,
                 .heap => (try heapShape(program, arguments[0])) == .builder,
                 else => false,
             };

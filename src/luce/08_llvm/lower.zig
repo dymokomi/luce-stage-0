@@ -315,8 +315,11 @@ const Module = struct {
         return switch (of) {
             .none => .void,
             .boolean => .i1,
+            .byte => .i8,
+            .short => .i16,
             .int => .i32,
             .long => .i64,
+            .half => .half,
             .float => .float,
             .double => .double,
             .string => self.string_type,
@@ -481,7 +484,8 @@ const Module = struct {
     /// this file stays free of `else` arms.
     fn valueAlignment(of: types.Type) Builder.Alignment {
         return switch (of) {
-            .boolean => Builder.Alignment.fromByteUnits(1),
+            .boolean, .byte => Builder.Alignment.fromByteUnits(1),
+            .short, .half => Builder.Alignment.fromByteUnits(2),
             .int, .float => Builder.Alignment.fromByteUnits(4),
             .none,
             .long,
@@ -688,8 +692,11 @@ const Module = struct {
         const tag: runtime.Tag, const bits: Builder.Constant = switch (of) {
             .none => .{ .none, try self.builder.intConst(.i64, 0) },
             .boolean => .{ .boolean, try self.builder.intConst(.i64, 0) },
+            .byte => .{ .byte, try self.builder.intConst(.i64, 0) },
+            .short => .{ .short, try self.builder.intConst(.i64, 0) },
             .int => .{ .int, try self.builder.intConst(.i64, 0) },
             .long => .{ .long, try self.builder.intConst(.i64, 0) },
+            .half => .{ .half, try self.builder.intConst(.i64, 0) },
             .float => .{ .float, try self.builder.intConst(.i64, 0) },
             .double => .{ .double, try self.builder.intConst(.i64, 0) },
             .string => .{ .string, try self.builder.intConst(.i64, 0) },
@@ -906,7 +913,8 @@ const Module = struct {
     /// `dereferenceable`.
     fn resultSize(of: types.Type) u32 {
         return switch (of) {
-            .boolean => 1,
+            .boolean, .byte => 1,
+            .short, .half => 2,
             .int, .float => 4,
             .long, .double, .strukt, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
@@ -917,7 +925,9 @@ const Module = struct {
             // and `dereferenceable` must not claim more than the
             // caller's `alloca` provides.
             .optional => |payload| switch (payload) {
-                .boolean => 2,
+                .boolean, .byte => 2,
+                // {i16, i1} and {half, i1} align to 2, so four.
+                .short, .half => 4,
                 // {i32, i1} and {float, i1} align to 4, so eight
                 // bytes rather than sixteen.
                 .int, .float => 8,
@@ -1702,8 +1712,11 @@ const Body = struct {
     fn zeroValue(self: *Body, of: types.Type) Error!Builder.Value {
         return switch (of) {
             .boolean => .false,
+            .byte => try self.module.builder.intValue(.i8, 0),
+            .short => try self.module.builder.intValue(.i16, 0),
             .int => try self.module.builder.intValue(.i32, 0),
             .long => try self.module.builder.intValue(.i64, 0),
+            .half => try self.module.builder.halfValue(0.0),
             .float => try self.module.builder.floatValue(0.0),
             .double => try self.module.builder.doubleValue(0.0),
             .string => (try self.module.textConstant("")).toValue(),
@@ -1880,10 +1893,16 @@ const Body = struct {
             // A narrow scalar sits in the low half of the word,
             // zero-extended: `asInt` reads it back by truncating, so
             // the top half is never read and must not be a sign.
-            .int => try self.wip.cast(.zext, held, .i64, "box.bits"),
+            .byte, .short, .int => try self.wip.cast(.zext, held, .i64, "box.bits"),
             .float => try self.wip.cast(
                 .zext,
                 try self.wip.cast(.bitcast, held, .i32, "box.word"),
+                .i64,
+                "box.bits",
+            ),
+            .half => try self.wip.cast(
+                .zext,
+                try self.wip.cast(.bitcast, held, .i16, "box.word"),
                 .i64,
                 "box.bits",
             ),
@@ -1904,7 +1923,17 @@ const Body = struct {
     fn boxLength(self: *Body, of: types.Type, held: Builder.Value) Error!Builder.Value {
         const builder = self.module.builder;
         return switch (of) {
-            .none, .boolean, .int, .long, .heap, .float, .double => try builder.intValue(.i64, 0),
+            .none,
+            .boolean,
+            .byte,
+            .short,
+            .int,
+            .long,
+            .heap,
+            .half,
+            .float,
+            .double,
+            => try builder.intValue(.i64, 0),
             .strukt => |layout| try builder.intValue(
                 .i64,
                 self.module.program.structs[layout].fields.len,
@@ -2038,11 +2067,19 @@ const Body = struct {
         const bits = try self.loadBoxField(slot, box_bits, "unbox.bits");
         return switch (of) {
             .long, .heap => bits,
+            .byte => try self.wip.cast(.trunc, bits, .i8, name),
+            .short => try self.wip.cast(.trunc, bits, .i16, name),
             .int => try self.wip.cast(.trunc, bits, .i32, name),
             .float => try self.wip.cast(
                 .bitcast,
                 try self.wip.cast(.trunc, bits, .i32, "unbox.word"),
                 .float,
+                name,
+            ),
+            .half => try self.wip.cast(
+                .bitcast,
+                try self.wip.cast(.trunc, bits, .i16, "unbox.word"),
+                .half,
                 name,
             ),
             .boolean => try self.wip.icmp(
@@ -2303,7 +2340,7 @@ const Body = struct {
     /// element is a borrow of it, and borrows own nothing.
     fn ownsNothing(of: types.Type) bool {
         return switch (of) {
-            .boolean, .int, .long, .float, .double => true,
+            .boolean, .byte, .short, .int, .long, .half, .float, .double => true,
             .none, .string, .strukt, .heap, .optional => false,
         };
     }
@@ -2463,7 +2500,11 @@ const Body = struct {
             .long => .i64,
             .float => .float,
             .int => .i32,
-            .boolean => .i8,
+            .half => .half,
+            .short => .i16,
+            // A `byte` cell is one byte, which is the whole point of
+            // the type (docs/TYPES.md §10).
+            .byte, .boolean => .i8,
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
             .none, .string, .strukt, .heap, .optional => self.module.value_type,
@@ -2472,7 +2513,8 @@ const Body = struct {
 
     fn cellAlignment(element: types.Type) Builder.Alignment {
         return switch (element) {
-            .boolean => Builder.Alignment.fromByteUnits(1),
+            .boolean, .byte => Builder.Alignment.fromByteUnits(1),
+            .short, .half => Builder.Alignment.fromByteUnits(2),
             .int, .float => Builder.Alignment.fromByteUnits(4),
             .none,
             .long,
@@ -2730,7 +2772,7 @@ const Body = struct {
     /// Read one cell as the Luce value it holds.
     fn loadCell(self: *Body, element: types.Type, address: Builder.Value) Error!Builder.Value {
         return switch (element) {
-            .double, .long, .float, .int => try self.wip.load(
+            .double, .long, .float, .int, .half, .short, .byte => try self.wip.load(
                 .normal,
                 self.cellType(element),
                 address,
@@ -2763,7 +2805,7 @@ const Body = struct {
         held: Builder.Value,
     ) Error!void {
         switch (element) {
-            .double, .long, .float, .int => _ = try self.wip.store(
+            .double, .long, .float, .int, .half, .short, .byte => _ = try self.wip.store(
                 .normal,
                 held,
                 address,
@@ -2901,13 +2943,17 @@ const Body = struct {
             try self.wip.bin(.@"or", below, above, "out.of.range"),
             .string_bounds,
         );
-        self.values[register] = try self.wip.cast(.zext, try self.wip.load(
+        // The byte itself, as an `i8`: `byte_at` answers a `byte` now,
+        // so the widening that used to happen here happens at whatever
+        // the caller does with it — a `zext`, because a byte's bits
+        // are a magnitude (D4).
+        self.values[register] = try self.wip.load(
             .normal,
             .i8,
             try self.wip.gep(.inbounds, .i8, text, &.{index}, "byte.at"),
             Builder.Alignment.fromByteUnits(1),
             "byte",
-        ), .i64, "byte.value");
+        );
     }
 
     /// `s[a:b]` — a borrow of the original bytes, checked twice: in
@@ -3392,10 +3438,11 @@ const Body = struct {
                 );
             },
             .const_double => |value| {
-                self.values[register] = if (self.function.result_types[register] == .float)
-                    try self.module.builder.floatValue(@floatCast(value))
-                else
-                    try self.module.builder.doubleValue(value);
+                self.values[register] = switch (self.function.result_types[register]) {
+                    .half => try self.module.builder.halfValue(@floatCast(value)),
+                    .float => try self.module.builder.floatValue(@floatCast(value)),
+                    else => try self.module.builder.doubleValue(value),
+                };
             },
             .const_string => |constant| {
                 const text = self.module.program.constants[constant];
@@ -3575,17 +3622,40 @@ const Body = struct {
 
         if (to.isFloating()) {
             self.values[register] = if (from.isInteger())
-                try self.wip.cast(.sitofp, held, target, "float")
+                // A `byte`'s bits are a magnitude and every other
+                // integer's carry a sign (D4), which is the whole of
+                // what "unsigned" decides here.
+                try self.wip.cast(
+                    if (from.isUnsigned()) .uitofp else .sitofp,
+                    held,
+                    target,
+                    "float",
+                )
             else if (to.numericBits() > from.numericBits())
                 try self.wip.cast(.fpext, held, target, "float")
             else
+                // One `fptrunc`, so `half(x)` from a `double` rounds
+                // once rather than twice through binary32 (§7).
                 try self.wip.cast(.fptrunc, held, target, "float");
             return;
         }
 
         if (from.isInteger()) {
-            if (to.numericBits() > from.numericBits()) {
-                self.values[register] = try self.wip.cast(.sext, held, target, "int");
+            const source_range = from.integerRange();
+            const target_range = to.integerRange();
+            // Widening is decided by the *ranges*, not the widths: it
+            // is a widening exactly when the destination holds
+            // everything the source can, which is what makes
+            // `short(b)` free although `byte` is unsigned.
+            if (target_range.low <= source_range.low and
+                target_range.high >= source_range.high)
+            {
+                self.values[register] = try self.wip.cast(
+                    if (from.isUnsigned()) .zext else .sext,
+                    held,
+                    target,
+                    "int",
+                );
                 return;
             }
             try self.checkIntegerRange(held, from, to);
@@ -3603,7 +3673,12 @@ const Body = struct {
             "rounded",
         );
         try self.checkFloatRange(rounded, from, to);
-        self.values[register] = try self.wip.cast(.fptosi, rounded, target, "int");
+        self.values[register] = try self.wip.cast(
+            if (to.isUnsigned()) .fptoui else .fptosi,
+            rounded,
+            target,
+            "int",
+        );
     }
 
     /// The bounds of `to`, tested on a float that has already been
@@ -3614,14 +3689,20 @@ const Body = struct {
     /// because 2^63 and 2^31 are both exactly representable in either
     /// float width while `maxInt` itself is not.
     fn checkFloatRange(self: *Body, rounded: Builder.Value, from: types.Type, to: types.Type) Error!void {
-        const lowest: f64, const past_top: f64 = switch (to.numericBits()) {
-            32 => .{ -2147483648.0, 2147483648.0 },
-            else => .{ -9223372036854775808.0, 9223372036854775808.0 },
-        };
+        const bounds = to.integerRange();
+        const lowest: f64 = @floatFromInt(bounds.low);
+        const past_top: f64 = @floatFromInt(bounds.high + 1);
         const not_a_number = try self.wip.fcmp(.normal, .uno, rounded, rounded, "is.nan");
+        // **The bound may not be finite at the source's width.**  A
+        // `half` tops out at 65504, so `int`'s and `long`'s bounds
+        // both become infinities in binary16 — and there the test has
+        // to include the bound rather than exclude it, because the
+        // value it is catching *is* that infinity.  The upper test
+        // needs no such care: it already includes its bound.
+        const floor_is_finite = std.math.isFinite(self.narrowedBound(from, lowest));
         const too_small = try self.wip.fcmp(
             .normal,
-            .olt,
+            if (floor_is_finite) .olt else .ole,
             rounded,
             try self.floatConstant(from, lowest),
             "too.small",
@@ -3642,12 +3723,30 @@ const Body = struct {
         try self.check(outside, .conversion_range);
     }
 
+    /// What a bound becomes at the source float's own width, which is
+    /// where the comparison happens.  `half` is the width that cannot
+    /// hold every bound, and this is what says so.
+    fn narrowedBound(_: *Body, from: types.Type, held: f64) f64 {
+        return switch (from) {
+            .half => @as(f16, @floatCast(held)),
+            .float => @as(f32, @floatCast(held)),
+            .double => held,
+            else => unreachable, // asked only of a float source
+        };
+    }
+
     /// The bounds of a narrower integer, tested at the source's width.
+    ///
+    /// **The source of a narrowing is always signed.**  `byte` is the
+    /// bottom of the integer ladder, so nothing narrows *into* it from
+    /// something unsigned and nothing narrows out of it at all — which
+    /// is why one signed pair of comparisons is the whole of this.
     fn checkIntegerRange(self: *Body, held: Builder.Value, from: types.Type, to: types.Type) Error!void {
+        std.debug.assert(!from.isUnsigned());
         const wide = try self.module.valueType(from);
-        const lowest = try self.module.builder.intValue(wide, std.math.minInt(i32));
-        const highest = try self.module.builder.intValue(wide, std.math.maxInt(i32));
-        std.debug.assert(to.numericBits() == 32);
+        const bounds = to.integerRange();
+        const lowest = try self.module.builder.intValue(wide, @as(i64, @intCast(bounds.low)));
+        const highest = try self.module.builder.intValue(wide, @as(i64, @intCast(bounds.high)));
         const outside = try self.wip.bin(
             .@"or",
             try self.wip.icmp(.slt, held, lowest, "too.small"),
@@ -3660,10 +3759,11 @@ const Body = struct {
     /// A constant of the float width `of` names.
     fn floatConstant(self: *Body, of: types.Type, held: f64) Error!Builder.Value {
         const builder = self.module.builder;
-        return if (of == .float)
-            builder.floatValue(@floatCast(held))
-        else
-            builder.doubleValue(held);
+        return switch (of) {
+            .half => builder.halfValue(@floatCast(held)),
+            .float => builder.floatValue(@floatCast(held)),
+            else => builder.doubleValue(held),
+        };
     }
 
     /// `Point(x = 1, y = 2)`: gather the fields into a scratch run of
@@ -3722,6 +3822,16 @@ const Body = struct {
                 try self.boxedRegister(operation.left, "left"),
                 try self.boxedRegister(operation.right, "right"),
             }),
+            // D5: an operator widens `byte`, `short` and `half` to
+            // `int` and `float` before it does anything, so no binary
+            // ever arrives wearing one — the verifier refuses the IR
+            // that would.  Named rather than folded into the arm
+            // below because the reason is different: these have
+            // arithmetic, one rung up, and the others have none.
+            .byte,
+            .short,
+            .half,
+            => return self.fail("arithmetic at a storage width, which promotion removes"),
             .none,
             .boolean,
             .strukt,
@@ -4009,6 +4119,12 @@ const Body = struct {
                 => return self.fail("arithmetic on the comparison path"),
             },
             .float, .double, .string, .strukt => unreachable, // answered above
+            // As in `emitBinary`: a comparison unifies its operands
+            // first, and no storage width survives that (D5).
+            .byte,
+            .short,
+            .half,
+            => return self.fail("a comparison at a storage width, which promotion removes"),
             .none => return self.fail("a comparison of None"),
             // `x == none` is `is_none` by the time it gets here, and
             // the analyzer refuses every other comparison of a `T?`
@@ -4042,6 +4158,12 @@ const Body = struct {
                 .float, .double => {
                     self.values[register] = try self.wip.un(.fneg, operand, "neg");
                 },
+                // Negating a storage width promotes first (D5), so
+                // no `neg` ever arrives wearing one.
+                .byte,
+                .short,
+                .half,
+                => return self.fail("negation at a storage width, which promotion removes"),
                 .none,
                 .boolean,
                 .string,
@@ -4199,7 +4321,18 @@ const Body = struct {
         return switch (of) {
             .string => true,
             .optional => |payload| carriesText(payload.asType()),
-            .none, .boolean, .int, .long, .float, .double, .strukt, .heap => false,
+            .none,
+            .boolean,
+            .byte,
+            .short,
+            .int,
+            .long,
+            .half,
+            .float,
+            .double,
+            .strukt,
+            .heap,
+            => false,
         };
     }
 
@@ -4626,7 +4759,9 @@ const Body = struct {
             .string_find_byte => try self.callAnswering(register, .luce_rt_string_find_byte, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
-                self.values[of[1]],
+                // The service takes a plain `i64`; the byte reaches it
+                // as the magnitude its bits are.
+                try self.wip.cast(.zext, self.values[of[1]], .i64, "byte.wanted"),
                 self.values[of[2]],
             }),
 
@@ -4780,6 +4915,12 @@ const Body = struct {
         const of = self.function.result_types[operand];
         return switch (of) {
             .int, .long, .float, .double => of,
+            // A storage width reaches a math builtin already widened,
+            // the same way it reaches an operator (D5).
+            .byte,
+            .short,
+            .half,
+            => self.fail("a math builtin at a storage width, which promotion removes"),
             .none,
             .boolean,
             .string,

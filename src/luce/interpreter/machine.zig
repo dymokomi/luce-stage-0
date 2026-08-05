@@ -386,14 +386,17 @@ pub const Machine = struct {
                     // A numeric constant travels at the widest member
                     // of its family and lands at the register's own
                     // width (docs/TYPES.md §1).
-                    .const_long => |value| registers[item] = if (function.result_types[item] == .int)
-                        .ofInt(@intCast(value))
-                    else
-                        .ofLong(value),
-                    .const_double => |value| registers[item] = if (function.result_types[item] == .float)
-                        .ofFloat(@floatCast(value))
-                    else
-                        .ofDouble(value),
+                    .const_long => |value| registers[item] = switch (function.result_types[item]) {
+                        .byte => .ofByte(@intCast(value)),
+                        .short => .ofShort(@intCast(value)),
+                        .int => .ofInt(@intCast(value)),
+                        else => .ofLong(value),
+                    },
+                    .const_double => |value| registers[item] = switch (function.result_types[item]) {
+                        .half => .ofHalf(@floatCast(value)),
+                        .float => .ofFloat(@floatCast(value)),
+                        else => .ofDouble(value),
+                    },
                     .const_string => |constant| {
                         registers[item] = .ofString(self.program.constants[constant]);
                     },
@@ -566,8 +569,11 @@ pub const Machine = struct {
         return switch (of) {
             .none => .none,
             .boolean => .ofBoolean(false),
+            .byte => .ofByte(0),
+            .short => .ofShort(0),
             .int => .ofInt(0),
             .long => .ofLong(0),
+            .half => .ofHalf(0.0),
             .float => .ofFloat(0.0),
             .double => .ofDouble(0.0),
             .string => .ofString(""),
@@ -833,7 +839,7 @@ pub const Machine = struct {
             .string_find_byte => return text.findByte(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asLong(),
+                registers[arguments[1]].asByte(),
                 registers[arguments[2]].asLong(),
             ),
             .assert_true => {

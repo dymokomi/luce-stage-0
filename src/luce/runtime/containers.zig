@@ -299,6 +299,9 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
                 .long => Value.ofLong(cell),
                 .float => Value.ofFloat(cell),
                 .int => Value.ofInt(cell),
+                .half => Value.ofHalf(cell),
+                .short => Value.ofShort(cell),
+                .byte => Value.ofByte(cell),
                 .boolean => Value.ofBoolean(cell != 0),
             };
         }

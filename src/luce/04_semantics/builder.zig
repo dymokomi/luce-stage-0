@@ -1585,16 +1585,34 @@ pub const FunctionBuilder = struct {
     /// composes its two widenings in.
     fn landingType(expected: Type) ?Type {
         return switch (expected) {
-            .int, .long, .float, .double => expected,
+            // A storage type is a place a literal lands on like any
+            // other — `pixels[i] = 200` with a `byte` element is §1's
+            // own example, and 200 fits while 300 is refused where it
+            // is written rather than where it is stored.
+            .byte, .short, .int, .long, .half, .float, .double => expected,
             .optional => |payload| switch (payload) {
+                .byte => .byte,
+                .short => .short,
                 .int => .int,
                 .long => .long,
+                .half => .half,
                 .float => .float,
                 .double => .double,
                 .boolean, .string, .strukt, .heap => null,
             },
             .none, .boolean, .string, .strukt, .heap => null,
         };
+    }
+
+    /// A number at the type an operator computes it at — `int` for a
+    /// `byte` or a `short`, `float` for a `half`, and itself for the
+    /// four that already do arithmetic (D5).  The one place that
+    /// promotion is spelled for a *single* operand; `unifyNumeric` is
+    /// the same rule for a pair.
+    fn promoted(self: *FunctionBuilder, value: Typed) Error!Typed {
+        const at = value.value_type.arithmeticType() orelse return value;
+        if (value.value_type.eql(at)) return value;
+        return self.widenNumeric(value, at);
     }
 
     /// Bring two numeric operands to the type they meet at
@@ -4477,9 +4495,14 @@ pub const FunctionBuilder = struct {
         // through its own instruction.  A comparison along one ladder
         // is an ordinary widening, because widening within a family
         // loses nothing.
-        if (left.value_type.isNumeric() and right.value_type.isNumeric() and
-            !left.value_type.eql(right.value_type))
-        {
+        //
+        // **Two numbers unify even when they are already the same
+        // type**, which is what D5 needs and equality alone would
+        // miss: `byte + byte` and `half * half` have equal operands
+        // and must still leave as an `int` and a `float`, because no
+        // expression ever has a storage type.  `unifyNumeric` moves
+        // only what has to move, so a `long + long` is untouched.
+        if (left.value_type.isNumeric() and right.value_type.isNumeric()) {
             const crosses = left.value_type.isInteger() != right.value_type.isInteger();
             if (crosses and operation.isComparison()) {
                 return self.lowerExactCompare(operation, left, right);
@@ -4597,6 +4620,12 @@ pub const FunctionBuilder = struct {
         const int_first = left.value_type.isInteger();
         var whole = if (int_first) left else right;
         var fraction = if (int_first) right else left;
+
+        // A storage width promotes before anything else (D5), so what
+        // reaches the pairs below is still `{int, long}` against
+        // `{float, double}` and there are still four of them.
+        whole = try self.promoted(whole);
+        fraction = try self.promoted(fraction);
 
         if (whole.value_type == .int and fraction.value_type == .double) {
             const widened = try self.widenNumeric(whole, .double);
@@ -4824,9 +4853,14 @@ pub const FunctionBuilder = struct {
                     });
                     return null;
                 }
+                // A storage width negates at its arithmetic type,
+                // like every other operator (D5): `-b` on a `byte` is
+                // an `int`, which is also the only answer that could
+                // be right — a `byte` has no negatives to hold.
+                const at = try self.promoted(operand);
                 return .{
-                    .register = try self.code.emit(.{ .unary = .{ .op = .negate, .operand = operand.register } }, operand.value_type),
-                    .value_type = operand.value_type,
+                    .register = try self.code.emit(.{ .unary = .{ .op = .negate, .operand = at.register } }, at.value_type),
+                    .value_type = at.value_type,
                 };
             },
             .logic_not => {
@@ -5142,11 +5176,17 @@ pub const FunctionBuilder = struct {
         result: Type,
     }{
         // The language's primitive byte access.
-        .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.long}, .result = .long },
+        // **The one builtin that answers a `byte`** (docs/TYPES.md
+        // §9): its result is definitionally one, both engines have
+        // always produced 0..255, and it is the natural producer for
+        // the one place an `array(byte, _)` gets filled from.  It
+        // costs nothing at a call site, because a `byte` reaches a
+        // `long` parameter and a comparison with nothing written down.
+        .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.long}, .result = .byte },
         // The scanning primitive that `byte_at` is the access
         // primitive: std strings builds substring search on it, and it
         // is the seam SIMD would enter through (docs/STD.md).
-        .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .long, .long }, .result = .long },
+        .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .byte, .long }, .result = .long },
     };
 
     /// Builtin methods on values: strings, lists, arrays, maps, and
@@ -6182,8 +6222,11 @@ pub const FunctionBuilder = struct {
         // that nobody wrote.  A literal has no type until it meets one
         // (docs/TYPES.md §1), and here it meets the constructor's.
         self.wanted = switch (produces) {
+            .byte => .byte,
+            .short => .short,
             .int => .int,
             .long => .long,
+            .half => .half,
             .float => .float,
             .double => .double,
             .boolean, .string, .list, .map, .array, .builder => null,
@@ -6192,7 +6235,7 @@ pub const FunctionBuilder = struct {
         if (produces == .string) {
             switch (value.value_type) {
                 .string => return value,
-                .int, .long, .float, .double, .boolean => {},
+                .byte, .short, .int, .long, .half, .float, .double, .boolean => {},
                 .heap => {
                     const descriptor = self.analyzer.heapOf(value.value_type).?;
                     if (descriptor == .builder) {
@@ -6227,8 +6270,11 @@ pub const FunctionBuilder = struct {
         // widen without an operator to hang it on, so a redundant one
         // is not a mistake to report.
         const target: Type = switch (produces) {
+            .byte => .byte,
+            .short => .short,
             .int => .int,
             .long => .long,
+            .half => .half,
             .float => .float,
             .double => .double,
             .boolean, .string, .list, .map, .array, .builder => unreachable, // answered above
@@ -6369,6 +6415,7 @@ pub const FunctionBuilder = struct {
         switch (matched.kind) {
             .abs => {
                 if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes a number");
+                arguments[0] = try self.promoted(arguments[0]);
                 result = arguments[0].value_type;
             },
             // `min`, `max` and `clamp` unify their arguments the way a
@@ -6402,6 +6449,9 @@ pub const FunctionBuilder = struct {
                 // diagnostic to pay for it with.
                 if (!arguments[0].value_type.isFloating())
                     return self.failIntrinsic(call, "this builtin takes a float or a double");
+                // A `half` arrives promoted to a `float`, so there is
+                // no binary16 square root to ask any target for (D5).
+                arguments[0] = try self.promoted(arguments[0]);
                 result = arguments[0].value_type;
             },
             .len => {

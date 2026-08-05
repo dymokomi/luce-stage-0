@@ -4299,3 +4299,345 @@ test "a runaway recursion reports a capped trace and counts the rest" {
     try testing.expect(std.mem.endsWith(u8, reported, "... 36 more\n"));
     try testing.expectEqual(@as(usize, 65), std.mem.count(u8, reported, "\n"));
 }
+
+// ---------------------------------------------------------------------------
+// The storage widths: `byte`, `short`, `half` (docs/TYPES.md step 5)
+// ---------------------------------------------------------------------------
+
+test "storage: the three widths hold what the ladder says they hold" {
+    try agreeOk(
+        \\func main():
+        \\    let low: byte = 0
+        \\    let high: byte = 255
+        \\    let bottom: short = -32768
+        \\    let top: short = 32767
+        \\    assert(low == 0)
+        \\    assert(high == 255)
+        \\    assert(bottom == -32768)
+        \\    assert(top == 32767)
+        \\    assert(string(high) == "255")
+        \\    assert(string(bottom) == "-32768")
+        \\
+    );
+}
+
+test "storage: an operator promotes, so nothing wraps at 8 or 16 bits" {
+    // D5's whole point: `byte + byte` is an `int`, so 255 + 1 is 256
+    // and not 0.  There is no arithmetic at a storage width to
+    // overflow, which is why `byte` needs no checked arithmetic.
+    try agreeOk(
+        \\func main():
+        \\    var a: byte = 255
+        \\    var b: byte = 1
+        \\    assert(a + b == 256)
+        \\    assert(a * a == 65025)
+        \\    var s: short = 32767
+        \\    assert(s + s == 65534)
+        \\    var h: half = 0.5
+        \\    assert(h + h == 1.0)
+        \\    assert(h * 4.0 == 2.0)
+        \\
+    );
+}
+
+test "storage: a byte widens as a magnitude and a short as a sign" {
+    // D4: a `byte`'s bits are read as a magnitude (`zext`), and every
+    // other integer's carry a sign (`sext`).  128 is the value that
+    // tells the two apart — as a signed 8-bit pattern it would be -128.
+    try agreeOk(
+        \\func main():
+        \\    var b: byte = 128
+        \\    var n: long = b
+        \\    assert(n == 128)
+        \\    assert(b > 127)
+        \\    var s: short = -128
+        \\    var m: long = s
+        \\    assert(m == -128)
+        \\    assert(s < 0)
+        \\
+    );
+}
+
+test "storage: byte_at answers a byte, and the high bytes stay positive" {
+    // The §9 exception, and the reason it is one: a UTF-8 lead byte is
+    // 0..255 on both engines and always has been, so every ordered
+    // comparison against 128, 192 or 194 in the corpus keeps reading
+    // the way it is written.
+    try agreeOk(
+        \\func main():
+        \\    let text = "é"
+        \\    assert(text.byte_at(0) == 195)
+        \\    assert(text.byte_at(1) == 169)
+        \\    assert(text.byte_at(0) >= 128)
+        \\    assert(text.byte_at(0) < 224)
+        \\    assert(string(text.byte_at(0)) == "195")
+        \\    let plain = "hi"
+        \\    assert(plain.find_byte(105, 0) == 1)
+        \\    assert(plain.find_byte(plain.byte_at(0), 0) == 0)
+        \\
+    );
+}
+
+// -- conversions, both directions, at every boundary ------------------------
+
+test "storage: narrowing to a byte keeps its range and traps outside it" {
+    try agreeOk(
+        \\func main():
+        \\    assert(byte(0) == 0)
+        \\    assert(byte(255) == 255)
+        \\    assert(byte(254.6) == 255)
+        \\    assert(byte(0.4) == 0)
+        \\    assert(short(-32768) == -32768)
+        \\    assert(short(32767) == 32767)
+        \\    assert(int(byte(200)) == 200)
+        \\    assert(long(short(-300)) == -300)
+        \\
+    );
+}
+
+test "storage: byte(256) traps rather than wrapping to zero" {
+    try agreeTrap(
+        \\func main():
+        \\    var over: long = 256
+        \\    var narrowed = byte(over)
+        \\    print(string(narrowed))
+        \\
+    , .conversion_range);
+}
+
+test "storage: byte(-1) traps rather than becoming 255" {
+    try agreeTrap(
+        \\func main():
+        \\    var under: long = -1
+        \\    var narrowed = byte(under)
+        \\    print(string(narrowed))
+        \\
+    , .conversion_range);
+}
+
+test "storage: short(32768) and short(-32769) both trap" {
+    try agreeTrap(
+        \\func main():
+        \\    var over: long = 32768
+        \\    var narrowed = short(over)
+        \\    print(string(narrowed))
+        \\
+    , .conversion_range);
+    try agreeTrap(
+        \\func main():
+        \\    var under: long = -32769
+        \\    var narrowed = short(under)
+        \\    print(string(narrowed))
+        \\
+    , .conversion_range);
+}
+
+test "storage: a float landing on a byte is checked after it rounds" {
+    // The range check runs on what rounding produced, so 255.5 rounds
+    // to 256 and is refused rather than truncated back into range.
+    try agreeTrap(
+        \\func main():
+        \\    var edge: double = 255.5
+        \\    var narrowed = byte(edge)
+        \\    print(string(narrowed))
+        \\
+    , .conversion_range);
+}
+
+// -- half: binary16, bit-exact on both engines ------------------------------
+
+test "half: the boundary values round-trip bit-exactly" {
+    // 65504 is the largest finite binary16; 2^-14 is the smallest
+    // normal and 2^-24 the smallest subnormal.  The last assert is
+    // §3's "shortest representation that round-trips *at its own
+    // width*" caught in the act: 65504 prints as "65500", because
+    // binary16 has no other value nearer to 65500 and four digits is
+    // all it takes to name this one.
+    try agreeOk(
+        \\func main():
+        \\    let biggest: half = 65504.0
+        \\    let smallest_normal: half = 0.00006103515625
+        \\    let smallest_subnormal: half = 0.000000059604644775390625
+        \\    assert(double(biggest) == 65504.0)
+        \\    assert(double(smallest_normal) == 0.00006103515625)
+        \\    assert(double(smallest_subnormal) == 0.000000059604644775390625)
+        \\    assert(string(biggest) == "65500")
+        \\
+    );
+}
+
+test "half: integers are exact to 2048 and step by two after it" {
+    try agreeOk(
+        \\func main():
+        \\    assert(double(half(2048.0)) == 2048.0)
+        \\    assert(double(half(2049.0)) == 2048.0)
+        \\    assert(double(half(2050.0)) == 2050.0)
+        \\    assert(double(half(1025.0)) == 1025.0)
+        \\
+    );
+}
+
+test "half: overflow reaches infinity rather than trapping" {
+    // Float to narrower float is IEEE and does not trap (§3), so
+    // 1e300 lands on `inf` — and `half` acquires one far more easily
+    // than `double` does, which is the whole reason the language does
+    // not grow a second story about infinity for it.
+    try agreeOk(
+        \\func main():
+        \\    var big: double = 1.0e300
+        \\    var over = half(big)
+        \\    assert(double(over) > 65504.0)
+        \\    assert(string(over) == "inf")
+        \\    var negative = half(-big)
+        \\    assert(string(negative) == "-inf")
+        \\
+    );
+}
+
+test "half: rounds to nearest, ties to even" {
+    // 2049 sits exactly between 2048 and 2050 at binary16; ties to
+    // even takes 2048.  2051 sits between 2050 and 2052 and takes
+    // 2052 for the same reason.
+    try agreeOk(
+        \\func main():
+        \\    var a: double = 2049.0
+        \\    var b: double = 2051.0
+        \\    assert(double(half(a)) == 2048.0)
+        \\    assert(double(half(b)) == 2052.0)
+        \\
+    );
+}
+
+test "half: double to half rounds once, not twice through binary32" {
+    // The §7 claim, made checkable: 1 + 2^-11 is a tie at binary16 and
+    // resolves to even, and 1 + 2^-10 is exactly representable.
+    try agreeOk(
+        \\func main():
+        \\    var tie: double = 1.00048828125
+        \\    assert(double(half(tie)) == 1.0)
+        \\    var above: double = 1.0009765625
+        \\    assert(double(half(above)) == 1.0009765625)
+        \\
+    );
+}
+
+test "half: a non-finite half landing on an integer traps" {
+    // The bound `int` names is not finite at binary16, so the check
+    // that catches this is the one that includes its bound rather than
+    // excluding it.
+    try agreeTrap(
+        \\func main():
+        \\    var big: double = 1.0e300
+        \\    var over = half(big)
+        \\    var narrowed = int(over)
+        \\    print(string(narrowed))
+        \\
+    , .conversion_range);
+}
+
+// -- array(byte, n): one byte an element ------------------------------------
+
+test "storage: an array of bytes stores and reads every value 0..255" {
+    try agreeOk(
+        \\func main():
+        \\    var cells = new array(byte, 256)
+        \\    var at = 0
+        \\    while at < 256:
+        \\        cells[at] = byte(at)
+        \\        at += 1
+        \\    assert(cells[0] == 0)
+        \\    assert(cells[128] == 128)
+        \\    assert(cells[255] == 255)
+        \\    var total = 0
+        \\    at = 0
+        \\    while at < 256:
+        \\        total += cells[at]
+        \\        at += 1
+        \\    assert(total == 32640)
+        \\
+    );
+}
+
+test "storage: arrays of short and half keep their own widths" {
+    try agreeOk(
+        \\func main():
+        \\    var shorts = new array(short, 4)
+        \\    shorts[0] = -32768
+        \\    shorts[3] = 32767
+        \\    assert(shorts[0] == -32768)
+        \\    assert(shorts[3] == 32767)
+        \\    assert(shorts[1] == 0)
+        \\    var halves = new array(half, 3)
+        \\    halves[0] = 0.5
+        \\    halves[1] = 65504.0
+        \\    assert(double(halves[0]) == 0.5)
+        \\    assert(double(halves[1]) == 65504.0)
+        \\    assert(halves[0] + halves[0] == 1.0)
+        \\
+    );
+}
+
+test "storage: a store past a byte element's range traps" {
+    try agreeTrap(
+        \\func main():
+        \\    var cells = new array(byte, 4)
+        \\    var over: long = 300
+        \\    cells[0] = byte(over)
+        \\    print(string(cells[0]))
+        \\
+    , .conversion_range);
+}
+
+test "storage: a list of bytes round-trips through the boxed path" {
+    // `List` stays boxed (§6) — this is the proof that a `byte`
+    // survives being boxed and read back, which is the path a list
+    // element takes and an array element does not.
+    try agreeOk(
+        \\func main():
+        \\    var xs = new list(byte)
+        \\    xs.append(0)
+        \\    xs.append(255)
+        \\    xs.append(128)
+        \\    assert(xs[0] == 0)
+        \\    assert(xs[1] == 255)
+        \\    assert(xs[2] == 128)
+        \\    assert(len(xs) == 3)
+        \\    xs.sort()
+        \\    assert(xs[0] == 0)
+        \\    assert(xs[1] == 128)
+        \\    assert(xs[2] == 255)
+        \\
+    );
+}
+
+test "storage: a struct field may be a storage width" {
+    try agreeOk(
+        \\struct Pixel:
+        \\    red: byte
+        \\    green: byte
+        \\    blue: byte
+        \\
+        \\func main():
+        \\    let p = Pixel(red = 255, green = 128, blue = 0)
+        \\    assert(p.red == 255)
+        \\    assert(p.green == 128)
+        \\    assert(p.blue == 0)
+        \\    assert(p.red + p.green + p.blue == 383)
+        \\
+    );
+}
+
+test "storage: a parameter and a return may be a storage width" {
+    try agreeOk(
+        \\func lighten(c: byte) -> byte:
+        \\    if c > 200:
+        \\        return 255
+        \\    return byte(c + 40)
+        \\
+        \\func main():
+        \\    assert(lighten(10) == 50)
+        \\    assert(lighten(255) == 255)
+        \\    assert(lighten(byte(201)) == 255)
+        \\
+    );
+}

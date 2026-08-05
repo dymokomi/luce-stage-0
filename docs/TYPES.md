@@ -1437,18 +1437,128 @@ be *refused*, 32 tagged `historical` and every one of those in a
 decision record), and `tools/spelling.zig` reads a living document's
 prose as well as its code.  `CONTRIBUTING.md` documents the taxonomy.
 
-**Steps 5 and 6 are not started**, and are each a step's worth of
-work rather than a remainder:
+### Step 5 — `byte`, `short`, `half`
 
-- **Step 5 — `byte`, `short`, `half`.**  `ElementKind` from four arms
-  to nine and the six parallel switches with it, `byte_at` answering
-  `byte`, `array(byte, n)` at one byte an element and into
-  `08_llvm/loops.zig`'s vectorisation gate, and the binary16 softfloat
-  routines verified on a baseline x86-64 build (§7) before it is
-  called done.
-- **Step 6 — opt down, and the 32-bit benchmark rows.**  Every
-  conversion pair with its rounding and its range trap pinned in both
-  directions; `programs/bf.luc`'s tape as `array(byte, cells)`;
-  `editor.luc`'s offsets as `int`; and **new** `bench/` rows against
-  new `float`/`int` C twins rather than converted ones (D7), with the
-  first snapshot in `docs/CODEGEN.md`.
+**Complete.**
+
+**What the memo got wrong, in contact with the code.**
+
+- **`ElementKind` was six arms, not four.**  The memo counted from
+  before step 4, which had already added `int` and `float`.  Six to
+  nine, and the "six parallel switches" were the four in `heap.zig`
+  and `containers.zig` plus `cellType`, `cellAlignment`, `loadCell`
+  and `storeCell` — eight, with `loops.zig`'s vectorisation gate a
+  ninth.
+- **"Loads widen" names the wrong instruction.**  A `byte` is a real
+  `types.Type` arm and a real register type, so `array(byte, n)`
+  loads an `i8` into a `byte` register and nothing widens at the
+  load.  What widens is the `convert` the analyzer inserts when an
+  operator touches it — `zext` for a `byte`, `sext` for a `short`,
+  `fpext` for a `half`.  Putting the widening at the load would have
+  made a `byte` local impossible, and §5 says a parameter and a field
+  may be one.
+- **`byte` arithmetic is not refused; it promotes.**  D5, §2's lattice
+  and §4 all say an operator widens `byte` and `short` to `int` and
+  `half` to `float`, and §9's "not one line of the corpus changes"
+  argument *depends* on it: `std/strings.luc:104`'s `byte + shift` and
+  every `func is_word_byte(byte: long)` in the corpus need the
+  implicit widening.  Refusing arithmetic outright would have broken
+  the corpus in the same commit that claimed not to.  What is true is
+  the weaker, load-bearing statement: **no expression ever has a
+  storage type**, so there is no checked arithmetic at 8 or 16 bits
+  and no binary16 arithmetic on any target.
+- **Two places had to learn that equal operands still unify.**
+  `lowerBinaryOperands` only unified when the two types *differed*, so
+  `byte + byte` and `half * half` sailed through as themselves and
+  reached the backend at a width it has no arithmetic for.  The guard
+  is now "both numeric", and `unifyNumeric` moves only what has to
+  move.  `lowerExactCompare` needed the same promotion, so its four
+  pairs are still four.
+- **`Type.unified` had to promote before it compared.**  It began with
+  `if (left.eql(right)) return left`, which answers `byte` for two
+  bytes.  Each operand now goes to its `arithmeticType()` first, which
+  is D5's collapse from a seven-by-seven table stated once.
+- **Three literal parsers knew two widths.**  `parseFloatLiteral` and
+  `parseIntLiteralAsFloat` read `f32` or `f64`, so a `half` literal
+  was parsed at binary64 and then failed the verifier's exactness
+  check; `parseIntLiteral` compared against `i32` or `i64`'s top.  All
+  three now take the width from the place, which is §1's rule and the
+  reason `let h: half = 0.1` is binary16's 0.1 rather than a double
+  rounding of binary64's.
+- **`rangeMessage` ended in an `else` that answered `long`.**  A
+  literal past a `byte` was told about nine quintillion, and a `half`
+  literal was called an *integer*.  It is exhaustive now, and each
+  width names its own range and the next rung up.  This is the one
+  place the house rule against `else` arms on type switches had been
+  broken, and the ladder is what made it visible.
+- **Two runtime switches were reachable and `unreachable`.**
+  `orderedBefore` (a `list(byte).sort()`) and `str` (`string(b)`)
+  both aborted.  The verifier now refuses storage-width arithmetic,
+  negation and math intrinsics outright, so the remaining
+  `unreachable`s in `runtime/operators.zig` are structurally
+  guaranteed rather than merely unreached — and a hand-made module
+  cannot reach one either.
+- **`format_version` is 22, and the type tags renumbered.**  The memo
+  said append only; that was advice for a change that did *not* move
+  the version.  This one does, so the three widths sit in ladder order
+  and every tag from `int` up shifts.  `runtime.Value.Tag` is ABI
+  rather than wire and still appends: `byte = 9`, `short = 10`,
+  `half = 11`.  `sizeOf(Value)` is 24, SSO untouched, `abi.version`
+  still 9.
+
+**The 8× prize, measured.**  `array(byte, 16000000)` against
+`array(long, 16000000)`, every element written, maximum resident set
+size: **18.0 MB against 130.0 MB**.  Net of loom's own 1.97 MB the two
+arrays are 16.04 MB and 128.06 MB — **7.98×**, which is the ratio the
+element widths predict and the first measurement in this tree that the
+narrow types were for.
+
+One thing that measurement found: `heap.max_array_elements` is
+`1 << 24`, and it counts **elements, not bytes**, so an
+`array(byte, n)` is capped at the same 16.7 M elements as an
+`array(long, n)` and can never spend the memory its width saves.  The
+valve is described in its own comment as "a safety valve, not a design
+limit"; that it is denominated in the wrong unit is recorded here
+rather than changed, because raising it is a decision about how much
+memory a Luce program may claim and belongs to whoever makes that one.
+
+**The `byte_at` ripple: nothing.**  §9 predicted "not one line of the
+corpus changes" and that is what happened — 30 call sites across
+`std/strings.luc`, `editor.luc`, `calc.luc`, `wordcount.luc` and
+`bf.luc`, every one of them a comparison against a decimal literal or
+an argument to a `long` parameter, and all of them compile and behave
+identically because a `byte` reaches both with nothing written down.
+The only edit the change forced anywhere was **one word in one pinned
+diagnostic**: `find_byte` now takes a `byte`, so its argument-type
+message says `byte` where it said `long`.  That is also the point of
+the change — "outside 0..255" is refused where it is written instead
+of trapping where it is read.
+
+**`half` is bit-exact on both engines**, pinned at the boundaries:
+65504, 2^-14, 2^-24, the 2048 integer-exactness bound and the step to
+2 above it, ties-to-even at 2049 and 2051, `inf` rather than a trap on
+overflow, and a trap when a non-finite `half` lands on an `int`.  That
+last one needed the range check to notice that **a bound may not be
+finite at the source's width**: `int`'s bounds are both infinities in
+binary16, so the low test includes its bound rather than excluding it,
+or `-inf` would have reached `fptosi` as poison.
+
+The §7 softfloat question resolved itself: `libluce_rt` is Zig and
+ships Zig's `compiler_rt`, and on this AArch64 host the conversions
+are `fcvt` and no library routine is referenced at all.  A
+baseline-x86-64 build is the case that would exercise
+`__truncdfhf2`/`__extendhfsf2`, and it was not built here.
+
+`string(x)` accepts all seven, and prints each at its own width —
+which is how `string(half(65504.0))` comes out `"65500"`: four digits
+is all it takes to name that value in binary16, and no other binary16
+is nearer to 65500.  That is §3's "shortest representation that round
+trips *at its own width*" caught in the act, and it is pinned.
+
+### Step 6 — opt down, and the 32-bit benchmark rows
+
+**Not started.**  Every conversion pair with its rounding and its
+range trap pinned in both directions; `programs/bf.luc`'s tape as
+`array(byte, cells)`; `editor.luc`'s offsets as `int`; and **new**
+`bench/` rows against new `float`/`int` C twins rather than converted
+ones (D7), with the first snapshot in `docs/CODEGEN.md`.

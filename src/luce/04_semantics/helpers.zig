@@ -164,13 +164,14 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 /// range, not the carrier.  Null means out of that range.
 pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
     const magnitude = std.fmt.parseInt(u64, text, 10) catch return null;
-    const top: u64 = if (lands == .int) std.math.maxInt(i32) else std.math.maxInt(i64);
-    if (negated) {
-        if (magnitude > top + 1) return null;
-        return @intCast(-@as(i128, magnitude));
-    }
-    if (magnitude > top) return null;
-    return @intCast(magnitude);
+    // The range of the width it landed on, both ends, carried at
+    // `i128` so that `long`'s own extremes are ordinary numbers here.
+    // One statement covers all four widths and both signs, including
+    // `-9223372036854775808`, whose magnitude is not itself an `i64`.
+    const bounds = if (lands.isInteger()) lands.integerRange() else Type.integerRange(.long);
+    const signed: i128 = if (negated) -@as(i128, magnitude) else @as(i128, magnitude);
+    if (signed < bounds.low or signed > bounds.high) return null;
+    return @intCast(signed);
 }
 
 /// Parse a float literal, refusing one that is not a finite number.
@@ -186,12 +187,16 @@ pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
 /// correctly-rounded answer for real inputs; reading the source text
 /// once, at the destination width, is the same one line and cannot.
 pub fn parseFloatLiteral(text: []const u8, lands: Type) ?f64 {
-    if (lands == .float) {
-        const narrow = std.fmt.parseFloat(f32, text) catch return null;
-        if (!std.math.isFinite(narrow)) return null;
-        return narrow;
-    }
-    const parsed = std.fmt.parseFloat(f64, text) catch return null;
+    // **Decimal straight to the width it lands on**, never through a
+    // wider one: parsing to binary64 and then rounding to binary16
+    // rounds twice, and the second rounding can move the answer by a
+    // whole ulp.  Keeping literals as text is what makes this one
+    // line per width instead of a correction (docs/TYPES.md §1).
+    const parsed: f64 = switch (lands) {
+        .half => std.fmt.parseFloat(f16, text) catch return null,
+        .float => std.fmt.parseFloat(f32, text) catch return null,
+        else => std.fmt.parseFloat(f64, text) catch return null,
+    };
     if (!std.math.isFinite(parsed)) return null;
     return parsed;
 }
@@ -205,10 +210,11 @@ pub fn parseFloatLiteral(text: []const u8, lands: Type) ?f64 {
 /// parsed at the width it lands on" has no exception for the integer
 /// spelling.  Null means malformed or not finite.
 pub fn parseIntLiteralAsFloat(text: []const u8, negated: bool, lands: Type) ?f64 {
-    const magnitude: f64 = if (lands == .float) narrow: {
-        const read = std.fmt.parseFloat(f32, text) catch return null;
-        break :narrow read;
-    } else std.fmt.parseFloat(f64, text) catch return null;
+    const magnitude: f64 = switch (lands) {
+        .half => std.fmt.parseFloat(f16, text) catch return null,
+        .float => std.fmt.parseFloat(f32, text) catch return null,
+        else => std.fmt.parseFloat(f64, text) catch return null,
+    };
     if (!std.math.isFinite(magnitude)) return null;
     return if (negated) -magnitude else magnitude;
 }
