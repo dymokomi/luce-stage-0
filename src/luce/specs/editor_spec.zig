@@ -36,10 +36,16 @@ const editor = @embedFile("editor.luc");
 const script = [_]agree.World.Key{
     .{ .name = "text", .text = "ab" },
     .{ .name = "enter" },
-    .{ .name = "text", .text = "cd" },
+    // **Multi-byte on purpose.**  The backspace two keys below is the
+    // branch that measures against the content as it was *before* the
+    // erase (docs/METHODS.md), and `previous_boundary` walks back over
+    // UTF-8 continuation bytes — so the before and after readings can
+    // only differ where the bytes at those positions differ, which in
+    // ASCII is never.  A first version of this script typed "cd" here
+    // and a mutation reverting the snapshot survived it; the mutation
+    // sweep is what said so.
+    .{ .name = "text", .text = "cé" },
     .{ .name = "left" },
-    // Backspace against a shortened line: the branch that reads the
-    // content as it was *before* the erase (docs/METHODS.md).
     .{ .name = "backspace" },
     .{ .name = "up" },
     .{ .name = "end" },
@@ -80,9 +86,9 @@ test "the editor draws the same frames, key for key, on both engines" {
     // `struct State`.  If this moves, the restructuring changed what
     // the program draws — which is exactly the thing docs/METHODS.md
     // said could go quietly wrong.
-    try testing.expectEqual(@as(usize, 31834), session.printed().len);
+    try testing.expectEqual(@as(usize, 31847), session.printed().len);
     try testing.expectEqual(
-        @as(u64, 4313717895958081035),
+        @as(u64, 1341180916343853173),
         std.hash.Wyhash.hash(0, session.printed()),
     );
 }
@@ -99,4 +105,4 @@ test "the editor's keys reach the file, and the unsaved gate holds" {
 }
 
 /// What the scripted keys leave in the file.
-const expected_content = "ab    \ndello\nworld\n";
+const expected_content = "ab    \n\u{e9}ello\nworld\n";

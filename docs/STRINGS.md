@@ -70,6 +70,10 @@ Measured consequences, both in MISSING.md:
   a 40 KB file** — 49 KB retained per keystroke. `Editing.splice` is
   `value[0:cursor] + extra + value[cursor:len(value)]`, two concats
   into the arena, and `Handle.key` then does four to six `struct_set`s,
+  (`Handle`'s four functions are `struct State`'s `var self` methods
+  now — docs/METHODS.md — and every measurement below names the code
+  as it stood when it was taken, which is the only honest way to
+  record one)
   each of which allocates a fresh eight-field run (`heap.zig:693`) that
   is also never reclaimed. The strings dominate; the runs are tens of
   megabytes on their own.

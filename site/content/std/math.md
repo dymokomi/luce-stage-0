@@ -184,7 +184,7 @@ first roll again: 5
 
 Seven, and each is a domain the caller was handed and could have
 checked: `ln` of a non-positive number, `pow` and `ipow` outside
-theirs, a shape mismatch in `dot` or `axpy`, and `random_int` with an
+theirs, a shape mismatch in `dot` or `axpy`, and `in_range` with an
 empty range. Those are bugs, and
 [bugs trap](/guide/failure/).
 

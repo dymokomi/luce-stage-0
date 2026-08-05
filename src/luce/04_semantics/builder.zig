@@ -4062,10 +4062,13 @@ pub const FunctionBuilder = struct {
             // sentence is the one `let f = Point.length` already gets,
             // reached through the same helper (docs/METHODS.md).
             const member = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, field.name });
-            const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{
-                try self.writtenTarget(field.target),
-                field.name,
-            });
+            // Spelled the way the reader wrote it where the receiver
+            // has a name, and by its struct where it does not:
+            // "the receiver.length" is not a phrase anybody typed.
+            const written = switch (field.target.*) {
+                .name => |name| try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ name.text, field.name }),
+                else => member,
+            };
             if (try self.failNotAValue(written, member, field.span)) return null;
             try self.failUnknownField("luce.sema.field", layout, field.name, field.span);
             return null;
