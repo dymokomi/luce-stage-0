@@ -537,7 +537,7 @@ test "a compiled program round-trips through the module format" {
         \\func main():
         \\    var point = Point(x = 3.0, y = 4.0)
         \\    point.x = 6.0
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for index in range(0, 5):
         \\        if index % 2 == 0:
         \\            total = total + index
@@ -775,7 +775,7 @@ const mutation_source =
     \\    return values[0] + values[1] + values[2]
     \\
     \\func main():
-    \\    var xs = [3, 1, 2]
+    \\    var xs: list(long) = [3, 1, 2]
     \\    xs.sort()
     \\    var ages = new map(string, long)
     \\    ages["ada"] = total(xs)
@@ -881,8 +881,27 @@ test "decode allocates in proportion to its input" {
     defer testing.allocator.free(encoded);
 
     // A one-byte flip must never turn a small module into a huge
-    // allocation request: counts are bounded by the remaining input.
-    const cap = 64 * encoded.len + 4096;
+    // allocation request: every count is bounded by the remaining
+    // input (`Reader.count`), so the whole decode is O(input) with the
+    // widest decoded element as its constant.
+    //
+    // **That constant is computed rather than guessed.**  A magic
+    // multiplier is a number that goes quietly wrong when a decoded
+    // type grows a field, and this test would then fail for a reason
+    // that has nothing to do with what it proves.  The arena never
+    // reuses what it frees, so the headroom is a small multiple of the
+    // bound rather than the bound itself.
+    const widest = @max(
+        @sizeOf(mir.Function),
+        @sizeOf(mir.Instruction),
+        @sizeOf(mir.Local),
+        @sizeOf(mir.Block),
+        @sizeOf(types.StructLayout),
+        @sizeOf(types.StructField),
+        @sizeOf(types.HeapType),
+        @sizeOf(types.Type),
+    );
+    const cap = 8 * widest * encoded.len + 4096;
     const scratch = try testing.allocator.alloc(u8, cap);
     defer testing.allocator.free(scratch);
     for (0..encoded.len) |index| {

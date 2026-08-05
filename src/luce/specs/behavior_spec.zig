@@ -201,7 +201,7 @@ test "long(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
         \\import std.math
         \\
         \\func main():
-        \\    var nearly = 0.49999999999999994
+        \\    var nearly: double = 0.49999999999999994
         \\    assert(long(nearly) == 0)
         \\    assert(math.round(nearly) == 0.0)
         \\    assert(floor(nearly + 0.5) == 1.0)
@@ -271,7 +271,7 @@ test "integers: / never traps, and 1 / 0 is inf" {
         \\    let nan = zero / zero
         \\    assert(nan != nan)
         \\    # And `minInt / -1`, which the long quotient could not hold.
-        \\    var low = -9223372036854775808
+        \\    var low: long = -9223372036854775808
         \\    var minus_one = -1
         \\    assert(low / minus_one > 9.0e18)
         \\
@@ -293,8 +293,18 @@ test "integers: // and % keep the trap / gave up" {
     , .divide_by_zero);
     try agreeTrap(
         \\func main():
-        \\    var low = -9223372036854775808
+        \\    var low: long = -9223372036854775808
         \\    var minus_one = -1
+        \\    let bad = low // minus_one
+        \\
+    , .integer_overflow);
+    // The same overflow at the other arithmetic width: `minInt // -1`
+    // is one value past the top at 32 bits exactly as it is at 64
+    // (docs/TYPES.md §4), and the check is per-width or it is wrong.
+    try agreeTrap(
+        \\func main():
+        \\    var low: int = -2147483648
+        \\    var minus_one: int = -1
         \\    let bad = low // minus_one
         \\
     , .integer_overflow);
@@ -394,12 +404,30 @@ test "floats: % floors with the integer operator, and // is its floor" {
     );
 }
 
-test "integers: the i64 range is honored" {
+test "integers: the long range is honored" {
     try agreeOk(
         \\func main():
-        \\    assert(9223372036854775807 > 0)
-        \\    assert(9223372036854775807 - 1 == 9223372036854775806)
-        \\    let low = 0 - 9223372036854775807
+        \\    let high: long = 9223372036854775807
+        \\    assert(high > 0)
+        \\    assert(high - 1 == 9223372036854775806)
+        \\    let low = 0 - high
+        \\    assert(low - 1 < low)
+        \\
+    );
+}
+
+test "integers: the int range is honored, at its own end" {
+    // The same program one rung down the ladder.  A literal has no
+    // type until it lands (docs/TYPES.md §1), so the only difference
+    // between this test and the one above is the word in the
+    // annotation — which is the whole claim the two of them make
+    // together.
+    try agreeOk(
+        \\func main():
+        \\    let high: int = 2147483647
+        \\    assert(high > 0)
+        \\    assert(high - 1 == 2147483646)
+        \\    let low = 0 - high
         \\    assert(low - 1 < low)
         \\
     );
@@ -412,20 +440,35 @@ test "integers: long's minimum is written the way it reads" {
     // nobody can spell, so the sign folds into the literal first.
     try agreeOk(
         \\func main():
-        \\    let low = -9223372036854775808
+        \\    let low: long = -9223372036854775808
         \\    assert(low < 0)
         \\    assert(low + 1 == -9223372036854775807)
         \\    assert(low == 0 - 9223372036854775807 - 1)
-        \\    let step = -9223372036854775808 // 2
+        \\    let step: long = -9223372036854775808 // 2
         \\    assert(step == -4611686018427387904)
+        \\
+    );
+}
+
+test "integers: int's minimum is written the way it reads too" {
+    // The sign folds into the literal before the range check at every
+    // width, not only at the one the check used to be written for.
+    try agreeOk(
+        \\func main():
+        \\    let low: int = -2147483648
+        \\    assert(low < 0)
+        \\    assert(low + 1 == -2147483647)
+        \\    assert(low == 0 - 2147483647 - 1)
+        \\    let step: int = -2147483648 // 2
+        \\    assert(step == -1073741824)
         \\
     );
 }
 
 test "integers: long's minimum folds in a file-scope constant too" {
     try agreeOk(
-        \\let low = -9223372036854775808
-        \\let high = 9223372036854775807
+        \\let low: long = -9223372036854775808
+        \\let high: long = 9223372036854775807
         \\
         \\func main():
         \\    assert(low < high)
@@ -434,11 +477,40 @@ test "integers: long's minimum folds in a file-scope constant too" {
     );
 }
 
+test "a minus does not move where a literal lands" {
+    // `lowerUnary` hands the landing type through a negate.  At one
+    // integer width and one float width that line was an equivalent
+    // mutant — no program could tell whether the literal landed and
+    // was then negated, or took the default and widened afterwards.
+    // With a ladder the two answer different numbers, and this is the
+    // program that says which one is the language's.
+    //
+    //   * `-0.1` read at binary64 is not binary32's `-0.1` widened.
+    //     Off by 1.5e-9, and silent, because the widening is legal.
+    //   * `-3000000000` is a `long` only if the literal never took the
+    //     default `int` first — if it had, it would not have compiled.
+    try agreeOk(
+        \\func main():
+        \\    let small: double = -0.1
+        \\    let plain: double = 0.1
+        \\    assert(small == 0.0 - plain)
+        \\    let narrow: float = -0.1
+        \\    assert(narrow != small)
+        \\    let wide: long = -3000000000
+        \\    assert(wide + 3000000000 == 0)
+        \\    assert(wide < -2147483648)
+        \\
+    );
+}
+
 // ---------------------------------------------------------------------------
-// arithmetic on doubles
+// arithmetic on floats and doubles
 // ---------------------------------------------------------------------------
 
 test "floats: arithmetic, IEEE division, and builtins" {
+    // Unannotated, so these are `float`s — every value here is exact
+    // in binary32 and the answers do not depend on the width, which
+    // is why this is the test that runs at the default one.
     try agreeOk(
         \\func main():
         \\    assert(1.5 + 2.5 == 4.0)
@@ -448,7 +520,27 @@ test "floats: arithmetic, IEEE division, and builtins" {
         \\    assert(floor(2.7) == 2.0)
         \\    assert(ceil(2.1) == 3.0)
         \\    assert(abs(-2.5) == 2.5)
-        \\    assert(1.0 / 0.0 > 9.0e300)
+        \\    assert(1.0 / 0.0 > 3.0e38)
+        \\
+    );
+}
+
+test "doubles: the same arithmetic, and an overflow bound only binary64 can state" {
+    // The twin of the test above at the wide rung.  `9.0e300` is not
+    // a finite `float`, so the bound the old spec wrote is now a
+    // statement a `double` place has to hold — which is exactly what
+    // makes it worth writing down separately.
+    try agreeOk(
+        \\func main():
+        \\    let sum: double = 1.5 + 2.5
+        \\    assert(sum == 4.0)
+        \\    let quarter: double = 1.0 / 4.0
+        \\    assert(quarter == 0.25)
+        \\    let nine: double = 9.0
+        \\    assert(sqrt(nine) == 3.0)
+        \\    let infinity: double = 1.0 / 0.0
+        \\    assert(infinity > 9.0e300)
+        \\    assert(0.0 - infinity < -9.0e300)
         \\
     );
 }
@@ -650,8 +742,8 @@ test "mixing: promotion reaches container elements and min/max/clamp" {
 test "mixing: comparison across the line is exact at 2^53, both sides" {
     try agreeOk(
         \\func main():
-        \\    var two53 = 9007199254740992
-        \\    var as_float = 9007199254740992.0
+        \\    var two53: long = 9007199254740992
+        \\    var as_float: double = 9007199254740992.0
         \\    assert(two53 == as_float)
         \\    assert(two53 <= as_float)
         \\    assert(as_float == two53)
@@ -664,6 +756,57 @@ test "mixing: comparison across the line is exact at 2^53, both sides" {
         \\    # And its neighbour on the other side.
         \\    assert(two53 - 1 < as_float)
         \\    assert(as_float > two53 - 1)
+        \\
+    );
+}
+
+// The row the ladder adds to that table (docs/TYPES.md §5).  2^24 is
+// where a binary32 stops holding consecutive integers, and 16,777,216
+// is a number ordinary programs reach — which is why `int` against
+// `float` gets the same treatment 2^53 got, rather than an argument
+// that it is unlikely.
+
+test "mixing: comparison across the line is exact at 2^24, for int against float" {
+    try agreeOk(
+        \\func main():
+        \\    var two24: int = 16777216
+        \\    var as_float: float = 16777216.0
+        \\    assert(two24 == as_float)
+        \\    assert(two24 <= as_float)
+        \\    assert(as_float == two24)
+        \\    # The number that does not survive widening.
+        \\    assert(two24 + 1 != as_float)
+        \\    assert(two24 + 1 > as_float)
+        \\    assert(as_float < two24 + 1)
+        \\    assert(not (two24 + 1 == as_float))
+        \\    assert(not (two24 + 1 <= as_float))
+        \\    # And its neighbour on the other side.
+        \\    assert(two24 - 1 < as_float)
+        \\    assert(as_float > two24 - 1)
+        \\
+    );
+}
+
+test "mixing: an int against a double is exact everywhere, ends included" {
+    // §5's first row, and the one place the lowering may skip the
+    // intrinsic: every `int` is exactly a `double`, so `sitofp` and an
+    // ordinary `fcmp` answer what comparing the numbers would.  The
+    // spec pins the answers rather than the lowering, because the
+    // answers are what may not move.
+    try agreeOk(
+        \\func main():
+        \\    var high: int = 2147483647
+        \\    var low: int = -2147483648
+        \\    var high_double: double = 2147483647.0
+        \\    var low_double: double = -2147483648.0
+        \\    assert(high == high_double)
+        \\    assert(not (high < high_double))
+        \\    assert(not (high > high_double))
+        \\    assert(low == low_double)
+        \\    assert(high > high_double - 0.5)
+        \\    assert(high < high_double + 0.5)
+        \\    assert(low < low_double + 0.5)
+        \\    assert(low > low_double - 0.5)
         \\
     );
 }
@@ -689,11 +832,11 @@ test "mixing: ordering, equality, and the fraction that breaks a tie" {
 test "mixing: infinity and NaN compare with a long without widening it" {
     try agreeOk(
         \\func main():
-        \\    var one = 1.0
-        \\    var zero = 0.0
+        \\    var one: double = 1.0
+        \\    var zero: double = 0.0
         \\    let infinity = one / zero
         \\    let nan = zero / zero
-        \\    var big = 9223372036854775807
+        \\    var big: long = 9223372036854775807
         \\    assert(big < infinity)
         \\    assert(infinity > big)
         \\    assert(0 - big - 1 > 0.0 - infinity)
@@ -710,9 +853,12 @@ test "mixing: infinity and NaN compare with a long without widening it" {
 
 test "mixing: an exact comparison folds the same way in a constant" {
     try agreeOk(
-        \\let below = 9007199254740992 == 9007199254740992.0
-        \\let above = 9007199254740993 == 9007199254740992.0
-        \\let ordered = 9007199254740992.0 < 9007199254740993
+        \\let two53: long = 9007199254740992
+        \\let after53: long = 9007199254740993
+        \\let as_double: double = 9007199254740992.0
+        \\let below = two53 == as_double
+        \\let above = after53 == as_double
+        \\let ordered = as_double < after53
         \\let widened = 1 + 2.5
         \\
         \\func main():
@@ -792,7 +938,7 @@ test "a compound index target evaluates its index expression once" {
     // 2 and the wrong slot would change; once, it lands on 1.
     try agreeOk(
         \\func main():
-        \\    var calls = [0]
+        \\    var calls: list(long) = [0]
         \\    var xs = [100, 200, 300]
         \\    xs[bump(calls)] += 5
         \\    assert(calls[0] == 1)
@@ -882,7 +1028,7 @@ test "while loops, break, and continue" {
 test "for-range iterates the half-open interval" {
     try agreeOk(
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for i in range(0, 5):
         \\        total = total + i
         \\    assert(total == 10)
@@ -1171,7 +1317,7 @@ test "returns: a shape is declared, returned, and bound" {
         \\    return low, high
         \\
         \\func main():
-        \\    var xs = [3, 1, 4, 1, 5]
+        \\    var xs: list(long) = [3, 1, 4, 1, 5]
         \\    let low, high = minmax(xs)
         \\    assert(low == 1 and high == 5)
         \\    # `var` governs the whole bind, and both names reassign.
@@ -1205,8 +1351,8 @@ test "returns: a discarded call is a statement temporary and dies with its state
     // what proves it.
     try agreeOk(
         \\func two() -> (list(long), list(long)):
-        \\    var head = [1]
-        \\    var tail = [2]
+        \\    var head: list(long) = [1]
+        \\    var tail: list(long) = [2]
         \\    return head, tail
         \\
         \\func main():
@@ -1399,7 +1545,7 @@ test "methods: a method may take and answer objects, and ownership is the plain-
         \\
         \\func main():
         \\    let tally = Tally(total = 10)
-        \\    var numbers = [1, 2, 3]
+        \\    var numbers: list(long) = [1, 2, 3]
         \\    assert(tally.over(numbers) == 16)
         \\    var pair = tally.spread()
         \\    assert(len(pair) == 2 and pair[0] == 10)
@@ -1627,7 +1773,7 @@ test "a chained index place evaluates its subscript once" {
         \\    return 1
         \\
         \\func main():
-        \\    var calls = [0]
+        \\    var calls: list(long) = [0]
         \\    var cells = [Cell(value = 100), Cell(value = 200)]
         \\    cells[bump(calls)].value += 5
         \\    assert(calls[0] == 1)
@@ -1693,7 +1839,7 @@ test "maps: for key, value iteration, values(), and get with default" {
         \\    m["b"] = 2
         \\    m["c"] = 3
         \\    var keys = new builder()
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for k, v in m:
         \\        keys.append(k)
         \\        total += v
@@ -1713,7 +1859,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
     try agreeOk(
         \\func main():
         \\    var xs = [10, 20, 30]
-        \\    var sum_index = 0
+        \\    var sum_index: long = 0
         \\    var sum_value = 0
         \\    for i, x in xs:
         \\        sum_index += i
@@ -1722,7 +1868,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
         \\    assert(sum_value == 60)
         \\    var row = new array(long, 4)
         \\    row.fill(5)
-        \\    var seen = 0
+        \\    var seen: long = 0
         \\    for i, v in row:
         \\        seen += i
         \\        assert(v == 5)
@@ -1737,7 +1883,7 @@ test "single-name for still binds keys for maps and elements for sequences" {
         \\    var m = new map(long, long)
         \\    m[7] = 70
         \\    m[8] = 80
-        \\    var key_sum = 0
+        \\    var key_sum: long = 0
         \\    for k in m:
         \\        key_sum += k
         \\    assert(key_sum == 15)
@@ -2003,7 +2149,7 @@ test "for-each over a rank-1 array visits every slot" {
         \\    row[1] = 2
         \\    row[2] = 3
         \\    row[3] = 4
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for v in row:
         \\        total = total + v
         \\    assert(total == 10)
@@ -2029,7 +2175,7 @@ test "for-each over map keys walks insertion order" {
 test "continue in a for-loop skips the rest of the body" {
     try agreeOk(
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for i in range(0, 10):
         \\        if i % 2 == 0:
         \\            continue
@@ -2332,7 +2478,7 @@ test "lists: nested lists are references shared until copied" {
     try agreeOk(
         \\func main():
         \\    var outer = new list(list(long))
-        \\    var inner = [1, 2]
+        \\    var inner: list(long) = [1, 2]
         \\    outer.append(give inner)
         \\    outer[0].append(3)
         \\    assert(len(outer[0]) == 3)
@@ -2664,13 +2810,13 @@ test "ownership: return moves an object out of a function" {
 test "ownership: a borrowed parameter is read without transfer" {
     try agreeOk(
         \\func total(xs: list(long)) -> long:
-        \\    var sum = 0
+        \\    var sum: long = 0
         \\    for x in xs:
         \\        sum = sum + x
         \\    return sum
         \\
         \\func main():
-        \\    var xs = [1, 2, 3, 4]
+        \\    var xs: list(long) = [1, 2, 3, 4]
         \\    assert(total(xs) == 10)
         \\    assert(len(xs) == 4)
         \\    assert(total(xs) == 10)
@@ -2794,7 +2940,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
     try agreeOk(
         \\func main():
         \\    let n = parse_int("41")
-        \\    var seen = 0
+        \\    var seen: long = 0
         \\    if n != none:
         \\        seen = n + 1
         \\    else:
@@ -2802,7 +2948,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
         \\    assert(seen == 42)
         \\
         \\    let bad = parse_int("x")
-        \\    var other = 0
+        \\    var other: long = 0
         \\    if bad == none:
         \\        other = 5
         \\    else:
@@ -2831,7 +2977,7 @@ test "narrowing: continue and break guards narrow what follows them" {
     try agreeOk(
         \\func main():
         \\    let inputs = ["1", "x", "3"]
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for text in inputs:
         \\        let n = parse_int(text)
         \\        if n == none:
@@ -2840,7 +2986,7 @@ test "narrowing: continue and break guards narrow what follows them" {
         \\    assert(total == 4)
         \\
         \\    var index = 0
-        \\    var first = 0
+        \\    var first: long = 0
         \\    while index < len(inputs):
         \\        let n = parse_int(inputs[index])
         \\        index = index + 1
@@ -2995,7 +3141,7 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
         \\    next: Node?
         \\
         \\func total(head: Node?) -> long:
-        \\    var sum = 0
+        \\    var sum: long = 0
         \\    var walk = head
         \\    while walk != none:
         \\        sum = sum + walk.value
@@ -3048,10 +3194,22 @@ test "absence survives a round trip through a struct field and a var" {
 // Runtime traps: one program per stable TrapCode
 // ---------------------------------------------------------------------------
 
+// Checked arithmetic exists at both arithmetic widths and traps with
+// one code (docs/TYPES.md §4).  Each of the three overflows below is
+// therefore written twice, at 2^63 and at 2^31 — because a check
+// hard-coded to one width is exactly the bug these pairs exist to
+// catch, and the `int` half is the one ordinary code can reach.
+
 test "trap: integer overflow on addition" {
     try agreeTrap(
         \\func main():
-        \\    var x = 9223372036854775807
+        \\    var x: long = 9223372036854775807
+        \\    x = x + 1
+        \\
+    , .integer_overflow);
+    try agreeTrap(
+        \\func main():
+        \\    var x: int = 2147483647
         \\    x = x + 1
         \\
     , .integer_overflow);
@@ -3060,7 +3218,14 @@ test "trap: integer overflow on addition" {
 test "trap: integer overflow negating the minimum" {
     try agreeTrap(
         \\func main():
-        \\    var n = 0 - 9223372036854775807
+        \\    var n: long = 0 - 9223372036854775807
+        \\    n = n - 1
+        \\    let bad = 0 - n
+        \\
+    , .integer_overflow);
+    try agreeTrap(
+        \\func main():
+        \\    var n: int = 0 - 2147483647
         \\    n = n - 1
         \\    let bad = 0 - n
         \\
@@ -3070,11 +3235,38 @@ test "trap: integer overflow negating the minimum" {
 test "trap: integer overflow taking abs of the minimum" {
     try agreeTrap(
         \\func main():
-        \\    var n = 0 - 9223372036854775807
+        \\    var n: long = 0 - 9223372036854775807
         \\    n = n - 1
         \\    let bad = abs(n)
         \\
     , .integer_overflow);
+    try agreeTrap(
+        \\func main():
+        \\    var n: int = 0 - 2147483647
+        \\    n = n - 1
+        \\    let bad = abs(n)
+        \\
+    , .integer_overflow);
+}
+
+test "trap: integer overflow multiplying, at the width that reaches it first" {
+    // 46,341 squared is past 2^31 — the boundary docs/TYPES.md §4
+    // says out loud that ordinary code reaches, and the reason `int`
+    // is a type you ask for rather than the one arithmetic defaults
+    // to when it has a `long` in it.
+    try agreeTrap(
+        \\func main():
+        \\    var n: int = 46341
+        \\    let bad = n * n
+        \\
+    , .integer_overflow);
+    // And the same program one rung up, where it simply computes.
+    try agreeOk(
+        \\func main():
+        \\    var n: long = 46341
+        \\    assert(n * n == 2147488281)
+        \\
+    );
 }
 
 test "trap: // by zero" {
@@ -3514,7 +3706,7 @@ test "loops, recursion, strings, and builtins compute" {
         \\    return value * factorial(value - 1)
         \\
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for index in range(1, 11):
         \\        total = total + index
         \\    assert(total == 55)
@@ -3577,17 +3769,23 @@ test "checked string intrinsics trap on bounds and UTF-8 splits" {
 }
 
 test "checked arithmetic and conversions trap" {
-    const cases = [_]struct { line: []const u8, code: mir.TrapCode }{
-        .{ .line = "assert(9223372036854775807 + 1 == 0)", .code = .integer_overflow },
-        .{ .line = "assert(1 // (2 - 2) == 0)", .code = .divide_by_zero },
-        .{ .line = "assert(long(1.0e300) == 0)", .code = .conversion_range },
-        .{ .line = "assert(1 == 0)", .code = .assertion_failed },
+    // Each body is written where its numbers fit: a literal has no
+    // type until it lands, so the overflow at 2^63 says `long` and
+    // the conversion out of a value only binary64 holds says `double`
+    // (docs/TYPES.md §1).
+    const cases = [_]struct { body: []const u8, code: mir.TrapCode }{
+        .{ .body = "var n: long = 9223372036854775807\n    assert(n + 1 == 0)", .code = .integer_overflow },
+        .{ .body = "var n: int = 2147483647\n    assert(n + 1 == 0)", .code = .integer_overflow },
+        .{ .body = "assert(1 // (2 - 2) == 0)", .code = .divide_by_zero },
+        .{ .body = "var big: double = 1.0e300\n    assert(long(big) == 0)", .code = .conversion_range },
+        .{ .body = "var big: float = 1.0e30\n    assert(int(big) == 0)", .code = .conversion_range },
+        .{ .body = "assert(1 == 0)", .code = .assertion_failed },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(
             testing.allocator,
             "func main():\n    {s}\n",
-            .{case.line},
+            .{case.body},
         );
         defer testing.allocator.free(source);
         try agreeTrap(source, case.code);
@@ -3684,7 +3882,7 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
         \\    assert(corner(grid) == 7)
         \\    var row = new array(double, 4)
         \\    row[0] = 2.5
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for value in row:
         \\        total = total + value
         \\    assert(total == 2.5)
@@ -3720,7 +3918,7 @@ test "structs and nested collections share objects by reference" {
         \\    items: list(long)
         \\
         \\func main():
-        \\    var inner = [1, 2]
+        \\    var inner: list(long) = [1, 2]
         \\    var bag = Bag(label = "first", items = give inner)
         \\    let same_bag = bag
         \\    same_bag.items.append(3)

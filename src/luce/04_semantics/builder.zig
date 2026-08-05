@@ -1421,6 +1421,40 @@ pub const FunctionBuilder = struct {
         );
     }
 
+    /// The advice a number earns when it turns up where a *narrower*
+    /// number belongs.  Narrowing is implicit in no direction and no
+    /// context (docs/TYPES.md §2), and a mismatch that says only that
+    /// leaves the reader to guess whether there is a way across at
+    /// all — there is, spelled with the name of the type it produces.
+    ///
+    /// Empty for every pair that is not a numeric narrowing, so a
+    /// caller may append it beside `absenceAdvice` and say nothing
+    /// extra when there is nothing extra to say.
+    fn narrowingAdvice(self: *FunctionBuilder, expected: Type, actual: Type) Error![]const u8 {
+        if (!expected.isNumeric() or !actual.isNumeric()) return "";
+        if (actual.widensTo(expected)) return "";
+        return std.fmt.allocPrint(
+            self.arena(),
+            "; narrowing is never implicit — write {s}(…)",
+            .{try self.analyzer.typeName(expected)},
+        );
+    }
+
+    /// What to say after a type mismatch: absence first, because a
+    /// missing value is a different mistake from a wrong width and the
+    /// reader has to fix it first, then the narrowing that has a
+    /// constructor to spell it.
+    fn mismatchAdvice(
+        self: *FunctionBuilder,
+        expected: Type,
+        actual: Type,
+        from: ?*const ast.Expression,
+    ) Error![]const u8 {
+        const absence = try self.absenceAdvice(actual, from);
+        if (absence.len != 0) return absence;
+        return self.narrowingAdvice(expected, actual);
+    }
+
     /// The name behind an expression that is a `T?` the flow analysis
     /// has already proved present — so a second test, or a fallback,
     /// is dead code the reader should be told about rather than left
@@ -1622,7 +1656,7 @@ pub const FunctionBuilder = struct {
                 subject,
                 try self.analyzer.typeName(expected),
                 try self.analyzer.typeName(value.value_type),
-                try self.absenceAdvice(value.value_type, expression),
+                try self.mismatchAdvice(expected, value.value_type, expression),
             });
             return null;
         };
@@ -1701,9 +1735,10 @@ pub const FunctionBuilder = struct {
             },
             .stored_element => {
                 if (index == 0) return null;
-                // Every index is a `long`; the value at the end lands
-                // on the element type, which the container named.
-                if (index + 1 < count) return .long;
+                // The subscripts land where subscripts land; the value
+                // at the end lands on the element type, which the
+                // container named.
+                if (index + 1 < count) return self.subscriptType(values[0].value_type);
                 const descriptor = self.analyzer.heapOf(values[0].value_type) orelse return null;
                 return switch (descriptor) {
                     .list => |element| element,
@@ -1712,7 +1747,24 @@ pub const FunctionBuilder = struct {
                     .builder => null,
                 };
             },
+            .subscripts => {
+                if (index == 0) return null;
+                return self.subscriptType(values[0].value_type);
+            },
         }
+    }
+
+    /// What a subscript of `container` lands on: a map takes its key
+    /// type, and everything a position can address — a list, an array,
+    /// a string being sliced — takes a `long`.
+    fn subscriptType(self: *FunctionBuilder, container: Type) ?Type {
+        if (container == .string) return .long;
+        const descriptor = self.analyzer.heapOf(container) orelse return null;
+        return switch (descriptor) {
+            .list, .array => .long,
+            .map => |pair| pair.key,
+            .builder => null,
+        };
     }
 
     const Landing = union(enum) {
@@ -1726,6 +1778,13 @@ pub const FunctionBuilder = struct {
         /// Operand zero is a container, the last operand is a value
         /// going into it, and everything between is an index.
         stored_element,
+        /// Operand zero is a container or a string and every other
+        /// operand subscripts it — an index or a slice bound.  The
+        /// read half of `stored_element`, and it exists because
+        /// `m[1] = "one"` landing its key while `m[1]` did not would
+        /// be a rule about which side of the equals sign a literal
+        /// sits on.
+        subscripts,
     };
 
     /// As `lowerOperands`, with the type each operand lands in already
@@ -1738,7 +1797,7 @@ pub const FunctionBuilder = struct {
     ) Error!?[]Typed {
         const expected: ?[]const Type = switch (landing) {
             .places => |places| places,
-            .nothing, .method, .stored_element => null,
+            .nothing, .method, .stored_element, .subscripts => null,
         };
         var spill_storage: [inline_operands]?LocalId = undefined;
         var split_storage: [inline_operands]bool = undefined;
@@ -1783,10 +1842,21 @@ pub const FunctionBuilder = struct {
         for (expressions, 0..) |expression, index| {
             // An argument and a returned value are both places with a
             // type written down, so a literal going into one lands
-            // there (docs/TYPES.md D3) rather than taking the default
-            // and widening afterwards.
+            // there (docs/TYPES.md D3, §1's *"an argument takes the
+            // parameter's type"*) rather than taking the default and
+            // widening afterwards.
+            //
+            // **Both hops, for the same reason.**  A `list(long)`
+            // parameter is a written-down type exactly as a `long` one
+            // is, and `[1, 2, 3]` has no element type until it lands —
+            // so the literal reads its elements at the parameter's
+            // width.  This is not covariance and does not become it: a
+            // *named* `list(int)` is still refused there, because it
+            // already has a type and D6 says no list converts to
+            // another.
             if (try self.landsOn(landing, values, index, expressions.len)) |place| {
                 self.wanted = landingType(place);
+                self.wanted_element = self.elementOf(place);
             }
             const value = if (expression.* == .none_literal and expected != null)
                 ((try self.lowerTyped(expression, expected.?[index], expression.span(), "this place")) orelse
@@ -2003,16 +2073,22 @@ pub const FunctionBuilder = struct {
                 value = (try self.fit(initializer, expected)) orelse {
                     // `let f: double = 1` used to arrive here and be
                     // told to write `double(...)`; it widens on its own
-                    // now (docs/NUMERICS.md), so everything that still
-                    // reaches this line has no conversion to offer.
+                    // now (docs/NUMERICS.md).  What is left is two
+                    // sentences, and which one is true depends on the
+                    // pair: a `long` into an `int` *has* a conversion
+                    // and is refused because narrowing is never
+                    // implicit, while a `string` into an `int` has
+                    // none at all (docs/TYPES.md §11).
+                    const narrowing = try self.narrowingAdvice(expected, initializer.value_type);
                     try self.fail(
                         "luce.sema.type",
                         span,
-                        "{s} declared {s} but initialized with {s}, and there is no conversion between them{s}",
+                        "{s} declared {s} but initialized with {s}{s}{s}",
                         .{
                             name,
                             try self.analyzer.typeName(expected),
                             try self.analyzer.typeName(initializer.value_type),
+                            if (narrowing.len != 0) narrowing else ", and there is no conversion between them",
                             try self.absenceAdvice(initializer.value_type, value_expression),
                         },
                     );
@@ -2358,16 +2434,20 @@ pub const FunctionBuilder = struct {
             return null;
         }
         // `/` answers a double whatever it divides (docs/NUMERICS.md
-        // §2), so `n /= 2` on a long place is a narrowing nobody
+        // §2), so `n /= 2` on an integer place is a narrowing nobody
         // wrote.  It is a compile error rather than a silent
         // truncation, which is this design's whole safety story in
         // one line — and the fix is one character.
-        if (op == .divide and place_type == .long) {
+        //
+        // **At every integer width.**  Naming one of them here would
+        // leave the other silently truncating, which is the one
+        // failure the message exists to prevent.
+        if (op == .divide and place_type.isInteger()) {
             try self.fail(
                 "luce.sema.type",
                 span,
-                "/ answers a double and this place is long; write '//=' for the integer quotient",
-                .{},
+                "/ answers a double and this place is {s}; write '//=' for the integer quotient",
+                .{try self.analyzer.typeName(place_type)},
             );
             return null;
         }
@@ -2720,7 +2800,14 @@ pub const FunctionBuilder = struct {
                 return shape.element;
             },
             .map => |pair| {
-                if (indices.len != 1 or !indices[0].value_type.eql(pair.key)) {
+                // A key widens into the key type the way an index
+                // widens into a `long`: `m[1]` on a `map(long, …)` is
+                // the same key `m[1] = …` stores, and refusing one
+                // while accepting the other would be a rule about
+                // which side of the equals sign a literal sits on.
+                // The other direction stays refused, because
+                // `widensInto` never narrows.
+                if (indices.len != 1 or !try self.widensInto(&indices[0], pair.key)) {
                     try self.fail("luce.sema.index", span, "this map is keyed by {s}", .{
                         try self.analyzer.typeName(pair.key),
                     });
@@ -3047,12 +3134,13 @@ pub const FunctionBuilder = struct {
                 return;
             }
             self.wanted = landingType(self.code.return_type);
+            self.wanted_element = self.elementOf(self.code.return_type);
             const lowered = (try self.lowerExpression(expression, false)) orelse return;
             const value = (try self.fit(lowered, self.code.return_type)) orelse {
                 try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}{s}", .{
                     try self.analyzer.typeName(lowered.value_type),
                     try self.analyzer.typeName(self.code.return_type),
-                    try self.absenceAdvice(lowered.value_type, expression),
+                    try self.mismatchAdvice(self.code.return_type, lowered.value_type, expression),
                 });
                 return;
             };
@@ -3596,7 +3684,7 @@ pub const FunctionBuilder = struct {
                 return null;
             },
             .field => |field| return self.lowerField(field),
-            .call => |call| return self.lowerCall(call, as_statement, fallible_allowed, shape_position),
+            .call => |call| return self.lowerCall(call, as_statement, fallible_allowed, shape_position, wanted),
             .binary => |binary| {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
                 return self.lowerBinary(binary, wanted);
@@ -4154,7 +4242,7 @@ pub const FunctionBuilder = struct {
         const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
         expressions[0] = index.target;
         @memcpy(expressions[1..], index.indices);
-        const values = (try self.lowerOperands(expressions)) orelse return null;
+        const values = (try self.lowerOperandsInto(expressions, .subscripts)) orelse return null;
         const element_type = (try self.checkIndex(values[0], values[1..], index.span)) orelse return null;
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |value, *slot| slot.* = value.register;
@@ -4173,7 +4261,7 @@ pub const FunctionBuilder = struct {
         try whole_sequence.append(self.temporary(), slice.target);
         if (slice.start) |expression| try whole_sequence.append(self.temporary(), expression);
         if (slice.end) |expression| try whole_sequence.append(self.temporary(), expression);
-        const sequence = (try self.lowerOperands(whole_sequence.items)) orelse return null;
+        const sequence = (try self.lowerOperandsInto(whole_sequence.items, .subscripts)) orelse return null;
         const target = sequence[0];
         const is_string = target.value_type == .string;
         const descriptor = self.analyzer.heapOf(target.value_type);
@@ -4764,12 +4852,13 @@ pub const FunctionBuilder = struct {
         as_statement: bool,
         fallible_allowed: bool,
         shape_position: ShapePosition,
+        wanted: ?Type,
     ) Error!?Typed {
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
             if (conversionNamed(call.callee) != null) return self.lowerConvert(call);
-            switch (try self.lowerIntrinsic(call, as_statement, fallible_allowed)) {
+            switch (try self.lowerIntrinsic(call, as_statement, fallible_allowed, wanted)) {
                 .not_builtin => {},
                 .failed => return null,
                 .value => |value| return value,
@@ -4901,7 +4990,7 @@ pub const FunctionBuilder = struct {
                     name,
                     try self.analyzer.typeName(info.parameter_types[index]),
                     try self.analyzer.typeName(value.value_type),
-                    try self.absenceAdvice(value.value_type, expressions[index]),
+                    try self.mismatchAdvice(info.parameter_types[index], value.value_type, expressions[index]),
                 });
                 return null;
             };
@@ -6029,7 +6118,7 @@ pub const FunctionBuilder = struct {
                     name,
                     try self.analyzer.typeName(expected),
                     try self.analyzer.typeName(value.value_type),
-                    try self.absenceAdvice(value.value_type, argument.value),
+                    try self.mismatchAdvice(expected, value.value_type, argument.value),
                 });
                 return null;
             };
@@ -6070,9 +6159,9 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// `long(x)`, `double(x)`, `string(x)` — the three conversion
-    /// constructors, each named for the type it produces
-    /// (docs/NUMERICS.md §7).  They are matched by name here, before
+    /// `int(x)`, `long(x)`, `float(x)`, `double(x)`, `string(x)` — the
+    /// conversion constructors, each named for the type it produces
+    /// (docs/TYPES.md §3).  They are matched by name here, before
     /// name resolution, which is why they are not in the builtin
     /// table and why `string` is a reserved name.
     ///
@@ -6084,8 +6173,22 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
             return null;
         }
-        const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
         const produces = conversionNamed(call.callee).?;
+        // **A constructor is a written-down type, so its argument lands
+        // on it.**  Without this `double(0.1)` reads `0.1` at binary32
+        // and then widens the wrong number, which is the same
+        // double-rounding a `list(double)` literal would have had — and
+        // `long(3000000000)` would be refused for not fitting an `int`
+        // that nobody wrote.  A literal has no type until it meets one
+        // (docs/TYPES.md §1), and here it meets the constructor's.
+        self.wanted = switch (produces) {
+            .int => .int,
+            .long => .long,
+            .float => .float,
+            .double => .double,
+            .boolean, .string, .list, .map, .array, .builder => null,
+        };
+        const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
         if (produces == .string) {
             switch (value.value_type) {
                 .string => return value,
@@ -6143,10 +6246,14 @@ pub const FunctionBuilder = struct {
     /// not X" — which stopped being true the moment `long(long)` was an
     /// identity and `long` accepted both numeric types.
     fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Typed {
+        // A family, not a list of widths.  There are four arithmetic
+        // types now and there will be seven (docs/TYPES.md §11), and
+        // a message that enumerates them is a message that goes stale
+        // every time the ladder grows a rung.
         const takes: []const u8 = if (conversionNamed(call.callee).? == .string)
-            "long, double, bool, or string"
+            "a number, a bool, or a string"
         else
-            "a long or a double";
+            "a number";
         try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{
             call.callee,
             takes,
@@ -6171,6 +6278,7 @@ pub const FunctionBuilder = struct {
         call: ast.Call,
         as_statement: bool,
         fallible_allowed: bool,
+        wanted: ?Type,
     ) Error!IntrinsicResult {
         const matched = for (builtins) |builtin| {
             if (std.mem.eql(u8, call.callee, builtin.name)) break builtin;
@@ -6231,15 +6339,36 @@ pub const FunctionBuilder = struct {
             }
             argument_expressions[index] = argument.value;
         }
-        const arguments = (try self.lowerOperands(argument_expressions[0..call.arguments.len])) orelse
-            return .failed;
+        const expressions = argument_expressions[0..call.arguments.len];
+        // **The builtins that answer their operand's own type land
+        // their operands where the whole call lands** (docs/TYPES.md
+        // §9).  `let x: double = sqrt(2.0)` otherwise reads `2.0` at
+        // binary32, takes a binary32 square root and widens the wrong
+        // number into a place that said `double` — the same
+        // double-rounding `methodParameters` exists to stop one level
+        // down, and it is silent in exactly the same way.  Every other
+        // builtin names its own operand types and takes no landing.
+        const arguments = arguments: {
+            const polymorphic = switch (matched.kind) {
+                .abs, .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc => true,
+                else => false,
+            };
+            const landing = if (polymorphic) landingType(wanted orelse .none) else null;
+            if (landing) |place| {
+                const places = try self.arena().alloc(Type, expressions.len);
+                @memset(places, place);
+                break :arguments (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse
+                    return .failed;
+            }
+            break :arguments (try self.lowerOperands(expressions)) orelse return .failed;
+        };
 
         // Argument and result typing per builtin.
         var result: Type = .none;
         var extra_argument: ?Register = null;
         switch (matched.kind) {
             .abs => {
-                if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes long or double");
+                if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes a number");
                 result = arguments[0].value_type;
             },
             // `min`, `max` and `clamp` unify their arguments the way a
@@ -6251,7 +6380,7 @@ pub const FunctionBuilder = struct {
                 _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
                 if (!arguments[0].value_type.isNumeric() or
                     !arguments[0].value_type.eql(arguments[1].value_type))
-                    return self.failIntrinsic(call, "min/max take two Ints or two Floats");
+                    return self.failIntrinsic(call, "min/max take two numbers of the same type");
                 result = arguments[0].value_type;
             },
             .clamp => {
@@ -6261,13 +6390,19 @@ pub const FunctionBuilder = struct {
                 if (!arguments[0].value_type.isNumeric() or
                     !arguments[0].value_type.eql(arguments[1].value_type) or
                     !arguments[0].value_type.eql(arguments[2].value_type))
-                    return self.failIntrinsic(call, "clamp takes three Ints or three Floats");
+                    return self.failIntrinsic(call, "clamp takes three numbers of the same type");
                 result = arguments[0].value_type;
             },
             .sqrt, .floor, .ceil, .trunc => {
-                if (!try self.widensInto(&arguments[0], .double))
-                    return self.failIntrinsic(call, "this builtin takes a double");
-                result = .double;
+                // Whichever float width it was given, and the same one
+                // back (docs/TYPES.md §9).  `sqrt` of a `float`
+                // answering a `double` would be a narrowing waiting to
+                // happen at the next store, and `llvm.sqrt.f32` exists
+                // — so there is nothing to buy by widening and a
+                // diagnostic to pay for it with.
+                if (!arguments[0].value_type.isFloating())
+                    return self.failIntrinsic(call, "this builtin takes a float or a double");
+                result = arguments[0].value_type;
             },
             .len => {
                 const measurable = arguments[0].value_type == .string or

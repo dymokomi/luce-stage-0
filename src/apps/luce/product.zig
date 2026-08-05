@@ -407,7 +407,7 @@ const stumbles =
     \\    return xs[index]
     \\
     \\func main():
-    \\    var xs = [1, 2, 3]
+    \\    var xs: list(long) = [1, 2, 3]
     \\    print("before")
     \\    print(string(at(xs, 7)))
     \\

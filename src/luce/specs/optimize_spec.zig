@@ -142,7 +142,7 @@ test "ownership behaviour survives the elision" {
         // Rebinding in a loop: a fresh object per turn, each released
         // at the end of its scope.
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for index in range(0, 8):
         \\        let row = new list(long)
         \\        row.append(index)
@@ -189,7 +189,7 @@ test "traps keep their code, their message, and their place" {
         \\
         ,
         \\func main():
-        \\    var n = 9223372036854775807
+        \\    var n: long = 9223372036854775807
         \\    print("before")
         \\    print(string(n + n))
         \\
@@ -220,8 +220,8 @@ test "traps keep their code, their message, and their place" {
 fn generate(text: *std.ArrayList(u8), random: std.Random) Allocator.Error!void {
     try text.appendSlice(testing.allocator,
         \\func main():
-        \\    var a = 3
-        \\    var b = 7
+        \\    var a: long = 3
+        \\    var b: long = 7
         \\    let xs = new list(long)
         \\
     );

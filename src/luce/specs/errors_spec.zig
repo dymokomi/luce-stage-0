@@ -1440,7 +1440,7 @@ test "luce.sema.type: a mismatch with no conversion says so" {
         \\
     ,
         "luce.sema.type",
-        "operands of + are long and string, and there is no conversion between them",
+        "operands of + are int and string, and there is no conversion between them",
         4,
         13,
     );
@@ -1450,7 +1450,7 @@ test "luce.sema.type: an annotation says so when nothing converts" {
     try expectOnlySayingAt(
         "func main():\n    let s: string = 1\n",
         "luce.sema.type",
-        "s declared string but initialized with long, and there is no conversion between them",
+        "s declared string but initialized with int, and there is no conversion between them",
         2,
         5,
     );
@@ -1461,13 +1461,30 @@ test "luce.sema.type: an annotation says so when nothing converts" {
 // it is refused at the first place an `long` is required, by a message
 // that was already in the tree (docs/NUMERICS.md §9).
 
-test "luce.sema.type: n /= 2 on a long place names the one-character fix" {
+test "luce.sema.type: n /= 2 on an int place names the one-character fix" {
     // The migration's sharpest edge (docs/NUMERICS.md §9): `/` answers
     // a double, so this is a narrowing nobody wrote.  That it is an
     // error rather than a silent truncation is the whole safety story.
     try expectOnlySayingAt(
         \\func main():
         \\    var n = 10
+        \\    n /= 2
+        \\
+    ,
+        "luce.sema.type",
+        "/ answers a double and this place is int; write '//=' for the integer quotient",
+        3,
+        5,
+    );
+}
+
+test "luce.sema.type: n /= 2 on a long place says the same thing" {
+    // The guard is per-width or it is nothing: naming one integer
+    // type and letting the other through would leave `/=` silently
+    // truncating at exactly the width the resize made the default.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var n: long = 10
         \\    n /= 2
         \\
     ,
@@ -1501,6 +1518,121 @@ test "luce.sema.type: a double where a long is required is still refused" {
     , "luce.sema.type");
 }
 
+// The two sentences the ladder made necessary, pinned to the word and
+// the column (docs/TYPES.md §11).  Both are about a *place*: the first
+// says a literal did not fit the one it landed on and names the width
+// that would hold it, the second says a value did not fit and names
+// the constructor that would put it there.  A width mistake is the one
+// kind of mistake seven types create that two did not, so these are
+// the messages the whole change is judged by.
+
+test "luce.sema.literal: an integer past an int names the width that holds it" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var n: int = 3000000000
+        \\
+    ,
+        "luce.sema.literal",
+        "integer literal out of range; int holds -2147483648 to 2147483647 — write the place as a long",
+        2,
+        18,
+    );
+    // And at the top of the ladder there is no wider place to name, so
+    // the sentence stops after the range rather than offering one.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var n: long = 99223372036854775808
+        \\
+    ,
+        "luce.sema.literal",
+        "integer literal out of range; long holds -9223372036854775808 to 9223372036854775807",
+        2,
+        19,
+    );
+}
+
+test "luce.sema.literal: a float past a float names the width that holds it" {
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var x: float = 1.0e300
+        \\
+    ,
+        "luce.sema.literal",
+        "float literal is not a finite float; float holds up to about 3.4e38 — write the place as a double",
+        2,
+        20,
+    );
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var x: double = 1.0e400
+        \\
+    ,
+        "luce.sema.literal",
+        "float literal is not a finite number; double holds up to about 1.8e308",
+        2,
+        21,
+    );
+}
+
+test "luce.sema.type: a refused narrowing names the constructor that would do it" {
+    // The tail used to say "and there is no conversion between them",
+    // which was true when `long` against `double` was the only
+    // mismatch a constructor could repair and is false the moment
+    // there is a ladder: there *is* a conversion, and what Luce
+    // refuses is performing it unasked.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var wide: long = 5
+        \\    var narrow: int = wide
+        \\
+    ,
+        "luce.sema.type",
+        "narrow declared int but initialized with long; narrowing is never implicit — write int(…)",
+        3,
+        5,
+    );
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var wide: double = 0.5
+        \\    var narrow: float = wide
+        \\
+    ,
+        "luce.sema.type",
+        "narrow declared float but initialized with double; narrowing is never implicit — write float(…)",
+        3,
+        5,
+    );
+    // A pair with genuinely nothing between it still says so, so the
+    // two sentences stay distinguishable.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var s: string = 1
+        \\
+    ,
+        "luce.sema.type",
+        "s declared string but initialized with int, and there is no conversion between them",
+        2,
+        5,
+    );
+}
+
+test "luce.sema.type: a narrowing argument earns the same sentence" {
+    try expectOnlySayingAt(
+        \\func take(n: int) -> int:
+        \\    return n
+        \\
+        \\func main():
+        \\    var wide: long = 5
+        \\    let bad = take(wide)
+        \\
+    ,
+        "luce.sema.type",
+        "argument 1 of take is int, got long; narrowing is never implicit — write int(…)",
+        6,
+        20,
+    );
+}
+
 // `and`/`or` used to underline both operands and name neither, in a
 // compiler where `condition must be bool, not long` already did both.
 //
@@ -1516,7 +1648,7 @@ test "luce.sema.type: a bad left operand of and is named, and underlined alone" 
         \\    if n and true:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of and must be bool, not long", 3, 8, 9);
+    , "luce.sema.type", "the left operand of and must be bool, not int", 3, 8, 9);
 }
 
 test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
@@ -1528,7 +1660,7 @@ test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
         \\    if total + 1 or false:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of or must be bool, not long", 3, 8, 17);
+    , "luce.sema.type", "the left operand of or must be bool, not int", 3, 8, 17);
 }
 
 test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
@@ -1538,7 +1670,7 @@ test "luce.sema.type: a bad right operand of or is named, and underlined alone" 
         \\    if true or n:
         \\        return
         \\
-    , "luce.sema.type", "the right operand of or must be bool, not long", 3, 16, 17);
+    , "luce.sema.type", "the right operand of or must be bool, not int", 3, 16, 17);
 }
 
 test "luce.sema.absent: a type name takes no article" {
@@ -1676,7 +1808,7 @@ test "luce.sema.convert: string() takes a scalar, and names build() for a builde
         \\
     ,
         "luce.sema.convert",
-        "string() converts long, double, bool, or string, not list(long)",
+        "string() converts a number, a bool, or a string, not list(int)",
         3,
         16,
     );
@@ -3118,7 +3250,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
     try expectMessage(
         \\func main():
         \\    var n: long? = 1
-        \\    var total = 0
+        \\    var total: long = 0
         \\    while total < 10:
         \\        total = total + n
         \\        n = none
@@ -3368,7 +3500,7 @@ test "an f-string hole is underlined, not the whole literal" {
         \\
     ,
         "luce.sema.convert",
-        "string() converts long, double, bool, or string, not list(long)",
+        "string() converts a number, a bool, or a string, not list(int)",
         6,
         30,
     );
@@ -3520,7 +3652,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
         \\    return 1
         \\
         \\func main():
-        \\    var a = 0
+        \\    var a: long = 0
         \\    a = risky() catch:
         \\        a = -1
         \\    assert(a == 1)
@@ -4152,7 +4284,7 @@ test "luce.sema.type: a nested place and a compound assignment check their own t
         \\    var held = Outer(inner = Inner(value = 1))
         \\    held.inner.value = 1.5
         \\
-    , "luce.sema.type", "this place holds long but the value is double");
+    , "luce.sema.type", "this place holds long but the value is float");
     // `compoundCombine`'s own "needs matching types" has no case
     // here, and cannot: all four callers — name, field, element,
     // chain — compare the place with the value before they combine,
@@ -4351,7 +4483,7 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
         \\    var b = new builder()
         \\    b.append(65)
         \\
-    , "luce.sema.type", "argument 1 of append is string, got long", 3, 14);
+    , "luce.sema.type", "argument 1 of append is string, got int", 3, 14);
     // The map says what its key and value types *are*, rather than
     // calling them "the map's key and value types".
     try expectSayingAt(
@@ -4359,7 +4491,7 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
         \\    var m = new map(string, long)
         \\    let x = m.get(1, 2)
         \\
-    , "luce.sema.type", "argument 1 of get is string, got long", 3, 19);
+    , "luce.sema.type", "argument 1 of get is string, got int", 3, 19);
 }
 
 test "luce.sema.type: a T? argument to a method earns the same advice it earns anywhere" {

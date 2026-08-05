@@ -183,7 +183,7 @@ test "the whole stage shrinks a program and leaves it verifiable" {
         \\
         \\func main():
         \\    let words = strings.split("a,b,c", ",")
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for word in words:
         \\        total = total + len(word) + len(word)
         \\    print(string(total))

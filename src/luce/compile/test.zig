@@ -447,7 +447,7 @@ test "the plan's scale example compiles and verifies" {
 test "control flow, loops, and builtins compile and verify" {
     var program = try expectCompiles(
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for index in range(0, 10):
         \\        if index % 2 == 0 and index != 4:
         \\            total = total + index
@@ -593,8 +593,11 @@ test "the IR dump is readable and deterministic" {
 
     try testing.expectEqualStrings(first, second);
     try testing.expect(std.mem.indexOf(u8, first, "func main() -> None") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: long") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "multiply.long") != null);
+    // Unannotated, so `value` is an `int` and the multiply is at that
+    // width — the resize's default, read straight off the IR
+    // (docs/TYPES.md, the ladder's rule 1).
+    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: int") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "multiply.int") != null);
 }
 
 test "the IR dump has a stable golden shape (short-circuit + ownership)" {
@@ -627,13 +630,13 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): list(long)
-        \\    local %1 xs: list(long)
+        \\    local %0 (temporary): list(int)
+        \\    local %1 xs: list(int)
         \\    local %2 (temporary): bool
         \\  b0:
         \\    r0 = const 1
         \\    r1 = const 2
-        \\    r2 = heap_new list(long)
+        \\    r2 = heap_new list(int)
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
         \\    local_set %1, r2
@@ -649,7 +652,7 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\    r14 = const 0
         \\    r15 = intrinsic index_get, r13, r14
         \\    r16 = const 1
-        \\    r17 = equal.long r15, r16
+        \\    r17 = equal.int r15, r16
         \\    local_set %2, r17
         \\    jump b2
         \\  b2:
@@ -755,9 +758,13 @@ test "calls check arity, types, and none results" {
         \\    let value = nothing()
         \\
     , "luce.sema.call");
+    // `sqrt(4)` is not this mistake any more: a literal has no type
+    // until it lands, and it lands on `sqrt`'s float (docs/TYPES.md
+    // §1).  What is still refused is an integer that has a type.
     try expectRejected(
         \\func main():
-        \\    let bad = sqrt(4)
+        \\    var n = 4
+        \\    let bad = sqrt(n)
         \\
     , "luce.sema.type");
     try expectRejected(
@@ -877,7 +884,7 @@ test "collections type-check and reject misuse at compile time" {
 
     var featured = try compile_mod.compile(testing.allocator,
         \\func sum(values: list(long)) -> long:
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for value in values:
         \\        total = total + value
         \\    return total

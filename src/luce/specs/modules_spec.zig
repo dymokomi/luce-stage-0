@@ -52,7 +52,7 @@ test "a file is a module: imports, qualified names, and shared types run" {
 test "an imported module compiles and runs the same with CRLF line endings" {
     // The layout rules run on the loaded text, so a module edited on
     // Windows blocks and dedents exactly like any other file.
-    const windows: agree.File = .{ .name = "geo", .source = "func area() -> long:\r\n    var total = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" };
+    const windows: agree.File = .{ .name = "geo", .source = "func area() -> long:\r\n    var total: long = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" };
     var program = try agree.project(
         \\import geo
         \\

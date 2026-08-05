@@ -194,13 +194,15 @@ test "math: vector operations compute exactly on exact inputs" {
         \\    math.fill(ys, 2.0)
         \\    assert(math.sum(ys) == 10.0)
         \\    assert(math.dot(xs, ys) == 10.0)
-        \\    assert(math.norm(ys) == sqrt(20.0))
+        \\    let twenty: double = 20.0
+        \\    assert(math.norm(ys) == sqrt(twenty))
         \\    math.scale(ys, 0.5)
         \\    assert(math.sum(ys) == 5.0)
         \\    math.axpy(ys, 2.0, xs)
         \\    assert(ys[4] == 5.0)
         \\    assert((math.variance(ys) else -1.0) == 2.0)
-        \\    assert((math.stddev(ys) else -1.0) == sqrt(2.0))
+        \\    let two: double = 2.0
+        \\    assert((math.stddev(ys) else -1.0) == sqrt(two))
         \\
     );
 }

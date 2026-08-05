@@ -98,7 +98,7 @@ test "floats, structs, and the host services all lower" {
         \\
         \\func main(args: list(string)):
         \\    let p = Point(x = 1.5, y = -0.0)
-        \\    print(string(p.x * 2.0) + string(long(p.y)) + string(sqrt(4.0)))
+        \\    print(string(p.x * 2.0) + string(long(p.y)) + string(sqrt(4.0)) + string(sqrt(p.x)))
         \\    print(args[0] + string(len(args)) + string(file_exists("nowhere")))
         \\    term_move(term_rows(), term_cols())
         \\    term_flush()
@@ -110,6 +110,12 @@ test "floats, structs, and the host services all lower" {
         "fmul",
         "fneg",
         "fptosi",
+        // `sqrt` answers whichever float width it was given
+        // (docs/TYPES.md §9): the unannotated literal is a `float` and
+        // the struct field is a `double`, so both intrinsics have to
+        // be here — one of them alone would mean the analyzer had
+        // widened something it was told not to.
+        "llvm.sqrt.f32",
         "llvm.sqrt.f64",
         "declare i32 @luce_rt_struct_make",
         "declare i32 @luce_rt_args_list",
@@ -391,7 +397,7 @@ test "a call inside a loop does not grow the frame" {
         \\    return total
         \\
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    var index = 0
         \\    while index < 1000000:
         \\        total = step(total, index)
@@ -647,7 +653,7 @@ test "a missing host service fails closed" {
 test "lists, maps, strings, and ownership agree with the interpreter" {
     try agree(
         \\func total(xs: list(long)) -> long:
-        \\    var sum = 0
+        \\    var sum: long = 0
         \\    for x in xs:
         \\        sum = sum + x
         \\    return sum
@@ -1205,7 +1211,7 @@ test "an inline array access agrees on every element kind and rank" {
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            grid[r, c] = r * 10 + c
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            total += grid[r, c]
@@ -1251,7 +1257,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
         \\    var a = new array(double, 4)
         \\    let alias = a
         \\    drop(give a)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 0):
         \\        total += alias[i]
         \\    print("survived " + string(long(total)))
@@ -1265,7 +1271,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
         \\    var a = new array(double, 4)
         \\    let alias = a
         \\    drop(give a)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 4):
         \\        total += alias[i]
         \\    print("unreachable " + string(long(total)))
@@ -1276,7 +1282,7 @@ test "a resolution lifted out of a loop still traps where the access is" {
     try agree(
         \\func main():
         \\    var a = new array(double, 4)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 6):
         \\        total += a[i]
         \\    print("unreachable " + string(long(total)))
@@ -1298,7 +1304,7 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
         \\    free(a)
         \\    var reborn = new array(long, 4)
         \\    reborn.fill(1)
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for i in range(0, 3):
         \\        total += alias[i]
         \\    print("unreachable " + string(total))
@@ -1311,7 +1317,7 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
         \\func main():
         \\    var rows = new array(array(long, _), 2)
         \\    var inner = rows[0]
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for i in range(0, 3):
         \\        total += inner[i]
         \\    print("unreachable " + string(total))
@@ -1326,7 +1332,7 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
         \\    print(string(len(text)) + " " + string(text.byte_at(0)) + " " + string(text.byte_at(1)))
         \\    print(text[0:1] + "|" + text[1:3] + "|" + text[0:0] + "|" + text[3:len(text)])
         \\    var i = 0
-        \\    var total = 0
+        \\    var total: long = 0
         \\    while i < len(text):
         \\        total += text.byte_at(i)
         \\        i += 1
@@ -1587,7 +1593,7 @@ test "optionals in a loop agree, boxed into container cells and back" {
         \\    return string(room)
         \\
         \\func main():
-        \\    var seen = 0
+        \\    var seen: long = 0
         \\    var i = 0
         \\    while i < 8:
         \\        let maybe = even(i)
@@ -1840,7 +1846,7 @@ test "a caught listing failure leaks nothing on either engine" {
     // parks must not be an object the census then counts.
     try agree(
         \\func main():
-        \\    var found = 0
+        \\    var found: long = 0
         \\    let names = dir_list("nowhere") catch new list(string)
         \\    found = len(names)
         \\    print("caught, " + string(found) + " names")
@@ -1945,7 +1951,7 @@ test "an error path releases the objects and the String storage it owns" {
         \\    return len(words)
         \\
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    var round = 0
         \\    while round < 3:
         \\        total = total + (gather("nothing-here.txt") catch -1)
@@ -2209,7 +2215,7 @@ test "a loop name agrees whether it borrows its element or copies it" {
         \\    words.append("aa")
         \\    words.append("bb")
         \\    words.append("cc")
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for w in words:
         \\        total += len(w)
         \\    print(string(total))

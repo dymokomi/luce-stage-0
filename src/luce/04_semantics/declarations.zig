@@ -1028,7 +1028,14 @@ pub const Analyzer = struct {
         negated: bool,
         wanted: ?Type,
     ) Error!?TypedConstant {
-        const lands: Type = wanted orelse .int;
+        // A literal lands on the place's type only when the place is a
+        // number.  `let flag: bool = 3` is not a literal that fits
+        // badly, it is a mismatch, and it has to reach the mismatch
+        // message rather than be folded into a bool-typed 3.
+        const lands: Type = if (wanted) |place|
+            (if (place.isNumeric()) place else .int)
+        else
+            .int;
         if (lands.isFloating()) {
             const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated, lands) orelse {
                 return self.constantError(span, "{s}", .{context.rangeMessage(lands)});
@@ -1257,38 +1264,66 @@ pub const Analyzer = struct {
                 .double => |held| try std.fmt.allocPrint(self.arena, "{d}", .{held}),
                 .boolean => |held| if (held) "true" else "false",
                 .string => |held| held,
-                else => return self.constantError(call.span, "string() converts long, double, bool, or string", .{}),
+                else => return self.constantError(call.span, "string() converts a number, a bool, or a string", .{}),
             };
             return .{ .value = .{ .string = printed }, .value_type = .string };
         }
-        if (produces == .long) {
-            switch (operand.value) {
-                .long => return operand,
-                .double => |value| {
-                    // The same guard as `runtime/operators.zig` and
-                    // `08_llvm/lower.zig`, value for value: a
-                    // conversion that disagrees at the boundary is a
-                    // different language.  And the same rounding —
-                    // half away from zero (docs/NUMERICS.md §7),
-                    // through the runtime's own function so there is
-                    // one of it.
-                    const rounded = operators.roundHalfAway(f64, value);
-                    if (std.math.isNan(rounded) or
-                        rounded < -9223372036854775808.0 or
-                        rounded >= 9223372036854775808.0)
-                    {
-                        return self.constantError(call.span, "constant conversion out of range", .{});
-                    }
-                    return .{ .value = .{ .long = @intFromFloat(rounded) }, .value_type = .long };
-                },
-                else => return self.constantError(call.span, "long() converts double", .{}),
+        // Every other constructor is named for a numeric type and
+        // takes any number (docs/TYPES.md §3): four destinations and
+        // one rule, not sixteen pairs.
+        const target: Type = switch (produces) {
+            .int => .int,
+            .long => .long,
+            .float => .float,
+            .double => .double,
+            .boolean, .string, .list, .map, .array, .builder => unreachable, // answered above
+        };
+        if (!operand.value_type.isNumeric()) {
+            return self.constantError(call.span, "{s}() converts a number", .{call.callee});
+        }
+        if (operand.value_type.eql(target)) return operand;
+
+        if (target.isFloating()) {
+            const held = asDouble(operand);
+            // Float to narrower float rounds to nearest, ties to even,
+            // and reaches `inf` rather than trapping — the same
+            // `@floatCast` `runtime/operators.zig` performs, so the
+            // fold and the run answer the same bits.  A `float` is
+            // carried in the wide slot at its own precision, exactly
+            // as a `float` literal is.
+            const narrowed: f64 = if (target == .float)
+                @as(f32, @floatCast(held))
+            else
+                held;
+            return .{ .value = .{ .double = narrowed }, .value_type = target };
+        }
+
+        // An integer destination.  The two sources fail differently
+        // and neither may travel through the other's arithmetic: a
+        // `long` past 2^53 does not survive a detour through f64.
+        const to_int = target == .int;
+        if (operand.value_type.isInteger()) {
+            const whole = operand.value.long;
+            if (to_int and (whole < std.math.minInt(i32) or whole > std.math.maxInt(i32))) {
+                return self.constantError(call.span, "constant conversion out of range", .{});
             }
+            return .{ .value = .{ .long = whole }, .value_type = target };
         }
-        switch (operand.value) {
-            .double => return operand,
-            .long => |value| return .{ .value = .{ .double = @floatFromInt(value) }, .value_type = .double },
-            else => return self.constantError(call.span, "double() converts long", .{}),
+        // The same guard as `runtime/operators.zig` and
+        // `08_llvm/lower.zig`, value for value: a conversion that
+        // disagrees at the boundary is a different language.  And the
+        // same rounding — half away from zero (docs/NUMERICS.md §7),
+        // through the runtime's own function so there is one of it,
+        // with the range checked *after* it.
+        const rounded = operators.roundHalfAway(f64, operand.value.double);
+        // One past the top, tested with `>=`: 2^31 and 2^63 are both
+        // exactly representable where `maxInt` itself is not.
+        const lowest: f64 = if (to_int) -2147483648.0 else -9223372036854775808.0;
+        const past_top: f64 = if (to_int) 2147483648.0 else 9223372036854775808.0;
+        if (std.math.isNan(rounded) or rounded < lowest or rounded >= past_top) {
+            return self.constantError(call.span, "constant conversion out of range", .{});
         }
+        return .{ .value = .{ .long = @intFromFloat(rounded) }, .value_type = target };
     }
 
     fn foldConstruct(

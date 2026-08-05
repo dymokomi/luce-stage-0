@@ -120,7 +120,7 @@ test "S2: an object given out of the block survives it" {
         \\func main():
         \\    var sink = new list(list(long))
         \\    if true:
-        \\        var inner = [7]
+        \\        var inner: list(long) = [7]
         \\        sink.append(give inner)
         \\    assert(len(sink[0]) == 1)
         \\
@@ -132,7 +132,7 @@ test "S3: unbound temporaries die at the end of their statement" {
         \\import std.strings
         \\
         \\func main():
-        \\    var seen = 0
+        \\    var seen: long = 0
         \\    for word in "a b c".split(""):
         \\        seen = seen + len(word)
         \\    assert(seen == 3)
@@ -347,13 +347,13 @@ test "S10: give takes a name, not an expression" {
 test "S11: passing an object is a borrow — free, silent, still owned by the caller" {
     try agreeClean(
         \\func total(values: list(long)) -> long:
-        \\    var sum = 0
+        \\    var sum: long = 0
         \\    for v in values:
         \\        sum = sum + v
         \\    return sum
         \\
         \\func main():
-        \\    var xs = [1, 2, 3]
+        \\    var xs: list(long) = [1, 2, 3]
         \\    assert(total(xs) == 6)
         \\    assert(total(xs) == 6)
         \\    xs.append(4)
@@ -415,7 +415,7 @@ test "S13: give appears in the signature and at the call site" {
         \\
         \\func main():
         \\    var index = new map(string, list(long))
-        \\    var mine = [1, 2]
+        \\    var mine: list(long) = [1, 2]
         \\    stash(index, give mine)
         \\    assert(len(index["latest"]) == 2)
         \\
@@ -436,7 +436,7 @@ test "S13: give appears in the signature and at the call site" {
         \\    assert(len(xs) == 1)
         \\
         \\func main():
-        \\    var mine = [1]
+        \\    var mine: list(long) = [1]
         \\    consume(give mine)
         \\    let bad = len(mine)
         \\
@@ -450,7 +450,7 @@ test "S14: fresh values and copies satisfy a give parameter with no verb" {
         \\
         \\func main():
         \\    consume([7, 8])
-        \\    var mine = [1, 2]
+        \\    var mine: list(long) = [1, 2]
         \\    consume(copy mine)
         \\    assert(len(mine) == 2)
         \\
@@ -464,7 +464,7 @@ test "S15: a give parameter not passed on dies with the callee" {
         \\    assert(len(xs) == 3)
         \\
         \\func main():
-        \\    var mine = [1, 2]
+        \\    var mine: list(long) = [1, 2]
         \\    consume(give mine)
         \\
     );
@@ -501,7 +501,7 @@ test "S17: returning a borrowed parameter is a compile error" {
     // An alias cannot be returned either.
     try expectRejected(
         \\func sneak() -> list(long):
-        \\    var xs = [1]
+        \\    var xs: list(long) = [1]
         \\    let view = xs
         \\    return view
         \\
@@ -611,7 +611,7 @@ test "S21: storing a bare name is a compile error at every container door" {
     try expectRejected(
         \\func main():
         \\    var rows = new list(list(long))
-        \\    var hits = [1]
+        \\    var hits: list(long) = [1]
         \\    rows.append(hits)
         \\
     );
@@ -619,7 +619,7 @@ test "S21: storing a bare name is a compile error at every container door" {
     try expectRejected(
         \\func main():
         \\    var rows = new list(list(long))
-        \\    var hits = [1]
+        \\    var hits: list(long) = [1]
         \\    rows.insert(0, hits)
         \\
     );
@@ -628,7 +628,7 @@ test "S21: storing a bare name is a compile error at every container door" {
         \\func main():
         \\    var rows = new list(list(long))
         \\    rows.append([0])
-        \\    var hits = [1]
+        \\    var hits: list(long) = [1]
         \\    rows[0] = hits
         \\
     );
@@ -636,7 +636,7 @@ test "S21: storing a bare name is a compile error at every container door" {
     try expectRejected(
         \\func main():
         \\    var cells = new array(list(long), 2)
-        \\    var hits = [1]
+        \\    var hits: list(long) = [1]
         \\    cells[0] = hits
         \\
     );
@@ -646,9 +646,9 @@ test "S21: give and copy open the container door" {
     try agreeClean(
         \\func main():
         \\    var index = new map(string, list(long))
-        \\    var hits = [12, 40]
+        \\    var hits: list(long) = [12, 40]
         \\    index["a.luc"] = give hits
-        \\    var template = [0, 0]
+        \\    var template: list(long) = [0, 0]
         \\    index["b.luc"] = copy template
         \\    template.append(1)
         \\    assert(len(index["b.luc"]) == 2)
@@ -721,7 +721,7 @@ test "S23: one object cannot end up owned twice — static poisoning" {
         \\func main():
         \\    var a = new list(list(long))
         \\    var b = new list(list(long))
-        \\    var item = [1]
+        \\    var item: list(long) = [1]
         \\    a.append(give item)
         \\    b.append(give item)
         \\
@@ -759,7 +759,7 @@ test "S23: giving through an alias is refused at a container store" {
         \\func main():
         \\    var a = new list(list(long))
         \\    var b = new list(list(long))
-        \\    var item = [2]
+        \\    var item: list(long) = [2]
         \\    let alias = item
         \\    a.append(give item)
         \\    b.append(give alias)
@@ -832,16 +832,16 @@ test "S23: the owner itself still gives, everywhere" {
         \\    return len(xs)
         \\
         \\func make() -> list(long):
-        \\    var fresh = [1, 2]
+        \\    var fresh: list(long) = [1, 2]
         \\    return give fresh
         \\
         \\func main():
-        \\    var xs = [1, 2]
+        \\    var xs: list(long) = [1, 2]
         \\    let view = xs
         \\    assert(len(view) == 2)
         \\    assert(take(give xs) == 2)
         \\    var a = new list(list(long))
-        \\    var item = [2]
+        \\    var item: list(long) = [2]
         \\    a.append(give item)
         \\    var moved = make()
         \\    free(moved)
@@ -856,7 +856,7 @@ test "S23: copy is the other fix, and it keeps both objects" {
         \\func main():
         \\    var a = new list(list(long))
         \\    var b = new list(list(long))
-        \\    var item = [2]
+        \\    var item: list(long) = [2]
         \\    let alias = item
         \\    a.append(copy alias)
         \\    a.append(give item)
@@ -882,8 +882,8 @@ test "S23: the runtime backstop still refuses a module stage 4 could not emit" {
     var compiled = try agree.program(
         \\func main():
         \\    var a = new list(list(long))
-        \\    var first = [1]
-        \\    var second = [2]
+        \\    var first: list(long) = [1]
+        \\    var second: list(long) = [2]
         \\    a.append(give first)
         \\    a.append(give second)
         \\
@@ -927,9 +927,9 @@ test "S24: object fields follow the verb rule at construction" {
         \\
         \\func main():
         \\    var bag = Bag(label = "a", items = [1, 2])
-        \\    var loose = [3, 4]
+        \\    var loose: list(long) = [3, 4]
         \\    var bag2 = Bag(label = "b", items = give loose)
-        \\    var seed = [5]
+        \\    var seed: list(long) = [5]
         \\    var bag3 = Bag(label = "c", items = copy seed)
         \\    assert(len(bag.items) == 2)
         \\    assert(len(bag2.items) == 2)
@@ -943,7 +943,7 @@ test "S24: object fields follow the verb rule at construction" {
         \\    items: list(long)
         \\
         \\func main():
-        \\    var loose = [3, 4]
+        \\    var loose: list(long) = [3, 4]
         \\    var bag = Bag(label = "c", items = loose)
         \\
     );
@@ -981,7 +981,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
         \\func main():
         \\    var bag = Bag(items = [1])
         \\    bag.items = [5, 6]
-        \\    var incoming = [7]
+        \\    var incoming: list(long) = [7]
         \\    bag.items = give incoming
         \\    assert(len(bag.items) == 1)
         \\
@@ -1102,7 +1102,7 @@ test "S28: returning an object-carrying struct moves the whole tree" {
 test "S29: poisoning is source-order and branch-insensitive" {
     try expectRejected(
         \\func main():
-        \\    var xs = [1]
+        \\    var xs: list(long) = [1]
         \\    var sink = new list(list(long))
         \\    if len(sink) > 0:
         \\        sink.append(give xs)
@@ -1114,7 +1114,7 @@ test "S29: poisoning is source-order and branch-insensitive" {
 test "S29: a conditional give still releases correctly on both paths" {
     try agreeClean(
         \\func stash(flag: bool) -> long:
-        \\    var xs = [1]
+        \\    var xs: list(long) = [1]
         \\    var sink = new list(list(long))
         \\    if flag:
         \\        sink.append(give xs)
@@ -1400,7 +1400,7 @@ test "mechanics: returning from inside a for over a fresh iterable frees it" {
 test "mechanics: assignment can receive a give" {
     try agreeClean(
         \\func main():
-        \\    var source = [1, 2]
+        \\    var source: list(long) = [1, 2]
         \\    var target: list(long)
         \\    target = give source
         \\    target.append(3)
@@ -1424,7 +1424,7 @@ test "mechanics: giving the same name twice in one statement is caught" {
 test "mechanics: short-circuit spills do not disturb ownership" {
     try agreeClean(
         \\func main():
-        \\    var xs = [1]
+        \\    var xs: list(long) = [1]
         \\    var rows = new list(list(long))
         \\    rows.append([len(xs), 2])
         \\    if len(xs) > 0 and len(rows[0]) > 1:
@@ -1808,7 +1808,7 @@ test "audit: give in a borrow position has no owner to receive it" {
         \\func main():
         \\    var xs = new list(list(long))
         \\    xs.append([1])
-        \\    var ys = [1]
+        \\    var ys: list(long) = [1]
         \\    let same = xs.contains(give ys)
         \\
     );
@@ -2084,7 +2084,7 @@ test "storage: a loop name that outlives a mutation of its collection keeps its 
         \\        seen = seen + w
         \\        words[0] = "zz"
         \\    assert(seen == "aabbcc")
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for w in words:
         \\        total += len(w)
         \\    assert(total == 6)
@@ -2145,7 +2145,7 @@ test "storage: a trap unwinds past every release and the bytes still come back" 
 test "storage: a loop that retains nothing allocates nothing that outlives it" {
     try agreeClean(
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for i in range(0, 2000):
         \\        let piece = "item-" + string(i) + ";"
         \\        total += len(piece)

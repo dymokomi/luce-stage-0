@@ -649,11 +649,20 @@ test "an intrinsic is checked for its own arity and operand types" {
     program.functions[0].instructions[1].intrinsic.arguments = &seven;
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
 
-    // The right arity, the wrong operand type.
+    // The right arity and a float operand, but not the width the
+    // result claims: `sqrt` answers whichever float it was handed
+    // (docs/TYPES.md §9), so a `float` in and a `double` out is a
+    // module that disagrees with itself.
     program.functions[0].instructions[1].intrinsic.arguments = &of;
+    program.functions[0].result_types[0] = .float;
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+
+    // The right arity and no float anywhere.  That is not a width
+    // mistake and does not answer as one: there is no `sqrt` of a
+    // `long` for the widths to disagree about.
     program.functions[0].instructions[0] = .{ .const_long = 4 };
     program.functions[0].result_types[0] = .long;
-    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+    try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
 }
 
 test "the entry is a function that exists and takes nothing" {

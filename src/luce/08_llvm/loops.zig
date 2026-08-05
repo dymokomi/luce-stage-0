@@ -500,7 +500,7 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
     var built = try planned(gpa,
         \\func main():
         \\    var a = new array(double, 8)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
         \\    print(string(long(total)))
@@ -557,7 +557,7 @@ test "a loop that can free, allocate, or call refuses to lift" {
         \\
         \\func main():
         \\    var a = new array(double, 8)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 8):
         \\        total = total + touch(a)
         \\    print(string(long(total)))
@@ -566,7 +566,7 @@ test "a loop that can free, allocate, or call refuses to lift" {
         // A fresh object grows the table, and the rows move with it.
         \\func main():
         \\    var a = new array(double, 8)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 8):
         \\        var xs = new list(long)
         \\        total = total + a[i]
@@ -584,7 +584,7 @@ test "an inner loop lifts even when the loop around it cannot" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for r in range(0, 2):
         \\        var a = new array(double, 8)
         \\        for i in range(0, 8):
@@ -614,7 +614,7 @@ test "the reassignment guard has no way to fire from source, and is kept anyway"
     var built = try planned(gpa,
         \\func main():
         \\    var a = new array(double, 8)
-        \\    var total = 0.0
+        \\    var total: double = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
         \\    print(string(long(total)))

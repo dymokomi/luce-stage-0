@@ -55,7 +55,7 @@ test "interpreter memory is bounded by depth and data, not by calls made" {
         \\    return scratch.x + p.y
         \\
         \\func main():
-        \\    var total = 0
+        \\    var total: long = 0
         \\    for i in range(0, 100000):
         \\        total += nudge(Point(x = i, y = 1))
         \\    assert(total > 0)
