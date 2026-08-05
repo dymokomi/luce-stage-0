@@ -145,5 +145,5 @@ position it gave up:
 
 ```output
 loom: error: expected a number at position 4 [user_error]
-    raised in Scan.number (calc.luc:44:13)
+    raised in Scan.number (calc.luc:55:13)
 ```

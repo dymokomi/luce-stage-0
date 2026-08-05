@@ -161,4 +161,4 @@ array has no mean.
 The seven traps that remain in `std.math` are domains the caller was
 handed and could have checked: `ln` of a non-positive number, `pow`
 and `ipow` outside theirs, a shape mismatch in `dot` or `axpy`, and
-`random_int` with an empty range.
+`in_range` with an empty range.

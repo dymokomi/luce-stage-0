@@ -40,7 +40,7 @@ no mean and that is absence rather than failure.
 The seven traps left in `std.math` are domains the caller was handed
 and could have checked: `ln` of a non-positive number, `pow` and
 `ipow` outside theirs, a shape mismatch in `dot` or `axpy`, and
-`random_int` with an empty range. Those are bugs, and bugs trap.
+`in_range` with an empty range. Those are bugs, and bugs trap.
 
 ## Why not a `Result` type
 

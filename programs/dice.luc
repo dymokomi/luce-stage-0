@@ -22,12 +22,12 @@ func main(args: List(String)) -> !:
     if len(args) > 1:
         count = parse_int(args[1]) else count
 
-    var rng = math.seed(seed)
+    var rng = math.Rng(state = seed)
     var rolls: List(String) = []
     var histogram = new Array(Int, 7)
     var total = 0
     for i in range(0, count):
-        let roll = math.random_int(rng, 1, 7)
+        let roll = rng.in_range(1, 7)
         rolls.append(String(roll))
         histogram[roll] += 1
         total += roll

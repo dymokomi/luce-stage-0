@@ -240,22 +240,22 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\import std.math
         \\
         \\func main():
-        \\    var rng = math.seed(42)
-        \\    var again = math.seed(42)
+        \\    var rng = math.Rng(state = 42)
+        \\    var again = math.Rng(state = 42)
         \\    for i in range(0, 10):
-        \\        assert(math.random_step(rng) == math.random_step(again))
-        \\    var negative_seed = math.seed(-7)
-        \\    assert(math.random_step(negative_seed) >= 1)
-        \\    var die = math.seed(2026)
+        \\        assert(rng.next() == again.next())
+        \\    var negative_seed = math.Rng(state = -7)
+        \\    assert(negative_seed.next() >= 1)
+        \\    var die = math.Rng(state = 2026)
         \\    var seen = new Map(Int, Bool)
         \\    for i in range(0, 200):
-        \\        let roll = math.random_int(die, 1, 7)
+        \\        let roll = die.in_range(1, 7)
         \\        assert(roll >= 1 and roll <= 6)
         \\        seen[roll] = true
         \\    assert(len(seen) == 6)
-        \\    var floats = math.seed(9)
+        \\    var floats = math.Rng(state = 9)
         \\    for i in range(0, 100):
-        \\        let f = math.random(floats)
+        \\        let f = floats.real()
         \\        assert(f > 0.0 and f < 1.0)
         \\
     );
@@ -263,8 +263,8 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\import std.math
         \\
         \\func main():
-        \\    var rng = math.seed(1)
-        \\    let bad = math.random_int(rng, 5, 5)
+        \\    var rng = math.Rng(state = 1)
+        \\    let bad = rng.in_range(5, 5)
         \\
     , .explicit_trap);
 }

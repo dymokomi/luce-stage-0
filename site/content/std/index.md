@@ -13,14 +13,14 @@ compile error, because file access genuinely does not exist there.
 
 Naming follows the language's own style. Modules are short lower-case
 nouns and functions are short verbs read *with* the module prefix —
-`files.read(path)`, `math.seed(42)` — so bare names stay short without
+`files.read(path)`, `math.sqrt2` — so bare names stay short without
 colliding.
 
 ## Two constraints, deliberate for now
 
 **No module state.** A top-level `let` is a compile-time constant, so
 a module cannot hold a mutable global. Where state is genuinely needed
-the idiom is to hand it to the caller: `math.seed(42)` returns a
+the idiom is to hand it to the caller: `strings.split(s, ",")` returns a
 `List(Int)` the caller owns, and mutation through a borrow is ordinary
 Luce.
 

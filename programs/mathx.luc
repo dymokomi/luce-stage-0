@@ -7,6 +7,18 @@ func mean(values: List(Float)) -> Float:
     return total / Float(len(values))
 
 # A sorted copy; whoever calls owns it.
+# The smallest and the largest, in one pass — where `sorted` was
+# called only to read its two ends (docs/RETURNS.md).
+func extremes(values: List(Float)) -> (Float, Float):
+    if len(values) == 0:
+        trap("extremes needs at least one value")
+    var smallest = values[0]
+    var largest = values[0]
+    for value in values:
+        smallest = min(smallest, value)
+        largest = max(largest, value)
+    return smallest, largest
+
 func sorted(values: List(Float)) -> List(Float):
     var copied = values[0:]
     copied.sort()

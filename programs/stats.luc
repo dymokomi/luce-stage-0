@@ -17,10 +17,10 @@ func main(args: List(String)):
             return
         values.append(number)
 
-    var ordered = mathx.sorted(values)
+    let lowest, highest = mathx.extremes(values)
     print("count   " + String(len(values)))
-    print("lowest  " + String(ordered[0]))
-    print("highest " + String(ordered[len(ordered) - 1]))
+    print("lowest  " + String(lowest))
+    print("highest " + String(highest))
     print("mean    " + String(mathx.mean(values)))
     print("median  " + String(mathx.median(values)))
     print("stddev  " + String(mathx.deviation(values)))

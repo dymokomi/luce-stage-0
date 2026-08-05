@@ -31,6 +31,7 @@ func main():
         checksum += math.dot(a, b)
         checksum += math.variance(a) else 0.0
         checksum += math.norm(b)
-    let low = Int(trunc((math.vmin(b) else 0.0) * 4.0))
-    let high = Int(trunc((math.vmax(b) else 0.0) * 4.0))
+    let smallest, largest = math.minmax(b)
+    let low = Int(trunc((smallest else 0.0) * 4.0))
+    let high = Int(trunc((largest else 0.0) * 4.0))
     print(f"{Int(trunc(math.sum(a)))} {low} {high} {Int(trunc(checksum))}")

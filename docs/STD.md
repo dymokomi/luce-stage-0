@@ -35,7 +35,7 @@ program run on both engines and compared (docs/ENGINE.md).
 
 Naming follows the language's own style: modules are short lower-case
 nouns, functions are short verbs read *with* the module prefix —
-`files.read(path)`, `math.seed(42)` — so bare names stay short
+`files.read(path)`, `math.round(x)` — so bare names stay short
 without colliding.
 
 ---
@@ -75,6 +75,7 @@ import std.math
 
 math.sum(xs)            math.mean(xs)      -> Float?  (empty: none)
 math.vmin(xs)           math.vmax(xs)      -> Float?  extrema; min/max
+math.minmax(xs)         -> (Float?, Float?)         both, one traversal
                                            # are the scalar builtins
 math.dot(xs, ys)        math.norm(xs)      # Euclidean
 math.variance(xs)       math.stddev(xs)    -> Float?  population
@@ -88,9 +89,9 @@ Luce, so there are no hidden globals and every stream is
 deterministic from its seed:
 
 ```luce
-var rng = math.seed(42)          # any Int seed
-let f = math.random(rng)         # Float in (0, 1)
-let roll = math.random_int(rng, 1, 7)   # Int in [low, high)
+var rng = math.Rng(state = 42)   # any Int seed
+let f = rng.real()               # Float in (0, 1)
+let roll = rng.in_range(1, 7)    # Int in [low, high)
 ```
 
 Period 2^31 − 2; games and shuffles, never secrets.
@@ -217,4 +218,4 @@ reductions over an array — `mean`, `vmin`, `vmax`, `variance`,
 worth carrying.  The seven traps left are domains a caller was handed
 and could have checked: `ln` of a non-positive number, `pow` and
 `ipow` outside theirs, a shape mismatch in `dot` or `axpy`, and
-`random_int` with an empty range.  Those are bugs, and bugs trap.
+`in_range` with an empty range.  Those are bugs, and bugs trap.
