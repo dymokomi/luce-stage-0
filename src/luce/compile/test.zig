@@ -523,6 +523,56 @@ test "functions unreachable from the entry are pruned from the artifact" {
     for (reached) |live| try testing.expect(live);
 }
 
+// A numeric literal lands at the type of the place it goes into and
+// is *parsed* there (docs/TYPES.md D3).  With one integer width and
+// one float width, landing and widening-afterwards agree on every
+// value, so no program can tell them apart — which is exactly why the
+// claim has to be checked here, against the IR, rather than by
+// running something.  A landed literal is one `const_float`; a
+// promoted one is a `const_int` and a `convert` beside it, and the
+// difference stops being cosmetic the moment the widths differ, where
+// the promoted form rounds twice.
+//
+// Every place a type is written down gets a line: an annotation, a
+// call argument, a return, and through a leading minus, which does
+// not move where a number lands.
+test "a literal lands at its context's type, with no conversion behind it" {
+    var program = try expectCompiles(
+        \\func takes(x: double) -> double:
+        \\    return x
+        \\
+        \\func answers() -> double:
+        \\    return 12
+        \\
+        \\func main():
+        \\    let annotated: double = 7
+        \\    let negated: double = -3
+        \\    assert(annotated == 7.0)
+        \\    assert(negated == -3.0)
+        \\    assert(takes(8) == 8.0)
+        \\    assert(answers() == 12.0)
+        \\
+    );
+    defer program.deinit();
+
+    var floats: usize = 0;
+    var conversions: usize = 0;
+    for (program.functions) |function| {
+        for (function.instructions) |instruction| {
+            switch (instruction) {
+                .const_float => floats += 1,
+                .convert => conversions += 1,
+                else => {},
+            }
+        }
+    }
+    // 7, -3 and 8 land as floats where they are written; `answers`
+    // returns 12 as one; and the four asserts compare against 7.0,
+    // -3.0, 8.0 and 12.0.  What matters is the second count.
+    try testing.expect(floats >= 8);
+    try testing.expectEqual(@as(usize, 0), conversions);
+}
+
 test "the IR dump is readable and deterministic" {
     const source =
         \\func main():

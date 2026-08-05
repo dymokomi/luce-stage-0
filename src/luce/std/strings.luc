@@ -191,7 +191,15 @@ func format_float(value: double, decimals: long) -> string:
         sign = "-"
     if magnitude > 1.0e15:
         return string(value)
-    var scale = 1.0
+    # Annotated `double`, and it has to be.  This one binding never
+    # meets `value` in an expression the checker would complain about
+    # — it is multiplied by literals and compared against a widened
+    # `long` — so at the narrower default it would quietly stay 32-bit
+    # and stop being exact at 10^8, three digits inside the range
+    # `decimals` allows.  The other unannotated site in std that would
+    # have gone wrong is loud; this is the one that is not
+    # (docs/TYPES.md, the unannotated-site audit).
+    var scale: double = 1.0
     for i in range(0, decimals):
         scale *= 10.0
     # `long(x)` rounds (docs/NUMERICS.md), so the split at the

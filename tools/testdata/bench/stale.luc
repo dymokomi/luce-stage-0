@@ -1,0 +1,3 @@
+func main():
+    let n: Int = 1
+    assert(n == 1)

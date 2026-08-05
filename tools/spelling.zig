@@ -73,16 +73,23 @@ pub const Sighting = struct {
     now: []const u8,
 };
 
-/// Every retired spelling still written in Luce source under the
-/// repository root.  The caller owns the list and every `file` in it.
-pub fn survey(gpa: std.mem.Allocator, io: std.Io) !std.ArrayList(Sighting) {
+/// Every retired spelling still written in Luce source under `base`.
+/// The caller owns the list and every `file` in it.
+///
+/// `base` is the repository root in earnest and a fixture directory
+/// under test — which is the whole reason it is a parameter.  A guard
+/// whose scope table nothing exercises is a guard that can be narrowed
+/// to nothing without a single test noticing, and this one was.
+pub fn survey(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !std.ArrayList(Sighting) {
     var found: std.ArrayList(Sighting) = .empty;
     errdefer {
         for (found.items) |item| gpa.free(item.file);
         found.deinit(gpa);
     }
     for (trees) |tree| {
-        try surveyTree(gpa, io, &found, tree, tree.path);
+        const where = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ base, tree.path });
+        defer gpa.free(where);
+        try surveyTree(gpa, io, &found, tree, where);
     }
     return found;
 }
@@ -102,8 +109,12 @@ fn surveyTree(
     var entries = directory.iterate();
     while (try entries.next(io)) |entry| {
         const path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ where, entry.name });
-        var kept = false;
-        defer if (!kept) gpa.free(path);
+        // Every sighting owns its own copy of the path.  Lending one
+        // copy to all of them looked thriftier and was a double free
+        // the moment a file held two — `list(Int)` on one line is a
+        // sighting for `list` and a sighting for `Int`, and the tree
+        // being clean is why nothing had ever run that path.
+        defer gpa.free(path);
         if (entry.kind == .directory) {
             try surveyTree(gpa, io, found, tree, path);
             continue;
@@ -112,11 +123,7 @@ fn surveyTree(
         if (!std.mem.endsWith(u8, entry.name, tree.suffix)) continue;
         const text = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
         defer gpa.free(text);
-        const before = found.items.len;
         try scan(gpa, found, path, text, tree.scope);
-        // The path is borrowed by every sighting in this file, or by
-        // none — it is freed above when nothing kept it.
-        kept = found.items.len != before;
     }
 }
 
@@ -163,7 +170,7 @@ fn scan(
         for (retired) |gone| {
             if (!wordIn(line, gone.was)) continue;
             try into.append(gpa, .{
-                .file = where,
+                .file = try gpa.dupe(u8, where),
                 .line = number,
                 .was = gone.was,
                 .now = gone.now,
@@ -193,11 +200,18 @@ fn isWordByte(byte: u8) bool {
 
 const testing = std.testing;
 
-test "no Luce source in the tree spells a builtin type the retired way" {
-    const gpa = testing.allocator;
+/// Fail unless every Luce source under `base` uses the current names,
+/// naming every place that does not.
+///
+/// Shared by the two tests below on purpose.  The real one runs against
+/// a clean tree, where an assertion that has been deleted and an
+/// assertion that holds look exactly alike; the fixture one runs
+/// against a tree built to be dirty and requires this to *fail*.  So
+/// the check itself is covered rather than merely executed.
+fn expectCurrentNames(gpa: std.mem.Allocator, base: []const u8) !void {
     var threaded: std.Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    var found = try survey(gpa, threaded.io());
+    var found = try survey(gpa, threaded.io(), base);
     defer {
         for (found.items) |item| gpa.free(item.file);
         found.deinit(gpa);
@@ -215,10 +229,49 @@ test "no Luce source in the tree spells a builtin type the retired way" {
     return error.TestUnexpectedResult;
 }
 
+test "no Luce source in the tree spells a builtin type the retired way" {
+    try expectCurrentNames(testing.allocator, ".");
+}
+
+test "the guard finds a stale name in every scope it scans" {
+    // `tools/testdata` is a miniature repository with one violation in
+    // each tree the guard walks, and prose and foreign fences beside
+    // them that it must ignore.  Without it, narrowing the scope table
+    // to nothing passes every test in the suite — which is what a
+    // mutation sweep found, four times over.
+    const gpa = testing.allocator;
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var found = try survey(gpa, threaded.io(), "tools/testdata");
+    defer {
+        for (found.items) |item| gpa.free(item.file);
+        found.deinit(gpa);
+    }
+    var per_tree: [trees.len]usize = @splat(0);
+    for (found.items) |item| {
+        for (trees, 0..) |tree, index| {
+            var prefixed: [64]u8 = undefined;
+            const head = std.fmt.bufPrint(&prefixed, "tools/testdata/{s}/", .{tree.path}) catch continue;
+            if (std.mem.startsWith(u8, item.file, head)) per_tree[index] += 1;
+        }
+    }
+    for (per_tree, trees) |count, tree| {
+        if (count != 0) continue;
+        std.debug.print("the guard read nothing under {s}\n", .{tree.path});
+        return error.TestUnexpectedResult;
+    }
+    // And the same run through the assertion the real test makes, so
+    // deleting that assertion fails here too.
+    try testing.expectError(error.TestUnexpectedResult, expectCurrentNames(gpa, "tools/testdata"));
+}
+
 test "the scan reads only the part of a file that is Luce" {
     const gpa = testing.allocator;
     var found: std.ArrayList(Sighting) = .empty;
-    defer found.deinit(gpa);
+    defer {
+        for (found.items) |item| gpa.free(item.file);
+        found.deinit(gpa);
+    }
 
     // Markdown: inside a luce fence counts, outside it does not, and a
     // fence of another language does not open one.
@@ -234,6 +287,7 @@ test "the scan reads only the part of a file that is Luce" {
     , .fenced_luce);
     try testing.expectEqual(@as(usize, 1), found.items.len);
     try testing.expectEqual(@as(usize, 6), found.items[0].line);
+    for (found.items) |item| gpa.free(item.file);
     found.clearRetainingCapacity();
 
     // Zig: only the continuation lines.
@@ -245,6 +299,7 @@ test "the scan reads only the part of a file that is Luce" {
     , .zig_multiline);
     try testing.expectEqual(@as(usize, 1), found.items.len);
     try testing.expectEqual(@as(usize, 3), found.items[0].line);
+    for (found.items) |item| gpa.free(item.file);
     found.clearRetainingCapacity();
 
     // Whole word only: the guard must not fire on `parseInt`.
@@ -255,7 +310,10 @@ test "the scan reads only the part of a file that is Luce" {
 test "the scan can be suspended, and resumes where it is told to" {
     const gpa = testing.allocator;
     var found: std.ArrayList(Sighting) = .empty;
-    defer found.deinit(gpa);
+    defer {
+        for (found.items) |item| gpa.free(item.file);
+        found.deinit(gpa);
+    }
     try scan(gpa, &found, "spec.zig",
         \\// spelling:off — this program's subject is the refusal
         \\    \\let a: Int = 1
