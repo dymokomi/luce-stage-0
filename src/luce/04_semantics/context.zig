@@ -196,6 +196,20 @@ pub const FunctionDeclInfo = struct {
     module: usize,
     parameter_types: []Type,
     parameter_modes: []ast.ParameterMode,
+    /// Whether this function's first parameter is `self`, and whether
+    /// it writes it back (docs/METHODS.md).  `.not` for every one of
+    /// the namespace functions a struct has always been able to hold —
+    /// which is the rule that keeps them all compiling untouched.
+    ///
+    /// A method is a plain call with the receiver first, and the
+    /// receiver's *type* is `parameter_types[0]` like any other
+    /// parameter's; this field is what says the call site may spell it
+    /// `x.f(…)`.
+    receiver: ast.Receiver = .not,
+    /// The struct this function was declared inside, or null at top
+    /// level.  Set for namespace functions too — `self` outside a
+    /// struct is refused by asking this, not by asking the receiver.
+    enclosing: ?u32 = null,
     return_type: Type,
     /// Written `-> T!` or `-> !`: every call site must say `try` or
     /// `catch`, which is what makes a swallowed failure unwritable

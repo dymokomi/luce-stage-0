@@ -1412,16 +1412,19 @@ pub const Analyzer = struct {
             self.diagnostics.scope = module.file;
             for (module.tree.functions) |*declaration| {
                 const qualified = try self.qualify(module.prefix, declaration.name);
-                try self.collectFunction(declaration, qualified, module_index, true);
+                try self.collectFunction(declaration, qualified, module_index, true, null);
             }
             for (module.tree.structs) |*declaration| {
+                const owner = self.struct_names.get(
+                    try self.qualify(module.prefix, declaration.name),
+                );
                 for (declaration.functions) |*function| {
                     const member = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
                         declaration.name,
                         function.name,
                     });
                     const qualified = try self.qualify(module.prefix, member);
-                    try self.collectFunction(function, qualified, module_index, false);
+                    try self.collectFunction(function, qualified, module_index, false, owner);
                 }
             }
         }
@@ -1435,6 +1438,10 @@ pub const Analyzer = struct {
         name: []const u8,
         module: usize,
         top_level: bool,
+        /// The struct this declaration sits inside, or null at file
+        /// scope.  It is what gives `self` its type, and what makes
+        /// `self` at file scope a diagnostic rather than a crash.
+        enclosing: ?u32,
     ) Error!void {
         const in_root = self.modules[module].prefix.len == 0;
         if (isReserved(declaration.name)) {
@@ -1460,7 +1467,28 @@ pub const Analyzer = struct {
         // The entry's parameter is collected like every other one: it
         // is the command line, it has a type, and `checkEntry` below
         // is what says which type it has to be (OWNERSHIP.md S44).
+        var receiver: ast.Receiver = .not;
         for (declaration.parameters) |parameter| {
+            // `self` is parameter zero of a method, and its type is the
+            // struct around it — there is nothing written to resolve.
+            // Stage 3 has already refused one anywhere but first and
+            // one with an annotation, so a receiver reaching here is in
+            // the only place it can be (docs/METHODS.md).
+            if (parameter.receiver != .not) {
+                const owner = enclosing orelse {
+                    try self.fail(
+                        "luce.sema.self",
+                        parameter.span,
+                        "self is only a parameter of a function declared inside a struct",
+                        .{},
+                    );
+                    continue;
+                };
+                receiver = parameter.receiver;
+                try parameter_types.append(self.arena, .{ .strukt = owner });
+                try parameter_modes.append(self.arena, .borrow);
+                continue;
+            }
             const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
             if (parameter.mode == .give and !self.carriesObjects(resolved)) {
                 try self.fail(
@@ -1487,6 +1515,8 @@ pub const Analyzer = struct {
             .module = module,
             .parameter_types = try parameter_types.toOwnedSlice(self.arena),
             .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
+            .receiver = receiver,
+            .enclosing = enclosing,
             .return_type = return_type,
             .fallible = declaration.fallible,
             .is_entry = is_entry,

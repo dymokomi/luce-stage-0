@@ -1215,6 +1215,7 @@ pub const FunctionBuilder = struct {
                 for (fresh_object_methods) |name| {
                     if (std.mem.eql(u8, method.name, name)) break :blk true;
                 }
+                if (self.structMethodYieldsObject(method.name)) break :blk true;
                 break :blk self.routedMethodYieldsObject(method.name);
             },
             else => false,
@@ -1238,6 +1239,28 @@ pub const FunctionBuilder = struct {
         const written = std.fmt.bufPrint(&qualified, "strings.{s}", .{name}) catch return false;
         const index = self.analyzer.function_names.get(written) orelse return false;
         return self.analyzer.carriesObjects(self.analyzer.functions.items[index].return_type);
+    }
+
+    /// True when some struct in this program declares a **method** by
+    /// this name whose result carries objects — `p.spread()` answering
+    /// a fresh `List(Int)`, which the caller owns like any other call
+    /// result (S16, docs/METHODS.md).
+    ///
+    /// Asked of the name rather than of the receiver, and for the same
+    /// reason `routedMethodYieldsObject` is: this question is put
+    /// *before* a give argument is lowered, so the receiver's type is
+    /// not yet known and cannot be.  Answering yes for a name some
+    /// other struct also spells costs nothing — every caller has
+    /// already established that the value in hand carries objects, and
+    /// a call's result is owned whenever it does.
+    fn structMethodYieldsObject(self: *const FunctionBuilder, name: []const u8) bool {
+        for (self.analyzer.functions.items) |candidate| {
+            if (candidate.receiver == .not) continue;
+            const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
+            if (!std.mem.eql(u8, candidate.name[dot + 1 ..], name)) continue;
+            if (self.analyzer.carriesObjects(candidate.return_type)) return true;
+        }
+        return false;
     }
 
     /// Side-effect-free twin of methodNamespace: does target.name(...)
@@ -3581,6 +3604,17 @@ pub const FunctionBuilder = struct {
         const layout_index = target.value_type.strukt;
         const layout = self.analyzer.structs.items[layout_index];
         const field_index = layout.findField(field.name) orelse {
+            // `let f = p.length` — a *bound method value*, which is a
+            // closure over `p` by another name and first among the
+            // things docs/LANGUAGE.md deliberately does not have.  The
+            // sentence is the one `let f = Point.length` already gets,
+            // reached through the same helper (docs/METHODS.md).
+            const member = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, field.name });
+            const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{
+                try self.writtenTarget(field.target),
+                field.name,
+            });
+            if (try self.failNotAValue(written, member, field.span)) return null;
             try self.failUnknownField("luce.sema.field", layout, field.name, field.span);
             return null;
         };
@@ -4002,6 +4036,33 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
             return null;
         }
+        // `Point.length(p)` stays callable and means exactly what
+        // `p.length()` means: the method form is sugar with one
+        // semantics under it, which is what makes converting a struct
+        // one function at a time possible (docs/METHODS.md).
+        //
+        // `Point.scale(p, 2.0)` is the one exception, and it is why
+        // this check exists: a `var self` method writes back to its
+        // receiver's place, and the static form has no place to write
+        // to.  It would take a copy, mutate it and discard it, in
+        // silence — which is the one shape where allowing both
+        // spellings would mean two semantics instead of one.
+        if (info.receiver == .writes) {
+            try self.fail(
+                "luce.sema.self",
+                span,
+                "{s} takes var self and writes back to its receiver; call it as {s}.{s}(…)",
+                .{
+                    info.declaration.name,
+                    if (call_arguments.len != 0)
+                        try self.writtenTarget(call_arguments[0].value)
+                    else
+                        "the receiver",
+                    info.declaration.name,
+                },
+            );
+            return null;
+        }
         // See `callUser`: a call that can fail has to say which of
         // `try` and `catch` it means, and the check comes before the
         // arguments so the reader is told the one thing that matters.
@@ -4110,7 +4171,7 @@ pub const FunctionBuilder = struct {
                 );
             },
             .reported => return null,
-            .value => return self.lowerValueMethod(method, as_statement),
+            .value => return self.lowerValueMethod(method, as_statement, fallible_allowed),
         }
     }
 
@@ -4207,7 +4268,12 @@ pub const FunctionBuilder = struct {
     /// Builtin methods on values: strings, lists, arrays, maps, and
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
-    fn lowerValueMethod(self: *FunctionBuilder, method: ast.Method, as_statement: bool) Error!?Typed {
+    fn lowerValueMethod(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        as_statement: bool,
+        fallible_allowed: bool,
+    ) Error!?Typed {
         const expressions = try self.arena().alloc(*ast.Expression, method.arguments.len + 1);
         expressions[0] = method.target;
         for (method.arguments, 0..) |argument, index| {
@@ -4249,6 +4315,17 @@ pub const FunctionBuilder = struct {
                     break :blk found;
                 }
                 return null;
+            }
+            // A struct value: `p.length()` *is* `Point.length(p)`, the
+            // same MIR call resolved here rather than a second
+            // semantics (docs/METHODS.md).
+            //
+            // It can never race a built-in method, and by construction
+            // rather than by ordering: `types.StructLayout` has no
+            // functions field and `heapOf` answers null for a struct,
+            // so the two arms above are unreachable for one.
+            if (receiver.value_type == .strukt) {
+                return self.lowerReceiverCall(method, values, as_statement, fallible_allowed);
             }
             try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
                 try self.analyzer.typeName(receiver.value_type),
@@ -4306,6 +4383,175 @@ pub const FunctionBuilder = struct {
             .register = try self.code.emit(.{ .intrinsic = .{ .kind = found.kind, .arguments = registers } }, found.result),
             .value_type = found.result,
         };
+    }
+
+    // Methods on a struct value ---------------------------------------------
+    //
+    // `p.length()` means `Point.length(p)` — not "is compiled like",
+    // *means*: the same call, resolved in this stage.  There is no
+    // dispatch, no reference, and no second semantics
+    // (docs/METHODS.md).
+
+    /// `x.f(a, b)` where `x` is a struct value.  `values` is the whole
+    /// operand run with the receiver at zero, already lowered by
+    /// `lowerValueMethod` — a method's arguments take their types from
+    /// the values, exactly as every other method's do.
+    fn lowerReceiverCall(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        values: []Typed,
+        as_statement: bool,
+        fallible_allowed: bool,
+    ) Error!?Typed {
+        const layout_index = values[0].value_type.strukt;
+        const layout = self.analyzer.structs.items[layout_index];
+        const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, method.name });
+        const function_index = self.analyzer.function_names.get(qualified) orelse {
+            try self.failUnknownMethod(layout_index, layout, method);
+            return null;
+        };
+        const info = self.analyzer.functions.items[function_index];
+        // The whole difference between a namespace and a method is
+        // whether the declaration's first parameter is the word `self`,
+        // and this is where a reader who has not learned that finds out
+        // (docs/METHODS.md).
+        if (info.receiver == .not) {
+            try self.fail(
+                "luce.sema.self",
+                method.span,
+                "{s}.{s} is a namespace function, not a method; it takes no self — call it as {s}({s}, …)",
+                .{ layout.name, method.name, qualified, try self.writtenReceiver(method) },
+            );
+            return null;
+        }
+        if (info.fallible and !fallible_allowed) {
+            try self.fail(
+                "luce.sema.fallible",
+                method.span,
+                "{s} can fail: write 'try {s}.{s}(…)' to pass the error on, or '{s}.{s}(…) catch …' to handle it",
+                .{
+                    method.name,
+                    try self.writtenReceiver(method),
+                    method.name,
+                    try self.writtenReceiver(method),
+                    method.name,
+                },
+            );
+            return null;
+        }
+
+        // The receiver is parameter zero, so the arity a reader wrote
+        // is one less than the one the declaration has.
+        const wanted = info.parameter_types[1..];
+        const arguments = values[1..];
+        if (arguments.len != wanted.len) {
+            try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
+                method.name,
+                wanted.len,
+                helpers.plural(wanted.len),
+                arguments.len,
+            });
+            return null;
+        }
+
+        // Ownership at the call site is the plain-call rule said once
+        // per argument: a give parameter needs `give`/`copy`/something
+        // fresh, and a borrow parameter refuses a `give` (S13, S14).
+        // The receiver never takes a verb — it is a struct value.
+        for (method.arguments, 0..) |argument, index| {
+            if (info.parameter_modes[index + 1] == .give) {
+                if (!(try self.yieldsOwnership(argument.value))) {
+                    try self.failNeedsOwnership(
+                        argument.span,
+                        try std.fmt.allocPrint(
+                            self.arena(),
+                            "argument {d} of {s} takes ownership",
+                            .{ index + 1, method.name },
+                        ),
+                        argument.value,
+                        "S13, S14",
+                    );
+                    return null;
+                }
+            } else if (argument.value.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
+                    .{method.name},
+                );
+                return null;
+            }
+        }
+
+        const registers = try self.arena().alloc(Register, values.len);
+        registers[0] = values[0].register;
+        for (arguments, wanted, 0..) |value, want, index| {
+            const fitted = (try self.fit(value, want)) orelse {
+                try self.fail("luce.sema.type", method.arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
+                    index + 1,
+                    method.name,
+                    try self.analyzer.typeName(want),
+                    try self.analyzer.typeName(value.value_type),
+                    try self.absenceAdvice(value.value_type, method.arguments[index].value),
+                });
+                return null;
+            };
+            registers[index + 1] = fitted.register;
+        }
+        if (info.return_type == .none and !as_statement) {
+            try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
+            return null;
+        }
+        const call = try self.code.emit(
+            .{ .call = .{ .function = function_index, .arguments = registers } },
+            info.return_type,
+        );
+        if (info.fallible) return try self.openFallible(call, info.return_type);
+        return .{ .register = call, .value_type = info.return_type };
+    }
+
+    /// How the reader spelled the receiver, for a message that has to
+    /// hand back the static form: the bare name where there is one,
+    /// and the struct's own word where the receiver is an expression.
+    fn writtenReceiver(self: *FunctionBuilder, method: ast.Method) Error![]const u8 {
+        return self.writtenTarget(method.target);
+    }
+
+    fn writtenTarget(self: *FunctionBuilder, target: *const ast.Expression) Error![]const u8 {
+        _ = self;
+        return switch (target.*) {
+            .name => |name| name.text,
+            else => "the receiver",
+        };
+    }
+
+    /// `p.foo()` where `Point` has no `foo` at all.
+    ///
+    /// **This replaces "Point has no methods"**, which was true until
+    /// a struct could have one and would now be a lie.  It offers the
+    /// closest method there actually is, which is what the List, Map
+    /// and Builder families already do.
+    fn failUnknownMethod(
+        self: *FunctionBuilder,
+        layout_index: u32,
+        layout: StructLayout,
+        method: ast.Method,
+    ) Error!void {
+        var suggestion = helpers.Suggestion.init(method.name);
+        for (self.analyzer.functions.items) |candidate| {
+            if (candidate.enclosing != layout_index) continue;
+            if (candidate.receiver == .not) continue;
+            const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
+            suggestion.offer(candidate.name[dot + 1 ..]);
+        }
+        if (suggestion.best()) |closest| {
+            try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{
+                layout.name, method.name, closest,
+            });
+            return;
+        }
+        try self.fail("luce.sema.method", method.span, "{s} has no method {s}", .{ layout.name, method.name });
     }
 
     /// Which argument of a method is a *store* into the receiver —

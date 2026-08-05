@@ -572,6 +572,125 @@ test "luce.lex.indent: an over-nested file is one message, not a hundred and fif
 }
 
 // ---------------------------------------------------------------------------
+// Methods: `self`
+// ---------------------------------------------------------------------------
+//
+// The whole family, each sentence pinned (docs/METHODS.md).  The two
+// structural refusals — `self` anywhere but first, and `self` with a
+// type — are stage 3's and live in `03_parse/test.zig`.
+
+test "luce.sema.self: self is only a parameter of a function inside a struct" {
+    try expectOnlySayingAt(
+        \\func loose(self) -> Int:
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.self",
+        "self is only a parameter of a function declared inside a struct",
+        1,
+        12,
+    );
+}
+
+test "luce.sema.self: a namespace function called as a method says which it is" {
+    // The one sentence that would have prevented this memo's own
+    // commissioning error: `Struct.func(x)` is a folder and an
+    // ordinary first argument; `x.foo()` is a type and a receiver.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func doubled(p: Point) -> Int:
+        \\        return p.x * 2
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.doubled() == 2)
+        \\
+    ,
+        "luce.sema.self",
+        "Point.doubled is a namespace function, not a method; it takes no self — call it as Point.doubled(p, …)",
+    );
+}
+
+test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
+    // This replaces "Point has no methods", which was true until a
+    // struct could have one, and matches the List/Map/Builder family.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func length(self) -> Int:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.lenght() == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "Point has no method lenght; did you mean length?",
+    );
+    // With nothing close, the sentence still names both.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.frobnicate() == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "Point has no method frobnicate",
+    );
+}
+
+test "luce.sema.name: there are no bound method values" {
+    // `let f = p.length` is a closure over `p` by another name, and
+    // first among the things docs/LANGUAGE.md deliberately refuses.
+    // The sentence is the one `let f = Point.length` already gets.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func length(self) -> Int:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let f = p_of().length
+        \\
+        \\func p_of() -> Point:
+        \\    return Point(x = 1)
+        \\
+    ,
+        "luce.sema.name",
+        "is a function, and Luce has no function values",
+    );
+}
+
+test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func moved(self, dx: Int, dy: Int) -> Int:
+        \\        return self.x + dx + dy
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.moved(1) == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "moved takes 2 arguments, got 1",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Entry contract
 // ---------------------------------------------------------------------------
 

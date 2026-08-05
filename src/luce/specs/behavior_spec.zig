@@ -1068,6 +1068,136 @@ test "structs: namespaced functions and nested structs" {
 }
 
 // ---------------------------------------------------------------------------
+// Methods: `self`
+// ---------------------------------------------------------------------------
+//
+// `p.length()` **is** `Point.length(p)` — the same MIR call, resolved
+// in stage 4 (docs/METHODS.md).  Nothing below is a second semantics,
+// which is why the oracle needed no edit for any of it and is
+// therefore the arm that proves the sugar resolved right.
+
+test "methods: a receiver reads its struct, and the static form is the same call" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\    func length(self) -> Float:
+        \\        return sqrt(self.x * self.x + self.y * self.y)
+        \\
+        \\    func plus(self, other: Point) -> Point:
+        \\        return Point(x = self.x + other.x, y = self.y + other.y)
+        \\
+        \\    func origin() -> Point:
+        \\        return Point(x = 0.0, y = 0.0)
+        \\
+        \\func main():
+        \\    let p = Point(x = 3.0, y = 4.0)
+        \\    assert(p.length() == 5.0)
+        \\    # The long way round means exactly the same thing, which is
+        \\    # what lets a struct convert one function at a time.
+        \\    assert(Point.length(p) == 5.0)
+        \\    let q = p.plus(Point(x = 1.0, y = 1.0))
+        \\    assert(q.x == 4.0 and q.y == 5.0)
+        \\    # A namespace function beside the methods, untouched.
+        \\    assert(Point.origin().length() == 0.0)
+        \\    # And a method on a call result, which needs no place.
+        \\    assert(Point.origin().plus(p).length() == 5.0)
+        \\
+    );
+}
+
+test "methods: a receiver is a value, so the method sees a copy" {
+    try agreeOk(
+        \\struct Counter:
+        \\    count: Int
+        \\
+        \\    func bumped(self) -> Counter:
+        \\        var next = self
+        \\        next.count = next.count + 1
+        \\        return next
+        \\
+        \\func main():
+        \\    let one = Counter(count = 1)
+        \\    let two = one.bumped()
+        \\    assert(two.count == 2)
+        \\    # `self` was a copy: nothing about `one` moved.
+        \\    assert(one.count == 1)
+        \\
+    );
+}
+
+test "methods: a receiver may be a field, an element, or a chain of both" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func doubled(self) -> Int:
+        \\        return self.x * 2
+        \\
+        \\struct Box:
+        \\    corner: Point
+        \\
+        \\func main():
+        \\    let box = Box(corner = Point(x = 3))
+        \\    assert(box.corner.doubled() == 6)
+        \\    var cells = [Point(x = 5)]
+        \\    assert(cells[0].doubled() == 10)
+        \\    free(cells)
+        \\
+    );
+}
+
+test "methods: a method may take and answer objects, and ownership is the plain-call rule" {
+    try agreeOk(
+        \\struct Tally:
+        \\    total: Int
+        \\
+        \\    func over(self, values: List(Int)) -> Int:
+        \\        var sum = self.total
+        \\        for value in values:
+        \\            sum = sum + value
+        \\        return sum
+        \\
+        \\    func spread(self) -> List(Int):
+        \\        var made = [self.total, self.total]
+        \\        return made
+        \\
+        \\func main():
+        \\    let tally = Tally(total = 10)
+        \\    var numbers = [1, 2, 3]
+        \\    assert(tally.over(numbers) == 16)
+        \\    var pair = tally.spread()
+        \\    assert(len(pair) == 2 and pair[0] == 10)
+        \\    free(pair)
+        \\    free(numbers)
+        \\
+    );
+}
+
+test "methods: a method can fail, and try and catch reach it through the receiver" {
+    try agreeOk(
+        \\struct Reader:
+        \\    limit: Int
+        \\
+        \\    func check(self, n: Int) -> Int!:
+        \\        if n > self.limit:
+        \\            error("over the limit")
+        \\        return n
+        \\
+        \\func under() -> Int!:
+        \\    let reader = Reader(limit = 5)
+        \\    return try reader.check(3)
+        \\
+        \\func main():
+        \\    let reader = Reader(limit = 5)
+        \\    assert((under() catch 0) == 3)
+        \\    assert((reader.check(9) catch -1) == -1)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Nested-place assignment
 // ---------------------------------------------------------------------------
 
