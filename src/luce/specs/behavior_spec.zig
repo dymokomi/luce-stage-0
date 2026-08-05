@@ -787,6 +787,51 @@ test "mixing: comparison across the line is exact at 2^24, for int against float
     );
 }
 
+// The landing rule reaches past an annotation, and each place below
+// is one where a literal read at the wrong width would be *silently*
+// wrong — a legal widening of the wrong number, not a diagnostic.
+
+test "a constructor lands its argument, so double(0.1) is binary64's" {
+    // `double(0.1)` reading `0.1` at binary32 and widening the result
+    // gives 0.10000000149011612 — a different number, and one that
+    // reaches its place through a conversion the language allows.
+    try agreeOk(
+        \\func main():
+        \\    let annotated: double = 0.1
+        \\    assert(double(0.1) == annotated)
+        \\    assert(double(0.1) != double(float(0.1)))
+        \\    assert(float(0.1) != annotated)
+        \\    # And the integer direction: the constructor's own type is
+        \\    # the place, so a value past an `int` is not refused for
+        \\    # overflowing one nobody wrote.
+        \\    assert(long(3000000000) == 3000000000)
+        \\
+    );
+}
+
+test "the width-polymorphic builtins land their arguments too" {
+    // `sqrt` answers its operand's float type (docs/TYPES.md §9), so a
+    // `double` place given binary32's square root widened would hold a
+    // number nobody asked for — and hold it legally, which is what
+    // makes this worth pinning rather than trusting.
+    try agreeOk(
+        \\func main():
+        \\    let two: double = 2.0
+        \\    let wide: double = sqrt(2.0)
+        \\    assert(wide == sqrt(two))
+        \\    let narrow: float = sqrt(2.0)
+        \\    assert(wide != narrow)
+        \\    # abs, min, max and clamp keep the same rule.
+        \\    let held: double = abs(-0.1)
+        \\    assert(held == 0.1)
+        \\    let picked: double = min(0.1, 1.0)
+        \\    assert(picked == 0.1)
+        \\    let bounded: double = clamp(0.1, 0.0, 1.0)
+        \\    assert(bounded == 0.1)
+        \\
+    );
+}
+
 test "mixing: an int against a double is exact everywhere, ends included" {
     // §5's first row, and the one place the lowering may skip the
     // intrinsic: every `int` is exactly a `double`, so `sitofp` and an

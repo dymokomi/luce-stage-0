@@ -44,6 +44,18 @@ fn expectRejected(source: []const u8, code: []const u8) !void {
     try expectRejectedOptions(source, script, code);
 }
 
+/// The other half of a refusal: the program one step inside the
+/// boundary is accepted, so a message about a *width* is not a
+/// message about the whole conversion.
+fn expectCompiles(source: []const u8) !void {
+    var result = try compile_mod.compile(testing.allocator, source, hosted);
+    defer result.deinit();
+    if (result == .failure) {
+        printAll(&result.failure);
+        return error.TestUnexpectedResult;
+    }
+}
+
 fn expectRejectedOptions(
     source: []const u8,
     options: types.CompileOptions,
@@ -1630,6 +1642,55 @@ test "luce.sema.type: a narrowing argument earns the same sentence" {
         "argument 1 of take is int, got long; narrowing is never implicit — write int(…)",
         6,
         20,
+    );
+}
+
+// A conversion the constant folder performs is the *same* conversion
+// the runtime would, per width and at the same boundary — a fold that
+// disagrees with a run is a different language (docs/TYPES.md §3).
+// Both of these are refused at compile time where the run would trap
+// `conversion_range`, which is the only difference between them.
+
+test "luce.sema.const: a folded narrowing is range-checked at its own width" {
+    try expectOnlySayingAt(
+        \\let wide: long = 3000000000
+        \\let narrowed = int(wide)
+        \\
+        \\func main():
+        \\    print(string(narrowed))
+        \\
+    , "luce.sema.const", "constant conversion out of range", 2, 16);
+    // One below the top fits, so the check is the boundary and not a
+    // refusal of the whole conversion.
+    try expectCompiles(
+        \\let wide: long = 2147483647
+        \\let narrowed = int(wide)
+        \\
+        \\func main():
+        \\    print(string(narrowed))
+        \\
+    );
+}
+
+test "luce.sema.const: a folded float-to-integer is range-checked at its own width" {
+    try expectOnlySayingAt(
+        \\let big: double = 3.0e9
+        \\let narrowed = int(big)
+        \\
+        \\func main():
+        \\    print(string(narrowed))
+        \\
+    , "luce.sema.const", "constant conversion out of range", 2, 16);
+    // The same value reaches a `long` without complaint, which is what
+    // makes the message above a statement about the width rather than
+    // about the number.
+    try expectCompiles(
+        \\let big: double = 3.0e9
+        \\let widened = long(big)
+        \\
+        \\func main():
+        \\    print(string(widened))
+        \\
     );
 }
 

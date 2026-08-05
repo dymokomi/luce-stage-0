@@ -1,6 +1,5 @@
-//! The guard on the documentation: **every Luce sample in a living
-//! document is compiled by the real compiler, on every `zig build
-//! test`.**
+//! The guard on the documentation: **every Luce sample in `docs/` is
+//! compiled by the real compiler, on every `zig build test`.**
 //!
 //! The site has had this property since it was written — a fenced
 //! `luce` block that does not declare what becomes of it is a build
@@ -53,14 +52,17 @@
 //!
 //! ## What counts as living
 //!
-//! `documents` below.  A **living** document describes the language as
-//! it is: a reader is entitled to paste its code into a file and have
-//! it compile.  A **decision record** — `docs/NUMERICS.md`,
+//! The first `living_count` entries of `documents` below.  A **living**
+//! document describes the language as it is: a reader is entitled to
+//! paste its code into a file and have it compile, and it gets no
+//! exemptions.  A **decision record** — `docs/NUMERICS.md`,
 //! `docs/RETURNS.md`, `docs/TYPES.md` and the rest — describes what was
-//! decided and when, and its code is allowed to be the code of its
-//! day; those are not listed here, and their snippets carry the
-//! `historical` tag where they show a spelling the language has since
-//! moved on from.
+//! decided and when; its code is checked too, and the parts of it that
+//! are the language of their day say so with `historical`.
+//!
+//! `tools/spelling.zig` reads the same split, for the sentences rather
+//! than the samples: a living document may not spell a retired type
+//! name in its prose either.
 
 const std = @import("std");
 const luce = @import("luce");
@@ -71,6 +73,11 @@ const Allocator = std.mem.Allocator;
 /// repository root, which is where the build runs its tests from —
 /// the same assumption `tools/spelling.zig` and `tools/grammar.zig`
 /// make.
+/// How many of `documents` are living.  The living ones come first so
+/// that "the living documents carry no exemptions" is a slice rather
+/// than a convention, and the test below asserts it as one.
+pub const living_count = 10;
+
 pub const documents = [_][]const u8{
     // Living: a reader may paste any of this into a file.
     "docs/LANGUAGE.md",
@@ -474,7 +481,7 @@ test "every Luce sample in every living document compiles" {
     // that reaches for `historical` is a living document that has
     // stopped being one.
     var living_census: Census = .{};
-    var living_problems = try survey(gpa, threaded.io(), ".", documents[0..10], &living_census);
+    var living_problems = try survey(gpa, threaded.io(), ".", documents[0..living_count], &living_census);
     defer {
         for (living_problems.items) |one| one.deinit(gpa);
         living_problems.deinit(gpa);
