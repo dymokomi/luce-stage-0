@@ -1,0 +1,5 @@
+editor-backspace-snapshot	programs/editor.luc	s/self.cursor = Text.previous_boundary\(before, self.cursor\)/self.cursor = Text.previous_boundary(self.content, self.cursor)/
+return-arity-shape	src/luce/04_semantics/builder.zig	s/if \(returned.values.len != self.results.len\)/if (false)/
+args-list-built	src/luce/runtime/containers.zig	s/while \(index < count\) : \(index \+= 1\)/while (false) : (index += 1)/
+self-in-expression-position	src/luce/03_parse/expressions.zig	s/return make\(self, .\{ .name = .\{ .text = "self", .span = item.span \} \}\);/return make(self, .{ .name = .{ .text = "notself", .span = item.span } });/
+export-before-release	src/luce/04_semantics/builder.zig	s/const handed_out = try self.code.exportStorage\(shape\);\n        try self.emitTempReleases\(0\);\n        try self.emitScopeReleases\(0, moved.items\);\n        try self.code.ret\(handed_out\);/try self.emitTempReleases(0);\n        try self.emitScopeReleases(0, moved.items);\n        try self.code.ret(try self.code.exportStorage(shape));/
