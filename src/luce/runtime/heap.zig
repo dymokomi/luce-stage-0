@@ -179,7 +179,7 @@ pub const Object = struct {
     /// An Array's shape and its elements.
     ///
     /// **The elements are stored as themselves, not as `Value`s.**  An
-    /// `Array(Float)` is `f64`s, an `Array(Int)` is `i64`s, an
+    /// `Array(double)` is `f64`s, an `Array(long)` is `i64`s, an
     /// `Array(Bool)` is bytes; only the kinds whose tag or length is
     /// not a compile-time fact — Strings, structs, objects — keep the
     /// 24-byte slot.  Three reasons, in the order they matter:
@@ -218,8 +218,10 @@ pub const Object = struct {
         pub fn at(self: Array, index: usize) Value {
             return switch (self.kind) {
                 .value => self.cells(Value)[index],
-                .float => Value.ofFloat(self.cells(f64)[index]),
-                .int => Value.ofInt(self.cells(i64)[index]),
+                .double => Value.ofDouble(self.cells(f64)[index]),
+                .long => Value.ofLong(self.cells(i64)[index]),
+                .float => Value.ofFloat(self.cells(f32)[index]),
+                .int => Value.ofInt(self.cells(i32)[index]),
                 .boolean => Value.ofBoolean(self.cells(u8)[index] != 0),
             };
         }
@@ -230,8 +232,10 @@ pub const Object = struct {
         pub fn put(self: Array, index: usize, held: Value) void {
             switch (self.kind) {
                 .value => self.cells(Value)[index] = held,
-                .float => self.cells(f64)[index] = held.asFloat(),
-                .int => self.cells(i64)[index] = held.asInt(),
+                .double => self.cells(f64)[index] = held.asDouble(),
+                .long => self.cells(i64)[index] = held.asLong(),
+                .float => self.cells(f32)[index] = held.asFloat(),
+                .int => self.cells(i32)[index] = held.asInt(),
                 .boolean => self.cells(u8)[index] = @intFromBool(held.asBoolean()),
             }
         }
@@ -241,8 +245,10 @@ pub const Object = struct {
         pub fn fill(self: Array, held: Value) void {
             switch (self.kind) {
                 .value => @memset(self.cells(Value), held),
-                .float => @memset(self.cells(f64), held.asFloat()),
-                .int => @memset(self.cells(i64), held.asInt()),
+                .double => @memset(self.cells(f64), held.asDouble()),
+                .long => @memset(self.cells(i64), held.asLong()),
+                .float => @memset(self.cells(f32), held.asFloat()),
+                .int => @memset(self.cells(i32), held.asInt()),
                 .boolean => @memset(self.cells(u8), @intFromBool(held.asBoolean())),
             }
         }
@@ -262,17 +268,25 @@ pub const Object = struct {
         /// — anything the element type does not settle to one machine
         /// word.  The only kind that can own something.
         value,
+        double,
+        long,
+        boolean,
+        /// The narrow widths, **appended**: an `array(int, n)` is
+        /// `i32` cells and an `array(float, n)` is `f32` cells, which
+        /// is half the memory and twice the lanes in the same vector
+        /// register (docs/TYPES.md §6).
         float,
         int,
-        boolean,
 
         /// The cell type `Array.cells` reads, so a switch with an
         /// `inline else` gets the storage type for free.
         pub fn Cell(comptime self: ElementKind) type {
             return switch (self) {
                 .value => Value,
-                .float => f64,
-                .int => i64,
+                .double => f64,
+                .long => i64,
+                .float => f32,
+                .int => i32,
                 .boolean => u8,
             };
         }
@@ -280,8 +294,10 @@ pub const Object = struct {
         pub fn width(self: ElementKind) usize {
             return switch (self) {
                 .value => @sizeOf(Value),
-                .float => @sizeOf(f64),
-                .int => @sizeOf(i64),
+                .double => @sizeOf(f64),
+                .long => @sizeOf(i64),
+                .float => @sizeOf(f32),
+                .int => @sizeOf(i32),
                 .boolean => 1,
             };
         }
@@ -295,6 +311,8 @@ pub const Object = struct {
         /// and nothing new crosses the boundary.
         pub fn of(zero: Value) ElementKind {
             return switch (zero.tag) {
+                .double => .double,
+                .long => .long,
                 .float => .float,
                 .int => .int,
                 .boolean => .boolean,
@@ -356,7 +374,7 @@ pub const Object = struct {
 ///
 /// `hashOf` and `value.keyEquals` must agree exactly: equal keys hash
 /// equally, or a lookup walks past its own entry.  They are written
-/// against the same two payloads (Int and String — the only key types
+/// against the same two payloads (long and String — the only key types
 /// the analyzer admits) for that reason.
 // ---------------------------------------------------------------------------
 // The map behind a Map
@@ -452,7 +470,7 @@ pub const Map = struct {
         self.slots[at] = position;
     }
 
-    /// The hash `find` probes with.  Keys are Int or String — the
+    /// The hash `find` probes with.  Keys are long or String — the
     /// analyzer admits nothing else — and this reads exactly the two
     /// payloads `value.keyEquals` compares, so equal keys always hash
     /// equally.  Ints go through a bit mixer rather than being used
@@ -460,9 +478,9 @@ pub const Map = struct {
     /// wants their low bits spread.
     fn hashOf(key: *const Value) usize {
         return switch (key.view()) {
-            .int => |held| @truncate(std.hash.int(@as(u64, @bitCast(held)))),
+            .long => |held| @truncate(std.hash.int(@as(u64, @bitCast(held)))),
             .string => |held| @truncate(std.hash.Wyhash.hash(0, held)),
-            else => unreachable, // the analyzer keys maps by Int or String
+            else => unreachable, // the analyzer keys maps by long or String
         };
     }
 };
@@ -1234,7 +1252,7 @@ pub const Runtime = struct {
             .list => |list| for (list.items) |item| self.freeValue(item),
             .map => |map| for (map.entries.items) |entry| {
                 // A map owns its keys' storage as well as its values';
-                // keys are Int or String, so there is never an object
+                // keys are long or String, so there is never an object
                 // in one.
                 self.dropStorage(entry.key);
                 self.freeValue(entry.value);
@@ -1409,7 +1427,7 @@ pub const Runtime = struct {
 pub fn flattenIndex(dims: []const i64, indices: []const Value) ?usize {
     var flat: usize = 0;
     for (dims, indices) |size, held| {
-        const index = held.asInt();
+        const index = held.asLong();
         if (index < 0 or index >= size) return null;
         flat = flat * @as(usize, @intCast(size)) + @as(usize, @intCast(index));
     }

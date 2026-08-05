@@ -87,7 +87,7 @@ test "unreachable functions are pruned and call targets renumbered" {
     const functions = try arena.alloc(Function, 5);
     for (functions, 0..) |*function, index| {
         const instructions = try arena.dupe(Instruction, &.{
-            .{ .const_int = 1 },
+            .{ .const_long = 1 },
             .{ .ret = 0 },
         });
         const items = try arena.dupe(Register, &.{ 0, 1 });
@@ -96,10 +96,10 @@ test "unreachable functions are pruned and call targets renumbered" {
         function.* = .{
             .name = try std.fmt.allocPrint(arena, "f{d}", .{index}),
             .parameter_count = 0,
-            .return_type = .int,
+            .return_type = .long,
             .locals = &.{},
             .instructions = instructions,
-            .result_types = try arena.dupe(types_mod.Type, &.{ .int, .none }),
+            .result_types = try arena.dupe(types_mod.Type, &.{ .long, .none }),
             .blocks = blocks,
         };
     }

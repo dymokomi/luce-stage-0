@@ -528,8 +528,8 @@ test "functions unreachable from the entry are pruned from the artifact" {
 // one float width, landing and widening-afterwards agree on every
 // value, so no program can tell them apart — which is exactly why the
 // claim has to be checked here, against the IR, rather than by
-// running something.  A landed literal is one `const_float`; a
-// promoted one is a `const_int` and a `convert` beside it, and the
+// running something.  A landed literal is one `const_double`; a
+// promoted one is a `const_long` and a `convert` beside it, and the
 // difference stops being cosmetic the moment the widths differ, where
 // the promoted form rounds twice.
 //
@@ -560,7 +560,7 @@ test "a literal lands at its context's type, with no conversion behind it" {
     for (program.functions) |function| {
         for (function.instructions) |instruction| {
             switch (instruction) {
-                .const_float => floats += 1,
+                .const_double => floats += 1,
                 .convert => conversions += 1,
                 else => {},
             }

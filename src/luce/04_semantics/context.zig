@@ -42,10 +42,30 @@ pub const Error = error{OutOfMemory};
 // different words for the same mistake inside a function.  So the
 // wording lives here and each pass formats it.
 
-pub const integer_range_message =
+/// What a literal that does not fit where it landed is told, per
+/// width.  Each names the type it did not fit, that type's range, and
+/// **the wider type that would hold it** — which is the whole value of
+/// the sentence: a reader who wrote `3000000000` did not make a
+/// mistake about arithmetic, they made one about a width, and the fix
+/// is a word (docs/TYPES.md §11).
+pub const int_range_message =
+    "integer literal out of range; int holds -2147483648 to 2147483647 — write the place as a long";
+pub const long_range_message =
     "integer literal out of range; long holds -9223372036854775808 to 9223372036854775807";
 pub const float_range_message =
+    "float literal is not a finite float; float holds up to about 3.4e38 — write the place as a double";
+pub const double_range_message =
     "float literal is not a finite number; double holds up to about 1.8e308";
+
+/// The sentence for a literal that did not fit the type it landed on.
+pub fn rangeMessage(landed: Type) []const u8 {
+    return switch (landed) {
+        .int => int_range_message,
+        .float => float_range_message,
+        .double => double_range_message,
+        else => long_range_message,
+    };
+}
 
 /// Binary operand typing: the operator and the two types.  Pass two
 /// appends one more `{s}` of advice when one side is an optional; the
@@ -263,8 +283,8 @@ pub const StructShape = struct {
 /// only — scalars, string, and value structs — computed entirely at
 /// compile time and inlined at every use site.
 pub const ConstantValue = union(enum) {
-    int: i64,
-    float: f64,
+    long: i64,
+    double: f64,
     boolean: bool,
     string: []const u8, // arena-owned
     strukt: struct { layout: u32, fields: []ConstantValue },
@@ -281,8 +301,8 @@ pub const ConstantInfo = struct {
     /// Lazy evaluation with cycle detection: constants may reference
     /// each other across modules in any order, but never in a loop.
     state: enum { pending, evaluating, ready, failed } = .pending,
-    value: ConstantValue = .{ .int = 0 },
-    value_type: Type = .int,
+    value: ConstantValue = .{ .long = 0 },
+    value_type: Type = .long,
 };
 
 // ---------------------------------------------------------------------------

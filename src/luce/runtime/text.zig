@@ -5,7 +5,7 @@
 //! next owns it, and the statement that produced it releases it if
 //! nothing does (docs/STRINGS.md).  Where the bytes go is the value's
 //! own business — short text lives inside the `Value` and costs no
-//! allocation at all, which is why `str(Int)` and `chr` never call the
+//! allocation at all, which is why `str(long)` and `chr` never call the
 //! allocator.  `slice` is the one borrow here, on both engines, and
 //! storing one copies; a slice of inline text is a copy already,
 //! because there is nothing to borrow from.
@@ -71,7 +71,7 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
 pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
     const text = held.asString();
     if (index < 0 or index >= text.len) return runtime.fail(.string_bounds);
-    return Value.ofInt(text[@intCast(index)]);
+    return Value.ofLong(text[@intCast(index)]);
 }
 
 /// `s.find_byte(b, from)` — the scanning primitive std's substring
@@ -83,8 +83,8 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
     if (start < 0 or start > text.len) return runtime.fail(.string_bounds);
     const from: usize = @intCast(start);
     const at = std.mem.indexOfScalarPos(u8, text, from, @intCast(byte)) orelse
-        return Value.ofInt(-1);
-    return Value.ofInt(@intCast(at));
+        return Value.ofLong(-1);
+    return Value.ofLong(@intCast(at));
 }
 
 // ---------------------------------------------------------------------------
@@ -101,29 +101,17 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
 pub fn str(runtime: *Runtime, held: Value) Error!Value {
     switch (held.view()) {
         // Twenty digits and a sign is the longest an i64 gets, so a
-        // number's text always fits inside the value and `str(i)` in a
-        // loop allocates nothing at all.
-        .int => |number| {
-            var digits: [24]u8 = undefined;
-            return Value.ofInlineText(.string, std.fmt.bufPrint(
-                &digits,
-                "{d}",
-                .{number},
-            ) catch unreachable);
-        },
+        // number's text always fits inside the value and `string(i)` in
+        // a loop allocates nothing at all.
+        .int => |number| return digitsOf(number),
+        .long => |number| return digitsOf(number),
         // `{d}` on a float is the shortest representation that round
-        // trips — Zig's Ryū-derived formatter, the same one the
-        // hand-written wasm runtime had to port by hand.
-        .float => |number| {
-            var written: [64]u8 = undefined;
-            const text = std.fmt.bufPrint(&written, "{d}", .{number}) catch
-                return Value.ofString(try std.fmt.allocPrint(
-                    runtime.objects,
-                    "{d}",
-                    .{number},
-                ));
-            return runtime.ownValue(Value.ofString(text));
-        },
+        // trips **at its own width** — Zig's Ryū-derived formatter,
+        // which is width-generic, so `string(float(1.0) / float(3.0))`
+        // is "0.33333334" and not binary64's seventeen digits
+        // (docs/TYPES.md §3).
+        .float => |number| return floatText(runtime, number),
+        .double => |number| return floatText(runtime, number),
         .boolean => |held_bool| return runtime.ownValue(
             Value.ofString(if (held_bool) "true" else "false"),
         ),
@@ -136,23 +124,46 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
     }
 }
 
-/// `parse_int(s) -> Int?`.  "Not a number" is the same reason every
+/// An integer's digits, at either width.  The text always fits inside
+/// the value, so this allocates nothing.
+fn digitsOf(number: anytype) Value {
+    var digits: [24]u8 = undefined;
+    return Value.ofInlineText(.string, std.fmt.bufPrint(
+        &digits,
+        "{d}",
+        .{number},
+    ) catch unreachable);
+}
+
+/// A float's shortest round-tripping text, at either width.
+fn floatText(runtime: *Runtime, number: anytype) Error!Value {
+    var written: [64]u8 = undefined;
+    const rendered = std.fmt.bufPrint(&written, "{d}", .{number}) catch
+        return Value.ofString(try std.fmt.allocPrint(
+            runtime.objects,
+            "{d}",
+            .{number},
+        ));
+    return runtime.ownValue(Value.ofString(rendered));
+}
+
+/// `parse_int(s) -> long?`.  "Not a number" is the same reason every
 /// time and the function's name already implies it, so the answer is
 /// absence rather than a trap or an error (docs/FAILURE.md).
 pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
     _ = runtime;
     const parsed = std.fmt.parseInt(i64, held.asString(), 10) catch return Value.none;
-    return Value.ofInt(parsed);
+    return Value.ofLong(parsed);
 }
 
-/// `parse_float(s) -> Float?`.  Refuses what `str` would never produce
+/// `parse_float(s) -> double?`.  Refuses what `str` would never produce
 /// as a number: NaN and the infinities parse, and are answered absent
-/// here so a Float that came from text is always finite.
+/// here so a double that came from text is always finite.
 pub fn parseFloat(runtime: *Runtime, held: Value) Error!Value {
     _ = runtime;
     const parsed = std.fmt.parseFloat(f64, held.asString()) catch return Value.none;
     if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;
-    return Value.ofFloat(parsed);
+    return Value.ofDouble(parsed);
 }
 
 /// `chr(code)` — one codepoint, UTF-8 encoded into fresh owned
@@ -178,5 +189,5 @@ pub fn ord(runtime: *Runtime, held: Value) Error!Value {
     if (text.len < length) return runtime.fail(.bad_codepoint);
     const codepoint = std.unicode.utf8Decode(text[0..length]) catch
         return runtime.fail(.bad_codepoint);
-    return Value.ofInt(codepoint);
+    return Value.ofLong(codepoint);
 }

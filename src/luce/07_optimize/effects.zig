@@ -59,26 +59,35 @@ pub const Effect = enum {
     impure,
 };
 
-pub fn classify(function: *const Function, instruction: Instruction) Effect {
-    return switch (instruction) {
+/// `at` is the register the instruction defines, which in this IR is
+/// also its index in the pool.  It is taken rather than the
+/// instruction itself because a `convert` reads its own result type to
+/// know whether it can trap: the destination is the register, and
+/// there is no second copy of it to disagree with.
+pub fn classify(function: *const Function, at: defs.Register) Effect {
+    return switch (function.instructions[at]) {
         // Values out of thin air, and reads of things nothing can
         // change: a local (invalidated by its own `local_set`, which
         // the caller tracks), a field of an immutable struct value.
-        .const_boolean, .const_int, .const_float, .const_string => .pure,
+        .const_boolean, .const_long, .const_double, .const_string => .pure,
         .local_get, .struct_get => .pure,
 
         .unary => |unary| switch (unary.op) {
             .logic_not => .pure,
-            // Negating long(min) overflows; negating a float cannot.
-            .negate => if (function.result_types[unary.operand] == .float) .pure else .stable,
+            // Negating the smallest integer overflows at either
+            // width; negating a float cannot, at either width.
+            .negate => if (function.result_types[unary.operand].isFloating()) .pure else .stable,
         },
-        .convert => |convert| switch (convert.kind) {
-            .int_to_float => .pure,
-            .float_to_int => .stable,
-        },
+        // A conversion is pure unless it can refuse the value it was
+        // given, which is exactly the two families `conversionTraps`
+        // names: float to integer, and integer to a narrower integer.
+        .convert => |operand| if (Type.conversionTraps(
+            function.result_types[operand],
+            function.result_types[at],
+        )) .stable else .pure,
         .binary => |binary| if (binary.op.isComparison())
             .pure
-        else if (binary.operand_type == .float)
+        else if (binary.operand_type.isFloating())
             // IEEE arithmetic answers everything, `/0` included, so
             // every double operator is pure — and since `/` is real
             // division and always answers a double
@@ -135,9 +144,9 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
         // for the same reason `negate` is: abs(long.min) overflows.
-        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_int_float => .pure,
+        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_long_double => .pure,
         .abs => if (first_argument) |argument|
-            (if (argument == .float) .pure else .stable)
+            (if (argument.isFloating()) .pure else .stable)
         else
             .stable,
         .null_object => .pure,
@@ -274,8 +283,8 @@ pub fn viewStable(instruction: Instruction) bool {
         // Values, locals, immutable struct storage, control flow: the
         // object table is not involved at all.
         .const_boolean,
-        .const_int,
-        .const_float,
+        .const_long,
+        .const_double,
         .const_string,
         .local_get,
         .local_set,
@@ -314,7 +323,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .floor,
             .ceil,
             .trunc,
-            .compare_int_float,
+            .compare_long_double,
             .string_slice,
             .string_byte,
             .string_find_byte,
@@ -426,8 +435,8 @@ pub fn viewStable(instruction: Instruction) bool {
 pub fn ownershipTransparent(function: *const Function, instruction: Instruction) bool {
     return switch (instruction) {
         .const_boolean,
-        .const_int,
-        .const_float,
+        .const_long,
+        .const_double,
         .const_string,
         .local_get,
         .local_set,
@@ -449,7 +458,7 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             .floor,
             .ceil,
             .trunc,
-            .compare_int_float,
+            .compare_long_double,
             .string_slice,
             .string_byte,
             .string_find_byte,

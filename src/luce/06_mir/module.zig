@@ -40,7 +40,7 @@ pub const magic = "LUCE";
 /// (`arg_count`, `arg_get`) and one trap code with them
 /// (`argument_bounds`), so every instruction tag after them renumbers;
 /// the entry may now carry one parameter, which the verifier checks.
-pub const format_version: u32 = 20;
+pub const format_version: u32 = 21;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -175,8 +175,8 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         switch (of) {
             .const_boolean => |value| try self.int(u8, @intFromBool(value)),
-            .const_int => |value| try self.int(i64, value),
-            .const_float => |value| try self.int(u64, @bitCast(value)),
+            .const_long => |value| try self.int(i64, value),
+            .const_double => |value| try self.int(u64, @bitCast(value)),
             .const_string => |constant| try self.int(u32, constant),
             .local_get => |local| try self.int(u32, local),
             .local_set => |set| {
@@ -193,10 +193,7 @@ const Writer = struct {
                 try self.int(u8, @intFromEnum(unary.op));
                 try self.int(u32, unary.operand);
             },
-            .convert => |convert| {
-                try self.int(u8, @intFromEnum(convert.kind));
-                try self.int(u32, convert.operand);
-            },
+            .convert => |operand| try self.int(u32, operand),
             .struct_make => |make| {
                 try self.int(u32, make.layout);
                 try self.registers(make.fields);
@@ -351,7 +348,9 @@ const Reader = struct {
             .none => .none,
             .boolean => .boolean,
             .int => .int,
+            .long => .long,
             .float => .float,
+            .double => .double,
             .string => .string,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
@@ -432,8 +431,8 @@ const Reader = struct {
         const tag = try self.enumTag(std.meta.Tag(mir.Instruction));
         return switch (tag) {
             .const_boolean => .{ .const_boolean = (try self.int(u8)) != 0 },
-            .const_int => .{ .const_int = try self.int(i64) },
-            .const_float => .{ .const_float = @bitCast(try self.int(u64)) },
+            .const_long => .{ .const_long = try self.int(i64) },
+            .const_double => .{ .const_double = @bitCast(try self.int(u64)) },
             .const_string => .{ .const_string = try self.int(u32) },
             .local_get => .{ .local_get = try self.int(u32) },
             .local_set => .{ .local_set = .{
@@ -450,10 +449,7 @@ const Reader = struct {
                 .op = try self.enumTag(mir.UnaryOp),
                 .operand = try self.int(u32),
             } },
-            .convert => .{ .convert = .{
-                .kind = try self.enumTag(mir.ConvertKind),
-                .operand = try self.int(u32),
-            } },
+            .convert => .{ .convert = try self.int(u32) },
             .struct_make => .{ .struct_make = .{
                 .layout = try self.int(u32),
                 .fields = try self.registers(arena),
@@ -628,7 +624,7 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
     // has no representation, so it must be refused rather than nested.
     const nested = try testing.allocator.dupe(u8, encoded);
     defer testing.allocator.free(nested);
-    const optional_tag: u8 = @intFromEnum(std.meta.activeTag(@as(types.Type, .{ .optional = .int })));
+    const optional_tag: u8 = @intFromEnum(std.meta.activeTag(@as(types.Type, .{ .optional = .long })));
     var damaged = false;
     for (nested, 0..) |byte, at| {
         if (byte != optional_tag or at + 1 >= nested.len) continue;
@@ -753,7 +749,7 @@ test "a damaged register reference fails verification, not execution" {
     // decoder's verifier pass must reject the module.
     program.functions[0].instructions[2] = .{ .binary = .{
         .op = .add,
-        .operand_type = .int,
+        .operand_type = .long,
         .left = 900,
         .right = 901,
     } };
@@ -922,6 +918,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 20), format_version);
-    try testing.expectEqual(@as(u64, 5072236016799722047), hasher.final());
+    try testing.expectEqual(@as(u32, 21), format_version);
+    try testing.expectEqual(@as(u64, 1599781513622071021), hasher.final());
 }

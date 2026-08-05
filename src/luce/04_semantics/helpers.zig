@@ -4,6 +4,7 @@ const std = @import("std");
 const ast = @import("../03_parse.zig").ast;
 const vocabulary = @import("../support/vocabulary.zig");
 const Span = @import("../01_source.zig").Span;
+const Type = @import("../support/types.zig").Type;
 
 /// How deep an expression tree this stage will walk before refusing
 /// it.  Stage 3 bounds *recursive descent*, which a left-leaning
@@ -148,21 +149,27 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 
 // Literals ------------------------------------------------------------------
 
-/// Parse a decimal integer literal, with the minus sign in front of it
-/// already folded in when there is one.
+/// Parse a decimal integer literal at the width it lands on, with the
+/// minus sign in front of it already folded in when there is one.
 ///
-/// The sign has to fold *before* the range check or `long`'s minimum is
-/// unwritable: `-9223372036854775808` lexes as a minus and a literal
-/// whose magnitude is one past the largest positive long, so checking
-/// the magnitude alone rejects the one number that most needs
-/// spelling.  Null means out of range.
-pub fn parseIntLiteral(text: []const u8, negated: bool) ?i64 {
+/// The sign has to fold *before* the range check or a width's minimum
+/// is unwritable: `-9223372036854775808` lexes as a minus and a
+/// literal whose magnitude is one past the largest positive `long`, so
+/// checking the magnitude alone rejects the one number that most needs
+/// spelling — and the same is true of `-2147483648` at `int`.
+///
+/// The answer is carried as an `i64` whatever the landing width,
+/// because that is how the IR carries an integer constant
+/// (`06_mir.Instruction.const_long`); what `lands` decides is the
+/// range, not the carrier.  Null means out of that range.
+pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
     const magnitude = std.fmt.parseInt(u64, text, 10) catch return null;
+    const top: u64 = if (lands == .int) std.math.maxInt(i32) else std.math.maxInt(i64);
     if (negated) {
-        if (magnitude > @as(u64, std.math.maxInt(i64)) + 1) return null;
+        if (magnitude > top + 1) return null;
         return @intCast(-@as(i128, magnitude));
     }
-    if (magnitude > std.math.maxInt(i64)) return null;
+    if (magnitude > top) return null;
     return @intCast(magnitude);
 }
 
@@ -178,7 +185,12 @@ pub fn parseIntLiteral(text: []const u8, negated: bool) ?i64 {
 /// binary64 → binary32 is a double rounding and disagrees with the
 /// correctly-rounded answer for real inputs; reading the source text
 /// once, at the destination width, is the same one line and cannot.
-pub fn parseFloatLiteral(text: []const u8) ?f64 {
+pub fn parseFloatLiteral(text: []const u8, lands: Type) ?f64 {
+    if (lands == .float) {
+        const narrow = std.fmt.parseFloat(f32, text) catch return null;
+        if (!std.math.isFinite(narrow)) return null;
+        return narrow;
+    }
     const parsed = std.fmt.parseFloat(f64, text) catch return null;
     if (!std.math.isFinite(parsed)) return null;
     return parsed;
@@ -192,10 +204,37 @@ pub fn parseFloatLiteral(text: []const u8) ?f64 {
 /// float that has room for it — and so the one rule "a literal is
 /// parsed at the width it lands on" has no exception for the integer
 /// spelling.  Null means malformed or not finite.
-pub fn parseIntLiteralAsFloat(text: []const u8, negated: bool) ?f64 {
-    const magnitude = std.fmt.parseFloat(f64, text) catch return null;
+pub fn parseIntLiteralAsFloat(text: []const u8, negated: bool, lands: Type) ?f64 {
+    const magnitude: f64 = if (lands == .float) narrow: {
+        const read = std.fmt.parseFloat(f32, text) catch return null;
+        break :narrow read;
+    } else std.fmt.parseFloat(f64, text) catch return null;
     if (!std.math.isFinite(magnitude)) return null;
     return if (negated) -magnitude else magnitude;
+}
+
+/// Whether an expression is a **constant expression over numeric
+/// literals** — the one shape that carries no type of its own and no
+/// effects either, so the place it lands in may decide its width and
+/// it may be lowered in either order.
+///
+/// A literal, a minus in front of one, or an operator whose two sides
+/// are both such expressions.  Nothing else: a named constant has a
+/// type already, and so does everything with a call in it.
+///
+/// Asked by both the lowering walk and the constant folder, because
+/// the two must agree about what `2 * 0.1` is (docs/TYPES.md §1).
+pub fn isUntypedNumber(expression: *const ast.Expression) bool {
+    return switch (expression.*) {
+        .int_literal, .float_literal => true,
+        .unary => |unary| unary.op == .negate and isUntypedNumber(unary.operand),
+        .binary => |binary| switch (binary.op) {
+            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => isUntypedNumber(binary.left) and
+                isUntypedNumber(binary.right),
+            else => false,
+        },
+        else => false,
+    };
 }
 
 /// The codepoint `ord` would read from a string literal, or null when
@@ -388,35 +427,35 @@ const testing = std.testing;
 test "long's minimum parses only when the sign folds into the literal" {
     // The magnitude alone is one past the largest positive long, so
     // checking it before applying the sign makes long.min unwritable.
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775808", false));
-    try testing.expectEqual(@as(?i64, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true));
-    try testing.expectEqual(@as(?i64, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false));
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775809", true));
-    try testing.expectEqual(@as(?i64, -1), parseIntLiteral("1", true));
-    try testing.expectEqual(@as(?i64, 0), parseIntLiteral("0", true));
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775808", false, .long));
+    try testing.expectEqual(@as(?i64, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true, .long));
+    try testing.expectEqual(@as(?i64, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false, .long));
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775809", true, .long));
+    try testing.expectEqual(@as(?i64, -1), parseIntLiteral("1", true, .long));
+    try testing.expectEqual(@as(?i64, 0), parseIntLiteral("0", true, .long));
 }
 
 test "a float literal that is not finite is refused, and underflow is not" {
-    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("1e400"));
-    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("-1e400"));
-    try testing.expectEqual(@as(?f64, 0.0), parseFloatLiteral("1e-400"));
-    try testing.expectEqual(@as(?f64, 1.5), parseFloatLiteral("1.5"));
-    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense"));
+    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("1e400", .double));
+    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("-1e400", .double));
+    try testing.expectEqual(@as(?f64, 0.0), parseFloatLiteral("1e-400", .double));
+    try testing.expectEqual(@as(?f64, 1.5), parseFloatLiteral("1.5", .double));
+    try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense", .double));
 }
 
 test "an integer literal landing on a float reads its digits, not a long" {
     // The ordinary cases agree with parseIntLiteral, sign and all.
-    try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false));
-    try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true));
-    try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true));
+    try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false, .double));
+    try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true, .double));
+    try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true, .double));
     // And the case that is the whole reason it reads the digits: a
     // magnitude past long's range is not a long, but it is a perfectly
     // ordinary float, and the type it landed on is the float.
-    try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false));
-    try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false));
+    try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false, .long));
+    try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false, .double));
     // Past every float as well is still refused, and so is nonsense.
-    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false));
-    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false));
+    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false, .double));
+    try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false, .double));
 }
 
 test "ord reads the first codepoint of a literal, and nothing from an empty one" {

@@ -22,7 +22,7 @@
 //! **Short text lives in the value.**  The tag needs one byte, not
 //! eight, and the seven that frees plus `bits` and `length` are
 //! twenty-two contiguous bytes at offset 2 — enough for the strings
-//! this language actually moves around (`String(Int)` is at most twenty,
+//! this language actually moves around (`String(long)` is at most twenty,
 //! a split piece averages twelve), and the same twenty-two libc++
 //! reaches in the same twenty-four.  `inline_length` says which form
 //! the text is in: a count from 0 to `inline_capacity` when the bytes
@@ -51,8 +51,8 @@ pub const Tag = enum(u8) {
     /// No value: a statement's result, an unset frame slot.
     none = 0,
     boolean = 1,
-    int = 2,
-    float = 3,
+    long = 2,
+    double = 3,
     string = 4,
     /// A struct value: `bits` addresses `length` fields.  Struct
     /// storage is never mutated in place — `struct_set` allocates a
@@ -60,6 +60,16 @@ pub const Tag = enum(u8) {
     strukt = 5,
     /// A `Handle` into the runtime's object table.
     object = 6,
+    /// The narrow widths, **appended**: no number above ever changes
+    /// what it means, which is the append-only rule the whole ABI is
+    /// built on (docs/TYPES.md §6).  Each width gets a tag of its own
+    /// rather than sharing one with its family, because
+    /// `heap.Object.ElementKind.of` derives an array's cell width from
+    /// the zero element's tag — the runtime is handed a zero and never
+    /// the program's type table — and a `float` whose zero boxed as
+    /// `double` would silently allocate eight-byte cells.
+    int = 7,
+    float = 8,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -141,12 +151,25 @@ pub const Value = extern struct {
         return .{ .tag = .boolean, .bits = @intFromBool(held) };
     }
 
-    pub fn ofInt(held: i64) Value {
-        return .{ .tag = .int, .bits = @bitCast(held) };
+    pub fn ofLong(held: i64) Value {
+        return .{ .tag = .long, .bits = @bitCast(held) };
     }
 
-    pub fn ofFloat(held: f64) Value {
-        return .{ .tag = .float, .bits = @bitCast(held) };
+    pub fn ofDouble(held: f64) Value {
+        return .{ .tag = .double, .bits = @bitCast(held) };
+    }
+
+    /// The narrow widths.  Each sits in the low bits of the same
+    /// word, sign- or zero-extended by the reader rather than stored
+    /// wide, so a boxed value is the same twenty-four bytes whatever
+    /// it holds and only its tag says how much of `bits` is the
+    /// number (docs/TYPES.md §6).
+    pub fn ofInt(held: i32) Value {
+        return .{ .tag = .int, .bits = @as(u32, @bitCast(held)) };
+    }
+
+    pub fn ofFloat(held: f32) Value {
+        return .{ .tag = .float, .bits = @as(u32, @bitCast(held)) };
     }
 
     /// Text that lives somewhere else — a program constant, an owned
@@ -205,12 +228,20 @@ pub const Value = extern struct {
         return self.bits != 0;
     }
 
-    pub fn asInt(self: Value) i64 {
+    pub fn asLong(self: Value) i64 {
         return @bitCast(self.bits);
     }
 
-    pub fn asFloat(self: Value) f64 {
+    pub fn asDouble(self: Value) f64 {
         return @bitCast(self.bits);
+    }
+
+    pub fn asInt(self: Value) i32 {
+        return @bitCast(@as(u32, @truncate(self.bits)));
+    }
+
+    pub fn asFloat(self: Value) f32 {
+        return @bitCast(@as(u32, @truncate(self.bits)));
     }
 
     /// The text this value holds.
@@ -262,7 +293,7 @@ pub const Value = extern struct {
     }
 
     /// True when this is the absent value of a `T?`.  One tag test for
-    /// every payload type: a present `Int?` is tagged `int` and a
+    /// every payload type: a present `long?` is tagged `int` and a
     /// present `List(T)?` is tagged `object`, so absence needs no
     /// per-type encoding and no second word (docs/FAILURE.md).  It is
     /// *not* the null object, which is a present handle to nothing.
@@ -299,7 +330,9 @@ pub const Value = extern struct {
             .none => .none,
             .boolean => .{ .boolean = self.asBoolean() },
             .int => .{ .int = self.asInt() },
+            .long => .{ .long = self.asLong() },
             .float => .{ .float = self.asFloat() },
+            .double => .{ .double = self.asDouble() },
             .string => .{ .string = self.asString() },
             .strukt => .{ .strukt = self.asStruct() },
             .object => .{ .object = self.asObject() },
@@ -312,20 +345,22 @@ pub const Value = extern struct {
 pub const View = union(enum) {
     none,
     boolean: bool,
-    int: i64,
-    float: f64,
+    int: i32,
+    long: i64,
+    float: f32,
+    double: f64,
     string: []const u8,
     strukt: []Value,
     object: Handle,
 };
 
-/// Map keys compare by content: the analyzer admits Int and String
+/// Map keys compare by content: the analyzer admits long and String
 /// keys only.
 pub fn keyEquals(left: *const Value, right: *const Value) bool {
     return switch (left.view()) {
-        .int => |held| held == right.asInt(),
+        .long => |held| held == right.asLong(),
         .string => |held| std.mem.eql(u8, held, right.asString()),
-        else => unreachable, // the analyzer keys maps by Int or String
+        else => unreachable, // the analyzer keys maps by long or String
     };
 }
 
@@ -344,8 +379,8 @@ test "the value layout is the one generated code assumes" {
 }
 
 test "every payload survives a round trip" {
-    try std.testing.expectEqual(@as(i64, -9), Value.ofInt(-9).asInt());
-    try std.testing.expectEqual(@as(f64, 1.5), Value.ofFloat(1.5).asFloat());
+    try std.testing.expectEqual(@as(i64, -9), Value.ofLong(-9).asLong());
+    try std.testing.expectEqual(@as(f64, 1.5), Value.ofDouble(1.5).asDouble());
     try std.testing.expect(Value.ofBoolean(true).asBoolean());
     try std.testing.expect(!Value.ofBoolean(false).asBoolean());
     const hi = Value.ofString("hi");
@@ -353,7 +388,7 @@ test "every payload survives a round trip" {
     const empty = Value.ofString("");
     try std.testing.expectEqualStrings("", empty.asString());
 
-    var fields = [_]Value{ Value.ofInt(1), Value.ofString("two") };
+    var fields = [_]Value{ Value.ofLong(1), Value.ofString("two") };
     const held = Value.ofStruct(&fields);
     try std.testing.expectEqual(@as(usize, 2), held.asStruct().len);
     try std.testing.expectEqualStrings("two", held.asStruct()[1].asString());
@@ -393,7 +428,7 @@ test "an inline value owns no allocation and an outside one does" {
     try std.testing.expect(Value.ofString(&words).ownsStorage());
     try std.testing.expect(!Value.ofString("").ownsStorage());
     try std.testing.expect(!Value.ofInlineText(.string, "borrowed").ownsStorage());
-    try std.testing.expect(!Value.ofInt(7).ownsStorage());
+    try std.testing.expect(!Value.ofLong(7).ownsStorage());
     try std.testing.expect(!Value.null_object.ownsStorage());
 }
 
@@ -420,8 +455,8 @@ test "a handle keeps its row and its occupant apart" {
 }
 
 test "a view carries the same payload as the accessors" {
-    switch (Value.ofFloat(-0.0).view()) {
-        .float => |held| try std.testing.expect(std.math.signbit(held)),
+    switch (Value.ofDouble(-0.0).view()) {
+        .double => |held| try std.testing.expect(std.math.signbit(held)),
         else => return error.WrongTag,
     }
     switch (Value.none.view()) {

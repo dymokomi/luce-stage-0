@@ -31,8 +31,8 @@ pub fn mapOperands(
 ) std.mem.Allocator.Error!void {
     switch (instruction.*) {
         .const_boolean,
-        .const_int,
-        .const_float,
+        .const_long,
+        .const_double,
         .const_string,
         .local_get,
         .jump,
@@ -45,7 +45,7 @@ pub fn mapOperands(
             binary.right = map[binary.right];
         },
         .unary => |*unary| unary.operand = map[unary.operand],
-        .convert => |*convert| convert.operand = map[convert.operand],
+        .convert => |*operand| operand.* = map[operand.*],
         .struct_make => |*make| make.fields = try mapSlice(arena, make.fields, map),
         .struct_get => |*get| get.target = map[get.target],
         .struct_set => |*set| {
@@ -78,8 +78,8 @@ fn mapSlice(
 pub fn markOperands(instruction: Instruction, used: []bool) void {
     switch (instruction) {
         .const_boolean,
-        .const_int,
-        .const_float,
+        .const_long,
+        .const_double,
         .const_string,
         .local_get,
         .jump,
@@ -92,7 +92,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
             used[binary.right] = true;
         },
         .unary => |unary| used[unary.operand] = true,
-        .convert => |convert| used[convert.operand] = true,
+        .convert => |operand| used[operand] = true,
         .struct_make => |make| for (make.fields) |field| {
             used[field] = true;
         },
@@ -159,9 +159,9 @@ test "every operand of every instruction shape is rewritten" {
     var dims = [_]Register{4};
     var shapes = [_]Instruction{
         .{ .local_set = .{ .local = 0, .value = 0 } },
-        .{ .binary = .{ .op = .add, .operand_type = .int, .left = 2, .right = 3 } },
+        .{ .binary = .{ .op = .add, .operand_type = .long, .left = 2, .right = 3 } },
         .{ .unary = .{ .op = .negate, .operand = 4 } },
-        .{ .convert = .{ .kind = .int_to_float, .operand = 5 } },
+        .{ .convert = 5 },
         .{ .struct_make = .{ .layout = 0, .fields = &fields } },
         .{ .struct_get = .{ .target = 6, .layout = 0, .field = 0 } },
         .{ .struct_set = .{ .target = 0, .layout = 0, .field = 0, .value = 1 } },
@@ -181,7 +181,7 @@ test "every operand of every instruction shape is rewritten" {
     try testing.expectEqual(@as(Register, 3), shapes[1].binary.left);
     try testing.expectEqual(@as(Register, 4), shapes[1].binary.right);
     try testing.expectEqual(@as(Register, 5), shapes[2].unary.operand);
-    try testing.expectEqual(@as(Register, 6), shapes[3].convert.operand);
+    try testing.expectEqual(@as(Register, 6), shapes[3].convert);
     try testing.expectEqualSlices(Register, &.{ 1, 2 }, shapes[4].struct_make.fields);
     try testing.expectEqual(@as(Register, 7), shapes[5].struct_get.target);
     try testing.expectEqual(@as(Register, 1), shapes[6].struct_set.target);

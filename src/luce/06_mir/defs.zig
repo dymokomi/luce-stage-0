@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const types = @import("../support/types.zig");
+const value = @import("../runtime/value.zig");
 const vocabulary = @import("../support/vocabulary.zig");
 
 const Allocator = std.mem.Allocator;
@@ -10,14 +11,36 @@ const Type = types.Type;
 const StructLayout = types.StructLayout;
 
 pub const Register = u32;
+
+/// Which `runtime.Tag` a value of `of` wears once it is boxed, or null
+/// for the one type that cannot say: a `T?` boxes as its payload's tag
+/// when it is there and as `none` when it is not, so what it wears is
+/// decided by the value and never by the type.
+///
+/// Here rather than in either engine because **both** need it and they
+/// must not answer differently — a program's types and the runtime's
+/// tags are two halves of one wire surface, which is the same reason
+/// `TrapCode` is named in this file.
+pub fn boxTag(of: Type) ?value.Tag {
+    return switch (of) {
+        .none => .none,
+        .boolean => .boolean,
+        .int => .int,
+        .long => .long,
+        .float => .float,
+        .double => .double,
+        .string => .string,
+        .strukt => .strukt,
+        .heap => .object,
+        .optional => null,
+    };
+}
 pub const BlockId = u32;
 pub const LocalId = u32;
 
 pub const BinaryOp = vocabulary.BinaryOp;
 
 pub const UnaryOp = enum { negate, logic_not };
-
-pub const ConvertKind = enum { int_to_float, float_to_int };
 
 pub const Intrinsic = enum {
     abs,
@@ -39,7 +62,7 @@ pub const Intrinsic = enum {
     /// single `operand_type` and cannot say that its two sides are
     /// different types.  Stage 4 mirrors the operator when the double
     /// was written on the left, so the long is always argument one.
-    compare_int_float,
+    compare_long_double,
     len,
     string_slice,
     string_byte,
@@ -168,14 +191,36 @@ pub const TrapCode = vocabulary.TrapCode;
 
 pub const Instruction = union(enum) {
     const_boolean: bool,
-    const_int: i64,
-    const_float: f64,
+    /// A numeric constant, **carried at the widest member of its
+    /// family** — the register's own type is the width it lands on.
+    ///
+    /// This is the language's own rule about literals, kept one stage
+    /// further down: a number has no type until it meets one
+    /// (docs/TYPES.md D3), and what it meets here is the register.
+    /// Every value an `int` register can hold is exactly an `i64` and
+    /// every value a `float` register can hold is exactly an `f64`, so
+    /// nothing is lost by carrying them this way and no width needs an
+    /// instruction of its own — which is why adding `byte`, `short`
+    /// and `half` will add none either.  `06_mir/verify.zig` checks
+    /// the value really does fit the register it lands in.
+    const_long: i64,
+    const_double: f64,
     const_string: u32,
     local_get: LocalId,
     local_set: struct { local: LocalId, value: Register },
     binary: Binary,
     unary: Unary,
-    convert: struct { kind: ConvertKind, operand: Register },
+    /// A numeric conversion: from the operand's type to this
+    /// instruction's own result type.
+    ///
+    /// **There is no kind.**  A conversion already knows both ends —
+    /// the operand carries the source and the register carries the
+    /// destination — so a stored kind is information the verifier can
+    /// derive and a second place for the two to disagree.  Seven types
+    /// would have been up to forty-two kinds; there are none, and the
+    /// instruction set got smaller rather than larger (docs/TYPES.md
+    /// §3).
+    convert: Register,
     struct_make: struct { layout: u32, fields: []Register },
     struct_get: struct { target: Register, layout: u32, field: u32 },
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },

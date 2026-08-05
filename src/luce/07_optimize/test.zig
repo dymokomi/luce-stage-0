@@ -295,7 +295,7 @@ fn handBuilt(
     const arena = program.arena.allocator();
 
     const heap_types = try arena.alloc(types.HeapType, 1);
-    heap_types[0] = .{ .list = .int };
+    heap_types[0] = .{ .list = .long };
     program.heap_types = heap_types;
 
     const items = try arena.alloc(Register, instructions.len);
@@ -404,7 +404,7 @@ test "ownership never forwards a load out of a slot that owns its storage" {
     const arena = program.arena.allocator();
 
     const heap_types = try arena.alloc(types.HeapType, 1);
-    heap_types[0] = .{ .list = .int };
+    heap_types[0] = .{ .list = .long };
     program.heap_types = heap_types;
     const layouts = try arena.alloc(types.StructLayout, 1);
     const fields = try arena.alloc(types.StructField, 1);

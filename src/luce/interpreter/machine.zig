@@ -383,8 +383,17 @@ pub const Machine = struct {
                 const instruction = function.instructions[item];
                 switch (instruction) {
                     .const_boolean => |value| registers[item] = .ofBoolean(value),
-                    .const_int => |value| registers[item] = .ofInt(value),
-                    .const_float => |value| registers[item] = .ofFloat(value),
+                    // A numeric constant travels at the widest member
+                    // of its family and lands at the register's own
+                    // width (docs/TYPES.md §1).
+                    .const_long => |value| registers[item] = if (function.result_types[item] == .int)
+                        .ofInt(@intCast(value))
+                    else
+                        .ofLong(value),
+                    .const_double => |value| registers[item] = if (function.result_types[item] == .float)
+                        .ofFloat(@floatCast(value))
+                    else
+                        .ofDouble(value),
                     .const_string => |constant| {
                         registers[item] = .ofString(self.program.constants[constant]);
                     },
@@ -406,13 +415,13 @@ pub const Machine = struct {
                                 return self.caught(mistake),
                         };
                     },
-                    .convert => |operation| {
-                        const operand = registers[operation.operand];
-                        registers[item] = switch (operation.kind) {
-                            .int_to_float => operators.intToFloat(operand),
-                            .float_to_int => operators.floatToInt(&self.runtime, operand) catch |mistake|
-                                return self.caught(mistake),
-                        };
+                    .convert => |operand_register| {
+                        const operand = registers[operand_register];
+                        registers[item] = operators.convert(
+                            &self.runtime,
+                            operand,
+                            mir.boxTag(function.result_types[item]).?,
+                        ) catch |mistake| return self.caught(mistake);
                     },
                     .struct_make => |make| {
                         self.field_scratch.clearRetainingCapacity();
@@ -542,7 +551,7 @@ pub const Machine = struct {
                 self.dims_scratch.clearRetainingCapacity();
                 try self.dims_scratch.ensureTotalCapacity(self.arena, new.dims.len);
                 for (new.dims) |register| {
-                    self.dims_scratch.appendAssumeCapacity(registers[register].asInt());
+                    self.dims_scratch.appendAssumeCapacity(registers[register].asLong());
                 }
                 return self.runtime.newArray(
                     self.dims_scratch.items,
@@ -558,7 +567,9 @@ pub const Machine = struct {
             .none => .none,
             .boolean => .ofBoolean(false),
             .int => .ofInt(0),
+            .long => .ofLong(0),
             .float => .ofFloat(0.0),
+            .double => .ofDouble(0.0),
             .string => .ofString(""),
             .heap => .null_object,
             // The zero of a `T?` is absence, which owns nothing (S43).
@@ -643,10 +654,10 @@ pub const Machine = struct {
             .floor => return operators.floor(registers[arguments[0]]),
             .ceil => return operators.ceil(registers[arguments[0]]),
             .trunc => return operators.truncate(registers[arguments[0]]),
-            .compare_int_float => return .ofBoolean(operators.compareIntFloat(
-                @enumFromInt(registers[arguments[0]].asInt()),
-                registers[arguments[1]].asInt(),
-                registers[arguments[2]].asFloat(),
+            .compare_long_double => return .ofBoolean(operators.compareLongDouble(
+                @enumFromInt(registers[arguments[0]].asLong()),
+                registers[arguments[1]].asLong(),
+                registers[arguments[2]].asDouble(),
             )),
             .len => return containers.length(&self.runtime, registers[arguments[0]]),
             .null_object => return .null_object,
@@ -702,8 +713,8 @@ pub const Machine = struct {
             .list_slice => return containers.listSlice(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
-                registers[arguments[2]].asInt(),
+                registers[arguments[1]].asLong(),
+                registers[arguments[2]].asLong(),
             ),
             .append_value => {
                 try containers.append(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
@@ -713,7 +724,7 @@ pub const Machine = struct {
                 try containers.appendAscii(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asInt(),
+                    registers[arguments[1]].asLong(),
                 );
                 return .none;
             },
@@ -722,7 +733,7 @@ pub const Machine = struct {
                 try containers.insert(
                     &self.runtime,
                     registers[arguments[0]],
-                    registers[arguments[1]].asInt(),
+                    registers[arguments[1]].asLong(),
                     registers[arguments[2]],
                 );
                 return .none;
@@ -739,17 +750,17 @@ pub const Machine = struct {
             .key_at => return containers.keyAt(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
+                registers[arguments[1]].asLong(),
             ),
             .value_at => return containers.valueAt(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
+                registers[arguments[1]].asLong(),
             ),
             .dim_size => return containers.dimSize(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
+                registers[arguments[1]].asLong(),
             ),
             .free_object => {
                 try containers.freeVerb(
@@ -773,7 +784,7 @@ pub const Machine = struct {
                 try containers.reverse(&self.runtime, registers[arguments[0]]);
                 return .none;
             },
-            .list_find => return .ofInt(try containers.find(
+            .list_find => return .ofLong(try containers.find(
                 &self.runtime,
                 registers[arguments[0]],
                 registers[arguments[1]],
@@ -806,24 +817,24 @@ pub const Machine = struct {
             .str_value => return text.str(&self.runtime, registers[arguments[0]]),
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
             .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
-            .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asInt()),
+            .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asLong()),
             .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),
             .string_slice => return text.slice(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
-                registers[arguments[2]].asInt(),
+                registers[arguments[1]].asLong(),
+                registers[arguments[2]].asLong(),
             ),
             .string_byte => return text.byteAt(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
+                registers[arguments[1]].asLong(),
             ),
             .string_find_byte => return text.findByte(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]].asInt(),
-                registers[arguments[2]].asInt(),
+                registers[arguments[1]].asLong(),
+                registers[arguments[2]].asLong(),
             ),
             .assert_true => {
                 if (!registers[arguments[0]].asBoolean()) {
@@ -938,7 +949,7 @@ pub const Machine = struct {
             .clock_ms => {
                 const host = try self.service();
                 const callback = host.clock_ms orelse return self.runtime.fail(.host_unavailable);
-                return .ofInt(callback(host.context));
+                return .ofLong(callback(host.context));
             },
             .sleep_ms => {
                 const host = try self.service();
@@ -946,7 +957,7 @@ pub const Machine = struct {
                 // A duration that has already elapsed is not a bug:
                 // `deadline - now` goes negative on a slow frame, and
                 // the answer is "no time left to wait".
-                callback(host.context, registers[arguments[0]].asInt());
+                callback(host.context, registers[arguments[0]].asLong());
                 return .none;
             },
             .env_get => {
@@ -964,11 +975,11 @@ pub const Machine = struct {
             },
             .term_rows => {
                 const screen = try self.terminal();
-                return .ofInt(screen.term_rows(screen.context));
+                return .ofLong(screen.term_rows(screen.context));
             },
             .term_cols => {
                 const screen = try self.terminal();
-                return .ofInt(screen.term_cols(screen.context));
+                return .ofLong(screen.term_cols(screen.context));
             },
             .term_clear => {
                 const screen = try self.terminal();
@@ -979,8 +990,8 @@ pub const Machine = struct {
                 const screen = try self.terminal();
                 try screen.term_move(
                     screen.context,
-                    registers[arguments[0]].asInt(),
-                    registers[arguments[1]].asInt(),
+                    registers[arguments[0]].asLong(),
+                    registers[arguments[1]].asLong(),
                 );
                 return .none;
             },
@@ -988,8 +999,8 @@ pub const Machine = struct {
                 const screen = try self.terminal();
                 try screen.term_style(
                     screen.context,
-                    registers[arguments[0]].asInt(),
-                    registers[arguments[1]].asInt(),
+                    registers[arguments[0]].asLong(),
+                    registers[arguments[1]].asLong(),
                     registers[arguments[2]].asBoolean(),
                 );
                 return .none;
@@ -1062,5 +1073,5 @@ fn namedBinding(
     serial: u64,
 ) ?runtime.OwnedBy {
     if (arguments.len != 2) return null;
-    return .{ .serial = serial, .local = @intCast(registers[arguments[1]].asInt()) };
+    return .{ .serial = serial, .local = @intCast(registers[arguments[1]].asLong()) };
 }

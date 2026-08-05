@@ -1478,7 +1478,7 @@ pub const FunctionBuilder = struct {
     /// order that makes sense: `let x: double? = 1` widens, then wraps.
     fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
-        if (expected == .float and value.value_type == .int) return try self.promote(value);
+        if (value.value_type.widensTo(expected)) return try self.widenNumeric(value, expected);
         const payload = expected.held() orelse return null;
         const inner = (try self.fit(value, payload)) orelse return null;
         const arguments = try self.arena().alloc(Register, 1);
@@ -1492,22 +1492,47 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Widen an `long` to a `double`: the language's one numeric
-    /// conversion that is not spelled (docs/NUMERICS.md).  One
-    /// direction, and never the reverse — implicit narrowing is what
-    /// would make float contagion silent, and Luce does not have it.
+    /// Widen a number to a wider one along `Type.widensTo` — the whole
+    /// of the language's unwritten numeric conversion (docs/TYPES.md
+    /// §2).  Four pairs: `int` to `long` and to `double`, `long` to
+    /// `double`, `float` to `double`.  Never the reverse, and never
+    /// across a ladder into a *narrow* float, because implicit
+    /// narrowing is what would make a lost digit silent.
     ///
-    /// A promoted *literal* costs nothing: `sitofp` of a constant is
-    /// folded before any machine code exists.  A promoted variable
+    /// A widened *literal* costs nothing: the conversion of a constant
+    /// is folded before any machine code exists.  A widened variable
     /// costs one instruction.
-    fn promote(self: *FunctionBuilder, value: Typed) Error!Typed {
+    ///
+    /// The caller has already asked `widensTo`; this asserts it rather
+    /// than re-deciding it, so there is one statement of the lattice.
+    fn widenNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
+        std.debug.assert(value.value_type.widensTo(to));
         return .{
             .register = try self.code.emit(
-                .{ .convert = .{ .kind = .int_to_float, .operand = value.register } },
-                .float,
+                .{ .convert = value.register },
+                to,
             ),
-            .value_type = .float,
+            .value_type = to,
         };
+    }
+
+    /// Bring an already-lowered value to `want` when it gets there by
+    /// widening, and say whether it is there afterwards.
+    ///
+    /// The builtins ask this rather than comparing types, because
+    /// "an index is a `long`" has always meant *an integer*, and an
+    /// `int` is one — it reaches a `long` place with nothing written
+    /// down, exactly as it does at an argument or a store
+    /// (docs/TYPES.md §2).  Comparing exactly would refuse
+    /// `xs[i]` for the commonest `int` there is, a loop counter.
+    ///
+    /// The value is rewritten in place, because the register the
+    /// caller goes on to pass is this one.
+    fn widensInto(self: *FunctionBuilder, held: *Typed, want: Type) Error!bool {
+        if (held.value_type.eql(want)) return true;
+        if (!held.value_type.widensTo(want)) return false;
+        held.* = try self.widenNumeric(held.*, want);
+        return true;
     }
 
     /// The element type a `list(T)` place names, for the literal about
@@ -1526,28 +1551,32 @@ pub const FunctionBuilder = struct {
     /// composes its two widenings in.
     fn landingType(expected: Type) ?Type {
         return switch (expected) {
-            .int, .float => expected,
+            .int, .long, .float, .double => expected,
             .optional => |payload| switch (payload) {
                 .int => .int,
+                .long => .long,
                 .float => .float,
+                .double => .double,
                 .boolean, .string, .strukt, .heap => null,
             },
             .none, .boolean, .string, .strukt, .heap => null,
         };
     }
 
-    /// Bring two numeric operands to one type, when one of them is an
-    /// `long` and the other a `double`.  True when it did something.
+    /// Bring two numeric operands to the type they meet at
+    /// (`Type.unified`).  True when it moved either of them.
     fn unifyNumeric(self: *FunctionBuilder, left: *Typed, right: *Typed) Error!bool {
-        if (left.value_type == .int and right.value_type == .float) {
-            left.* = try self.promote(left.*);
-            return true;
+        const meeting = Type.unified(left.value_type, right.value_type) orelse return false;
+        var moved = false;
+        if (!left.value_type.eql(meeting)) {
+            left.* = try self.widenNumeric(left.*, meeting);
+            moved = true;
         }
-        if (left.value_type == .float and right.value_type == .int) {
-            right.* = try self.promote(right.*);
-            return true;
+        if (!right.value_type.eql(meeting)) {
+            right.* = try self.widenNumeric(right.*, meeting);
+            moved = true;
         }
-        return false;
+        return moved;
     }
 
     /// A value that reached its place, and whether it got there by the
@@ -1629,8 +1658,75 @@ pub const FunctionBuilder = struct {
     const inline_operands = 8;
 
     fn lowerOperands(self: *FunctionBuilder, expressions: []const *ast.Expression) Error!?[]Typed {
-        return self.lowerOperandsInto(expressions, null);
+        return self.lowerOperandsInto(expressions, .nothing);
     }
+
+    /// What the operands of one batch land on — asked per operand, in
+    /// order, because not every batch knows the answer up front.
+    ///
+    /// A call's parameters are written down in front of it, so
+    /// `places` has the whole list before anything is lowered.  A
+    /// **method's** are not: `xs.append(0.1)` takes its parameter type
+    /// from `xs`, which is operand zero of this very batch — and the
+    /// same is true of `xs[i] = 0.1`, whose element type is operand
+    /// zero's.  Both are answered here, after operand zero has been
+    /// lowered and before the argument is, which is the only order in
+    /// which `0.1` can be parsed at the width it lands on
+    /// (docs/TYPES.md §1).  Widening it afterwards is a different
+    /// number.
+    ///
+    /// Splitting the batch in two would have answered it as well, and
+    /// would have given up the cross-operand analysis that copies a
+    /// borrowed string before a later operand can free it
+    /// (docs/STRINGS.md).  One batch, asked as it goes.
+    /// The type operand `index` of a batch lands on, given the
+    /// operands already lowered into `values`, or null when nothing
+    /// names one.  Operand zero never lands on anything: it is either
+    /// an ordinary operand or the receiver the others ask about.
+    fn landsOn(
+        self: *FunctionBuilder,
+        landing: Landing,
+        values: []const Typed,
+        index: usize,
+        count: usize,
+    ) Error!?Type {
+        switch (landing) {
+            .nothing => return null,
+            .places => |places| return places[index],
+            .method => |name| {
+                if (index == 0) return null;
+                const wanted = (try self.methodParameters(values[0].value_type, name)) orelse
+                    return null;
+                return if (index - 1 < wanted.len) wanted[index - 1] else null;
+            },
+            .stored_element => {
+                if (index == 0) return null;
+                // Every index is a `long`; the value at the end lands
+                // on the element type, which the container named.
+                if (index + 1 < count) return .long;
+                const descriptor = self.analyzer.heapOf(values[0].value_type) orelse return null;
+                return switch (descriptor) {
+                    .list => |element| element,
+                    .array => |shape| shape.element,
+                    .map => |pair| pair.value,
+                    .builder => null,
+                };
+            },
+        }
+    }
+
+    const Landing = union(enum) {
+        /// Nothing is written down; every operand takes the default.
+        nothing,
+        /// One type per operand, positionally.
+        places: []const Type,
+        /// Operand zero is a method receiver and names what the rest
+        /// take, through `methodParameters`.
+        method: []const u8,
+        /// Operand zero is a container, the last operand is a value
+        /// going into it, and everything between is an index.
+        stored_element,
+    };
 
     /// As `lowerOperands`, with the type each operand lands in already
     /// known — which is what lets a bare `none` be written among them,
@@ -1638,8 +1734,12 @@ pub const FunctionBuilder = struct {
     fn lowerOperandsInto(
         self: *FunctionBuilder,
         expressions: []const *ast.Expression,
-        expected: ?[]const Type,
+        landing: Landing,
     ) Error!?[]Typed {
+        const expected: ?[]const Type = switch (landing) {
+            .places => |places| places,
+            .nothing, .method, .stored_element => null,
+        };
         var spill_storage: [inline_operands]?LocalId = undefined;
         var split_storage: [inline_operands]bool = undefined;
         const wide = expressions.len > inline_operands;
@@ -1685,7 +1785,9 @@ pub const FunctionBuilder = struct {
             // type written down, so a literal going into one lands
             // there (docs/TYPES.md D3) rather than taking the default
             // and widening afterwards.
-            if (expected) |places| self.wanted = landingType(places[index]);
+            if (try self.landsOn(landing, values, index, expressions.len)) |place| {
+                self.wanted = landingType(place);
+            }
             const value = if (expression.* == .none_literal and expected != null)
                 ((try self.lowerTyped(expression, expected.?[index], expression.span(), "this place")) orelse
                     return null).value
@@ -2208,10 +2310,10 @@ pub const FunctionBuilder = struct {
             return;
         }
         // The value was lowered before the chain named a type for it,
-        // so a double place takes its long here (docs/NUMERICS.md).
+        // so a wider place widens it here (docs/TYPES.md §2).
         var placed = value;
-        if (current_type == .float and placed.value_type == .int) {
-            placed = try self.promote(placed);
+        if (placed.value_type.widensTo(current_type)) {
+            placed = try self.widenNumeric(placed, current_type);
         }
         if (!placed.value_type.eql(current_type)) {
             try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
@@ -2260,7 +2362,7 @@ pub const FunctionBuilder = struct {
         // wrote.  It is a compile error rather than a silent
         // truncation, which is this design's whole safety story in
         // one line — and the fix is one character.
-        if (op == .divide and place_type == .int) {
+        if (op == .divide and place_type == .long) {
             try self.fail(
                 "luce.sema.type",
                 span,
@@ -2513,16 +2615,16 @@ pub const FunctionBuilder = struct {
         expressions[0] = target.base;
         @memcpy(expressions[1 .. 1 + target.indices.len], target.indices);
         expressions[expressions.len - 1] = assign.value;
-        const values = (try self.lowerOperands(expressions)) orelse return;
+        const values = (try self.lowerOperandsInto(expressions, .stored_element)) orelse return;
 
         const object = values[0];
         const indices = values[1 .. values.len - 1];
         const value = &values[values.len - 1];
         const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
         // The value was lowered before the container named a type for
-        // it, so a double element takes its long here (docs/NUMERICS.md).
-        if (element_type == .float and value.value_type == .int) {
-            value.* = try self.promote(value.*);
+        // it, so a wider element widens it here (docs/TYPES.md §2).
+        if (value.value_type.widensTo(element_type)) {
+            value.* = try self.widenNumeric(value.*, element_type);
         }
         // Containers own their object elements: storing one takes a
         // fresh value, a give, or a copy (S20, S21).
@@ -2574,7 +2676,7 @@ pub const FunctionBuilder = struct {
     fn checkIndex(
         self: *FunctionBuilder,
         object: Typed,
-        indices: []const Typed,
+        indices: []Typed,
         span: Span,
     ) Error!?Type {
         const descriptor = self.analyzer.heapOf(object.value_type) orelse {
@@ -2595,7 +2697,7 @@ pub const FunctionBuilder = struct {
 
         switch (descriptor) {
             .list => |element| {
-                if (indices.len != 1 or indices[0].value_type != .int) {
+                if (indices.len != 1 or !try self.widensInto(&indices[0], .long)) {
                     try self.fail("luce.sema.index", span, "lists index with one long", .{});
                     return null;
                 }
@@ -2609,8 +2711,8 @@ pub const FunctionBuilder = struct {
                     });
                     return null;
                 }
-                for (indices) |index_value| {
-                    if (index_value.value_type != .int) {
+                for (indices) |*index_value| {
+                    if (!try self.widensInto(index_value, .long)) {
                         try self.fail("luce.sema.index", span, "array indices are long", .{});
                         return null;
                     }
@@ -2731,18 +2833,21 @@ pub const FunctionBuilder = struct {
         defer self.temporary().free(entry);
         const temps_floor = self.temps.items.len;
         const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
-        const start = bounds[0];
-        const end = bounds[1];
-        if (start.value_type != .int or end.value_type != .int) {
+        // Widened *before* the registers are read: a bound written as
+        // an `int` reaches a `long` loop by widening, and the counted
+        // loop the IR opens is a `long` one (docs/TYPES.md §2).
+        if (!try self.widensInto(&bounds[0], .long) or !try self.widensInto(&bounds[1], .long)) {
             try self.fail("luce.sema.type", loop.span, "range bounds must be long", .{});
             return;
         }
+        const start = bounds[0];
+        const end = bounds[1];
         // Bound temporaries die before the loop starts.
         try self.flushTemps(temps_floor);
 
         try self.pushScope();
         defer self.popScope();
-        const index_local = (try self.declareLocal(loop.name, .int, false, .alias, loop.span)) orelse return;
+        const index_local = (try self.declareLocal(loop.name, .long, false, .alias, loop.span)) orelse return;
         const shape = try self.code.openCountedLoop(index_local, start.register, end.register);
 
         try self.loops.append(self.temporary(), .{
@@ -2796,7 +2901,7 @@ pub const FunctionBuilder = struct {
         // in c:` binds position then payload.
         var payload_kind: mir.Intrinsic = .index_get;
         var position_kind: ?mir.Intrinsic = null; // null = the raw long index
-        var position_type: Type = .int;
+        var position_type: Type = .long;
         const payload_type: Type = switch (descriptor) {
             .list => |element| element,
             .array => |shape| blk: {
@@ -3091,7 +3196,7 @@ pub const FunctionBuilder = struct {
 
         // One walk, so an operand that splits blocks cannot strand the
         // ones before it — the same rule every other operand run keeps.
-        const values = (try self.lowerOperandsInto(returned.values, self.results)) orelse return;
+        const values = (try self.lowerOperandsInto(returned.values, .{ .places = self.results })) orelse return;
         const registers = try self.arena().alloc(Register, values.len);
 
         var moved: std.ArrayList(LocalId) = .empty;
@@ -3194,7 +3299,7 @@ pub const FunctionBuilder = struct {
         // `self` — `return low + self.next() % span` is the shape —
         // and reading the receiver before that runs would hand the
         // caller back the state the method started with.
-        const values = (try self.lowerOperandsInto(returned.values, self.results)) orelse return;
+        const values = (try self.lowerOperandsInto(returned.values, .{ .places = self.results })) orelse return;
         const registers = try self.arena().alloc(Register, values.len + 1);
         // The receiver goes into the shape as a *store*, so it takes
         // its storage first: `ownValue` deep-copies a struct's run, and
@@ -3378,14 +3483,15 @@ pub const FunctionBuilder = struct {
 
     /// Materialise an integer literal at the type it lands on
     /// (docs/TYPES.md D3).  `negated` folds the minus in first, so
-    /// `long`'s minimum stays writable; `wanted` is the landing type the
-    /// context asked for, and null means there is no context and the
-    /// literal takes the default.
+    /// `long`'s minimum stays writable; `wanted` is the landing type
+    /// the context asked for, and null means there is no context and
+    /// the literal takes the default, which is `int`.
     ///
-    /// The float landing reads the **digits**, not `parseIntLiteral`'s
-    /// result: an integer literal past `long`'s range still lands
-    /// correctly on a float that has room for it, and the rule "parsed
-    /// at the width it lands on" keeps its one spelling.
+    /// **The text is read at the width it lands on**, never at the
+    /// widest and then narrowed: a float landing reads the *digits*
+    /// rather than `parseIntLiteral`'s result, so an integer literal
+    /// past `long`'s range still lands correctly on a float that has
+    /// room for it, and the one rule keeps its one spelling.
     fn lowerIntLiteral(
         self: *FunctionBuilder,
         literal: ast.Literal,
@@ -3393,18 +3499,19 @@ pub const FunctionBuilder = struct {
         negated: bool,
         wanted: ?Type,
     ) Error!?Typed {
-        if (wanted != null and wanted.? == .float) {
-            const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated) orelse {
-                try self.fail("luce.sema.literal", span, "{s}", .{context.float_range_message});
+        const lands: Type = wanted orelse .int;
+        if (lands.isFloating()) {
+            const parsed = helpers.parseIntLiteralAsFloat(literal.text, negated, lands) orelse {
+                try self.fail("luce.sema.literal", span, "{s}", .{context.rangeMessage(lands)});
                 return null;
             };
-            return .{ .register = try self.code.emit(.{ .const_float = parsed }, .float), .value_type = .float };
+            return .{ .register = try self.code.emit(.{ .const_double = parsed }, lands), .value_type = lands };
         }
-        const parsed = helpers.parseIntLiteral(literal.text, negated) orelse {
-            try self.fail("luce.sema.literal", span, "{s}", .{context.integer_range_message});
+        const parsed = helpers.parseIntLiteral(literal.text, negated, lands) orelse {
+            try self.fail("luce.sema.literal", span, "{s}", .{context.rangeMessage(lands)});
             return null;
         };
-        return .{ .register = try self.code.emit(.{ .const_int = parsed }, .int), .value_type = .int };
+        return .{ .register = try self.code.emit(.{ .const_long = parsed }, lands), .value_type = lands };
     }
 
     fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Typed {
@@ -3422,11 +3529,18 @@ pub const FunctionBuilder = struct {
         switch (expression.*) {
             .int_literal => |literal| return self.lowerIntLiteral(literal, literal.span, false, wanted),
             .float_literal => |literal| {
-                const parsed = helpers.parseFloatLiteral(literal.text) orelse {
-                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.float_range_message});
+                // A float literal lands on `float` with no context —
+                // the owner's ruling, and the one place the language
+                // differs from every precedent (docs/TYPES.md D2).
+                const lands: Type = if (wanted) |place|
+                    (if (place.isFloating()) place else .float)
+                else
+                    .float;
+                const parsed = helpers.parseFloatLiteral(literal.text, lands) orelse {
+                    try self.fail("luce.sema.literal", literal.span, "{s}", .{context.rangeMessage(lands)});
                     return null;
                 };
-                return .{ .register = try self.code.emit(.{ .const_float = parsed }, .float), .value_type = .float };
+                return .{ .register = try self.code.emit(.{ .const_double = parsed }, lands), .value_type = lands };
             },
             .bool_literal => |literal| {
                 return .{ .register = try self.code.emit(.{ .const_boolean = literal.value }, .boolean), .value_type = .boolean };
@@ -3485,7 +3599,7 @@ pub const FunctionBuilder = struct {
             .call => |call| return self.lowerCall(call, as_statement, fallible_allowed, shape_position),
             .binary => |binary| {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
-                return self.lowerBinary(binary);
+                return self.lowerBinary(binary, wanted);
             },
             .unary => |unary| return self.lowerUnary(unary, wanted),
             .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed, shape_position),
@@ -3848,7 +3962,7 @@ pub const FunctionBuilder = struct {
         // for it.
         const arguments = try self.arena().alloc(Register, 2);
         arguments[0] = value;
-        arguments[1] = try self.code.emit(.{ .const_int = local }, .int);
+        arguments[1] = try self.code.emit(.{ .const_long = local }, .long);
         return .{
             .register = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
@@ -3870,8 +3984,12 @@ pub const FunctionBuilder = struct {
 
     fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Register {
         return switch (value) {
-            .int => |folded| try self.code.emit(.{ .const_int = folded }, .int),
-            .float => |folded| try self.code.emit(.{ .const_float = folded }, .float),
+            // The width is the constant's own, not the widest of its
+            // family: a folded constant carries its value at the
+            // family's widest member and its `value_type` says where
+            // that value landed (docs/TYPES.md §1).
+            .long => |folded| try self.code.emit(.{ .const_long = folded }, value_type),
+            .double => |folded| try self.code.emit(.{ .const_double = folded }, value_type),
             .boolean => |folded| try self.code.emit(.{ .const_boolean = folded }, .boolean),
             .string => |folded| blk: {
                 const constant = try self.analyzer.pool.intern(folded);
@@ -3945,8 +4063,8 @@ pub const FunctionBuilder = struct {
             });
             dims = try self.arena().alloc(Register, new.dims.len);
             const dimensions = (try self.lowerOperands(new.dims)) orelse return null;
-            for (dimensions, new.dims, dims) |dimension, expression, *register| {
-                if (dimension.value_type != .int) {
+            for (dimensions, new.dims, dims) |*dimension, expression, *register| {
+                if (!try self.widensInto(dimension, .long)) {
                     try self.fail("luce.sema.new", expression.span(), "array dimensions are long", .{});
                     return null;
                 }
@@ -3980,21 +4098,25 @@ pub const FunctionBuilder = struct {
         }
         const elements = (try self.lowerOperands(literal.elements)) orelse return null;
         const element_type = wanted orelse unified: {
-            // One double among numbers makes them all Floats, wherever
-            // in the literal it stands: `[1, 2.5]` and `[2.5, 1]` are
+            // The elements meet where two operands of an operator meet
+            // and for the same reason: `[1, 2.5]` and `[2.5, 1]` are
             // the same list, as `1 + 2.5` and `2.5 + 1` are the same
-            // sum (docs/NUMERICS.md).
-            for (elements) |element| {
-                if (element.value_type == .float) break :unified .float;
+            // sum (docs/TYPES.md §2).  A non-numeric element stops the
+            // fold and the first element decides, which is what the
+            // mismatch below then reports.
+            var meeting = elements[0].value_type;
+            for (elements[1..]) |element| {
+                meeting = Type.unified(meeting, element.value_type) orelse
+                    break :unified elements[0].value_type;
             }
-            break :unified elements[0].value_type;
+            break :unified meeting;
         };
         for (elements, literal.elements) |*element, expression| {
-            // A `list(double)` takes long elements by widening them, and
-            // so does a list whose first element made it double
-            // (docs/NUMERICS.md): `[1.5, 2]` is a `list(double)`.
-            if (element_type == .float and element.value_type == .int) {
-                element.* = try self.promote(element.*);
+            // A `list(double)` takes narrower elements by widening
+            // them, and so does a list the fold above landed on
+            // (docs/TYPES.md §2): `[1.5, 2]` is a `list(double)`.
+            if (element.value_type.widensTo(element_type)) {
+                element.* = try self.widenNumeric(element.*, element_type);
             }
             if (!element.value_type.eql(element_type)) {
                 try self.fail("luce.sema.type", expression.span(), "list elements are all {s}, got {s}", .{
@@ -4063,8 +4185,8 @@ pub const FunctionBuilder = struct {
         }
 
         const lowered_bounds = sequence[1..];
-        for (lowered_bounds) |value| {
-            if (value.value_type != .int) {
+        for (lowered_bounds) |*value| {
+            if (!try self.widensInto(value, .long)) {
                 try self.fail("luce.sema.type", slice.span, "slice bounds are long", .{});
                 return null;
             }
@@ -4075,7 +4197,7 @@ pub const FunctionBuilder = struct {
             start = lowered_bounds[next_bound].register;
             next_bound += 1;
         } else {
-            start = try self.code.emit(.{ .const_int = 0 }, .int);
+            start = try self.code.emit(.{ .const_long = 0 }, .long);
         }
         var end: Register = undefined;
         if (slice.end != null) {
@@ -4083,7 +4205,7 @@ pub const FunctionBuilder = struct {
         } else {
             const whole = try self.arena().alloc(Register, 1);
             whole[0] = target.register;
-            end = try self.code.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .int);
+            end = try self.code.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .long);
         }
 
         const arguments = try self.arena().alloc(Register, 3);
@@ -4163,7 +4285,65 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
+    /// The two sides of an operator, each landing where it should.
+    ///
+    /// Two rules, and between them they are the whole of "a number has
+    /// no type until it meets one" (docs/TYPES.md D3) inside an
+    /// operator:
+    ///
+    ///   * **Both sides untyped** — `2 * 0.1` — and the *place* the
+    ///     whole expression lands in decides, so `let x: double =
+    ///     2 * 0.1` computes at binary64 throughout.  `wanted` is
+    ///     pushed into both and reaches every literal under them.
+    ///   * **One side typed** — `x * 0.1` — and that side decides,
+    ///     because what the literal met is `x`.  This is Go's rule and
+    ///     Luce needs it for Go's reason: without it the literal takes
+    ///     the default `float`, and `double_x * float(0.1)` is not
+    ///     `double_x * 0.1` — binary32's nearest 0.1 is a different
+    ///     number, and the widening that follows cannot put back what
+    ///     the parse threw away.
+    ///
+    /// In the second case the typed side is lowered **first**, so its
+    /// type is known before the literal is parsed.  That reorders
+    /// nothing observable: the sides swap only when one of them is a
+    /// constant expression over literals, which evaluates to itself
+    /// with no effects, no calls and no traps.
+    ///
+    /// `04_semantics/declarations.zig` folds a file-scope `let` by the
+    /// same two rules, because the two must agree about what `2 * 0.1`
+    /// is.
+    fn lowerBinaryOperands(
+        self: *FunctionBuilder,
+        binary: ast.Binary,
+        wanted: ?Type,
+    ) Error!?[]Typed {
+        const left_untyped = helpers.isUntypedNumber(binary.left);
+        const right_untyped = helpers.isUntypedNumber(binary.right);
+        if (left_untyped and right_untyped) {
+            const values = try self.arena().alloc(Typed, 2);
+            const expressions = [_]*ast.Expression{ binary.left, binary.right };
+            for (expressions, 0..) |expression, index| {
+                if (wanted) |place| self.wanted = landingType(place);
+                values[index] = (try self.lowerExpression(expression, false)) orelse return null;
+            }
+            return values;
+        }
+        if (left_untyped == right_untyped) {
+            return self.lowerOperands(&.{ binary.left, binary.right });
+        }
+        const values = try self.arena().alloc(Typed, 2);
+        const written_first: usize = if (left_untyped) 1 else 0;
+        const written_second: usize = 1 - written_first;
+        const expressions = [_]*ast.Expression{ binary.left, binary.right };
+        values[written_first] =
+            (try self.lowerExpression(expressions[written_first], false)) orelse return null;
+        if (landingType(values[written_first].value_type)) |place| self.wanted = place;
+        values[written_second] =
+            (try self.lowerExpression(expressions[written_second], false)) orelse return null;
+        return values;
+    }
+
+    fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Error!?Typed {
         switch (binary.op) {
             .logic_and, .logic_or => return self.lowerShortCircuit(binary),
             .coalesce => return self.lowerCoalesce(binary),
@@ -4183,7 +4363,7 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        const sides = (try self.lowerOperands(&.{ binary.left, binary.right })) orelse return null;
+        const sides = (try self.lowerBinaryOperands(binary, wanted)) orelse return null;
         var left = sides[0];
         var right = sides[1];
 
@@ -4203,25 +4383,35 @@ pub const FunctionBuilder = struct {
             .logic_and, .logic_or, .coalesce, .catch_error => unreachable, // answered above
         };
 
-        // Numbers that mix (docs/NUMERICS.md).  Arithmetic widens the
-        // long and answers a double; comparison does **not** widen —
-        // it is exact, and leaves through its own instruction.
-        if ((left.value_type == .int and right.value_type == .float) or
-            (left.value_type == .float and right.value_type == .int))
+        // Numbers that mix (docs/TYPES.md §2).  Arithmetic brings them
+        // to the type they meet at; a comparison **across the
+        // ladders** does not widen at all — it is exact, and leaves
+        // through its own instruction.  A comparison along one ladder
+        // is an ordinary widening, because widening within a family
+        // loses nothing.
+        if (left.value_type.isNumeric() and right.value_type.isNumeric() and
+            !left.value_type.eql(right.value_type))
         {
-            if (operation.isComparison()) {
+            const crosses = left.value_type.isInteger() != right.value_type.isInteger();
+            if (crosses and operation.isComparison()) {
                 return self.lowerExactCompare(operation, left, right);
             }
             _ = try self.unifyNumeric(&left, &right);
         }
 
-        // `/` is **real division** and always answers a double, so two
-        // Ints widen here too and there is no integer `/` left in the
-        // IR (docs/NUMERICS.md §2).  `1 / 2` is `0.5`; the quotient
-        // that answers `0` is `1 // 2`.
-        if (operation == .divide and left.value_type == .int and right.value_type == .int) {
-            left = try self.promote(left);
-            right = try self.promote(right);
+        // `/` is **real division** and always answers a float, so two
+        // integers widen here too and there is no integer `/` left in
+        // the IR (docs/NUMERICS.md §2).  `1 / 2` is `0.5`; the
+        // quotient that answers `0` is `1 // 2`.
+        //
+        // They widen to `double` at **either** integer width, which is
+        // the cross-family rule and not a special case: `int / int` is
+        // a `double` because that is where an integer meets a float,
+        // and a `float` result would lose everything above 2^24 from
+        // operands that reach it (docs/TYPES.md §2).
+        if (operation == .divide and left.value_type.isInteger() and right.value_type.isInteger()) {
+            left = try self.widenNumeric(left, .double);
+            right = try self.widenNumeric(right, .double);
         }
 
         if (!left.value_type.eql(right.value_type)) {
@@ -4291,30 +4481,75 @@ pub const FunctionBuilder = struct {
     }
 
     /// `1 < 1.5`, `9007199254740993 == 9007199254740992.0`: a
-    /// comparison whose sides are an `long` and a `double` compares the
-    /// numbers and not a conversion of them (docs/NUMERICS.md §5).
+    /// comparison whose sides sit on different ladders compares the
+    /// **numbers** and not a conversion of them (docs/NUMERICS.md §5).
     ///
-    /// The runtime answers one shape — long first — so an operator
-    /// written the other way round is **mirrored** rather than given a
-    /// second implementation.  Only the ordering operators have a
-    /// mirror image; equality is its own.
+    /// Four pairs reach here now — `{int, long} x {float, double}` —
+    /// and one function answers all four, because widening the integer
+    /// to `i64` and the float to `f64` is lossless by construction.
+    /// So the operands widen into the pair the intrinsic already
+    /// speaks and nothing new is written (docs/TYPES.md §5).
+    ///
+    /// **An `int` against a `double` skips the call.**  Every i32 is
+    /// exactly representable in binary64, so widening decides it and
+    /// an ordinary `fcmp` is the whole comparison — an optimisation
+    /// the two-type language could not have, because it had no integer
+    /// narrower than the mantissa.
+    ///
+    /// The runtime answers one shape — the integer first — so an
+    /// operator written the other way round is **mirrored** rather
+    /// than given a second implementation.  Only the ordering
+    /// operators have a mirror image; equality is its own.
     fn lowerExactCompare(
         self: *FunctionBuilder,
         operation: mir.BinaryOp,
         left: Typed,
         right: Typed,
     ) Error!?Typed {
-        const int_first = left.value_type == .int;
+        const int_first = left.value_type.isInteger();
+        var whole = if (int_first) left else right;
+        var fraction = if (int_first) right else left;
+
+        if (whole.value_type == .int and fraction.value_type == .double) {
+            const widened = try self.widenNumeric(whole, .double);
+            const ordered = if (int_first)
+                try self.emitCompare(operation, widened, fraction)
+            else
+                try self.emitCompare(operation, fraction, widened);
+            return ordered;
+        }
+
+        if (whole.value_type == .int) whole = try self.widenNumeric(whole, .long);
+        if (fraction.value_type == .float) fraction = try self.widenNumeric(fraction, .double);
+
         const spelled = if (int_first) operation else operation.mirrored();
         const arguments = try self.arena().alloc(Register, 3);
-        arguments[0] = try self.code.emit(.{ .const_int = @intFromEnum(spelled) }, .int);
-        arguments[1] = if (int_first) left.register else right.register;
-        arguments[2] = if (int_first) right.register else left.register;
+        arguments[0] = try self.code.emit(.{ .const_long = @intFromEnum(spelled) }, .long);
+        arguments[1] = whole.register;
+        arguments[2] = fraction.register;
         return .{
             .register = try self.code.emit(
-                .{ .intrinsic = .{ .kind = .compare_int_float, .arguments = arguments } },
+                .{ .intrinsic = .{ .kind = .compare_long_double, .arguments = arguments } },
                 .boolean,
             ),
+            .value_type = .boolean,
+        };
+    }
+
+    /// An ordinary same-type comparison, once both sides are one type.
+    fn emitCompare(
+        self: *FunctionBuilder,
+        operation: mir.BinaryOp,
+        left: Typed,
+        right: Typed,
+    ) Error!Typed {
+        return .{
+            .register = try self.code.emit(.{ .binary = .{
+                .op = operation,
+                .operand_type = left.value_type,
+                .left = left.register,
+                .right = right.register,
+            } }, .boolean),
             .value_type = .boolean,
         };
     }
@@ -4657,7 +4892,7 @@ pub const FunctionBuilder = struct {
                 return null;
             }
         }
-        const values = (try self.lowerOperandsInto(expressions, info.parameter_types)) orelse return null;
+        const values = (try self.lowerOperandsInto(expressions, .{ .places = info.parameter_types })) orelse return null;
         const registers = try self.arena().alloc(Register, call_arguments.len);
         for (values, 0..) |value, index| {
             const fitted = (try self.fit(value, info.parameter_types[index])) orelse {
@@ -4818,11 +5053,11 @@ pub const FunctionBuilder = struct {
         result: Type,
     }{
         // The language's primitive byte access.
-        .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.int}, .result = .int },
+        .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.long}, .result = .long },
         // The scanning primitive that `byte_at` is the access
         // primitive: std strings builds substring search on it, and it
         // is the seam SIMD would enter through (docs/STD.md).
-        .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .int, .int }, .result = .int },
+        .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .long, .long }, .result = .long },
     };
 
     /// Builtin methods on values: strings, lists, arrays, maps, and
@@ -4844,7 +5079,7 @@ pub const FunctionBuilder = struct {
             }
             expressions[index + 1] = argument.value;
         }
-        const values = (try self.lowerOperands(expressions)) orelse
+        const values = (try self.lowerOperandsInto(expressions, .{ .method = method.name })) orelse
             return null;
         const receiver = values[0];
         const arguments = values[1..];
@@ -4859,7 +5094,7 @@ pub const FunctionBuilder = struct {
                 // strings.find(s, x) (docs/STD.md).
                 for (string_methods) |primitive| {
                     if (!std.mem.eql(u8, method.name, primitive.name)) continue;
-                    if (!try self.methodTakes(method, arguments, primitive.takes)) return null;
+                    if (!try self.methodTakes(method, arguments, receiver.value_type)) return null;
                     break :blk .{ .kind = primitive.kind, .result = primitive.result };
                 }
                 return self.stringsCall(method, values, as_statement);
@@ -4872,7 +5107,7 @@ pub const FunctionBuilder = struct {
                 {
                     return self.stringsCall(method, values, as_statement);
                 }
-                if (try self.objectMethod(method, descriptor, arguments)) |found| {
+                if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
                     break :blk found;
                 }
                 return null;
@@ -5294,17 +5529,105 @@ pub const FunctionBuilder = struct {
     ///
     /// False after reporting.  `wanted` is positional and its length
     /// is the arity.
+    /// What a built-in method takes, given the receiver it is called
+    /// on — **the one table**, and null when the receiver has no such
+    /// method.
+    ///
+    /// It is consulted twice, which is the whole reason it exists as a
+    /// function rather than as `&.{...}` in the dispatch below.  Once
+    /// by `lowerOperandsInto`, *before* an argument is lowered, so a
+    /// numeric literal lands at the type the receiver names: a number
+    /// has no type until it meets one (docs/TYPES.md D3), and
+    /// `xs.append(0.1)` on a `list(double)` must store binary64's 0.1,
+    /// which is not what widening binary32's 0.1 produces.  And once
+    /// by `methodTakes`, to check what actually arrived.  Two answers
+    /// from one table cannot disagree; two tables would.
+    ///
+    /// A string receiver whose name is not a primitive answers null:
+    /// that call is `strings.name(s, ...)`, a library function with a
+    /// signature of its own, and the ordinary call path lands its
+    /// arguments.
+    fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8) Error!?[]const Type {
+        if (receiver == .string) {
+            for (string_methods) |primitive| {
+                if (std.mem.eql(u8, name, primitive.name)) return primitive.takes;
+            }
+            return null;
+        }
+        const descriptor = self.analyzer.heapOf(receiver) orelse return null;
+        return switch (descriptor) {
+            .list => |element| self.sequenceParameters(name, element, true),
+            .array => |shape| blk: {
+                if (std.mem.eql(u8, name, "dim")) break :blk try self.typeList(&.{.long});
+                if (std.mem.eql(u8, name, "fill")) break :blk try self.typeList(&.{shape.element});
+                break :blk self.sequenceParameters(name, shape.element, false);
+            },
+            .map => |pair| blk: {
+                if (std.mem.eql(u8, name, "has") or
+                    std.mem.eql(u8, name, "remove")) break :blk try self.typeList(&.{pair.key});
+                if (std.mem.eql(u8, name, "get")) break :blk try self.typeList(&.{ pair.key, pair.value });
+                if (std.mem.eql(u8, name, "keys") or
+                    std.mem.eql(u8, name, "values") or
+                    std.mem.eql(u8, name, "clear")) break :blk &.{};
+                break :blk null;
+            },
+            .builder => blk: {
+                if (std.mem.eql(u8, name, "append")) break :blk try self.typeList(&.{.string});
+                if (std.mem.eql(u8, name, "append_ascii")) break :blk try self.typeList(&.{.long});
+                if (std.mem.eql(u8, name, "build") or
+                    std.mem.eql(u8, name, "clear")) break :blk &.{};
+                break :blk null;
+            },
+        };
+    }
+
+    /// The list and array half of `methodParameters`.  A `list(T)` and
+    /// a rank-1 `array(T, _)` answer to the same names; `growable`
+    /// says which four only a list has.
+    fn sequenceParameters(
+        self: *FunctionBuilder,
+        name: []const u8,
+        element: Type,
+        growable: bool,
+    ) Error!?[]const Type {
+        if (growable) {
+            if (std.mem.eql(u8, name, "append")) return try self.typeList(&.{element});
+            if (std.mem.eql(u8, name, "insert")) return try self.typeList(&.{ .long, element });
+            if (std.mem.eql(u8, name, "remove")) return try self.typeList(&.{.long});
+            if (std.mem.eql(u8, name, "pop")) return &.{};
+        }
+        if (std.mem.eql(u8, name, "sort") or std.mem.eql(u8, name, "reverse")) return &.{};
+        if (std.mem.eql(u8, name, "clear") and growable) return &.{};
+        if (std.mem.eql(u8, name, "find") or std.mem.eql(u8, name, "contains")) {
+            return try self.typeList(&.{element});
+        }
+        return null;
+    }
+
+    /// A parameter list in arena storage, because the element and key
+    /// types in one are the receiver's and not compile-time constants.
+    fn typeList(self: *FunctionBuilder, items: []const Type) Error![]const Type {
+        return self.arena().dupe(Type, items);
+    }
+
     /// Check a method's arguments against the types it takes, and
-    /// widen the ones that reach them by widening — an `long` handed to
-    /// a `list(double)`'s `append` is a `double` (docs/NUMERICS.md).
+    /// widen the ones that reach them by widening — an `int` handed to
+    /// a `list(double)`'s `append` is a `double` (docs/TYPES.md §2).
     /// The arguments are rewritten in place, because the registers the
     /// caller goes on to pass are these.
+    ///
+    /// A *literal* argument does not reach here needing a widening at
+    /// all: it landed at this type when it was lowered, from this same
+    /// table (`methodParameters`).
     fn methodTakes(
         self: *FunctionBuilder,
         method: ast.Method,
         arguments: []Typed,
-        wanted: []const Type,
+        receiver: Type,
     ) Error!bool {
+        // The dispatch below matched this name against the same table,
+        // so a null here would mean the two had drifted apart.
+        const wanted = (try self.methodParameters(receiver, method.name)).?;
         if (arguments.len != wanted.len) {
             try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
                 method.name,
@@ -5315,8 +5638,8 @@ pub const FunctionBuilder = struct {
             return false;
         }
         for (arguments, wanted, 0..) |*argument, want, index| {
-            if (want == .float and argument.value_type == .int) {
-                argument.* = try self.promote(argument.*);
+            if (argument.value_type.widensTo(want)) {
+                argument.* = try self.widenNumeric(argument.*, want);
             }
             if (argument.value_type.eql(want)) continue;
             try self.fail(
@@ -5480,19 +5803,20 @@ pub const FunctionBuilder = struct {
     fn objectMethod(
         self: *FunctionBuilder,
         method: ast.Method,
+        receiver: Type,
         descriptor: types.HeapType,
         arguments: []Typed,
     ) Error!?MethodFound {
         const name = method.name;
         switch (descriptor) {
-            .list => |element| return self.sequenceMethod(method, element, true, arguments),
+            .list => |element| return self.sequenceMethod(method, receiver, element, true, arguments),
             .array => |shape| {
                 if (std.mem.eql(u8, name, "dim")) {
-                    if (!try self.methodTakes(method, arguments, &.{.int})) return null;
-                    return .{ .kind = .dim_size, .result = .int };
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
+                    return .{ .kind = .dim_size, .result = .long };
                 }
                 if (std.mem.eql(u8, name, "fill")) {
-                    if (!try self.methodTakes(method, arguments, &.{shape.element})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     // One value cannot own every slot (S21, S23):
                     // arrays of objects store per slot instead.
                     if (self.analyzer.carriesObjects(shape.element)) {
@@ -5510,31 +5834,31 @@ pub const FunctionBuilder = struct {
                     try self.fail("luce.sema.method", method.span, "only rank-1 arrays have {s}; index higher ranks", .{name});
                     return null;
                 }
-                return self.sequenceMethod(method, shape.element, false, arguments);
+                return self.sequenceMethod(method, receiver, shape.element, false, arguments);
             },
             .map => |pair| {
                 if (std.mem.eql(u8, name, "has")) {
-                    if (!try self.methodTakes(method, arguments, &.{pair.key})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .has_key, .result = .boolean };
                 }
                 if (std.mem.eql(u8, name, "remove")) {
-                    if (!try self.methodTakes(method, arguments, &.{pair.key})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .remove_entry, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "keys")) {
-                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .map_keys, .result = try self.analyzer.internHeapType(.{ .list = pair.key }) };
                 }
                 if (std.mem.eql(u8, name, "values")) {
-                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .map_values, .result = try self.analyzer.internHeapType(.{ .list = pair.value }) };
                 }
                 if (std.mem.eql(u8, name, "get")) {
-                    if (!try self.methodTakes(method, arguments, &.{ pair.key, pair.value })) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .map_get, .result = pair.value };
                 }
                 if (std.mem.eql(u8, name, "clear")) {
-                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .clear_object, .result = .none };
                 }
                 var suggestion = helpers.Suggestion.init(name);
@@ -5553,19 +5877,19 @@ pub const FunctionBuilder = struct {
                 // is why `str` could not simply be renamed
                 // `string` (docs/NUMERICS.md §7).
                 if (std.mem.eql(u8, name, "build")) {
-                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .str_value, .result = .string };
                 }
                 if (std.mem.eql(u8, name, "append")) {
-                    if (!try self.methodTakes(method, arguments, &.{.string})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .append_value, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "append_ascii")) {
-                    if (!try self.methodTakes(method, arguments, &.{.int})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .append_ascii, .result = .none };
                 }
                 if (std.mem.eql(u8, name, "clear")) {
-                    if (!try self.methodTakes(method, arguments, &.{})) return null;
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
                     return .{ .kind = .clear_object, .result = .none };
                 }
                 var suggestion = helpers.Suggestion.init(name);
@@ -5585,6 +5909,7 @@ pub const FunctionBuilder = struct {
     fn sequenceMethod(
         self: *FunctionBuilder,
         method: ast.Method,
+        receiver: Type,
         element: Type,
         growable: bool,
         arguments: []Typed,
@@ -5592,52 +5917,52 @@ pub const FunctionBuilder = struct {
         const name = method.name;
         if (growable) {
             if (std.mem.eql(u8, name, "append")) {
-                if (!try self.methodTakes(method, arguments, &.{element})) return null;
+                if (!try self.methodTakes(method, arguments, receiver)) return null;
                 return .{ .kind = .append_value, .result = .none };
             }
             if (std.mem.eql(u8, name, "insert")) {
-                if (!try self.methodTakes(method, arguments, &.{ .int, element })) return null;
+                if (!try self.methodTakes(method, arguments, receiver)) return null;
                 return .{ .kind = .insert_value, .result = .none };
             }
             if (std.mem.eql(u8, name, "remove")) {
-                if (!try self.methodTakes(method, arguments, &.{.int})) return null;
+                if (!try self.methodTakes(method, arguments, receiver)) return null;
                 return .{ .kind = .remove_entry, .result = .none };
             }
             if (std.mem.eql(u8, name, "pop")) {
-                if (!try self.methodTakes(method, arguments, &.{})) return null;
+                if (!try self.methodTakes(method, arguments, receiver)) return null;
                 return .{ .kind = .pop_value, .result = element };
             }
             if (std.mem.eql(u8, name, "clear")) {
-                if (!try self.methodTakes(method, arguments, &.{})) return null;
+                if (!try self.methodTakes(method, arguments, receiver)) return null;
                 return .{ .kind = .clear_object, .result = .none };
             }
         }
         if (std.mem.eql(u8, name, "sort")) {
-            if (!try self.methodTakes(method, arguments, &.{})) return null;
-            const ordered = element == .int or element == .float or element == .string;
-            if (!ordered) return self.methodFail(method, "sort orders long, double, or string elements");
+            if (!try self.methodTakes(method, arguments, receiver)) return null;
+            const ordered = element.isNumeric() or element == .string;
+            if (!ordered) return self.methodFail(method, "sort orders numbers or string elements");
             return .{ .kind = .list_sort, .result = .none };
         }
         if (std.mem.eql(u8, name, "reverse")) {
-            if (!try self.methodTakes(method, arguments, &.{})) return null;
+            if (!try self.methodTakes(method, arguments, receiver)) return null;
             return .{ .kind = .list_reverse, .result = .none };
         }
         if (std.mem.eql(u8, name, "find")) {
-            if (!try self.methodTakes(method, arguments, &.{element})) return null;
-            return .{ .kind = .list_find, .result = .int };
+            if (!try self.methodTakes(method, arguments, receiver)) return null;
+            return .{ .kind = .list_find, .result = .long };
         }
         if (std.mem.eql(u8, name, "contains")) {
-            if (!try self.methodTakes(method, arguments, &.{element})) return null;
+            if (!try self.methodTakes(method, arguments, receiver)) return null;
             return .{ .kind = .list_contains, .result = .boolean };
         }
         // "here" was the only word naming the receiver, and it names
         // nothing: map and builder both say which they are, and a
         // reader who mistook a list for a map needs exactly that.
-        const receiver = if (growable) "list" else "array";
+        const shape_word = if (growable) "list" else "array";
         var suggestion = helpers.Suggestion.init(name);
         suggestion.offerAll(if (growable) &list_methods else &array_methods);
         if (suggestion.best()) |closest| {
-            try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{ receiver, name, closest });
+            try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{ shape_word, name, closest });
             return null;
         }
         if (growable) {
@@ -5695,7 +6020,7 @@ pub const FunctionBuilder = struct {
             field.* = field_index;
             wanted.* = layout.fields[field_index].field_type;
         }
-        const values = (try self.lowerOperandsInto(expressions, expected_types)) orelse return null;
+        const values = (try self.lowerOperandsInto(expressions, .{ .places = expected_types })) orelse return null;
         for (call_arguments, values, fields, expected_types) |argument, value, field_index, expected| {
             const name = argument.name.?;
             const fitted = (try self.fit(value, expected)) orelse {
@@ -5764,7 +6089,7 @@ pub const FunctionBuilder = struct {
         if (produces == .string) {
             switch (value.value_type) {
                 .string => return value,
-                .int, .float, .boolean => {},
+                .int, .long, .float, .double, .boolean => {},
                 .heap => {
                     const descriptor = self.analyzer.heapOf(value.value_type).?;
                     if (descriptor == .builder) {
@@ -5792,19 +6117,24 @@ pub const FunctionBuilder = struct {
             try self.parkFreshStorage(answer);
             return answer;
         }
-        if (produces == .long) {
-            if (value.value_type == .int) return value;
-            if (value.value_type != .float) return self.failConvert(call, value);
-            return .{
-                .register = try self.code.emit(.{ .convert = .{ .kind = .float_to_int, .operand = value.register } }, .int),
-                .value_type = .int,
-            };
-        }
-        if (value.value_type == .float) return value;
-        if (value.value_type != .int) return self.failConvert(call, value);
+        // Every other constructor is named for a numeric type and
+        // produces it, from any number: one rule, and it needs no arm
+        // per pair (docs/TYPES.md §3).  `long(x)` where `x` is already
+        // a `long` is the identity — the constructors are how you
+        // widen without an operator to hang it on, so a redundant one
+        // is not a mistake to report.
+        const target: Type = switch (produces) {
+            .int => .int,
+            .long => .long,
+            .float => .float,
+            .double => .double,
+            .boolean, .string, .list, .map, .array, .builder => unreachable, // answered above
+        };
+        if (value.value_type.eql(target)) return value;
+        if (!value.value_type.isNumeric()) return self.failConvert(call, value);
         return .{
-            .register = try self.code.emit(.{ .convert = .{ .kind = .int_to_float, .operand = value.register } }, .float),
-            .value_type = .float,
+            .register = try self.code.emit(.{ .convert = value.register }, target),
+            .value_type = target,
         };
     }
 
@@ -5857,8 +6187,8 @@ pub const FunctionBuilder = struct {
         {
             if (helpers.ordOfLiteral(call.arguments[0].value.string_literal.decoded)) |codepoint| {
                 return .{ .value = .{
-                    .register = try self.code.emit(.{ .const_int = codepoint }, .int),
-                    .value_type = .int,
+                    .register = try self.code.emit(.{ .const_long = codepoint }, .long),
+                    .value_type = .long,
                 } };
             }
         }
@@ -5935,9 +6265,9 @@ pub const FunctionBuilder = struct {
                 result = arguments[0].value_type;
             },
             .sqrt, .floor, .ceil, .trunc => {
-                if (arguments[0].value_type != .float)
+                if (!try self.widensInto(&arguments[0], .double))
                     return self.failIntrinsic(call, "this builtin takes a double");
-                result = .float;
+                result = .double;
             },
             .len => {
                 const measurable = arguments[0].value_type == .string or
@@ -5949,7 +6279,7 @@ pub const FunctionBuilder = struct {
                     }
                     return self.failIntrinsic(call, "len takes a string, list, map, array, or builder");
                 }
-                result = .int;
+                result = .long;
             },
             .free_object => {
                 if (arguments[0].value_type != .heap) {
@@ -6007,7 +6337,7 @@ pub const FunctionBuilder = struct {
                 found.info.poisoned = .freed;
                 // Free names its binding so the runtime can verify
                 // this name still owns the object (S6, S23).
-                extra_argument = try self.code.emit(.{ .const_int = found.info.local }, .int);
+                extra_argument = try self.code.emit(.{ .const_long = found.info.local }, .long);
                 result = .none;
             },
             .parse_int, .parse_float => {
@@ -6017,19 +6347,19 @@ pub const FunctionBuilder = struct {
                 // name already implies it, so the answer is absence
                 // rather than a trap (docs/FAILURE.md).
                 result = if (matched.kind == .parse_int)
-                    .{ .optional = .int }
+                    .{ .optional = .long }
                 else
-                    .{ .optional = .float };
+                    .{ .optional = .double };
             },
             .chr_code => {
-                if (arguments[0].value_type != .int)
+                if (!try self.widensInto(&arguments[0], .long))
                     return self.failIntrinsic(call, "chr takes a long codepoint");
                 result = .string;
             },
             .ord_text => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "ord takes a string");
-                result = .int;
+                result = .long;
             },
             // Lowered from syntax or method calls, never from bare names.
             .own_storage,
@@ -6039,7 +6369,7 @@ pub const FunctionBuilder = struct {
             .copy_object,
             .null_object,
             // Emitted by a mixed comparison; there is no name for it.
-            .compare_int_float,
+            .compare_long_double,
             // Emitted by `string(x)` and by `builder.build()`, both of
             // which are resolved before this table is consulted.
             .str_value,
@@ -6115,19 +6445,20 @@ pub const FunctionBuilder = struct {
                 result = .boolean;
             },
             .term_rows, .term_cols => {
-                result = .int;
+                result = .long;
             },
             .term_clear, .term_flush => {
                 result = .none;
             },
             .term_move => {
-                if (arguments[0].value_type != .int or arguments[1].value_type != .int)
+                if (!try self.widensInto(&arguments[0], .long) or
+                    !try self.widensInto(&arguments[1], .long))
                     return self.failIntrinsic(call, "term_move takes (row long, col long)");
                 result = .none;
             },
             .term_style => {
-                if (arguments[0].value_type != .int or
-                    arguments[1].value_type != .int or
+                if (!try self.widensInto(&arguments[0], .long) or
+                    !try self.widensInto(&arguments[1], .long) or
                     arguments[2].value_type != .boolean)
                     return self.failIntrinsic(call, "term_style takes (foreground long, background long, bold bool)");
                 result = .none;
@@ -6158,10 +6489,10 @@ pub const FunctionBuilder = struct {
                 result = .none;
             },
             .clock_ms => {
-                result = .int;
+                result = .long;
             },
             .sleep_ms => {
-                if (arguments[0].value_type != .int)
+                if (!try self.widensInto(&arguments[0], .long))
                     return self.failIntrinsic(call, "sleep_ms takes a long of milliseconds");
                 result = .none;
             },

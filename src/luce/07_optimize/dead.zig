@@ -28,7 +28,7 @@
 //! Each local is another slot in every frame, so dropping the hidden
 //! temporaries this stage empties out would be worth a little — but
 //! `give` and `free` on an owned name pass the *local id* to the
-//! runtime as an ordinary `const_int` operand of `give_object` /
+//! runtime as an ordinary `const_long` operand of `give_object` /
 //! `free_object` (`04_semantics/builder.zig`), which is how the
 //! runtime checks that the name still owns the object (S23).  A local
 //! id that travels as an integer value is invisible to renumbering:
@@ -115,7 +115,7 @@ fn isDead(function: *const Function, used: []const bool, read: []const bool, ite
         // the bytes leak, delete the store-back after a release and
         // they are freed twice.
         .local_set => |set| !read[set.local] and !function.locals[set.local].owns_storage,
-        else => !used[item] and effects.classify(function, instruction) == .pure,
+        else => !used[item] and effects.classify(function, item) == .pure,
     };
 }
 

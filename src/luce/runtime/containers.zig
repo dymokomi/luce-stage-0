@@ -37,7 +37,7 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
         },
         else => unreachable,
     };
-    return Value.ofInt(@intCast(measured));
+    return Value.ofLong(@intCast(measured));
 }
 
 /// `a[i]`, `m[key]`, `grid[r, c]`.  A list or array index out of range
@@ -47,7 +47,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => |list| {
-            const index = indices[0].asInt();
+            const index = indices[0].asLong();
             if (index < 0 or index >= list.items.len) return runtime.fail(.index_bounds);
             return list.items[@intCast(index)];
         },
@@ -81,7 +81,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => |*list| {
-            const index = indices[0].asInt();
+            const index = indices[0].asLong();
             if (index < 0 or index >= list.items.len) return runtime.fail(.index_bounds);
             // An element overwrite frees the old owned element (S22).
             runtime.freeValue(list.items[@intCast(index)]);
@@ -185,7 +185,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => |*list| {
-            const index = which.asInt();
+            const index = which.asLong();
             if (index < 0 or index >= list.items.len) return runtime.fail(.index_bounds);
             runtime.freeValue(list.orderedRemove(@intCast(index)));
         },
@@ -225,14 +225,14 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
     const object = try runtime.resolve(target);
     const dims = object.array.dims;
     if (axis < 0 or axis >= dims.len) return runtime.fail(.index_bounds);
-    return Value.ofInt(dims[@intCast(axis)]);
+    return Value.ofLong(dims[@intCast(axis)]);
 }
 
 /// `xs.sort()` and `xs.reverse()`, in place, on a list or an array.
 ///
 /// Stable, and O(n log n): `std.sort.block` is an in-place merge sort
 /// (Wikisort), so it needs no scratch allocation and cannot fail.
-/// Stability is not decoration — sort admits Float elements, and
+/// Stability is not decoration — sort admits double elements, and
 /// `-0.0` and `0.0` compare equal while printing differently, so an
 /// unstable order would be observable in a program's output.  It
 /// replaces an insertion sort that was stable too, and quadratic.
@@ -295,6 +295,8 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
         fn lift(cell: kind.Cell()) Value {
             return switch (kind) {
                 .value => cell,
+                .double => Value.ofDouble(cell),
+                .long => Value.ofLong(cell),
                 .float => Value.ofFloat(cell),
                 .int => Value.ofInt(cell),
                 .boolean => Value.ofBoolean(cell != 0),
@@ -323,7 +325,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
     }
 }
 
-/// `m.keys()` — a fresh list of the keys.  Keys are Int or String, so
+/// `m.keys()` — a fresh list of the keys.  Keys are long or String, so
 /// there is no object to own; a String key's bytes belong to the map's
 /// entry, so the list takes its own copy (docs/STRINGS.md).
 pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {

@@ -18,7 +18,7 @@ func main():
         b[i] = double((i * 7) % 100) * 0.25
     var dot = 0.0
     for r in range(0, reps):
-        var sum = 0.0
+        var sum: double = 0.0
         for i in range(0, n):
             sum += a[i] * b[i]
         dot += sum

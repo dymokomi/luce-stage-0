@@ -1,7 +1,7 @@
 # A tiny math module: imported by stats.luc (`import mathx`).
 
 func mean(values: list(double)) -> double:
-    var total = 0.0
+    var total: double = 0.0
     for value in values:
         total = total + value
     return total / double(len(values))
@@ -34,7 +34,7 @@ func median(values: list(double)) -> double:
 
 func deviation(values: list(double)) -> double:
     let center = mean(values)
-    var spread = 0.0
+    var spread: double = 0.0
     for value in values:
         spread = spread + (value - center) * (value - center)
     return sqrt(spread / double(len(values)))

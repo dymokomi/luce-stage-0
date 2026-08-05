@@ -435,7 +435,7 @@ test "integers: long's minimum folds in a file-scope constant too" {
 }
 
 // ---------------------------------------------------------------------------
-// double arithmetic
+// arithmetic on doubles
 // ---------------------------------------------------------------------------
 
 test "floats: arithmetic, IEEE division, and builtins" {
@@ -544,8 +544,8 @@ test "mixing: promotion reaches annotations, arguments, returns, and fields" {
 // TitleCase name is always a struct of the reader's own, which is what
 // makes the case of a type name say who defined it.
 //
-// The TitleCase spellings still resolve while the tree is being
-// renamed onto these; when they go, this program is unchanged.
+// The TitleCase spellings do not resolve at all: a program that
+// writes one is told the lowercase name it is written with now.
 test "types: the language's own names are lowercase" {
     try agreeOk(
         \\struct Point:

@@ -115,7 +115,7 @@ func replace(s: string, old: string, replacement: string) -> string:
     if len(old) == 0:
         return s
     var out = new builder()
-    var run = 0
+    var run: long = 0
     var at = find_from(s, old, 0)
     while at >= 0:
         out.append(s[run:at])
@@ -153,7 +153,7 @@ func split(s: string, separator: string) -> list(string):
                 pieces.append(s[at:word_end])
             at = word_end
         return pieces
-    var run = 0
+    var run: long = 0
     var at = find_from(s, separator, 0)
     while at >= 0:
         pieces.append(s[run:at])

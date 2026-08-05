@@ -96,7 +96,7 @@ test "a freed row is reused, so the table follows live objects and not allocatio
     var made: usize = 0;
     while (made < 100_000) : (made += 1) {
         const held = try runtime.newList();
-        try containers.append(runtime, held, Value.ofInt(@intCast(made)));
+        try containers.append(runtime, held, Value.ofLong(@intCast(made)));
         runtime.freeObject(held.asObject());
     }
     try testing.expectEqual(@as(usize, 1), runtime.table.items.len);
@@ -124,10 +124,10 @@ test "a directory listing splits the same list out of both shapes" {
 
     const from_slices = try containers.listOfText(runtime, &names);
     const from_bytes = try containers.listOfJoinedText(runtime, joined);
-    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_slices)).asInt());
-    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_bytes)).asInt());
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_slices)).asLong());
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, from_bytes)).asLong());
     for (names, 0..) |wanted, at| {
-        const index = Value.ofInt(@intCast(at));
+        const index = Value.ofLong(@intCast(at));
         try testing.expectEqualStrings(
             wanted,
             (try containers.indexGet(runtime, from_slices, &.{index})).asString(),
@@ -142,9 +142,9 @@ test "a directory listing splits the same list out of both shapes" {
     // empty name — and a buffer with no trailing separator is still
     // read whole, because a host is not ours to promise for.
     const empty = try containers.listOfJoinedText(runtime, "");
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asInt());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asLong());
     const unterminated = try containers.listOfJoinedText(runtime, "one\x00two");
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, unterminated)).asInt());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, unterminated)).asLong());
 
     runtime.freeObject(from_slices.asObject());
     runtime.freeObject(from_bytes.asObject());
@@ -159,7 +159,7 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     const runtime = &bench.runtime;
 
     const first = try runtime.newList();
-    try containers.append(runtime, first, Value.ofInt(11));
+    try containers.append(runtime, first, Value.ofLong(11));
     runtime.freeObject(first.asObject());
 
     // The very next object takes the row the first one vacated — the
@@ -173,10 +173,10 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     // one still opens.
     try expectTrap(.use_after_free, runtime, runtime.resolve(first));
     try expectTrap(.use_after_free, runtime, containers.length(runtime, first));
-    try expectTrap(.use_after_free, runtime, containers.indexGet(runtime, first, &.{Value.ofInt(0)}));
+    try expectTrap(.use_after_free, runtime, containers.indexGet(runtime, first, &.{Value.ofLong(0)}));
     try expectTrap(.use_after_free, runtime, runtime.deepCopy(first));
     try expectTrap(.use_after_free, runtime, runtime.checkGivable(first, null));
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asInt());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asLong());
 
     // Identity is the object, not the row: the two handles are not
     // equal, and freeing through the stale one takes nothing.
@@ -308,17 +308,17 @@ test "copy duplicates what an object owns, recursively (S31)" {
 
     const outer = try runtime.newList();
     const inner = try runtime.newList();
-    try containers.append(runtime, inner, Value.ofInt(7));
+    try containers.append(runtime, inner, Value.ofLong(7));
     try containers.append(runtime, outer, inner);
 
     const duplicate = try containers.copyVerb(runtime, outer);
     try testing.expectEqual(@as(u32, 4), runtime.live);
 
     // The copy's element is a different object that holds equal data.
-    const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofInt(0)});
+    const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofLong(0)});
     try testing.expect(!copied_inner.asObject().same(inner.asObject()));
-    const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofInt(0)});
-    try testing.expectEqual(@as(i64, 7), element.asInt());
+    const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofLong(0)});
+    try testing.expectEqual(@as(i64, 7), element.asLong());
 
     // Freeing the copy takes its own element and nothing of the original.
     runtime.freeObject(duplicate.asObject());
@@ -332,7 +332,7 @@ test "objects inside a struct value are walked, not skipped" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    var fields = [_]Value{ Value.ofInt(1), try runtime.newList() };
+    var fields = [_]Value{ Value.ofLong(1), try runtime.newList() };
     const record = Value.ofStruct(&fields);
     const serial = runtime.takeSerial();
     runtime.bind(record, serial, 0);
@@ -366,16 +366,16 @@ test "freeing an object gives its storage back, during the run" {
     for (0..8) |_| {
         const list = try runtime.newList();
         for (0..64) |number| {
-            try containers.append(&runtime, list, Value.ofInt(@intCast(number)));
+            try containers.append(&runtime, list, Value.ofLong(@intCast(number)));
         }
         const map = try runtime.newMap();
         for (0..64) |number| {
-            const key = Value.ofInt(@intCast(number));
-            try containers.indexSet(&runtime, map, &.{key}, Value.ofInt(0));
+            const key = Value.ofLong(@intCast(number));
+            try containers.indexSet(&runtime, map, &.{key}, Value.ofLong(0));
         }
         const builder = try runtime.newBuilder();
         for (0..64) |_| try containers.append(&runtime, builder, Value.ofString("word"));
-        const array = try runtime.newArray(&.{ 8, 8 }, Value.ofInt(0));
+        const array = try runtime.newArray(&.{ 8, 8 }, Value.ofLong(0));
 
         runtime.freeObject(list.asObject());
         runtime.freeObject(map.asObject());
@@ -403,35 +403,35 @@ test "a map keeps insertion order through growth, lookup, and removal" {
     const count = 200;
     const map = try runtime.newMap();
     for (0..count) |number| {
-        const key = Value.ofInt(@intCast(number * 7));
-        try containers.indexSet(runtime, map, &.{key}, Value.ofInt(@intCast(number)));
+        const key = Value.ofLong(@intCast(number * 7));
+        try containers.indexSet(runtime, map, &.{key}, Value.ofLong(@intCast(number)));
     }
-    try testing.expectEqual(@as(i64, count), (try containers.length(runtime, map)).asInt());
+    try testing.expectEqual(@as(i64, count), (try containers.length(runtime, map)).asLong());
     for (0..count) |number| {
-        const key = Value.ofInt(@intCast(number * 7));
+        const key = Value.ofLong(@intCast(number * 7));
         const found = try containers.indexGet(runtime, map, &.{key});
-        try testing.expectEqual(@as(i64, @intCast(number)), found.asInt());
-        try testing.expectEqual(key.asInt(), (try containers.keyAt(runtime, map, @intCast(number))).asInt());
+        try testing.expectEqual(@as(i64, @intCast(number)), found.asLong());
+        try testing.expectEqual(key.asLong(), (try containers.keyAt(runtime, map, @intCast(number))).asLong());
     }
     // A key that was never stored is absent however close it hashes.
-    try testing.expect(!(try containers.hasKey(runtime, map, Value.ofInt(3))).asBoolean());
+    try testing.expect(!(try containers.hasKey(runtime, map, Value.ofLong(3))).asBoolean());
 
     // Removal renumbers the entries; the survivors keep their order
     // and still look up.
     for (0..count) |number| {
         if (number % 2 == 0) continue;
-        try containers.remove(runtime, map, Value.ofInt(@intCast(number * 7)));
+        try containers.remove(runtime, map, Value.ofLong(@intCast(number * 7)));
     }
-    try testing.expectEqual(@as(i64, count / 2), (try containers.length(runtime, map)).asInt());
+    try testing.expectEqual(@as(i64, count / 2), (try containers.length(runtime, map)).asLong());
     for (0..count / 2) |position| {
         const wanted: i64 = @intCast(position * 14);
-        try testing.expectEqual(wanted, (try containers.keyAt(runtime, map, @intCast(position))).asInt());
-        try testing.expect((try containers.hasKey(runtime, map, Value.ofInt(wanted))).asBoolean());
+        try testing.expectEqual(wanted, (try containers.keyAt(runtime, map, @intCast(position))).asLong());
+        try testing.expect((try containers.hasKey(runtime, map, Value.ofLong(wanted))).asBoolean());
     }
     runtime.freeObject(map.asObject());
 }
 
-test "map keys hash as they compare, for Int and for String" {
+test "map keys hash as they compare, for long and for String" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
@@ -443,24 +443,24 @@ test "map keys hash as they compare, for Int and for String" {
     var first: [3]u8 = "abc".*;
     var second: [3]u8 = "abc".*;
     const map = try runtime.newMap();
-    try containers.indexSet(runtime, map, &.{Value.ofString(&first)}, Value.ofInt(1));
-    try containers.indexSet(runtime, map, &.{Value.ofString(&second)}, Value.ofInt(2));
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, map)).asInt());
+    try containers.indexSet(runtime, map, &.{Value.ofString(&first)}, Value.ofLong(1));
+    try containers.indexSet(runtime, map, &.{Value.ofString(&second)}, Value.ofLong(2));
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, map)).asLong());
     try testing.expectEqual(
         @as(i64, 2),
-        (try containers.indexGet(runtime, map, &.{Value.ofString("abc")})).asInt(),
+        (try containers.indexGet(runtime, map, &.{Value.ofString("abc")})).asLong(),
     );
 
-    // Negative Int keys travel through the same bit mixer as positive
+    // Negative long keys travel through the same bit mixer as positive
     // ones and come back.
     const numbers = try runtime.newMap();
     for ([_]i64{ -1, 0, 1, std.math.minInt(i64), std.math.maxInt(i64) }) |key| {
-        try containers.indexSet(runtime, numbers, &.{Value.ofInt(key)}, Value.ofInt(key));
+        try containers.indexSet(runtime, numbers, &.{Value.ofLong(key)}, Value.ofLong(key));
     }
     for ([_]i64{ -1, 0, 1, std.math.minInt(i64), std.math.maxInt(i64) }) |key| {
         try testing.expectEqual(
             key,
-            (try containers.indexGet(runtime, numbers, &.{Value.ofInt(key)})).asInt(),
+            (try containers.indexGet(runtime, numbers, &.{Value.ofLong(key)})).asLong(),
         );
     }
     runtime.freeObject(map.asObject());
@@ -478,27 +478,27 @@ test "lists index, append, pop, insert, remove, and bound-check" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newList();
-    try containers.append(runtime, held, Value.ofInt(10));
-    try containers.append(runtime, held, Value.ofInt(30));
-    try containers.insert(runtime, held, 1, Value.ofInt(20));
-    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, held)).asInt());
+    try containers.append(runtime, held, Value.ofLong(10));
+    try containers.append(runtime, held, Value.ofLong(30));
+    try containers.insert(runtime, held, 1, Value.ofLong(20));
+    try testing.expectEqual(@as(i64, 3), (try containers.length(runtime, held)).asLong());
     try testing.expectEqual(
         @as(i64, 20),
-        (try containers.indexGet(runtime, held, &.{Value.ofInt(1)})).asInt(),
+        (try containers.indexGet(runtime, held, &.{Value.ofLong(1)})).asLong(),
     );
 
-    try containers.indexSet(runtime, held, &.{Value.ofInt(0)}, Value.ofInt(-1));
-    try testing.expectEqual(@as(i64, 1), try containers.find(runtime, held, Value.ofInt(20)));
-    try testing.expectEqual(@as(i64, -1), try containers.find(runtime, held, Value.ofInt(99)));
+    try containers.indexSet(runtime, held, &.{Value.ofLong(0)}, Value.ofLong(-1));
+    try testing.expectEqual(@as(i64, 1), try containers.find(runtime, held, Value.ofLong(20)));
+    try testing.expectEqual(@as(i64, -1), try containers.find(runtime, held, Value.ofLong(99)));
 
-    try testing.expectEqual(@as(i64, 30), (try containers.pop(runtime, held)).asInt());
-    try containers.remove(runtime, held, Value.ofInt(0));
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asInt());
+    try testing.expectEqual(@as(i64, 30), (try containers.pop(runtime, held)).asLong());
+    try containers.remove(runtime, held, Value.ofLong(0));
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asLong());
 
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexGet(runtime, held, &.{Value.ofInt(5)}),
+        containers.indexGet(runtime, held, &.{Value.ofLong(5)}),
     );
     try containers.clear(runtime, held);
     try expectTrap(.empty_collection, runtime, containers.pop(runtime, held));
@@ -518,52 +518,52 @@ test "every list bound is checked at the last legal index and the first illegal 
     const runtime = &bench.runtime;
 
     const held = try runtime.newList();
-    for ([_]i64{ 10, 20, 30 }) |element| try containers.append(runtime, held, Value.ofInt(element));
+    for ([_]i64{ 10, 20, 30 }) |element| try containers.append(runtime, held, Value.ofLong(element));
 
     // Reading: 0 and len-1 answer, -1 and len trap.
-    try testing.expectEqual(@as(i64, 10), (try containers.indexGet(runtime, held, &.{Value.ofInt(0)})).asInt());
-    try testing.expectEqual(@as(i64, 30), (try containers.indexGet(runtime, held, &.{Value.ofInt(2)})).asInt());
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofInt(3)}));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofInt(-1)}));
+    try testing.expectEqual(@as(i64, 10), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
+    try testing.expectEqual(@as(i64, 30), (try containers.indexGet(runtime, held, &.{Value.ofLong(2)})).asLong());
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofLong(3)}));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, held, &.{Value.ofLong(-1)}));
 
     // Writing has the same bound, and it is a separate comparison.
-    try containers.indexSet(runtime, held, &.{Value.ofInt(2)}, Value.ofInt(31));
+    try containers.indexSet(runtime, held, &.{Value.ofLong(2)}, Value.ofLong(31));
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexSet(runtime, held, &.{Value.ofInt(3)}, Value.ofInt(0)),
+        containers.indexSet(runtime, held, &.{Value.ofLong(3)}, Value.ofLong(0)),
     );
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexSet(runtime, held, &.{Value.ofInt(-1)}, Value.ofInt(0)),
+        containers.indexSet(runtime, held, &.{Value.ofLong(-1)}, Value.ofLong(0)),
     );
 
     // Insert is the one whose bound is *not* the same as the others:
     // `xs.insert(len, v)` appends, so len is legal and len+1 is not.
     // Reading this bound as "like index_get" is an off-by-one that
     // silently loses the append form.
-    try containers.insert(runtime, held, 3, Value.ofInt(40));
-    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, held)).asInt());
-    try testing.expectEqual(@as(i64, 40), (try containers.indexGet(runtime, held, &.{Value.ofInt(3)})).asInt());
-    try containers.insert(runtime, held, 0, Value.ofInt(5));
-    try testing.expectEqual(@as(i64, 5), (try containers.indexGet(runtime, held, &.{Value.ofInt(0)})).asInt());
-    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, 6, Value.ofInt(0)));
-    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, -1, Value.ofInt(0)));
-    try testing.expectEqual(@as(i64, 5), (try containers.length(runtime, held)).asInt());
+    try containers.insert(runtime, held, 3, Value.ofLong(40));
+    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, held)).asLong());
+    try testing.expectEqual(@as(i64, 40), (try containers.indexGet(runtime, held, &.{Value.ofLong(3)})).asLong());
+    try containers.insert(runtime, held, 0, Value.ofLong(5));
+    try testing.expectEqual(@as(i64, 5), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, 6, Value.ofLong(0)));
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, held, -1, Value.ofLong(0)));
+    try testing.expectEqual(@as(i64, 5), (try containers.length(runtime, held)).asLong());
 
     // Remove is bounded like a read: len-1 is the last element there
     // is to take out.
-    try containers.remove(runtime, held, Value.ofInt(4));
-    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofInt(4)));
-    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofInt(-1)));
+    try containers.remove(runtime, held, Value.ofLong(4));
+    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofLong(4)));
+    try expectTrap(.index_bounds, runtime, containers.remove(runtime, held, Value.ofLong(-1)));
 
     // A slice is half-open: end may be len, start may equal end, and
     // an inverted pair is refused rather than answered empty.
     const whole = bench.made(try containers.listSlice(runtime, held, 0, 4));
-    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, whole)).asInt());
+    try testing.expectEqual(@as(i64, 4), (try containers.length(runtime, whole)).asLong());
     const empty = bench.made(try containers.listSlice(runtime, held, 4, 4));
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asInt());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, empty)).asLong());
     try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, 0, 5));
     try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, 3, 2));
     try expectTrap(.index_bounds, runtime, containers.listSlice(runtime, held, -1, 2));
@@ -581,12 +581,12 @@ test "every map and array bound is checked on both sides too" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newMap();
-    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofInt(1));
-    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofInt(2));
+    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofLong(1));
+    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofLong(2));
 
     // Positional access over a map's entries is bounded by its count.
     try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 1)).asString());
-    try testing.expectEqual(@as(i64, 2), (try containers.valueAt(runtime, held, 1)).asInt());
+    try testing.expectEqual(@as(i64, 2), (try containers.valueAt(runtime, held, 1)).asLong());
     try expectTrap(.index_bounds, runtime, containers.keyAt(runtime, held, 2));
     try expectTrap(.index_bounds, runtime, containers.keyAt(runtime, held, -1));
     try expectTrap(.index_bounds, runtime, containers.valueAt(runtime, held, 2));
@@ -596,23 +596,23 @@ test "every map and array bound is checked on both sides too" {
     // nothing at all — the two are different questions on purpose.
     try expectTrap(.key_missing, runtime, containers.indexGet(runtime, held, &.{Value.ofString("z")}));
     try containers.remove(runtime, held, Value.ofString("z"));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asInt());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
 
     // Every axis of an array is bounded independently, and so is the
     // axis number `dim_size` is asked about.
-    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofInt(0));
-    try containers.indexSet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(2) }, Value.ofInt(7));
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofLong(0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofLong(7));
     try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
         runtime,
         grid,
-        &.{ Value.ofInt(1), Value.ofInt(2) },
-    )).asInt());
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(2), Value.ofInt(2) }));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(3) }));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(-1), Value.ofInt(0) }));
-    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofInt(0), Value.ofInt(-1) }));
-    try testing.expectEqual(@as(i64, 2), (try containers.dimSize(runtime, grid, 0)).asInt());
-    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asInt());
+        &.{ Value.ofLong(1), Value.ofLong(2) },
+    )).asLong());
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(2), Value.ofLong(2) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(3) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(-1), Value.ofLong(0) }));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(-1) }));
+    try testing.expectEqual(@as(i64, 2), (try containers.dimSize(runtime, grid, 0)).asLong());
+    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asLong());
     try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, 2));
     try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, -1));
 
@@ -624,7 +624,7 @@ test "every map and array bound is checked on both sides too" {
     try containers.appendAscii(runtime, builder, 0x7F);
     try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, builder, 0x80));
     try expectTrap(.bad_codepoint, runtime, containers.appendAscii(runtime, builder, -1));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, builder)).asInt());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, builder)).asLong());
 }
 
 test "maps keep insertion order and answer for missing keys three ways" {
@@ -634,10 +634,10 @@ test "maps keep insertion order and answer for missing keys three ways" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newMap();
-    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofInt(2));
-    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofInt(1));
+    try containers.indexSet(runtime, held, &.{Value.ofString("b")}, Value.ofLong(2));
+    try containers.indexSet(runtime, held, &.{Value.ofString("a")}, Value.ofLong(1));
     try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 0)).asString());
-    try testing.expectEqual(@as(i64, 1), (try containers.valueAt(runtime, held, 1)).asInt());
+    try testing.expectEqual(@as(i64, 1), (try containers.valueAt(runtime, held, 1)).asLong());
 
     // has_key answers false, get answers the default, m[key] traps.
     try testing.expect(!(try containers.hasKey(runtime, held, Value.ofString("c"))).asBoolean());
@@ -645,8 +645,8 @@ test "maps keep insertion order and answer for missing keys three ways" {
         runtime,
         held,
         Value.ofString("c"),
-        Value.ofInt(9),
-    )).asInt());
+        Value.ofLong(9),
+    )).asLong());
     try expectTrap(
         .key_missing,
         runtime,
@@ -654,7 +654,7 @@ test "maps keep insertion order and answer for missing keys three ways" {
     );
 
     const keys = try containers.mapKeys(runtime, held);
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, keys)).asInt());
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, keys)).asLong());
 }
 
 test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
@@ -663,18 +663,18 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofInt(0));
-    try containers.indexSet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(2) }, Value.ofInt(5));
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofLong(0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofLong(5));
     try testing.expectEqual(@as(i64, 5), (try containers.indexGet(
         runtime,
         grid,
-        &.{ Value.ofInt(1), Value.ofInt(2) },
-    )).asInt());
-    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asInt());
+        &.{ Value.ofLong(1), Value.ofLong(2) },
+    )).asLong());
+    try testing.expectEqual(@as(i64, 3), (try containers.dimSize(runtime, grid, 1)).asLong());
     try expectTrap(
         .index_bounds,
         runtime,
-        containers.indexGet(runtime, grid, &.{ Value.ofInt(2), Value.ofInt(0) }),
+        containers.indexGet(runtime, grid, &.{ Value.ofLong(2), Value.ofLong(0) }),
     );
 
     try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 20, 1 << 20 }, Value.none));
@@ -687,8 +687,8 @@ test "compiled code's byte offsets find the fields they name" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofFloat(0.0));
-    try containers.indexSet(runtime, grid, &.{ Value.ofInt(1), Value.ofInt(2) }, Value.ofFloat(7.5));
+    const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofDouble(0.0));
+    try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofDouble(7.5));
 
     // Exactly the walk `08_llvm/lower.zig` emits: the table base out of
     // the `Runtime`, the row by handle, then `generation`, `count`,
@@ -711,7 +711,7 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(@as(usize, 6), @as(*const usize, @ptrCast(@alignCast(
         row + heap.layout.array_count,
     ))).*);
-    // An `Array(Float)` stores `f64`s, so the element is one load and
+    // An `Array(double)` stores `f64`s, so the element is one load and
     // no unboxing — which is the whole reason the storage is typed.
     const elements: [*]const f64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
         row + heap.layout.array_elements,
@@ -787,13 +787,13 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
     for (lengths) |length| {
         const wanted = words[0..length];
         try containers.append(runtime, kept, try runtime.ownValue(Value.ofString(wanted)));
-        try containers.indexSet(runtime, table, &.{Value.ofString(wanted)}, Value.ofInt(1));
+        try containers.indexSet(runtime, table, &.{Value.ofString(wanted)}, Value.ofLong(1));
     }
     for (lengths, 0..) |length, index| {
-        const held = try containers.indexGet(runtime, kept, &.{Value.ofInt(@intCast(index))});
+        const held = try containers.indexGet(runtime, kept, &.{Value.ofLong(@intCast(index))});
         try testing.expectEqualStrings(words[0..length], held.asString());
     }
-    try testing.expectEqual(@as(i64, lengths.len), (try containers.length(runtime, table)).asInt());
+    try testing.expectEqual(@as(i64, lengths.len), (try containers.length(runtime, table)).asLong());
     runtime.freeObject(kept.asObject());
     runtime.freeObject(table.asObject());
 }
@@ -807,7 +807,7 @@ test "str and chr answer text that needs no allocation at all" {
     // Twenty digits and a sign is the widest an i64 gets, so no
     // number's text ever leaves the value it is answered in.
     for ([_]i64{ 0, -1, 9, 1234567, std.math.minInt(i64), std.math.maxInt(i64) }) |number| {
-        const made = try text.str(runtime, Value.ofInt(number));
+        const made = try text.str(runtime, Value.ofLong(number));
         try testing.expect(made.textIsInline());
         try testing.expect(!made.ownsStorage());
         var digits: [24]u8 = undefined;
@@ -853,11 +853,11 @@ test "sort and reverse work in place on lists and arrays alike" {
     const runtime = &bench.runtime;
 
     const held = try runtime.newList();
-    for ([_]i64{ 3, 1, 2 }) |number| try containers.append(runtime, held, Value.ofInt(number));
+    for ([_]i64{ 3, 1, 2 }) |number| try containers.append(runtime, held, Value.ofLong(number));
     try containers.sort(runtime, held);
-    try testing.expectEqual(@as(i64, 1), (try containers.indexGet(runtime, held, &.{Value.ofInt(0)})).asInt());
+    try testing.expectEqual(@as(i64, 1), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
     try containers.reverse(runtime, held);
-    try testing.expectEqual(@as(i64, 3), (try containers.indexGet(runtime, held, &.{Value.ofInt(0)})).asInt());
+    try testing.expectEqual(@as(i64, 3), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
 }
 
 test "a list slice copies its object elements rather than sharing them" {
@@ -870,8 +870,8 @@ test "a list slice copies its object elements rather than sharing them" {
     try containers.append(runtime, held, try runtime.newList());
     const taken = try containers.listSlice(runtime, held, 0, 1);
 
-    const original = try containers.indexGet(runtime, held, &.{Value.ofInt(0)});
-    const copied = try containers.indexGet(runtime, taken, &.{Value.ofInt(0)});
+    const original = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
+    const copied = try containers.indexGet(runtime, taken, &.{Value.ofLong(0)});
     try testing.expect(!original.asObject().same(copied.asObject()));
 }
 
@@ -891,9 +891,9 @@ test "string slicing is checked twice: in range, and on a UTF-8 boundary" {
     try expectTrap(.string_boundary, runtime, text.slice(runtime, held, 0, 2));
     try expectTrap(.string_bounds, runtime, text.slice(runtime, held, 0, 99));
 
-    try testing.expectEqual(@as(i64, 0xf0), (try text.byteAt(runtime, held, 1)).asInt());
-    try testing.expectEqual(@as(i64, 5), (try text.findByte(runtime, held, 'b', 0)).asInt());
-    try testing.expectEqual(@as(i64, -1), (try text.findByte(runtime, held, 'z', 0)).asInt());
+    try testing.expectEqual(@as(i64, 0xf0), (try text.byteAt(runtime, held, 1)).asLong());
+    try testing.expectEqual(@as(i64, 5), (try text.findByte(runtime, held, 'b', 0)).asLong());
+    try testing.expectEqual(@as(i64, -1), (try text.findByte(runtime, held, 'z', 0)).asLong());
 }
 
 test "the conversions round trip and refuse what they cannot represent" {
@@ -902,21 +902,21 @@ test "the conversions round trip and refuse what they cannot represent" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    try testing.expectEqualStrings("-12", bench.made(try text.str(runtime, Value.ofInt(-12))).asString());
+    try testing.expectEqualStrings("-12", bench.made(try text.str(runtime, Value.ofLong(-12))).asString());
     try testing.expectEqualStrings("true", bench.made(try text.str(runtime, Value.ofBoolean(true))).asString());
     // Shortest text that round trips, not a fixed number of digits.
-    try testing.expectEqualStrings("0.1", bench.made(try text.str(runtime, Value.ofFloat(0.1))).asString());
+    try testing.expectEqualStrings("0.1", bench.made(try text.str(runtime, Value.ofDouble(0.1))).asString());
     try testing.expectEqualStrings(
         "1000000000000000000000",
-        bench.made(try text.str(runtime, Value.ofFloat(1e21))).asString(),
+        bench.made(try text.str(runtime, Value.ofDouble(1e21))).asString(),
     );
 
     // The parsers answer absence rather than trapping: "not a number"
     // is the same reason every time and the name says it already.
-    try testing.expectEqual(@as(i64, 42), (try text.parseInt(runtime, Value.ofString("42"))).asInt());
+    try testing.expectEqual(@as(i64, 42), (try text.parseInt(runtime, Value.ofString("42"))).asLong());
     try testing.expect((try text.parseInt(runtime, Value.ofString("4 2"))).isNone());
     try testing.expect((try text.parseInt(runtime, Value.ofString(""))).isNone());
-    try testing.expectEqual(@as(f64, 1.5), (try text.parseFloat(runtime, Value.ofString("1.5"))).asFloat());
+    try testing.expectEqual(@as(f64, 1.5), (try text.parseFloat(runtime, Value.ofString("1.5"))).asDouble());
     try testing.expect((try text.parseFloat(runtime, Value.ofString("inf"))).isNone());
     try testing.expect((try text.parseFloat(runtime, Value.ofString("nan"))).isNone());
     try testing.expect((try text.parseFloat(runtime, Value.ofString("zero"))).isNone());
@@ -926,7 +926,7 @@ test "the conversions round trip and refuse what they cannot represent" {
         bench.made(try text.chr(runtime, 0x1F642)).asString(),
     );
     try expectTrap(.bad_codepoint, runtime, text.chr(runtime, 0x110000));
-    try testing.expectEqual(@as(i64, 0x1F642), (try text.ord(runtime, Value.ofString("\xF0\x9F\x99\x82"))).asInt());
+    try testing.expectEqual(@as(i64, 0x1F642), (try text.ord(runtime, Value.ofString("\xF0\x9F\x99\x82"))).asLong());
     try expectTrap(.bad_codepoint, runtime, text.ord(runtime, Value.ofString("")));
 }
 
@@ -936,31 +936,31 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const biggest = Value.ofInt(std.math.maxInt(i64));
-    try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofInt(1)));
-    // The operators that still produce an Int are the ones that still
-    // trap: `/` answers a Float and is IEEE (docs/NUMERICS.md §4).
-    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofInt(0)));
-    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofInt(0)));
+    const biggest = Value.ofLong(std.math.maxInt(i64));
+    try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofLong(1)));
+    // The operators that still produce a long are the ones that still
+    // trap: `/` answers a double and is IEEE (docs/NUMERICS.md §4).
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofLong(0)));
+    try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofLong(0)));
     try expectTrap(
         .integer_overflow,
         runtime,
-        operators.binary(runtime, .floor_divide, Value.ofInt(std.math.minInt(i64)), Value.ofInt(-1)),
+        operators.binary(runtime, .floor_divide, Value.ofLong(std.math.minInt(i64)), Value.ofLong(-1)),
     );
-    try expectTrap(.integer_overflow, runtime, operators.negate(runtime, Value.ofInt(std.math.minInt(i64))));
+    try expectTrap(.integer_overflow, runtime, operators.negate(runtime, Value.ofLong(std.math.minInt(i64))));
 
-    const divided = try operators.binary(runtime, .divide, Value.ofFloat(1.0), Value.ofFloat(0.0));
-    try testing.expect(std.math.isInf(divided.asFloat()));
+    const divided = try operators.binary(runtime, .divide, Value.ofDouble(1.0), Value.ofDouble(0.0));
+    try testing.expect(std.math.isInf(divided.asDouble()));
     // Negation keeps the sign of zero, which `0.0 - x` would not.
-    try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofFloat(0.0))).asFloat()));
+    try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofDouble(0.0))).asDouble()));
 
-    try expectTrap(.conversion_range, runtime, operators.floatToInt(runtime, Value.ofFloat(1e30)));
-    // `Int(x)` rounds half away from zero (docs/NUMERICS.md §7);
+    try expectTrap(.conversion_range, runtime, operators.convert(runtime, Value.ofDouble(1e30), .long));
+    // `long(x)` rounds half away from zero (docs/NUMERICS.md §7);
     // `trunc(x)` is how truncation is spelled now.
-    try testing.expectEqual(@as(i64, -2), (try operators.floatToInt(runtime, Value.ofFloat(-1.9))).asInt());
-    try testing.expectEqual(@as(i64, 3), (try operators.floatToInt(runtime, Value.ofFloat(2.5))).asInt());
-    try testing.expectEqual(@as(i64, -3), (try operators.floatToInt(runtime, Value.ofFloat(-2.5))).asInt());
-    try testing.expectEqual(@as(f64, -1.0), operators.truncate(Value.ofFloat(-1.9)).asFloat());
+    try testing.expectEqual(@as(i64, -2), (try operators.convert(runtime, Value.ofDouble(-1.9), .long)).asLong());
+    try testing.expectEqual(@as(i64, 3), (try operators.convert(runtime, Value.ofDouble(2.5), .long)).asLong());
+    try testing.expectEqual(@as(i64, -3), (try operators.convert(runtime, Value.ofDouble(-2.5), .long)).asLong());
+    try testing.expectEqual(@as(f64, -1.0), operators.truncate(Value.ofDouble(-1.9)).asDouble());
 
     const joined = bench.made(try operators.binary(runtime, .add, Value.ofString("a"), Value.ofString("b")));
     try testing.expectEqualStrings("ab", joined.asString());
@@ -977,10 +977,10 @@ test "object comparison is identity, struct comparison is by field" {
     try testing.expect(operators.compare(.equal, first, first));
     try testing.expect(operators.compare(.not_equal, first, second));
 
-    var left = [_]Value{ Value.ofInt(1), Value.ofString("x") };
-    var right = [_]Value{ Value.ofInt(1), Value.ofString("x") };
+    var left = [_]Value{ Value.ofLong(1), Value.ofString("x") };
+    var right = [_]Value{ Value.ofLong(1), Value.ofString("x") };
     try testing.expect(operators.compare(.equal, Value.ofStruct(&left), Value.ofStruct(&right)));
-    right[0] = Value.ofInt(2);
+    right[0] = Value.ofLong(2);
     try testing.expect(operators.compare(.not_equal, Value.ofStruct(&left), Value.ofStruct(&right)));
 }
 
@@ -1077,17 +1077,17 @@ test "the C surface opens a run, carries values, and reports its own traps" {
 
     var held: Value = .none;
     try testing.expectEqual(0, luce_rt_new_list(runtime, &held));
-    try testing.expectEqual(0, luce_rt_append(runtime, &held, &Value.ofInt(21)));
+    try testing.expectEqual(0, luce_rt_append(runtime, &held, &Value.ofLong(21)));
 
     var read: Value = .none;
-    try testing.expectEqual(0, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofInt(0)}, 1, &read));
+    try testing.expectEqual(0, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofLong(0)}, 1, &read));
     var printed: Value = .none;
     try testing.expectEqual(0, luce_rt_str(runtime, &read, &printed));
     try testing.expectEqualStrings("21", printed.asString());
 
     // Out of range: the call answers trapped, and the trap waits in the
     // runtime while the frames record themselves on the way out.
-    try testing.expectEqual(1, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofInt(1)}, 1, &read));
+    try testing.expectEqual(1, luce_rt_index_get(runtime, &held, &[_]Value{Value.ofLong(1)}, 1, &read));
     luce_rt_unwound(runtime, 0, 1);
     luce_rt_unwound(runtime, 1, 0);
     luce_rt_report(runtime, &reported, Reported.take);

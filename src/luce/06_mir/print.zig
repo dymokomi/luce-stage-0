@@ -88,8 +88,8 @@ fn printInstruction(
     }
     switch (instruction) {
         .const_boolean => |value| try appendPrint(text, allocator, "const {}", .{value}),
-        .const_int => |value| try appendPrint(text, allocator, "const {d}", .{value}),
-        .const_float => |value| try appendPrint(text, allocator, "const {d}", .{value}),
+        .const_long => |value| try appendPrint(text, allocator, "const {d}", .{value}),
+        .const_double => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_string => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
         .local_get => |local| try appendPrint(text, allocator, "local_get %{d}", .{local}),
         .local_set => |set| try appendPrint(text, allocator, "local_set %{d}, r{d}", .{ set.local, set.value }),
@@ -104,7 +104,7 @@ fn printInstruction(
             });
         },
         .unary => |unary| try appendPrint(text, allocator, "{s} r{d}", .{ @tagName(unary.op), unary.operand }),
-        .convert => |convert| try appendPrint(text, allocator, "{s} r{d}", .{ @tagName(convert.kind), convert.operand }),
+        .convert => |operand| try appendPrint(text, allocator, "convert r{d}", .{operand}),
         .struct_make => |make| {
             try appendPrint(text, allocator, "struct_make {s}", .{program.structs[make.layout].name});
             for (make.fields) |field| try appendPrint(text, allocator, ", r{d}", .{field});

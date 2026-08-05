@@ -43,7 +43,6 @@ pub const BlockId = @import("06_mir/defs.zig").BlockId;
 pub const LocalId = @import("06_mir/defs.zig").LocalId;
 pub const BinaryOp = @import("06_mir/defs.zig").BinaryOp;
 pub const UnaryOp = @import("06_mir/defs.zig").UnaryOp;
-pub const ConvertKind = @import("06_mir/defs.zig").ConvertKind;
 pub const Intrinsic = @import("06_mir/defs.zig").Intrinsic;
 pub const TrapCode = @import("06_mir/defs.zig").TrapCode;
 pub const ErrorCode = @import("06_mir/defs.zig").ErrorCode;
@@ -55,6 +54,7 @@ pub const Origin = @import("06_mir/defs.zig").Origin;
 pub const Function = @import("06_mir/defs.zig").Function;
 pub const Program = @import("06_mir/defs.zig").Program;
 pub const strip = @import("06_mir/defs.zig").strip;
+pub const boxTag = @import("06_mir/defs.zig").boxTag;
 
 /// Building the MIR: the emitter stage 4 records on, and the pass that
 /// closes what it recorded into a `Program`.

@@ -26,7 +26,7 @@ func main():
     for i in range(0, n):
         a[i] = double((i * 7) % 32) * 0.25
         b[i] = double((i * 13) % 32) * 0.25
-    var checksum = 0.0
+    var checksum: double = 0.0
     for r in range(0, 6):
         checksum += math.dot(a, b)
         checksum += math.variance(a) else 0.0

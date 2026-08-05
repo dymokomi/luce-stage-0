@@ -3,7 +3,7 @@
 
 func main():
     let n = 13416
-    var total = 0
+    var total: long = 0
     for i in range(0, n):
         for j in range(0, n):
             total += (i * j) % 7

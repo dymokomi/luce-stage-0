@@ -787,7 +787,7 @@ export fn luce_rt_find(
 ) callconv(.c) i32 {
     const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
-    out.* = Value.ofInt(at);
+    out.* = Value.ofLong(at);
     return survived;
 }
 
@@ -952,7 +952,7 @@ export fn luce_rt_compare(
     return @intFromBool(operators.compare(@enumFromInt(op), left.*, right.*));
 }
 
-/// Float `%`: the floor modulus (docs/NUMERICS.md §3).  Two scalars
+/// `%` on doubles: the floor modulus (docs/NUMERICS.md §3).  Two scalars
 /// in, one out; it reads no memory and cannot fail.
 ///
 /// **A call rather than an inline sequence**, which is unlike the
@@ -963,17 +963,25 @@ export fn luce_rt_compare(
 /// on `-0.0` and the infinities, and `frem` is already a libm call, so
 /// what the extra frame buys is that there is only one of it.
 export fn luce_rt_float_mod(left: f64, right: f64) callconv(.c) f64 {
-    return operators.floorMod(left, right);
+    return operators.floorMod(f64, left, right);
 }
 
-/// Comparison across the Int/Float line, exactly (docs/NUMERICS.md).
+/// The same operator at binary32.  A width of its own rather than a
+/// widening through `double`: `%` on floats must answer what a float
+/// `%` answers, and the round trip through binary64 disagrees exactly
+/// where the correction fires.
+export fn luce_rt_float32_mod(left: f32, right: f32) callconv(.c) f32 {
+    return operators.floorMod(f32, left, right);
+}
+
+/// Comparison across the long/double line, exactly (docs/NUMERICS.md).
 /// Two scalars and an operator: it reads no memory at all, cannot
-/// fail, and takes no runtime.  The Int is always the left operand —
-/// stage 4 mirrors the operator when the Float was written first.
-export fn luce_rt_compare_int_float(
+/// fail, and takes no runtime.  The long is always the left operand —
+/// stage 4 mirrors the operator when the double was written first.
+export fn luce_rt_compare_long_double(
     op: i32,
     left: i64,
     right: f64,
 ) callconv(.c) i32 {
-    return @intFromBool(operators.compareIntFloat(@enumFromInt(op), left, right));
+    return @intFromBool(operators.compareLongDouble(@enumFromInt(op), left, right));
 }

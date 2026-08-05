@@ -28,7 +28,7 @@ func matching_backward(code: string, pc: long) -> long:
 func interpret(code: string, cells: long) -> string:
     var tape = new array(long, cells)
     var pointer = 0
-    var pc = 0
+    var pc: long = 0
     var out = new builder()
     while pc < len(code):
         let op = code.byte_at(pc)

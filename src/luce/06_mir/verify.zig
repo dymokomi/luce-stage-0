@@ -42,7 +42,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.heap_types) |descriptor| switch (descriptor) {
         .list => |element| try verifyType(program, element),
         .map => |pair| {
-            if (pair.key != .int and pair.key != .string) return error.BadStruct;
+            if (pair.key != .long and pair.key != .string) return error.BadStruct;
             try verifyType(program, pair.value);
         },
         .array => |shape| {
@@ -245,6 +245,28 @@ fn operandType(function: *const Function, defined: *const std.AutoHashMapUnmanag
     return result;
 }
 
+/// Whether an integer constant, carried as an `i64`, is exactly what
+/// a register of type `at` would hold.
+fn fitsInteger(held: i64, at: Type) bool {
+    return switch (at) {
+        .long => true,
+        .int => held >= std.math.minInt(i32) and held <= std.math.maxInt(i32),
+        .none, .boolean, .float, .double, .string, .strukt, .heap, .optional => false,
+    };
+}
+
+/// The same question for a float constant carried as an `f64`.  A NaN
+/// is representable at either width and compares equal to nothing, so
+/// it is answered before the round trip rather than by it; an infinity
+/// survives the round trip and needs no arm of its own.
+fn fitsFloat(held: f64, at: Type) bool {
+    return switch (at) {
+        .double => true,
+        .float => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
+        .none, .boolean, .int, .long, .string, .strukt, .heap, .optional => false,
+    };
+}
+
 fn expectType(actual: Type, expected: Type) VerifyError!void {
     if (!actual.eql(expected)) return error.TypeMismatch;
 }
@@ -263,8 +285,19 @@ fn verifyInstruction(
     const result = function.result_types[register];
     switch (instruction) {
         .const_boolean => try expectType(result, .boolean),
-        .const_int => try expectType(result, .int),
-        .const_float => try expectType(result, .float),
+        // A numeric constant travels at the widest member of its
+        // family and lands on the register's own width, so what is
+        // checked is not the tag but the *value*: it must be exactly
+        // representable where it lands, or the constant and its type
+        // would disagree about which number this is.
+        .const_long => |held| {
+            if (!result.isInteger()) return error.TypeMismatch;
+            if (!fitsInteger(held, result)) return error.BadConstant;
+        },
+        .const_double => |held| {
+            if (!result.isFloating()) return error.TypeMismatch;
+            if (!fitsFloat(held, result)) return error.BadConstant;
+        },
         .const_string => |constant| {
             if (constant >= program.constants.len) return error.BadConstant;
             try expectType(result, .string);
@@ -294,12 +327,12 @@ fn verifyInstruction(
                 const concat = binary.op == .add and binary.operand_type == .string;
                 if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
                 // `/` is real division and always answers a double
-                // (docs/NUMERICS.md §2), so `Binary { .divide, .int }`
+                // (docs/NUMERICS.md §2), so `Binary { .divide, .long }`
                 // is not a shape stage 4 can emit — the quotient that
                 // answers a long is `floor_divide`.  Rejecting it here
                 // is what lets the runtime and the lowering stop
                 // carrying an integer `/` at all.
-                if (binary.op == .divide and binary.operand_type == .int) {
+                if (binary.op == .divide and binary.operand_type == .long) {
                     return error.TypeMismatch;
                 }
                 try expectType(result, binary.operand_type);
@@ -318,18 +351,16 @@ fn verifyInstruction(
                 },
             }
         },
-        .convert => |convert| {
-            const operand = try operandType(function, defined, convert.operand);
-            switch (convert.kind) {
-                .int_to_float => {
-                    try expectType(operand, .int);
-                    try expectType(result, .float);
-                },
-                .float_to_int => {
-                    try expectType(operand, .float);
-                    try expectType(result, .int);
-                },
-            }
+        // A conversion carries no kind: it goes from the operand's
+        // type to the register's, and every pair of *different*
+        // numeric types is one the language can spell.  Same-to-same
+        // is refused rather than tolerated — it would be a conversion
+        // that converts nothing, which is a lowering bug wearing a
+        // legal instruction (docs/TYPES.md §3).
+        .convert => |operand_register| {
+            const operand = try operandType(function, defined, operand_register);
+            if (!operand.isNumeric() or !result.isNumeric()) return error.TypeMismatch;
+            if (operand.eql(result)) return error.TypeMismatch;
         },
         .struct_make => |make| {
             if (make.layout >= program.structs.len) return error.BadStruct;
@@ -387,7 +418,7 @@ fn verifyInstruction(
             if (new.dims.len != expected_dims) return error.BadStruct;
             for (new.dims) |dimension| {
                 const value = try operandType(function, defined, dimension);
-                try expectType(value, .int);
+                try expectType(value, .long);
             }
             try expectType(result, .{ .heap = new.heap });
         },
@@ -488,44 +519,46 @@ fn verifyIntrinsic(
         },
         .sqrt, .floor, .ceil, .trunc => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .float);
-            try expectType(result, .float);
+            // Whichever float width it was given, and the same one
+            // back: `sqrt` of a `float` is a `float` (docs/TYPES.md §9).
+            if (!arguments[0].isFloating()) return error.BadIntrinsic;
+            try expectType(result, arguments[0]);
         },
-        .compare_int_float => {
+        .compare_long_double => {
             try exactly(arguments, 3);
             // The operator travels as a long because an intrinsic call
             // carries registers and no immediates; which operator it
             // names is trusted exactly as an instruction's type is.
-            try expectType(arguments[0], .int);
-            try expectType(arguments[1], .int);
-            try expectType(arguments[2], .float);
+            try expectType(arguments[0], .long);
+            try expectType(arguments[1], .long);
+            try expectType(arguments[2], .double);
             try expectType(result, .boolean);
         },
         .len => {
             try exactly(arguments, 1);
             const measurable = arguments[0] == .string or arguments[0] == .heap;
             if (!measurable) return error.BadIntrinsic;
-            try expectType(result, .int);
+            try expectType(result, .long);
         },
         .string_slice => {
             try exactly(arguments, 3);
             try expectType(arguments[0], .string);
-            try expectType(arguments[1], .int);
-            try expectType(arguments[2], .int);
+            try expectType(arguments[1], .long);
+            try expectType(arguments[2], .long);
             try expectType(result, .string);
         },
         .string_byte => {
             try exactly(arguments, 2);
             try expectType(arguments[0], .string);
-            try expectType(arguments[1], .int);
-            try expectType(result, .int);
+            try expectType(arguments[1], .long);
+            try expectType(result, .long);
         },
         .string_find_byte => {
             try exactly(arguments, 3);
             try expectType(arguments[0], .string);
-            try expectType(arguments[1], .int);
-            try expectType(arguments[2], .int);
-            try expectType(result, .int);
+            try expectType(arguments[1], .long);
+            try expectType(arguments[2], .long);
+            try expectType(result, .long);
         },
         .assert_true => {
             try exactly(arguments, 1);
@@ -583,7 +616,7 @@ fn verifyIntrinsic(
             const element: Type = switch (try heapShape(program, arguments[0])) {
                 .list => |item| blk: {
                     try exactly(arguments, 2 + value_slots);
-                    try expectType(arguments[1], .int);
+                    try expectType(arguments[1], .long);
                     break :blk item;
                 },
                 .map => |pair| blk: {
@@ -593,7 +626,7 @@ fn verifyIntrinsic(
                 },
                 .array => |shape| blk: {
                     try exactly(arguments, 1 + shape.rank + value_slots);
-                    for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .int);
+                    for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .long);
                     break :blk shape.element;
                 },
                 .builder => return error.BadIntrinsic,
@@ -608,8 +641,8 @@ fn verifyIntrinsic(
         .list_slice => {
             try exactly(arguments, 3);
             if (try heapShape(program, arguments[0]) != .list) return error.BadIntrinsic;
-            try expectType(arguments[1], .int);
-            try expectType(arguments[2], .int);
+            try expectType(arguments[1], .long);
+            try expectType(arguments[2], .long);
             try expectType(result, arguments[0]);
         },
         .append_value => {
@@ -624,7 +657,7 @@ fn verifyIntrinsic(
         .append_ascii => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .builder) return error.BadIntrinsic;
-            try expectType(arguments[1], .int);
+            try expectType(arguments[1], .long);
             try expectType(result, .none);
         },
         .pop_value => {
@@ -638,7 +671,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 3);
             switch (try heapShape(program, arguments[0])) {
                 .list => |element| {
-                    try expectType(arguments[1], .int);
+                    try expectType(arguments[1], .long);
                     try expectType(arguments[2], element);
                 },
                 else => return error.BadIntrinsic,
@@ -648,7 +681,7 @@ fn verifyIntrinsic(
         .remove_entry => {
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
-                .list => try expectType(arguments[1], .int),
+                .list => try expectType(arguments[1], .long),
                 .map => |pair| try expectType(arguments[1], pair.key),
                 else => return error.BadIntrinsic,
             }
@@ -666,7 +699,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
                 .map => |pair| {
-                    try expectType(arguments[1], .int);
+                    try expectType(arguments[1], .long);
                     try expectType(result, pair.key);
                 },
                 else => return error.BadIntrinsic,
@@ -676,7 +709,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
                 .map => |pair| {
-                    try expectType(arguments[1], .int);
+                    try expectType(arguments[1], .long);
                     try expectType(result, pair.value);
                 },
                 else => return error.BadIntrinsic,
@@ -685,19 +718,19 @@ fn verifyIntrinsic(
         .dim_size => {
             try exactly(arguments, 2);
             if (try heapShape(program, arguments[0]) != .array) return error.BadIntrinsic;
-            try expectType(arguments[1], .int);
-            try expectType(result, .int);
+            try expectType(arguments[1], .long);
+            try expectType(result, .long);
         },
         .free_object => {
             if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
             if (arguments[0] != .heap) return error.BadIntrinsic;
-            if (arguments.len == 2) try expectType(arguments[1], .int);
+            if (arguments.len == 2) try expectType(arguments[1], .long);
             try expectType(result, .none);
         },
         .give_object => {
             if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
             if (arguments[0] != .heap and arguments[0] != .strukt) return error.BadIntrinsic;
-            if (arguments.len == 2) try expectType(arguments[1], .int);
+            if (arguments.len == 2) try expectType(arguments[1], .long);
             try expectType(result, arguments[0]);
         },
         .copy_object => {
@@ -727,7 +760,7 @@ fn verifyIntrinsic(
                 else => return error.BadIntrinsic,
             };
             try expectType(arguments[1], element);
-            try expectType(result, if (call.kind == .list_find) .int else .boolean);
+            try expectType(result, if (call.kind == .list_find) .long else .boolean);
         },
         .clear_object => {
             try exactly(arguments, 1);
@@ -777,7 +810,7 @@ fn verifyIntrinsic(
         .str_value => {
             try exactly(arguments, 1);
             const stringable = switch (arguments[0]) {
-                .int, .float, .boolean, .string => true,
+                .int, .long, .float, .double, .boolean, .string => true,
                 .heap => (try heapShape(program, arguments[0])) == .builder,
                 else => false,
             };
@@ -788,19 +821,19 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);
             try expectType(result, if (call.kind == .parse_int)
-                .{ .optional = .int }
+                .{ .optional = .long }
             else
-                .{ .optional = .float });
+                .{ .optional = .double });
         },
         .chr_code => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .int);
+            try expectType(arguments[0], .long);
             try expectType(result, .string);
         },
         .ord_text => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);
-            try expectType(result, .int);
+            try expectType(result, .long);
         },
         .print, .term_write => {
             try exactly(arguments, 1);
@@ -827,7 +860,7 @@ fn verifyIntrinsic(
         },
         .term_rows, .term_cols => {
             try exactly(arguments, 0);
-            try expectType(result, .int);
+            try expectType(result, .long);
         },
         .term_clear, .term_flush => {
             try exactly(arguments, 0);
@@ -835,14 +868,14 @@ fn verifyIntrinsic(
         },
         .term_move => {
             try exactly(arguments, 2);
-            try expectType(arguments[0], .int);
-            try expectType(arguments[1], .int);
+            try expectType(arguments[0], .long);
+            try expectType(arguments[1], .long);
             try expectType(result, .none);
         },
         .term_style => {
             try exactly(arguments, 3);
-            try expectType(arguments[0], .int);
-            try expectType(arguments[1], .int);
+            try expectType(arguments[0], .long);
+            try expectType(arguments[1], .long);
             try expectType(arguments[2], .boolean);
             try expectType(result, .none);
         },
@@ -868,11 +901,11 @@ fn verifyIntrinsic(
         },
         .clock_ms => {
             try exactly(arguments, 0);
-            try expectType(result, .int);
+            try expectType(result, .long);
         },
         .sleep_ms => {
             try exactly(arguments, 1);
-            try expectType(arguments[0], .int);
+            try expectType(arguments[0], .long);
             try expectType(result, .none);
         },
         .file_append, .file_rename => {

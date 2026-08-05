@@ -68,10 +68,10 @@ test "the verifier rejects structural damage a decoder could admit" {
     const arena = program.arena.allocator();
 
     const instructions = try arena.dupe(Instruction, &.{
-        .{ .const_int = 1 },
+        .{ .const_long = 1 },
         .{ .ret = null },
     });
-    const result_types = try arena.dupe(types.Type, &.{ .int, .none });
+    const result_types = try arena.dupe(types.Type, &.{ .long, .none });
     const items = try arena.dupe(Register, &.{ 0, 1 });
     const blocks = try arena.alloc(Block, 1);
     blocks[0] = .{ .items = items };
@@ -103,14 +103,14 @@ test "the verifier rejects structural damage a decoder could admit" {
 
     functions[0].result_types[0] = .boolean;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
-    functions[0].result_types[0] = .int;
+    functions[0].result_types[0] = .long;
 
     const owned_instructions = try arena.dupe(Instruction, &.{
-        .{ .const_int = 1 },
+        .{ .const_long = 1 },
         .{ .object_bind = .{ .local = 7, .value = 0 } },
         .{ .ret = 0 },
     });
-    const owned_results = try arena.dupe(types.Type, &.{ .int, .none, .none });
+    const owned_results = try arena.dupe(types.Type, &.{ .long, .none, .none });
     const owned_items = try arena.dupe(Register, &.{ 0, 1, 2 });
     functions[0].instructions = owned_instructions;
     functions[0].result_types = owned_results;
@@ -126,7 +126,7 @@ test "the verifier rejects structural damage a decoder could admit" {
     try verify_mod.verify(testing.allocator, &program);
 
     functions[0].parameter_count = 1;
-    functions[0].locals = try arena.dupe(Local, &.{.{ .name = "arg", .local_type = .int }});
+    functions[0].locals = try arena.dupe(Local, &.{.{ .name = "arg", .local_type = .long }});
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
     functions[0].parameter_count = 0;
     functions[0].locals = &.{};
@@ -207,13 +207,13 @@ test "a register defined in one block cannot be read in another" {
     //             jump 1
     var crossing = try programOf(.{
         .instructions = &.{
-            .{ .const_int = 1 },
+            .{ .const_long = 1 },
             .{ .jump = 1 },
             .{ .ret = 0 },
         },
-        .result_types = &.{ .int, .none, .none },
+        .result_types = &.{ .long, .none, .none },
         .blocks = &.{ &.{ 0, 1 }, &.{2} },
-        .return_type = .int,
+        .return_type = .long,
     });
     defer crossing.deinit();
     try testing.expectError(error.UndefinedRegister, verify_mod.verify(testing.allocator, &crossing));
@@ -222,12 +222,12 @@ test "a register defined in one block cannot be read in another" {
     // makes the block boundary — and nothing else — the fault above.
     var together = try programOf(.{
         .instructions = &.{
-            .{ .const_int = 1 },
+            .{ .const_long = 1 },
             .{ .ret = 0 },
         },
-        .result_types = &.{ .int, .none },
+        .result_types = &.{ .long, .none },
         .blocks = &.{&.{ 0, 1 }},
-        .return_type = .int,
+        .return_type = .long,
     });
     defer together.deinit();
     try verify_mod.verify(testing.allocator, &together);
@@ -240,24 +240,24 @@ test "a value crosses a block in a local, and the local's type is checked" {
     // type, so a module claiming otherwise is refused.
     var carried = try programOf(.{
         .instructions = &.{
-            .{ .const_int = 7 }, // r0
+            .{ .const_long = 7 }, // r0
             .{ .local_set = .{ .local = 0, .value = 0 } }, // r1
             .{ .jump = 1 }, // r2
             .{ .local_get = 0 }, // r3
             .{ .ret = 3 }, // r4
         },
-        .result_types = &.{ .int, .none, .none, .int, .none },
+        .result_types = &.{ .long, .none, .none, .long, .none },
         .blocks = &.{ &.{ 0, 1, 2 }, &.{ 3, 4 } },
-        .locals = &.{.{ .name = "carried", .local_type = .int }},
-        .return_type = .int,
+        .locals = &.{.{ .name = "carried", .local_type = .long }},
+        .return_type = .long,
     });
     defer carried.deinit();
     try verify_mod.verify(testing.allocator, &carried);
 
     // The load claiming a type the slot does not hold.
-    carried.functions[0].result_types[3] = .float;
+    carried.functions[0].result_types[3] = .double;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &carried));
-    carried.functions[0].result_types[3] = .int;
+    carried.functions[0].result_types[3] = .long;
 
     // A local id past the end of the table, on the load and the store
     // alike.
@@ -269,7 +269,7 @@ test "a value crosses a block in a local, and the local's type is checked" {
     carried.functions[0].instructions[1] = .{ .local_set = .{ .local = 0, .value = 0 } };
 
     // The store handing the slot a type it cannot hold.
-    carried.functions[0].locals[0].local_type = .float;
+    carried.functions[0].locals[0].local_type = .double;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &carried));
 }
 
@@ -280,9 +280,9 @@ test "every block ends in exactly one terminator, wherever the block sits" {
     var missing = try programOf(.{
         .instructions = &.{
             .{ .jump = 1 }, // r0
-            .{ .const_int = 1 }, // r1: block 1 ends here, on a value
+            .{ .const_long = 1 }, // r1: block 1 ends here, on a value
         },
-        .result_types = &.{ .none, .int },
+        .result_types = &.{ .none, .long },
         .blocks = &.{ &.{0}, &.{1} },
     });
     defer missing.deinit();
@@ -292,9 +292,9 @@ test "every block ends in exactly one terminator, wherever the block sits" {
         .instructions = &.{
             .{ .jump = 1 }, // r0
             .{ .ret = null }, // r1: a terminator, but not last
-            .{ .const_int = 1 }, // r2
+            .{ .const_long = 1 }, // r2
         },
-        .result_types = &.{ .none, .none, .int },
+        .result_types = &.{ .none, .none, .long },
         .blocks = &.{ &.{0}, &.{ 1, 2 } },
     });
     defer misplaced.deinit();
@@ -351,8 +351,8 @@ test "a terminator may only name a block that exists" {
     branching.functions[0].instructions[1].branch.else_block = 1;
 
     // A branch decides on a bool and on nothing else.
-    branching.functions[0].instructions[0] = .{ .const_int = 1 };
-    branching.functions[0].result_types[0] = .int;
+    branching.functions[0].instructions[0] = .{ .const_long = 1 };
+    branching.functions[0].result_types[0] = .long;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &branching));
 }
 
@@ -363,11 +363,11 @@ test "one instruction may stand in exactly one block" {
     // the repeat whether it is in the same block or a later one.
     var shared = try programOf(.{
         .instructions = &.{
-            .{ .const_int = 1 }, // r0
+            .{ .const_long = 1 }, // r0
             .{ .jump = 1 }, // r1
             .{ .ret = null }, // r2
         },
-        .result_types = &.{ .int, .none, .none },
+        .result_types = &.{ .long, .none, .none },
         .blocks = &.{ &.{ 0, 1 }, &.{ 0, 2 } },
     });
     defer shared.deinit();
@@ -382,10 +382,10 @@ test "a register is defined before it is read, never after" {
     var forward = try programOf(.{
         .instructions = &.{
             .{ .unary = .{ .op = .negate, .operand = 1 } }, // r0 reads r1
-            .{ .const_int = 1 }, // r1
+            .{ .const_long = 1 }, // r1
             .{ .ret = null }, // r2
         },
-        .result_types = &.{ .int, .int, .none },
+        .result_types = &.{ .long, .long, .none },
         .blocks = &.{&.{ 0, 1, 2 }},
     });
     defer forward.deinit();
@@ -517,11 +517,11 @@ test "a call agrees with the callee it names, argument for argument" {
         .return_type = .none,
         .locals = &.{},
         .instructions = try arena.dupe(Instruction, &.{
-            .{ .const_int = 1 }, // r0
+            .{ .const_long = 1 }, // r0
             .{ .call = .{ .function = 1, .arguments = arguments } }, // r1
             .{ .ret = null }, // r2
         }),
-        .result_types = try arena.dupe(types.Type, &.{ .int, .int, .none }),
+        .result_types = try arena.dupe(types.Type, &.{ .long, .long, .none }),
         .blocks = try arena.dupe(Block, &.{
             .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
         }),
@@ -530,13 +530,13 @@ test "a call agrees with the callee it names, argument for argument" {
     functions[1] = .{
         .name = "twice",
         .parameter_count = 1,
-        .return_type = .int,
-        .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .int }}),
+        .return_type = .long,
+        .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .long }}),
         .instructions = try arena.dupe(Instruction, &.{
             .{ .local_get = 0 }, // r0
             .{ .ret = 0 }, // r1
         }),
-        .result_types = try arena.dupe(types.Type, &.{ .int, .none }),
+        .result_types = try arena.dupe(types.Type, &.{ .long, .none }),
         .blocks = try arena.dupe(Block, &.{
             .{ .items = try arena.dupe(Register, &.{ 0, 1 }) },
         }),
@@ -555,16 +555,16 @@ test "a call agrees with the callee it names, argument for argument" {
     functions[0].instructions[1].call.arguments = arguments;
 
     // The right count, the wrong type.
-    functions[0].instructions[0] = .{ .const_float = 1.0 };
-    functions[0].result_types[0] = .float;
+    functions[0].instructions[0] = .{ .const_double = 1.0 };
+    functions[0].result_types[0] = .double;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
-    functions[0].instructions[0] = .{ .const_int = 1 };
-    functions[0].result_types[0] = .int;
+    functions[0].instructions[0] = .{ .const_long = 1 };
+    functions[0].result_types[0] = .long;
 
     // The call's own result must be what the callee returns.
-    functions[0].result_types[1] = .float;
+    functions[0].result_types[1] = .double;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
-    functions[0].result_types[1] = .int;
+    functions[0].result_types[1] = .long;
     try verify_mod.verify(testing.allocator, &program);
 
     // A callee's parameters are its first locals, so fewer locals than
@@ -580,7 +580,7 @@ test "a call agrees with the callee it names, argument for argument" {
 
     // What a function returns is checked against what it says it
     // returns, in the callee as well as at the call.
-    functions[1].return_type = .float;
+    functions[1].return_type = .double;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
 }
 
@@ -595,23 +595,23 @@ test "the heap type table is checked before anything indexes it" {
     });
     defer program.deinit();
     const heap_types = try program.arena.allocator().alloc(types.HeapType, 1);
-    heap_types[0] = .{ .list = .int };
+    heap_types[0] = .{ .list = .long };
     program.heap_types = heap_types;
     try verify_mod.verify(testing.allocator, &program);
 
     // A map keyed by something that cannot be a key.
-    heap_types[0] = .{ .map = .{ .key = .float, .value = .int } };
+    heap_types[0] = .{ .map = .{ .key = .double, .value = .long } };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
     // An array with no axes, and one with more than the four the
     // language spells.
-    heap_types[0] = .{ .array = .{ .element = .int, .rank = 0 } };
+    heap_types[0] = .{ .array = .{ .element = .long, .rank = 0 } };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
-    heap_types[0] = .{ .array = .{ .element = .int, .rank = 5 } };
+    heap_types[0] = .{ .array = .{ .element = .long, .rank = 5 } };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
     // A rank the `heap_new` supplies no sizes for.
-    heap_types[0] = .{ .array = .{ .element = .int, .rank = 2 } };
+    heap_types[0] = .{ .array = .{ .element = .long, .rank = 2 } };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
     // An element type naming a struct row that is not there.
@@ -619,7 +619,7 @@ test "the heap type table is checked before anything indexes it" {
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
     // And what `heap_new` answers must be the row it allocated.
-    heap_types[0] = .{ .list = .int };
+    heap_types[0] = .{ .list = .long };
     program.functions[0].result_types[0] = .{ .heap = 1 };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 }
@@ -629,11 +629,11 @@ test "an intrinsic is checked for its own arity and operand types" {
     var seven = [_]Register{ 0, 0, 0, 0, 0, 0, 0 };
     var program = try programOf(.{
         .instructions = &.{
-            .{ .const_float = 4.0 }, // r0
+            .{ .const_double = 4.0 }, // r0
             .{ .intrinsic = .{ .kind = .sqrt, .arguments = &of } }, // r1
             .{ .ret = null }, // r2
         },
-        .result_types = &.{ .float, .float, .none },
+        .result_types = &.{ .double, .double, .none },
         .blocks = &.{&.{ 0, 1, 2 }},
     });
     defer program.deinit();
@@ -651,8 +651,8 @@ test "an intrinsic is checked for its own arity and operand types" {
 
     // The right arity, the wrong operand type.
     program.functions[0].instructions[1].intrinsic.arguments = &of;
-    program.functions[0].instructions[0] = .{ .const_int = 4 };
-    program.functions[0].result_types[0] = .int;
+    program.functions[0].instructions[0] = .{ .const_long = 4 };
+    program.functions[0].result_types[0] = .long;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
 }
 
@@ -674,7 +674,7 @@ test "the entry is a function that exists and takes nothing" {
     program.functions[0].parameter_count = 1;
     program.functions[0].locals = try program.arena.allocator().dupe(
         Local,
-        &.{.{ .name = "argument", .local_type = .int }},
+        &.{.{ .name = "argument", .local_type = .long }},
     );
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
 }
@@ -682,10 +682,10 @@ test "the entry is a function that exists and takes nothing" {
 test "the side tables are exactly as long as the instruction pool" {
     var program = try programOf(.{
         .instructions = &.{
-            .{ .const_int = 1 }, // r0
+            .{ .const_long = 1 }, // r0
             .{ .ret = null }, // r1
         },
-        .result_types = &.{ .int, .none },
+        .result_types = &.{ .long, .none },
         .blocks = &.{&.{ 0, 1 }},
     });
     defer program.deinit();

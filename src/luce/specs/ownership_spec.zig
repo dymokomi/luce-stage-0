@@ -906,8 +906,8 @@ test "S23: the runtime backstop still refuses a module stage 4 could not emit" {
         if (seen == 1) {
             owner_operand = call.arguments[1];
         } else if (seen == 2) {
-            const wrong = main_function.instructions[owner_operand.?].const_int;
-            main_function.instructions[call.arguments[1]] = .{ .const_int = wrong };
+            const wrong = main_function.instructions[owner_operand.?].const_long;
+            main_function.instructions[call.arguments[1]] = .{ .const_long = wrong };
         }
     }
     try testing.expectEqual(@as(usize, 2), seen);

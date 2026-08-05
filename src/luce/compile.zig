@@ -200,8 +200,8 @@ test "luce.compiler.verify: broken IR becomes a diagnostic, never a bad artifact
         .locals = &.{},
         // A block whose last instruction is not a terminator: what a
         // lowering that forgot to close a block would produce.
-        .instructions = try arena.dupe(mir.Instruction, &.{.{ .const_int = 1 }}),
-        .result_types = try arena.dupe(types.Type, &.{.int}),
+        .instructions = try arena.dupe(mir.Instruction, &.{.{ .const_long = 1 }}),
+        .result_types = try arena.dupe(types.Type, &.{.long}),
         .blocks = try arena.dupe(mir.Block, &.{
             .{ .items = try arena.dupe(mir.Register, &.{0}) },
         }),

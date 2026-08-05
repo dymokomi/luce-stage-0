@@ -1176,3 +1176,159 @@ Luce beyond `T <: T?`. D6 names the cost of refusing it — one library
 tranche per element type — and that cost is real and should be revisited
 when it bites, as a language decision of its own and not as a rider on
 this one.
+
+---
+
+## As built
+
+Recorded per step, against the plan above.  Where the memo and the
+code disagreed, the code won and the disagreement is written down
+here rather than quietly fixed — a ratified record that survives
+contact is worth more than one that looks like it did.
+
+### Steps 1–3 (landed)
+
+1. **Untyped constants** — `c62d034`.  `wanted`, a one-hop field on
+   the FunctionBuilder beside `wanted_element`, raised by every place
+   that writes a type down and read by `lowerExpressionInner`.
+2. **`long` and `double` arrive** — `6c808db`.
+3. **The rename, and D8's lowercase** — `7f05561`, `8dcaf56`.  The
+   build-failing grep is `tools/spelling.zig`.
+
+### Step 4 — the resize
+
+**In progress.**  The mechanism is complete and every bundled program
+and benchmark compiles; the executable specification has **not** been
+migrated (see *What is left* below).
+
+**The order that made it safe.**  `types.Type.int` was renamed to
+`.long` and `.float` to `.double` **first**, tree-wide, along with
+`Type.Payload`, `runtime.Value.Tag` (2 and 3 keeping their numbers),
+`runtime.View`, `heap.ElementKind`, `context.ConstantValue`,
+`lower.Numeric`, and the `Value.ofInt`/`asInt`/`ofFloat`/`asFloat`
+accessors.  Only then were `int` and `float` added back at 32 bits.
+There is no commit in which either name means the wrong width, and no
+site can have been missed, because a missed one does not compile.
+
+**What the memo got wrong, in contact with the code.**
+
+- **The ladder table, rule 1 and rule 5 still say `Long`/`Double` are
+  the defaults.**  D2 was *overruled* — `var i = 7` is an `int` and
+  `var j = 2.5` is a `float` — and the body was never rewritten to
+  match.  §9's table is about what *builtins* answer and is unaffected
+  (`len`, `clock_ms`, `parse_int` still answer `long`); only the
+  literal default moved.  **The table's two "default" marks belong on
+  `int` and `float`.**
+- **`format_version` was 20, not 19**: the rename had already bumped
+  it.  It is now **21**.  The fingerprint moved and its pin was
+  updated by hand, as the file says it must be.
+- **The migration is louder than "the corpus".**  The memo scoped the
+  audit to the 19 `.luc` files.  It also reaches the **executable
+  specification** — 120-odd spec programs written when every integer
+  was 64 bits — and the site's fenced samples, neither of which the
+  memo names.  Under the overruled D2 this was always going to happen;
+  it is the ruling's cost, arriving where the memo did not look.
+- **`emitConstantValue` hard-coded the width.**  A folded constant
+  was emitted into a `.long` register whatever its `value_type` said,
+  which produced a `long → long` conversion the new verifier caught.
+  The same bug lived in both engines' `const_long` lowering.  All
+  three now take the width from the register.
+- **`methodTakes` was bigger than the memo said, and the fix is not
+  the one it implied.**  Landing an argument at the receiver's type
+  *after* lowering it is wrong, not merely late: `xs.append(0.1)` on a
+  `list(double)` would store the widening of binary32's 0.1, which is
+  a different number.  The parameter types moved into one function,
+  `methodParameters`, consulted twice — once by the operand batch
+  before an argument is lowered, once by `methodTakes` to check what
+  arrived.  `lowerOperandsInto` grew a `Landing` that is asked per
+  operand rather than given up front, which is what lets operand zero
+  decide for the rest; `xs[i] = 0.1` takes the same route.
+- **Binary operands needed the same rule and the memo did not list
+  them.**  Two rules, in `lowerBinaryOperands` and mirrored in the
+  constant folder: two untyped sides take the *place's* type, and
+  otherwise the typed side decides for the untyped one.  Without the
+  second, `x * 0.1` on a `double` computes with binary32's 0.1.
+- **The constant folder's float `%` was already wrong.**  It used
+  Zig's `@mod`, which forces a non-negative answer, where the runtime
+  floors.  `let x = 7.0 % -3.0` folded to `1.0` and ran as `-2.0`.
+  Fixed with the resize because the folder had to be rewritten anyway.
+- **`ConvertKind` is deleted**, as the memo asked, and the instruction
+  is now `convert: Register`.  The verifier derives legality from the
+  operand's type and the register's, and **refuses same-to-same** —
+  which is what caught the `emitConstantValue` bug.
+- **A numeric constant is carried at the widest member of its family**
+  (`const_long: i64`, `const_double: f64`) and lands at the register's
+  width, with the verifier checking the value is exact there.  This is
+  the language's own rule about literals kept one stage down, and it
+  means `byte`, `short` and `half` will add **no** constant arms.
+- **`compare_int_float` is renamed `compare_long_double`** and
+  `luce_rt_compare_int_float` with it: after the resize the old name
+  described a function that takes neither an `int` nor a `float`.
+  Four pairs now reach it and it answers all four unchanged, by
+  widening into `(i64, f64)` — both lossless.  **`int` against
+  `double` skips the call**, as §5 predicted.
+- **The builtins compared exactly where they had to widen.**  "Array
+  indices are `long`" has always meant *an integer*, and a loop
+  counter is the commonest `int` there is; `widensInto` is the one
+  place that rule is applied to an already-lowered value, and the
+  index, range, slice, dimension and terminal builtins all ask it.
+- **`parse_int` and `parse_float` keep their names** and answer
+  `long?`/`double?` per §9 — but the names now read as promises about
+  32-bit types, which is a bruise the memo could not have seen before
+  D8 made `int` a real spelling.  Recorded, not fixed: renaming a
+  language builtin is a decision of its own.
+
+**The annotation ledger.**  Every site the audit made loud, and why
+each one is what it is.  `long` where an accumulator meets `len`,
+`clock_ms` or another `long`; `double` where it meets a `double` or
+carries a documented precision claim.
+
+| file | site | now | why |
+|---|---|---|---|
+| `std/strings.luc` | `run` ×2 (`:118`, `:156`) | `long` | a string offset, and `len` answers `long` |
+| `std/math.luc` | `term`, `total` (`:59-60`) | `double` | `exp`'s series backs the module's 1e-14 claim |
+| `std/math.luc` | `result` (`:127`) | `long` | `ipow`'s specs assert 2^62 |
+| `std/math.luc` | `total` ×3 (`:167`, `:215`, `:229`) | `double` | reductions over `array(double, _)` |
+| `programs/mathx.luc` | `total`, `spread` | `double` | sums of `double` values |
+| `programs/dice.luc` | `seed`, `count`, `total` | `long` | `parse_int` and `math.random` answer `long` |
+| `programs/bf.luc` | `pc` | `long` | indexes a `long`-measured program |
+| `programs/editor.luc` | `at`, `used` | `long` | byte offsets, from `len` |
+| `programs/wordcount.luc` | `best_count`, `top` | `long` | counts from `len` |
+| `programs/life.luc` | — | — | `frame_ms` widens at the operator; nothing to annotate |
+| `bench/loops.luc` | `total` | `long` | sums to 462,794,501 and must print it |
+| `bench/strings.luc` | `total_len` | `long` | from `len` |
+| `bench/arrays.luc` | `sum` | `double` | the 1/8-exactness argument needs binary64 |
+| `bench/math.luc` | `x`, `y` | `double` | the recorded output is binary64's |
+| `bench/matmul.luc`, `bench/stats.luc` | `checksum` | `double` | D7: the printed number must not move |
+| `src/apps/loom/product.zig` | `total` in the installed-pair program | `long` | prints `total 30` and is compared |
+
+**What is left of step 4**, in the order it should be done:
+
+1. **The executable specification.**  123 tests fail, every one a
+   program written when an unannotated integer was 64 bits.  Three
+   shapes: an accumulator meeting a `long` (annotate), a literal past
+   2^31 (annotate the place `long` — the new diagnostic names the
+   fix), and `[1, 2, 3]` reaching a `list(long)` parameter, which is
+   D6's no-covariance rule arriving early and wants the literal's
+   place annotated.  A handful of `errors_spec` messages moved text
+   and need re-pinning.
+2. **The site's 200 samples**, same three shapes, plus the ones whose
+   *recorded output* legitimately changes because an unannotated float
+   is now binary32 — `sqrt(2.0)` prints `1.4142135`, not
+   `1.4142135623730951`.  Each needs a decision: annotate `double` to
+   keep the lesson, or record the narrower answer because it is now
+   the language's own.
+3. **D7's gate.**  `bench/run.sh` byte-comparison and the 200-sample
+   site check, both against the recorded outputs.  The annotations
+   above are chosen to keep every one of them identical; that is a
+   claim and it has not yet been *run*.
+4. **The specs the memo asks for and this step has not written**: the
+   landing of a negated literal through a minus, the 2^24 exactness
+   boundary pinned on both engines, the wrong-width literal, and the
+   refused narrowing with its column.
+5. `docs/PIPELINE.md`, `CLAUDE.md`'s *"one implicit conversion and one
+   only"* sentence, and the mutation sweep.
+
+### Steps 5–7
+
+Not started.

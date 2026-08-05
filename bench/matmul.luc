@@ -19,7 +19,7 @@ func main():
             let pivot = a[i * n + k]
             for j in range(0, n):
                 c[i * n + j] += pivot * b[k * n + j]
-    var checksum = 0.0
+    var checksum: double = 0.0
     for i in range(0, n * n):
         checksum += c[i]
     print(string(long(trunc(checksum))))

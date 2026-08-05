@@ -15,8 +15,8 @@ func bar(count: long) -> string:
     return "#".repeat(count)
 
 func main(args: list(string)) -> !:
-    var seed = 2026
-    var count = 20
+    var seed: long = 2026
+    var count: long = 20
     if len(args) > 0:
         seed = parse_int(args[0]) else seed
     if len(args) > 1:
@@ -25,7 +25,7 @@ func main(args: list(string)) -> !:
     var rng = math.Rng(state = seed)
     var rolls: list(string) = []
     var histogram = new array(long, 7)
-    var total = 0
+    var total: long = 0
     for i in range(0, count):
         let roll = rng.in_range(1, 7)
         rolls.append(string(roll))

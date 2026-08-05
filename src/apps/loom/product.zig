@@ -161,7 +161,7 @@ fn calls(install: *const Install, gpa: Allocator) !usize {
 
 const greeting =
     \\func main():
-    \\    var total = 0
+    \\    var total: long = 0
     \\    for index in range(0, 5):
     \\        total = total + index * index
     \\    print("total " + string(total))

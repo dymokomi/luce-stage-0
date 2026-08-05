@@ -211,7 +211,7 @@ fn stable(program: *const mir.Program, function: *const mir.Function, loop: Loop
             if (optimize.effects.viewStable(instruction)) continue;
             // The one refinement this stage can make and stage 9
             // cannot: writing an element frees the element it replaced
-            // (S22), and a Float, an Int or a String owns nothing to
+            // (S22), and a double, a long or a String owns nothing to
             // free.  Stage 9 has the instruction but not the program's
             // heap-type table, so it answers conservatively.
             if (!writesPlainElement(program, function, instruction)) return false;
@@ -230,7 +230,7 @@ fn writesPlainElement(
     const target = instruction.intrinsic.arguments[0];
     const shape = arrayShape(program, function.result_types[target]) orelse return false;
     return switch (shape.element) {
-        .boolean, .int, .float, .string => true,
+        .boolean, .int, .long, .float, .double, .string => true,
         .none, .strukt, .heap, .optional => false,
     };
 }
@@ -510,7 +510,7 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
 
     try testing.expectEqual(@as(usize, 1), built.made.hoists.len);
     const hoist = built.made.hoists[0];
-    try testing.expectEqual(types.Type.float, hoist.element);
+    try testing.expectEqual(types.Type.double, hoist.element);
     try testing.expectEqual(@as(u8, 1), hoist.rank);
     // The preheader emits it — at the end, after everything the block
     // itself does — and the loop's blocks read it.

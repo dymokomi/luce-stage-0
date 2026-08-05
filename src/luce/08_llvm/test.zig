@@ -331,7 +331,7 @@ test "a compiled program prints through the host table" {
     try std.testing.expectEqual(@as(?mir.TrapCode, null), capture.trap_code);
 }
 
-test "arithmetic, comparison, control flow, locals, and String(Int) run" {
+test "arithmetic, comparison, control flow, locals, and String(long) run" {
     var capture: Capture = .{};
 
     const status = try run(
@@ -930,7 +930,7 @@ test "an index out of bounds agrees" {
 // Floats
 // ---------------------------------------------------------------------------
 //
-// The special values travel through a `List(Float)`, which no optimizer
+// The special values travel through a `List(double)`, which no optimizer
 // can see into: without that, LLVM would fold the whole table at
 // compile time and the test would only prove that its constant folder
 // agrees, not that the generated instructions do.
@@ -1064,7 +1064,7 @@ test "the float builtins agree" {
     );
 }
 
-test "Int(Float) agrees at the range boundaries" {
+test "long(double) agrees at the range boundaries" {
     try agree(
         \\func main():
         \\    var scale = 1.0
@@ -1081,7 +1081,7 @@ test "Int(Float) agrees at the range boundaries" {
     );
 }
 
-test "Int(NaN) and Int(infinity) trap the same way" {
+test "long(NaN) and long(infinity) trap the same way" {
     try agree(
         \\func main():
         \\    let nan = 0.0 / 0.0
@@ -1098,7 +1098,7 @@ test "Int(NaN) and Int(infinity) trap the same way" {
     );
 }
 
-test "the Int math builtins agree, and abs of the smallest Int traps" {
+test "the long math builtins agree, and abs of the smallest long traps" {
     try agree(
         \\func main():
         \\    let xs = new list(long)
@@ -1194,7 +1194,7 @@ test "zero-initialized structs agree, nested ones included" {
 }
 
 test "an inline array access agrees on every element kind and rank" {
-    // Since `Array` storage is typed (`runtime/heap.zig`), a Float
+    // Since `Array` storage is typed (`runtime/heap.zig`), a double
     // array is `f64`s and a Bool array is bytes, while a String or an
     // object element keeps the 24-byte slot — and compiled code reads
     // each one inline rather than through the runtime.  Four kinds,
@@ -1447,7 +1447,7 @@ test "the else fallback runs only where there was no value, and chains" {
 }
 
 test "parse_int and parse_float agree when the text is a number and when it is not" {
-    // The `Int?`/`Float?` that made optionals load-bearing on day one.
+    // The `long?`/`double?` that made optionals load-bearing on day one.
     try agree(
         \\func main():
         \\    print(string(parse_int("41") else -1))
@@ -1669,7 +1669,7 @@ test "every payload a T? can hold survives being returned" {
 test "the null object put in a T? is present, because absence is not a handle" {
     // The case that decides the representation.  `raw` is the zero of
     // an object-typed place — the null handle, a value that is *there*
-    // and traps on use (S40) — and borrowing it into a `List(Int)?`
+    // and traps on use (S40) — and borrowing it into a `List(long)?`
     // is accepted without a diagnostic.  The interpreter answers
     // "present" because absence there is the tag.  Had the lowering
     // spent the null index on `none`, as docs/FAILURE.md first

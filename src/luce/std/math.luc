@@ -56,8 +56,8 @@ func exp(x: double) -> double:
     # below converges in a few terms; then scale by 2^k.
     let k = long(x / ln2)
     let r = x - double(k) * ln2
-    var term = 1.0
-    var total = 1.0
+    var term: double = 1.0
+    var total: double = 1.0
     for i in range(1, 15):
         term *= r / double(i)
         total += term
@@ -124,7 +124,7 @@ func pow(x: double, y: double) -> double:
 func ipow(base: long, exponent: long) -> long:
     if exponent < 0:
         trap("ipow needs a non-negative exponent")
-    var result = 1
+    var result: long = 1
     var square = base
     var left = exponent
     while left > 0:
@@ -164,7 +164,7 @@ func tan(x: double) -> double:
 # (mean, vmin, vmax, variance) trap.
 
 func sum(xs: array(double, _)) -> double:
-    var total = 0.0
+    var total: double = 0.0
     for i in range(0, len(xs)):
         total += xs[i]
     return total
@@ -212,7 +212,7 @@ func minmax(xs: array(double, _)) -> (double?, double?):
 func dot(xs: array(double, _), ys: array(double, _)) -> double:
     if len(xs) != len(ys):
         trap("dot needs arrays of one length")
-    var total = 0.0
+    var total: double = 0.0
     for i in range(0, len(xs)):
         total += xs[i] * ys[i]
     return total
@@ -226,7 +226,7 @@ func variance(xs: array(double, _)) -> double?:
     if len(xs) == 0:
         return none
     let center = mean(xs) else 0.0
-    var total = 0.0
+    var total: double = 0.0
     for i in range(0, len(xs)):
         let d = xs[i] - center
         total += d * d

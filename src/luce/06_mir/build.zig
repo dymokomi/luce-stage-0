@@ -358,8 +358,8 @@ pub const Lowering = struct {
         return switch (of) {
             .none => unreachable, // no annotation resolves to None
             .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
-            .int => try self.emit(.{ .const_int = 0 }, .int),
-            .float => try self.emit(.{ .const_float = 0.0 }, .float),
+            .int, .long => try self.emit(.{ .const_long = 0 }, of),
+            .float, .double => try self.emit(.{ .const_double = 0.0 }, of),
             .string => try self.emit(.{ .const_string = try self.pool.intern("") }, .string),
             .heap => try self.emit(
                 .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
@@ -582,7 +582,7 @@ pub const Lowering = struct {
         start: Register,
         limit_value: Register,
     ) Error!CountedLoop {
-        const limit = try self.hiddenLocal(.int, false);
+        const limit = try self.hiddenLocal(.long, false);
         try self.store(index, start);
         try self.store(limit, limit_value);
 
@@ -597,7 +597,7 @@ pub const Lowering = struct {
         const bound = try self.load(limit);
         const keep_going = try self.emit(.{ .binary = .{
             .op = .less,
-            .operand_type = .int,
+            .operand_type = .long,
             .left = counter,
             .right = bound,
         } }, .boolean);
@@ -624,13 +624,13 @@ pub const Lowering = struct {
     /// A long local, one higher.
     fn advance(self: *Lowering, counter: LocalId) Error!void {
         const current = try self.load(counter);
-        const one = try self.emit(.{ .const_int = 1 }, .int);
+        const one = try self.emit(.{ .const_long = 1 }, .long);
         const stepped = try self.emit(.{ .binary = .{
             .op = .add,
-            .operand_type = .int,
+            .operand_type = .long,
             .left = current,
             .right = one,
-        } }, .int);
+        } }, .long);
         try self.store(counter, stepped);
     }
 
@@ -651,7 +651,7 @@ pub const Lowering = struct {
     pub fn openIteration(self: *Lowering, object_type: Type) Error!Iteration {
         return .{
             .object = try self.hiddenLocal(object_type, false),
-            .position = try self.hiddenLocal(.int, false),
+            .position = try self.hiddenLocal(.long, false),
         };
     }
 
@@ -660,7 +660,7 @@ pub const Lowering = struct {
     /// iteration stays bounds-safe.
     pub fn startIteration(self: *Lowering, loop: *Iteration, object: Register) Error!void {
         try self.store(loop.object, object);
-        const zero = try self.emit(.{ .const_int = 0 }, .int);
+        const zero = try self.emit(.{ .const_long = 0 }, .long);
         try self.store(loop.position, zero);
 
         loop.header = try self.reserveBlock();
@@ -675,12 +675,12 @@ pub const Lowering = struct {
         arguments[0] = collection;
         const length = try self.emit(
             .{ .intrinsic = .{ .kind = .len, .arguments = arguments } },
-            .int,
+            .long,
         );
         const at = try self.load(loop.position);
         const keep_going = try self.emit(.{ .binary = .{
             .op = .less,
-            .operand_type = .int,
+            .operand_type = .long,
             .left = at,
             .right = length,
         } }, .boolean);

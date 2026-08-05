@@ -36,8 +36,13 @@ pub const CompileOptions = struct {
 pub const Type = union(enum) {
     none,
     boolean,
+    /// The four arithmetic types, in ladder order: two integer widths
+    /// and two float widths, sized as Java, C, C#, GLSL and every GPU
+    /// API size them (docs/TYPES.md).
     int,
+    long,
     float,
+    double,
     string,
     strukt: u32,
     heap: u32,
@@ -52,7 +57,9 @@ pub const Type = union(enum) {
     pub const Payload = union(enum) {
         boolean,
         int,
+        long,
         float,
+        double,
         string,
         strukt: u32,
         heap: u32,
@@ -61,7 +68,9 @@ pub const Type = union(enum) {
             return switch (self) {
                 .boolean => .boolean,
                 .int => .int,
+                .long => .long,
                 .float => .float,
+                .double => .double,
                 .string => .string,
                 .strukt => |index| .{ .strukt = index },
                 .heap => |index| .{ .heap = index },
@@ -87,7 +96,95 @@ pub const Type = union(enum) {
     }
 
     pub fn isNumeric(self: Type) bool {
-        return self == .int or self == .float;
+        return self.isInteger() or self.isFloating();
+    }
+
+    /// The signed integers, and nothing else — `bool` is not a small
+    /// integer here and never has been.
+    pub fn isInteger(self: Type) bool {
+        return self == .int or self == .long;
+    }
+
+    pub fn isFloating(self: Type) bool {
+        return self == .float or self == .double;
+    }
+
+    /// How wide a numeric type is, in bits.  Asked only of one:
+    /// callers test `isNumeric` first, and a non-numeric answering
+    /// zero would let a caller compute with the answer instead of
+    /// being stopped by it.
+    pub fn numericBits(self: Type) u16 {
+        return switch (self) {
+            .int, .float => 32,
+            .long, .double => 64,
+            .none, .boolean, .string, .strukt, .heap, .optional => 0,
+        };
+    }
+
+    /// Whether a value of `self` reaches a `to` place with **nothing
+    /// written down** — the whole of the language's implicit
+    /// conversion, stated once (docs/TYPES.md §2).
+    ///
+    /// Four pairs, and the two that are missing are the point.  Along
+    /// a ladder: `int` widens to `long`, `float` to `double`, both
+    /// exactly.  Across the ladders the answer is always `double`:
+    /// `int` is exact in it and `long` is exact below 2^53, which is
+    /// the one lossy implicit conversion the language has and the one
+    /// `docs/NUMERICS.md` §6 ratified.  What is *not* here is Java's
+    /// `int → float` and `long → float`, which lose everything above
+    /// 2^24 from sources that reach it routinely; a program that wants
+    /// a narrow float writes `float(x)` and says so.
+    ///
+    /// Narrowing is in no direction and no context: not `long` into
+    /// `int`, not `double` into `float`, not at a store, an argument
+    /// or a return.
+    pub fn widensTo(self: Type, to: Type) bool {
+        return switch (self) {
+            .int => to == .long or to == .double,
+            .long => to == .double,
+            .float => to == .double,
+            .double, .none, .boolean, .string, .strukt, .heap, .optional => false,
+        };
+    }
+
+    /// The type two numeric operands meet at, or null when either is
+    /// not a number.  Same type, same answer; two integers meet at the
+    /// wider; two floats meet at the wider; a mixed pair meets at
+    /// `double`, whichever way round it was written.
+    pub fn unified(left: Type, right: Type) ?Type {
+        if (!left.isNumeric() or !right.isNumeric()) return null;
+        if (left.eql(right)) return left;
+        if (left.isInteger() and right.isInteger()) return .long;
+        if (left.isFloating() and right.isFloating()) return .double;
+        return .double;
+    }
+
+    /// Whether the conversion `to(x)` can stop the program.
+    ///
+    /// Two of the four families of pair can, and for the same reason:
+    /// the answer may have no representation at all in the
+    /// destination, and Luce refuses to invent one (docs/TYPES.md §3).
+    ///
+    ///   * **float to integer** traps `conversion_range` outside the
+    ///     target, NaN and the infinities included — at every width,
+    ///     because rounding half away from zero can land past the top
+    ///     of an `int` as easily as past the top of a `long`.
+    ///   * **integer to a narrower integer** traps `conversion_range`
+    ///     outside the target: `int(3000000000)` is not 3 billion
+    ///     modulo anything, it is a program that stops.
+    ///
+    /// The other two never do.  Integer to float rounds to nearest and
+    /// always has an answer; float to float rounds to nearest, ties to
+    /// even, and reaches `inf` rather than trapping, because `/` is
+    /// already IEEE without traps and the language should not acquire
+    /// a second story about infinity.
+    ///
+    /// Asked only of a legal conversion: both ends numeric, and not
+    /// the same type.
+    pub fn conversionTraps(from: Type, to: Type) bool {
+        std.debug.assert(from.isNumeric() and to.isNumeric());
+        if (from.isFloating()) return to.isInteger();
+        return to.isInteger() and to.numericBits() < from.numericBits();
     }
 
     /// `T` written as `T?`, or null when there is no such type: `None`
@@ -97,7 +194,9 @@ pub const Type = union(enum) {
             .none, .optional => null,
             .boolean => .{ .optional = .boolean },
             .int => .{ .optional = .int },
+            .long => .{ .optional = .long },
             .float => .{ .optional = .float },
+            .double => .{ .optional = .double },
             .string => .{ .optional = .string },
             .strukt => |index| .{ .optional = .{ .strukt = index } },
             .heap => |index| .{ .optional = .{ .heap = index } },
@@ -166,7 +265,9 @@ pub const StructLayout = struct {
 /// an unknown struct in the other.
 pub const Builtin = enum {
     boolean,
+    int,
     long,
+    float,
     double,
     string,
     list,
@@ -181,7 +282,7 @@ pub const Builtin = enum {
 /// **Lowercase names are the language's; TitleCase names are yours**
 /// (docs/TYPES.md D8), which is what makes the case of a type name say
 /// who defined it.  There are no TitleCase builtins and no aliases for
-/// the ones there used to be: a program that writes `Int` is told the
+/// the ones there used to be: a program that writes `long` is told the
 /// name is `long`, by `failUnknownType`, once.
 pub fn builtinNamed(text: []const u8) ?Builtin {
     for (builtin_table) |entry| {
@@ -192,7 +293,9 @@ pub fn builtinNamed(text: []const u8) ?Builtin {
 
 const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "bool", .is = .boolean },
+    .{ .name = "int", .is = .int },
     .{ .name = "long", .is = .long },
+    .{ .name = "float", .is = .float },
     .{ .name = "double", .is = .double },
     .{ .name = "string", .is = .string },
     .{ .name = "list", .is = .list },
@@ -210,6 +313,13 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
 /// mistake is remembering the older name should be told the newer one
 /// outright.  It is also the sentence the whole tree's migration
 /// hangs on, so it names both halves.
+///
+/// **`Int` answers `long` and `Float` answers `double`, not `int` and
+/// `float`** — the lowercase names exist now, but they are 32 bits
+/// wide and the TitleCase ones never were.  A reader migrating a
+/// program written before the resize wants the type that holds what
+/// theirs held; the narrow one is a decision, and a decision belongs
+/// where somebody writes it down.
 pub fn retiredSpelling(text: []const u8) ?[]const u8 {
     const retired = [_]struct { was: []const u8, now: []const u8 }{
         .{ .was = "Int", .now = "long" },
@@ -235,7 +345,7 @@ pub fn retiredSpelling(text: []const u8) ?[]const u8 {
 pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
-        .long, .double, .string => builtin,
+        .int, .long, .float, .double, .string => builtin,
         .boolean, .list, .map, .array, .builder => null,
     };
 }
@@ -277,8 +387,10 @@ fn writeTypeName(
     switch (of) {
         .none => try written.appendSlice(allocator, "None"),
         .boolean => try written.appendSlice(allocator, "bool"),
-        .int => try written.appendSlice(allocator, "long"),
-        .float => try written.appendSlice(allocator, "double"),
+        .int => try written.appendSlice(allocator, "int"),
+        .long => try written.appendSlice(allocator, "long"),
+        .float => try written.appendSlice(allocator, "float"),
+        .double => try written.appendSlice(allocator, "double"),
         .string => try written.appendSlice(allocator, "string"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .heap => |index| switch (heap_types[index]) {
@@ -310,19 +422,19 @@ fn writeTypeName(
 }
 
 test "type equality distinguishes struct indices" {
-    try std.testing.expect(Type.eql(.int, .int));
-    try std.testing.expect(!Type.eql(.int, .float));
+    try std.testing.expect(Type.eql(.long, .long));
+    try std.testing.expect(!Type.eql(.long, .double));
     try std.testing.expect(Type.eql(.{ .strukt = 2 }, .{ .strukt = 2 }));
     try std.testing.expect(!Type.eql(.{ .strukt = 2 }, .{ .strukt = 3 }));
-    try std.testing.expect(!Type.eql(.{ .strukt = 2 }, .int));
+    try std.testing.expect(!Type.eql(.{ .strukt = 2 }, .long));
 }
 
 test "an optional is its payload plus one level, and never two" {
-    const maybe_int = Type.optionalOf(.int).?;
-    try std.testing.expect(maybe_int.eql(.{ .optional = .int }));
-    try std.testing.expect(!maybe_int.eql(.int));
-    try std.testing.expect(maybe_int.held().?.eql(.int));
-    try std.testing.expectEqual(@as(?Type, null), (Type{ .int = {} }).held());
+    const maybe_int = Type.optionalOf(.long).?;
+    try std.testing.expect(maybe_int.eql(.{ .optional = .long }));
+    try std.testing.expect(!maybe_int.eql(.long));
+    try std.testing.expect(maybe_int.held().?.eql(.long));
+    try std.testing.expectEqual(@as(?Type, null), (Type{ .long = {} }).held());
 
     // `T??` and `None?` have no representation to reach.
     try std.testing.expectEqual(@as(?Type, null), Type.optionalOf(maybe_int));
@@ -338,7 +450,7 @@ test "an optional is its payload plus one level, and never two" {
 }
 
 test "an optional type writes the ? it was written with" {
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .int }}, .{ .optional = .{ .heap = 0 } });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list(long)?", written);
 }

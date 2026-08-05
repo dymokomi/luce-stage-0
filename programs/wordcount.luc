@@ -35,7 +35,7 @@ func count_words(content: string, counts: map(string, long)):
 # did a second hash lookup for the count this already had.
 func heaviest(counts: map(string, long)) -> (string, long):
     var best = ""
-    var best_count = 0
+    var best_count: long = 0
     for word in counts:
         if counts[word] > best_count:
             best = word
@@ -47,7 +47,7 @@ func main(args: list(string)) -> !:
         print("usage: wordcount FILE [TOP_N]")
         return
     let path = args[0]
-    var top = 5
+    var top: long = 5
     if len(args) > 1:
         top = parse_int(args[1]) else top
 

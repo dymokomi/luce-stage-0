@@ -14,7 +14,7 @@ func main():
     let text = b.build()
 
     let pieces = text.split(";")
-    var total_len = 0
+    var total_len: long = 0
     for piece in pieces:
         total_len += len(piece)
 

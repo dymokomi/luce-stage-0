@@ -118,7 +118,7 @@ struct Text:
         return at
 
     func width(value: string) -> long:
-        var at = 0
+        var at: long = 0
         var columns = 0
         while at < len(value):
             at = Text.next_boundary(value, at)
@@ -374,7 +374,7 @@ struct Draw:
     # One source line with Luce highlighting, clipped to `width`.
     func line(content: string, start: long, finish: long, width: long):
         var at = start
-        var used = 0
+        var used: long = 0
         while at < finish and used < width:
             let byte = content.byte_at(at)
             if byte == 35:

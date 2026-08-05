@@ -135,7 +135,7 @@ pub const Result = union(enum) {
     /// allocator it passed to `lower`.
     bitcode: []const u8,
     /// Some construct has no lowering yet.  The payload names it
-    /// ("intrinsic.map_get", "Float") and is static storage — nothing
+    /// ("intrinsic.map_get", "double") and is static storage — nothing
     /// was allocated, and there is nothing to free.
     unsupported: []const u8,
 };
@@ -280,7 +280,7 @@ const Module = struct {
 
     /// `llvm.minimumnum.f64` and `llvm.maximumnum.f64`, in that order,
     /// declared on first use (`floatExtremum`).
-    float_extrema: [2]?Builder.Function.Index = .{ null, null },
+    float_extrema: [2][2]?Builder.Function.Index = @splat(.{ null, null }),
 
     /// One retired object row, read in place of a null handle's when a
     /// resolution is lifted out of a loop (`loops.zig`).  A lifted
@@ -315,8 +315,10 @@ const Module = struct {
         return switch (of) {
             .none => .void,
             .boolean => .i1,
-            .int => .i64,
-            .float => .double,
+            .int => .i32,
+            .long => .i64,
+            .float => .float,
+            .double => .double,
             .string => self.string_type,
             // A heap object is a `runtime.Handle`: the row of the
             // object table it lives in, and which occupant of that
@@ -335,11 +337,11 @@ const Module = struct {
             // and that index is already spoken for: the null handle is
             // the zero of an object-typed place (S40), a value that is
             // *present* and traps on use, and a program can put one in
-            // a `T?` — `look(raw)` against `func look(xs: List(Int)?)`
+            // a `T?` — `look(raw)` against `func look(xs: List(long)?)`
             // borrows one in without a diagnostic, and the interpreter
             // answers "present" because absence there is the tag, not
             // the payload.  A sentinel would answer "absent" and the
-            // two engines would part company.  Int, Float, Bool,
+            // two engines would part company.  long, double, Bool,
             // String and structs have no spare value to sentinel with
             // anyway, so the bit is what the other six payloads cost;
             // spending it on the seventh buys nothing and costs the
@@ -454,19 +456,23 @@ const Module = struct {
     /// that intrinsic to LLVM — it recognizes the name on the way in and
     /// attaches the intrinsic's own attributes — so nothing about the
     /// module differs from one the enum could have built.
-    fn floatExtremum(self: *Module, wants_minimum: bool) Error!Builder.Function.Index {
+    fn floatExtremum(self: *Module, wants_minimum: bool, of: types.Type) Error!Builder.Function.Index {
+        const narrow: usize = if (of == .float) 1 else 0;
         const slot: usize = if (wants_minimum) 0 else 1;
-        if (self.float_extrema[slot]) |found| return found;
-        const signature_type = try self.builder.fnType(.double, &.{ .double, .double }, .normal);
+        if (self.float_extrema[narrow][slot]) |found| return found;
+        const width: Builder.Type = if (of == .float) .float else .double;
+        const signature_type = try self.builder.fnType(width, &.{ width, width }, .normal);
+        const name: []const u8 = if (of == .float)
+            (if (wants_minimum) "llvm.minimumnum.f32" else "llvm.maximumnum.f32")
+        else
+            (if (wants_minimum) "llvm.minimumnum.f64" else "llvm.maximumnum.f64");
         const declared = try self.builder.addFunction(
             signature_type,
-            try self.builder.strtabString(
-                if (wants_minimum) "llvm.minimumnum.f64" else "llvm.maximumnum.f64",
-            ),
+            try self.builder.strtabString(name),
             .default,
         );
         declared.setLinkage(.external, self.builder);
-        self.float_extrema[slot] = declared;
+        self.float_extrema[narrow][slot] = declared;
         return declared;
     }
 
@@ -476,9 +482,10 @@ const Module = struct {
     fn valueAlignment(of: types.Type) Builder.Alignment {
         return switch (of) {
             .boolean => Builder.Alignment.fromByteUnits(1),
+            .int, .float => Builder.Alignment.fromByteUnits(4),
             .none,
-            .int,
-            .float,
+            .long,
+            .double,
             .string,
             .strukt,
             .heap,
@@ -682,7 +689,9 @@ const Module = struct {
             .none => .{ .none, try self.builder.intConst(.i64, 0) },
             .boolean => .{ .boolean, try self.builder.intConst(.i64, 0) },
             .int => .{ .int, try self.builder.intConst(.i64, 0) },
+            .long => .{ .long, try self.builder.intConst(.i64, 0) },
             .float => .{ .float, try self.builder.intConst(.i64, 0) },
+            .double => .{ .double, try self.builder.intConst(.i64, 0) },
             .string => .{ .string, try self.builder.intConst(.i64, 0) },
             .heap => .{ .object, try self.builder.intConst(.i64, runtime.null_index) },
             .strukt => |nested| .{ .strukt, try self.builder.castConst(
@@ -898,7 +907,8 @@ const Module = struct {
     fn resultSize(of: types.Type) u32 {
         return switch (of) {
             .boolean => 1,
-            .int, .float, .strukt, .heap => 8,
+            .int, .float => 4,
+            .long, .double, .strukt, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
             .string => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
@@ -908,7 +918,10 @@ const Module = struct {
             // caller's `alloca` provides.
             .optional => |payload| switch (payload) {
                 .boolean => 2,
-                .int, .float, .strukt, .heap => 16,
+                // {i32, i1} and {float, i1} align to 4, so eight
+                // bytes rather than sixteen.
+                .int, .float => 8,
+                .long, .double, .strukt, .heap => 16,
                 .string => 24,
             },
             // Never reached: a function returning nothing has no slot.
@@ -1551,8 +1564,8 @@ const Body = struct {
                 // Naming the rest keeps a new IR instruction a compile
                 // error here as well as in the lowering switch.
                 .const_boolean,
-                .const_int,
-                .const_float,
+                .const_long,
+                .const_double,
                 .const_string,
                 .local_get,
                 .local_set,
@@ -1689,8 +1702,10 @@ const Body = struct {
     fn zeroValue(self: *Body, of: types.Type) Error!Builder.Value {
         return switch (of) {
             .boolean => .false,
-            .int => try self.module.builder.intValue(.i64, 0),
-            .float => try self.module.builder.doubleValue(0.0),
+            .int => try self.module.builder.intValue(.i32, 0),
+            .long => try self.module.builder.intValue(.i64, 0),
+            .float => try self.module.builder.floatValue(0.0),
+            .double => try self.module.builder.doubleValue(0.0),
             .string => (try self.module.textConstant("")).toValue(),
             // The zero of an object-typed place is the null handle;
             // using it traps rather than touching anything.
@@ -1851,16 +1866,7 @@ const Body = struct {
     /// of its own: what it boxes as is decided by whether it is there,
     /// so it is the one type this cannot answer.
     fn boxTag(self: *Body, of: types.Type) Error!runtime.Tag {
-        return switch (of) {
-            .none => .none,
-            .boolean => .boolean,
-            .int => .int,
-            .string => .string,
-            .heap => .object,
-            .float => .float,
-            .strukt => .strukt,
-            .optional => self.fail("the tag of a T? read from its type"),
-        };
+        return mir.boxTag(of) orelse self.fail("the tag of a T? read from its type");
     }
 
     /// The `bits` word a value of `of` puts in a box.
@@ -1869,8 +1875,18 @@ const Body = struct {
             .none => try self.module.builder.intValue(.i64, 0),
             .boolean => try self.wip.cast(.zext, held, .i64, "box.bits"),
             // A handle already *is* the `bits` word `Value` carries.
-            .int, .heap => held,
-            .float => try self.wip.cast(.bitcast, held, .i64, "box.bits"),
+            .long, .heap => held,
+            .double => try self.wip.cast(.bitcast, held, .i64, "box.bits"),
+            // A narrow scalar sits in the low half of the word,
+            // zero-extended: `asInt` reads it back by truncating, so
+            // the top half is never read and must not be a sign.
+            .int => try self.wip.cast(.zext, held, .i64, "box.bits"),
+            .float => try self.wip.cast(
+                .zext,
+                try self.wip.cast(.bitcast, held, .i32, "box.word"),
+                .i64,
+                "box.bits",
+            ),
             .strukt => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
             .string => try self.wip.cast(
                 .ptrtoint,
@@ -1888,7 +1904,7 @@ const Body = struct {
     fn boxLength(self: *Body, of: types.Type, held: Builder.Value) Error!Builder.Value {
         const builder = self.module.builder;
         return switch (of) {
-            .none, .boolean, .int, .heap, .float => try builder.intValue(.i64, 0),
+            .none, .boolean, .int, .long, .heap, .float, .double => try builder.intValue(.i64, 0),
             .strukt => |layout| try builder.intValue(
                 .i64,
                 self.module.program.structs[layout].fields.len,
@@ -2021,14 +2037,21 @@ const Body = struct {
         if (of == .optional) return self.unboxedOptional(of.optional, slot, name);
         const bits = try self.loadBoxField(slot, box_bits, "unbox.bits");
         return switch (of) {
-            .int, .heap => bits,
+            .long, .heap => bits,
+            .int => try self.wip.cast(.trunc, bits, .i32, name),
+            .float => try self.wip.cast(
+                .bitcast,
+                try self.wip.cast(.trunc, bits, .i32, "unbox.word"),
+                .float,
+                name,
+            ),
             .boolean => try self.wip.icmp(
                 .ne,
                 bits,
                 try self.module.builder.intValue(.i64, 0),
                 name,
             ),
-            .float => try self.wip.cast(.bitcast, bits, .double, name),
+            .double => try self.wip.cast(.bitcast, bits, .double, name),
             .string => try self.unboxedText(slot, bits, name),
             // The field count is a compile-time fact, so only the
             // address of the run travels back.
@@ -2280,7 +2303,7 @@ const Body = struct {
     /// element is a borrow of it, and borrows own nothing.
     fn ownsNothing(of: types.Type) bool {
         return switch (of) {
-            .boolean, .int, .float => true,
+            .boolean, .int, .long, .float, .double => true,
             .none, .string, .strukt, .heap, .optional => false,
         };
     }
@@ -2430,14 +2453,16 @@ const Body = struct {
     /// The LLVM type one cell of an `Array(element)` is.
     ///
     /// It mirrors `runtime.Object.ElementKind`, which is what the
-    /// runtime actually allocates: an `Array(Float)` is `f64`s, so
+    /// runtime actually allocates: an `Array(double)` is `f64`s, so
     /// reading one is a `load double` and nothing else.  The two are
     /// held together by the byte-offset test in `runtime/test.zig`,
-    /// which reads a Float array's element as an `f64`.
+    /// which reads a double array's element as an `f64`.
     fn cellType(self: *Body, element: types.Type) Builder.Type {
         return switch (element) {
-            .float => .double,
-            .int => .i64,
+            .double => .double,
+            .long => .i64,
+            .float => .float,
+            .int => .i32,
             .boolean => .i8,
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
@@ -2448,9 +2473,10 @@ const Body = struct {
     fn cellAlignment(element: types.Type) Builder.Alignment {
         return switch (element) {
             .boolean => Builder.Alignment.fromByteUnits(1),
+            .int, .float => Builder.Alignment.fromByteUnits(4),
             .none,
-            .int,
-            .float,
+            .long,
+            .double,
             .string,
             .strukt,
             .heap,
@@ -2704,7 +2730,7 @@ const Body = struct {
     /// Read one cell as the Luce value it holds.
     fn loadCell(self: *Body, element: types.Type, address: Builder.Value) Error!Builder.Value {
         return switch (element) {
-            .float, .int => try self.wip.load(
+            .double, .long, .float, .int => try self.wip.load(
                 .normal,
                 self.cellType(element),
                 address,
@@ -2737,7 +2763,7 @@ const Body = struct {
         held: Builder.Value,
     ) Error!void {
         switch (element) {
-            .float, .int => _ = try self.wip.store(
+            .double, .long, .float, .int => _ = try self.wip.store(
                 .normal,
                 held,
                 address,
@@ -3355,11 +3381,21 @@ const Body = struct {
             .const_boolean => |value| {
                 self.values[register] = if (value) .true else .false;
             },
-            .const_int => |value| {
-                self.values[register] = try self.module.builder.intValue(.i64, value);
+            // A numeric constant travels at the widest member of its
+            // family and lands at the register's own width; the
+            // verifier has already checked the value is exact there
+            // (docs/TYPES.md §1).
+            .const_long => |value| {
+                self.values[register] = try self.module.builder.intValue(
+                    try self.module.valueType(self.function.result_types[register]),
+                    value,
+                );
             },
-            .const_float => |value| {
-                self.values[register] = try self.module.builder.doubleValue(value);
+            .const_double => |value| {
+                self.values[register] = if (self.function.result_types[register] == .float)
+                    try self.module.builder.floatValue(@floatCast(value))
+                else
+                    try self.module.builder.doubleValue(value);
             },
             .const_string => |constant| {
                 const text = self.module.program.constants[constant];
@@ -3388,7 +3424,7 @@ const Body = struct {
             .local_set => |set| try self.emitLocalSet(set.local, set.value),
             .binary => |operation| try self.emitBinary(register, operation),
             .unary => |operation| try self.emitUnary(register, operation),
-            .convert => |operation| try self.emitConvert(register, operation.kind, operation.operand),
+            .convert => |operand| try self.emitConvert(register, operand),
             .struct_make => |make| try self.emitStructMake(register, make.layout, make.fields),
             .struct_get => |get| {
                 const layout = self.module.program.structs[get.layout];
@@ -3503,63 +3539,131 @@ const Body = struct {
 
     // -- conversion and struct values ----------------------------------
 
-    /// `Float(x)` widens; `Int(x)` **rounds half away from zero** and
-    /// traps outside the i64 range, NaN and the infinities included
-    /// (docs/NUMERICS.md §7).  The guards are the interpreter's, value
-    /// for value (`runtime/operators.zig`), because a conversion that
-    /// disagrees at the boundary is a different language — and so is
-    /// the rounding, which is `llvm.round`, the intrinsic whose
-    /// definition *is* "half away from zero".  The range check runs
-    /// before the rounding, so a value rounding would push past 2^63
-    /// is refused rather than wrapped.
+    /// Every numeric conversion, from the operand's type to the
+    /// register's — the instruction carries no kind, because both ends
+    /// are already written down (docs/TYPES.md §3).
+    ///
+    /// Four families, and two of them can stop the program:
+    ///
+    ///   * **to a float** — `sitofp` from an integer, `fpext` or
+    ///     `fptrunc` between the float widths.  Never traps; a
+    ///     `fptrunc` that overflows answers `inf`, because `/` is
+    ///     already IEEE without traps.
+    ///   * **to an integer, from a float** — **rounds half away from
+    ///     zero** and traps outside the target's range, NaN and the
+    ///     infinities included.  The guards are the interpreter's,
+    ///     value for value (`runtime/operators.zig`), because a
+    ///     conversion that disagrees at the boundary is a different
+    ///     language — and so is the rounding, which is `llvm.round`,
+    ///     the intrinsic whose definition *is* "half away from zero".
+    ///     The range check runs *after* the rounding, so a value
+    ///     rounding would push past the top is refused rather than
+    ///     wrapped.
+    ///   * **to a wider integer** — `sext`, exact.
+    ///   * **to a narrower integer** — a range check, then `trunc`.
+    ///     `int(3000000000)` stops; it is not 3 billion modulo
+    ///     anything.
     fn emitConvert(
         self: *Body,
         register: mir.Register,
-        kind: mir.ConvertKind,
         operand: mir.Register,
     ) Error!void {
+        const from = self.function.result_types[operand];
+        const to = self.function.result_types[register];
         const held = self.values[operand];
-        switch (kind) {
-            .int_to_float => {
-                self.values[register] = try self.wip.cast(.sitofp, held, .double, "float");
-            },
-            .float_to_int => {
-                const builder = self.module.builder;
-                const rounded = try self.wip.callIntrinsic(
-                    .normal,
-                    .none,
-                    .round,
-                    &.{.double},
-                    &.{held},
-                    "rounded",
-                );
-                // NaN compares unordered with itself and with the
-                // bounds, so it has to be asked about separately.
-                const not_a_number = try self.wip.fcmp(.normal, .uno, rounded, rounded, "is.nan");
-                const too_small = try self.wip.fcmp(
-                    .normal,
-                    .olt,
-                    rounded,
-                    try builder.doubleValue(-9223372036854775808.0),
-                    "too.small",
-                );
-                const too_large = try self.wip.fcmp(
-                    .normal,
-                    .oge,
-                    rounded,
-                    try builder.doubleValue(9223372036854775808.0),
-                    "too.large",
-                );
-                const outside = try self.wip.bin(
-                    .@"or",
-                    not_a_number,
-                    try self.wip.bin(.@"or", too_small, too_large, "off.scale"),
-                    "unrepresentable",
-                );
-                try self.check(outside, .conversion_range);
-                self.values[register] = try self.wip.cast(.fptosi, rounded, .i64, "int");
-            },
+        const target = try self.module.valueType(to);
+
+        if (to.isFloating()) {
+            self.values[register] = if (from.isInteger())
+                try self.wip.cast(.sitofp, held, target, "float")
+            else if (to.numericBits() > from.numericBits())
+                try self.wip.cast(.fpext, held, target, "float")
+            else
+                try self.wip.cast(.fptrunc, held, target, "float");
+            return;
         }
+
+        if (from.isInteger()) {
+            if (to.numericBits() > from.numericBits()) {
+                self.values[register] = try self.wip.cast(.sext, held, target, "int");
+                return;
+            }
+            try self.checkIntegerRange(held, from, to);
+            self.values[register] = try self.wip.cast(.trunc, held, target, "int");
+            return;
+        }
+
+        const source = try self.module.valueType(from);
+        const rounded = try self.wip.callIntrinsic(
+            .normal,
+            .none,
+            .round,
+            &.{source},
+            &.{held},
+            "rounded",
+        );
+        try self.checkFloatRange(rounded, from, to);
+        self.values[register] = try self.wip.cast(.fptosi, rounded, target, "int");
+    }
+
+    /// The bounds of `to`, tested on a float that has already been
+    /// rounded.  NaN compares unordered with itself and with the
+    /// bounds, so it is asked about separately.
+    ///
+    /// The upper bound is one past the top and tested with `>=`,
+    /// because 2^63 and 2^31 are both exactly representable in either
+    /// float width while `maxInt` itself is not.
+    fn checkFloatRange(self: *Body, rounded: Builder.Value, from: types.Type, to: types.Type) Error!void {
+        const lowest: f64, const past_top: f64 = switch (to.numericBits()) {
+            32 => .{ -2147483648.0, 2147483648.0 },
+            else => .{ -9223372036854775808.0, 9223372036854775808.0 },
+        };
+        const not_a_number = try self.wip.fcmp(.normal, .uno, rounded, rounded, "is.nan");
+        const too_small = try self.wip.fcmp(
+            .normal,
+            .olt,
+            rounded,
+            try self.floatConstant(from, lowest),
+            "too.small",
+        );
+        const too_large = try self.wip.fcmp(
+            .normal,
+            .oge,
+            rounded,
+            try self.floatConstant(from, past_top),
+            "too.large",
+        );
+        const outside = try self.wip.bin(
+            .@"or",
+            not_a_number,
+            try self.wip.bin(.@"or", too_small, too_large, "off.scale"),
+            "unrepresentable",
+        );
+        try self.check(outside, .conversion_range);
+    }
+
+    /// The bounds of a narrower integer, tested at the source's width.
+    fn checkIntegerRange(self: *Body, held: Builder.Value, from: types.Type, to: types.Type) Error!void {
+        const wide = try self.module.valueType(from);
+        const lowest = try self.module.builder.intValue(wide, std.math.minInt(i32));
+        const highest = try self.module.builder.intValue(wide, std.math.maxInt(i32));
+        std.debug.assert(to.numericBits() == 32);
+        const outside = try self.wip.bin(
+            .@"or",
+            try self.wip.icmp(.slt, held, lowest, "too.small"),
+            try self.wip.icmp(.sgt, held, highest, "too.large"),
+            "unrepresentable",
+        );
+        try self.check(outside, .conversion_range);
+    }
+
+    /// A constant of the float width `of` names.
+    fn floatConstant(self: *Body, of: types.Type, held: f64) Error!Builder.Value {
+        const builder = self.module.builder;
+        return if (of == .float)
+            builder.floatValue(@floatCast(held))
+        else
+            builder.doubleValue(held);
     }
 
     /// `Point(x = 1, y = 2)`: gather the fields into a scratch run of
@@ -3599,9 +3703,15 @@ const Body = struct {
             return;
         }
         switch (operation.operand_type) {
-            .int => self.values[register] = try self.emitIntArithmetic(operation.op, left, right),
-            .float => self.values[register] = try self.emitFloatArithmetic(
+            .int, .long => self.values[register] = try self.emitIntArithmetic(
                 operation.op,
+                operation.operand_type,
+                left,
+                right,
+            ),
+            .float, .double => self.values[register] = try self.emitFloatArithmetic(
+                operation.op,
+                operation.operand_type,
                 left,
                 right,
             ),
@@ -3624,14 +3734,16 @@ const Body = struct {
     fn emitIntArithmetic(
         self: *Body,
         operation: mir.BinaryOp,
+        of: types.Type,
         left: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
+        const width = try self.module.valueType(of);
         switch (operation) {
-            .add => return self.emitChecked(.@"sadd.with.overflow", left, right),
-            .subtract => return self.emitChecked(.@"ssub.with.overflow", left, right),
-            .multiply => return self.emitChecked(.@"smul.with.overflow", left, right),
-            // `/` is real division and always answers a Float, so an
+            .add => return self.emitChecked(.@"sadd.with.overflow", width, left, right),
+            .subtract => return self.emitChecked(.@"ssub.with.overflow", width, left, right),
+            .multiply => return self.emitChecked(.@"smul.with.overflow", width, left, right),
+            // `/` is real division and always answers a float, so an
             // integer one is IR the verifier already refused
             // (docs/NUMERICS.md §2).
             .divide => return self.fail("integer division, which the language does not have"),
@@ -3641,7 +3753,7 @@ const Body = struct {
             // both corrections fire on the same condition: the true
             // quotient was negative and did not divide evenly.
             .floor_divide, .modulo => {
-                try self.checkDivisor(left, right);
+                try self.checkDivisor(of, left, right);
                 const truncated = try self.wip.bin(
                     if (operation == .floor_divide) .sdiv else .srem,
                     left,
@@ -3652,7 +3764,7 @@ const Body = struct {
                     truncated
                 else
                     try self.wip.bin(.srem, left, right, "rem");
-                return self.correctToFloor(operation, truncated, remainder, right);
+                return self.correctToFloor(operation, width, truncated, remainder, right);
             },
             .equal,
             .not_equal,
@@ -3681,12 +3793,13 @@ const Body = struct {
     fn correctToFloor(
         self: *Body,
         operation: mir.BinaryOp,
+        width: Builder.Type,
         truncated: Builder.Value,
         remainder: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
         const builder = self.module.builder;
-        const zero = try builder.intValue(.i64, 0);
+        const zero = try builder.intValue(width, 0);
         const uneven = try self.wip.icmp(.ne, remainder, zero, "uneven");
         // `(a ^ b) < 0` is "the signs disagree", in one instruction
         // and without the two comparisons the words would take.
@@ -3697,15 +3810,15 @@ const Body = struct {
         // are computed, and the discarded one must be a defined value
         // rather than poison.  Neither can wrap where it is chosen.
         const corrected = if (operation == .floor_divide)
-            try self.wip.bin(.sub, truncated, try builder.intValue(.i64, 1), "floored")
+            try self.wip.bin(.sub, truncated, try builder.intValue(width, 1), "floored")
         else
             try self.wip.bin(.add, remainder, right, "modded");
         return self.wip.select(.normal, needs, corrected, truncated, "int");
     }
 
-    /// Float arithmetic is plain IEEE 754 and never traps: division by
-    /// zero and overflow produce infinities and NaN, exactly as they do
-    /// in the interpreter.
+    /// Arithmetic on doubles is plain IEEE 754 and never traps:
+    /// division by zero and overflow produce infinities and NaN,
+    /// exactly as they do in the interpreter.
     ///
     /// Two of the six are not one instruction.  `%` is the **floor**
     /// modulus, pairing with `//` so that promotion introduces no
@@ -3717,13 +3830,15 @@ const Body = struct {
     fn emitFloatArithmetic(
         self: *Body,
         operation: mir.BinaryOp,
+        of: types.Type,
         left: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
+        const width = try self.module.valueType(of);
         switch (operation) {
             .modulo => return self.callRuntime(
-                .luce_rt_float_mod,
-                .double,
+                if (of == .float) .luce_rt_float32_mod else .luce_rt_float_mod,
+                width,
                 &.{ left, right },
                 "float",
             ),
@@ -3733,7 +3848,7 @@ const Body = struct {
                     .normal,
                     .none,
                     .floor,
-                    &.{.double},
+                    &.{width},
                     &.{quotient},
                     "float",
                 );
@@ -3761,6 +3876,7 @@ const Body = struct {
     fn emitChecked(
         self: *Body,
         intrinsic: Builder.Intrinsic,
+        width: Builder.Type,
         left: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
@@ -3768,7 +3884,7 @@ const Body = struct {
             .normal,
             .none,
             intrinsic,
-            &.{.i64},
+            &.{width},
             &.{ left, right },
             "checked",
         );
@@ -3780,13 +3896,17 @@ const Body = struct {
 
     /// Division traps on a zero divisor and on `minInt / -1`, the one
     /// signed division whose result is not representable.
-    fn checkDivisor(self: *Body, left: Builder.Value, right: Builder.Value) Error!void {
+    fn checkDivisor(self: *Body, of: types.Type, left: Builder.Value, right: Builder.Value) Error!void {
         const builder = self.module.builder;
-        const zero = try builder.intValue(.i64, 0);
+        const width = try self.module.valueType(of);
+        const zero = try builder.intValue(width, 0);
         try self.check(try self.wip.icmp(.eq, right, zero, "by.zero"), .divide_by_zero);
 
-        const smallest = try builder.intValue(.i64, std.math.minInt(i64));
-        const negative_one = try builder.intValue(.i64, -1);
+        const smallest = try builder.intValue(
+            width,
+            @as(i64, if (of == .int) std.math.minInt(i32) else std.math.minInt(i64)),
+        );
+        const negative_one = try builder.intValue(width, -1);
         const is_smallest = try self.wip.icmp(.eq, left, smallest, "is.smallest");
         const is_negative_one = try self.wip.icmp(.eq, right, negative_one, "is.minus.one");
         const both = try self.wip.bin(.@"and", is_smallest, is_negative_one, "overflows");
@@ -3799,10 +3919,10 @@ const Body = struct {
         left: Builder.Value,
         right: Builder.Value,
     ) Error!Builder.Value {
-        // Float comparison is ordered except for `!=`, which is true
+        // Comparison on doubles is ordered except for `!=`, which is true
         // whenever the two are not equal — NaN included.  That is what
         // Zig's operators mean in `runtime/operators.zig`.
-        if (operation.operand_type == .float) {
+        if (operation.operand_type.isFloating()) {
             const condition: Builder.FloatCondition = switch (operation.op) {
                 .equal => .oeq,
                 .not_equal => .une,
@@ -3839,7 +3959,7 @@ const Body = struct {
         }
 
         const condition: Builder.IntegerCondition = switch (operation.operand_type) {
-            .int => switch (operation.op) {
+            .int, .long => switch (operation.op) {
                 .equal => .eq,
                 .not_equal => .ne,
                 .less => .slt,
@@ -3888,7 +4008,7 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
-            .float, .string, .strukt => unreachable, // answered above
+            .float, .double, .string, .strukt => unreachable, // answered above
             .none => return self.fail("a comparison of None"),
             // `x == none` is `is_none` by the time it gets here, and
             // the analyzer refuses every other comparison of a `T?`
@@ -3906,17 +4026,20 @@ const Body = struct {
                 self.values[register] = try self.wip.bin(.xor, operand, .true, "not");
             },
             .negate => switch (self.function.result_types[operation.operand]) {
-                .int => {
-                    const zero = try self.module.builder.intValue(.i64, 0);
+                .int, .long => {
+                    const of = self.function.result_types[operation.operand];
+                    const width = try self.module.valueType(of);
+                    const zero = try self.module.builder.intValue(width, 0);
                     self.values[register] = try self.emitChecked(
                         .@"ssub.with.overflow",
+                        width,
                         zero,
                         operand,
                     );
                 },
                 // A true sign-bit flip, not `0.0 - x`: the two differ
                 // for +0.0, and the deleted x86 backend got it wrong.
-                .float => {
+                .float, .double => {
                     self.values[register] = try self.wip.un(.fneg, operand, "neg");
                 },
                 .none,
@@ -4076,7 +4199,7 @@ const Body = struct {
         return switch (of) {
             .string => true,
             .optional => |payload| carriesText(payload.asType()),
-            .none, .boolean, .int, .float, .strukt, .heap => false,
+            .none, .boolean, .int, .long, .float, .double, .strukt, .heap => false,
         };
     }
 
@@ -4154,15 +4277,18 @@ const Body = struct {
             },
 
             // -- scalar math, generated here --------------------------
-            .abs => switch (try self.numeric(of[0])) {
-                .int => {
-                    // Negating the smallest i64 has no representable
-                    // result, so `abs` traps where the interpreter does
-                    // and the intrinsic never sees the poison case.
+            .abs => {
+                const kind = try self.numeric(of[0]);
+                const width = try self.module.valueType(kind);
+                if (kind.isInteger()) {
+                    // Negating the smallest integer has no
+                    // representable result at either width, so `abs`
+                    // traps where the interpreter does and the
+                    // intrinsic never sees the poison case.
                     const held = self.values[of[0]];
                     const smallest = try self.module.builder.intValue(
-                        .i64,
-                        std.math.minInt(i64),
+                        width,
+                        @as(i64, if (kind == .int) std.math.minInt(i32) else std.math.minInt(i64)),
                     );
                     try self.check(
                         try self.wip.icmp(.eq, held, smallest, "is.smallest"),
@@ -4172,19 +4298,18 @@ const Body = struct {
                         .normal,
                         .none,
                         .abs,
-                        &.{.i64},
+                        &.{width},
                         &.{ held, .true },
                         "abs",
                     );
-                },
-                .float => self.values[register] = try self.wip.callIntrinsic(
+                } else self.values[register] = try self.wip.callIntrinsic(
                     .normal,
                     .none,
                     .fabs,
-                    &.{.double},
+                    &.{width},
                     &.{self.values[of[0]]},
                     "abs",
-                ),
+                );
             },
             .min, .max => self.values[register] = try self.emitExtremum(
                 called.kind == .min,
@@ -4217,12 +4342,12 @@ const Body = struct {
             .ceil => self.values[register] = try self.emitFloatCall(.ceil, of[0]),
             .trunc => self.values[register] = try self.emitFloatCall(.trunc, of[0]),
 
-            // Comparison across the Int/Float line is exact, so it is
+            // Comparison across the long/double line is exact, so it is
             // a call and not a widening (docs/NUMERICS.md).  The
-            // operator arrives as an Int register — a constant every
+            // operator arrives as a long register — a constant every
             // time — and narrows to the `i32` the C surface takes.
-            .compare_int_float => {
-                const answer = try self.callRuntime(.luce_rt_compare_int_float, .i32, &.{
+            .compare_long_double => {
+                const answer = try self.callRuntime(.luce_rt_compare_long_double, .i32, &.{
                     try self.wip.cast(.trunc, self.values[of[0]], .i32, "op"),
                     self.values[of[1]],
                     self.values[of[2]],
@@ -4646,15 +4771,15 @@ const Body = struct {
 
     // -- scalar math helpers ---------------------------------------------
 
-    /// Which of the two numeric types a math builtin was given.  The
-    /// analyzer admits no others; naming the rest keeps this file free
-    /// of `else` arms.
-    const Numeric = enum { int, float };
-
-    fn numeric(self: *Body, operand: mir.Register) Error!Numeric {
-        return switch (self.function.result_types[operand]) {
-            .int => .int,
-            .float => .float,
+    /// Which numeric type a math builtin was given — its own, at its
+    /// own width, because `abs`, `min`, `max` and `clamp` answer the
+    /// type they were handed and `sqrt` of a `float` is a `float`.  The
+    /// analyzer admits no other type; naming the rest keeps this file
+    /// free of `else` arms.
+    fn numeric(self: *Body, operand: mir.Register) Error!types.Type {
+        const of = self.function.result_types[operand];
+        return switch (of) {
+            .int, .long, .float, .double => of,
             .none,
             .boolean,
             .string,
@@ -4667,9 +4792,9 @@ const Body = struct {
 
     /// `min` when `wants_minimum`, `max` otherwise.
     ///
-    /// Int is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
+    /// A long is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
     ///
-    /// Float is `llvm.minimumnum`/`llvm.maximumnum`, which mean exactly
+    /// A double is `llvm.minimumnum`/`llvm.maximumnum`, which mean exactly
     /// what the interpreter's `@min` means and are the only extremum
     /// intrinsics that mean anything at all: `llvm.minnum` leaves
     /// `(-0.0, +0.0)` unspecified, so LLVM's constant folder and the
@@ -4693,48 +4818,48 @@ const Body = struct {
         wants_minimum: bool,
         left: Builder.Value,
         right: Builder.Value,
-        kind: Numeric,
+        kind: types.Type,
     ) Error!Builder.Value {
-        switch (kind) {
-            .int => return self.wip.callIntrinsic(
+        const width = try self.module.valueType(kind);
+        if (kind.isInteger()) {
+            return self.wip.callIntrinsic(
                 .normal,
                 .none,
                 if (wants_minimum) .smin else .smax,
-                &.{.i64},
+                &.{width},
                 &.{ left, right },
                 "extremum",
-            ),
-            .float => {
-                const target = try self.module.floatExtremum(wants_minimum);
-                const builder = self.module.builder;
-                return self.wip.call(
-                    .normal,
-                    Builder.CallConv.default,
-                    .none,
-                    target.typeOf(builder),
-                    target.toValue(builder),
-                    &.{ left, right },
-                    "extremum",
-                );
-            },
+            );
         }
+        const target = try self.module.floatExtremum(wants_minimum, kind);
+        const builder = self.module.builder;
+        return self.wip.call(
+            .normal,
+            Builder.CallConv.default,
+            .none,
+            target.typeOf(builder),
+            target.toValue(builder),
+            &.{ left, right },
+            "extremum",
+        );
     }
 
-    /// One of the Float-only builtins, as its LLVM intrinsic.
+    /// One of the float-only builtins, as its LLVM intrinsic, at the
+    /// width its operand arrived at: `llvm.sqrt.f32` exists, and a
+    /// `sqrt` of a `float` answering a `double` would be a narrowing
+    /// waiting to happen at the next store.
     fn emitFloatCall(
         self: *Body,
         intrinsic: Builder.Intrinsic,
         operand: mir.Register,
     ) Error!Builder.Value {
-        switch (try self.numeric(operand)) {
-            .float => {},
-            .int => return self.fail("a Float builtin applied to an Int"),
-        }
+        const of = try self.numeric(operand);
+        if (!of.isFloating()) return self.fail("a float builtin applied to an integer");
         return self.wip.callIntrinsic(
             .normal,
             .none,
             intrinsic,
-            &.{.double},
+            &.{try self.module.valueType(of)},
             &.{self.values[operand]},
             "float",
         );
