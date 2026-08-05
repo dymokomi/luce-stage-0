@@ -36,15 +36,21 @@ const editor = @embedFile("editor.luc");
 const script = [_]agree.World.Key{
     .{ .name = "text", .text = "ab" },
     .{ .name = "enter" },
-    // **Multi-byte on purpose.**  The backspace two keys below is the
-    // branch that measures against the content as it was *before* the
-    // erase (docs/METHODS.md), and `previous_boundary` walks back over
-    // UTF-8 continuation bytes — so the before and after readings can
-    // only differ where the bytes at those positions differ, which in
-    // ASCII is never.  A first version of this script typed "cd" here
-    // and a mutation reverting the snapshot survived it; the mutation
-    // sweep is what said so.
-    .{ .name = "text", .text = "cé" },
+    // **`éxy`, and the cursor left twice, on purpose.**  The backspace
+    // below is the branch that measures against the content as it was
+    // *before* the erase (docs/METHODS.md), and the two readings agree
+    // on almost everything — `previous_boundary` walks back over UTF-8
+    // continuation bytes, and after an erase the byte at the old
+    // cursor's left is the *following* character's first byte, which
+    // is never a continuation.  They part company in exactly one
+    // shape: a **two-byte** character erased with single-byte text
+    // after the cursor, where the byte that slides into place is the
+    // second byte of what follows.  Two earlier versions of this
+    // script — all-ASCII, then multi-byte in the wrong position —
+    // both let a mutation reverting the snapshot through, and the
+    // mutation sweep is what said so each time.
+    .{ .name = "text", .text = "éxy" },
+    .{ .name = "left" },
     .{ .name = "left" },
     .{ .name = "backspace" },
     .{ .name = "up" },
@@ -54,7 +60,6 @@ const script = [_]agree.World.Key{
     .{ .name = "down" },
     .{ .name = "right" },
     .{ .name = "delete" },
-    .{ .name = "page_up" },
     .{ .name = "page_down" },
     .{ .name = "ctrl_s" },
     .{ .name = "ctrl_q" },
@@ -86,9 +91,9 @@ test "the editor draws the same frames, key for key, on both engines" {
     // `struct State`.  If this moves, the restructuring changed what
     // the program draws — which is exactly the thing docs/METHODS.md
     // said could go quietly wrong.
-    try testing.expectEqual(@as(usize, 31847), session.printed().len);
+    try testing.expectEqual(@as(usize, 31856), session.printed().len);
     try testing.expectEqual(
-        @as(u64, 1341180916343853173),
+        @as(u64, 6306024964287991885),
         std.hash.Wyhash.hash(0, session.printed()),
     );
 }
@@ -105,4 +110,4 @@ test "the editor's keys reach the file, and the unsaved gate holds" {
 }
 
 /// What the scripted keys leave in the file.
-const expected_content = "ab    \n\u{e9}ello\nworld\n";
+const expected_content = "ab    \nxhello\nworld\n";
