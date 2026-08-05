@@ -214,6 +214,15 @@ pub const FunctionDeclInfo = struct {
     /// answers nothing, one entry for `-> T`, two or more for a return
     /// shape (docs/RETURNS.md).  This is the arity a call site sees.
     results: []Type = &.{},
+    /// What actually travels in the value channel, in order: the
+    /// receiver first when the method writes it back, then `results`.
+    ///
+    /// **A `var self` method's receiver is result zero** — there is no
+    /// receiver mechanism separate from the return mechanism, which is
+    /// the sense in which `self` was always waiting for multiple
+    /// returns (docs/RETURNS.md §5).  For everything else this is
+    /// `results` exactly.
+    channel: []Type = &.{},
     /// The one type that travels in the value channel.  For a return
     /// shape it is the compiler-synthesized struct the values ride in
     /// (`(Int, Int)`), which is why nothing below stage 4 grows a case

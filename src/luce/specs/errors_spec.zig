@@ -908,6 +908,96 @@ test "luce.sema.name: there are no bound method values" {
     );
 }
 
+test "luce.sema.self: a var self receiver must be a writable place" {
+    // The rule is the one `lowerAssignChain` already enforces for
+    // `cells[0].value = 3` — a place whose root is a mutable local —
+    // so a receiver is legal in precisely the positions an assignment
+    // target is, and the two can never drift (docs/METHODS.md).
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    let q = Point(x = 1)
+        \\    q.grow()
+        \\
+    , "luce.sema.let", "q is let-bound; grow takes var self and writes back to its receiver — use var");
+
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func origin() -> Point:
+        \\        return Point(x = 0)
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    Point.origin().grow()
+        \\
+    , "luce.sema.self", "grow takes var self, so its receiver must be a variable — not a call result or a temporary");
+}
+
+test "luce.sema.self: the static form of a var self method is refused" {
+    // It would take a copy, mutate it, and discard it, in silence —
+    // the one shape where allowing both spellings would mean two
+    // semantics rather than one.
+    try expectSaying(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    var p = Point(x = 1)
+        \\    Point.grow(p)
+        \\
+    , "luce.sema.self", "grow takes var self and writes back to its receiver; call it as p.grow(…)");
+}
+
+test "luce.sema.self: var self needs a struct that carries no objects" {
+    // Not a restriction invented for the feature: it is where S17 and
+    // S28 already put the corpus, and the diagnostic cites them.
+    try expectSaying(
+        \\struct Bag:
+        \\    items: List(Int)
+        \\
+        \\    func stash(var self, n: Int):
+        \\        self.items.append(n)
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.self",
+        "Bag carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
+    );
+}
+
+test "luce.sema.self: the receiver is written back, not returned" {
+    // The declared arity is the arity at the call site.  If the
+    // receiver were nameable there it would be a second way to spell
+    // `rng`, which is what `Point.scale(p, 2.0)` was refused for.
+    try expectSaying(
+        \\struct Rng:
+        \\    state: Int
+        \\
+        \\    func next(var self) -> Int:
+        \\        self.state = self.state + 1
+        \\        return self.state
+        \\
+        \\func main():
+        \\    var rng = Rng(state = 1)
+        \\    let receiver, roll = rng.next()
+        \\
+    , "luce.sema.shape", "next answers 1 value, got 2 names");
+}
+
 test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
     try expectSaying(
         \\struct Point:

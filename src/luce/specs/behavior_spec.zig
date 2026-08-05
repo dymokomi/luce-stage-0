@@ -1351,6 +1351,145 @@ test "methods: a method can fail, and try and catch reach it through the receive
 }
 
 // ---------------------------------------------------------------------------
+// `var self`: the receiver is result zero
+// ---------------------------------------------------------------------------
+//
+// `p.scale(2.0)` means `p = Point.scale(p, 2.0)` — copy in, copy out,
+// with no reference anywhere.  With a declared result beside it,
+// `let roll = rng.next()` means `rng, roll = Rng.next(rng)`, and under
+// the lowering that is not a second channel at all: the method's
+// results are `[receiver] ++ declared` and they travel in one
+// synthesized layout (docs/METHODS.md, docs/RETURNS.md §5).
+
+test "var self: the receiver is written back, and nothing about it is a reference" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Float
+        \\    y: Float
+        \\
+        \\    func scale(var self, factor: Float):
+        \\        self.x = self.x * factor
+        \\        self.y = self.y * factor
+        \\
+        \\    func reset(var self):
+        \\        # `self` is the one parameter a method may reassign.
+        \\        self = Point(x = 0.0, y = 0.0)
+        \\
+        \\func main():
+        \\    var p = Point(x = 1.0, y = 2.0)
+        \\    p.scale(2.0)
+        \\    assert(p.x == 2.0 and p.y == 4.0)
+        \\    # A copy taken before the call is untouched by it.
+        \\    let before = p
+        \\    p.scale(0.5)
+        \\    assert(p.x == 1.0 and before.x == 2.0)
+        \\    p.reset()
+        \\    assert(p.x == 0.0 and p.y == 0.0)
+        \\
+    );
+}
+
+test "var self: the motivating case, end to end" {
+    // The RNG of docs/RETURNS.md §5.  One call where the workaround
+    // had a one-element `List(Int)` allocated to give an `Int`
+    // reference semantics.
+    try agreeOk(
+        \\struct Rng:
+        \\    state: Int
+        \\
+        \\    func next(var self) -> Int:
+        \\        self.state = self.state * 48271 % 2147483647
+        \\        return self.state
+        \\
+        \\    func in_range(var self, low: Int, high: Int) -> Int:
+        \\        if high <= low:
+        \\            trap("in_range needs low < high")
+        \\        return low + self.next() % (high - low)
+        \\
+        \\func main():
+        \\    var rng = Rng(state = 42)
+        \\    let roll = rng.in_range(1, 7)
+        \\    assert(roll >= 1 and roll < 7)
+        \\    # The write-back is invisible at the call site, and it
+        \\    # happened: 42 * 48271 is where the state went.
+        \\    assert(rng.state == 2027382)
+        \\    let second = rng.next()
+        \\    assert(second == rng.state)
+        \\    assert(second != 2027382)
+        \\    # At statement position the declared value is discarded
+        \\    # and result zero is still stored.
+        \\    let third = rng.state
+        \\    rng.next()
+        \\    assert(rng.state != third)
+        \\
+    );
+}
+
+test "var self: a receiver may be a field or an element of a var root" {
+    try agreeOk(
+        \\struct Counter:
+        \\    n: Int
+        \\
+        \\    func bump(var self):
+        \\        self.n = self.n + 1
+        \\
+        \\func main():
+        \\    var c = Counter(n = 1)
+        \\    c.bump()
+        \\    c.bump()
+        \\    assert(c.n == 3)
+        \\
+    );
+}
+
+test "var self: a method that raises leaves its receiver as it was" {
+    // All or nothing, and for free: the write-back stands on the
+    // returning edge only, which is what `catch`'s branch already
+    // gives (docs/FAILURE.md, docs/METHODS.md).
+    try agreeOk(
+        \\struct Meter:
+        \\    reading: Int
+        \\
+        \\    func take(var self, n: Int) -> Int!:
+        \\        if n < 0:
+        \\            error("negative")
+        \\        self.reading = self.reading + n
+        \\        return self.reading
+        \\
+        \\func main():
+        \\    var meter = Meter(reading = 10)
+        \\    let ok = meter.take(5) catch -1
+        \\    assert(ok == 15 and meter.reading == 15)
+        \\    let bad = meter.take(-1) catch -1
+        \\    assert(bad == -1)
+        \\    # Nothing about the receiver moved on the errored edge.
+        \\    assert(meter.reading == 15)
+        \\
+    );
+}
+
+test "var self: the read-only static form of a plain method is still the same call" {
+    try agreeOk(
+        \\struct Point:
+        \\    x: Int
+        \\
+        \\    func doubled(self) -> Int:
+        \\        return self.x * 2
+        \\
+        \\    func grow(var self):
+        \\        self.x = self.x + 1
+        \\
+        \\func main():
+        \\    var p = Point(x = 3)
+        \\    assert(p.doubled() == 6)
+        \\    assert(Point.doubled(p) == 6)
+        \\    p.grow()
+        \\    assert(p.x == 4)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Nested-place assignment
 // ---------------------------------------------------------------------------
 

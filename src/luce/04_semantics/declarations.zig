@@ -1485,6 +1485,23 @@ pub const Analyzer = struct {
                     );
                     continue;
                 };
+                // A `var self` method writes its receiver back to
+                // the receiver's place, and that write is a pure value
+                // store — which it can only be if the struct carries
+                // no object handles.  Not a restriction invented for
+                // the feature: it is where S17 and S28 already put the
+                // corpus, and a struct that *does* carry objects
+                // mutates through its fields from a plain `self` (S38),
+                // which needs no write-back at all (docs/METHODS.md).
+                if (parameter.receiver == .writes and self.carriesObjects(.{ .strukt = owner })) {
+                    try self.fail(
+                        "luce.sema.self",
+                        parameter.span,
+                        "{s} carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
+                        .{self.structs.items[owner].name},
+                    );
+                    continue;
+                }
                 receiver = parameter.receiver;
                 try parameter_types.append(self.arena, .{ .strukt = owner });
                 try parameter_modes.append(self.arena, .borrow);
@@ -1509,11 +1526,19 @@ pub const Analyzer = struct {
             const resolved = (try self.resolveType(module, written)) orelse continue;
             try results.append(self.arena, resolved);
         }
+        // A `var self` method's receiver is result zero: its results
+        // are `[receiver] ++ declared`, and they travel in one
+        // synthesized layout, so there is no receiver mechanism
+        // separate from the return mechanism (docs/RETURNS.md §5).
+        var channel: std.ArrayList(Type) = .empty;
+        defer channel.deinit(self.arena);
+        if (receiver == .writes) try channel.append(self.arena, .{ .strukt = enclosing.? });
+        try channel.appendSlice(self.arena, results.items);
         // The synthesized layout a return shape rides in is settled
         // after every signature is collected — `synthesizeShapes`
         // below — because the layout table must not grow while a body
         // is being lowered against a snapshot of it.
-        const return_type: Type = if (results.items.len == 1) results.items[0] else .none;
+        const return_type: Type = if (channel.items.len == 1) channel.items[0] else .none;
 
         const index: u32 = @intCast(self.functions.items.len);
         try self.function_names.put(self.temporary, name, index);
@@ -1526,6 +1551,7 @@ pub const Analyzer = struct {
             .receiver = receiver,
             .enclosing = enclosing,
             .results = try results.toOwnedSlice(self.arena),
+            .channel = try channel.toOwnedSlice(self.arena),
             .return_type = return_type,
             .fallible = declaration.fallible,
             .is_entry = is_entry,
@@ -1616,7 +1642,7 @@ pub const Analyzer = struct {
     /// is no reason to.
     fn synthesizeShapes(self: *Analyzer) Error!void {
         for (self.functions.items) |*info| {
-            if (info.results.len < 2) continue;
+            if (info.channel.len < 2) continue;
             self.diagnostics.scope = self.modules[info.module].file;
             info.return_type = (try self.internShape(info)) orelse continue;
         }
@@ -1643,7 +1669,7 @@ pub const Analyzer = struct {
         defer fields.deinit(self.arena);
         var values: u32 = 0;
         var carries = false;
-        for (info.results, 0..) |result, position| {
+        for (info.channel, 0..) |result, position| {
             try fields.append(self.arena, .{
                 .name = try std.fmt.allocPrint(self.arena, "field{d}", .{position}),
                 .field_type = result,
@@ -1683,12 +1709,12 @@ pub const Analyzer = struct {
     /// value, `(Int, Int)` for a shape, `None` for nothing.  Also the
     /// synthesized layout's name, so the two can never disagree.
     pub fn writtenResults(self: *Analyzer, info: *const FunctionDeclInfo) Error![]const u8 {
-        if (info.results.len == 0) return "None";
-        if (info.results.len == 1) return self.typeName(info.results[0]);
+        if (info.channel.len == 0) return "None";
+        if (info.channel.len == 1) return self.typeName(info.channel[0]);
         var written: std.ArrayList(u8) = .empty;
         errdefer written.deinit(self.arena);
         try written.append(self.arena, '(');
-        for (info.results, 0..) |result, position| {
+        for (info.channel, 0..) |result, position| {
             if (position != 0) try written.appendSlice(self.arena, ", ");
             try written.appendSlice(self.arena, try self.typeName(result));
         }
@@ -1768,6 +1794,8 @@ pub const Analyzer = struct {
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
             .results = info.results,
+            .channel = info.channel,
+            .writes_receiver = info.receiver == .writes,
             .code = .{
                 .arena = self.arena,
                 .pool = self.pool,
@@ -1798,14 +1826,33 @@ pub const Analyzer = struct {
             // way the object goes: the caller's binding outlives
             // the call and gives the bytes back itself
             // (docs/STRINGS.md).
+            // Parameters are immutable, with one exception: `var self`
+            // says the method may reassign its receiver, and `self =
+            // Point(x = 0.0, y = 0.0)` inside one means what it says
+            // (docs/METHODS.md).
+            const writes_back = parameter.receiver == .writes;
+            // And that exception decides the *storage* too.  Every
+            // other parameter borrows its caller's — the caller's
+            // binding outlives the call and gives the bytes back
+            // itself (docs/STRINGS.md).  A `var self` receiver is
+            // written to, and every write frees what it replaced, so
+            // the slot has to own what it holds or the first
+            // `self.x = …` would give the caller's run back.  It takes
+            // a copy on entry, which is exactly the `var moved =
+            // state` the corpus writes by hand at every mutation site
+            // it has (docs/METHODS.md).
             const local = (try builder.declareLocalAs(
                 parameter.name,
                 parameter_type,
-                false,
+                writes_back,
                 class,
-                .borrows,
+                if (writes_back) .owns else .borrows,
                 parameter.name_span,
             )) orelse continue;
+            if (writes_back) {
+                const arrived = try builder.code.load(local);
+                try builder.code.store(local, try builder.code.ownStorage(arrived));
+            }
             // An owning parameter is an owned binding like any other
             // (S15): take the object over from the caller on entry.
             if (owns) {
@@ -1815,6 +1862,13 @@ pub const Analyzer = struct {
         }
 
         try builder.lowerBlock(info.declaration.body);
+        // `func step(var self):` names no result, so its body ends
+        // without a `return` — but its receiver still has to leave.
+        // One implicit `return self` at the end, which is the same
+        // instruction an explicit one emits (docs/RETURNS.md §5).
+        if (info.receiver == .writes and info.results.len == 0) {
+            try builder.returnReceiver();
+        }
         try builder.emitScopeEnd();
         builder.popScope();
 
@@ -1822,7 +1876,7 @@ pub const Analyzer = struct {
         // written return type rather than the `func` line: in a long
         // function that is the claim being broken, and it is what the
         // reader has to change if they meant something else.
-        if (info.return_type != .none and !helpers.returnsOnAllPaths(info.declaration.body)) {
+        if (info.results.len != 0 and !helpers.returnsOnAllPaths(info.declaration.body)) {
             const at = info.declaration.returnsSpan() orelse info.declaration.span;
             try self.fail(
                 "luce.sema.return",
