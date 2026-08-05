@@ -138,13 +138,13 @@ test "semantic diagnostics carry the right code and location" {
     // A bad conversion argument, pointed at the call.
     try expectDiagnostics(
         \\func main():
-        \\    let x = Int("no")
+        \\    let x = long("no")
         \\
     , .{}, &.{.{ .code = "luce.sema.convert", .line = 2, .column = 13 }});
     // An unknown field, pointed at the access.
     try expectDiagnostics(
         \\struct Point:
-        \\    x: Float
+        \\    x: double
         \\
         \\func main():
         \\    var p = Point(x = 1.0)
@@ -163,7 +163,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     //
     // Columns, so this cannot pass by pointing at the right line.
     try expectDiagnostics(
-        \\func term_rows() -> Int:
+        \\func term_rows() -> long:
         \\    return 1
         \\
         \\func main():
@@ -172,7 +172,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 1, .column = 6 }});
     try expectDiagnostics(
         \\struct term_style:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    return
@@ -192,7 +192,7 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
     try expectDiagnostics(
         \\func main():
-        \\    var term_rows: Int
+        \\    var term_rows: long
         \\
     , .{}, &.{.{ .code = "luce.sema.reserved", .line = 2, .column = 9 }});
     // The same rule for the duplicates, which read the same spans.
@@ -209,10 +209,10 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 6 }});
     try expectDiagnostics(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\struct Point:
-        \\    y: Int
+        \\    y: long
         \\
         \\func main():
         \\    return
@@ -220,27 +220,27 @@ test "a diagnostic about a name points at the name, not at the declaration" {
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 8 }});
     try expectDiagnostics(
         \\struct Point:
-        \\    x: Int
-        \\    x: Int
+        \\    x: long
+        \\    x: long
         \\
         \\func main():
         \\    return
         \\
     , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 3, .column = 5 }});
     try expectDiagnostics(
-        \\func f(a: Int, a: Int) -> Int:
+        \\func f(a: long, a: long) -> long:
         \\    return a
         \\
         \\func main():
         \\    return
         \\
-    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 1, .column = 16 }});
+    , .{}, &.{.{ .code = "luce.sema.duplicate", .line = 1, .column = 17 }});
     try expectDiagnostics(
         \\func main():
         \\    let a = 1
         \\    if true:
         \\        let a = 2
-        \\        print(String(a))
+        \\        print(string(a))
         \\
     , .{ .allow_host = true }, &.{.{ .code = "luce.sema.duplicate", .line = 4, .column = 13 }});
 }
@@ -272,8 +272,8 @@ test "the previously-unasserted diagnostic codes fire" {
         // A missing operand, not a stray character: `let a = @` is
         // stage 2's mistake, and stage 3 no longer says it again.
         .{ .source = "func main():\n    let a = 1 +\n", .code = "luce.parse.expression" },
-        .{ .source = "func main():\n    let a: List = []\n", .code = "luce.sema.type" },
-        .{ .source = "func main():\n    let a = new Array(Int)\n", .code = "luce.sema.new" },
+        .{ .source = "func main():\n    let a: list = []\n", .code = "luce.sema.type" },
+        .{ .source = "func main():\n    let a = new array(long)\n", .code = "luce.sema.new" },
         .{ .source = "func main():\n    let a = 99999999999999999999999\n", .code = "luce.sema.literal" },
     };
     for (cases) |case| {
@@ -288,10 +288,10 @@ test "the pipeline survives every allocation failure" {
     // enforces error.NondeterministicMemoryUsage.
     const representative =
         \\struct Point:
-        \\    x: Float
-        \\    tag: String
+        \\    x: double
+        \\    tag: string
         \\
-        \\func total(values: List(Int)) -> Int:
+        \\func total(values: list(long)) -> long:
         \\    var sum = 0
         \\    for value in values:
         \\        sum = sum + value
@@ -300,9 +300,9 @@ test "the pipeline survives every allocation failure" {
         \\func main():
         \\    var xs = [3, 1, 2]
         \\    xs.sort()
-        \\    var ages = new Map(String, Int)
+        \\    var ages = new map(string, long)
         \\    ages["ada"] = total(xs)
-        \\    print(String(ages["ada"]))
+        \\    print(string(ages["ada"]))
         \\
     ;
     try testing.checkAllAllocationFailures(testing.allocator, struct {
@@ -337,17 +337,17 @@ test "decode survives every allocation failure" {
 
 test "the entry is exactly func main(), and nothing else will do" {
     try expectRejected(
-        \\func helper() -> Int:
+        \\func helper() -> long:
         \\    return 1
         \\
     , "luce.sema.main");
     try expectRejected(
-        \\func main(value: Int):
+        \\func main(value: long):
         \\    return
         \\
     , "luce.sema.main");
     try expectRejected(
-        \\func main() -> Int:
+        \\func main() -> long:
         \\    return 1
         \\
     , "luce.sema.main");
@@ -374,12 +374,12 @@ test "the entry is exactly func main(), and nothing else will do" {
 test "struct namespaces collect functions and reject invalid members" {
     var program = try expectCompiles(
         \\struct Math:
-        \\    func twice(value: Int) -> Int:
+        \\    func twice(value: long) -> long:
         \\        return value * 2
         \\
         \\struct Pair:
-        \\    left: Int
-        \\    func sum(left: Int, right: Int) -> Int:
+        \\    left: long
+        \\    func sum(left: long, right: long) -> long:
         \\        return left + right
         \\
         \\func main():
@@ -391,8 +391,8 @@ test "struct namespaces collect functions and reject invalid members" {
 
     try expectRejected(
         \\struct Bad:
-        \\    value: Int
-        \\    func value() -> Int:
+        \\    value: long
+        \\    func value() -> long:
         \\        return 1
         \\
         \\func main():
@@ -401,7 +401,7 @@ test "struct namespaces collect functions and reject invalid members" {
     , "luce.sema.duplicate");
     try expectRejected(
         \\struct Helpers:
-        \\    func one() -> Int:
+        \\    func one() -> long:
         \\        return 1
         \\
         \\func main():
@@ -410,7 +410,7 @@ test "struct namespaces collect functions and reject invalid members" {
     , "luce.sema.call");
     try expectRejected(
         \\struct Helpers:
-        \\    func one() -> Int:
+        \\    func one() -> long:
         \\        return 1
         \\
         \\func main():
@@ -422,10 +422,10 @@ test "struct namespaces collect functions and reject invalid members" {
 test "the plan's scale example compiles and verifies" {
     var program = try expectCompiles(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\func scale_point(point: Point, factor: Float) -> Point:
+        \\func scale_point(point: Point, factor: double) -> Point:
         \\    return Point(
         \\        x = point.x * factor,
         \\        y = point.y * factor,
@@ -484,7 +484,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\import std.strings
         \\
         \\func main():
-        \\    print(String("abc".find("b")))
+        \\    print(string("abc".find("b")))
         \\
     , .{ .allow_host = true });
     defer used.deinit();
@@ -543,8 +543,8 @@ test "the IR dump is readable and deterministic" {
 
     try testing.expectEqualStrings(first, second);
     try testing.expect(std.mem.indexOf(u8, first, "func main() -> None") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: Int") != null);
-    try testing.expect(std.mem.indexOf(u8, first, "multiply.Int") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "local %0 value: long") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "multiply.long") != null);
 }
 
 test "the IR dump has a stable golden shape (short-circuit + ownership)" {
@@ -577,13 +577,13 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): List(Int)
-        \\    local %1 xs: List(Int)
-        \\    local %2 (temporary): Bool
+        \\    local %0 (temporary): list(long)
+        \\    local %1 xs: list(long)
+        \\    local %2 (temporary): bool
         \\  b0:
         \\    r0 = const 1
         \\    r1 = const 2
-        \\    r2 = heap_new List(Int)
+        \\    r2 = heap_new list(long)
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
         \\    local_set %1, r2
@@ -591,7 +591,7 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\    r7 = local_get %1
         \\    r8 = intrinsic len, r7
         \\    r9 = const 0
-        \\    r10 = greater.Int r8, r9
+        \\    r10 = greater.long r8, r9
         \\    local_set %2, r10
         \\    branch r10, b1, b2
         \\  b1:
@@ -599,7 +599,7 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\    r14 = const 0
         \\    r15 = intrinsic index_get, r13, r14
         \\    r16 = const 1
-        \\    r17 = equal.Int r15, r16
+        \\    r17 = equal.long r15, r16
         \\    local_set %2, r17
         \\    jump b2
         \\  b2:
@@ -619,12 +619,12 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
 }
 
 test "no implicit narrowing, no reassigned let, no shadowing" {
-    // `Int` widens to `Float` on its own (docs/NUMERICS.md); nothing
+    // `long` widens to `double` on its own (docs/NUMERICS.md); nothing
     // goes the other way without being asked, which is what keeps
     // float contagion from ever being silent.
     try expectRejected(
         \\func main():
-        \\    let narrowed: Int = 2.5
+        \\    let narrowed: long = 2.5
         \\
     , "luce.sema.type");
     try expectRejected(
@@ -644,7 +644,7 @@ test "no implicit narrowing, no reassigned let, no shadowing" {
 
 test "return paths are checked on every branch" {
     try expectRejected(
-        \\func partial(flag: Bool) -> Int:
+        \\func partial(flag: bool) -> long:
         \\    if flag:
         \\        return 1
         \\
@@ -657,8 +657,8 @@ test "return paths are checked on every branch" {
 test "struct construction is complete, named, and typed" {
     const source_prefix =
         \\struct Color:
-        \\    red: Float
-        \\    green: Float
+        \\    red: double
+        \\    green: double
         \\
     ;
     try expectRejected(source_prefix ++
@@ -672,7 +672,7 @@ test "struct construction is complete, named, and typed" {
         \\
     , "luce.sema.construct");
     // `red = 1` is a widening, not a mismatch (docs/NUMERICS.md); a
-    // String is still a String.
+    // string is still a string.
     try expectRejected(source_prefix ++
         \\func main():
         \\    let wrong = Color(red = "x", green = 2.0)
@@ -690,7 +690,7 @@ test "struct construction is complete, named, and typed" {
 
 test "calls check arity, types, and none results" {
     try expectRejected(
-        \\func helper(value: Int) -> Int:
+        \\func helper(value: long) -> long:
         \\    return value
         \\
         \\func main():
@@ -728,8 +728,8 @@ test "break and continue require a loop" {
 test "var struct fields update through functional struct_set" {
     var program = try expectCompiles(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
         \\func main():
         \\    var point = Point(x = 0.0, y = 0.0)
@@ -772,7 +772,7 @@ test "host builtins type-check and stay host-gated" {
     , "luce.sema.host");
 
     var hosted = try compile_mod.compile(testing.allocator,
-        \\func main(args: List(String)) -> !:
+        \\func main(args: list(string)) -> !:
         \\    print("hello " + args[0])
         \\    let text = file_read("notes.txt") catch ""
         \\    try file_write("copy.txt", text)
@@ -787,7 +787,7 @@ test "host builtins type-check and stay host-gated" {
     defer hosted.deinit();
     try testing.expect(hosted == .success);
 
-    // `key_read` answers `String?`, so a program that treats a key
+    // `key_read` answers `string?`, so a program that treats a key
     // that never came as a key is refused where it is written rather
     // than looping on it at run time (docs/FAILURE.md).
     try expectRejectedOptions(
@@ -826,21 +826,21 @@ test "collections type-check and reject misuse at compile time" {
     const script: types.CompileOptions = .{};
 
     var featured = try compile_mod.compile(testing.allocator,
-        \\func sum(values: List(Int)) -> Int:
+        \\func sum(values: list(long)) -> long:
         \\    var total = 0
         \\    for value in values:
         \\        total = total + value
         \\    return total
         \\
-        \\func label(counts: Map(String, Int), grid: Array(Int, _, _)) -> String:
-        \\    var b = new Builder()
-        \\    b.append(String(len(counts) + grid[0, 0]))
+        \\func label(counts: map(string, long), grid: array(long, _, _)) -> string:
+        \\    var b = new builder()
+        \\    b.append(string(len(counts) + grid[0, 0]))
         \\    let made = b.build()
         \\    free(b)
         \\    return made
         \\
         \\func main():
-        \\    var values: List(Int) = []
+        \\    var values: list(long) = []
         \\    values.append(4)
         \\    let total = sum(values[0:])
         \\    free(values)
@@ -861,18 +861,18 @@ test "collections type-check and reject misuse at compile time" {
     , script, "luce.sema.type");
     try expectRejectedOptions(
         \\func main():
-        \\    var m = new Map(Float, Int)
+        \\    var m = new map(double, long)
         \\
     , script, "luce.sema.type");
     try expectRejectedOptions(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    let bad = grid[0]
         \\
     , script, "luce.sema.index");
     try expectRejectedOptions(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let bad = m[7]
         \\
     , script, "luce.sema.index");
@@ -935,23 +935,23 @@ const geo_module: TestModule = .{ .name = "geo", .source =
     \\import util
     \\
     \\struct Point:
-    \\    x: Float
-    \\    y: Float
+    \\    x: double
+    \\    y: double
     \\
     \\struct Text:
-    \\    func twice(value: Int) -> Int:
+    \\    func twice(value: long) -> long:
     \\        return value * 2
     \\
-    \\func make(x: Float, y: Float) -> Point:
+    \\func make(x: double, y: double) -> Point:
     \\    return Point(x = x, y = y)
     \\
-    \\func length(point: Point) -> Float:
+    \\func length(point: Point) -> double:
     \\    return util.hypot(point.x, point.y)
     \\
 };
 
 const util_module: TestModule = .{ .name = "util", .source =
-    \\func hypot(x: Float, y: Float) -> Float:
+    \\func hypot(x: double, y: double) -> double:
     \\    return sqrt(x * x + y * y)
     \\
 };
@@ -974,7 +974,7 @@ test "luce.import.limit: an import graph past the module ceiling is refused" {
             .name = try std.fmt.allocPrint(arena, "m{d}", .{index}),
             .source = try std.fmt.allocPrint(
                 arena,
-                "func value{d}() -> Int:\n    return {d}\n",
+                "func value{d}() -> long:\n    return {d}\n",
                 .{ index, index },
             ),
         };
@@ -1084,7 +1084,7 @@ test "luce.sema.duplicate: an import cannot take a struct's name" {
         \\import util
         \\
         \\struct util:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    return
@@ -1164,7 +1164,7 @@ test "imports are explicit, checked, and reported per file" {
 
     // An error inside an imported module renders against that file.
     const broken: TestModule = .{ .name = "broken", .source =
-        \\func helper() -> Int:
+        \\func helper() -> long:
         \\    return "not an int"
         \\
     };
@@ -1205,7 +1205,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     // A module whose bytes are not text is refused at the import that
     // asked for it, naming the file it could not become.
     var binary: TestLoader = .{ .modules = &.{
-        .{ .name = "geo", .source = "func area() -> Int:\n    return \x00\n" },
+        .{ .name = "geo", .source = "func area() -> long:\n    return \x00\n" },
     } };
     var not_text = try compile_mod.compileProject(testing.allocator, uses_geo, binary.loader(), script);
     defer not_text.deinit();
@@ -1222,7 +1222,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
     // A module that imports itself says so, instead of quietly
     // resolving to the module already being loaded.
     var recursive: TestLoader = .{ .modules = &.{
-        .{ .name = "geo", .source = "import geo\n\nfunc area() -> Int:\n    return 4\n" },
+        .{ .name = "geo", .source = "import geo\n\nfunc area() -> long:\n    return 4\n" },
     } };
     var itself = try compile_mod.compileProject(testing.allocator, uses_geo, recursive.loader(), script);
     defer itself.deinit();
@@ -1234,7 +1234,7 @@ test "every way an import can fail is a diagnostic, not a crash or an empty modu
 test "std is a namespace, not a reserved name: a sibling module may be called math" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "math", .source = "func answer() -> Int:\n    return 42\n" },
+        .{ .name = "math", .source = "func answer() -> long:\n    return 42\n" },
     } };
 
     // `import math` is the file beside the program.  The library takes
@@ -1287,8 +1287,8 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
 test "a missing import is spelled the way the author would have to write it" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{
-        .{ .name = "math", .source = "func answer() -> Int:\n    return 42\n" },
-        .{ .name = "user", .source = "import math\n\nfunc go() -> Int:\n    return math.answer()\n" },
+        .{ .name = "math", .source = "func answer() -> long:\n    return 42\n" },
+        .{ .name = "user", .source = "import math\n\nfunc go() -> long:\n    return math.answer()\n" },
     } };
 
     // A sibling math.luc is in the program, so the fix is `import
@@ -1359,7 +1359,7 @@ test "a project's diagnostics name every file they come from" {
     // file this could only ever print one file's line numbers.
     var files: TestLoader = .{ .modules = &.{
         .{ .name = "geo", .source =
-        \\func area() -> Int:
+        \\func area() -> long:
         \\    return "not an int"
         \\
         },
@@ -1369,8 +1369,8 @@ test "a project's diagnostics name every file they come from" {
         \\import std.math
         \\
         \\func main():
-        \\    let bad: Int = geo.area()
-        \\    let worse: Int = math.pi
+        \\    let bad: long = geo.area()
+        \\    let worse: long = math.pi
         \\
     , files.loader(), .{ .source_name = "program.luc" });
     defer result.deinit();
@@ -1393,9 +1393,9 @@ test "an import cycle compiles; what may not be circular is checked finer" {
     // `specs/modules_spec.zig`.
     const script: types.CompileOptions = .{};
     var ring: TestLoader = .{ .modules = &.{
-        .{ .name = "a", .source = "import b\n\nfunc step(v: Int) -> Int:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
-        .{ .name = "b", .source = "import c\n\nfunc step(v: Int) -> Int:\n    return c.step(v)\n" },
-        .{ .name = "c", .source = "import a\n\nfunc step(v: Int) -> Int:\n    return a.step(v)\n" },
+        .{ .name = "a", .source = "import b\n\nfunc step(v: long) -> long:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
+        .{ .name = "b", .source = "import c\n\nfunc step(v: long) -> long:\n    return c.step(v)\n" },
+        .{ .name = "c", .source = "import a\n\nfunc step(v: long) -> long:\n    return a.step(v)\n" },
     } };
     var looped = try compile_mod.compileProject(testing.allocator,
         \\import a
@@ -1419,7 +1419,7 @@ test "an import cycle compiles; what may not be circular is checked finer" {
         \\import a
         \\
         \\func main():
-        \\    print(String(a.width))
+        \\    print(string(a.width))
         \\
     , constants.loader(), script);
     defer knotted.deinit();
@@ -1444,7 +1444,7 @@ fn failsWith(source: []const u8, code: []const u8) !void {
 
 test "constants are compile-time: calls, objects, and verbs are refused" {
     try failsWith(
-        \\func answer() -> Int:
+        \\func answer() -> long:
         \\    return 42
         \\
         \\let bad = answer()
@@ -1462,7 +1462,7 @@ test "constants are compile-time: calls, objects, and verbs are refused" {
     , "luce.sema.const");
     try failsWith(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\let bad = Bag(items = [1])
         \\
@@ -1516,7 +1516,7 @@ test "constants share the one namespace and stay immutable" {
     try failsWith(
         \\let twice = 2
         \\
-        \\func twice() -> Int:
+        \\func twice() -> long:
         \\    return 2
         \\
         \\func main():
@@ -1545,19 +1545,19 @@ test "constants share the one namespace and stay immutable" {
         \\
     , "luce.sema.reserved");
     // The annotation is checked, and it is the *landing type*: `3`
-    // has no type of its own and becomes a Float here (docs/TYPES.md
+    // has no type of its own and becomes a double here (docs/TYPES.md
     // D3), so what this proves is the direction that stays refused —
     // a float value does not land on an integer annotation, because
     // narrowing is never implicit.
     try failsWith(
-        \\let wrong: Int = 3.5
+        \\let wrong: long = 3.5
         \\
         \\func main():
         \\    return
         \\
     , "luce.sema.type");
     try failsWith(
-        \\let wrong: Bool = 3
+        \\let wrong: bool = 3
         \\
         \\func main():
         \\    return

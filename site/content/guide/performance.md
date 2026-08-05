@@ -33,7 +33,7 @@ same libm C's do while the surrounding loop vectorizes.
 
 `strings` is the one row genuinely behind, and it is
 **allocation-bound rather than code-generation-bound**: the cost is
-copying `String` bytes into list elements, which is the price of
+copying `string` bytes into list elements, which is the price of
 giving strings an owner so memory comes back.
 [Strings and copies](../strings/) is that whole story, with the phase
 timings that locate the remaining cost.
@@ -109,11 +109,11 @@ instead of crashing.
 Little of this is unusual, and none of it is about the language being
 new.
 
-**Use `Array` for numeric bulk.** Fixed shape, zero-initialized,
+**Use `array` for numeric bulk.** Fixed shape, zero-initialized,
 contiguous. `std.math`'s whole-array reductions accumulate left to
 right and are bit-reproducible, including against the C twins.
 
-**Use a `Builder` to accumulate text.** Repeated `+` allocates per
+**Use a `builder` to accumulate text.** Repeated `+` allocates per
 step.
 
 **Prefer `get(key, default)` to `has` then index** where you can — the
@@ -133,13 +133,13 @@ import std.math
 
 func main():
     let n = 100000
-    var values = new Array(Float, n)
+    var values = new array(double, n)
     for i in range(0, n):
-        values[i] = Float(i % 97) * 0.5
+        values[i] = double(i % 97) * 0.5
 
     print(f"sum {math.sum(values)}")
     print(f"mean {math.mean(values) else 0.0}")
-    print(f"norm {Int(trunc(math.norm(values)))}")
+    print(f"norm {long(trunc(math.norm(values)))}")
 ```
 
 ```output

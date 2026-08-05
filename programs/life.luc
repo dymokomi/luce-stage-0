@@ -1,4 +1,4 @@
-# Conway's Game of Life: a multi-dimensional Array on the terminal.
+# Conway's Game of Life: a multi-dimensional array on the terminal.
 #
 #   loom run life.lc
 #   any key steps a generation, space runs a hundred, Ctrl-Q quits
@@ -13,13 +13,13 @@
 let frame_ms = 80
 
 struct World:
-    func rows() -> Int:
+    func rows() -> long:
         return clamp(term_rows() - 2, 8, 40)
 
-    func cols() -> Int:
+    func cols() -> long:
         return clamp((term_cols() - 1) // 2, 8, 60)
 
-    func seed(grid: Array(Bool, _, _)):
+    func seed(grid: array(bool, _, _)):
         # A glider...
         grid[1, 2] = true
         grid[2, 3] = true
@@ -32,7 +32,7 @@ struct World:
         grid[mid, 7] = true
         grid[mid, 8] = true
 
-    func neighbors(grid: Array(Bool, _, _), row: Int, col: Int) -> Int:
+    func neighbors(grid: array(bool, _, _), row: long, col: long) -> long:
         let height = grid.dim(0)
         let width = grid.dim(1)
         var alive = 0
@@ -46,10 +46,10 @@ struct World:
         return alive
 
     # One generation: builds the next grid; the caller owns it.
-    func step(grid: Array(Bool, _, _)) -> Array(Bool, _, _):
+    func step(grid: array(bool, _, _)) -> array(bool, _, _):
         let height = grid.dim(0)
         let width = grid.dim(1)
-        var next = new Array(Bool, height, width)
+        var next = new array(bool, height, width)
         for row in range(0, height):
             for col in range(0, width):
                 let around = World.neighbors(grid, row, col)
@@ -59,7 +59,7 @@ struct World:
                     next[row, col] = around == 3
         return next
 
-    func draw(grid: Array(Bool, _, _), generation: Int):
+    func draw(grid: array(bool, _, _), generation: long):
         term_clear()
         for row in range(0, grid.dim(0)):
             term_move(row, 0)
@@ -72,10 +72,10 @@ struct World:
                     term_write(" ·")
         term_move(grid.dim(0), 0)
         term_style(252, 237, false)
-        term_write(" generation " + String(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
+        term_write(" generation " + string(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():
-    var grid = new Array(Bool, World.rows(), World.cols())
+    var grid = new array(bool, World.rows(), World.cols())
     World.seed(grid)
     var generation = 0
     var running = true

@@ -12,13 +12,13 @@ A missing service does not silently do nothing: it traps
 
 The command line is not a service the program asks for: it is handed
 to it. A program that reads one declares
-`func main(args: List(String)):`, and `args` is an ordinary
-`List(String)` — `len`, indexing, slicing, `for … in`, everything.
+`func main(args: list(string)):`, and `args` is an ordinary
+`list(string)` — `len`, indexing, slicing, `for … in`, everything.
 `args[0]` is the first word the person typed **after** the program's
 own name.
 
 ```luce run args=3 fig
-func main(args: List(String)):
+func main(args: list(string)):
     print(f"{len(args)} arguments")
     for name in args:
         print(f"  {name}")
@@ -80,7 +80,7 @@ exists: true, missing: false
 (could not read)
 ```
 
-`exists` answers a plain `Bool` and is the exception — but it is a
+`exists` answers a plain `bool` and is the exception — but it is a
 question about the past, never a guard for the call after it. Read the
 file and handle what the read says; that window is one nothing can
 close.
@@ -92,7 +92,7 @@ Paths resolve relative to the current directory.
 Three more services, and each one's shape is a decision about what
 kind of fact it is reporting.
 
-`read_line(prompt)` writes the prompt and answers `String?`. End of
+`read_line(prompt)` writes the prompt and answers `string?`. End of
 input is **absence**, not failure — nothing went wrong, there is just
 nothing more — so it is `T?` and not `T!`, and `else` is the whole
 handling.
@@ -108,7 +108,7 @@ already-elapsed duration — zero, or the negative left by
 is no time left to wait, so an animation loop subtracts without
 guarding. That is exactly what `programs/life.luc` does.
 
-`env(name)` answers `String?`: one variable, or `none` when unset.
+`env(name)` answers `string?`: one variable, or `none` when unset.
 
 ```luce run
 func main():
@@ -143,7 +143,7 @@ needs no explicit flush, and it returns stable key names — `"text"`,
 `"enter"`, `"up"`, `"ctrl_s"` — with `key_text()` carrying the
 payload when the name is `"text"`.
 
-It answers `String?`, not `String`. A keyboard runs dry when the pipe
+It answers `string?`, not `string`. A keyboard runs dry when the pipe
 driving the program ends or the terminal closes, and that is the same
 "nothing there" `read_line` answers `none` for off the same input — so
 a draw loop writes `if name == none: break` and stops, instead of

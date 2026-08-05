@@ -29,9 +29,9 @@ own, and the compiler quotes their numbers in its diagnostics.
 
 ## What owns what
 
-Only **objects** are owned: `List`, `Map`, `Array`, `Builder`, and
-structs that transitively contain one. **Values** — `Int`, `Float`,
-`Bool`, `String`, and plain structs — copy freely and are never
+Only **objects** are owned: `list`, `map`, `array`, `builder`, and
+structs that transitively contain one. **Values** — `long`, `double`,
+`bool`, `string`, and plain structs — copy freely and are never
 verbed.
 
 An object is freed when its owner dies, and an owner is one of exactly
@@ -42,7 +42,7 @@ import std.strings
 
 func main():
     for round in range(0, 3):
-        var row = new Array(Int, 4)   # fresh every iteration
+        var row = new array(long, 4)   # fresh every iteration
         row.fill(round)
         print(f"round {round} first {row[0]}")
         # row is freed here, every time around — memory stays flat
@@ -85,7 +85,7 @@ func main():
     var xs = [1, 2]
     let view = xs
     free(xs)                  # released early, on purpose
-    print(String(view[0]))
+    print(string(view[0]))
 ```
 
 ```output
@@ -101,7 +101,7 @@ guessing. It wants you to say which you meant.
 
 ```luce fail
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     var hits = [12, 40]
     index["a.luc"] = hits
 ```
@@ -117,7 +117,7 @@ The two answers are `give` and `copy`:
 
 ```luce run
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
 
     var hits = [12, 40]
     index["a.luc"] = give hits      # transfer: the map owns it now
@@ -142,17 +142,17 @@ reason about which arm of an `if` ran.
 
 ```luce fail
 func main():
-    var sink = new List(List(Int))
+    var sink = new list(list(long))
     var xs = [1]
     if len(xs) > 0:
         sink.append(give xs)
-    print(String(len(xs)))
+    print(string(len(xs)))
 ```
 
 ```output
 luce: compile failed
 main.luc:6:22: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
-        print(String(len(xs)))
+        print(string(len(xs)))
                          ^~
 ```
 
@@ -168,18 +168,18 @@ may not do is *keep* the object — store it, return it, give it away or
 free it.
 
 ```luce run
-func fill(xs: List(Int), upto: Int):
+func fill(xs: list(long), upto: long):
     for i in range(0, upto):
         xs.append(i * i)
 
-func total(values: List(Int)) -> Int:
+func total(values: list(long)) -> long:
     var sum = 0
     for value in values:
         sum += value
     return sum
 
 func main():
-    var squares: List(Int) = []
+    var squares: list(long) = []
     fill(squares, 5)                 # no word: a borrow
     print(f"{len(squares)} values totalling {total(squares)}")
 ```
@@ -193,11 +193,11 @@ caller echoes it at the call site. Ownership handoffs are never
 invisible.
 
 ```luce run
-func stash(index: Map(String, List(Int)), hits: give List(Int)):
+func stash(index: map(string, list(long)), hits: give list(long)):
     index["latest"] = give hits
 
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     var mine = [1, 2]
     stash(index, give mine)          # said at both ends
     stash(index, [3, 4])             # fresh needs no word
@@ -218,17 +218,17 @@ error.
 ```luce run
 import std.strings
 
-func squares(upto: Int) -> List(Int):
-    var out: List(Int) = []
+func squares(upto: long) -> list(long):
+    var out: list(long) = []
     for i in range(0, upto):
         out.append(i * i)
     return out                    # moves out; the caller owns it
 
 func main():
     var values = squares(5)
-    var text: List(String) = []
+    var text: list(string) = []
     for value in values:
-        text.append(String(value))
+        text.append(string(value))
     print(text.join(" "))
 ```
 
@@ -244,7 +244,7 @@ that it has finished with sometimes does.
 
 ```luce run
 func main():
-    var big = new Array(Int, 100000)
+    var big = new array(long, 100000)
     big.fill(7)
     let sum = big[0] + big[99999]
     free(big)                     # done with it, on purpose

@@ -82,7 +82,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     }
 }
 
-/// `List(String)` — the one type the entry's parameter may have.
+/// `list(string)` — the one type the entry's parameter may have.
 fn isCommandLine(program: *const Program, of: Type) bool {
     if (of != .heap or of.heap >= program.heap_types.len) return false;
     const descriptor = program.heap_types[of.heap];
@@ -293,10 +293,10 @@ fn verifyInstruction(
             } else {
                 const concat = binary.op == .add and binary.operand_type == .string;
                 if (!binary.operand_type.isNumeric() and !concat) return error.TypeMismatch;
-                // `/` is real division and always answers a Float
+                // `/` is real division and always answers a double
                 // (docs/NUMERICS.md §2), so `Binary { .divide, .int }`
                 // is not a shape stage 4 can emit — the quotient that
-                // answers an Int is `floor_divide`.  Rejecting it here
+                // answers a long is `floor_divide`.  Rejecting it here
                 // is what lets the runtime and the lowering stop
                 // carrying an integer `/` at all.
                 if (binary.op == .divide and binary.operand_type == .int) {
@@ -493,7 +493,7 @@ fn verifyIntrinsic(
         },
         .compare_int_float => {
             try exactly(arguments, 3);
-            // The operator travels as an Int because an intrinsic call
+            // The operator travels as a long because an intrinsic call
             // carries registers and no immediates; which operator it
             // names is trusted exactly as an instruction's type is.
             try expectType(arguments[0], .int);
@@ -817,7 +817,7 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .string);
             try expectType(arguments[1], .string);
             // Answers nothing: a write that did not land is an error
-            // in the channel, not a Bool (docs/FAILURE.md).
+            // in the channel, not a bool (docs/FAILURE.md).
             try expectType(result, .none);
         },
         .file_exists => {
@@ -851,7 +851,7 @@ fn verifyIntrinsic(
             try expectType(result, .string);
         },
         .key_read => {
-            // `String?`: a keyboard that has run dry has nothing to
+            // `string?`: a keyboard that has run dry has nothing to
             // hand over, which is absence and not news (docs/FAILURE.md).
             try exactly(arguments, 0);
             try expectType(result, .{ .optional = .string });

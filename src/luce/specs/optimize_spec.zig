@@ -86,24 +86,24 @@ test "ownership behaviour survives the elision" {
     const cases = [_][]const u8{
         // The plain case: a fresh object adopted by a named binding.
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(len(xs)))
+        \\    print(string(len(xs)))
         \\
         ,
         // A fresh object adopted by a container instead — the release
         // of the temporary is a real no-op at run time, but only
         // because `append` took ownership, which the pass cannot see.
         \\func main():
-        \\    let outer = new List(List(Int))
-        \\    outer.append(new List(Int))
+        \\    let outer = new list(list(long))
+        \\    outer.append(new list(long))
         \\    outer[0].append(7)
-        \\    print(String(len(outer[0])))
+        \\    print(string(len(outer[0])))
         \\
         ,
         // Early release, then the scope end that must not free twice.
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
         \\    free(xs)
         \\    print("done")
@@ -115,7 +115,7 @@ test "ownership behaviour survives the elision" {
         \\    var xs = [1, 2]
         \\    let view = xs
         \\    free(xs)
-        \\    print(String(view[0]))
+        \\    print(string(view[0]))
         \\
         ,
         // Reassigning an owning var frees the old object at once (S5).
@@ -123,20 +123,20 @@ test "ownership behaviour survives the elision" {
         \\    var xs = [1]
         \\    let view = xs
         \\    xs = [2, 3]
-        \\    print(String(view[0]))
+        \\    print(string(view[0]))
         \\
         ,
         // An object given away must not be freed by the binding that
         // gave it.
-        \\func keep(v: give List(Int)) -> Int:
+        \\func keep(v: give list(long)) -> long:
         \\    let n = len(v)
         \\    free(v)
         \\    return n
         \\
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(keep(give(xs))))
+        \\    print(string(keep(give(xs))))
         \\
         ,
         // Rebinding in a loop: a fresh object per turn, each released
@@ -144,30 +144,30 @@ test "ownership behaviour survives the elision" {
         \\func main():
         \\    var total = 0
         \\    for index in range(0, 8):
-        \\        let row = new List(Int)
+        \\        let row = new list(long)
         \\        row.append(index)
         \\        total = total + len(row)
-        \\    print(String(total))
+        \\    print(string(total))
         \\
         ,
         // Returning an object moves it to the caller (S16).
-        \\func make() -> List(Int):
-        \\    let xs = new List(Int)
+        \\func make() -> list(long):
+        \\    let xs = new list(long)
         \\    xs.append(3)
         \\    return xs
         \\
         \\func main():
         \\    let xs = make()
-        \\    print(String(len(xs)))
+        \\    print(string(len(xs)))
         \\
         ,
         // A copy is a second object, and both have to come back.
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
         \\    let ys = copy(xs)
         \\    ys.append(2)
-        \\    print(String(len(xs)) + " " + String(len(ys)))
+        \\    print(string(len(xs)) + " " + string(len(ys)))
         \\
         ,
     };
@@ -179,19 +179,19 @@ test "traps keep their code, their message, and their place" {
         \\func main():
         \\    var n = 0
         \\    print("before")
-        \\    print(String(10 // n))
+        \\    print(string(10 // n))
         \\
         ,
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    print("before")
-        \\    print(String(xs[3]))
+        \\    print(string(xs[3]))
         \\
         ,
         \\func main():
         \\    var n = 9223372036854775807
         \\    print("before")
-        \\    print(String(n + n))
+        \\    print(string(n + n))
         \\
         ,
         \\func main():
@@ -200,9 +200,9 @@ test "traps keep their code, their message, and their place" {
         \\
         ,
         \\func main():
-        \\    let m = new Map(String, Int)
+        \\    let m = new map(string, long)
         \\    print("before")
-        \\    print(String(m["missing"]))
+        \\    print(string(m["missing"]))
         \\
     };
     for (cases) |source| try unchanged(source);
@@ -222,13 +222,13 @@ fn generate(text: *std.ArrayList(u8), random: std.Random) Allocator.Error!void {
         \\func main():
         \\    var a = 3
         \\    var b = 7
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\
     );
     const statements = random.intRangeAtMost(usize, 1, 6);
     for (0..statements) |_| try statement(text, random, 1);
     try text.appendSlice(testing.allocator,
-        \\    print(String(a) + " " + String(b) + " " + String(len(xs)))
+        \\    print(string(a) + " " + string(b) + " " + string(len(xs)))
         \\
     );
 }
@@ -298,7 +298,7 @@ fn statement(text: *std.ArrayList(u8), random: std.Random, depth: usize) Allocat
             fresh_name += 1;
             const name = fresh_name;
             try indent(text, depth + 1);
-            try add(text, "let row{d} = new List(Int)\n", .{name});
+            try add(text, "let row{d} = new list(long)\n", .{name});
             try indent(text, depth + 1);
             try add(text, "row{d}.append(a)\n", .{name});
             try statement(text, random, depth + 1);

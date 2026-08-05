@@ -177,7 +177,7 @@ pub const Lowering = struct {
         return self.locals.items[local].local_type;
     }
 
-    /// Does this slot have to give its String bytes and struct field
+    /// Does this slot have to give its string bytes and struct field
     /// runs back when it dies (docs/STRINGS.md)?
     pub fn localOwnsStorage(self: *const Lowering, local: LocalId) bool {
         return self.locals.items[local].owns_storage;
@@ -189,7 +189,7 @@ pub const Lowering = struct {
     /// Only ever called on a hidden slot that is written and never
     /// loaded, so the store into it becomes dead and `07_optimize`
     /// removes it — a slot that stopped owning storage would hand a
-    /// load the register shape, and a String's form does not survive
+    /// load the register shape, and a string's form does not survive
     /// that round trip.
     pub fn disownStorage(self: *Lowering, local: LocalId) void {
         self.locals.items[local].owns_storage = false;
@@ -288,7 +288,7 @@ pub const Lowering = struct {
 
     /// Release one owned local, in whichever of the two senses it
     /// owns something: `objects` frees whatever object in its slot is
-    /// still bound to it, `storage` gives its String bytes and struct
+    /// still bound to it, `storage` gives its string bytes and struct
     /// field runs back.  Safe on any path and safe twice over — an
     /// object given away or adopted elsewhere is skipped at run time,
     /// and a storage release writes the emptied value back, so a
@@ -350,7 +350,7 @@ pub const Lowering = struct {
         return local;
     }
 
-    /// The zero value of a type, as instructions: numbers zero, Bool
+    /// The zero value of a type, as instructions: numbers zero, bool
     /// false, text empty, structs zeroed field by field, objects null.
     /// What `var name: Type` with no initializer starts at, and the
     /// null object traps on use until something assigns over it (S40).
@@ -621,7 +621,7 @@ pub const Lowering = struct {
         self.switchTo(loop.exit);
     }
 
-    /// An Int local, one higher.
+    /// A long local, one higher.
     fn advance(self: *Lowering, counter: LocalId) Error!void {
         const current = try self.load(counter);
         const one = try self.emit(.{ .const_int = 1 }, .int);
@@ -738,7 +738,7 @@ pub const Lowering = struct {
     }
 
     /// `a else b` — the same shape as a short circuit, with the result
-    /// typed by the fallback rather than Bool: park the present value,
+    /// typed by the fallback rather than bool: park the present value,
     /// then run the fallback only where `absent` says there was none.
     /// `closeShortCircuit` ends it.
     pub fn openCoalesce(

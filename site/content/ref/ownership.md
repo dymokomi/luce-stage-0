@@ -12,8 +12,8 @@ the rules.
 
 ## Vocabulary
 
-**object** — a heap value: `List`, `Map`, `Array`, `Builder`.
-Everything else (`Int`, `Float`, `Bool`, `String`, structs)
+**object** — a heap value: `list`, `map`, `array`, `builder`.
+Everything else (`long`, `double`, `bool`, `string`, structs)
 is a **value**: copied freely, never freed by the program, never
 verbed. The runtime reclaims a value's storage when the place holding
 it dies.
@@ -55,7 +55,7 @@ func main():
     for word in "a b c".split(""):   # the list is never named
         print(word)
     # the split list is freed when the for statement completes
-    print(String(len("xy".split(""))))  # freed at the end of this line
+    print(string(len("xy".split(""))))  # freed at the end of this line
 ```
 
 ```output
@@ -117,7 +117,7 @@ func main():
     let view = xs
     free(xs)
     let bad = view[0]
-    print(String(bad))
+    print(string(bad))
 ```
 
 ```output
@@ -144,11 +144,11 @@ or freeing. A borrow may read, mutate contents, and pass along as a
 borrow.
 
 ```luce fail
-func stash(index: Map(String, List(Int)), hits: List(Int)):
+func stash(index: map(string, list(long)), hits: list(long)):
     index["latest"] = hits
 
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     stash(index, [1, 2])
 ```
 
@@ -187,10 +187,10 @@ keyword, because it is unambiguous.
 
 Whatever a function returns, the caller owns; no exceptions, so
 [S16](#s16) is absolute. Write `return copy xs`, or take
-`xs: give List(Int)`.
+`xs: give list(long)`.
 
-This is a rule about **objects**. A `String` return copies instead of
-erroring, because a `String` has no verb to demand ([S32](#s32)):
+This is a rule about **objects**. A `string` return copies instead of
+erroring, because a `string` has no verb to demand ([S32](#s32)):
 `strings.trim` ends `return s[first:last]`, a view of its parameter,
 and what comes out is a copy the caller owns.
 
@@ -218,7 +218,7 @@ a dangling element is unrepresentable.
 
 ```luce fail
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     var hits = [12, 40]
     index["a.luc"] = hits
 ```
@@ -243,7 +243,7 @@ overwriting an element free the owned element immediately.
 
 ```luce run
 func main():
-    var rows = new List(List(Int))
+    var rows = new list(list(long))
     rows.append([1, 2])
     let peek = rows[0]        # a borrow; rows still owns it
     print(f"peek {len(peek)}")
@@ -271,8 +271,8 @@ cannot be given again.
 
 ```luce fail
 func main():
-    var a = new List(List(Int))
-    var b = new List(List(Int))
+    var a = new list(list(long))
+    var b = new list(list(long))
     var item = [1]
     a.append(give item)
     b.append(give item)
@@ -291,8 +291,8 @@ the compiler knows it is one where it stands:
 
 ```luce fail
 func main():
-    var a = new List(List(Int))
-    var b = new List(List(Int))
+    var a = new list(list(long))
+    var b = new list(list(long))
     var item = [1]
     let alias = item
     a.append(give item)
@@ -309,7 +309,7 @@ main.luc:7:14: alias aliases an object it does not own; give the owning name, or
 Where the owner is still an owner, the refusal names it:
 
 ```luce fail
-func take(xs: give List(Int)) -> Int:
+func take(xs: give list(long)) -> long:
     return len(xs)
 
 func main():
@@ -329,14 +329,14 @@ The two fixes it names both work: `give xs` hands over the owner, and
 `copy view` makes a second object so both names have one.
 
 ```luce run
-func take(xs: give List(Int)) -> Int:
+func take(xs: give list(long)) -> long:
     return len(xs)
 
 func main():
     var xs = [1, 2]
     let view = xs
-    print(String(len(view)))
-    print(String(take(give xs)))
+    print(string(len(view)))
+    print(string(take(give xs)))
 ```
 
 ```output
@@ -363,7 +363,7 @@ objects put into it fresh or by verb.
 ### S26 — struct copies alias the same objects {#s26}
 
 Copying a struct value never duplicates or moves objects; ownership
-stays where it was. Object fields alias; value fields — `String`s and
+stays where it was. Object fields alias; value fields — `string`s and
 nested plain structs — copy, so a struct copy costs the bytes of its
 value fields.
 
@@ -376,11 +376,11 @@ its owned objects.
 
 ```luce fail
 struct Bag:
-    label: String
-    items: List(Int)
+    label: string
+    items: list(long)
 
 func main():
-    var bags = new List(Bag)
+    var bags = new list(Bag)
     var bag = Bag(label = "x", items = [1])
     bags.append(bag)
 ```
@@ -417,7 +417,7 @@ call site — that is the point.
 
 ### S32 — values never take verbs {#s32}
 
-`give` and `copy` apply to `List`, `Map`, `Array`, `Builder` and
+`give` and `copy` apply to `list`, `map`, `array`, `builder` and
 carrying structs, and to nothing else.
 
 ```luce fail
@@ -429,7 +429,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:3:17: give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32] [luce.sema.own]
+main.luc:3:17: give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32] [luce.sema.own]
         let title = give name
                     ^~~~~~~~~
 ```
@@ -475,7 +475,7 @@ declared.
 
 ### S37 — values into containers need no ownership and no verbs, ever {#s37}
 
-`Int`, `Float`, `Bool`, `String` and plain structs copy into
+`long`, `double`, `bool`, `string` and plain structs copy into
 containers with zero ceremony. A loop variable "dying" each iteration
 is irrelevant: values are copied, never owned.
 
@@ -504,13 +504,13 @@ The first assignment has no old object to drop.
 ### S41 — "uninitialized" is a state, not a value, and it cannot be said {#s41}
 
 There is no null literal and no `x == null`. A parameter or return
-typed `Builder` is always a real `Builder`, so every signature stays
+typed `builder` is always a real `builder`, so every signature stays
 trustworthy and nobody checks. Using an unfilled object slot traps
 `null_object` — a bug with a line number, like an index out of bounds.
 
 ```luce trap
 func main():
-    var report: Builder
+    var report: builder
     report.append("x")
 ```
 
@@ -529,7 +529,7 @@ use.
 
 Scope exit or reassignment of an unfilled slot frees nothing. Freeing
 a container skips null elements. Optionals inherit S1–S42 unchanged: a
-`Builder?` holding an object owns it like any binding, and holding
+`builder?` holding an object owns it like any binding, and holding
 `none` owns nothing.
 
 Nothing in this document changed when `T?` arrived, which is the
@@ -541,7 +541,7 @@ error path needs to know.
 ### S44 — the entry's arguments are handed in, and `main`'s scope owns them {#s44}
 
 ```luce run args=fig date
-func main(args: List(String)):
+func main(args: list(string)):
     for name in args:
         print(name)
     # scope ends: the list is freed here, like any owned binding
@@ -562,13 +562,13 @@ it still owns when `main` returns is freed by `main`'s scope
 ([S1](#s1), [S33](#s33)). A host that supplies no arguments supplies an
 **empty** list, never a null one.
 
-`func main(args: give List(String)):` is refused. The verb would be
+`func main(args: give list(string)):` is refused. The verb would be
 noise on a signature with nobody to say it back.
 
 ### S45 — a multiple return moves each value, and no object twice {#s45}
 
 ```luce run
-func halves(n: Int) -> (List(Int), List(Int)):
+func halves(n: long) -> (list(long), list(long)):
     var head = [n]
     var tail = [n + 1]
     return head, tail        # both move; the caller's two names own them
@@ -595,7 +595,7 @@ two bindings owning it and free it twice, which [S23](#s23) forbids and
 which only a comma can now write.
 
 ```luce fail
-func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+func bad(xs: give list(long)) -> (list(long), list(long)):
     return xs, xs
 
 func main():

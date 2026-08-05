@@ -121,10 +121,10 @@ fn hasCode(parsed: *const Parsed, code: []const u8) bool {
 test "the plan's scale example parses" {
     var parsed = try expectClean(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\func scale_point(point: Point, factor: Float) -> Point:
+        \\func scale_point(point: Point, factor: double) -> Point:
         \\    return Point(
         \\        x = point.x * factor,
         \\        y = point.y * factor,
@@ -159,13 +159,13 @@ test "every declaration form at file scope parses into its own list" {
         \\import geo
         \\
         \\let width = 80
-        \\let banner: String = "loom"
+        \\let banner: string = "loom"
         \\
         \\struct Theme:
-        \\    keyword: Int
-        \\    comment: Int
+        \\    keyword: long
+        \\    comment: long
         \\
-        \\    func default() -> Int:
+        \\    func default() -> long:
         \\        return 176
         \\
         \\func main():
@@ -181,7 +181,7 @@ test "every declaration form at file scope parses into its own list" {
     try testing.expectEqual(source_mod.Origin.sibling, parsed.program.imports[1].origin);
     try testing.expectEqual(@as(usize, 2), parsed.program.constants.len);
     try testing.expect(parsed.program.constants[0].annotation == null);
-    try testing.expectEqualStrings("String", parsed.program.constants[1].annotation.?.name);
+    try testing.expectEqualStrings("string", parsed.program.constants[1].annotation.?.name);
     try testing.expectEqual(@as(usize, 2), parsed.program.structs[0].fields.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
@@ -189,7 +189,7 @@ test "every declaration form at file scope parses into its own list" {
 
 test "parameter modes, return types, and dotted type names parse" {
     var parsed = try expectClean(
-        \\func stash(index: Map(String, List(Int)), hits: give List(Int), origin: shapes.Point) -> List(Int):
+        \\func stash(index: map(string, list(long)), hits: give list(long), origin: shapes.Point) -> list(long):
         \\    return give hits
         \\
         \\func main():
@@ -201,15 +201,15 @@ test "parameter modes, return types, and dotted type names parse" {
     try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
     try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
     try testing.expectEqualStrings("shapes.Point", stash.parameters[2].type_name.name);
-    try testing.expectEqualStrings("List", stash.returns[0].name);
-    try testing.expectEqualStrings("Int", stash.returns[0].arguments[0].name);
+    try testing.expectEqualStrings("list", stash.returns[0].name);
+    try testing.expectEqualStrings("long", stash.returns[0].arguments[0].name);
 }
 
 test "struct bodies parse fields and namespaced functions" {
     var parsed = try expectClean(
         \\struct Helpers:
-        \\    value: Int
-        \\    func double(value: Int) -> Int:
+        \\    value: long
+        \\    func double(value: long) -> long:
         \\        return value * 2
         \\
         \\func main():
@@ -229,7 +229,7 @@ test "struct bodies parse fields and namespaced functions" {
 test "top-level let constants parse; top-level var is refused" {
     var parsed = try expectClean(
         \\let width = 80
-        \\let banner: String = "loom " + version
+        \\let banner: string = "loom " + version
         \\let version = "2.0"
         \\
         \\func main():
@@ -240,7 +240,7 @@ test "top-level let constants parse; top-level var is refused" {
     try testing.expectEqual(@as(usize, 3), parsed.program.constants.len);
     try testing.expectEqualStrings("width", parsed.program.constants[0].name);
     try testing.expect(parsed.program.constants[0].annotation == null);
-    try testing.expectEqualStrings("String", parsed.program.constants[1].annotation.?.name);
+    try testing.expectEqualStrings("string", parsed.program.constants[1].annotation.?.name);
     try testing.expect(parsed.program.constants[1].value.* == .binary);
 
     try expectDiagnostics("var counter = 0\n", &.{
@@ -250,7 +250,7 @@ test "top-level let constants parse; top-level var is refused" {
 
 test "array shape wildcards parse in annotations" {
     var parsed = try expectClean(
-        \\func total(grid: Array(Int, _, _)) -> Int:
+        \\func total(grid: array(long, _, _)) -> long:
         \\    return dim(grid, 0)
         \\
         \\func main():
@@ -259,7 +259,7 @@ test "array shape wildcards parse in annotations" {
     );
     defer parsed.deinit();
     const parameter = parsed.program.functions[0].parameters[0];
-    try testing.expectEqualStrings("Array", parameter.type_name.name);
+    try testing.expectEqualStrings("array", parameter.type_name.name);
     try testing.expectEqual(@as(u8, 2), parameter.type_name.wildcards);
 }
 
@@ -270,22 +270,22 @@ test "array shape wildcards parse in annotations" {
 test "late declarations parse: var with annotation only" {
     var parsed = try expectClean(
         \\func main():
-        \\    var report: Builder
-        \\    var grid: Array(Int, _, _)
-        \\    var count: Int
-        \\    report = new Builder()
+        \\    var report: builder
+        \\    var grid: array(long, _, _)
+        \\    var count: long
+        \\    report = new builder()
         \\
     );
     defer parsed.deinit();
     const body = parsed.program.functions[0].body;
     try testing.expect(body.statements[0].variable.value == null);
-    try testing.expectEqualStrings("Builder", body.statements[0].variable.annotation.?.name);
+    try testing.expectEqualStrings("builder", body.statements[0].variable.annotation.?.name);
     try testing.expect(body.statements[1].variable.value == null);
     try testing.expect(body.statements[2].variable.value == null);
 
     // let never late-declares, and var needs a type or a value.
-    try expectDiagnostics("func main():\n    let frozen: Int\n", &.{
-        .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "let always initializes" },
+    try expectDiagnostics("func main():\n    let frozen: long\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 21, .contains = "let always initializes" },
     });
     try expectDiagnostics("func main():\n    var untyped\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 16, .contains = "'=' with an initial value" },
@@ -297,7 +297,7 @@ test "every assignment place parses, nested and compound" {
         \\func main():
         \\    var n = 0
         \\    var p = Point(x = 1)
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    var cells = [Point(x = 1)]
         \\    n = 1
         \\    p.x = 2
@@ -334,7 +334,7 @@ test "every for form parses into the node its lowering needs" {
     var parsed = try expectClean(
         \\func main():
         \\    var xs = [1]
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    for i in range(0, 10):
         \\        print(i)
         \\    for x in xs:
@@ -415,7 +415,7 @@ test "return, break, and continue parse with and without a value" {
         \\        continue
         \\    return
         \\
-        \\func value() -> Int:
+        \\func value() -> long:
         \\    return 1 + 2
         \\
     );
@@ -429,14 +429,14 @@ test "return, break, and continue parse with and without a value" {
 
 test "ownership verbs parse: give/copy expressions, free calls, give parameters" {
     var parsed = try expectClean(
-        \\func stash(index: Map(String, List(Int)), hits: give List(Int)):
+        \\func stash(index: map(string, list(long)), hits: give list(long)):
         \\    index["latest"] = give hits
         \\
         \\func main():
         \\    var mine = [1, 2]
         \\    let moved = give mine
         \\    let doubled = copy moved
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    stash(index, give doubled)
         \\    free(index)
         \\
@@ -598,7 +598,7 @@ test "every adjacent pair of precedence levels binds the tighter one first" {
 
 test "'not' in front of a comparison is refused, naming both readings" {
     // docs/LANGUAGE.md: `not` is a prefix operator, so `not a == b` is
-    // `(not a) == b` here and `not (a == b)` in Python.  With Bool
+    // `(not a) == b` here and `not (a == b)` in Python.  With bool
     // operands both parse and disagree, so the parser will not pick.
     for ([_][]const u8{ "==", "!=", "<", "<=", ">", ">=" }) |operator| {
         const source = try std.fmt.allocPrint(
@@ -637,7 +637,7 @@ test "'not' in front of a comparison is refused, naming both readings" {
 
 test "comparison does not chain, and the fix is written out" {
     // docs/LANGUAGE.md: `a < b < c` is one comparison in Python and a
-    // Bool-versus-Int type error here.  Refuse it in the parser, where
+    // bool-versus-long type error here.  Refuse it in the parser, where
     // the operators are still in hand.
     try expectDiagnostics("func main():\n    let x = a < b < c\n", &.{
         .{ .code = "luce.parse.chain", .line = 2, .column = 19, .contains = "write 'a < b and b < c'" },
@@ -680,11 +680,11 @@ test "every literal form parses" {
         \\    let g = "text"
         \\    let h = [1, 2, 3]
         \\    let i = []
-        \\    let j = new Builder()
-        \\    let k = new Builder
-        \\    let l = new List(Int)
-        \\    let m = new Map(String, Int)
-        \\    let n = new Array(Float, 4, 8)
+        \\    let j = new builder()
+        \\    let k = new builder
+        \\    let l = new list(long)
+        \\    let m = new map(string, long)
+        \\    let n = new array(double, 4, 8)
         \\
     );
     defer parsed.deinit();
@@ -698,20 +698,20 @@ test "every literal form parses" {
     try testing.expectEqualStrings("text", body.statements[6].let.value.string_literal.decoded);
     try testing.expectEqual(@as(usize, 3), body.statements[7].let.value.list_literal.elements.len);
     try testing.expectEqual(@as(usize, 0), body.statements[8].let.value.list_literal.elements.len);
-    try testing.expectEqualStrings("Builder", body.statements[9].let.value.new_object.type_name.name);
-    try testing.expectEqualStrings("Builder", body.statements[10].let.value.new_object.type_name.name);
-    try testing.expectEqualStrings("Int", body.statements[11].let.value.new_object.type_name.arguments[0].name);
-    try testing.expectEqualStrings("Map", body.statements[12].let.value.new_object.type_name.name);
+    try testing.expectEqualStrings("builder", body.statements[9].let.value.new_object.type_name.name);
+    try testing.expectEqualStrings("builder", body.statements[10].let.value.new_object.type_name.name);
+    try testing.expectEqualStrings("long", body.statements[11].let.value.new_object.type_name.arguments[0].name);
+    try testing.expectEqualStrings("map", body.statements[12].let.value.new_object.type_name.name);
     try testing.expectEqual(@as(usize, 2), body.statements[13].let.value.new_object.dims.len);
 }
 
 test "collections parse: types, new, literals, indexing, slices, for-in" {
     var parsed = try expectClean(
         \\func main():
-        \\    var xs: List(Int) = [1, 2, 3]
-        \\    var m = new Map(String, List(Int))
-        \\    var grid = new Array(Float, 4, 8)
-        \\    var b = new Builder()
+        \\    var xs: list(long) = [1, 2, 3]
+        \\    var m = new map(string, list(long))
+        \\    var grid = new array(double, 4, 8)
+        \\    var b = new builder()
         \\    xs[0] = 10
         \\    grid[1, 2] = 3.5
         \\    m["ones"] = xs
@@ -720,23 +720,23 @@ test "collections parse: types, new, literals, indexing, slices, for-in" {
         \\    let tail = xs[1:]
         \\    let whole = xs[:]
         \\    for x in xs:
-        \\        append(b, String(x))
+        \\        append(b, string(x))
         \\
     );
     defer parsed.deinit();
     const body = parsed.program.functions[0].body;
 
     const annotated = body.statements[0].variable;
-    try testing.expectEqualStrings("List", annotated.annotation.?.name);
-    try testing.expectEqualStrings("Int", annotated.annotation.?.arguments[0].name);
+    try testing.expectEqualStrings("list", annotated.annotation.?.name);
+    try testing.expectEqualStrings("long", annotated.annotation.?.arguments[0].name);
     try testing.expectEqual(@as(usize, 3), annotated.value.?.list_literal.elements.len);
 
     const map_new = body.statements[1].variable.value.?.new_object;
-    try testing.expectEqualStrings("Map", map_new.type_name.name);
-    try testing.expectEqualStrings("List", map_new.type_name.arguments[1].name);
+    try testing.expectEqualStrings("map", map_new.type_name.name);
+    try testing.expectEqualStrings("list", map_new.type_name.arguments[1].name);
 
     const array_new = body.statements[2].variable.value.?.new_object;
-    try testing.expectEqualStrings("Array", array_new.type_name.name);
+    try testing.expectEqualStrings("array", array_new.type_name.name);
     try testing.expectEqual(@as(usize, 2), array_new.dims.len);
 
     try testing.expectEqual(@as(usize, 1), body.statements[4].assign.target.index.indices.len);
@@ -814,7 +814,7 @@ test "strings decode escapes" {
     try testing.expectEqualStrings("line\none\ttab \"quoted\"", value.string_literal.decoded);
 }
 
-test "f-strings expand to String()-wrapped concatenation" {
+test "f-strings expand to string()-wrapped concatenation" {
     var parsed = try expectClean(
         \\func main():
         \\    let a = f"x = {x}, y = {y}"
@@ -826,10 +826,10 @@ test "f-strings expand to String()-wrapped concatenation" {
     );
     defer parsed.deinit();
     const body = parsed.program.functions[0].body;
-    // "x = " + String(x) + ", y = " + String(y), left-associated.
+    // "x = " + string(x) + ", y = " + string(y), left-associated.
     const a = body.statements[0].let.value.binary;
     try testing.expectEqual(ast.BinaryOp.add, a.op);
-    try testing.expectEqualStrings("String", a.right.call.callee);
+    try testing.expectEqualStrings("string", a.right.call.callee);
     try testing.expectEqualStrings("y", a.right.call.arguments[0].value.name.text);
     // Doubled braces are literal text, with no interpolation at all.
     try testing.expectEqualStrings("{literal}", body.statements[1].let.value.string_literal.decoded);
@@ -872,7 +872,7 @@ test "five unrelated mistakes yield five diagnostics, one each" {
         \\    let 3 = 4
         \\
         \\struct D
-        \\    x: Int
+        \\    x: long
         \\
         \\func e():
         \\    if q = 2:
@@ -896,7 +896,7 @@ test "a header that fails takes its orphaned body with it" {
     try expectDiagnostics("func main():\n    if x > 1\n        y = 2\n        z = 3\n    print(4)\n", &.{
         .{ .code = "luce.parse.expected", .line = 2, .column = 13 },
     });
-    try expectDiagnostics("struct D\n    x: Int\n    y: Int\n", &.{
+    try expectDiagnostics("struct D\n    x: long\n    y: long\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 9 },
     });
     // A header whose ':' is the *only* thing wrong is read on anyway:
@@ -913,7 +913,7 @@ test "a header that fails takes its orphaned body with it" {
         .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "':' to open the block" },
         .{ .code = "luce.parse.expression", .line = 3, .column = 12, .contains = "found end of line" },
     });
-    try expectDiagnostics("struct D\n    x: Int\n    y:\n", &.{
+    try expectDiagnostics("struct D\n    x: long\n    y:\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "':' after the struct name" },
         .{ .code = "luce.parse.expected", .line = 3, .column = 7, .contains = "a type name" },
     });
@@ -931,7 +931,7 @@ test "recovery resumes at the next declaration, not inside the last one" {
         \\    let ok = 1
         \\    var value = ok +
         \\
-        \\func helper() -> Int:
+        \\func helper() -> long:
         \\    return 2
         \\
     );
@@ -995,7 +995,7 @@ test "the ordinary mistakes name themselves and point at the offending token" {
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "'else' has no matching 'if'" },
         },
         .{
-            .source = "func main():\n    struct S:\n        x: Int\n",
+            .source = "func main():\n    struct S:\n        x: long\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "belong at file scope" },
         },
         // A missing expression names what it found instead.
@@ -1086,7 +1086,7 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'func'" },
         },
         .{
-            .source = "class Point:\n    x: Int\n",
+            .source = "class Point:\n    x: long\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "no classes" },
         },
         .{
@@ -1104,7 +1104,7 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'func', not 'Func'" },
         },
         .{
-            .source = "STRUCT Point:\n    x: Int\n",
+            .source = "STRUCT Point:\n    x: long\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'struct'" },
         },
         // Tuples do not exist, and "expected ')' , found ','" does not
@@ -1158,24 +1158,24 @@ test "a missing comma is reported as a missing comma, in every list there is" {
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 17, .contains = "missing ','" },
         },
         .{
-            .source = "func main():\n    let m = new Map(String Int)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 28, .contains = "missing ',' before 'Int'" },
+            .source = "func main():\n    let m = new map(string long)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 28, .contains = "missing ',' before 'long'" },
         },
         .{
             .source = "func main():\n    let v = grid[1 2]\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = "missing ','" },
         },
         .{
-            .source = "func main():\n    let g = new Array(Int 2 3)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 27, .contains = "missing ','" },
+            .source = "func main():\n    let g = new array(long 2 3)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 28, .contains = "missing ','" },
         },
         .{
-            .source = "func f(a: Int b: Int):\n    return\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "missing ',' before 'b'" },
+            .source = "func f(a: long b: long):\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 16, .contains = "missing ',' before 'b'" },
         },
         .{
-            .source = "func main():\n    var x: Map(String Int) = new Map(String, Int)\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 23, .contains = "missing ',' before 'Int'" },
+            .source = "func main():\n    var x: map(string long) = new map(string, long)\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 23, .contains = "missing ',' before 'long'" },
         },
     };
     for (cases) |case| try expectDiagnostics(case.source, &.{case.wanted});
@@ -1195,10 +1195,10 @@ test "a list that runs out of input blames the bracket, not the element that nev
     const cases = [_][]const u8{
         "func main():\n    let xs = [1, 2,\n",
         "func main():\n    let x = xs[0,\n",
-        "func main():\n    var x: List(Int,\n",
-        "func main():\n    let g = new Array(Int, 2,\n",
+        "func main():\n    var x: list(long,\n",
+        "func main():\n    let g = new array(long, 2,\n",
         "func main():\n    f(a,\n",
-        "func f(a: Int,\n",
+        "func f(a: long,\n",
         "func main():\n    let p = Point(x = 1,\n",
     };
     for (cases) |source| {
@@ -1333,7 +1333,7 @@ test "every recursive construct is bounded, and hitting the bound is one clean d
         .{ .name = "parentheses", .head = "func main():\n    let x = ", .unit = "(", .tail = "1\n" },
         .{ .name = "list literals", .head = "func main():\n    let x = ", .unit = "[", .tail = "1\n" },
         .{ .name = "calls", .head = "func main():\n    let x = ", .unit = "f(", .tail = "1\n" },
-        .{ .name = "type arguments", .head = "func main():\n    var x: ", .unit = "List(", .tail = "Int\n" },
+        .{ .name = "type arguments", .head = "func main():\n    var x: ", .unit = "list(", .tail = "long\n" },
     };
     for (cases) |case| {
         const text = try repeated(case.head, case.unit, 4000, case.tail);
@@ -1427,11 +1427,11 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\let width = 80
         \\
         \\struct Point:
-        \\    x: Float
+        \\    x: double
         \\
         \\func main():
         \\    var xs = [1, 2]
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    for i, x in xs:
         \\        if x % 2 == 0 and x > width:
         \\            m[f"k{i}"] += x
@@ -1460,17 +1460,17 @@ test "truncated input at every prefix terminates and stays inside the source" {
 /// the lexer and the outermost recovery; this exercises the grammar
 /// itself, which is where the recovery bugs live.
 const fragments = [_][]const u8{
-    "func main():", "func f(a: Int) -> Int:", "struct P:",    "import math",
-    "let x = ",     "var y: Int",             "return ",      "if ",
-    "elif ",        "else:",                  "while ",       "for i in range(0, 3):",
-    "for x in xs:", "break",                  "continue",     "print(x)",
-    "xs.append(",   "new Map(String, Int)",   "new List(",    "new Array(Int, 2, 2)",
-    "give ",        "copy ",                  "not ",         "and ",
-    "or ",          "==",                     "<",            "+",
-    "(",            ")",                      "[",            "]",
-    ",",            ":",                      ".",            "=",
-    "f\"{x}\"",     "\"text\"",               "1",            "2.5",
-    "true",         "xs",                     "Point(x = 1)",
+    "func main():", "func f(a: long) -> long:", "struct P:",    "import math",
+    "let x = ",     "var y: long",              "return ",      "if ",
+    "elif ",        "else:",                    "while ",       "for i in range(0, 3):",
+    "for x in xs:", "break",                    "continue",     "print(x)",
+    "xs.append(",   "new map(string, long)",    "new list(",    "new array(long, 2, 2)",
+    "give ",        "copy ",                    "not ",         "and ",
+    "or ",          "==",                       "<",            "+",
+    "(",            ")",                        "[",            "]",
+    ",",            ":",                        ".",            "=",
+    "f\"{x}\"",     "\"text\"",                 "1",            "2.5",
+    "true",         "xs",                       "Point(x = 1)",
 };
 
 /// The indentation a generated line may carry — the layout dimension
@@ -1480,8 +1480,8 @@ const indents = [_][]const u8{ "", "    ", "        ", "            ", "  " };
 test "fuzz: parsing any bytes terminates with spans inside the source" {
     try testing.fuzz({}, parseAnything, .{ .corpus = &.{
         "func main():\n    let x = 1 + 2\n",
-        "func f(a: give List(Int)) -> Int:\n    return len(a)\n",
-        "struct P:\n    x: Float\n",
+        "func f(a: give list(long)) -> long:\n    return len(a)\n",
+        "struct P:\n    x: double\n",
         "let k = 3\n",
         "func main():\n    if x = 1:\n        for i in range(0, 2):\n            m[f\"{i}\"] += 1\n",
         "func main()\n    let y = (1 + [2, 3\n",
@@ -1584,10 +1584,10 @@ fn writeNearMiss(random: std.Random, text: *std.ArrayList(u8)) !void {
 test "a trailing ? makes a type optional, and there is no second one" {
     var parsed = try expectClean(
         \\struct Slot:
-        \\    held: String?
+        \\    held: string?
         \\
-        \\func find(key: Map(String, Int)?, fallback: Int) -> Int?:
-        \\    var seen: List(Int)? = none
+        \\func find(key: map(string, long)?, fallback: long) -> long?:
+        \\    var seen: list(long)? = none
         \\    return fallback
         \\
     );
@@ -1596,7 +1596,7 @@ test "a trailing ? makes a type optional, and there is no second one" {
     try testing.expect(parsed.program.structs[0].fields[0].type_name.optional);
     const found = parsed.program.functions[0];
     try testing.expect(found.parameters[0].type_name.optional);
-    try testing.expectEqualStrings("Map", found.parameters[0].type_name.name);
+    try testing.expectEqualStrings("map", found.parameters[0].type_name.name);
     try testing.expect(!found.parameters[1].type_name.optional);
     try testing.expect(found.returns[0].optional);
     try testing.expect(found.body.statements[0].variable.annotation.?.optional);
@@ -1604,12 +1604,12 @@ test "a trailing ? makes a type optional, and there is no second one" {
 
     try expectDiagnostics(
         \\func main():
-        \\    var n: Int?? = none
+        \\    var n: long?? = none
         \\
     , &.{.{
         .code = "luce.parse.type",
         .line = 2,
-        .column = 16,
+        .column = 17,
         .contains = "one '?' is all there is",
     }});
 }
@@ -1670,12 +1670,12 @@ test "an else block still reads as a block, not as a fallback" {
 test "self and var self are parameter zero, bare and untyped" {
     var parsed = try expectClean(
         \\struct Point:
-        \\    x: Float
+        \\    x: double
         \\
-        \\    func length(self) -> Float:
+        \\    func length(self) -> double:
         \\        return self.x
         \\
-        \\    func scale(var self, factor: Float):
+        \\    func scale(var self, factor: double):
         \\        self.x = self.x * factor
         \\
         \\    func origin() -> Point:
@@ -1708,13 +1708,13 @@ test "self and var self are parameter zero, bare and untyped" {
 test "self comes first, and takes no type" {
     try expectDiagnostics(
         \\struct Point:
-        \\    func f(a: Int, self):
+        \\    func f(a: long, self):
         \\        return
         \\
     , &.{.{
         .code = "luce.parse.self",
         .line = 2,
-        .column = 20,
+        .column = 21,
         .contains = "self is the receiver, so it comes first in the parameter list",
     }});
 
@@ -1733,13 +1733,13 @@ test "self comes first, and takes no type" {
     // `var self` is refused in the same place and for the same reason.
     try expectDiagnostics(
         \\struct Point:
-        \\    func f(a: Int, var self):
+        \\    func f(a: long, var self):
         \\        return
         \\
     , &.{.{
         .code = "luce.parse.self",
         .line = 2,
-        .column = 20,
+        .column = 21,
         .contains = "comes first",
     }});
 }

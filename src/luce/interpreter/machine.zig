@@ -86,7 +86,7 @@ pub fn run(
             // not in the census, and the frames that own it are still
             // standing right here, so it goes back now
             // (docs/STRINGS.md).  Reported after the traceback: a
-            // trap's words may be a String the program built.
+            // trap's words may be a string the program built.
             machine.releaseFrameStorage();
             return .{ .trap = reported };
         },
@@ -166,7 +166,7 @@ pub const Machine = struct {
     /// Scratch for one `struct_make`'s fields, reused; live only until
     /// the runtime copies them into arena storage.
     field_scratch: std.ArrayList(RuntimeValue) = .empty,
-    /// Scratch for one `new Array`'s dimension sizes, reused; live
+    /// Scratch for one `new array`'s dimension sizes, reused; live
     /// only until the runtime copies them into the array's own shape.
     /// Reused rather than freshly allocated because the arena never
     /// gives a slice back, and a loop that allocates arrays would
@@ -266,7 +266,7 @@ pub const Machine = struct {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
 
-    /// The `List(String)` `main`'s parameter receives (OWNERSHIP.md
+    /// The `list(string)` `main`'s parameter receives (OWNERSHIP.md
     /// S44).
     ///
     /// A host with no arguments to offer — including no host at all —
@@ -352,7 +352,7 @@ pub const Machine = struct {
     // -- the dispatch loop ----------------------------------------------
 
     pub fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
-        // `func main(args: List(String)):` receives the command line;
+        // `func main(args: list(string)):` receives the command line;
         // `func main():` receives nothing, and those are the only two
         // shapes stage 4 lets through (docs/METHODS.md).  The list is
         // built the same way the compiled arm builds it — `libluce_rt`
@@ -526,8 +526,8 @@ pub const Machine = struct {
     // library deliberately does not know.  Compiled code resolves both
     // at compile time instead.
 
-    /// `new List(T)` / `new Map(K, V)` / `new Array(T, ...)` / `new
-    /// Builder`: read the shape from the program's heap-type table and
+    /// `new list(T)` / `new map(K, V)` / `new array(T, ...)` / `new
+    /// builder`: read the shape from the program's heap-type table and
     /// ask the runtime for the object.
     pub fn allocateObject(
         self: *Machine,

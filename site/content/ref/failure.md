@@ -18,7 +18,7 @@ guide to applying it.
 A trap is deterministic, carries a stable code, and ends the program
 without publishing anything. Every check that raises one is part of
 the language and cannot be disabled: there is no build mode in which
-`Int` arithmetic wraps or an index goes unchecked.
+`long` arithmetic wraps or an index goes unchecked.
 
 A debug build reports `code`, message, `file:line:column` and the call
 trace. `--release` keeps the code, the message and the function names
@@ -29,15 +29,15 @@ the rest.
 
 | Code | Message | Raised when |
 |---|---|---|
-| `integer_overflow` | integer overflow | a checked `Int` operation leaves 64 bits |
-| `divide_by_zero` | division by zero | `/` or `%` with a zero `Int` divisor |
-| `conversion_range` | conversion out of range | `Int(f)` outside the `Int` range |
+| `integer_overflow` | integer overflow | a checked `long` operation leaves 64 bits |
+| `divide_by_zero` | division by zero | `/` or `%` with a zero `long` divisor |
+| `conversion_range` | conversion out of range | `long(f)` outside the `long` range |
 | `assertion_failed` | assertion failed | `assert(false)` |
 | `explicit_trap` | explicit trap | `trap(message)` |
 | `missing_return` | function ended without returning a value | a value-returning function fell off its end |
 | `call_depth_exceeded` | call depth exceeded | the call-depth budget ran out |
-| `string_bounds` | string index out of bounds | a `String` index or slice past the end |
-| `string_boundary` | string slice splits a UTF-8 sequence | a `String` slice cutting a character |
+| `string_bounds` | string index out of bounds | a `string` index or slice past the end |
+| `string_boundary` | string slice splits a UTF-8 sequence | a `string` slice cutting a character |
 | `host_unavailable` | host service unavailable | an effect the host does not implement |
 | `index_bounds` | index out of bounds | a list or array index past the end |
 | `key_missing` | key not found in map | indexing a map with an absent key |
@@ -66,7 +66,7 @@ with a message and a call stack, never a segmentation fault.
 func main():
     var xs = [1, 2, 3]
     print("before")
-    print(String(xs[7]))
+    print(string(xs[7]))
 ```
 
 ```output
@@ -118,14 +118,14 @@ An uncaught error out of `main() -> !` ends the run. The host prints
 the words and the **one** place it was raised — one line, not a stack.
 
 ```luce raise
-func check(n: Int) -> Int!:
+func check(n: long) -> long!:
     if n < 0:
         error(f"negative: {n}")
     return n
 
 func main() -> !:
-    print(String(try check(1)))
-    print(String(try check(-5)))
+    print(string(try check(1)))
+    print(string(try check(-5)))
 ```
 
 ```output
@@ -151,11 +151,11 @@ of the unwinder.
 Neither a trap nor an error. `T?` is the shape when the only fact is
 that there is nothing there.
 
-In the language: `parse_int` and `parse_float` answer `Int?` and
-`Float?`.
+In the language: `parse_int` and `parse_float` answer `long?` and
+`double?`.
 
 In the standard library: `math.mean`, `math.vmin`, `math.vmax`,
-`math.variance` and `math.stddev` answer `Float?`, because an empty
+`math.variance` and `math.stddev` answer `double?`, because an empty
 array has no mean.
 
 The seven traps that remain in `std.math` are domains the caller was

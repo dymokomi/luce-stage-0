@@ -89,11 +89,11 @@ test "S1: a fresh object bound to a name frees at scope end, no memory words" {
         \\    var xs = [1, 2, 3]
         \\    xs.append(4)
         \\    assert(len(xs) == 4)
-        \\    var ages = new Map(String, Int)
+        \\    var ages = new map(string, long)
         \\    ages["ada"] = 36
-        \\    var grid = new Array(Int, 4, 4)
+        \\    var grid = new array(long, 4, 4)
         \\    grid.fill(7)
-        \\    var text = new Builder()
+        \\    var text = new builder()
         \\    text.append("hello")
         \\    assert(text.build() == "hello")
         \\
@@ -118,7 +118,7 @@ test "S2: an inner block's object dies at that block's end" {
 test "S2: an object given out of the block survives it" {
     try agreeClean(
         \\func main():
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    if true:
         \\        var inner = [7]
         \\        sink.append(give inner)
@@ -144,7 +144,7 @@ test "S3: unbound temporaries die at the end of their statement" {
 
 test "S4: return, break, and continue unwind what their scopes own" {
     try agreeClean(
-        \\func early(flag: Bool) -> String:
+        \\func early(flag: bool) -> string:
         \\    var lines = ["a", "b"]
         \\    if flag:
         \\        return "early"
@@ -158,12 +158,12 @@ test "S4: return, break, and continue unwind what their scopes own" {
         \\        var row = [i]
         \\        if i == 3:
         \\            break
-        \\        var wide = new Array(Int, 8)
+        \\        var wide = new array(long, 8)
         \\        wide.fill(i)
         \\        if i == 1:
         \\            continue
-        \\        var tail = new Builder()
-        \\        tail.append(String(i))
+        \\        var tail = new builder()
+        \\        tail.append(string(i))
         \\
     );
 }
@@ -181,14 +181,14 @@ test "S5: reassigning an owning var frees the old object immediately" {
 
 test "S5: the life.luc pattern — reassign in a loop, no free dance" {
     try agreeClean(
-        \\func step(grid: Array(Int, _)) -> Array(Int, _):
-        \\    var next = new Array(Int, len(grid))
+        \\func step(grid: array(long, _)) -> array(long, _):
+        \\    var next = new array(long, len(grid))
         \\    for i in range(0, len(grid)):
         \\        next[i] = grid[i] + 1
         \\    return next
         \\
         \\func main():
-        \\    var grid = new Array(Int, 16)
+        \\    var grid = new array(long, 16)
         \\    for tick in range(0, 100):
         \\        grid = step(grid)
         \\    assert(grid[0] == 100)
@@ -250,9 +250,9 @@ test "S7: a fresh object inside a loop dies every iteration" {
         \\
         \\func main():
         \\    for i in range(0, 1000):
-        \\        var row = new Array(Int, 64)
+        \\        var row = new array(long, 64)
         \\        row.fill(i)
-        \\        var pieces = String(i).split(".")
+        \\        var pieces = string(i).split(".")
         \\
     );
 }
@@ -333,7 +333,7 @@ test "S10: give transfers between names and poisons the giver" {
 test "S10: give takes a name, not an expression" {
     try expectRejected(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([1])
         \\    let bad = give rows[0]
         \\
@@ -346,7 +346,7 @@ test "S10: give takes a name, not an expression" {
 
 test "S11: passing an object is a borrow — free, silent, still owned by the caller" {
     try agreeClean(
-        \\func total(values: List(Int)) -> Int:
+        \\func total(values: list(long)) -> long:
         \\    var sum = 0
         \\    for v in values:
         \\        sum = sum + v
@@ -363,7 +363,7 @@ test "S11: passing an object is a borrow — free, silent, still owned by the ca
 
 test "S11: giving to a borrow parameter is a compile error" {
     try expectRejected(
-        \\func peek(values: List(Int)) -> Int:
+        \\func peek(values: list(long)) -> long:
         \\    return len(values)
         \\
         \\func main():
@@ -376,29 +376,29 @@ test "S11: giving to a borrow parameter is a compile error" {
 test "S12: a callee cannot keep a borrowed parameter" {
     // Storing into a container.
     try expectRejected(
-        \\func stash(index: Map(String, List(Int)), hits: List(Int)):
+        \\func stash(index: map(string, list(long)), hits: list(long)):
         \\    index["latest"] = hits
         \\
         \\func main():
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    var mine = [1]
         \\    stash(index, mine)
         \\
     );
     // Giving it away.
     try expectRejected(
-        \\func keep(sink: List(List(Int)), hits: List(Int)):
+        \\func keep(sink: list(list(long)), hits: list(long)):
         \\    sink.append(give hits)
         \\
         \\func main():
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    var mine = [1]
         \\    keep(sink, mine)
         \\
     );
     // Freeing it.
     try expectRejected(
-        \\func drop(hits: List(Int)):
+        \\func drop(hits: list(long)):
         \\    free(hits)
         \\
         \\func main():
@@ -410,11 +410,11 @@ test "S12: a callee cannot keep a borrowed parameter" {
 
 test "S13: give appears in the signature and at the call site" {
     try agreeClean(
-        \\func stash(index: Map(String, List(Int)), hits: give List(Int)):
+        \\func stash(index: map(string, list(long)), hits: give list(long)):
         \\    index["latest"] = give hits
         \\
         \\func main():
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    var mine = [1, 2]
         \\    stash(index, give mine)
         \\    assert(len(index["latest"]) == 2)
@@ -422,7 +422,7 @@ test "S13: give appears in the signature and at the call site" {
     );
     // The caller must say it out loud: a bare name is refused.
     try expectRejected(
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    assert(len(xs) == 1)
         \\
         \\func main():
@@ -432,7 +432,7 @@ test "S13: give appears in the signature and at the call site" {
     );
     // And the giver is poisoned afterwards.
     try expectRejected(
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    assert(len(xs) == 1)
         \\
         \\func main():
@@ -445,7 +445,7 @@ test "S13: give appears in the signature and at the call site" {
 
 test "S14: fresh values and copies satisfy a give parameter with no verb" {
     try agreeClean(
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    assert(len(xs) == 2)
         \\
         \\func main():
@@ -459,7 +459,7 @@ test "S14: fresh values and copies satisfy a give parameter with no verb" {
 
 test "S15: a give parameter not passed on dies with the callee" {
     try agreeClean(
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    xs.append(9)
         \\    assert(len(xs) == 3)
         \\
@@ -476,7 +476,7 @@ test "S15: a give parameter not passed on dies with the callee" {
 
 test "S16: returning something you own moves it to the caller" {
     try agreeClean(
-        \\func build() -> List(String):
+        \\func build() -> list(string):
         \\    var lines = ["a", "b"]
         \\    return lines
         \\
@@ -490,7 +490,7 @@ test "S16: returning something you own moves it to the caller" {
 
 test "S17: returning a borrowed parameter is a compile error" {
     try expectRejected(
-        \\func pick(xs: List(Int)) -> List(Int):
+        \\func pick(xs: list(long)) -> list(long):
         \\    return xs
         \\
         \\func main():
@@ -500,7 +500,7 @@ test "S17: returning a borrowed parameter is a compile error" {
     );
     // An alias cannot be returned either.
     try expectRejected(
-        \\func sneak() -> List(Int):
+        \\func sneak() -> list(long):
         \\    var xs = [1]
         \\    let view = xs
         \\    return view
@@ -511,11 +511,11 @@ test "S17: returning a borrowed parameter is a compile error" {
     );
     // Nor a borrowed element; return a copy.
     try expectRejected(
-        \\func first(rows: List(List(Int))) -> List(Int):
+        \\func first(rows: list(list(long))) -> list(long):
         \\    return rows[0]
         \\
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([1])
         \\    var bad = first(rows)
         \\
@@ -524,11 +524,11 @@ test "S17: returning a borrowed parameter is a compile error" {
 
 test "S17: return copy is the escape hatch for borrows" {
     try agreeClean(
-        \\func first(rows: List(List(Int))) -> List(Int):
+        \\func first(rows: list(list(long))) -> list(long):
         \\    return copy rows[0]
         \\
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([1, 2])
         \\    var taken = first(rows)
         \\    taken.append(3)
@@ -540,7 +540,7 @@ test "S17: return copy is the escape hatch for borrows" {
 
 test "S18: returning a give parameter is legal — owned in, owned out" {
     try agreeClean(
-        \\func sorted(values: give List(Float)) -> List(Float):
+        \\func sorted(values: give list(double)) -> list(double):
         \\    values.sort()
         \\    return values
         \\
@@ -553,7 +553,7 @@ test "S18: returning a give parameter is legal — owned in, owned out" {
 
 test "S19: an ignored returned object is a temporary and frees itself" {
     try agreeClean(
-        \\func build() -> List(String):
+        \\func build() -> list(string):
         \\    var lines = ["a", "b"]
         \\    return lines
         \\
@@ -573,13 +573,13 @@ test "S20: containers adopt fresh values silently and free them recursively" {
         \\import std.strings
         \\
         \\func main():
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    index["a.luc"] = [12, 40]
-        \\    var words = new Map(String, List(String))
+        \\    var words = new map(string, list(string))
         \\    words["b.luc"] = "1 2 3".split(" ")
         \\    assert(len(words["b.luc"]) == 3)
-        \\    var grid = new List(List(Int))
-        \\    grid.append(new List(Int))
+        \\    var grid = new list(list(long))
+        \\    grid.append(new list(long))
         \\    grid[0].append(5)
         \\    assert(grid[0][0] == 5)
         \\
@@ -589,7 +589,7 @@ test "S20: containers adopt fresh values silently and free them recursively" {
 test "S20: freeing a container frees the objects it owns" {
     try agreeTrap(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([1, 2])
         \\    let probe = rows[0]
         \\    free(rows)
@@ -599,43 +599,43 @@ test "S20: freeing a container frees the objects it owns" {
 }
 
 test "S21: storing a bare name is a compile error at every container door" {
-    // Map value.
+    // map value.
     try expectRejected(
         \\func main():
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    var hits = [12, 40]
         \\    index["a.luc"] = hits
         \\
     );
-    // List append.
+    // list append.
     try expectRejected(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    var hits = [1]
         \\    rows.append(hits)
         \\
     );
-    // List insert.
+    // list insert.
     try expectRejected(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    var hits = [1]
         \\    rows.insert(0, hits)
         \\
     );
-    // List element overwrite.
+    // list element overwrite.
     try expectRejected(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([0])
         \\    var hits = [1]
         \\    rows[0] = hits
         \\
     );
-    // Array element.
+    // array element.
     try expectRejected(
         \\func main():
-        \\    var cells = new Array(List(Int), 2)
+        \\    var cells = new array(list(long), 2)
         \\    var hits = [1]
         \\    cells[0] = hits
         \\
@@ -645,7 +645,7 @@ test "S21: storing a bare name is a compile error at every container door" {
 test "S21: give and copy open the container door" {
     try agreeClean(
         \\func main():
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    var hits = [12, 40]
         \\    index["a.luc"] = give hits
         \\    var template = [0, 0]
@@ -661,7 +661,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
     // pop hands the element to the receiver.
     try agreeClean(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([1, 2])
         \\    let peek = rows[0]
         \\    assert(len(peek) == 2)
@@ -674,7 +674,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
     // An element overwrite frees the old element right there.
     try agreeTrap(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([9, 9])
         \\    let probe = rows[0]
         \\    rows[0] = [7]
@@ -684,7 +684,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
     // remove frees the owned element.
     try agreeTrap(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([9])
         \\    let probe = rows[0]
         \\    rows.remove(0)
@@ -694,7 +694,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
     // clear frees all owned elements.
     try agreeTrap(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([9])
         \\    let probe = rows[0]
         \\    rows.clear()
@@ -706,7 +706,7 @@ test "S22: reading borrows; pop moves out; overwrite, remove, and clear free" {
 test "S22: map overwrite and remove free the old owned value" {
     try agreeClean(
         \\func main():
-        \\    var index = new Map(String, List(Int))
+        \\    var index = new map(string, list(long))
         \\    index["a"] = [1]
         \\    index["a"] = [2, 3]
         \\    assert(len(index["a"]) == 2)
@@ -719,8 +719,8 @@ test "S22: map overwrite and remove free the old owned value" {
 test "S23: one object cannot end up owned twice — static poisoning" {
     try expectRejected(
         \\func main():
-        \\    var a = new List(List(Int))
-        \\    var b = new List(List(Int))
+        \\    var a = new list(list(long))
+        \\    var b = new list(list(long))
         \\    var item = [1]
         \\    a.append(give item)
         \\    b.append(give item)
@@ -735,7 +735,7 @@ test "S23: one object cannot end up owned twice — static poisoning" {
 
 test "S23: giving through an alias is refused at a call site" {
     try expectSayingAt(
-        \\func take(xs: give List(Int)) -> Int:
+        \\func take(xs: give list(long)) -> long:
         \\    return len(xs)
         \\
         \\func main():
@@ -757,8 +757,8 @@ test "S23: giving through an alias is refused at a container store" {
     // exists and stops there.
     try expectSayingAt(
         \\func main():
-        \\    var a = new List(List(Int))
-        \\    var b = new List(List(Int))
+        \\    var a = new list(list(long))
+        \\    var b = new list(list(long))
         \\    var item = [2]
         \\    let alias = item
         \\    a.append(give item)
@@ -776,7 +776,7 @@ test "S23: returning a give through an alias is refused" {
     // past it, because the verb lowered before the return looked at
     // the name.
     try expectSayingAt(
-        \\func make() -> List(Int):
+        \\func make() -> list(long):
         \\    var xs = [1, 2]
         \\    let view = xs
         \\    return give view
@@ -810,8 +810,8 @@ test "S23: a loop name owns nothing either" {
     // other, and this was the second way to reach the old trap.
     try expectSayingAt(
         \\func main():
-        \\    var rows = new List(List(Int))
-        \\    var sink = new List(List(Int))
+        \\    var rows = new list(list(long))
+        \\    var sink = new list(list(long))
         \\    rows.append([1])
         \\    for row in rows:
         \\        sink.append(give row)
@@ -828,10 +828,10 @@ test "S23: the owner itself still gives, everywhere" {
     // them is fixed by naming the owner, and the fix compiles and runs
     // clean on both engines.
     try agreeClean(
-        \\func take(xs: give List(Int)) -> Int:
+        \\func take(xs: give list(long)) -> long:
         \\    return len(xs)
         \\
-        \\func make() -> List(Int):
+        \\func make() -> list(long):
         \\    var fresh = [1, 2]
         \\    return give fresh
         \\
@@ -840,7 +840,7 @@ test "S23: the owner itself still gives, everywhere" {
         \\    let view = xs
         \\    assert(len(view) == 2)
         \\    assert(take(give xs) == 2)
-        \\    var a = new List(List(Int))
+        \\    var a = new list(list(long))
         \\    var item = [2]
         \\    a.append(give item)
         \\    var moved = make()
@@ -854,8 +854,8 @@ test "S23: the owner itself still gives, everywhere" {
 test "S23: copy is the other fix, and it keeps both objects" {
     try agreeClean(
         \\func main():
-        \\    var a = new List(List(Int))
-        \\    var b = new List(List(Int))
+        \\    var a = new list(list(long))
+        \\    var b = new list(list(long))
         \\    var item = [2]
         \\    let alias = item
         \\    a.append(copy alias)
@@ -881,7 +881,7 @@ test "S23: the runtime backstop still refuses a module stage 4 could not emit" {
     // on it.
     var compiled = try agree.program(
         \\func main():
-        \\    var a = new List(List(Int))
+        \\    var a = new list(list(long))
         \\    var first = [1]
         \\    var second = [2]
         \\    a.append(give first)
@@ -922,8 +922,8 @@ test "S23: the runtime backstop still refuses a module stage 4 could not emit" {
 test "S24: object fields follow the verb rule at construction" {
     try agreeClean(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(label = "a", items = [1, 2])
@@ -939,8 +939,8 @@ test "S24: object fields follow the verb rule at construction" {
     );
     try expectRejected(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
         \\    var loose = [3, 4]
@@ -953,7 +953,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
     // The old field object dies at the overwrite.
     try agreeTrap(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(items = [1])
@@ -965,7 +965,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
     // Bare names stay refused.
     try expectRejected(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(items = [1])
@@ -976,7 +976,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
     // Success path, no leaks.
     try agreeClean(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(items = [1])
@@ -991,7 +991,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
 test "S25: only the owning name restocks an object field" {
     try expectRejected(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(items = [1])
@@ -1004,8 +1004,8 @@ test "S25: only the owning name restocks an object field" {
 test "S26: struct copies alias the same objects" {
     try agreeClean(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(label = "a", items = [1, 2])
@@ -1019,22 +1019,22 @@ test "S26: struct copies alias the same objects" {
 test "S27: keeping an object-carrying struct needs a verb" {
     try expectRejected(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
-        \\    var bags = new List(Bag)
+        \\    var bags = new list(Bag)
         \\    var bag = Bag(label = "x", items = [1])
         \\    bags.append(bag)
         \\
     );
     try agreeClean(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
-        \\    var bags = new List(Bag)
+        \\    var bags = new list(Bag)
         \\    var bag = Bag(label = "x", items = [1])
         \\    bags.append(give bag)
         \\    bags.append(Bag(label = "y", items = [2]))
@@ -1047,11 +1047,11 @@ test "S27: keeping an object-carrying struct needs a verb" {
 test "S27: copy on a carrying struct deep-copies its owned objects" {
     try agreeClean(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
-        \\    var bags = new List(Bag)
+        \\    var bags = new list(Bag)
         \\    var bag = Bag(label = "x", items = [1])
         \\    bags.append(copy bag)
         \\    bag.items.append(2)
@@ -1064,11 +1064,11 @@ test "S27: copy on a carrying struct deep-copies its owned objects" {
 test "S27: plain-value structs never need verbs" {
     try agreeClean(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
-        \\    var points = new List(Point)
+        \\    var points = new list(Point)
         \\    var origin = Point(x = 0, y = 0)
         \\    points.append(origin)
         \\    points.append(Point(x = 1, y = 2))
@@ -1080,8 +1080,8 @@ test "S27: plain-value structs never need verbs" {
 test "S28: returning an object-carrying struct moves the whole tree" {
     try agreeClean(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func make_bag() -> Bag:
         \\    var bag = Bag(label = "n", items = [1, 2])
@@ -1103,7 +1103,7 @@ test "S29: poisoning is source-order and branch-insensitive" {
     try expectRejected(
         \\func main():
         \\    var xs = [1]
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    if len(sink) > 0:
         \\        sink.append(give xs)
         \\    let bad = len(xs)
@@ -1113,9 +1113,9 @@ test "S29: poisoning is source-order and branch-insensitive" {
 
 test "S29: a conditional give still releases correctly on both paths" {
     try agreeClean(
-        \\func stash(flag: Bool) -> Int:
+        \\func stash(flag: bool) -> long:
         \\    var xs = [1]
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    if flag:
         \\        sink.append(give xs)
         \\    return len(sink)
@@ -1131,7 +1131,7 @@ test "S30: giving or freeing an outer name inside a loop is a compile error" {
     try expectRejected(
         \\func main():
         \\    var xs = [1]
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    for i in range(0, 3):
         \\        sink.append(give xs)
         \\
@@ -1148,7 +1148,7 @@ test "S30: giving or freeing an outer name inside a loop is a compile error" {
 test "S30: names created inside the loop give freely" {
     try agreeClean(
         \\func main():
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    for i in range(0, 3):
         \\        var fresh = [i]
         \\        sink.append(give fresh)
@@ -1159,11 +1159,11 @@ test "S30: names created inside the loop give freely" {
 
 test "S31: copy is deep and always legal on readable objects" {
     try agreeClean(
-        \\func dup(borrowed: List(List(Int))) -> List(List(Int)):
+        \\func dup(borrowed: list(list(long))) -> list(list(long)):
         \\    return copy borrowed
         \\
         \\func main():
-        \\    var nested = new List(List(Int))
+        \\    var nested = new list(list(long))
         \\    nested.append([1, 2])
         \\    let mirror = copy nested
         \\    mirror[0].append(3)
@@ -1179,7 +1179,7 @@ test "S31: copy is deep and always legal on readable objects" {
 test "S31: slices of object lists are deep copies too" {
     try agreeClean(
         \\func main():
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([1])
         \\    rows.append([2])
         \\    var front = rows[0:1]
@@ -1204,7 +1204,7 @@ test "S32: values never take verbs" {
         \\
     );
     try expectRejected(
-        \\func square(value: give Int) -> Int:
+        \\func square(value: give long) -> long:
         \\    return value * value
         \\
         \\func main():
@@ -1219,11 +1219,11 @@ test "S32: values never take verbs" {
 
 test "S36: ownership follows the binding, which lives where it was declared" {
     try agreeClean(
-        \\func report(verbose: Bool) -> String:
-        \\    var text = new Builder()
+        \\func report(verbose: bool) -> string:
+        \\    var text = new builder()
         \\    text.append("head")
         \\    if verbose:
-        \\        text = new Builder()
+        \\        text = new builder()
         \\        text.append("details")
         \\    return text.build()
         \\
@@ -1239,11 +1239,11 @@ test "S37: values into containers need no ownership, ever" {
         \\import std.strings
         \\
         \\func main():
-        \\    var x: List(Int) = []
+        \\    var x: list(long) = []
         \\    for i in range(0, 10):
         \\        x.append(i)
         \\    assert(len(x) == 10)
-        \\    var names: List(String) = []
+        \\    var names: list(string) = []
         \\    names.append("ada")
         \\    let alan = "alan"
         \\    names.append(alan)
@@ -1254,12 +1254,12 @@ test "S37: values into containers need no ownership, ever" {
 
 test "S38: a borrowed parameter may mutate contents" {
     try agreeClean(
-        \\func fill_list(xs: List(Int)):
+        \\func fill_list(xs: list(long)):
         \\    for i in range(0, 10):
         \\        xs.append(i)
         \\
         \\func main():
-        \\    var x: List(Int) = []
+        \\    var x: list(long) = []
         \\    fill_list(x)
         \\    assert(len(x) == 10)
         \\
@@ -1293,13 +1293,13 @@ test "S39: let freezes the binding, not the object" {
 test "S33: a busy program ends with zero live objects" {
     try agreeClean(
         \\struct Entry:
-        \\    word: String
-        \\    hits: List(Int)
+        \\    word: string
+        \\    hits: list(long)
         \\
         \\import std.strings
         \\
-        \\func collect(text: String) -> List(Entry):
-        \\    var entries = new List(Entry)
+        \\func collect(text: string) -> list(Entry):
+        \\    var entries = new list(Entry)
         \\    for word in text.split(" "):
         \\        entries.append(Entry(word = word, hits = [len(word)]))
         \\    return entries
@@ -1316,7 +1316,7 @@ test "S34: a trap mid-run aborts cleanly with objects in flight" {
     try agreeTrap(
         \\func main():
         \\    var xs = [1, 2]
-        \\    var sink = new List(List(Int))
+        \\    var sink = new list(list(long))
         \\    sink.append([3])
         \\    let bad = xs[9]
         \\
@@ -1335,14 +1335,14 @@ test "mechanics: a bare give with no receiver dies at the statement end" {
 test "mechanics: give checks the object exists — unfilled slots trap (S42)" {
     try agreeTrap(
         \\func main():
-        \\    var inner: Builder
-        \\    var sink = new List(Builder)
+        \\    var inner: builder
+        \\    var sink = new list(builder)
         \\    sink.append(give inner)
         \\
     , .null_object);
     try agreeTrap(
         \\func main():
-        \\    var inner: List(Int)
+        \\    var inner: list(long)
         \\    let bad = copy inner
         \\
     , .null_object);
@@ -1350,7 +1350,7 @@ test "mechanics: give checks the object exists — unfilled slots trap (S42)" {
 
 test "mechanics: deep recursion moves objects out without confusion" {
     try agreeClean(
-        \\func chain(depth: Int) -> List(Int):
+        \\func chain(depth: long) -> list(long):
         \\    if depth == 0:
         \\        return [0]
         \\    var below = chain(depth - 1)
@@ -1371,7 +1371,7 @@ test "mechanics: loop conditions that allocate flush every iteration" {
         \\
         \\func main():
         \\    var i = 0
-        \\    while len(String(i).split(".")) > 0 and i < 100:
+        \\    while len(string(i).split(".")) > 0 and i < 100:
         \\        i = i + 1
         \\    assert(i == 100)
         \\
@@ -1382,7 +1382,7 @@ test "mechanics: returning from inside a for over a fresh iterable frees it" {
     try agreeClean(
         \\import std.strings
         \\
-        \\func hunt(text: String) -> String:
+        \\func hunt(text: string) -> string:
         \\    for word in text.split(" "):
         \\        if word.starts_with("b"):
         \\            return word
@@ -1401,7 +1401,7 @@ test "mechanics: assignment can receive a give" {
     try agreeClean(
         \\func main():
         \\    var source = [1, 2]
-        \\    var target: List(Int)
+        \\    var target: list(long)
         \\    target = give source
         \\    target.append(3)
         \\    assert(len(target) == 3)
@@ -1411,7 +1411,7 @@ test "mechanics: assignment can receive a give" {
 
 test "mechanics: giving the same name twice in one statement is caught" {
     try expectRejected(
-        \\func pair(a: give List(Int), b: give List(Int)):
+        \\func pair(a: give list(long), b: give list(long)):
         \\    assert(len(a) == len(b))
         \\
         \\func main():
@@ -1425,7 +1425,7 @@ test "mechanics: short-circuit spills do not disturb ownership" {
     try agreeClean(
         \\func main():
         \\    var xs = [1]
-        \\    var rows = new List(List(Int))
+        \\    var rows = new list(list(long))
         \\    rows.append([len(xs), 2])
         \\    if len(xs) > 0 and len(rows[0]) > 1:
         \\        rows.append(xs[0:])
@@ -1441,20 +1441,20 @@ test "mechanics: short-circuit spills do not disturb ownership" {
 test "S40: late declarations start at the type's zero value" {
     try agreeClean(
         \\struct Point:
-        \\    x: Float
-        \\    tag: String
+        \\    x: double
+        \\    tag: string
         \\
         \\struct Nested:
-        \\    label: String
+        \\    label: string
         \\    at: Point
-        \\    marks: List(Int)
+        \\    marks: list(long)
         \\
         \\func main():
-        \\    var count: Int
-        \\    var ratio: Float
+        \\    var count: long
+        \\    var ratio: double
         \\    var open = true
-        \\    var flag: Bool
-        \\    var name: String
+        \\    var flag: bool
+        \\    var name: string
         \\    var spot: Nested
         \\    assert(count == 0)
         \\    assert(ratio == 0.0)
@@ -1473,10 +1473,10 @@ test "S40: late declarations start at the type's zero value" {
 test "S40: the branch-set pattern works and the object outlives the if" {
     try agreeClean(
         \\func main():
-        \\    var report: Builder
+        \\    var report: builder
         \\    let verbose = true
         \\    if verbose:
-        \\        report = new Builder()
+        \\        report = new builder()
         \\        report.append("details")
         \\    if verbose:
         \\        assert(report.build() == "details")
@@ -1488,27 +1488,27 @@ test "S40: the branch-set pattern works and the object outlives the if" {
 test "S41: using an unfilled object slot traps null_object" {
     const cases = [_][]const u8{
         \\func main():
-        \\    var report: Builder
+        \\    var report: builder
         \\    report.append("boom")
         \\
         ,
         \\func main():
-        \\    var xs: List(Int)
+        \\    var xs: list(long)
         \\    let bad = xs[0]
         \\
         ,
         \\func main():
-        \\    var xs: List(Int)
+        \\    var xs: list(long)
         \\    let bad = len(xs)
         \\
         ,
         \\func main():
-        \\    var grid: Array(Int, _, _)
+        \\    var grid: array(long, _, _)
         \\    grid[0, 0] = 1
         \\
         ,
         \\func main():
-        \\    var m: Map(String, Int)
+        \\    var m: map(string, long)
         \\    for key in m:
         \\        let unused = key
         \\
@@ -1521,7 +1521,7 @@ test "S41: using an unfilled object slot traps null_object" {
 test "S42: verbs demand an object — free of an unfilled slot traps" {
     try agreeTrap(
         \\func main():
-        \\    var report: Builder
+        \\    var report: builder
         \\    free(report)
         \\
     , .null_object);
@@ -1529,14 +1529,14 @@ test "S42: verbs demand an object — free of an unfilled slot traps" {
 
 test "S42: passing an unfilled slot traps at first use, not at the call" {
     try agreeTrap(
-        \\func peek(xs: List(Int)) -> Int:
+        \\func peek(xs: list(long)) -> long:
         \\    return 41 + 1
         \\
-        \\func measure(xs: List(Int)) -> Int:
+        \\func measure(xs: list(long)) -> long:
         \\    return len(xs)
         \\
         \\func main():
-        \\    var xs: List(Int)
+        \\    var xs: list(long)
         \\    assert(peek(xs) == 42)
         \\    let bad = measure(xs)
         \\
@@ -1546,9 +1546,9 @@ test "S42: passing an unfilled slot traps at first use, not at the call" {
 test "S43: an unfilled slot frees nothing; a filled one frees normally" {
     try agreeClean(
         \\func main():
-        \\    var never: Builder
-        \\    var eventually: Builder
-        \\    eventually = new Builder()
+        \\    var never: builder
+        \\    var eventually: builder
+        \\    eventually = new builder()
         \\    eventually.append("x")
         \\    free(eventually)
         \\
@@ -1566,10 +1566,10 @@ test "S43: an unfilled slot frees nothing; a filled one frees normally" {
 test "optionals: a T? holding none owns nothing and releases nothing" {
     try agreeClean(
         \\func main():
-        \\    var never: List(Int)? = none
-        \\    var also: Builder? = none
+        \\    var never: list(long)? = none
+        \\    var also: builder? = none
         \\    also = none
-        \\    var again: Map(String, Int)? = none
+        \\    var again: map(string, long)? = none
         \\    assert(never == none and also == none and again == none)
         \\
     );
@@ -1578,7 +1578,7 @@ test "optionals: a T? holding none owns nothing and releases nothing" {
 test "optionals: a T? holding an object obeys scope ownership exactly as T does" {
     try agreeClean(
         \\func main():
-        \\    var xs: List(Int)? = new List(Int)
+        \\    var xs: list(long)? = new list(long)
         \\    xs.append(1)
         \\    assert(len(xs) == 1)
         \\
@@ -1587,9 +1587,9 @@ test "optionals: a T? holding an object obeys scope ownership exactly as T does"
     // `none` is a legal thing to reassign it to.
     try agreeClean(
         \\func main():
-        \\    var xs: List(Int)? = new List(Int)
+        \\    var xs: list(long)? = new list(long)
         \\    xs.append(1)
-        \\    xs = new List(Int)
+        \\    xs = new list(long)
         \\    xs.append(2)
         \\    xs = none
         \\    assert(xs == none)
@@ -1598,8 +1598,8 @@ test "optionals: a T? holding an object obeys scope ownership exactly as T does"
     // And an explicit free still works through the narrowed name.
     try agreeClean(
         \\func main():
-        \\    var xs: List(Int)? = none
-        \\    xs = new List(Int)
+        \\    var xs: list(long)? = none
+        \\    xs = new list(long)
         \\    free(xs)
         \\
     );
@@ -1607,14 +1607,14 @@ test "optionals: a T? holding an object obeys scope ownership exactly as T does"
 
 test "optionals: an object still moves out on return and into a give parameter" {
     try agreeClean(
-        \\func make(wanted: Bool) -> List(Int)?:
+        \\func make(wanted: bool) -> list(long)?:
         \\    if not wanted:
         \\        return none
-        \\    var fresh = new List(Int)
+        \\    var fresh = new list(long)
         \\    fresh.append(3)
         \\    return fresh
         \\
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    free(xs)
         \\
         \\func main():
@@ -1632,13 +1632,13 @@ test "optionals: an object still moves out on return and into a give parameter" 
 test "optionals: an object-carrying struct field may be absent and still frees" {
     try agreeClean(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)?
+        \\    label: string
+        \\    items: list(long)?
         \\
         \\func main():
         \\    var empty = Bag(label = "empty", items = none)
         \\    assert(empty.items == none)
-        \\    var full = Bag(label = "full", items = new List(Int))
+        \\    var full = Bag(label = "full", items = new list(long))
         \\    # A field is not a local, so it does not narrow (Dart's
         \\    # rule): bind it to a name and test that.
         \\    let held = full.items
@@ -1656,29 +1656,29 @@ test "optionals: the ownership rules still refuse what they refused" {
     // or not (S5, S21).
     try expectRejected(
         \\func main():
-        \\    let source = new List(Int)
-        \\    var kept: List(Int)? = none
+        \\    let source = new list(long)
+        \\    var kept: list(long)? = none
         \\    kept = source
         \\
     );
     // A borrowed parameter cannot be given away (S12).
     try expectRejected(
-        \\func steal(xs: List(Int)?) -> List(Int)?:
+        \\func steal(xs: list(long)?) -> list(long)?:
         \\    return xs
         \\
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    let taken = steal(xs)
         \\    free(xs)
         \\
     );
     // Poisoning survives the wrapper: a given name is untouchable.
     try expectRejected(
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    free(xs)
         \\
         \\func main():
-        \\    var xs: List(Int)? = new List(Int)
+        \\    var xs: list(long)? = new list(long)
         \\    consume(give xs)
         \\    assert(xs == none)
         \\
@@ -1687,8 +1687,8 @@ test "optionals: the ownership rules still refuse what they refused" {
 
 test "optionals: use after free still traps through a T?" {
     try agreeTrap(
-        \\func maybe() -> List(Int)?:
-        \\    var fresh = new List(Int)
+        \\func maybe() -> list(long)?:
+        \\    var fresh = new list(long)
         \\    return fresh
         \\
         \\func main():
@@ -1709,26 +1709,26 @@ test "optionals: use after free still traps through a T?" {
 test "audit: fill on arrays of objects is refused — one value cannot own every slot" {
     try expectRejected(
         \\func main():
-        \\    var arr = new Array(List(Int), 2)
+        \\    var arr = new array(list(long), 2)
         \\    arr.fill([9])
         \\
     );
     try expectRejected(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\func main():
-        \\    var arr = new Array(Bag, 2)
+        \\    var arr = new array(Bag, 2)
         \\    arr.fill(Bag(items = [1]))
         \\
     );
     // Value elements fill exactly as before.
     try agreeClean(
         \\func main():
-        \\    var arr = new Array(Int, 4)
+        \\    var arr = new array(long, 4)
         \\    arr.fill(7)
         \\    assert(arr[3] == 7)
-        \\    var cells = new Array(List(Int), 2)
+        \\    var cells = new array(list(long), 2)
         \\    cells[0] = [1]
         \\    cells[1] = [2]
         \\    assert(cells[1][0] == 2)
@@ -1747,7 +1747,7 @@ test "audit: list literals are container doors too (S21)" {
     // ...which keeps a borrowing callee from adopting the caller's
     // object (S11, S12).
     try expectRejected(
-        \\func keepit(hits: List(Int)):
+        \\func keepit(hits: list(long)):
         \\    var wrapped = [hits]
         \\
         \\func main():
@@ -1759,7 +1759,7 @@ test "audit: list literals are container doors too (S21)" {
     // Carrying structs need the verb here as well (S27).
     try expectRejected(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\func main():
         \\    var bag = Bag(items = [1])
@@ -1783,7 +1783,7 @@ test "audit: list literals are container doors too (S21)" {
 
 test "audit: the S30 guard sees while conditions" {
     try expectRejected(
-        \\func eat(xs: give List(Int)) -> Int:
+        \\func eat(xs: give list(long)) -> long:
         \\    return len(xs)
         \\
         \\func main():
@@ -1806,7 +1806,7 @@ test "audit: give in a borrow position has no owner to receive it" {
     // Non-adopting method arguments borrow.
     try expectRejected(
         \\func main():
-        \\    var xs = new List(List(Int))
+        \\    var xs = new list(list(long))
         \\    xs.append([1])
         \\    var ys = [1]
         \\    let same = xs.contains(give ys)
@@ -1865,7 +1865,7 @@ test "audit: reassigning the iterated name mid-loop is a compile error" {
     );
 }
 
-test "audit: a routed String method hands its object to the caller (S16, S22)" {
+test "audit: a routed string method hands its object to the caller (S16, S22)" {
     // `s.split(",")` is `strings.split(s, ",")` — a call, and a call's
     // result belongs to whoever receives it.  The classifier asks the
     // declaration's return type rather than a hand-kept list of method
@@ -1894,7 +1894,7 @@ test "audit: a routed String method hands its object to the caller (S16, S22)" {
         \\import std.strings
         \\
         \\func main():
-        \\    var rows = new List(List(String))
+        \\    var rows = new list(list(string))
         \\    rows.append("a,b".split(","))
         \\    assert(len(rows[0]) == 2)
         \\
@@ -1917,7 +1917,7 @@ test "audit: give and free of an outer name are refused in every loop shape (S30
             \\func main():
             \\    var xs = [1]
             \\    var probe = [1]
-            \\    var sink = new List(List(Int))
+            \\    var sink = new list(list(long))
             \\
         );
         try source.appendSlice(testing.allocator, body);
@@ -1929,7 +1929,7 @@ test "audit: give and free of an outer name are refused in every loop shape (S30
 // Value storage — docs/STRINGS.md
 // ---------------------------------------------------------------------------
 //
-// A String's bytes and a struct's field run have exactly one owner, and
+// A string's bytes and a struct's field run have exactly one owner, and
 // the tests below are run under `std.testing.allocator`: what a program
 // does not give back is a reported leak, and what it gives back twice
 // is a reported double free.  That is the whole proof, so every one of
@@ -1940,10 +1940,10 @@ test "storage: a returned view of a parameter comes out owned (S17 is an object 
     try agreeClean(
         \\import std.strings
         \\
-        \\func widen(s: String) -> String:
+        \\func widen(s: string) -> string:
         \\    return strings.trim(s)
         \\
-        \\func unchanged(s: String) -> String:
+        \\func unchanged(s: string) -> string:
         \\    return strings.replace(s, "", "!")
         \\
         \\func main():
@@ -1958,7 +1958,7 @@ test "storage: a returned view of a parameter comes out owned (S17 is an object 
 test "storage: a container owns the bytes it is handed, and frees them with itself" {
     try agreeClean(
         \\func main():
-        \\    var names = new List(String)
+        \\    var names = new list(string)
         \\    var seed = "ada"
         \\    names.append(seed)
         \\    names.append(seed + "-lovelace")
@@ -1975,10 +1975,10 @@ test "storage: a container owns the bytes it is handed, and frees them with itse
     );
 }
 
-test "storage: copy of a List(String) survives freeing the original (S31)" {
+test "storage: copy of a list(string) survives freeing the original (S31)" {
     try agreeClean(
         \\func main():
-        \\    var first = new List(String)
+        \\    var first = new list(string)
         \\    first.append("alpha")
         \\    first.append("be" + "ta")
         \\    var second = copy first
@@ -1996,9 +1996,9 @@ test "storage: copy of a List(String) survives freeing the original (S31)" {
 test "storage: a map owns its keys as well as its values" {
     try agreeClean(
         \\func main():
-        \\    var table = new Map(String, String)
-        \\    table["k" + String(1)] = "v1"
-        \\    table["k1"] = "v" + String(2)
+        \\    var table = new map(string, string)
+        \\    table["k" + string(1)] = "v1"
+        \\    table["k1"] = "v" + string(2)
         \\    table["k2"] = "v2"
         \\    assert(table["k1"] == "v2")
         \\    assert(len(table) == 2)
@@ -2019,8 +2019,8 @@ test "storage: a map owns its keys as well as its values" {
 test "storage: a struct field assigned twice frees what it replaced (S25, S26)" {
     try agreeClean(
         \\struct Tag:
-        \\    label: String
-        \\    count: Int
+        \\    label: string
+        \\    count: long
         \\
         \\func main():
         \\    var tag = Tag(label = "one", count = 1)
@@ -2052,18 +2052,18 @@ test "storage: reassignment reads the old bytes before releasing them (S5)" {
 test "storage: an element read stays valid across a call that empties its container" {
     // The residual hazard docs/STRINGS.md closes statically: `pieces[0]`
     // is a view of an element the second argument frees.  An object
-    // would go stale and trap (S9); a String has no handle, so the read
+    // would go stale and trap (S9); a string has no handle, so the read
     // is copied instead.
     try agreeClean(
-        \\func drop_first(pieces: List(String)) -> Int:
+        \\func drop_first(pieces: list(string)) -> long:
         \\    pieces.remove(0)
         \\    return 1
         \\
-        \\func measure(left: String, right: Int) -> Int:
+        \\func measure(left: string, right: long) -> long:
         \\    return len(left) + right
         \\
         \\func main():
-        \\    var pieces = new List(String)
+        \\    var pieces = new list(string)
         \\    pieces.append("first-piece")
         \\    pieces.append("second")
         \\    assert(measure(pieces[0], drop_first(pieces)) == 12)
@@ -2075,7 +2075,7 @@ test "storage: an element read stays valid across a call that empties its contai
 test "storage: a loop name that outlives a mutation of its collection keeps its own copy" {
     try agreeClean(
         \\func main():
-        \\    var words = new List(String)
+        \\    var words = new list(string)
         \\    words.append("aa")
         \\    words.append("bb")
         \\    words.append("cc")
@@ -2093,15 +2093,15 @@ test "storage: a loop name that outlives a mutation of its collection keeps its 
     );
 }
 
-test "storage: an Array of Strings and of structs owns every cell" {
+test "storage: an array of Strings and of structs owns every cell" {
     try agreeClean(
         \\struct Tag:
-        \\    label: String
-        \\    count: Int
+        \\    label: string
+        \\    count: long
         \\
         \\func main():
-        \\    var cells = new Array(String, 3)
-        \\    cells[0] = "x" + String(0)
+        \\    var cells = new array(string, 3)
+        \\    cells[0] = "x" + string(0)
         \\    cells[1] = cells[0]
         \\    cells[0] = "y"
         \\    assert(cells[0] == "y")
@@ -2110,7 +2110,7 @@ test "storage: an Array of Strings and of structs owns every cell" {
         \\    cells.fill("z")
         \\    assert(cells[1] == "z")
         \\    free(cells)
-        \\    var marks = new Array(Tag, 2)
+        \\    var marks = new array(Tag, 2)
         \\    marks[0] = Tag(label = "m0", count = 0)
         \\    marks[1] = marks[0]
         \\    assert(marks[1].label == "m0")
@@ -2126,10 +2126,10 @@ test "storage: a trap unwinds past every release and the bytes still come back" 
     // `std.testing.allocator` a missed sweep is a reported leak.
     try agreeTrap(
         \\struct Tag:
-        \\    label: String
-        \\    count: Int
+        \\    label: string
+        \\    count: long
         \\
-        \\func deeper(name: String) -> Int:
+        \\func deeper(name: string) -> long:
         \\    let held = name + "-held"
         \\    var tag = Tag(label = held, count = 1)
         \\    trap(tag.label)
@@ -2147,7 +2147,7 @@ test "storage: a loop that retains nothing allocates nothing that outlives it" {
         \\func main():
         \\    var total = 0
         \\    for i in range(0, 2000):
-        \\        let piece = "item-" + String(i) + ";"
+        \\        let piece = "item-" + string(i) + ";"
         \\        total += len(piece)
         \\    assert(total > 0)
         \\

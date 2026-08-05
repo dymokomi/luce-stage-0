@@ -151,9 +151,9 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 /// Parse a decimal integer literal, with the minus sign in front of it
 /// already folded in when there is one.
 ///
-/// The sign has to fold *before* the range check or `Int`'s minimum is
+/// The sign has to fold *before* the range check or `long`'s minimum is
 /// unwritable: `-9223372036854775808` lexes as a minus and a literal
-/// whose magnitude is one past the largest positive Int, so checking
+/// whose magnitude is one past the largest positive long, so checking
 /// the magnitude alone rejects the one number that most needs
 /// spelling.  Null means out of range.
 pub fn parseIntLiteral(text: []const u8, negated: bool) ?i64 {
@@ -185,10 +185,10 @@ pub fn parseFloatLiteral(text: []const u8) ?f64 {
 }
 
 /// An **integer** literal's text read as a float, because that is the
-/// type it landed on: `let x: Float = 7`.
+/// type it landed on: `let x: double = 7`.
 ///
 /// Reads the digits rather than converting `parseIntLiteral`'s result,
-/// so a literal too large for an `Int` still lands correctly on a
+/// so a literal too large for an `long` still lands correctly on a
 /// float that has room for it — and so the one rule "a literal is
 /// parsed at the width it lands on" has no exception for the integer
 /// spelling.  Null means malformed or not finite.
@@ -385,9 +385,9 @@ pub fn exitingStatement(statement: ast.Statement) ?[]const u8 {
 
 const testing = std.testing;
 
-test "Int's minimum parses only when the sign folds into the literal" {
-    // The magnitude alone is one past the largest positive Int, so
-    // checking it before applying the sign makes Int.min unwritable.
+test "long's minimum parses only when the sign folds into the literal" {
+    // The magnitude alone is one past the largest positive long, so
+    // checking it before applying the sign makes long.min unwritable.
     try testing.expectEqual(@as(?i64, null), parseIntLiteral("9223372036854775808", false));
     try testing.expectEqual(@as(?i64, std.math.minInt(i64)), parseIntLiteral("9223372036854775808", true));
     try testing.expectEqual(@as(?i64, std.math.maxInt(i64)), parseIntLiteral("9223372036854775807", false));
@@ -404,13 +404,13 @@ test "a float literal that is not finite is refused, and underflow is not" {
     try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense"));
 }
 
-test "an integer literal landing on a float reads its digits, not an Int" {
+test "an integer literal landing on a float reads its digits, not a long" {
     // The ordinary cases agree with parseIntLiteral, sign and all.
     try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false));
     try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true));
     try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true));
     // And the case that is the whole reason it reads the digits: a
-    // magnitude past Int's range is not an Int, but it is a perfectly
+    // magnitude past long's range is not a long, but it is a perfectly
     // ordinary float, and the type it landed on is the float.
     try testing.expectEqual(@as(?i64, null), parseIntLiteral("99999999999999999999", false));
     try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false));

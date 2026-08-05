@@ -5,19 +5,19 @@ the program. Debug builds report `file:line:column` and the call
 trace, out of the machine code you ship.
 
 ```luce trap
-func depth_three(values: List(Int)) -> Int:
+func depth_three(values: list(long)) -> long:
     return values[10]
 
-func depth_two(values: List(Int)) -> Int:
+func depth_two(values: list(long)) -> long:
     return depth_three(values)
 
-func depth_one(values: List(Int)) -> Int:
+func depth_one(values: list(long)) -> long:
     return depth_two(values)
 
 func main():
     var values = [1, 2, 3]
     print("before")
-    print(String(depth_one(values)))
+    print(string(depth_one(values)))
 ```
 
 ```output
@@ -31,14 +31,14 @@ loom: trap: index out of bounds [index_bounds]
 
 ## Arithmetic
 
-`Int` is checked. Overflow and division by zero are traps in every
+`long` is checked. Overflow and division by zero are traps in every
 build mode — there is no `--release` that turns them off.
 
 ```luce trap
 func main():
     let a = 4611686018427387904
     print("doubling")
-    print(String(a * 2))
+    print(string(a * 2))
 ```
 
 ```output
@@ -48,12 +48,12 @@ loom: trap: integer overflow [integer_overflow]
 ```
 
 ```luce trap
-func ratio(a: Int, b: Int) -> Int:
+func ratio(a: long, b: long) -> long:
     return a // b
 
 func main():
-    print(String(ratio(10, 2)))
-    print(String(ratio(10, 0)))
+    print(string(ratio(10, 2)))
+    print(string(ratio(10, 0)))
 ```
 
 ```output
@@ -67,9 +67,9 @@ loom: trap: division by zero [divide_by_zero]
 
 ```luce trap
 func main():
-    var xs: List(Int) = []
+    var xs: list(long) = []
     print("popping an empty list")
-    print(String(xs.pop()))
+    print(string(xs.pop()))
 ```
 
 ```output
@@ -80,9 +80,9 @@ loom: trap: pop from an empty list [empty_collection]
 
 ```luce trap
 func main():
-    var m = new Map(String, Int)
+    var m = new map(string, long)
     m["a"] = 1
-    print(String(m["b"]))
+    print(string(m["b"]))
 ```
 
 ```output
@@ -92,7 +92,7 @@ loom: trap: key not found in map [key_missing]
 
 ## Text
 
-Slicing a `String` checks UTF-8 boundaries, so a character cannot be
+Slicing a `string` checks UTF-8 boundaries, so a character cannot be
 cut in half.
 
 ```luce trap
@@ -137,11 +137,11 @@ with a message and a stack, never a segmentation fault. The trace
 keeps the innermost frames and counts the rest.
 
 ```luce trap
-func forever(n: Int) -> Int:
+func forever(n: long) -> long:
     return forever(n + 1)
 
 func main():
-    print(String(forever(0)))
+    print(string(forever(0)))
 ```
 
 ```output

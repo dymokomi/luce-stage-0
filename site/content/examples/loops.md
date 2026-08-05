@@ -5,7 +5,7 @@
 ```luce run
 func main():
     for i in range(0, 5):
-        print(String(i))
+        print(string(i))
 ```
 
 ```output
@@ -28,7 +28,7 @@ func main():
     for index, colour in colours:
         print(f"{index}: {colour}")
 
-    var counts = new Map(String, Int)
+    var counts = new map(string, long)
     counts["a"] = 1
     counts["b"] = 2
     for key in counts:
@@ -50,7 +50,7 @@ a = 1
 b = 2
 ```
 
-`while` takes a `Bool`, and `break` and `continue` do what you expect.
+`while` takes a `bool`, and `break` and `continue` do what you expect.
 Both of them free whatever the scopes they leave still own.
 
 ```luce run
@@ -75,7 +75,7 @@ Nested loops are ordinary loops. There are no labelled breaks; a flag
 or an early `return` covers it.
 
 ```luce run
-func find(grid: Array(Int, _, _), wanted: Int) -> Int:
+func find(grid: array(long, _, _), wanted: long) -> long:
     for row in range(0, grid.dim(0)):
         for column in range(0, grid.dim(1)):
             if grid[row, column] == wanted:
@@ -83,12 +83,12 @@ func find(grid: Array(Int, _, _), wanted: Int) -> Int:
     return -1
 
 func main():
-    var grid = new Array(Int, 3, 3)
+    var grid = new array(long, 3, 3)
     for row in range(0, 3):
         for column in range(0, 3):
             grid[row, column] = row * 3 + column
-    print(String(find(grid, 5)))
-    print(String(find(grid, 99)))
+    print(string(find(grid, 5)))
+    print(string(find(grid, 99)))
 ```
 
 ```output

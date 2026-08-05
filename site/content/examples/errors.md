@@ -5,16 +5,16 @@ world decided. A `-> T!` says a call may raise one; `try` passes it up
 and `catch` handles it here.
 
 ```luce run
-func parse_port(text: String) -> Int!:
+func parse_port(text: string) -> long!:
     let n = parse_int(text) else error(f"not a number: {text}")
     if n < 1 or n > 65535:
         error(f"port out of range: {n}")
     return n
 
 func main() -> !:
-    print(String(try parse_port("8080")))
-    print(String(parse_port("nope") catch -1))
-    print(String(parse_port("99999") catch -1))
+    print(string(try parse_port("8080")))
+    print(string(parse_port("nope") catch -1))
+    print(string(parse_port("99999") catch -1))
 ```
 
 ```output
@@ -29,20 +29,20 @@ func main() -> !:
 does, with one terminator changed. It needs a caller that said `!`.
 
 ```luce run
-func inner(n: Int) -> Int!:
+func inner(n: long) -> long!:
     if n == 0:
         error("inner refuses zero")
     return 100 // n
 
-func middle(n: Int) -> Int!:
+func middle(n: long) -> long!:
     return try inner(n) + 1
 
-func outer(n: Int) -> Int!:
+func outer(n: long) -> long!:
     return try middle(n) * 2
 
 func main() -> !:
-    print(String(try outer(5)))
-    print(String(outer(0) catch -1))
+    print(string(try outer(5)))
+    print(string(outer(0) catch -1))
 ```
 
 ```output
@@ -54,7 +54,7 @@ Forgetting to say which you meant is a compile error. There is no
 spelling that ignores the outcome.
 
 ```luce fail
-func risky() -> Int!:
+func risky() -> long!:
     error("no")
 
 func main():
@@ -104,14 +104,14 @@ and the stack is its diagnosis, but an error is news and where it came
 from is the news.
 
 ```luce raise
-func check(value: Int) -> Int!:
+func check(value: long) -> long!:
     if value > 100:
         error(f"{value} is too large")
     return value
 
 func main() -> !:
-    print(String(try check(50)))
-    print(String(try check(500)))
+    print(string(try check(50)))
+    print(string(try check(500)))
 ```
 
 ```output
@@ -123,7 +123,7 @@ loom: error: 500 is too large [user_error]
 ## The worked example
 
 `programs/calc.luc` in the repository is a recursive-descent
-calculator — a `Float` one, because `/` is real division and a pocket
+calculator — a `double` one, because `/` is real division and a pocket
 calculator that answers `3` to `7 / 2` is broken. Every way it can be
 defeated is a way the *user* defeated it, so the parser says
 `-> Step!` and raises with `error(...)`; `try` carries the failure up

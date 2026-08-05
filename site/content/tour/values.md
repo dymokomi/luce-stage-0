@@ -2,15 +2,15 @@
 
 Every expression in Luce has one type, known when the program is
 compiled. Annotations are optional wherever the initializer decides
-the answer: `let n = 1` is an `Int`, and `let n: Int = 1` says so out
+the answer: `let n = 1` is an `long`, and `let n: long = 1` says so out
 loud.
 
 ```luce run
 func main():
-    let count = 7                 # Int
-    let ratio: Float = 0.5        # said out loud
-    let ready = true              # Bool
-    let name = "loom"             # String
+    let count = 7                 # long
+    let ratio: double = 0.5        # said out loud
+    let ready = true              # bool
+    let name = "loom"             # string
     print(f"{count} {ratio} {ready} {name}")
 ```
 
@@ -22,35 +22,35 @@ func main():
 
 | Type | What it is |
 |---|---|
-| `Bool` | `true` or `false`. No truthiness: nothing else is a condition. |
-| `Int` | A signed 64-bit integer, **checked**: overflow is a trap, not a wrap. |
-| `Float` | IEEE 754 double precision. |
-| `String` | Immutable UTF-8 text. A value, not an object. |
+| `bool` | `true` or `false`. No truthiness: nothing else is a condition. |
+| `long` | A signed 64-bit integer, **checked**: overflow is a trap, not a wrap. |
+| `double` | IEEE 754 double precision. |
+| `string` | Immutable UTF-8 text. A value, not an object. |
 
 Number literals are decimal. A fraction or an exponent makes a
-`Float`: `12` is an `Int`, `1.5` and `1e10` and `1.5e-3` are `Float`s.
+`double`: `12` is an `long`, `1.5` and `1e10` and `1.5e-3` are `double`s.
 There are no hexadecimal, binary or octal literals and no `_` digit
 separators — writing one is a `luce.lex.number` error naming the
 reason, rather than a silent misreading.
 
-## `Int` widens to `Float`, and never the other way
+## `long` widens to `double`, and never the other way
 
-Mix an `Int` and a `Float` and the `Int` widens: the answer is a
-`Float`, wherever the two meet — an operator, an annotation, an
+Mix an `long` and a `double` and the `long` widens: the answer is a
+`double`, wherever the two meet — an operator, an annotation, an
 argument, a return, a field, a list element. It is the one conversion
 Luce makes without being asked, and it goes in one direction only.
-Nothing narrows a `Float` to an `Int` on its own, so a `Float` that
+Nothing narrows a `double` to an `long` on its own, so a `double` that
 wandered somewhere it should not be is a compile error at the first
-place an `Int` is required, not a silent truncation.
+place an `long` is required, not a silent truncation.
 
 ```luce run
 func main():
     let steps = 7
     let seconds = 2.5
-    print(String(steps * seconds))
-    let elapsed: Float = steps
-    print(String(elapsed))
-    print(String(Int(seconds)))       # asked for, and it rounds
+    print(string(steps * seconds))
+    let elapsed: double = steps
+    print(string(elapsed))
+    print(string(long(seconds)))       # asked for, and it rounds
 ```
 
 ```output
@@ -62,13 +62,13 @@ func main():
 Comparison crosses the line too — and it is **exact**. `1 < 1.5` is
 `true`; so is `9007199254740993 != 9007199254740992.0`, because those
 really are two different numbers even though the first does not
-survive being turned into a `Float`. Luce compares the numbers, not a
+survive being turned into a `double`. Luce compares the numbers, not a
 conversion of them.
 
 ```luce run
 func main():
-    print(String(1 < 1.5))
-    print(String(9007199254740993 == 9007199254740992.0))
+    print(string(1 < 1.5))
+    print(string(9007199254740993 == 9007199254740992.0))
 ```
 
 ```output
@@ -78,7 +78,7 @@ false
 
 ## Arithmetic is checked
 
-`Int` arithmetic traps on overflow and on division by zero. There is
+`long` arithmetic traps on overflow and on division by zero. There is
 no build mode in which it does not — Luce is always what Zig would
 call `ReleaseSafe`.
 
@@ -87,7 +87,7 @@ func main():
     var n = 9223372036854775807
     print("about to add one")
     n += 1
-    print(String(n))
+    print(string(n))
 ```
 
 ```output
@@ -98,7 +98,7 @@ loom: trap: integer overflow [integer_overflow]
 
 ## `/` divides, `//` quotients
 
-`/` is real division and always answers a `Float` — `1 / 2` is `0.5`,
+`/` is real division and always answers a `double` — `1 / 2` is `0.5`,
 not `0`. The quotient people mean when they say "integer division" is
 `//`, and `%` is the modulus that pairs with it: they **floor**
 together, so `%` takes the sign of the divisor and
@@ -106,10 +106,10 @@ together, so `%` takes the sign of the divisor and
 
 ```luce run
 func main():
-    print(String(1 / 2))
-    print(String(7 // 2) + " " + String(7 % 2))
-    print(String(-7 // 3) + " " + String(-7 % 3))
-    print(String(-1 % 256))
+    print(string(1 / 2))
+    print(string(7 // 2) + " " + string(7 % 2))
+    print(string(-7 // 3) + " " + string(-7 % 3))
+    print(string(-1 % 256))
 ```
 
 ```output
@@ -124,9 +124,9 @@ negative answer, so `x % 256` wraps a byte for every `x` and
 `(row - 1) % height` walks a torus, without the `+ height` other
 languages need.
 
-`//` and `%` by zero are traps, because they answer an `Int` and
-there is no `Int` that means "undefined". `/` answers a `Float` and is
-IEEE like every other `Float` operation: `1 / 0` is `inf` and `0 / 0`
+`//` and `%` by zero are traps, because they answer an `long` and
+there is no `long` that means "undefined". `/` answers a `double` and is
+IEEE like every other `double` operation: `1 / 0` is `inf` and `0 / 0`
 is NaN, neither of them a trap.
 
 ## let and var
@@ -139,7 +139,7 @@ what the name points at — `let` is JavaScript's `const`, not Swift's
 func main():
     let limit = 10
     limit = 11
-    print(String(limit))
+    print(string(limit))
 ```
 
 ```output
@@ -159,9 +159,9 @@ Compound assignment applies an operator in place — `n += 1`, `n *= 2`,
 
 ## Booleans and comparison
 
-`and`, `or` and `not` short-circuit and take `Bool`s only. The
-comparisons are `== != < <= > >=`, and they order `Int`, `Float` and
-`String`.
+`and`, `or` and `not` short-circuit and take `bool`s only. The
+comparisons are `== != < <= > >=`, and they order `long`, `double` and
+`string`.
 
 Two shapes that mean different things in different languages are
 refused rather than guessed at, and both are fixed by one pair of
@@ -175,13 +175,13 @@ func main():
     let a = 1
     let b = 2
     let c = 3
-    print(String(a < b < c))
+    print(string(a < b < c))
 ```
 
 ```output
 luce: compile failed
 main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
-        print(String(a < b < c))
+        print(string(a < b < c))
                            ^
 ```
 
@@ -199,7 +199,7 @@ let banner = "loom v" + version
 
 func main():
     print(banner)
-    print(String(half))
+    print(string(half))
 ```
 
 ```output
@@ -210,13 +210,13 @@ loom v2
 Constants may reference each other in any order, but never in a cycle.
 What may be folded is literals, other constants, arithmetic,
 comparisons, `and`/`or`, string concatenation, the three conversion
-constructors `Int()`, `Float()` and `String()`, and value-struct
+constructors `long()`, `double()` and `string()`, and value-struct
 construction. **Calls are not constant**, and neither are heap
 objects, because a top-level binding has no scope to die at and
 therefore cannot own one:
 
 ```luce fail
-func label() -> String:
+func label() -> string:
     return "loom"
 
 let banner = label() + " v2"

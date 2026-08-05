@@ -46,10 +46,10 @@ fn compileScript(source: []const u8) !mir.Program {
 test "interpreter memory is bounded by depth and data, not by calls made" {
     var program = try compileScript(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
-        \\func nudge(p: Point) -> Int:
+        \\func nudge(p: Point) -> long:
         \\    var scratch: Point
         \\    scratch.x = p.x + 1
         \\    return scratch.x + p.y
@@ -93,7 +93,7 @@ test "the explicit frame stack survives deep recursion" {
     // promise a different way — it counts frames — and `specs/` is
     // where the two are compared.
     var program = try compileScript(
-        \\func dive(left: Int) -> Int:
+        \\func dive(left: long) -> long:
         \\    if left == 0:
         \\        return 0
         \\    return dive(left - 1)

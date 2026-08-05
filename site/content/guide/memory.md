@@ -17,7 +17,7 @@ temporary lives exactly as long as the statement that made it. `let y
 storing it in a container or struct, or handing it to a parameter that
 says `give` — takes a word from you, `give` (transfer) or `copy`
 (duplicate). `return` moves. `free(x)` is an early release. Values —
-`Int`, `Float`, `Bool`, `String`, and object-free structs — never take
+`long`, `double`, `bool`, `string`, and object-free structs — never take
 a word at all.
 
 That is the whole thing. It is ratified as
@@ -101,13 +101,13 @@ had been linear.
 
 ## Values give memory back too
 
-The harder half was values, and in particular `String`. A `String`'s
+The harder half was values, and in particular `string`. A `string`'s
 bytes used to live in a run-lifetime arena and were never reclaimed,
 so a program that built and discarded text grew without bound even
 though it retained nothing.
 
 What fixed it is the language's own claim made literal: **values
-copy**. A `String`'s bytes and a struct's field run have exactly one
+copy**. A `string`'s bytes and a struct's field run have exactly one
 owner, and any store into something that outlives the current
 statement copies them, so no owner ever holds a view of bytes it did
 not allocate.
@@ -144,23 +144,23 @@ the rest of that story, including the row it cost.
 
 ```luce run
 struct Report:
-    title: String
-    lines: List(String)
+    title: string
+    lines: list(string)
 
-func build(title: String, count: Int) -> Report:
-    var lines: List(String) = []
+func build(title: string, count: long) -> Report:
+    var lines: list(string) = []
     for i in range(0, count):
         lines.append(f"line {i}")
     return Report(title = title, lines = give lines)
 
-func summarise(report: Report) -> String:
+func summarise(report: Report) -> string:
     return f"{report.title}: {len(report.lines)} lines"
 
 func main():
     var report = build("first", 3)
     print(summarise(report))
 
-    var archive = new List(Report)
+    var archive = new list(Report)
     archive.append(give report)
     archive.append(build("second", 5))
 

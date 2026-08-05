@@ -5,12 +5,12 @@ A file is a module, like Zig. `import name` binds the sibling file
 
 ```luce module file=geometry.luc
 struct Point:
-    x: Float
-    y: Float
+    x: double
+    y: double
 
 let unit = 1.0
 
-func distance(a: Point, b: Point) -> Float:
+func distance(a: Point, b: Point) -> double:
     let dx = a.x - b.x
     let dy = a.y - b.y
     return sqrt(dx * dx + dy * dy)
@@ -22,8 +22,8 @@ import geometry
 func main():
     let a = geometry.Point(x = 0.0, y = 0.0)
     let b = geometry.Point(x = 3.0, y = 4.0)
-    print(String(geometry.distance(a, b)))
-    print(String(geometry.unit))
+    print(string(geometry.distance(a, b)))
+    print(string(geometry.unit))
 ```
 
 ```output
@@ -60,7 +60,7 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 5))
-    print(String(math.ipow(2, 10)))
+    print(string(math.ipow(2, 10)))
     print(strings.format_float(math.ln(math.e), 1))
 
     var rng = math.Rng(state = 42)

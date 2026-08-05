@@ -1,6 +1,6 @@
 # std.strings
 
-The language keeps the `String` primitives — literals and f-strings,
+The language keeps the `string` primitives — literals and f-strings,
 `+`, comparison, boundary-checked slices `s[a:b]`, `len(s)`,
 `s.byte_at(i)` and `s.find_byte(byte, start)`. Everything built on top
 of them is ordinary Luce in this module.
@@ -11,7 +11,7 @@ import std.strings
 
 The familiar method spelling is sugar for it: with the import in
 scope, `s.find(x)` **is** `strings.find(s, x)`, and
-`parts.join(sep)` is `strings.join(parts, sep)`. Using a String method
+`parts.join(sep)` is `strings.join(parts, sep)`. Using a string method
 without the import is a compile error that says so.
 
 All offsets are **byte** offsets, like the primitives. The module
@@ -22,23 +22,23 @@ match positions of valid UTF-8 needles.
 
 | Signature | Returns |
 |---|---|
-| `strings.find(s, needle) -> Int` | first byte offset, or `-1` |
-| `strings.find_from(s, needle, start) -> Int` | first occurrence at or after `start` |
-| `strings.contains(s, needle) -> Bool` | |
-| `strings.starts_with(s, prefix) -> Bool` | |
-| `strings.ends_with(s, suffix) -> Bool` | |
-| `strings.count(s, needle) -> Int` | non-overlapping occurrences |
+| `strings.find(s, needle) -> long` | first byte offset, or `-1` |
+| `strings.find_from(s, needle, start) -> long` | first occurrence at or after `start` |
+| `strings.contains(s, needle) -> bool` | |
+| `strings.starts_with(s, prefix) -> bool` | |
+| `strings.ends_with(s, suffix) -> bool` | |
+| `strings.count(s, needle) -> long` | non-overlapping occurrences |
 
 ```luce run
 import std.strings
 
 func main():
     let path = "src/luce/std/strings.luc"
-    print(String(path.find("/")))
-    print(String(path.find_from("/", 4)))
-    print(String(path.find("nowhere")))
+    print(string(path.find("/")))
+    print(string(path.find_from("/", 4)))
+    print(string(path.find("nowhere")))
     print(f"{path.contains("std")} {path.starts_with("src")} {path.ends_with(".luc")}")
-    print(String(path.count("/")))
+    print(string(path.count("/")))
 ```
 
 ```output
@@ -53,10 +53,10 @@ true true true
 
 | Signature | Notes |
 |---|---|
-| `strings.trim(s) -> String` | ASCII whitespace off both ends |
+| `strings.trim(s) -> string` | ASCII whitespace off both ends |
 | `strings.lower(s)`, `strings.upper(s)` | ASCII folding; multibyte characters pass through whole |
-| `strings.replace(s, old, replacement) -> String` | every occurrence; an empty `old` changes nothing |
-| `strings.repeat(s, times) -> String` | zero or fewer gives `""` |
+| `strings.replace(s, old, replacement) -> string` | every occurrence; an empty `old` changes nothing |
+| `strings.repeat(s, times) -> string` | zero or fewer gives `""` |
 | `strings.pad_left(s, width)`, `strings.pad_right(s, width)` | space-padded to `width` bytes |
 
 ```luce run
@@ -85,11 +85,11 @@ Mixed CASE words
 
 | Signature | Notes |
 |---|---|
-| `strings.split(s, separator) -> List(String)` | keeps empty pieces; an empty separator splits on whitespace runs and drops the empties, which is Python's `split()` |
-| `strings.join(parts, separator) -> String` | |
+| `strings.split(s, separator) -> list(string)` | keeps empty pieces; an empty separator splits on whitespace runs and drops the empties, which is Python's `split()` |
+| `strings.join(parts, separator) -> string` | |
 
-`split` hands back a fresh **object** — a `List(String)` the receiver
-owns and must give away or free. `join` hands back a `String`, which
+`split` hands back a fresh **object** — a `list(string)` the receiver
+owns and must give away or free. `join` hands back a `string`, which
 is a **value**: it copies like any other, and there is nothing to own.
 That distinction is the one the whole
 [memory model](/ref/ownership/) rests on.
@@ -115,13 +115,13 @@ func main():
 
 ## Formatting
 
-`strings.format_float(x, decimals) -> String` gives fixed-point
-display, rounding half away from zero. `String(x)` gives the shortest
+`strings.format_float(x, decimals) -> string` gives fixed-point
+display, rounding half away from zero. `string(x)` gives the shortest
 form that round-trips.
 
 **An f-string spec is this function**: `f"{x:.2f}"` *is*
 `strings.format_float(x, 2)`, which is why a spec needs this import
-like any other String service. Write the call where a format is not
+like any other string service. Write the call where a format is not
 in a string; write the spec where it is.
 
 It is for **display of ordinary magnitudes**, and it says so at both
@@ -131,7 +131,7 @@ edges rather than pretending otherwise:
   count is not a request this function can round; it is a bug at the
   call site.
 - above about 1e15 there are no fractional digits left to print, so it
-  falls back to `String(value)` — `format_float(1.0e20, 2)` is
+  falls back to `string(value)` — `format_float(1.0e20, 2)` is
   `100000000000000000000`, with no `.00`.
 
 ```luce trap
@@ -157,7 +157,7 @@ func main():
     print(strings.format_float(1.0 / 3.0, 5))
     print(strings.format_float(-2.345, 2))
     print(strings.format_float(9.99, 0))
-    print(String(1.0 / 3.0))
+    print(string(1.0 / 3.0))
 ```
 
 ```output
@@ -175,7 +175,7 @@ byte with `find_byte` and only then compares the rest, so the scan
 itself is **one runtime call the implementation may vectorize** rather
 than a Luce loop over `byte_at`. And `fold_case`, which `lower` and
 `upper` build on, emits folded bytes with `append_ascii`, which needs
-no `String` per character.
+no `string` per character.
 
 That is why searching is a language primitive at all: not because it
 is hard, but because it is the seam where a vectorized implementation
@@ -183,7 +183,7 @@ enters.
 
 ## The one sentinel
 
-`find` and `find_from` answer `-1` for "not found". `Int?` exists now,
+`find` and `find_from` answer `-1` for "not found". `long?` exists now,
 so the sentinel is a wart with nothing holding it up — and
 `find_from` overloads it: a `start` below zero or past the end of the
 string answers `-1` too, which is an *argument* error and not the same

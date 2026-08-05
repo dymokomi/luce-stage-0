@@ -350,7 +350,7 @@ test "a terminator may only name a block that exists" {
     try testing.expectError(error.BadBlock, verify_mod.verify(testing.allocator, &branching));
     branching.functions[0].instructions[1].branch.else_block = 1;
 
-    // A branch decides on a Bool and on nothing else.
+    // A branch decides on a bool and on nothing else.
     branching.functions[0].instructions[0] = .{ .const_int = 1 };
     branching.functions[0].result_types[0] = .int;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &branching));
@@ -510,7 +510,7 @@ test "a call agrees with the callee it names, argument for argument" {
 
     const functions = try arena.alloc(Function, 2);
     const arguments = try arena.dupe(Register, &.{0});
-    // f0: main — calls f1 with one Int.
+    // f0: main — calls f1 with one long.
     functions[0] = .{
         .name = "main",
         .parameter_count = 0,
@@ -526,7 +526,7 @@ test "a call agrees with the callee it names, argument for argument" {
             .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
         }),
     };
-    // f1: twice(value: Int) -> Int
+    // f1: twice(value: long) -> long
     functions[1] = .{
         .name = "twice",
         .parameter_count = 1,

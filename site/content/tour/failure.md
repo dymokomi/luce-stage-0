@@ -1,7 +1,7 @@
 # Failure
 
 A trailing `!` on a return type says the call may not succeed.
-`String!` hands back a `String` **or** an error, and a bare `-> !`
+`string!` hands back a `string` **or** an error, and a bare `-> !`
 hands back nothing or an error.
 
 `!` means failure and only failure. It is never spent on absence,
@@ -56,7 +56,7 @@ has two forms, for the two shapes recovery takes.
 ```luce run
 import std.files
 
-func save(path: String, text: String) -> !:
+func save(path: string, text: string) -> !:
     try files.write(path, text)
     print(f"wrote {path}")
 
@@ -92,13 +92,13 @@ hands over a fresh object, the fallback must too.
 ## error raises, with your own words
 
 ```luce run
-func check(n: Int) -> Int!:
+func check(n: long) -> long!:
     if n < 0:
         error(f"negative: {n}")
     return n
 
 func main() -> !:
-    print(String(try check(5)))
+    print(string(try check(5)))
     let fallback = check(-1) catch 0
     print(f"fallback {fallback}")
 ```
@@ -114,21 +114,21 @@ where a value belongs: `parse_int(digits) else error("not a number")`.
 ## T! is not a type
 
 Fallibility is an attribute of the *function*. There is no `T!` to
-declare a variable of, put in a `List`, or write in a struct field —
+declare a variable of, put in a `list`, or write in a struct field —
 and `return x` in a `-> T!` function just returns `x`, with nothing to
 wrap it in.
 
 ```luce fail
 func main():
-    var results: List(Int!) = []
-    print(String(len(results)))
+    var results: list(long!) = []
+    print(string(len(results)))
 ```
 
 ```output
 luce: compile failed
-main.luc:2:26: expected ')' to close '(', found '!' [luce.parse.expected]
-        var results: List(Int!) = []
-                             ^
+main.luc:2:27: expected ')' to close '(', found '!' [luce.parse.expected]
+        var results: list(long!) = []
+                              ^
 ```
 
 ## What an uncaught error looks like
@@ -153,15 +153,15 @@ trace would also charge the *success* path for it.
 Compare a trap, which does print the stack:
 
 ```luce trap
-func inner(values: List(Int)) -> Int:
+func inner(values: list(long)) -> long:
     return values[9]
 
-func outer(values: List(Int)) -> Int:
+func outer(values: list(long)) -> long:
     return inner(values)
 
 func main():
     var values = [1, 2, 3]
-    print(String(outer(values)))
+    print(string(outer(values)))
 ```
 
 ```output

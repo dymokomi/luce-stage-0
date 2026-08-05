@@ -113,8 +113,8 @@ pub const Type = union(enum) {
     }
 };
 
-/// The shape of one heap object type: what a List holds, a Map's key
-/// and value, an Array's element and rank, or a Builder.
+/// The shape of one heap object type: what a list holds, a map's key
+/// and value, an array's element and rank, or a builder.
 pub const HeapType = union(enum) {
     list: Type,
     map: struct { key: Type, value: Type },
@@ -179,10 +179,10 @@ pub const Builtin = enum {
 /// a struct of the reader's own, or a mistake.
 ///
 /// **Lowercase names are the language's; TitleCase names are yours**
-/// (docs/TYPES.md D8).  The TitleCase spellings below are the ones the
-/// language shipped with and are on their way out: every one of them
-/// is renamed across the tree in the step after this, and these rows
-/// go with them.
+/// (docs/TYPES.md D8), which is what makes the case of a type name say
+/// who defined it.  There are no TitleCase builtins and no aliases for
+/// the ones there used to be: a program that writes `Int` is told the
+/// name is `long`, by `failUnknownType`, once.
 pub fn builtinNamed(text: []const u8) ?Builtin {
     for (builtin_table) |entry| {
         if (std.mem.eql(u8, text, entry.name)) return entry.is;
@@ -199,17 +199,33 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "map", .is = .map },
     .{ .name = "array", .is = .array },
     .{ .name = "builder", .is = .builder },
-    // Retiring, and every one of these rows is deleted by the rename
-    // step (docs/TYPES.md, Order 3).
-    .{ .name = "Bool", .is = .boolean },
-    .{ .name = "Int", .is = .long },
-    .{ .name = "Float", .is = .double },
-    .{ .name = "String", .is = .string },
-    .{ .name = "List", .is = .list },
-    .{ .name = "Map", .is = .map },
-    .{ .name = "Array", .is = .array },
-    .{ .name = "Builder", .is = .builder },
 };
+
+/// The lowercase name a retired TitleCase spelling is written with
+/// now, or null when the name was never one of the language's.
+///
+/// The two resized names are the reason this exists rather than a
+/// suggestion by edit distance: nothing spells `long` closely enough
+/// to `Int` for a did-you-mean to find it, and a reader whose only
+/// mistake is remembering the older name should be told the newer one
+/// outright.  It is also the sentence the whole tree's migration
+/// hangs on, so it names both halves.
+pub fn retiredSpelling(text: []const u8) ?[]const u8 {
+    const retired = [_]struct { was: []const u8, now: []const u8 }{
+        .{ .was = "Int", .now = "long" },
+        .{ .was = "Float", .now = "double" },
+        .{ .was = "Bool", .now = "bool" },
+        .{ .was = "String", .now = "string" },
+        .{ .was = "List", .now = "list" },
+        .{ .was = "Map", .now = "map" },
+        .{ .was = "Array", .now = "array" },
+        .{ .was = "Builder", .now = "builder" },
+    };
+    for (retired) |entry| {
+        if (std.mem.eql(u8, text, entry.was)) return entry.now;
+    }
+    return null;
+}
 
 /// The builtin a **conversion constructor** produces, or null when the
 /// name is not one.  A conversion is named for the type it produces
@@ -236,7 +252,7 @@ pub const builtin_names = names: {
 
 /// The written name of a type, for diagnostics.  Struct names resolve
 /// through the layout table; heap type names render recursively
-/// (`List(Int)`, `Map(String, List(Int))`, `Array(Float, _, _)`), an
+/// (`list(long)`, `map(string, list(long))`, `array(double, _, _)`), an
 /// optional takes the `?` it is written with, so the caller supplies
 /// an allocator and owns the result.
 pub fn typeName(
@@ -260,31 +276,31 @@ fn writeTypeName(
 ) error{OutOfMemory}!void {
     switch (of) {
         .none => try written.appendSlice(allocator, "None"),
-        .boolean => try written.appendSlice(allocator, "Bool"),
-        .int => try written.appendSlice(allocator, "Int"),
-        .float => try written.appendSlice(allocator, "Float"),
-        .string => try written.appendSlice(allocator, "String"),
+        .boolean => try written.appendSlice(allocator, "bool"),
+        .int => try written.appendSlice(allocator, "long"),
+        .float => try written.appendSlice(allocator, "double"),
+        .string => try written.appendSlice(allocator, "string"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
         .heap => |index| switch (heap_types[index]) {
             .list => |element| {
-                try written.appendSlice(allocator, "List(");
+                try written.appendSlice(allocator, "list(");
                 try writeTypeName(written, allocator, layouts, heap_types, element);
                 try written.appendSlice(allocator, ")");
             },
             .map => |pair| {
-                try written.appendSlice(allocator, "Map(");
+                try written.appendSlice(allocator, "map(");
                 try writeTypeName(written, allocator, layouts, heap_types, pair.key);
                 try written.appendSlice(allocator, ", ");
                 try writeTypeName(written, allocator, layouts, heap_types, pair.value);
                 try written.appendSlice(allocator, ")");
             },
             .array => |shape| {
-                try written.appendSlice(allocator, "Array(");
+                try written.appendSlice(allocator, "array(");
                 try writeTypeName(written, allocator, layouts, heap_types, shape.element);
                 for (0..shape.rank) |_| try written.appendSlice(allocator, ", _");
                 try written.appendSlice(allocator, ")");
             },
-            .builder => try written.appendSlice(allocator, "Builder"),
+            .builder => try written.appendSlice(allocator, "builder"),
         },
         .optional => |payload| {
             try writeTypeName(written, allocator, layouts, heap_types, payload.asType());
@@ -317,12 +333,12 @@ test "an optional is its payload plus one level, and never two" {
     try std.testing.expect(Type.optionalOf(.{ .strukt = 2 }).?.eql(.{ .optional = .{ .strukt = 2 } }));
     try std.testing.expect(!Type.optionalOf(.{ .strukt = 2 }).?.eql(.{ .optional = .{ .strukt = 3 } }));
 
-    // An `Int?` is not a number: arithmetic needs it narrowed first.
+    // A `long?` is not a number: arithmetic needs it narrowed first.
     try std.testing.expect(!maybe_int.isNumeric());
 }
 
 test "an optional type writes the ? it was written with" {
     const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .int }}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
-    try std.testing.expectEqualStrings("List(Int)?", written);
+    try std.testing.expectEqualStrings("list(long)?", written);
 }

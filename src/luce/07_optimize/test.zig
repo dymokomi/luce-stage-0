@@ -98,9 +98,9 @@ fn countTag(program: *const Program, tag: std.meta.Tag(mir.Instruction)) usize {
 test "ownership drops the temporary's bind and its inert release" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(len(xs)))
+        \\    print(string(len(xs)))
         \\
     );
     defer program.deinit();
@@ -125,15 +125,15 @@ test "ownership leaves a bind alone across a call" {
     // free anything it is passed, so the window closes and both the
     // bind and the release stay.
     var program = try compileRaw(
-        \\func take(v: give List(Int)) -> Int:
+        \\func take(v: give list(long)) -> long:
         \\    let n = len(v)
         \\    free(v)
         \\    return n
         \\
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(take(give(xs))))
+        \\    print(string(take(give(xs))))
         \\
     );
     defer program.deinit();
@@ -148,9 +148,9 @@ test "ownership leaves a bind alone across a call" {
 test "dead code sweeps unread values and compacts the pool" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(len(xs)))
+        \\    print(string(len(xs)))
         \\
     );
     defer program.deinit();
@@ -186,7 +186,7 @@ test "the whole stage shrinks a program and leaves it verifiable" {
         \\    var total = 0
         \\    for word in words:
         \\        total = total + len(word) + len(word)
-        \\    print(String(total))
+        \\    print(string(total))
         \\
     ;
     var program = try compileRaw(source);
@@ -203,12 +203,12 @@ test "the whole stage shrinks a program and leaves it verifiable" {
 test "running the stage twice changes nothing the second time" {
     var program = try compileRaw(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    var index = 0
         \\    while index < 5:
         \\        xs.append(index * index)
         \\        index = index + 1
-        \\    print(String(len(xs)))
+        \\    print(string(len(xs)))
         \\
     );
     defer program.deinit();
@@ -226,29 +226,29 @@ test "running the stage twice changes nothing the second time" {
 test "every pass on its own leaves verifiable MIR" {
     const sources = [_][]const u8{
         \\func main():
-        \\    let m = new Map(String, Int)
+        \\    let m = new map(string, long)
         \\    m["a"] = 1
         \\    if m.has("a"):
-        \\        print(String(m["a"]))
+        \\        print(string(m["a"]))
         \\
         ,
-        \\func fib(n: Int) -> Int:
+        \\func fib(n: long) -> long:
         \\    if n < 2:
         \\        return n
         \\    return fib(n - 1) + fib(n - 2)
         \\
         \\func main():
-        \\    print(String(fib(10)))
+        \\    print(string(fib(10)))
         \\
         ,
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
         \\    p.x = p.x + p.y
-        \\    print(String(p.x))
+        \\    print(string(p.x))
         \\
     };
     const each = [_]optimize.Passes{
@@ -282,7 +282,7 @@ test "every pass on its own leaves verifiable MIR" {
 // produces them, and pinning them here is what stops a later lowering
 // from producing one against a pass that quietly stopped checking.
 
-/// A one-function program with one `List(Int)` heap row, built by
+/// A one-function program with one `list(long)` heap row, built by
 /// hand.  `locals` and the instruction list are duplicated into the
 /// program's arena, and everything lands in a single block.
 fn handBuilt(
@@ -328,7 +328,7 @@ test "ownership keeps the release that follows a real release" {
     // freed and every other handle to them is stale, so nothing after
     // it may be judged against what was known before it.
     //
-    //   r0 = heap_new List(Int)
+    //   r0 = heap_new list(long)
     //   object_bind   %0, r0     # %0 owns it
     //   object_unbind %0, r0     # ... and gives it back: a real free
     //   object_unbind %1, r0     # a different name, on a stale handle
@@ -510,7 +510,7 @@ test "ownership leaves a program with nothing to rewrite byte for byte alone" {
         \\    while index < 5:
         \\        total = total + index
         \\        index = index + 1
-        \\    print(String(total))
+        \\    print(string(total))
         \\
     );
     defer program.deinit();
@@ -529,17 +529,17 @@ test "prune keeps everything the entry can reach, however it reaches it" {
     // the program it was given — same functions, same order, same
     // entry, and the same MIR down to the printed byte.
     var program = try compileRaw(
-        \\func odd(n: Int) -> Bool:
+        \\func odd(n: long) -> bool:
         \\    if n == 0:
         \\        return false
         \\    return even(n - 1)
         \\
-        \\func even(n: Int) -> Bool:
+        \\func even(n: long) -> bool:
         \\    if n == 0:
         \\        return true
         \\    return odd(n - 1)
         \\
-        \\func label(n: Int) -> String:
+        \\func label(n: long) -> string:
         \\    if even(n):
         \\        return "even"
         \\    return "odd"

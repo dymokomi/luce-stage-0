@@ -11,11 +11,11 @@
 //! **The pattern this removes.**  Every fresh object is parked in a
 //! hidden temporary first, so the end of the statement can release it
 //! if nothing adopted it (S3, S19).  When something does adopt it —
-//! `let xs = new List(Int)` — the lowering binds it twice and then
+//! `let xs = new list(long)` — the lowering binds it twice and then
 //! releases the temporary:
 //!
 //! ```text
-//!     r0 = heap_new List(Int)
+//!     r0 = heap_new list(long)
 //!     local_set %0, r0        # the hidden temporary
 //!     object_bind %0, r0
 //!     local_set %1, r0        # xs

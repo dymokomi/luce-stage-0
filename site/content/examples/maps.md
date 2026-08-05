@@ -1,12 +1,12 @@
 # Maps
 
-A `Map(K, V)` is an insertion-ordered dictionary. `K` is `Int` or
-`String`. Lookup, insertion and update are O(1): the entries stay a
+A `map(K, V)` is an insertion-ordered dictionary. `K` is `long` or
+`string`. Lookup, insertion and update are O(1): the entries stay a
 dense array in arrival order, with a hash index over it.
 
 ```luce run
 func main():
-    var ages = new Map(String, Int)
+    var ages = new map(string, long)
     ages["ada"] = 36
     ages["grace"] = 45
     ages["alan"] = 41
@@ -41,9 +41,9 @@ which cannot trap.
 
 ```luce trap
 func main():
-    var ages = new Map(String, Int)
+    var ages = new map(string, long)
     ages["ada"] = 36
-    print(String(ages["nobody"]))
+    print(string(ages["nobody"]))
 ```
 
 ```output
@@ -53,14 +53,14 @@ loom: trap: key not found in map [key_missing]
 
 ## Counting
 
-The `Map` counting idiom, which is what most real uses are:
+The `map` counting idiom, which is what most real uses are:
 
 ```luce run
 import std.strings
 
 func main():
     let text = "the cat sat on the mat the end"
-    var counts = new Map(String, Int)
+    var counts = new map(string, long)
     for word in text.split(" "):
         counts[word] = counts.get(word, 0) + 1
 
@@ -77,7 +77,7 @@ the: 3
 
 ```luce run
 func main():
-    var stock = new Map(Int, String)
+    var stock = new map(long, string)
     stock[3] = "fig"
     stock[1] = "pear"
 

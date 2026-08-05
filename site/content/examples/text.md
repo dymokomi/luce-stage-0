@@ -1,6 +1,6 @@
 # Text processing
 
-The language keeps the `String` primitives; everything else is
+The language keeps the `string` primitives; everything else is
 `std.strings`, written in ordinary Luce. With the import in scope the
 method spelling works: `s.split(x)` *is* `strings.split(s, x)`.
 
@@ -9,7 +9,7 @@ import std.strings
 
 func main():
     let line = "  name , age , city  "
-    var fields: List(String) = []
+    var fields: list(string) = []
     for raw in line.split(","):
         fields.append(raw.trim())
     print(f"{len(fields)}: [{fields.join("][")}]")
@@ -86,15 +86,15 @@ on space:   10 pieces
 
 ## Building text
 
-Repeated `+` allocates every time; a `Builder` does not.
+Repeated `+` allocates every time; a `builder` does not.
 
 ```luce run
 func main():
-    var table = new Builder()
+    var table = new builder()
     for row in range(0, 4):
         for column in range(0, 4):
-            table.append(String(row * column))
-            table.append_ascii(9)      # a tab, without allocating a String
+            table.append(string(row * column))
+            table.append_ascii(9)      # a tab, without allocating a string
         table.append("\n")
     print(table.build())
 ```
@@ -138,7 +138,7 @@ piece: ccc
 
 ## Formatting numbers
 
-`str` gives the shortest round-trip form of a `Float`.
+`str` gives the shortest round-trip form of a `double`.
 `strings.format_float(x, decimals)` gives fixed point, rounding half
 away from zero.
 
@@ -146,7 +146,7 @@ away from zero.
 import std.strings
 
 func main():
-    print(String(1.0 / 3.0))
+    print(string(1.0 / 3.0))
     print(strings.format_float(1.0 / 3.0, 4))
     print(strings.format_float(2.5, 0))
     print(strings.format_float(-2.345, 2))

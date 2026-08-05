@@ -5,16 +5,16 @@ and nobody frees it.
 
 ```luce run
 struct Rect:
-    width: Float
-    height: Float
+    width: double
+    height: double
 
-    func area(self) -> Float:
+    func area(self) -> double:
         return self.width * self.height
 
-    func scaled(self, factor: Float) -> Rect:
+    func scaled(self, factor: double) -> Rect:
         return Rect(width = self.width * factor, height = self.height * factor)
 
-    func grow(var self, factor: Float):
+    func grow(var self, factor: double):
         self.width = self.width * factor
         self.height = self.height * factor
 
@@ -57,12 +57,12 @@ read once and rebuilt, so every subscript is evaluated exactly once.
 
 ```luce run
 struct Position:
-    row: Int
-    column: Int
+    row: long
+    column: long
 
 struct Cursor:
     at: Position
-    label: String
+    label: string
 
 func main():
     var cursor = Cursor(at = Position(row = 0, column = 0), label = "main")
@@ -70,7 +70,7 @@ func main():
     cursor.at.column += 7
     print(f"{cursor.label} at {cursor.at.row},{cursor.at.column}")
 
-    var cells = new List(Position)
+    var cells = new list(Position)
     cells.append(Position(row = 1, column = 1))
     cells[0].column = 9
     print(f"cell {cells[0].row},{cells[0].column}")
@@ -83,14 +83,14 @@ cell 1,9
 
 ## Structs that carry objects
 
-A struct containing a `List`, `Map`, `Array` or `Builder` — directly
+A struct containing a `list`, `map`, `array` or `builder` — directly
 or through another struct — is *object-carrying*, and follows the
 object rules whenever it is **kept**.
 
 ```luce run
 struct Bag:
-    label: String
-    items: List(Int)
+    label: string
+    items: list(long)
 
 func main():
     var bag = Bag(label = "a", items = [1, 2])   # fresh: bag owns it
@@ -102,7 +102,7 @@ func main():
     alias.items.append(9)
     print(f"{bag.label} now has {len(bag.items)}")
 
-    var bags = new List(Bag)
+    var bags = new list(Bag)
     bags.append(give bag)          # keeping a carrying struct needs a word
     bags.append(give second)
     bags.append(Bag(label = "c", items = [5]))   # fresh: silent
@@ -125,10 +125,10 @@ stops at absence rather than at a layout.
 
 ```luce run
 struct Node:
-    value: String
+    value: string
     next: Node?
 
-func length(head: Node?) -> Int:
+func length(head: Node?) -> long:
     var here = head
     var count = 0
     while here != none:

@@ -5,7 +5,7 @@ a return type follows `->`, and a function that returns nothing simply
 omits it.
 
 ```luce run
-func gcd(a: Int, b: Int) -> Int:
+func gcd(a: long, b: long) -> long:
     var left = a
     var right = b
     while right != 0:
@@ -14,7 +14,7 @@ func gcd(a: Int, b: Int) -> Int:
         right = next
     return left
 
-func announce(label: String, value: Int):
+func announce(label: string, value: long):
     print(f"{label}: {value}")
 
 func main():
@@ -42,8 +42,8 @@ by name, and copying a struct copies it.
 
 ```luce run
 struct Point:
-    x: Float
-    y: Float
+    x: double
+    y: double
 
 func main():
     let origin = Point(x = 0.0, y = 0.0)
@@ -77,10 +77,10 @@ them. There is still no dispatch and no inheritance — `p.length()`
 
 ```luce run
 struct Point:
-    x: Float
-    y: Float
+    x: double
+    y: double
 
-    func length(p: Point) -> Float:
+    func length(p: Point) -> double:
         return sqrt(p.x * p.x + p.y * p.y)
 
     func plus(a: Point, b: Point) -> Point:
@@ -89,7 +89,7 @@ struct Point:
 func main():
     let a = Point(x = 3.0, y = 4.0)
     let b = Point(x = 1.0, y = 2.0)
-    print(String(Point.length(a)))
+    print(string(Point.length(a)))
     let sum = Point.plus(a, b)
     print(f"({sum.x}, {sum.y}) has length {Point.length(sum)}")
 ```
@@ -112,10 +112,10 @@ exactly once — and then rebuilt.
 
 ```luce run
 struct Inner:
-    n: Int
+    n: long
 
 struct Outer:
-    label: String
+    label: string
     inner: Inner
 
 func main():

@@ -568,8 +568,8 @@ test "a byte-order mark counts toward the offsets a message reports" {
 
 test "the two namespaces are disjoint: std.math is embedded, math is the file" {
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "math", .text = "func local() -> Int:\n    return 0\n" },
-        .{ .name = "geo", .text = "func area() -> Int:\n    return 4\n" },
+        .{ .name = "math", .text = "func local() -> long:\n    return 0\n" },
+        .{ .name = "geo", .text = "func area() -> long:\n    return 4\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -598,7 +598,7 @@ test "a sibling module is reached by its own name, whatever the library is calle
     // shadowed, not warned about, and not reserved — it is simply what
     // `import math` means.
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "math", .text = "func local() -> Int:\n    return 7\n" },
+        .{ .name = "math", .text = "func local() -> long:\n    return 7\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
@@ -617,7 +617,7 @@ test "one name cannot mean two modules" {
     const orders = [_][2]Origin{ .{ .standard, .sibling }, .{ .sibling, .standard } };
     for (orders) |order| {
         var table: TableLoader = .{ .entries = &.{
-            .{ .name = "math", .text = "func local() -> Int:\n    return 7\n", .path = "lib/math.luc" },
+            .{ .name = "math", .text = "func local() -> long:\n    return 7\n", .path = "lib/math.luc" },
         } };
         var diagnostics = Diagnostics.init(testing.allocator);
         defer diagnostics.deinit();
@@ -654,8 +654,8 @@ test "the std namespace holds exactly the library, and nothing else" {
 
 test "an imported module is named by the path the host really opened" {
     var table: TableLoader = .{ .entries = &.{
-        .{ .name = "geo", .text = "func area() -> Int:\n    return \"no\"\n", .path = "lib/geo.luc" },
-        .{ .name = "util", .text = "func twice(v: Int) -> Int:\n    return v * 2\n" },
+        .{ .name = "geo", .text = "func area() -> long:\n    return \"no\"\n", .path = "lib/geo.luc" },
+        .{ .name = "util", .text = "func twice(v: long) -> long:\n    return v * 2\n" },
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();

@@ -20,7 +20,7 @@ closed the failure half; nothing that was designed is now unbuilt.
 blocked real programs are both closed: a `.lc` **is** machine code at
 C parity, whether `loom run` opens it or a shell runs an `--emit=exe`
 binary, and memory is genuinely given back — object identity first,
-then String bytes and struct field runs. A Luce program can run all
+then string bytes and struct field runs. A Luce program can run all
 day.
 
 **What is left is a short list of library and host builtins, one open
@@ -30,7 +30,7 @@ language question, and one benchmark row.**
 
 | | |
 |---|---|
-| Static typing with inference; `Int` widens to `Float`, nothing narrows | shipped |
+| Static typing with inference; `long` widens to `double`, nothing narrows | shipped |
 | Checked arithmetic, bounds checks, UTF-8 boundary checks, in every mode | shipped |
 | Scope ownership: `give`, `copy`, `free`, 43 ratified situations | shipped |
 | `T?`, `none`, narrowing, `else` | shipped |
@@ -42,7 +42,7 @@ language question, and one benchmark row.**
 | LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
 | Trap locations and call traces in debug builds | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
-| Map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
+| map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
 ## What is measured
 
@@ -61,7 +61,7 @@ and it does not move with the iteration count. The editor simulation:
 [How, and what it cost](/guide/memory/).
 
 Small-string optimisation was predicted to remove "essentially all" of
-the cost of giving String bytes an owner. It removed roughly three
+the cost of giving string bytes an owner. It removed roughly three
 quarters. The repository records that the prediction was too strong.
 
 ## Deliberately absent, permanently
@@ -93,7 +93,7 @@ These are decisions with reasons written down, not gaps.
 - **`defer`** for memory. It may return for host cleanup, as a
   separate decision.
 - **Generics for user code.** The type union is closed with twenty
-  exhaustive switches over it, and `List(T)` is a monomorphic heap
+  exhaustive switches over it, and `list(T)` is a monomorphic heap
   object rather than a generic. `T?` became a variant and opened no
   door at all: nothing about it generalises. What would pay is
   monomorphised generic *functions*, and that needs first-class
@@ -118,7 +118,7 @@ The corpus pays for it constantly, and the counts are real:
   `elif` chain and no final `else`**. A misspelled `"page_dwon"`
   compiles and silently does nothing.
 - `editor.luc` writes `# 1 keyword, 2 type name, 3 builtin, 0 plain` —
-  an enum written as an `Int` with a comment.
+  an enum written as an `long` with a comment.
 - `editor.luc` implements `is_keyword` and `is_builtin` as **46
   `word == "…"` comparisons**: a hash set written as a truth table.
 
@@ -175,7 +175,7 @@ workaround-dense and the proof that the language moved.
     two namespaces in one file.
 13. **`m.get(k) -> V?` does not exist**, so `has` then index is three
     hash lookups on the hit path.
-14. **`strings.find` returns `-1`** because `Int?` did not exist when
+14. **`strings.find` returns `-1`** because `long?` did not exist when
     it was written. It does now, so the sentinel is a
     wart with nothing holding it up — and it also returns `-1` for an
     *argument* error, which is not the same fact as "absent".

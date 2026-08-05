@@ -26,7 +26,7 @@ func main():
 
 ```luce run
 func main():
-    var index = new Map(String, List(Int))
+    var index = new map(string, list(long))
     var hits = [12, 40]
     index["a.luc"] = give hits    # the map owns it now
     print(f"stored {len(index["a.luc"])}")
@@ -41,16 +41,16 @@ is a compile error, not a runtime surprise.
 
 ```luce fail
 func main():
-    var sink = new List(List(Int))
+    var sink = new list(list(long))
     var xs = [1, 2]
     sink.append(give xs)
-    print(String(len(xs)))
+    print(string(len(xs)))
 ```
 
 ```output
 luce: compile failed
 main.luc:5:22: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
-        print(String(len(xs)))
+        print(string(len(xs)))
                          ^~
 ```
 
@@ -60,7 +60,7 @@ would use a name that is gone.
 
 ```luce fail
 func main():
-    var sink = new List(List(Int))
+    var sink = new list(list(long))
     var xs = [1]
     for i in range(0, 3):
         sink.append(give xs)
@@ -80,7 +80,7 @@ Its cost is visible at the call site, which is the point.
 
 ```luce run
 func main():
-    var nested = new List(List(Int))
+    var nested = new list(list(long))
     nested.append([1, 2])
 
     let independent = copy nested
@@ -97,11 +97,11 @@ source inner 2, copy inner 3
 parameter — it is the escape hatch when `give` is not what you meant.
 
 ```luce run
-func remember(store: List(List(Int)), values: List(Int)):
+func remember(store: list(list(long)), values: list(long)):
     store.append(copy values)      # values is borrowed; copy is allowed
 
 func main():
-    var store = new List(List(Int))
+    var store = new list(list(long))
     var mine = [1, 2, 3]
     remember(store, mine)
     mine.append(4)
@@ -118,15 +118,15 @@ A function that keeps a parameter says so in its signature, and the
 caller echoes it. There is no way to hand over ownership silently.
 
 ```luce run
-func stash(store: List(List(Int)), values: give List(Int)):
+func stash(store: list(list(long)), values: give list(long)):
     store.append(give values)
 
-func consume(values: give List(Int)):
+func consume(values: give list(long)):
     print(f"consuming {len(values)}")
     # values is owned here and dies here
 
 func main():
-    var store = new List(List(Int))
+    var store = new list(list(long))
     stash(store, [1, 2])           # fresh: no word
     var mine = [3, 4, 5]
     stash(store, give mine)        # named: said at both ends
@@ -143,11 +143,11 @@ A borrowed parameter may mutate contents all it likes. Borrowing is
 about *lifetime*, not about immutability.
 
 ```luce fail
-func keep(store: List(List(Int)), values: List(Int)):
+func keep(store: list(list(long)), values: list(long)):
     store.append(values)
 
 func main():
-    var store = new List(List(Int))
+    var store = new list(list(long))
     keep(store, [1])
 ```
 
@@ -162,7 +162,7 @@ main.luc:2:18: a container keeps its object elements; values is a borrowed param
 
 ```luce run
 func main():
-    var big = new Array(Int, 200000)
+    var big = new array(long, 200000)
     big.fill(3)
     let sample = big[199999]
     free(big)                      # the memory goes back now
@@ -182,7 +182,7 @@ func main():
     var xs = [1, 2]
     let view = xs
     free(xs)
-    print(String(view[0]))
+    print(string(view[0]))
 ```
 
 ```output
@@ -198,8 +198,8 @@ because an alias is an alias where it is written:
 
 ```luce fail
 func main():
-    var first = new List(List(Int))
-    var second = new List(List(Int))
+    var first = new list(list(long))
+    var second = new list(list(long))
     var item = [1]
     let alias = item
     first.append(give item)        # first owns it now
@@ -217,13 +217,13 @@ Say `copy alias` and both containers get a list of their own:
 
 ```luce run
 func main():
-    var first = new List(List(Int))
-    var second = new List(List(Int))
+    var first = new list(list(long))
+    var second = new list(list(long))
     var item = [1]
     let alias = item
     second.append(copy alias)
     first.append(give item)
-    print(String(len(first) + len(second)))
+    print(string(len(first) + len(second)))
 ```
 
 ```output

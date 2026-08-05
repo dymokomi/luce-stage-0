@@ -1,4 +1,4 @@
-# Array number-crunching: fill two Float arrays, then a repeated dot
+# array number-crunching: fill two double arrays, then a repeated dot
 # product.  This is the workload a C compiler auto-vectorizes, and the
 # compiled Luce vectorizes it too — the fill loops on both sides, while
 # the dot product's accumulation stays scalar on both, because a
@@ -11,15 +11,15 @@
 func main():
     let n = 200000
     let reps = 400
-    var a = new Array(Float, n)
-    var b = new Array(Float, n)
+    var a = new array(double, n)
+    var b = new array(double, n)
     for i in range(0, n):
-        a[i] = Float(i % 100) * 0.5
-        b[i] = Float((i * 7) % 100) * 0.25
+        a[i] = double(i % 100) * 0.5
+        b[i] = double((i * 7) % 100) * 0.25
     var dot = 0.0
     for r in range(0, reps):
         var sum = 0.0
         for i in range(0, n):
             sum += a[i] * b[i]
         dot += sum
-    print(String(Int(trunc(dot))))
+    print(string(long(trunc(dot))))

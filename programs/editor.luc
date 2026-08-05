@@ -11,19 +11,19 @@
 import std.files
 
 struct Theme:
-    keyword: Int
-    kind: Int
-    builtin: Int
-    text: Int
-    number: Int
-    comment: Int
-    plain: Int
-    punct: Int
-    gutter: Int
-    gutter_current: Int
-    status_fg: Int
-    status_bg: Int
-    alert: Int
+    keyword: long
+    kind: long
+    builtin: long
+    text: long
+    number: long
+    comment: long
+    plain: long
+    punct: long
+    gutter: long
+    gutter_current: long
+    status_fg: long
+    status_bg: long
+    alert: long
 
 # One file-scope constant instead of a function per color.
 let theme = Theme(
@@ -43,17 +43,17 @@ let theme = Theme(
 )
 
 struct Fmt:
-    func pad_left(value: String, width: Int) -> String:
+    func pad_left(value: string, width: long) -> string:
         var padded = value
         while len(padded) < width:
             padded = " " + padded
         return padded
 
 struct Text:
-    func continuation(byte: Int) -> Bool:
+    func continuation(byte: long) -> bool:
         return byte >= 128 and byte < 192
 
-    func previous_boundary(value: String, cursor: Int) -> Int:
+    func previous_boundary(value: string, cursor: long) -> long:
         if cursor <= 0:
             return 0
         var at = cursor - 1
@@ -61,7 +61,7 @@ struct Text:
             at = at - 1
         return at
 
-    func next_boundary(value: String, cursor: Int) -> Int:
+    func next_boundary(value: string, cursor: long) -> long:
         if cursor >= len(value):
             return len(value)
         var at = cursor + 1
@@ -69,29 +69,29 @@ struct Text:
             at = at + 1
         return at
 
-    func line_start(value: String, cursor: Int) -> Int:
+    func line_start(value: string, cursor: long) -> long:
         var at = cursor
         while at > 0 and value.byte_at(at - 1) != 10:
             at = at - 1
         return at
 
-    func line_end(value: String, cursor: Int) -> Int:
+    func line_end(value: string, cursor: long) -> long:
         var at = cursor
         while at < len(value) and value.byte_at(at) != 10:
             at = at + 1
         return at
 
-    func line_of(value: String, cursor: Int) -> Int:
+    func line_of(value: string, cursor: long) -> long:
         var line = 0
         for at in range(0, cursor):
             if value.byte_at(at) == 10:
                 line = line + 1
         return line
 
-    func count_lines(value: String) -> Int:
+    func count_lines(value: string) -> long:
         return Text.line_of(value, len(value)) + 1
 
-    func column_of(value: String, cursor: Int) -> Int:
+    func column_of(value: string, cursor: long) -> long:
         var at = Text.line_start(value, cursor)
         var column = 0
         while at < cursor:
@@ -99,7 +99,7 @@ struct Text:
             column = column + 1
         return column
 
-    func line_at(value: String, wanted: Int) -> Int:
+    func line_at(value: string, wanted: long) -> long:
         var at = 0
         var line = 0
         while line < wanted and at < len(value):
@@ -108,7 +108,7 @@ struct Text:
             at = at + 1
         return at
 
-    func at_column(value: String, start: Int, column: Int) -> Int:
+    func at_column(value: string, start: long, column: long) -> long:
         var at = start
         var current = 0
         let finish = Text.line_end(value, start)
@@ -117,7 +117,7 @@ struct Text:
             current = current + 1
         return at
 
-    func width(value: String) -> Int:
+    func width(value: string) -> long:
         var at = 0
         var columns = 0
         while at < len(value):
@@ -126,37 +126,37 @@ struct Text:
         return columns
 
 struct Editing:
-    func splice(value: String, cursor: Int, extra: String) -> String:
+    func splice(value: string, cursor: long, extra: string) -> string:
         return value[0:cursor] + extra + value[cursor:len(value)]
 
-    func erase_before(value: String, cursor: Int) -> String:
+    func erase_before(value: string, cursor: long) -> string:
         let before = Text.previous_boundary(value, cursor)
         return value[0:before] + value[cursor:len(value)]
 
-    func erase_at(value: String, cursor: Int) -> String:
+    func erase_at(value: string, cursor: long) -> string:
         let after = Text.next_boundary(value, cursor)
         return value[0:cursor] + value[after:len(value)]
 
 struct Words:
-    func is_digit(byte: Int) -> Bool:
+    func is_digit(byte: long) -> bool:
         return byte >= 48 and byte <= 57
 
-    func is_upper(byte: Int) -> Bool:
+    func is_upper(byte: long) -> bool:
         return byte >= 65 and byte <= 90
 
-    func is_alpha(byte: Int) -> Bool:
+    func is_alpha(byte: long) -> bool:
         return Words.is_upper(byte) or (byte >= 97 and byte <= 122)
 
-    func is_word_start(byte: Int) -> Bool:
+    func is_word_start(byte: long) -> bool:
         return Words.is_alpha(byte) or byte == 95 or byte >= 194
 
-    func is_word(byte: Int) -> Bool:
+    func is_word(byte: long) -> bool:
         return Words.is_word_start(byte) or Words.is_digit(byte) or Words.continuation_byte(byte)
 
-    func continuation_byte(byte: Int) -> Bool:
+    func continuation_byte(byte: long) -> bool:
         return byte >= 128 and byte < 192
 
-    func is_keyword(word: String) -> Bool:
+    func is_keyword(word: string) -> bool:
         if word == "func" or word == "let" or word == "var" or word == "if":
             return true
         if word == "elif" or word == "else" or word == "while" or word == "for":
@@ -167,7 +167,7 @@ struct Words:
             return true
         return word == "true" or word == "false"
 
-    func is_builtin(word: String) -> Bool:
+    func is_builtin(word: string) -> bool:
         if word == "range" or word == "len" or word == "slice" or word == "byte_at":
             return true
         if word == "print" or word == "assert" or word == "trap":
@@ -187,7 +187,7 @@ struct Words:
         return word == "term_cols"
 
     # 1 keyword, 2 type name (capitalized), 3 builtin, 0 plain.
-    func classify(word: String) -> Int:
+    func classify(word: string) -> long:
         if Words.is_keyword(word):
             return 1
         if len(word) > 0 and Words.is_upper(word.byte_at(0)):
@@ -205,21 +205,21 @@ struct Words:
 # spelled by hand at seven sites (docs/METHODS.md), and `var self`
 # writes them: `state.key(…)` means `state = State.key(state, …)`.
 #
-# `State` carries only String, Int and Bool — all values — which is
+# `State` carries only string, long and bool — all values — which is
 # what `var self` requires and where S17 and S28 had already put this
-# code: had it carried a `List`, `return next` would already have been
+# code: had it carried a `list`, `return next` would already have been
 # refused.
 struct State:
-    path: String
-    content: String
-    cursor: Int
-    scroll: Int
-    dirty: Bool
-    message: String
-    quit_pending: Bool
-    quit: Bool
+    path: string
+    content: string
+    cursor: long
+    scroll: long
+    dirty: bool
+    message: string
+    quit_pending: bool
+    quit: bool
 
-    func vertical(var self, target_line: Int):
+    func vertical(var self, target_line: long):
         let total = Text.count_lines(self.content)
         let wanted = Text.column_of(self.content, self.cursor)
         let landing = clamp(target_line, 0, total - 1)
@@ -236,7 +236,7 @@ struct State:
         self.dirty = false
         self.message = "saved " + self.path
 
-    func key(var self, name: String, inserted: String, visible: Int):
+    func key(var self, name: string, inserted: string, visible: long):
         let line = Text.line_of(self.content, self.cursor)
         if name != "ctrl_q":
             self.quit_pending = false
@@ -299,7 +299,7 @@ struct State:
             else:
                 self.quit = true
 
-    func adjust(var self, visible: Int):
+    func adjust(var self, visible: long):
         let cursor_line = Text.line_of(self.content, self.cursor)
         if cursor_line < self.scroll:
             self.scroll = cursor_line
@@ -311,12 +311,12 @@ struct State:
     # back.  Everything else in `Draw` operates on text and columns
     # rather than on the editor, and stays the namespace function it
     # is — which is the whole rule, said once.
-    func status(self, rows: Int, cols: Int, line: Int, column: Int):
+    func status(self, rows: long, cols: long, line: long, column: long):
         term_move(rows - 1, 0)
         var flag = ""
         if self.dirty:
             flag = " +"
-        var left = " " + self.path + flag + "  " + String(line + 1) + ":" + String(column + 1)
+        var left = " " + self.path + flag + "  " + string(line + 1) + ":" + string(column + 1)
         if len(self.message) > 0:
             left = left + "  — " + self.message
         let hint = "Ctrl-S save  Ctrl-Q quit "
@@ -361,7 +361,7 @@ struct State:
 struct Draw:
     # Write [from, to) clipped to `remaining` display columns; returns
     # the columns actually used.
-    func emit(value: String, from: Int, to: Int, remaining: Int) -> Int:
+    func emit(value: string, from: long, to: long, remaining: long) -> long:
         var at = from
         var used = 0
         while at < to and used < remaining:
@@ -372,7 +372,7 @@ struct Draw:
         return used
 
     # One source line with Luce highlighting, clipped to `width`.
-    func line(content: String, start: Int, finish: Int, width: Int):
+    func line(content: string, start: long, finish: long, width: long):
         var at = start
         var used = 0
         while at < finish and used < width:
@@ -426,14 +426,14 @@ struct Draw:
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
 
-    func gutter(number: Int, current: Bool):
+    func gutter(number: long, current: bool):
         if current:
             term_style(theme.gutter_current, -1, false)
         else:
             term_style(theme.gutter, -1, false)
-        term_write(Fmt.pad_left(String(number), 4) + " ")
+        term_write(Fmt.pad_left(string(number), 4) + " ")
 
-func main(args: List(String)):
+func main(args: list(string)):
     if len(args) != 1:
         print("usage: editor FILE")
         return
@@ -460,7 +460,7 @@ func main(args: List(String)):
         let visible = max(term_rows() - 1, 1)
         state.adjust(visible)
         state.frame()
-        # `key_read` answers `String?`: `none` is the keyboard running
+        # `key_read` answers `string?`: `none` is the keyboard running
         # dry — a pipe that ended, a terminal that closed — and there
         # is no one left to ask what to do about unsaved work, so the
         # editor stops rather than asking forever.

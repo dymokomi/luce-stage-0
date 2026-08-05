@@ -1,6 +1,6 @@
 # Absence
 
-A trailing `?` makes a type nullable. `Int?` is an `Int` that may not
+A trailing `?` makes a type nullable. `long?` is an `long` that may not
 be there, and `none` is the value that is not there.
 
 `?` means nullable and **only** nullable. Failure is `!` and is never
@@ -8,10 +8,10 @@ spelled with a `?` — that is [the next chapter](../failure/).
 
 ```luce run
 func main():
-    var user: String? = none
-    let limit: Int? = 10              # an Int? that is there
-    let parsed = parse_int("42")      # Int?
-    let bad = parse_int("hello")      # also Int?, and it is none
+    var user: string? = none
+    let limit: long? = 10              # a long? that is there
+    let parsed = parse_int("42")      # long?
+    let bad = parse_int("hello")      # also long?, and it is none
     print(f"user absent: {user == none}")
     print(f"parsed absent: {parsed == none}, bad absent: {bad == none}")
     user = "ada"
@@ -34,10 +34,10 @@ After a test, the name *is* its payload. There is no unwrapping
 operator and no second spelling to learn.
 
 ```luce run
-func describe(value: Int?) -> String:
+func describe(value: long?) -> string:
     if value == none:
         return "nothing"
-    return f"the number {value * 2}"   # value is Int here, not Int?
+    return f"the number {value * 2}"   # value is long here, not long?
 
 func main():
     print(describe(21))
@@ -88,7 +88,7 @@ because `or` is broken there by truthiness, and Luce has neither
 truthiness nor a ternary.
 
 ```luce run args=hello
-func main(args: List(String)):
+func main(args: list(string)):
     let count = parse_int(args[0]) else 10
     let pair = parse_int("x") else parse_int("41") else 0
     print(f"count {count}, pair {pair}")
@@ -110,7 +110,7 @@ is why there is no force-unwrap sigil in the language at all.
 func main():
     let text = "not a number"
     let n = parse_int(text) else trap(f"expected a number, got {text}")
-    print(String(n))
+    print(string(n))
 ```
 
 ```output
@@ -126,13 +126,13 @@ name in front of you.
 ```luce fail
 func main():
     let n = parse_int("7")
-    print(String(n + 1))
+    print(string(n + 1))
 ```
 
 ```output
 luce: compile failed
-main.luc:3:18: operands of + are Int? and Int, and there is no conversion between them; test it first (if n != none:) or supply a fallback (n else …) [luce.sema.type]
-        print(String(n + 1))
+main.luc:3:18: operands of + are long? and long, and there is no conversion between them; test it first (if n != none:) or supply a fallback (n else …) [luce.sema.type]
+        print(string(n + 1))
                      ^~~~~
 ```
 
@@ -148,7 +148,7 @@ counting.
 
 ```luce run
 struct Node:
-    value: Int
+    value: long
     next: Node?
 
 func main():
@@ -170,8 +170,8 @@ sum 6
 
 ## Absence owns nothing
 
-An optional inherits every ownership rule unchanged: a `List(Int)?`
-holding an object owns it exactly as a `List(Int)` would, and holding
+An optional inherits every ownership rule unchanged: a `list(long)?`
+holding an object owns it exactly as a `list(long)` would, and holding
 `none` owns nothing. `give`, `copy` and `free` demand a value that is
 there, and so demand narrowing first.
 
@@ -185,7 +185,7 @@ object slot traps `null_object`.
 
 ```luce trap
 func main():
-    var report: Builder
+    var report: builder
     report.append("x")
 ```
 

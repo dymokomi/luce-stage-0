@@ -53,8 +53,8 @@ pub const BinaryOp = enum {
 
     /// The same comparison with its operands the other way round.
     ///
-    /// Exact Int/Float comparison is implemented once, in one shape —
-    /// the Int on the left (docs/NUMERICS.md §5) — so a comparison
+    /// Exact long/double comparison is implemented once, in one shape —
+    /// the long on the left (docs/NUMERICS.md §5) — so a comparison
     /// written the other way round arrives here rather than at a
     /// second implementation of the same judgment.  Equality is its
     /// own mirror image; arithmetic has none and is refused.

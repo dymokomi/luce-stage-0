@@ -18,7 +18,7 @@ func main() -> !:
     for index, line in lines:
         print(f"  {index}: {line}")
 
-    var kept: List(String) = []
+    var kept: list(string) = []
     for line in lines:
         if line != "pear":
             kept.append(line)
@@ -60,7 +60,7 @@ could not write outside the sandbox
 exists: false
 ```
 
-`exists` answers a plain `Bool` and is the one call here that is not
+`exists` answers a plain `bool` and is the one call here that is not
 fallible — but it is a question about the past, never a guard for the
 call after it. There is a window between the two that nothing can
 close, and a guard could not tell "not there" from "would not open"
@@ -81,7 +81,7 @@ the fox and the dog
 import std.files
 import std.strings
 
-func main(args: List(String)) -> !:
+func main(args: list(string)) -> !:
     if len(args) == 0:
         print("usage: wc FILE")
         return
@@ -89,7 +89,7 @@ func main(args: List(String)) -> !:
     let path = args[0]
     let text = try files.read(path)
 
-    var counts = new Map(String, Int)
+    var counts = new map(string, long)
     for line in text.split("\n"):
         for word in line.split(""):
             counts[word] = counts.get(word, 0) + 1

@@ -112,7 +112,7 @@
 //!   Adding one here without the decoder would silently produce wrong
 //!   text, so the escape set moves as one change across two stages or
 //!   not at all.  `\xNN` is refused permanently for a different
-//!   reason: a raw byte escape can build a String that is not UTF-8,
+//!   reason: a raw byte escape can build a string that is not UTF-8,
 //!   and every other layer is allowed to assume it is.
 
 const std = @import("std");
@@ -732,7 +732,7 @@ const Lexer = struct {
         // after '.', found end of line" about what is plainly an
         // unfinished float; `.5` has had the model message all along.
         // A word start after the point really is member access
-        // (`5.foo`), and Int saying it has no fields is the right
+        // (`5.foo`), and long saying it has no fields is the right
         // answer to that one, so it is left alone.
         var unfinished_point = false;
         if (!is_float and self.offset < self.source.len and self.source[self.offset] == '.' and

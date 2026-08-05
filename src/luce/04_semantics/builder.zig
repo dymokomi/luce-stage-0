@@ -130,8 +130,8 @@ pub const retired_builtins = [_]struct {
     name: []const u8,
     instead: []const u8,
 }{
-    .{ .name = "arg", .instead = "declare func main(args: List(String)): and index args" },
-    .{ .name = "arg_count", .instead = "declare func main(args: List(String)): and write len(args)" },
+    .{ .name = "arg", .instead = "declare func main(args: list(string)): and index args" },
+    .{ .name = "arg_count", .instead = "declare func main(args: list(string)): and write len(args)" },
 };
 
 // ---------------------------------------------------------------------------
@@ -224,19 +224,19 @@ pub const FunctionBuilder = struct {
     /// arguments — and the reader is owed the one line that fixes it.
     shape_position: ShapePosition = .refused,
     /// The element type the next list literal should be built at, when
-    /// the place it is going into names one — `let xs: List(Float) =
+    /// the place it is going into names one — `let xs: list(double) =
     /// [1, 2, 3]` (docs/NUMERICS.md).  A literal has no annotation of
-    /// its own, so without this the elements infer `Int` and the whole
-    /// list refuses to fit a `List(Float)` it could have been.
+    /// its own, so without this the elements infer `long` and the whole
+    /// list refuses to fit a `list(double)` it could have been.
     ///
     /// Set for exactly one hop, the way `allow_fallible` is:
     /// `lowerExpressionInner` reads and clears it, so it reaches the
     /// literal it was raised in front of and nothing nested inside it.
     /// Inference where nothing is expected is untouched — `let xs =
-    /// [1, 2, 3]` is still a `List(Int)`.
+    /// [1, 2, 3]` is still a `list(long)`.
     wanted_element: ?Type = null,
     /// The scalar type the next expression lands on, when the place it
-    /// is going into names one — `let x: Float = 7` (docs/TYPES.md §1,
+    /// is going into names one — `let x: double = 7` (docs/TYPES.md §1,
     /// D3).  **A numeric literal has no type of its own**; it takes the
     /// type of its context if it fits, and this is how the context
     /// reaches it.
@@ -254,7 +254,7 @@ pub const FunctionBuilder = struct {
     /// fallible call's branch.  The value is the same value — the slot
     /// only carries it from one block to the next — so every question
     /// asked about where a value came from has to look through the
-    /// link, or a call's fresh String would be nobody's to free.
+    /// link, or a call's fresh string would be nobody's to free.
     carried: std.ArrayList(Carried) = .empty,
 
     /// A fallible call whose failing side is still an empty block.
@@ -639,6 +639,18 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.retired", span, "{s} was retired: {s}", .{ gone.name, gone.instead });
             return;
         }
+        // A conversion named for the type it produces is spelled the
+        // way that type is, and the types are lowercase now
+        // (docs/TYPES.md D8): `Int(x)` is `long(x)`.
+        if (types.retiredSpelling(written)) |now| {
+            try self.fail(
+                "luce.sema.call",
+                span,
+                "the builtin types are lowercase: {s} is written {s}",
+                .{ written, now },
+            );
+            return;
+        }
         var suggestion = helpers.Suggestion.init(written);
         var functions = self.analyzer.function_names.keyIterator();
         while (functions.next()) |key| {
@@ -730,7 +742,7 @@ pub const FunctionBuilder = struct {
     /// **One value, one park.**  A `try` hands back what the call it
     /// wraps produced, so the walk sees the same register twice — once
     /// for the call and once for the `try` around it — and two hidden
-    /// locals both claiming one String's bytes free them twice.  The
+    /// locals both claiming one string's bytes free them twice.  The
     /// question is asked of the register rather than of the
     /// expression, which is why `a else b` is untouched: its three
     /// registers are three different values.
@@ -791,7 +803,7 @@ pub const FunctionBuilder = struct {
             // so the generic message would name a namespace that
             // appears nowhere in the program, under a caret inside an
             // f-string hole.  The rule is the same one — a format spec
-            // is a String service like any other — but it has to be
+            // is a string service like any other — but it has to be
             // said about the syntax that is actually there.
             //
             // **`.written` cannot be reached from here today**, and is
@@ -824,7 +836,7 @@ pub const FunctionBuilder = struct {
     }
 
     /// Does this binding own the storage in its slot?  Every real
-    /// binding does — `let b = a` copies a's String fields even while
+    /// binding does — `let b = a` copies a's string fields even while
     /// it aliases a's objects (S26) — and a parameter never does: its
     /// bytes belong to the caller's binding, which outlives the call
     /// (docs/STRINGS.md).
@@ -890,7 +902,7 @@ pub const FunctionBuilder = struct {
 
     // Value storage --------------------------------------------------------
     //
-    // A String's bytes and a struct's field run have exactly one owner
+    // A string's bytes and a struct's field run have exactly one owner
     // (docs/STRINGS.md).  Stage 4 says where that owner is: a fresh
     // allocation is parked in a statement temporary the moment it is
     // made, and every store into a place that outlives the statement
@@ -904,7 +916,7 @@ pub const FunctionBuilder = struct {
     /// cannot drift from what was actually emitted.
     fn producesFreshStorage(self: *const FunctionBuilder, register: Register) bool {
         return switch (self.code.instructions.items[self.sourceOf(register)]) {
-            // String `+`; every other binary answers a scalar.
+            // string `+`; every other binary answers a scalar.
             .binary => true,
             // Both build a whole new struct value that owns its run.
             .struct_make, .struct_set => true,
@@ -970,7 +982,7 @@ pub const FunctionBuilder = struct {
     ///
     /// Two parks are kept rather than retracted.  A slot that is read
     /// back cannot stop owning storage, because a borrowing slot hands
-    /// a reload the register shape and a String's form does not
+    /// a reload the register shape and a string's form does not
     /// survive that — which is exactly the slot a fallible call's
     /// result crosses its branch in.  And a temporary that also owns
     /// *objects* keeps its slot, because that ownership is settled at
@@ -1057,7 +1069,7 @@ pub const FunctionBuilder = struct {
     /// That means a call to a declaration or any method — a method's
     /// receiver is the container in `xs.remove(0)`.  Every builtin but
     /// `free` moves no ownership at all (`07_optimize/effects.zig`
-    /// answers the same question about instructions), so `String(i)` and
+    /// answers the same question about instructions), so `string(i)` and
     /// `len(xs)` beside a container read cost nothing.
     fn mayMutateContainers(expression: *const ast.Expression) bool {
         return switch (expression.*) {
@@ -1164,7 +1176,7 @@ pub const FunctionBuilder = struct {
     /// including every user function, which is the conservative answer
     /// `mayMutateContainers` needs.
     fn isPureBuiltin(callee: []const u8) bool {
-        // `Int(...)` and `Float(...)` are conversions rather than
+        // `long(...)` and `double(...)` are conversions rather than
         // intrinsics, so they are not in the table above; both are pure.
         if (conversionNamed(callee)) |produces| return produces != .string;
         for (builtins) |builtin| {
@@ -1173,7 +1185,7 @@ pub const FunctionBuilder = struct {
         return false;
     }
 
-    /// Park a freshly allocated String or struct value that was not
+    /// Park a freshly allocated string or struct value that was not
     /// produced through `lowerExpression` — a compound assignment's
     /// concatenation, say — so the statement's end reclaims it.
     fn parkFreshStorage(self: *FunctionBuilder, value: Typed) Error!void {
@@ -1298,7 +1310,7 @@ pub const FunctionBuilder = struct {
 
     /// True when some struct in this program declares a **method** by
     /// this name whose result carries objects — `p.spread()` answering
-    /// a fresh `List(Int)`, which the caller owns like any other call
+    /// a fresh `list(long)`, which the caller owns like any other call
     /// result (S16, docs/METHODS.md).
     ///
     /// Asked of the name rather than of the receiver, and for the same
@@ -1412,7 +1424,7 @@ pub const FunctionBuilder = struct {
     /// The name behind an expression that is a `T?` the flow analysis
     /// has already proved present — so a second test, or a fallback,
     /// is dead code the reader should be told about rather than left
-    /// to wonder at "Int is always there".
+    /// to wonder at "long is always there".
     fn narrowedName(self: *FunctionBuilder, expression: *const ast.Expression) ?[]const u8 {
         if (expression.* != .name) return null;
         const found = self.findLocal(expression.name.text) orelse return null;
@@ -1454,7 +1466,7 @@ pub const FunctionBuilder = struct {
     }
 
     /// Make an already-lowered value fit `expected`, applying the two
-    /// widenings the language has: `Int` into `Float`
+    /// widenings the language has: `long` into `double`
     /// (docs/NUMERICS.md) and `T` into `T?` (S43 — the widened value
     /// owns exactly what it owned before).  Null means it does not fit
     /// and the caller reports.
@@ -1463,7 +1475,7 @@ pub const FunctionBuilder = struct {
     /// site that already called it — annotation, argument, return,
     /// element, field — gets promotion consistently and none of them
     /// had to learn about it.  The two widenings compose in the one
-    /// order that makes sense: `let x: Float? = 1` widens, then wraps.
+    /// order that makes sense: `let x: double? = 1` widens, then wraps.
     fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
         if (expected == .float and value.value_type == .int) return try self.promote(value);
@@ -1480,7 +1492,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Widen an `Int` to a `Float`: the language's one numeric
+    /// Widen an `long` to a `double`: the language's one numeric
     /// conversion that is not spelled (docs/NUMERICS.md).  One
     /// direction, and never the reverse — implicit narrowing is what
     /// would make float contagion silent, and Luce does not have it.
@@ -1498,7 +1510,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// The element type a `List(T)` place names, for the literal about
+    /// The element type a `list(T)` place names, for the literal about
     /// to be lowered into it; null for every place that is not one.
     fn elementOf(self: *FunctionBuilder, expected: Type) ?Type {
         const descriptor = self.analyzer.heapOf(expected) orelse return null;
@@ -1509,7 +1521,7 @@ pub const FunctionBuilder = struct {
     /// null when `expected` names no scalar for it to land on
     /// (docs/TYPES.md D3).
     ///
-    /// `T?` looks through to its `T`: `let x: Float? = 1` lands the
+    /// `T?` looks through to its `T`: `let x: double? = 1` lands the
     /// literal at a float and wraps it, which is the same order `fit`
     /// composes its two widenings in.
     fn landingType(expected: Type) ?Type {
@@ -1525,7 +1537,7 @@ pub const FunctionBuilder = struct {
     }
 
     /// Bring two numeric operands to one type, when one of them is an
-    /// `Int` and the other a `Float`.  True when it did something.
+    /// `long` and the other a `double`.  True when it did something.
     fn unifyNumeric(self: *FunctionBuilder, left: *Typed, right: *Typed) Error!bool {
         if (left.value_type == .int and right.value_type == .float) {
             left.* = try self.promote(left.*);
@@ -1556,8 +1568,8 @@ pub const FunctionBuilder = struct {
     ) Error!?Fitted {
         if (expression.* == .none_literal) {
             if (expected != .optional) {
-                // No article in front of a type name: "a Int" is not
-                // English and "a Int is always there" says nothing
+                // No article in front of a type name: "a long" reads as
+                // an adjective, and "a long is always there" says nothing
                 // besides.  The variants below sidestep it the same
                 // way, and this is the wording they are standardised
                 // on.
@@ -1685,7 +1697,7 @@ pub const FunctionBuilder = struct {
             // element's or a field's bytes, and an operand still to
             // come could free them — `f(pieces[0], drop_first(pieces))`
             // is the shape.  An object would go stale and trap (S9); a
-            // String has no handle to check, so it closes here, by
+            // string has no handle to check, so it closes here, by
             // copying the borrow before the mutation can happen.
             if (mutating[index] and
                 self.analyzer.ownsStorage(value.value_type) and
@@ -1839,13 +1851,13 @@ pub const FunctionBuilder = struct {
         span: Span,
     ) Error!void {
         // An empty [] has no element type of its own; the annotation
-        // supplies it: var xs: List(Int) = []
+        // supplies it: var xs: list(long) = []
         if (value_expression.* == .list_literal and value_expression.list_literal.elements.len == 0) {
             const written = annotation orelse {
                 try self.fail(
                     "luce.sema.type",
                     span,
-                    "an empty [] needs an annotation: var {s}: List(T) = []",
+                    "an empty [] needs an annotation: var {s}: list(T) = []",
                     .{name},
                 );
                 return self.forgetName(name);
@@ -1854,7 +1866,7 @@ pub const FunctionBuilder = struct {
                 return self.forgetName(name);
             const descriptor = self.analyzer.heapOf(expected);
             if (descriptor == null or descriptor.? != .list) {
-                try self.fail("luce.sema.type", span, "[] builds a List, but {s} is annotated {s}", .{
+                try self.fail("luce.sema.type", span, "[] builds a list, but {s} is annotated {s}", .{
                     name,
                     try self.analyzer.typeName(expected),
                 });
@@ -1887,8 +1899,8 @@ pub const FunctionBuilder = struct {
                 const initializer = (try self.lowerExpression(value_expression, false)) orelse
                     return self.forgetName(name);
                 value = (try self.fit(initializer, expected)) orelse {
-                    // `let f: Float = 1` used to arrive here and be
-                    // told to write `Float(...)`; it widens on its own
+                    // `let f: double = 1` used to arrive here and be
+                    // told to write `double(...)`; it widens on its own
                     // now (docs/NUMERICS.md), so everything that still
                     // reaches this line has no conversion to offer.
                     try self.fail(
@@ -1912,7 +1924,7 @@ pub const FunctionBuilder = struct {
         }
         // A binding that received something fresh (or a give, or a
         // copy) owns the object; receiving another name is an alias
-        // (S1, S8).  `var xs: List(T)? = none` owns too, for S40's
+        // (S1, S8).  `var xs: list(T)? = none` owns too, for S40's
         // reason: the binding is established here and whatever a later
         // assignment fills in belongs to its scope — `none` itself
         // owns nothing (S43).
@@ -1933,7 +1945,7 @@ pub const FunctionBuilder = struct {
             // so refusing `give y` can name `x` (S23).
             self.rememberOwnerName(name, value_expression.name.text);
         }
-        // `let x: Int? = 5` is optional in its type and present in
+        // `let x: long? = 5` is optional in its type and present in
         // fact, and the reader should not have to test what they just
         // wrote.
         if (widened) try self.narrow(local);
@@ -2196,7 +2208,7 @@ pub const FunctionBuilder = struct {
             return;
         }
         // The value was lowered before the chain named a type for it,
-        // so a Float place takes its Int here (docs/NUMERICS.md).
+        // so a double place takes its long here (docs/NUMERICS.md).
         var placed = value;
         if (current_type == .float and placed.value_type == .int) {
             placed = try self.promote(placed);
@@ -2226,7 +2238,7 @@ pub const FunctionBuilder = struct {
     /// the right-hand side under OP — `place OP= value` reads the
     /// place once (the caller supplies `current`) and stores this.
     /// Type rules are a binary expression's exactly: numeric
-    /// arithmetic, plus String concat for `+=`.  Returns the register
+    /// arithmetic, plus string concat for `+=`.  Returns the register
     /// holding the combined value, or null after reporting.
     fn compoundCombine(
         self: *FunctionBuilder,
@@ -2243,8 +2255,8 @@ pub const FunctionBuilder = struct {
             });
             return null;
         }
-        // `/` answers a Float whatever it divides (docs/NUMERICS.md
-        // §2), so `n /= 2` on an Int place is a narrowing nobody
+        // `/` answers a double whatever it divides (docs/NUMERICS.md
+        // §2), so `n /= 2` on a long place is a narrowing nobody
         // wrote.  It is a compile error rather than a silent
         // truncation, which is this design's whole safety story in
         // one line — and the fix is one character.
@@ -2252,14 +2264,14 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.type",
                 span,
-                "/ answers a Float and this place is Int; write '//=' for the integer quotient",
+                "/ answers a double and this place is long; write '//=' for the integer quotient",
                 .{},
             );
             return null;
         }
         const string_concat = op == .add and place_type == .string;
         if (!place_type.isNumeric() and !string_concat) {
-            try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on String){s}", .{
+            try self.fail("luce.sema.type", span, "{s} has no compound assignment (numbers, or += on string){s}", .{
                 try self.analyzer.typeName(place_type),
                 try self.absenceAdvice(place_type, null),
             });
@@ -2322,7 +2334,7 @@ pub const FunctionBuilder = struct {
         // place gets a clear message here instead of the ownership
         // check firing on the (non-fresh) right-hand side.
         if (assign.compound != null and info.carries) {
-            try self.fail("luce.sema.type", assign.span, "{s} has no compound assignment (numbers, or += on String)", .{
+            try self.fail("luce.sema.type", assign.span, "{s} has no compound assignment (numbers, or += on string)", .{
                 try self.analyzer.typeName(local_type),
             });
             return;
@@ -2508,7 +2520,7 @@ pub const FunctionBuilder = struct {
         const value = &values[values.len - 1];
         const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
         // The value was lowered before the container named a type for
-        // it, so a Float element takes its Int here (docs/NUMERICS.md).
+        // it, so a double element takes its long here (docs/NUMERICS.md).
         if (element_type == .float and value.value_type == .int) {
             value.* = try self.promote(value.*);
         }
@@ -2557,7 +2569,7 @@ pub const FunctionBuilder = struct {
     }
 
     /// Type-check lowered index values against a heap object: lists
-    /// take one Int, arrays take rank Ints, maps take one key.
+    /// take one long, arrays take rank Ints, maps take one key.
     /// Returns the element/value type.
     fn checkIndex(
         self: *FunctionBuilder,
@@ -2584,7 +2596,7 @@ pub const FunctionBuilder = struct {
         switch (descriptor) {
             .list => |element| {
                 if (indices.len != 1 or indices[0].value_type != .int) {
-                    try self.fail("luce.sema.index", span, "lists index with one Int", .{});
+                    try self.fail("luce.sema.index", span, "lists index with one long", .{});
                     return null;
                 }
                 return element;
@@ -2599,7 +2611,7 @@ pub const FunctionBuilder = struct {
                 }
                 for (indices) |index_value| {
                     if (index_value.value_type != .int) {
-                        try self.fail("luce.sema.index", span, "array indices are Int", .{});
+                        try self.fail("luce.sema.index", span, "array indices are long", .{});
                         return null;
                     }
                 }
@@ -2615,7 +2627,7 @@ pub const FunctionBuilder = struct {
                 return pair.value;
             },
             .builder => {
-                try self.fail("luce.sema.index", span, "Builder has no index; b.build() reads it", .{});
+                try self.fail("luce.sema.index", span, "builder has no index; b.build() reads it", .{});
                 return null;
             },
         }
@@ -2624,7 +2636,7 @@ pub const FunctionBuilder = struct {
     fn lowerCondition(self: *FunctionBuilder, expression: *ast.Expression) Error!?Typed {
         const condition = (try self.lowerExpression(expression, false)) orelse return null;
         if (condition.value_type != .boolean) {
-            try self.fail("luce.sema.type", expression.span(), "condition must be Bool, not {s}{s}", .{
+            try self.fail("luce.sema.type", expression.span(), "condition must be bool, not {s}{s}", .{
                 try self.analyzer.typeName(condition.value_type),
                 try self.absenceAdvice(condition.value_type, expression),
             });
@@ -2639,7 +2651,7 @@ pub const FunctionBuilder = struct {
         const temps_floor = self.temps.items.len;
         const condition = (try self.lowerCondition(conditional.condition)) orelse return;
         // Condition temporaries die before the branch: the condition
-        // value is a Bool, so nothing still needs them.
+        // value is a bool, so nothing still needs them.
         try self.flushTemps(temps_floor);
 
         // The arms run under what the condition decided, and what
@@ -2722,7 +2734,7 @@ pub const FunctionBuilder = struct {
         const start = bounds[0];
         const end = bounds[1];
         if (start.value_type != .int or end.value_type != .int) {
-            try self.fail("luce.sema.type", loop.span, "range bounds must be Int", .{});
+            try self.fail("luce.sema.type", loop.span, "range bounds must be long", .{});
             return;
         }
         // Bound temporaries die before the loop starts.
@@ -2771,19 +2783,19 @@ pub const FunctionBuilder = struct {
         defer self.temporary().free(entry);
         const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
         const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
-            try self.fail("luce.sema.loop", loop.span, "for iterates a List, a rank-1 Array, or a Map, not {s}{s}", .{
+            try self.fail("luce.sema.loop", loop.span, "for iterates a list, a rank-1 array, or a map, not {s}{s}", .{
                 try self.analyzer.typeName(iterable.value_type),
                 try self.absenceAdvice(iterable.value_type, loop.iterable),
             });
             return;
         };
-        // Each collection has a "position" (a Map's key, or a
-        // List/Array's Int index) and a "payload" (a Map's value, or
+        // Each collection has a "position" (a map's key, or a
+        // list/array's long index) and a "payload" (a map's value, or
         // the element).  `for x in c:` binds the payload for
         // sequences and the key for maps (Python's habit); `for a, b
         // in c:` binds position then payload.
         var payload_kind: mir.Intrinsic = .index_get;
-        var position_kind: ?mir.Intrinsic = null; // null = the raw Int index
+        var position_kind: ?mir.Intrinsic = null; // null = the raw long index
         var position_type: Type = .int;
         const payload_type: Type = switch (descriptor) {
             .list => |element| element,
@@ -2801,7 +2813,7 @@ pub const FunctionBuilder = struct {
                 break :blk pair.value;
             },
             .builder => {
-                try self.fail("luce.sema.loop", loop.span, "Builder is not iterable", .{});
+                try self.fail("luce.sema.loop", loop.span, "builder is not iterable", .{});
                 return;
             },
         };
@@ -2820,7 +2832,7 @@ pub const FunctionBuilder = struct {
         // A loop name holds a *view* of the element, and the body can
         // invalidate it: an element overwrite frees the old element
         // (S22), and unlike an object — whose handle would go stale
-        // and trap — a String has no handle to check
+        // and trap — a string has no handle to check
         // (docs/STRINGS.md).  So a body that could free something a
         // container holds gives the name a copy of its own, released
         // at the top of the next iteration and at the end of the loop;
@@ -2850,7 +2862,7 @@ pub const FunctionBuilder = struct {
         try self.code.startIteration(&shape, iterable.register);
 
         // Bind the first name: a getter intrinsic (key_at / index_get)
-        // or the raw index when it is the List/Array position.
+        // or the raw index when it is the list/array position.
         //
         // The owning form releases the previous iteration's copy
         // before storing this one; the slot starts empty, so the first
@@ -3014,7 +3026,7 @@ pub const FunctionBuilder = struct {
                     },
                 }
             }
-            // Whatever a String-returning function hands back may be
+            // Whatever a string-returning function hands back may be
             // a view of a parameter (`strings.trim` returns
             // `s[first:last]`) or of a local this frame is about to
             // release, and Luce has no annotation that tells them
@@ -3138,7 +3150,7 @@ pub const FunctionBuilder = struct {
     ///
     /// `func step(var self):` answers arity one — the receiver alone —
     /// and lowers exactly as `docs/METHODS.md` said it would.
-    /// `func next(var self) -> Int:` answers `(Rng, Int)`, and the call
+    /// `func next(var self) -> long:` answers `(Rng, long)`, and the call
     /// site takes result zero back to the receiver's place and result
     /// one to the name.  There is one mechanism, not two.
     ///
@@ -3212,7 +3224,7 @@ pub const FunctionBuilder = struct {
             };
             // The *declared* results may carry objects freely and move
             // under S16/S28 like any other return: a method may answer
-            // a fresh List while writing back a value-only receiver,
+            // a fresh list while writing back a value-only receiver,
             // and the two facts do not interact.
             if (try self.movesOut(expression, value, &moved)) |register| {
                 registers[position + 1] = register;
@@ -3355,7 +3367,7 @@ pub const FunctionBuilder = struct {
         // Freshly allocated storage is parked for the same reason and
         // in the same slot, but the two questions differ: `give s`
         // hands over an object while borrowing the struct run it sits
-        // in, and a String slice borrows without yielding anything
+        // in, and a string slice borrows without yielding anything
         // (docs/STRINGS.md).
         const storage = self.analyzer.ownsStorage(value.value_type) and
             self.producesFreshStorage(value.register) and
@@ -3366,12 +3378,12 @@ pub const FunctionBuilder = struct {
 
     /// Materialise an integer literal at the type it lands on
     /// (docs/TYPES.md D3).  `negated` folds the minus in first, so
-    /// `Int`'s minimum stays writable; `wanted` is the landing type the
+    /// `long`'s minimum stays writable; `wanted` is the landing type the
     /// context asked for, and null means there is no context and the
     /// literal takes the default.
     ///
     /// The float landing reads the **digits**, not `parseIntLiteral`'s
-    /// result: an integer literal past `Int`'s range still lands
+    /// result: an integer literal past `long`'s range still lands
     /// correctly on a float that has room for it, and the rule "parsed
     /// at the width it lands on" keeps its one spelling.
     fn lowerIntLiteral(
@@ -3464,7 +3476,7 @@ pub const FunctionBuilder = struct {
                 try self.fail(
                     "luce.sema.absent",
                     literal.span,
-                    "none needs a type here; write it into something declared T? (var x: Int? = none), or compare with a T? (x == none)",
+                    "none needs a type here; write it into something declared T? (var x: long? = none), or compare with a T? (x == none)",
                     .{},
                 );
                 return null;
@@ -3503,7 +3515,7 @@ pub const FunctionBuilder = struct {
         // What the call answered has to survive the branch on its
         // outcome, and it arrives owning something — so the slot that
         // carries it across *is* the slot that owns it (S3).  One
-        // place, not two, and a String's form survives the crossing
+        // place, not two, and a string's form survives the crossing
         // because an owning slot holds a whole value; a borrowing one
         // would carry a pointer into whatever scratch the call
         // answered into (docs/STRINGS.md).
@@ -3760,7 +3772,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.own",
                 give.span,
-                "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]",
                 .{},
             );
             return null;
@@ -3897,7 +3909,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.own",
                 copied.span,
-                "copy applies to objects (List, Map, Array, Builder, object-carrying structs); values copy by themselves [OWNERSHIP.md S32]",
+                "copy applies to objects (list, map, array, builder, object-carrying structs); values copy by themselves [OWNERSHIP.md S32]",
                 .{},
             );
             return null;
@@ -3918,11 +3930,11 @@ pub const FunctionBuilder = struct {
         var dims: []Register = &.{};
         if (types.builtinNamed(new.type_name.name) == .array) {
             if (new.dims.len == 0 or new.dims.len > 4) {
-                try self.fail("luce.sema.new", new.span, "new Array takes 1 to 4 dimension sizes: new Array(Int, 5, 5)", .{});
+                try self.fail("luce.sema.new", new.span, "new array takes 1 to 4 dimension sizes: new array(long, 5, 5)", .{});
                 return null;
             }
             const element = (try self.analyzer.resolveType(self.module, new.type_name.arguments[0])) orelse return null;
-            // `new Array(T, n)` spells its shape with expressions, so
+            // `new array(T, n)` spells its shape with expressions, so
             // it interns the heap type here rather than through the
             // written-type path — and needs the same refusal.
             if (try self.analyzer.refuseOptionalPart(element, new.type_name.arguments[0], "array element")) {
@@ -3935,7 +3947,7 @@ pub const FunctionBuilder = struct {
             const dimensions = (try self.lowerOperands(new.dims)) orelse return null;
             for (dimensions, new.dims, dims) |dimension, expression, *register| {
                 if (dimension.value_type != .int) {
-                    try self.fail("luce.sema.new", expression.span(), "array dimensions are Int", .{});
+                    try self.fail("luce.sema.new", expression.span(), "array dimensions are long", .{});
                     return null;
                 }
                 register.* = dimension.register;
@@ -3943,7 +3955,7 @@ pub const FunctionBuilder = struct {
         } else {
             object_type = (try self.analyzer.resolveType(self.module, new.type_name)) orelse return null;
             if (object_type != .heap) {
-                try self.fail("luce.sema.new", new.span, "new builds List, Map, Array, or Builder", .{});
+                try self.fail("luce.sema.new", new.span, "new builds list, map, array, or builder", .{});
                 return null;
             }
         }
@@ -3961,14 +3973,14 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.type",
                 literal.span,
-                "an empty [] needs an annotated binding (var xs: List(Int) = []) or new List(T)",
+                "an empty [] needs an annotated binding (var xs: list(long) = []) or new list(T)",
                 .{},
             );
             return null;
         }
         const elements = (try self.lowerOperands(literal.elements)) orelse return null;
         const element_type = wanted orelse unified: {
-            // One Float among numbers makes them all Floats, wherever
+            // One double among numbers makes them all Floats, wherever
             // in the literal it stands: `[1, 2.5]` and `[2.5, 1]` are
             // the same list, as `1 + 2.5` and `2.5 + 1` are the same
             // sum (docs/NUMERICS.md).
@@ -3978,9 +3990,9 @@ pub const FunctionBuilder = struct {
             break :unified elements[0].value_type;
         };
         for (elements, literal.elements) |*element, expression| {
-            // A `List(Float)` takes Int elements by widening them, and
-            // so does a list whose first element made it Float
-            // (docs/NUMERICS.md): `[1.5, 2]` is a `List(Float)`.
+            // A `list(double)` takes long elements by widening them, and
+            // so does a list whose first element made it double
+            // (docs/NUMERICS.md): `[1.5, 2]` is a `list(double)`.
             if (element_type == .float and element.value_type == .int) {
                 element.* = try self.promote(element.*);
             }
@@ -4044,7 +4056,7 @@ pub const FunctionBuilder = struct {
         const is_string = target.value_type == .string;
         const descriptor = self.analyzer.heapOf(target.value_type);
         if (!is_string and (descriptor == null or descriptor.? != .list)) {
-            try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on List and String", .{
+            try self.fail("luce.sema.index", slice.span, "{s} cannot be sliced; slices work on list and string", .{
                 try self.analyzer.typeName(target.value_type),
             });
             return null;
@@ -4053,7 +4065,7 @@ pub const FunctionBuilder = struct {
         const lowered_bounds = sequence[1..];
         for (lowered_bounds) |value| {
             if (value.value_type != .int) {
-                try self.fail("luce.sema.type", slice.span, "slice bounds are Int", .{});
+                try self.fail("luce.sema.type", slice.span, "slice bounds are long", .{});
                 return null;
             }
         }
@@ -4192,7 +4204,7 @@ pub const FunctionBuilder = struct {
         };
 
         // Numbers that mix (docs/NUMERICS.md).  Arithmetic widens the
-        // Int and answers a Float; comparison does **not** widen —
+        // long and answers a double; comparison does **not** widen —
         // it is exact, and leaves through its own instruction.
         if ((left.value_type == .int and right.value_type == .float) or
             (left.value_type == .float and right.value_type == .int))
@@ -4203,7 +4215,7 @@ pub const FunctionBuilder = struct {
             _ = try self.unifyNumeric(&left, &right);
         }
 
-        // `/` is **real division** and always answers a Float, so two
+        // `/` is **real division** and always answers a double, so two
         // Ints widen here too and there is no integer `/` left in the
         // IR (docs/NUMERICS.md §2).  `1 / 2` is `0.5`; the quotient
         // that answers `0` is `1 // 2`.
@@ -4254,8 +4266,8 @@ pub const FunctionBuilder = struct {
             };
         }
 
-        // Comparisons: equality everywhere; ordering for Int, Float,
-        // and String.
+        // Comparisons: equality everywhere; ordering for long, double,
+        // and string.
         const ordering = operation != .equal and operation != .not_equal;
         if (ordering and !(operand_type.isNumeric() or operand_type == .string)) {
             try self.fail("luce.sema.type", binary.span, "{s} has no ordering", .{
@@ -4279,10 +4291,10 @@ pub const FunctionBuilder = struct {
     }
 
     /// `1 < 1.5`, `9007199254740993 == 9007199254740992.0`: a
-    /// comparison whose sides are an `Int` and a `Float` compares the
+    /// comparison whose sides are an `long` and a `double` compares the
     /// numbers and not a conversion of them (docs/NUMERICS.md §5).
     ///
-    /// The runtime answers one shape — Int first — so an operator
+    /// The runtime answers one shape — long first — so an operator
     /// written the other way round is **mirrored** rather than given a
     /// second implementation.  Only the ordering operators have a
     /// mirror image; equality is its own.
@@ -4363,8 +4375,8 @@ pub const FunctionBuilder = struct {
         const left = (try self.lowerExpression(binary.left, false)) orelse return null;
         const payload = left.value_type.held() orelse {
             // A name already proved present is the likely case, and
-            // "Int always has a value" would only puzzle a reader who
-            // wrote `Int?`.
+            // "long always has a value" would only puzzle a reader who
+            // wrote `long?`.
             if (already) |name| {
                 try self.fail("luce.sema.absent", binary.span, "{s} already holds a value here, so the else can never run; drop it", .{name});
                 return null;
@@ -4422,10 +4434,10 @@ pub const FunctionBuilder = struct {
         if (left.value_type != .boolean) {
             // Which side, and what it is: the type is in hand and the
             // operand has its own span, so underlining both of them and
-            // naming neither — which is what "and needs Bool operands"
+            // naming neither — which is what "and needs bool operands"
             // did — throws away everything the reader needs.
-            // `condition must be Bool, not Int` is the model.
-            try self.fail("luce.sema.type", binary.left.span(), "the left operand of {s} must be Bool, not {s}{s}", .{
+            // `condition must be bool, not long` is the model.
+            try self.fail("luce.sema.type", binary.left.span(), "the left operand of {s} must be bool, not {s}{s}", .{
                 operator,
                 try self.analyzer.typeName(left.value_type),
                 try self.absenceAdvice(left.value_type, binary.left),
@@ -4444,7 +4456,7 @@ pub const FunctionBuilder = struct {
         defer self.narrowed.shrinkRetainingCapacity(facts_floor);
         if (try self.lowerExpression(binary.right, false)) |right| {
             if (right.value_type != .boolean) {
-                try self.fail("luce.sema.type", binary.right.span(), "the right operand of {s} must be Bool, not {s}{s}", .{
+                try self.fail("luce.sema.type", binary.right.span(), "the right operand of {s} must be bool, not {s}{s}", .{
                     operator,
                     try self.analyzer.typeName(right.value_type),
                     try self.absenceAdvice(right.value_type, binary.right),
@@ -4461,14 +4473,14 @@ pub const FunctionBuilder = struct {
 
     fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error!?Typed {
         // -9223372036854775808 is one literal, not a negated one: the
-        // magnitude alone is past Int's maximum, so the sign has to
-        // fold in before the range is checked or the smallest Int is
+        // magnitude alone is past long's maximum, so the sign has to
+        // fold in before the range is checked or the smallest long is
         // the one number nobody can write.
         if (unary.op == .negate and unary.operand.* == .int_literal) {
             return self.lowerIntLiteral(unary.operand.int_literal, unary.span, true, wanted);
         }
         // A minus does not change where a literal lands, so the
-        // landing type passes straight through it: `let x: Float =
+        // landing type passes straight through it: `let x: double =
         // -1.5` reads its text at a float exactly as `1.5` would.
         if (unary.op == .negate) self.wanted = wanted;
         const operand = (try self.lowerExpression(unary.operand, false)) orelse return null;
@@ -4487,7 +4499,7 @@ pub const FunctionBuilder = struct {
             },
             .logic_not => {
                 if (operand.value_type != .boolean) {
-                    try self.fail("luce.sema.type", unary.span, "not needs a Bool", .{});
+                    try self.fail("luce.sema.type", unary.span, "not needs a bool", .{});
                     return null;
                 }
                 return .{
@@ -4783,8 +4795,8 @@ pub const FunctionBuilder = struct {
         return .value;
     }
 
-    /// The String methods the language keeps for itself, and what each
-    /// lowers to.  Everything else a program writes on a String routes
+    /// The string methods the language keeps for itself, and what each
+    /// lowers to.  Everything else a program writes on a string routes
     /// to the std `strings` module (`stringsCall`, docs/STD.md), so
     /// this table is the whole closed set — a table rather than the two
     /// `if`s it used to be, because it is the only place these two
@@ -4834,7 +4846,7 @@ pub const FunctionBuilder = struct {
         const found: MethodFound = blk: {
             if (receiver.value_type == .string) {
                 // The primitives above, and nothing else: every other
-                // String method is library code — s.find(x) is
+                // string method is library code — s.find(x) is
                 // strings.find(s, x) (docs/STD.md).
                 for (string_methods) |primitive| {
                     if (!std.mem.eql(u8, method.name, primitive.name)) continue;
@@ -4845,7 +4857,7 @@ pub const FunctionBuilder = struct {
             }
             if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
                 // join belongs to the strings module too: it makes a
-                // String, from List(String).
+                // string, from list(string).
                 if (descriptor == .list and descriptor.list == .string and
                     std.mem.eql(u8, method.name, "join"))
                 {
@@ -4914,7 +4926,7 @@ pub const FunctionBuilder = struct {
         const registers = try self.arena().alloc(Register, values.len);
         for (values, registers) |value, *slot| slot.* = value.register;
         // A list keeps what it is appended, so the element is a store
-        // and takes or copies its storage here; a Builder copies bytes
+        // and takes or copies its storage here; a builder copies bytes
         // into a buffer of its own and borrows (docs/STRINGS.md).
         if (self.storedElement(found.kind, receiver.value_type)) |position| {
             registers[position] = try self.ownedForStore(values[position]);
@@ -5211,8 +5223,8 @@ pub const FunctionBuilder = struct {
     ///
     /// **This replaces "Point has no methods"**, which was true until
     /// a struct could have one and would now be a lie.  It offers the
-    /// closest method there actually is, which is what the List, Map
-    /// and Builder families already do.
+    /// closest method there actually is, which is what the list, map
+    /// and builder families already do.
     fn failUnknownMethod(
         self: *FunctionBuilder,
         layout_index: u32,
@@ -5263,7 +5275,7 @@ pub const FunctionBuilder = struct {
     /// the position, the type wanted and the type given, and it is
     /// underlined at the argument that is wrong rather than at the
     /// whole call.  Before this existed each method wrote one sentence
-    /// for both mistakes — `xs.append("hi")` on a `List(Int)` was told
+    /// for both mistakes — `xs.append("hi")` on a `list(long)` was told
     /// "append takes one element value", which is an answer to a
     /// question the reader did not ask, since they passed exactly one.
     ///
@@ -5274,8 +5286,8 @@ pub const FunctionBuilder = struct {
     /// False after reporting.  `wanted` is positional and its length
     /// is the arity.
     /// Check a method's arguments against the types it takes, and
-    /// widen the ones that reach them by widening — an `Int` handed to
-    /// a `List(Float)`'s `append` is a `Float` (docs/NUMERICS.md).
+    /// widen the ones that reach them by widening — an `long` handed to
+    /// a `list(double)`'s `append` is a `double` (docs/NUMERICS.md).
     /// The arguments are rewritten in place, because the registers the
     /// caller goes on to pass are these.
     fn methodTakes(
@@ -5331,7 +5343,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.import",
                 method.span,
-                "String manipulation lives in the standard library: import std.strings to use {s} (docs/STD.md)",
+                "string manipulation lives in the standard library: import std.strings to use {s} (docs/STD.md)",
                 .{method.name},
             );
             return null;
@@ -5355,14 +5367,14 @@ pub const FunctionBuilder = struct {
             while (keys.next()) |key| {
                 if (std.mem.startsWith(u8, key.*, "strings.")) suggestion.offer(key.*["strings.".len..]);
             }
-            // The reader wrote a method on a String; `strings` is the
+            // The reader wrote a method on a string; `strings` is the
             // module it routes to, and answering with the routing
             // target names something they never typed.  Say what they
             // asked about, then where the answer would have lived.
             if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "String has no method {s}; did you mean {s}?", .{ method.name, closest });
+                try self.fail("luce.sema.method", method.span, "string has no method {s}; did you mean {s}?", .{ method.name, closest });
             } else {
-                try self.fail("luce.sema.method", method.span, "String has no method {s}, and neither has the strings module", .{method.name});
+                try self.fail("luce.sema.method", method.span, "string has no method {s}, and neither has the strings module", .{method.name});
             }
             return null;
         };
@@ -5450,7 +5462,7 @@ pub const FunctionBuilder = struct {
     pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
 
     /// `descriptor` is the receiver's *shape*, which is everything the
-    /// dispatch below turns on: a `List(Int)` and a `List(String)`
+    /// dispatch below turns on: a `list(long)` and a `list(string)`
     /// answer to the same method names and differ only in what the
     /// element type makes of the arguments, and the descriptor carries
     /// that.  The receiver's `Type` adds nothing on top of it.
@@ -5519,18 +5531,18 @@ pub const FunctionBuilder = struct {
                 var suggestion = helpers.Suggestion.init(name);
                 suggestion.offerAll(&map_methods);
                 if (suggestion.best()) |closest| {
-                    try self.fail("luce.sema.method", method.span, "Map has no method {s}; did you mean {s}?", .{ name, closest });
+                    try self.fail("luce.sema.method", method.span, "map has no method {s}; did you mean {s}?", .{ name, closest });
                 } else {
-                    try self.fail("luce.sema.method", method.span, "Map has no method {s} (has get remove keys values clear)", .{name});
+                    try self.fail("luce.sema.method", method.span, "map has no method {s} (has get remove keys values clear)", .{name});
                 }
                 return null;
             },
             .builder => {
-                // The method a Builder should always have had.  Its
+                // The method a builder should always have had.  Its
                 // text used to come out through `b.build()`, which made
                 // the one free builtin that took a heap object — and
                 // is why `str` could not simply be renamed
-                // `String` (docs/NUMERICS.md §7).
+                // `string` (docs/NUMERICS.md §7).
                 if (std.mem.eql(u8, name, "build")) {
                     if (!try self.methodTakes(method, arguments, &.{})) return null;
                     return .{ .kind = .str_value, .result = .string };
@@ -5550,16 +5562,16 @@ pub const FunctionBuilder = struct {
                 var suggestion = helpers.Suggestion.init(name);
                 suggestion.offerAll(&builder_methods);
                 if (suggestion.best()) |closest| {
-                    try self.fail("luce.sema.method", method.span, "Builder has no method {s}; did you mean {s}?", .{ name, closest });
+                    try self.fail("luce.sema.method", method.span, "builder has no method {s}; did you mean {s}?", .{ name, closest });
                 } else {
-                    try self.fail("luce.sema.method", method.span, "Builder has no method {s} (append append_ascii build clear)", .{name});
+                    try self.fail("luce.sema.method", method.span, "builder has no method {s} (append append_ascii build clear)", .{name});
                 }
                 return null;
             },
         }
     }
 
-    /// Methods shared by List and rank-1 Array; growth operations are
+    /// Methods shared by list and rank-1 array; growth operations are
     /// list-only.
     fn sequenceMethod(
         self: *FunctionBuilder,
@@ -5594,7 +5606,7 @@ pub const FunctionBuilder = struct {
         if (std.mem.eql(u8, name, "sort")) {
             if (!try self.methodTakes(method, arguments, &.{})) return null;
             const ordered = element == .int or element == .float or element == .string;
-            if (!ordered) return self.methodFail(method, "sort orders Int, Float, or String elements");
+            if (!ordered) return self.methodFail(method, "sort orders long, double, or string elements");
             return .{ .kind = .list_sort, .result = .none };
         }
         if (std.mem.eql(u8, name, "reverse")) {
@@ -5610,9 +5622,9 @@ pub const FunctionBuilder = struct {
             return .{ .kind = .list_contains, .result = .boolean };
         }
         // "here" was the only word naming the receiver, and it names
-        // nothing: Map and Builder both say which they are, and a
-        // reader who mistook a List for a Map needs exactly that.
-        const receiver = if (growable) "List" else "Array";
+        // nothing: map and builder both say which they are, and a
+        // reader who mistook a list for a map needs exactly that.
+        const receiver = if (growable) "list" else "array";
         var suggestion = helpers.Suggestion.init(name);
         suggestion.offerAll(if (growable) &list_methods else &array_methods);
         if (suggestion.best()) |closest| {
@@ -5620,10 +5632,10 @@ pub const FunctionBuilder = struct {
             return null;
         }
         if (growable) {
-            try self.fail("luce.sema.method", method.span, "List has no method {s} (has append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
+            try self.fail("luce.sema.method", method.span, "list has no method {s} (has append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
             return null;
         }
-        try self.fail("luce.sema.method", method.span, "Array has no method {s} (has dim fill sort reverse find contains)", .{name});
+        try self.fail("luce.sema.method", method.span, "array has no method {s} (has dim fill sort reverse find contains)", .{name});
         return null;
     }
 
@@ -5724,13 +5736,13 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// `Int(x)`, `Float(x)`, `String(x)` — the three conversion
+    /// `long(x)`, `double(x)`, `string(x)` — the three conversion
     /// constructors, each named for the type it produces
     /// (docs/NUMERICS.md §7).  They are matched by name here, before
     /// name resolution, which is why they are not in the builtin
-    /// table and why `String` is a reserved name.
+    /// table and why `string` is a reserved name.
     ///
-    /// `String(x)` takes the scalars and nothing else: a `Builder` is
+    /// `string(x)` takes the scalars and nothing else: a `builder` is
     /// a heap object and its text comes out through `b.build()`, which
     /// is the method it should always have had.
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
@@ -5750,7 +5762,7 @@ pub const FunctionBuilder = struct {
                         try self.fail(
                             "luce.sema.convert",
                             call.span,
-                            "String() converts a scalar; a Builder hands over its text with .build()",
+                            "string() converts a scalar; a builder hands over its text with .build()",
                             .{},
                         );
                         return null;
@@ -5788,14 +5800,14 @@ pub const FunctionBuilder = struct {
     }
 
     /// One sentence for all three constructors, naming what each takes.
-    /// It used to be spelled per constructor as "Int() converts Float,
-    /// not X" — which stopped being true the moment `Int(Int)` was an
-    /// identity and `Int` accepted both numeric types.
+    /// It used to be spelled per constructor as "long() converts double,
+    /// not X" — which stopped being true the moment `long(long)` was an
+    /// identity and `long` accepted both numeric types.
     fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Typed {
         const takes: []const u8 = if (conversionNamed(call.callee).? == .string)
-            "Int, Float, Bool, or String"
+            "long, double, bool, or string"
         else
-            "an Int or a Float";
+            "a long or a double";
         try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{
             call.callee,
             takes,
@@ -5888,14 +5900,14 @@ pub const FunctionBuilder = struct {
         var extra_argument: ?Register = null;
         switch (matched.kind) {
             .abs => {
-                if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes Int or Float");
+                if (!arguments[0].value_type.isNumeric()) return self.failIntrinsic(call, "abs takes long or double");
                 result = arguments[0].value_type;
             },
             // `min`, `max` and `clamp` unify their arguments the way a
-            // binary operator unifies its operands: one Float among
+            // binary operator unifies its operands: one double among
             // them makes them all Floats (docs/NUMERICS.md).  Anything
             // else would make `clamp(x, 0, 10)` a type error for a
-            // Float `x` in a language where `x < 0` is not.
+            // double `x` in a language where `x < 0` is not.
             .min, .max => {
                 _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
                 if (!arguments[0].value_type.isNumeric() or
@@ -5915,7 +5927,7 @@ pub const FunctionBuilder = struct {
             },
             .sqrt, .floor, .ceil, .trunc => {
                 if (arguments[0].value_type != .float)
-                    return self.failIntrinsic(call, "this builtin takes a Float");
+                    return self.failIntrinsic(call, "this builtin takes a double");
                 result = .float;
             },
             .len => {
@@ -5926,7 +5938,7 @@ pub const FunctionBuilder = struct {
                         try self.failAbsence(call.span, "len", arguments[0].value_type, call.arguments[0].value);
                         return .failed;
                     }
-                    return self.failIntrinsic(call, "len takes a String, List, Map, Array, or Builder");
+                    return self.failIntrinsic(call, "len takes a string, list, map, array, or builder");
                 }
                 result = .int;
             },
@@ -5936,7 +5948,7 @@ pub const FunctionBuilder = struct {
                         try self.failAbsence(call.span, "free", arguments[0].value_type, call.arguments[0].value);
                         return .failed;
                     }
-                    return self.failIntrinsic(call, "free releases a List, Map, Array, or Builder");
+                    return self.failIntrinsic(call, "free releases a list, map, array, or builder");
                 }
                 // free is deliberate early release of an owned name,
                 // and poisons the name like give does (S6).
@@ -5991,7 +6003,7 @@ pub const FunctionBuilder = struct {
             },
             .parse_int, .parse_float => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "this builtin parses a String");
+                    return self.failIntrinsic(call, "this builtin parses a string");
                 // "Not a number" is the same reason every time and the
                 // name already implies it, so the answer is absence
                 // rather than a trap (docs/FAILURE.md).
@@ -6002,12 +6014,12 @@ pub const FunctionBuilder = struct {
             },
             .chr_code => {
                 if (arguments[0].value_type != .int)
-                    return self.failIntrinsic(call, "chr takes an Int codepoint");
+                    return self.failIntrinsic(call, "chr takes a long codepoint");
                 result = .string;
             },
             .ord_text => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "ord takes a String");
+                    return self.failIntrinsic(call, "ord takes a string");
                 result = .int;
             },
             // Lowered from syntax or method calls, never from bare names.
@@ -6019,7 +6031,7 @@ pub const FunctionBuilder = struct {
             .null_object,
             // Emitted by a mixed comparison; there is no name for it.
             .compare_int_float,
-            // Emitted by `String(x)` and by `Builder.build()`, both of
+            // Emitted by `string(x)` and by `builder.build()`, both of
             // which are resolved before this table is consulted.
             .str_value,
             .none_value,
@@ -6054,43 +6066,43 @@ pub const FunctionBuilder = struct {
 
             .assert_true => {
                 if (arguments[0].value_type != .boolean)
-                    return self.failIntrinsic(call, "assert takes a Bool");
+                    return self.failIntrinsic(call, "assert takes a bool");
                 result = .none;
             },
             .trap_message => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "trap takes a String message");
+                    return self.failIntrinsic(call, "trap takes a string message");
                 result = .none;
             },
             .raise_error => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "error takes a String message");
+                    return self.failIntrinsic(call, "error takes a string message");
                 result = .none;
             },
             // Emitted by `try` and `catch`; never written by a reader.
             .errored, .forget => unreachable,
             .print, .term_write => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "this builtin takes a String");
+                    return self.failIntrinsic(call, "this builtin takes a string");
                 result = .none;
             },
             .file_read => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "file_read takes a String path");
+                    return self.failIntrinsic(call, "file_read takes a string path");
                 result = .string;
             },
             .file_write => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                    return self.failIntrinsic(call, "file_write takes (path String, content String)");
+                    return self.failIntrinsic(call, "file_write takes (path string, content string)");
                 // The world decided, so a failed write is news and not
-                // a Bool nobody looked at (docs/FAILURE.md).  It
+                // a bool nobody looked at (docs/FAILURE.md).  It
                 // answers nothing and every call site says which of
                 // `try` and `catch` it means.
                 result = .none;
             },
             .file_exists => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "file_exists takes a String path");
+                    return self.failIntrinsic(call, "file_exists takes a string path");
                 result = .boolean;
             },
             .term_rows, .term_cols => {
@@ -6101,20 +6113,20 @@ pub const FunctionBuilder = struct {
             },
             .term_move => {
                 if (arguments[0].value_type != .int or arguments[1].value_type != .int)
-                    return self.failIntrinsic(call, "term_move takes (row Int, col Int)");
+                    return self.failIntrinsic(call, "term_move takes (row long, col long)");
                 result = .none;
             },
             .term_style => {
                 if (arguments[0].value_type != .int or
                     arguments[1].value_type != .int or
                     arguments[2].value_type != .boolean)
-                    return self.failIntrinsic(call, "term_style takes (foreground Int, background Int, bold Bool)");
+                    return self.failIntrinsic(call, "term_style takes (foreground long, background long, bold bool)");
                 result = .none;
             },
             .key_read => {
                 // A keyboard runs dry — a pipe ends, a terminal
                 // closes — and there is nothing there and no reason
-                // worth carrying, which is `String?` and not a name
+                // worth carrying, which is `string?` and not a name
                 // in the closed set (docs/FAILURE.md).  The same fact
                 // `read_line` already answers `none` for, off the same
                 // descriptor.
@@ -6125,15 +6137,15 @@ pub const FunctionBuilder = struct {
             },
             .read_line => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "read_line takes a String prompt");
-                // End of input is absence, not failure: `String?`, and
+                    return self.failIntrinsic(call, "read_line takes a string prompt");
+                // End of input is absence, not failure: `string?`, and
                 // `read_line("> ") else ""` is the whole handling
                 // (docs/FAILURE.md).
                 result = .{ .optional = .string };
             },
             .print_error => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "print_error takes a String");
+                    return self.failIntrinsic(call, "print_error takes a string");
                 result = .none;
             },
             .clock_ms => {
@@ -6141,32 +6153,32 @@ pub const FunctionBuilder = struct {
             },
             .sleep_ms => {
                 if (arguments[0].value_type != .int)
-                    return self.failIntrinsic(call, "sleep_ms takes an Int of milliseconds");
+                    return self.failIntrinsic(call, "sleep_ms takes a long of milliseconds");
                 result = .none;
             },
             .env_get => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "env takes a String name");
+                    return self.failIntrinsic(call, "env takes a string name");
                 result = .{ .optional = .string };
             },
             .file_append => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                    return self.failIntrinsic(call, "file_append takes (path String, content String)");
+                    return self.failIntrinsic(call, "file_append takes (path string, content string)");
                 result = .none;
             },
             .file_delete => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "file_delete takes a String path");
+                    return self.failIntrinsic(call, "file_delete takes a string path");
                 result = .none;
             },
             .file_rename => {
                 if (arguments[0].value_type != .string or arguments[1].value_type != .string)
-                    return self.failIntrinsic(call, "file_rename takes (from String, to String)");
+                    return self.failIntrinsic(call, "file_rename takes (from string, to string)");
                 result = .none;
             },
             .dir_list => {
                 if (arguments[0].value_type != .string)
-                    return self.failIntrinsic(call, "dir_list takes a String path");
+                    return self.failIntrinsic(call, "dir_list takes a string path");
                 result = try self.analyzer.internHeapType(.{ .list = .string });
             },
         }

@@ -29,7 +29,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-/// 18 — `key_read` answers `String?` rather than `String`.  The
+/// 18 — `key_read` answers `string?` rather than `string`.  The
 /// intrinsic list is unchanged and the wire shape with it, but the
 /// *type* the verifier demands of `key_read`'s result is not, so a
 /// module written under 17 would either fail verification or, worse,
@@ -532,10 +532,10 @@ fn compileScript(source: []const u8) !mir.Program {
 test "a compiled program round-trips through the module format" {
     const source =
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\func length(point: Point) -> Float:
+        \\func length(point: Point) -> double:
         \\    return sqrt(point.x * point.x + point.y * point.y)
         \\
         \\func main():
@@ -547,14 +547,14 @@ test "a compiled program round-trips through the module format" {
         \\            total = total + index
         \\    print("length ready")
         \\    let text = "π = " + "3.14159"[0:4]
-        \\    var points = new List(Float)
+        \\    var points = new list(double)
         \\    points.append(length(point))
-        \\    var counts = new Map(String, Int)
+        \\    var counts = new map(string, long)
         \\    counts[text] = len(points)
-        \\    var grid = new Array(Int, 2, 3)
+        \\    var grid = new array(long, 2, 3)
         \\    grid[1, 2] = total
         \\    for value in points:
-        \\        total = total + Int(value)
+        \\        total = total + long(value)
         \\    free(points)
         \\    free(counts)
         \\    free(grid)
@@ -587,18 +587,18 @@ test "a compiled program round-trips through the module format" {
 test "an optional type round-trips with its payload, and T?? is rejected" {
     var program = try compileScript(
         \\struct Slot:
-        \\    held: String?
+        \\    held: string?
         \\
-        \\func widen(n: Int) -> Int?:
+        \\func widen(n: long) -> long?:
         \\    return n
         \\
         \\func main():
-        \\    var counted: Int? = none
+        \\    var counted: long? = none
         \\    counted = widen(3)
         \\    var slot = Slot(held = none)
         \\    slot.held = "there"
-        \\    var listed: List(Int)? = none
-        \\    listed = new List(Int)
+        \\    var listed: list(long)? = none
+        \\    listed = new list(long)
         \\    listed.append(1)
         \\    assert((counted else 0) == 3)
         \\    assert(slot.held != none)
@@ -617,8 +617,8 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
     const loaded_dump = try mir.print(testing.allocator, &loaded);
     defer testing.allocator.free(loaded_dump);
     try testing.expectEqualStrings(original_dump, loaded_dump);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "Int?") != null);
-    try testing.expect(std.mem.indexOf(u8, loaded_dump, "List(Int)?") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "long?") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "list(long)?") != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -654,7 +654,7 @@ test "an optional type round-trips with its payload, and T?? is rejected" {
 
 test "debug origins round-trip; strip removes them and shrinks the module" {
     var program = try compileScript(
-        \\func twice(value: Int) -> Int:
+        \\func twice(value: long) -> long:
         \\    return value * 2
         \\
         \\func main():
@@ -772,20 +772,20 @@ test "a damaged register reference fails verification, not execution" {
 // the corpus keeps it by being acyclic (see `forwardOnly`).
 const mutation_source =
     \\struct Point:
-    \\    x: Float
-    \\    tag: String
+    \\    x: double
+    \\    tag: string
     \\
-    \\func total(values: List(Int)) -> Int:
+    \\func total(values: list(long)) -> long:
     \\    return values[0] + values[1] + values[2]
     \\
     \\func main():
     \\    var xs = [3, 1, 2]
     \\    xs.sort()
-    \\    var ages = new Map(String, Int)
+    \\    var ages = new map(string, long)
     \\    ages["ada"] = total(xs)
     \\    let point = Point(x = sqrt(4.0), tag = "p"[0:1])
     \\    if point.x > 1.0 and ages.has("ada"):
-    \\        xs.append(Int(point.x))
+    \\        xs.append(long(point.x))
     \\    assert(len(xs) == 4)
     \\
 ;
@@ -918,7 +918,7 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     //
     // **It fingerprints the names and nothing else**, so it catches an
     // intrinsic added, removed or renamed and cannot catch one whose
-    // *type* changed — `key_read` going from `String` to `String?`
+    // *type* changed — `key_read` going from `string` to `string?`
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.

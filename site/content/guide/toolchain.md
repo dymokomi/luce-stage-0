@@ -217,7 +217,7 @@ clause in [the ownership specification](/ref/ownership/).
 
 ```luce fail
 func main():
-    var rows = new List(List(Int))
+    var rows = new list(list(long))
     var item = [1]
     rows.append(item)
 ```

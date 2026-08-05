@@ -7,7 +7,7 @@
 //! questions about meaning.
 //!
 //! **Complete for the grammar in docs/LANGUAGE.md**, with one wart:
-//! it desugars f-strings into `String(x) + …` and `elif` chains into
+//! it desugars f-strings into `string(x) + …` and `elif` chains into
 //! nested `if`s while it still has only syntax.  That belongs in
 //! stage 5; nothing else here anticipates it.
 //!

@@ -164,7 +164,7 @@ const greeting =
     \\    var total = 0
     \\    for index in range(0, 5):
     \\        total = total + index * index
-    \\    print("total " + String(total))
+    \\    print("total " + string(total))
     \\
 ;
 
@@ -431,7 +431,7 @@ test "how a program ended is the number a shell reads, whoever started it" {
             \\func main():
             \\    var xs = [1, 2, 3]
             \\    print("before")
-            \\    print(String(xs[7]))
+            \\    print(string(xs[7]))
             \\
             ,
             .status = 1,
@@ -477,8 +477,8 @@ test "the words after a program are the program's, not loom's" {
     var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("echo.luc",
-        \\func main(args: List(String)):
-        \\    print(String(len(args)))
+        \\func main(args: list(string)):
+        \\    print(string(len(args)))
         \\    for word in args:
         \\        print(word)
         \\
@@ -576,7 +576,7 @@ test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
     var install = try installTree(gpa, true);
     defer install.deinit(gpa);
     try install.write("mine.luc",
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    print("editing " + args[0])
         \\
     );

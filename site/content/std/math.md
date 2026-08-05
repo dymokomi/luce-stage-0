@@ -17,13 +17,13 @@ compile-time constants and fold at their use sites.
 
 | Signature | Notes |
 |---|---|
-| `math.round(x: Float) -> Float` | half **away from zero**: `round(-2.5)` is `-3.0`; the same rounding `Int(x)` does |
-| `math.exp(x: Float) -> Float` | overflow yields infinity, underflow yields `0.0` |
-| `math.ln(x: Float) -> Float` | traps for `x <= 0` |
+| `math.round(x: double) -> double` | half **away from zero**: `round(-2.5)` is `-3.0`; the same rounding `long(x)` does |
+| `math.exp(x: double) -> double` | overflow yields infinity, underflow yields `0.0` |
+| `math.ln(x: double) -> double` | traps for `x <= 0` |
 | `math.log2(x)`, `math.log10(x)` | |
-| `math.pow(x: Float, y: Float) -> Float` | negative `x` needs a whole `y` or it traps; `0^negative` traps; `0^0` is `1` |
-| `math.ipow(base: Int, n: Int) -> Int` | integer power by squaring; checked, so overflow traps; negative `n` traps |
-| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians; every `Float` is in the domain, but see the accuracy note below |
+| `math.pow(x: double, y: double) -> double` | negative `x` needs a whole `y` or it traps; `0^negative` traps; `0^0` is `1` |
+| `math.ipow(base: long, n: long) -> long` | integer power by squaring; checked, so overflow traps; negative `n` traps |
+| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians; every `double` is in the domain, but see the accuracy note below |
 
 Series are range-reduced, and `exp` and `ln` hold to about 1e-14
 relative.
@@ -55,11 +55,11 @@ import std.strings
 
 func main():
     print(strings.format_float(math.pi, 6))
-    print(String(math.round(2.5)) + " " + String(math.round(-2.5)))
+    print(string(math.round(2.5)) + " " + string(math.round(-2.5)))
     print(strings.format_float(math.exp(1.0), 6))
     print(strings.format_float(math.ln(math.e), 6))
     print(strings.format_float(math.log2(1024.0), 1))
-    print(String(math.ipow(2, 20)))
+    print(string(math.ipow(2, 20)))
     print(strings.format_float(math.pow(2.0, 0.5), 6))
     print(strings.format_float(math.sin(math.pi / 2.0), 6))
 ```
@@ -77,25 +77,25 @@ func main():
 
 ## Vectors and statistics
 
-Whole-array operations over `Array(Float, _)`, the numeric vector
+Whole-array operations over `array(double, _)`, the numeric vector
 type — the numpy-shaped tranche. Reductions accumulate left to right,
 so they are bit-reproducible, including against the benchmark's C
 twins.
 
 | Signature | Notes |
 |---|---|
-| `math.sum(xs) -> Float` | |
-| `math.mean(xs) -> Float?` | `none` for an empty array |
-| `math.vmin(xs) -> Float?`, `math.vmax(xs) -> Float?` | extrema; `min`/`max` are the scalar builtins |
-| `math.minmax(xs) -> (Float?, Float?)` | both, in **one** traversal. There could not have been one before multiple returns: writing it would have meant inventing a bag struct in the standard library |
-| `math.dot(xs, ys) -> Float` | a shape mismatch traps |
-| `math.norm(xs) -> Float` | Euclidean |
-| `math.variance(xs) -> Float?`, `math.stddev(xs) -> Float?` | population |
+| `math.sum(xs) -> double` | |
+| `math.mean(xs) -> double?` | `none` for an empty array |
+| `math.vmin(xs) -> double?`, `math.vmax(xs) -> double?` | extrema; `min`/`max` are the scalar builtins |
+| `math.minmax(xs) -> (double?, double?)` | both, in **one** traversal. There could not have been one before multiple returns: writing it would have meant inventing a bag struct in the standard library |
+| `math.dot(xs, ys) -> double` | a shape mismatch traps |
+| `math.norm(xs) -> double` | Euclidean |
+| `math.variance(xs) -> double?`, `math.stddev(xs) -> double?` | population |
 | `math.fill(xs, value)` | in place |
 | `math.scale(xs, factor)` | in place |
 | `math.axpy(xs, factor, ys)` | in place: `xs[i] += factor * ys[i]`; a shape mismatch traps |
 
-The five that answer `Float?` do so because an empty array has no
+The five that answer `double?` do so because an empty array has no
 mean, and "there is nothing there" is the same fact every time with no
 reason worth carrying.
 
@@ -104,9 +104,9 @@ import std.math
 import std.strings
 
 func main():
-    var xs = new Array(Float, 5)
+    var xs = new array(double, 5)
     for i in range(0, 5):
-        xs[i] = Float(i) * 2.0 + 1.0
+        xs[i] = double(i) * 2.0 + 1.0
 
     print(f"sum {math.sum(xs)}")
     print(f"mean {math.mean(xs) else 0.0}")
@@ -114,14 +114,14 @@ func main():
     print(strings.format_float(math.stddev(xs) else 0.0, 4))
     print(strings.format_float(math.norm(xs), 4))
 
-    var ys = new Array(Float, 5)
+    var ys = new array(double, 5)
     math.fill(ys, 2.0)
     print(f"dot {math.dot(xs, ys)}")
     math.scale(ys, 0.5)
     math.axpy(ys, 10.0, xs)
     print(f"ys[0] {ys[0]}, ys[4] {ys[4]}")
 
-    var empty = new Array(Float, 0)
+    var empty = new array(double, 0)
     print(f"mean of nothing: {math.mean(empty) else -1.0}")
 ```
 
@@ -138,7 +138,7 @@ mean of nothing: -1
 
 ## Randomness
 
-A Lehmer/MINSTD generator whose state is one `Int` in a struct. Every
+A Lehmer/MINSTD generator whose state is one `long` in a struct. Every
 draw is a `var self` method, so the state
 is *written back* rather than mutated through a reference: there are
 no hidden globals, no allocation, and every stream is deterministic
@@ -146,10 +146,10 @@ from its seed.
 
 | Signature | Notes |
 |---|---|
-| `math.Rng(state: Int)` | a generator. Any seed works — `folded` puts it in `[1, 2³¹ − 2]` |
-| `rng.next() -> Int` | the raw next state in `[1, 2³¹ − 2]`; the two below are the friendly faces over it |
-| `rng.real() -> Float` | in the open interval (0, 1) |
-| `rng.in_range(low, high) -> Int` | in `[low, high)`, `high` exclusive like `range`; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses |
+| `math.Rng(state: long)` | a generator. Any seed works — `folded` puts it in `[1, 2³¹ − 2]` |
+| `rng.next() -> long` | the raw next state in `[1, 2³¹ − 2]`; the two below are the friendly faces over it |
+| `rng.real() -> double` | in the open interval (0, 1) |
+| `rng.in_range(low, high) -> long` | in `[low, high)`, `high` exclusive like `range`; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses |
 
 The receiver must be a `var`: `var rng = math.Rng(state = 42)`.
 
@@ -160,13 +160,13 @@ import std.math
 
 func main():
     var rng = math.Rng(state = 2026)
-    var rolls: List(Int) = []
+    var rolls: list(long) = []
     for i in range(0, 8):
         rolls.append(rng.in_range(1, 7))
 
-    var text = new Builder()
+    var text = new builder()
     for roll in rolls:
-        text.append(String(roll))
+        text.append(string(roll))
         text.append(" ")
     print(text.build())
 
@@ -193,12 +193,12 @@ import std.math
 
 func main():
     print("about to take a logarithm")
-    print(String(math.ln(0.0)))
+    print(string(math.ln(0.0)))
 ```
 
 ```output
 about to take a logarithm
 loom: trap: ln of a non-positive number [explicit_trap]
-    at math.ln (std/math.luc:67:9)
+    at math.ln (std/math.luc:76:9)
     at main (main.luc:5:5)
 ```

@@ -60,23 +60,23 @@ test "integers: the four operations and precedence" {
     );
 }
 
-// `String(x)` completes the family of conversion constructors, each
+// `string(x)` completes the family of conversion constructors, each
 // named for the type it produces, and `str` is gone (docs/NUMERICS.md
-// §7).  `Builder` is why they are not the same function: `str(b)`
+// §7).  `builder` is why they are not the same function: `str(b)`
 // took a heap object, and a scalar constructor should not — a builder
 // hands over its text with `b.build()`.
 
-test "String(x) prints every scalar, and Builder.build() hands over its own" {
+test "string(x) prints every scalar, and builder.build() hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(String(42) == "42")
-        \\    assert(String(-7) == "-7")
-        \\    assert(String(2.5) == "2.5")
-        \\    assert(String(3.0) == "3")
-        \\    assert(String(true) == "true")
-        \\    assert(String(false) == "false")
-        \\    assert(String("already") == "already")
-        \\    var b = new Builder()
+        \\    assert(string(42) == "42")
+        \\    assert(string(-7) == "-7")
+        \\    assert(string(2.5) == "2.5")
+        \\    assert(string(3.0) == "3")
+        \\    assert(string(true) == "true")
+        \\    assert(string(false) == "false")
+        \\    assert(string("already") == "already")
+        \\    var b = new builder()
         \\    b.append("he")
         \\    b.append("llo")
         \\    assert(b.build() == "hello")
@@ -91,11 +91,11 @@ test "String(x) prints every scalar, and Builder.build() hands over its own" {
 
 // `{x:.2f}` — format specs inside f-strings, and nowhere else,
 // because that is where formatting happens (docs/NUMERICS.md §8).
-// One form: `.Nf` on a Float.  It lowers to `strings.format_float`,
+// One form: `.Nf` on a double.  It lowers to `strings.format_float`,
 // which already existed and already rounds half away from zero, so
 // this is one production in the f-string scanner and no runtime.
 
-test "f-strings: a :.Nf spec writes a Float to N decimal places" {
+test "f-strings: a :.Nf spec writes a double to N decimal places" {
     try agree.printsGiven(
         \\import std.strings
         \\
@@ -106,7 +106,7 @@ test "f-strings: a :.Nf spec writes a Float to N decimal places" {
         \\    print(f"{3} rolls, {rate:.3f}/s")
         \\    # Rounding is the language's, half away from zero.
         \\    print(f"{2.5:.0f} {-2.5:.0f}")
-        \\    # Promotion reaches the spec too: an Int widens into it.
+        \\    # Promotion reaches the spec too: a long widens into it.
         \\    print(f"{7:.2f}")
         \\    # And a hole with no spec is unchanged.
         \\    print(f"{mean}")
@@ -134,7 +134,7 @@ test "str is a name a program may take now" {
     // It left the reserved list with the builtin, so the language got
     // one word smaller in both senses (docs/NUMERICS.md §7).
     try agreeOk(
-        \\func str(n: Int) -> Int:
+        \\func str(n: long) -> long:
         \\    return n * 2
         \\
         \\func main():
@@ -143,56 +143,56 @@ test "str is a name a program may take now" {
     );
 }
 
-test "String(x) folds in a constant, in the same bytes a run would print" {
+test "string(x) folds in a constant, in the same bytes a run would print" {
     try agreeOk(
-        \\let count = String(42)
-        \\let ratio = String(2.5)
-        \\let flag = String(true)
-        \\let same = String("x")
+        \\let count = string(42)
+        \\let ratio = string(2.5)
+        \\let flag = string(true)
+        \\let same = string("x")
         \\let joined = count + " " + ratio + " " + flag + " " + same
         \\
         \\func main():
         \\    assert(joined == "42 2.5 true x")
-        \\    assert(String(42) == count)
-        \\    assert(String(2.5) == ratio)
+        \\    assert(string(42) == count)
+        \\    assert(string(2.5) == ratio)
         \\
     );
 }
 
-// `Int(x)` **rounds half away from zero** — the same rounding
+// `long(x)` **rounds half away from zero** — the same rounding
 // `math.round` was always documented as, because a language with two
 // roundings that disagree has a bug in it (docs/NUMERICS.md §7).
 // `trunc(x)` is how truncation is spelled now, completing the four:
 // `floor`, `ceil`, `trunc`, and round.
 
-test "Int(x) rounds half away from zero, and trunc keeps truncation" {
+test "long(x) rounds half away from zero, and trunc keeps truncation" {
     try agreeOk(
         \\func main():
-        \\    assert(Int(2.5) == 3)
-        \\    assert(Int(-2.5) == -3)
-        \\    assert(Int(0.5) == 1)
-        \\    assert(Int(-0.5) == -1)
-        \\    assert(Int(2.4) == 2)
-        \\    assert(Int(-2.4) == -2)
-        \\    assert(Int(2.6) == 3)
-        \\    assert(Int(-2.6) == -3)
-        \\    assert(Int(3.9) == 4)
-        \\    assert(Int(-3.9) == -4)
-        \\    assert(Int(7) == 7)
+        \\    assert(long(2.5) == 3)
+        \\    assert(long(-2.5) == -3)
+        \\    assert(long(0.5) == 1)
+        \\    assert(long(-0.5) == -1)
+        \\    assert(long(2.4) == 2)
+        \\    assert(long(-2.4) == -2)
+        \\    assert(long(2.6) == 3)
+        \\    assert(long(-2.6) == -3)
+        \\    assert(long(3.9) == 4)
+        \\    assert(long(-3.9) == -4)
+        \\    assert(long(7) == 7)
         \\    # Toward zero has a spelling of its own again.
         \\    assert(trunc(2.9) == 2.0)
         \\    assert(trunc(-2.9) == -2.0)
-        \\    assert(Int(trunc(-2.9)) == -2)
+        \\    assert(long(trunc(-2.9)) == -2)
         \\    # And the four roundings are four different answers.
         \\    assert(floor(-2.5) == -3.0)
         \\    assert(ceil(-2.5) == -2.0)
         \\    assert(trunc(-2.5) == -2.0)
-        \\    assert(Int(-2.5) == -3)
+        \\    assert(long(-2.5) == -3)
         \\
     );
 }
 
-test "Int(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
+test "long(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
     // `0.49999999999999994 + 0.5` rounds up to exactly 1.0 in
     // binary64, so the floor of it is 1 where the answer is 0.  That
     // is how `math.round` used to be written; both now split at
@@ -202,46 +202,46 @@ test "Int(x) and math.round agree, at the value floor(x + 0.5) gets wrong" {
         \\
         \\func main():
         \\    var nearly = 0.49999999999999994
-        \\    assert(Int(nearly) == 0)
+        \\    assert(long(nearly) == 0)
         \\    assert(math.round(nearly) == 0.0)
         \\    assert(floor(nearly + 0.5) == 1.0)
         \\    for step in range(-40, 41):
-        \\        let x = Float(step) / 4.0
-        \\        assert(Float(Int(x)) == math.round(x))
+        \\        let x = double(step) / 4.0
+        \\        assert(double(long(x)) == math.round(x))
         \\
     );
 }
 
-test "trap: Int(x) still refuses NaN, the infinities, and out of range" {
+test "trap: long(x) still refuses NaN, the infinities, and out of range" {
     try agreeTrap(
         \\func main():
         \\    var big = 1.0
         \\    while big < 1.0e30:
         \\        big = big * 10.0
-        \\    let bad = Int(big)
+        \\    let bad = long(big)
         \\
     , .conversion_range);
     try agreeTrap(
         \\func main():
         \\    var zero = 0.0
-        \\    let bad = Int(zero / zero)
+        \\    let bad = long(zero / zero)
         \\
     , .conversion_range);
     try agreeTrap(
         \\func main():
         \\    var zero = 0.0
         \\    var one = 1.0
-        \\    let bad = Int(one / zero)
+        \\    let bad = long(one / zero)
         \\
     , .conversion_range);
 }
 
-// `/` is **real division** and always answers a Float
+// `/` is **real division** and always answers a double
 // (docs/NUMERICS.md §2, §4): the classic `1/2 == 0` is the single
 // most common cause of surprise for people who do not already think
 // in machine words, and the quotient that answers `0` is `1 // 2`.
 
-test "integers: / is real division and answers a Float" {
+test "integers: / is real division and answers a double" {
     try agreeOk(
         \\func main():
         \\    assert(1 / 2 == 0.5)
@@ -257,9 +257,9 @@ test "integers: / is real division and answers a Float" {
 }
 
 test "integers: / never traps, and 1 / 0 is inf" {
-    // The operators that produce an Int keep integer semantics,
-    // including the trap; the one that produces a Float is IEEE like
-    // every other Float operation (docs/NUMERICS.md §4).
+    // The operators that produce a long keep integer semantics,
+    // including the trap; the one that produces a double is IEEE like
+    // every other double operation (docs/NUMERICS.md §4).
     try agreeOk(
         \\func main():
         \\    var zero = 0
@@ -270,7 +270,7 @@ test "integers: / never traps, and 1 / 0 is inf" {
         \\    assert(negative < -9.0e300)
         \\    let nan = zero / zero
         \\    assert(nan != nan)
-        \\    # And `minInt / -1`, which the Int quotient could not hold.
+        \\    # And `minInt / -1`, which the long quotient could not hold.
         \\    var low = -9223372036854775808
         \\    var minus_one = -1
         \\    assert(low / minus_one > 9.0e18)
@@ -405,10 +405,10 @@ test "integers: the i64 range is honored" {
     );
 }
 
-test "integers: Int's minimum is written the way it reads" {
+test "integers: long's minimum is written the way it reads" {
     // `-9223372036854775808` is a minus and a literal whose magnitude
-    // is one past the largest positive Int.  Range-checking the
-    // magnitude on its own makes the smallest Int the one number
+    // is one past the largest positive long.  Range-checking the
+    // magnitude on its own makes the smallest long the one number
     // nobody can spell, so the sign folds into the literal first.
     try agreeOk(
         \\func main():
@@ -422,7 +422,7 @@ test "integers: Int's minimum is written the way it reads" {
     );
 }
 
-test "integers: Int's minimum folds in a file-scope constant too" {
+test "integers: long's minimum folds in a file-scope constant too" {
     try agreeOk(
         \\let low = -9223372036854775808
         \\let high = 9223372036854775807
@@ -435,7 +435,7 @@ test "integers: Int's minimum folds in a file-scope constant too" {
 }
 
 // ---------------------------------------------------------------------------
-// Float arithmetic
+// double arithmetic
 // ---------------------------------------------------------------------------
 
 test "floats: arithmetic, IEEE division, and builtins" {
@@ -462,14 +462,14 @@ test "the conversions are still spelled where a program spells them" {
         \\func main():
         \\    let n = 7
         \\    let x = 2.0
-        \\    assert(Float(n) / x == 3.5)
-        \\    assert(Int(x) + n == 9)
-        \\    assert(Float(Int(3.9)) == 4.0)
+        \\    assert(double(n) / x == 3.5)
+        \\    assert(long(x) + n == 9)
+        \\    assert(double(long(3.9)) == 4.0)
         \\
     );
 }
 
-test "mixing: Int widens to Float in every arithmetic operator" {
+test "mixing: long widens to double in every arithmetic operator" {
     try agreeOk(
         \\func main():
         \\    let n = 7
@@ -488,19 +488,19 @@ test "mixing: Int widens to Float in every arithmetic operator" {
     );
 }
 
-test "mixing: a promoted operator answers a Float, printed as one" {
-    // `String` of a whole Float is its shortest round-trip, so "8" and
+test "mixing: a promoted operator answers a double, printed as one" {
+    // `string` of a whole double is its shortest round-trip, so "8" and
     // not "8.0" — the division below is what shows the type moved.
     try agree.printsGiven(
         \\func main():
         \\    let n = 7
-        \\    print(String(n + 1.0))
-        \\    print(String(1 + 0.5))
-        \\    print(String(n / 2.0))
+        \\    print(string(n + 1.0))
+        \\    print(string(1 + 0.5))
+        \\    print(string(n / 2.0))
         \\    var f = 2.0
         \\    f += 1
         \\    f *= 2
-        \\    print(String(f / 8.0))
+        \\    print(string(f / 8.0))
         \\
     , budget, "8\n1.5\n3.5\n0.75\n");
 }
@@ -508,22 +508,22 @@ test "mixing: a promoted operator answers a Float, printed as one" {
 test "mixing: promotion reaches annotations, arguments, returns, and fields" {
     try agreeOk(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\func scale(by: Float) -> Float:
+        \\func scale(by: double) -> double:
         \\    return by * 2
         \\
-        \\func whole() -> Float:
+        \\func whole() -> double:
         \\    return 3
         \\
-        \\func maybe_whole(present: Bool) -> Float?:
+        \\func maybe_whole(present: bool) -> double?:
         \\    if present:
         \\        return 4
         \\    return none
         \\
         \\func main():
-        \\    let f: Float = 1
+        \\    let f: double = 1
         \\    assert(f == 1.0)
         \\    assert(scale(3) == 6.0)
         \\    assert(whole() == 3.0)
@@ -593,15 +593,15 @@ test "types: the language's own names are lowercase" {
 // that used to refuse an integer spelling outright.
 test "literals: a number lands on the type its context names" {
     try agreeOk(
-        \\let whole: Float = 7
-        \\let negative: Float = -3
-        \\let folded: Float = 2 * 3 + 1
+        \\let whole: double = 7
+        \\let negative: double = -3
+        \\let folded: double = 2 * 3 + 1
         \\let plain = 7
         \\
-        \\func takes(x: Float) -> Float:
+        \\func takes(x: double) -> double:
         \\    return x
         \\
-        \\func answers() -> Float:
+        \\func answers() -> double:
         \\    return 12
         \\
         \\func main():
@@ -609,9 +609,9 @@ test "literals: a number lands on the type its context names" {
         \\    assert(negative == -3.0)
         \\    assert(folded == 7.0)
         \\    assert(plain == 7)
-        \\    let local: Float = 5
+        \\    let local: double = 5
         \\    assert(local == 5.0)
-        \\    let held: Float? = 6
+        \\    let held: double? = 6
         \\    assert(held == 6.0)
         \\    assert(takes(8) == 8.0)
         \\    assert(answers() == 12.0)
@@ -622,7 +622,7 @@ test "literals: a number lands on the type its context names" {
 test "mixing: promotion reaches container elements and min/max/clamp" {
     try agreeOk(
         \\func main():
-        \\    var xs: List(Float) = [1, 2, 3]
+        \\    var xs: list(double) = [1, 2, 3]
         \\    xs.append(4)
         \\    xs[0] = 9
         \\    assert(xs[0] == 9.0)
@@ -642,7 +642,7 @@ test "mixing: promotion reaches container elements and min/max/clamp" {
 }
 
 // Comparison across the line is **exact**: it compares the numbers,
-// not a conversion of them.  The boundary is 2^53, where an Int stops
+// not a conversion of them.  The boundary is 2^53, where a long stops
 // surviving `sitofp` — below it every answer agrees with widening and
 // above it they part company, which is the whole reason this is a
 // call and not a cast (docs/NUMERICS.md §5).
@@ -686,7 +686,7 @@ test "mixing: ordering, equality, and the fraction that breaks a tie" {
     );
 }
 
-test "mixing: infinity and NaN compare with an Int without widening it" {
+test "mixing: infinity and NaN compare with a long without widening it" {
     try agreeOk(
         \\func main():
         \\    var one = 1.0
@@ -728,7 +728,7 @@ test "mixing: an exact comparison folds the same way in a constant" {
 // Compound assignment
 // ---------------------------------------------------------------------------
 
-test "compound assignment on names: every operator, Int and Float" {
+test "compound assignment on names: every operator, long and double" {
     try agreeOk(
         \\func main():
         \\    var n = 10
@@ -765,7 +765,7 @@ test "compound assignment concatenates strings with +=" {
 test "compound assignment on struct fields and container elements" {
     try agreeOk(
         \\struct Counter:
-        \\    value: Int
+        \\    value: long
         \\
         \\func main():
         \\    var c = Counter(value = 1)
@@ -775,11 +775,11 @@ test "compound assignment on struct fields and container elements" {
         \\    var xs = [1, 2, 3]
         \\    xs[1] += 10
         \\    assert(xs[1] == 12)
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    grid[1, 1] += 7
         \\    grid[1, 1] -= 2
         \\    assert(grid[1, 1] == 5)
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["k"] = 5
         \\    m["k"] *= 4
         \\    assert(m["k"] == 20)
@@ -800,7 +800,7 @@ test "a compound index target evaluates its index expression once" {
         \\    assert(xs[0] == 100)
         \\    assert(xs[2] == 300)
         \\
-        \\func bump(counter: List(Int)) -> Int:
+        \\func bump(counter: list(long)) -> long:
         \\    counter[0] = counter[0] + 1
         \\    return 1
         \\
@@ -827,7 +827,7 @@ test "booleans: logic, short-circuit, and comparison chains" {
 
 test "short-circuit does not evaluate the dead side" {
     try agreeOk(
-        \\func boom(x: Int) -> Bool:
+        \\func boom(x: long) -> bool:
         \\    assert(x != 0)
         \\    return true
         \\
@@ -846,7 +846,7 @@ test "short-circuit does not evaluate the dead side" {
 
 test "if / elif / else selects exactly one arm" {
     try agreeOk(
-        \\func classify(n: Int) -> Int:
+        \\func classify(n: long) -> long:
         \\    if n < 0:
         \\        return 0 - 1
         \\    elif n == 0:
@@ -914,12 +914,12 @@ test "nested loops with labeled-free break only leave the inner loop" {
 
 test "functions: parameters, returns, and recursion" {
     try agreeOk(
-        \\func factorial(n: Int) -> Int:
+        \\func factorial(n: long) -> long:
         \\    if n <= 1:
         \\        return 1
         \\    return n * factorial(n - 1)
         \\
-        \\func fib(n: Int) -> Int:
+        \\func fib(n: long) -> long:
         \\    if n < 2:
         \\        return n
         \\    return fib(n - 1) + fib(n - 2)
@@ -933,12 +933,12 @@ test "functions: parameters, returns, and recursion" {
 
 test "mutual recursion resolves regardless of declaration order" {
     try agreeOk(
-        \\func is_even(n: Int) -> Bool:
+        \\func is_even(n: long) -> bool:
         \\    if n == 0:
         \\        return true
         \\    return is_odd(n - 1)
         \\
-        \\func is_odd(n: Int) -> Bool:
+        \\func is_odd(n: long) -> bool:
         \\    if n == 0:
         \\        return false
         \\    return is_even(n - 1)
@@ -989,13 +989,13 @@ test "strings: UTF-8 aware slicing and byte access" {
 // Conversions
 // ---------------------------------------------------------------------------
 
-test "conversions: String, parse, chr, ord" {
+test "conversions: string, parse, chr, ord" {
     try agreeOk(
         \\func main():
-        \\    assert(String(42) == "42")
-        \\    assert(String(0 - 7) == "-7")
-        \\    assert(String(true) == "true")
-        \\    assert(String(false) == "false")
+        \\    assert(string(42) == "42")
+        \\    assert(string(0 - 7) == "-7")
+        \\    assert(string(true) == "true")
+        \\    assert(string(false) == "false")
         \\    assert((parse_int("100") else 0) == 100)
         \\    assert((parse_float("1.5") else 0.0) == 1.5)
         \\    assert(chr(65) == "A")
@@ -1049,7 +1049,7 @@ test "ord folds in a file-scope constant, and an empty one still traps at run ti
 }
 
 // ---------------------------------------------------------------------------
-// String interpolation (f-strings)
+// string interpolation (f-strings)
 // ---------------------------------------------------------------------------
 
 test "f-strings interpolate names, expressions, and every scalar" {
@@ -1089,7 +1089,7 @@ test "f-strings compose with methods and calls in holes" {
     try agreeOk(
         \\import std.strings
         \\
-        \\func twice(n: Int) -> Int:
+        \\func twice(n: long) -> long:
         \\    return n * 2
         \\
         \\func main():
@@ -1109,8 +1109,8 @@ test "f-strings compose with methods and calls in holes" {
 test "structs: construction, field read, functional update, value copy" {
     try agreeOk(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
         \\    var p = Point(x = 1, y = 2)
@@ -1129,8 +1129,8 @@ test "structs: construction, field read, functional update, value copy" {
 test "structs: namespaced functions and nested structs" {
     try agreeOk(
         \\struct Vec:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\    func add(a: Vec, b: Vec) -> Vec:
         \\        return Vec(x = a.x + b.x, y = a.y + b.y)
@@ -1162,7 +1162,7 @@ test "structs: namespaced functions and nested structs" {
 
 test "returns: a shape is declared, returned, and bound" {
     try agreeOk(
-        \\func minmax(xs: List(Int)) -> (Int, Int):
+        \\func minmax(xs: list(long)) -> (long, long):
         \\    var low = xs[0]
         \\    var high = xs[0]
         \\    for value in xs:
@@ -1186,8 +1186,8 @@ test "returns: a shape is declared, returned, and bound" {
 
 test "returns: three values, mixed types, and a shape of shapes' worth of nesting" {
     try agreeOk(
-        \\func spread(n: Int) -> (Int, Float, String):
-        \\    return n, Float(n) / 2.0, String(n)
+        \\func spread(n: long) -> (long, double, string):
+        \\    return n, double(n) / 2.0, string(n)
         \\
         \\func main():
         \\    let count, half, written = spread(7)
@@ -1204,7 +1204,7 @@ test "returns: a discarded call is a statement temporary and dies with its state
     // struct temporary releases the whole shape.  The leak census is
     // what proves it.
     try agreeOk(
-        \\func two() -> (List(Int), List(Int)):
+        \\func two() -> (list(long), list(long)):
         \\    var head = [1]
         \\    var tail = [2]
         \\    return head, tail
@@ -1219,7 +1219,7 @@ test "returns: a discarded call is a statement temporary and dies with its state
 
 test "returns: each value moves, and the caller's two names own one each" {
     try agreeOk(
-        \\func halves(n: Int) -> (List(Int), List(Int)):
+        \\func halves(n: long) -> (list(long), list(long)):
         \\    var head = [n]
         \\    var tail = [n + 1]
         \\    return head, tail
@@ -1237,12 +1237,12 @@ test "returns: each value moves, and the caller's two names own one each" {
 
 test "returns: T! composes, and try is the only composition there is" {
     try agreeOk(
-        \\func pair(n: Int) -> (Int, Int)!:
+        \\func pair(n: long) -> (long, long)!:
         \\    if n < 0:
         \\        error("negative")
         \\    return n, n * 2
         \\
-        \\func doubled(n: Int) -> (Int, Int)!:
+        \\func doubled(n: long) -> (long, long)!:
         \\    let a, b = try pair(n)
         \\    return b, a
         \\
@@ -1261,16 +1261,16 @@ test "returns: T! composes, and try is the only composition there is" {
 
 test "returns: T? is an ordinary element of a shape" {
     // Absence *is* a value, so a `T?` among the elements needs no rule
-    // at all — while `-> (Int, Int)?` is refused, because there the
+    // at all — while `-> (long, long)?` is refused, because there the
     // `?` would be marking the shape (docs/RETURNS.md §2).
     try agreeOk(
-        \\func lookup(m: Map(String, Int), key: String) -> (Int?, Bool):
+        \\func lookup(m: map(string, long), key: string) -> (long?, bool):
         \\    if m.has(key):
         \\        return m[key], true
         \\    return none, false
         \\
         \\func main():
-        \\    var ages = new Map(String, Int)
+        \\    var ages = new map(string, long)
         \\    ages["ada"] = 36
         \\    let found, present = lookup(ages, "ada")
         \\    assert(present and (found else 0) == 36)
@@ -1286,7 +1286,7 @@ test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
     // not disqualifying, and two `var`s carry a pair as well as one
     // struct did.
     try agreeOk(
-        \\func step(value: Int, at: Int) -> (Int, Int):
+        \\func step(value: long, at: long) -> (long, long):
         \\    return value + at, at + 1
         \\
         \\func main():
@@ -1313,10 +1313,10 @@ test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
 test "methods: a receiver reads its struct, and the static form is the same call" {
     try agreeOk(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\    func length(self) -> Float:
+        \\    func length(self) -> double:
         \\        return sqrt(self.x * self.x + self.y * self.y)
         \\
         \\    func plus(self, other: Point) -> Point:
@@ -1344,7 +1344,7 @@ test "methods: a receiver reads its struct, and the static form is the same call
 test "methods: a receiver is a value, so the method sees a copy" {
     try agreeOk(
         \\struct Counter:
-        \\    count: Int
+        \\    count: long
         \\
         \\    func bumped(self) -> Counter:
         \\        var next = self
@@ -1364,9 +1364,9 @@ test "methods: a receiver is a value, so the method sees a copy" {
 test "methods: a receiver may be a field, an element, or a chain of both" {
     try agreeOk(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
-        \\    func doubled(self) -> Int:
+        \\    func doubled(self) -> long:
         \\        return self.x * 2
         \\
         \\struct Box:
@@ -1385,15 +1385,15 @@ test "methods: a receiver may be a field, an element, or a chain of both" {
 test "methods: a method may take and answer objects, and ownership is the plain-call rule" {
     try agreeOk(
         \\struct Tally:
-        \\    total: Int
+        \\    total: long
         \\
-        \\    func over(self, values: List(Int)) -> Int:
+        \\    func over(self, values: list(long)) -> long:
         \\        var sum = self.total
         \\        for value in values:
         \\            sum = sum + value
         \\        return sum
         \\
-        \\    func spread(self) -> List(Int):
+        \\    func spread(self) -> list(long):
         \\        var made = [self.total, self.total]
         \\        return made
         \\
@@ -1412,14 +1412,14 @@ test "methods: a method may take and answer objects, and ownership is the plain-
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:
-        \\    limit: Int
+        \\    limit: long
         \\
-        \\    func check(self, n: Int) -> Int!:
+        \\    func check(self, n: long) -> long!:
         \\        if n > self.limit:
         \\            error("over the limit")
         \\        return n
         \\
-        \\func under() -> Int!:
+        \\func under() -> long!:
         \\    let reader = Reader(limit = 5)
         \\    return try reader.check(3)
         \\
@@ -1445,10 +1445,10 @@ test "methods: a method can fail, and try and catch reach it through the receive
 test "var self: the receiver is written back, and nothing about it is a reference" {
     try agreeOk(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\    func scale(var self, factor: Float):
+        \\    func scale(var self, factor: double):
         \\        self.x = self.x * factor
         \\        self.y = self.y * factor
         \\
@@ -1472,17 +1472,17 @@ test "var self: the receiver is written back, and nothing about it is a referenc
 
 test "var self: the motivating case, end to end" {
     // The RNG of docs/RETURNS.md §5.  One call where the workaround
-    // had a one-element `List(Int)` allocated to give an `Int`
+    // had a one-element `list(long)` allocated to give an `long`
     // reference semantics.
     try agreeOk(
         \\struct Rng:
-        \\    state: Int
+        \\    state: long
         \\
-        \\    func next(var self) -> Int:
+        \\    func next(var self) -> long:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
-        \\    func in_range(var self, low: Int, high: Int) -> Int:
+        \\    func in_range(var self, low: long, high: long) -> long:
         \\        if high <= low:
         \\            trap("in_range needs low < high")
         \\        return low + self.next() % (high - low)
@@ -1509,7 +1509,7 @@ test "var self: the motivating case, end to end" {
 test "var self: a receiver may be a field or an element of a var root" {
     try agreeOk(
         \\struct Counter:
-        \\    n: Int
+        \\    n: long
         \\
         \\    func bump(var self):
         \\        self.n = self.n + 1
@@ -1529,9 +1529,9 @@ test "var self: a method that raises leaves its receiver as it was" {
     // gives (docs/FAILURE.md, docs/METHODS.md).
     try agreeOk(
         \\struct Meter:
-        \\    reading: Int
+        \\    reading: long
         \\
-        \\    func take(var self, n: Int) -> Int!:
+        \\    func take(var self, n: long) -> long!:
         \\        if n < 0:
         \\            error("negative")
         \\        self.reading = self.reading + n
@@ -1552,9 +1552,9 @@ test "var self: a method that raises leaves its receiver as it was" {
 test "var self: the read-only static form of a plain method is still the same call" {
     try agreeOk(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
-        \\    func doubled(self) -> Int:
+        \\    func doubled(self) -> long:
         \\        return self.x * 2
         \\
         \\    func grow(var self):
@@ -1577,10 +1577,10 @@ test "var self: the read-only static form of a plain method is still the same ca
 test "chained assignment through nested struct fields" {
     try agreeOk(
         \\struct Inner:
-        \\    n: Int
+        \\    n: long
         \\
         \\struct Outer:
-        \\    label: String
+        \\    label: string
         \\    inner: Inner
         \\
         \\func main():
@@ -1600,7 +1600,7 @@ test "chained assignment through nested struct fields" {
 test "chained assignment into struct elements of lists and arrays" {
     try agreeOk(
         \\struct Cell:
-        \\    value: Int
+        \\    value: long
         \\
         \\func main():
         \\    var cells = [Cell(value = 10), Cell(value = 20)]
@@ -1609,7 +1609,7 @@ test "chained assignment into struct elements of lists and arrays" {
         \\    assert(cells[0].value == 10)
         \\    cells[0].value += 5
         \\    assert(cells[0].value == 15)
-        \\    var grid = new Array(Cell, 2, 2)
+        \\    var grid = new array(Cell, 2, 2)
         \\    grid[1, 1].value = 7
         \\    assert(grid[1, 1].value == 7)
         \\    assert(grid[0, 0].value == 0)
@@ -1620,9 +1620,9 @@ test "chained assignment into struct elements of lists and arrays" {
 test "a chained index place evaluates its subscript once" {
     try agreeOk(
         \\struct Cell:
-        \\    value: Int
+        \\    value: long
         \\
-        \\func bump(counter: List(Int)) -> Int:
+        \\func bump(counter: list(long)) -> long:
         \\    counter[0] = counter[0] + 1
         \\    return 1
         \\
@@ -1667,7 +1667,7 @@ test "lists: literals, indexing, growth, and iteration" {
 test "maps: upsert, lookup, membership, keys in insertion order" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m["a"] = 3
@@ -1675,7 +1675,7 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
         \\    assert(m["a"] == 3)
         \\    assert(m.has("b"))
         \\    assert(not m.has("z"))
-        \\    var order = new Builder()
+        \\    var order = new builder()
         \\    for k in m.keys():
         \\        order.append(k)
         \\    assert(order.build() == "ab")
@@ -1688,11 +1688,11 @@ test "maps: upsert, lookup, membership, keys in insertion order" {
 test "maps: for key, value iteration, values(), and get with default" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m["c"] = 3
-        \\    var keys = new Builder()
+        \\    var keys = new builder()
         \\    var total = 0
         \\    for k, v in m:
         \\        keys.append(k)
@@ -1720,7 +1720,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
         \\        sum_value += x
         \\    assert(sum_index == 0 + 1 + 2)
         \\    assert(sum_value == 60)
-        \\    var row = new Array(Int, 4)
+        \\    var row = new array(long, 4)
         \\    row.fill(5)
         \\    var seen = 0
         \\    for i, v in row:
@@ -1734,7 +1734,7 @@ test "sequences: for index, element enumerates lists and rank-1 arrays" {
 test "single-name for still binds keys for maps and elements for sequences" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(Int, Int)
+        \\    var m = new map(long, long)
         \\    m[7] = 70
         \\    m[8] = 80
         \\    var key_sum = 0
@@ -1753,12 +1753,12 @@ test "single-name for still binds keys for maps and elements for sequences" {
 test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
     try agreeOk(
         \\func main():
-        \\    var grid = new Array(Int, 3, 4)
+        \\    var grid = new array(long, 3, 4)
         \\    assert(grid.dim(0) == 3 and grid.dim(1) == 4)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
         \\    assert(grid[2, 3] == 7)
-        \\    var row = new Array(Int, 5)
+        \\    var row = new array(long, 5)
         \\    row.fill(9)
         \\    assert(row[0] == 9 and row[4] == 9)
         \\    assert(len(row) == 5)
@@ -1769,7 +1769,7 @@ test "arrays: fixed shape, zero-init, multi-dimensional indexing" {
 test "builders accumulate text" {
     try agreeOk(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    b.append("he")
         \\    b.append("llo")
         \\    assert(b.build() == "hello")
@@ -1803,7 +1803,7 @@ test "file-scope constants fold and inline" {
 // Numeric builtins: abs / min / max / clamp
 // ---------------------------------------------------------------------------
 
-test "abs, min, max, clamp on Int" {
+test "abs, min, max, clamp on long" {
     try agreeOk(
         \\func main():
         \\    assert(abs(0 - 7) == 7)
@@ -1819,7 +1819,7 @@ test "abs, min, max, clamp on Int" {
     );
 }
 
-test "abs, min, max, clamp on Float" {
+test "abs, min, max, clamp on double" {
     try agreeOk(
         \\func main():
         \\    assert(abs(0.0 - 2.5) == 2.5)
@@ -1849,7 +1849,7 @@ test "float builtins: sqrt, floor, ceil on exact and fractional inputs" {
 // Comparison operators across the ordered types
 // ---------------------------------------------------------------------------
 
-test "all six comparisons on Int" {
+test "all six comparisons on long" {
     try agreeOk(
         \\func main():
         \\    assert(1 < 2)
@@ -1866,7 +1866,7 @@ test "all six comparisons on Int" {
     );
 }
 
-test "all six comparisons on Float" {
+test "all six comparisons on double" {
     try agreeOk(
         \\func main():
         \\    assert(1.5 < 1.6)
@@ -1880,7 +1880,7 @@ test "all six comparisons on Float" {
     );
 }
 
-test "all six comparisons on String use lexicographic byte order" {
+test "all six comparisons on string use lexicographic byte order" {
     try agreeOk(
         \\func main():
         \\    assert("a" < "b")
@@ -1898,10 +1898,10 @@ test "all six comparisons on String use lexicographic byte order" {
 }
 
 // ---------------------------------------------------------------------------
-// Equality by type: Bool, String, struct value, object identity
+// Equality by type: bool, string, struct value, object identity
 // ---------------------------------------------------------------------------
 
-test "equality: Bool truth table" {
+test "equality: bool truth table" {
     try agreeOk(
         \\func main():
         \\    assert(true == true)
@@ -1930,8 +1930,8 @@ test "equality: lists compare by identity, not contents" {
 test "equality: structs compare field by field (value semantics)" {
     try agreeOk(
         \\struct Pair:
-        \\    a: Int
-        \\    b: Int
+        \\    a: long
+        \\    b: long
         \\
         \\func main():
         \\    let p = Pair(a = 1, b = 2)
@@ -1983,22 +1983,22 @@ test "for-range over a reversed interval iterates zero times" {
     );
 }
 
-test "for-each over a List sums its elements in order" {
+test "for-each over a list sums its elements in order" {
     try agreeOk(
         \\func main():
         \\    let xs = [4, 5, 6]
-        \\    var out = new Builder()
+        \\    var out = new builder()
         \\    for x in xs:
-        \\        out.append(String(x))
+        \\        out.append(string(x))
         \\    assert(out.build() == "456")
         \\
     );
 }
 
-test "for-each over a rank-1 Array visits every slot" {
+test "for-each over a rank-1 array visits every slot" {
     try agreeOk(
         \\func main():
-        \\    var row = new Array(Int, 4)
+        \\    var row = new array(long, 4)
         \\    row[0] = 1
         \\    row[1] = 2
         \\    row[2] = 3
@@ -2011,14 +2011,14 @@ test "for-each over a rank-1 Array visits every slot" {
     );
 }
 
-test "for-each over Map keys walks insertion order" {
+test "for-each over map keys walks insertion order" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["x"] = 1
         \\    m["y"] = 2
         \\    m["z"] = 3
-        \\    var joined = new Builder()
+        \\    var joined = new builder()
         \\    for k in m.keys():
         \\        joined.append(k)
         \\    assert(joined.build() == "xyz")
@@ -2055,7 +2055,7 @@ test "continue in a nested loop affects only the inner loop" {
 
 test "the explicit frame stack survives a deep iterative-recursive sum" {
     try agreeOk(
-        \\func sum_to(n: Int) -> Int:
+        \\func sum_to(n: long) -> long:
         \\    if n == 0:
         \\        return 0
         \\    return n + sum_to(n - 1)
@@ -2190,23 +2190,23 @@ test "strings: byte_at reads raw UTF-8 bytes of a multibyte string" {
 // Conversions in depth
 // ---------------------------------------------------------------------------
 
-test "String renders every scalar, and a Builder hands over its own" {
+test "string renders every scalar, and a builder hands over its own" {
     try agreeOk(
         \\func main():
-        \\    assert(String(0) == "0")
-        \\    assert(String(1000000) == "1000000")
-        \\    assert(String(1.5) == "1.5")
-        \\    assert(String(3.0) == "3")
-        \\    assert(String(true) == "true")
-        \\    assert(String("already") == "already")
-        \\    var b = new Builder()
+        \\    assert(string(0) == "0")
+        \\    assert(string(1000000) == "1000000")
+        \\    assert(string(1.5) == "1.5")
+        \\    assert(string(3.0) == "3")
+        \\    assert(string(true) == "true")
+        \\    assert(string("already") == "already")
+        \\    var b = new builder()
         \\    b.append("bld")
         \\    assert(b.build() == "bld")
         \\
     );
 }
 
-test "parse_int and parse_float accept signs and round-trip String" {
+test "parse_int and parse_float accept signs and round-trip string" {
     try agreeOk(
         \\func main():
         \\    assert((parse_int("0") else 1) == 0)
@@ -2214,7 +2214,7 @@ test "parse_int and parse_float accept signs and round-trip String" {
         \\    assert((parse_int("+7") else 0) == 7)
         \\    assert((parse_float("3.25") else 0.0) == 3.25)
         \\    assert((parse_float("-0.5") else 0.0) == 0.0 - 0.5)
-        \\    assert((parse_int(String(98765)) else 0) == 98765)
+        \\    assert((parse_int(string(98765)) else 0) == 98765)
         \\
     );
 }
@@ -2254,7 +2254,7 @@ test "chr and ord round-trip across ASCII and multibyte codepoints" {
 // Lists: methods, slicing independence, nesting, structs
 // ---------------------------------------------------------------------------
 
-test "lists: sort orders Int, Float, and String in place" {
+test "lists: sort orders long, double, and string in place" {
     try agreeOk(
         \\func main():
         \\    var ints = [3, 1, 2]
@@ -2277,7 +2277,7 @@ test "lists: sort is stable — equal elements keep their order" {
     // detail: this test fails outright under an unstable sort.
     try agreeOk(
         \\func main():
-        \\    var xs: List(Float) = []
+        \\    var xs: list(double) = []
         \\    var i = 0
         \\    while i < 40:
         \\        xs.append(1.0)
@@ -2287,8 +2287,8 @@ test "lists: sort is stable — equal elements keep their order" {
         \\    xs.sort()
         \\    i = 0
         \\    while i < 40:
-        \\        assert(String(xs[i * 2]) == "-0")
-        \\        assert(String(xs[i * 2 + 1]) == "0")
+        \\        assert(string(xs[i * 2]) == "-0")
+        \\        assert(string(xs[i * 2 + 1]) == "0")
         \\        i += 1
         \\    assert(xs[80] == 1.0)
         \\
@@ -2331,12 +2331,12 @@ test "lists: a slice is an independent copy" {
 test "lists: nested lists are references shared until copied" {
     try agreeOk(
         \\func main():
-        \\    var outer = new List(List(Int))
+        \\    var outer = new list(list(long))
         \\    var inner = [1, 2]
         \\    outer.append(give inner)
         \\    outer[0].append(3)
         \\    assert(len(outer[0]) == 3)
-        \\    var dup = new List(List(Int))
+        \\    var dup = new list(list(long))
         \\    dup.append(copy outer[0])
         \\    dup[0].append(4)
         \\    assert(len(dup[0]) == 4)
@@ -2352,10 +2352,10 @@ test "lists: value structs stored by copy are independent" {
     // slot is replaced whole with cells[i] = ..., not cells[i].v = ...)
     try agreeOk(
         \\struct Cell:
-        \\    v: Int
+        \\    v: long
         \\
         \\func main():
-        \\    var cells = new List(Cell)
+        \\    var cells = new list(Cell)
         \\    var c = Cell(v = 1)
         \\    cells.append(c)
         \\    cells.append(c)
@@ -2372,10 +2372,10 @@ test "lists: value structs stored by copy are independent" {
 // Maps: key types, removal, clear
 // ---------------------------------------------------------------------------
 
-test "maps: Int keys, lookup, has, and len" {
+test "maps: long keys, lookup, has, and len" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(Int, String)
+        \\    var m = new map(long, string)
         \\    m[1] = "one"
         \\    m[2] = "two"
         \\    m[10] = "ten"
@@ -2393,7 +2393,7 @@ test "maps: Int keys, lookup, has, and len" {
 test "maps: removing an absent key is a no-op; clear empties" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["a"] = 1
         \\    m["b"] = 2
         \\    m.remove("ghost")
@@ -2416,32 +2416,32 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
     // keys()), and it has to survive all of that.
     try agreeOk(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    var i = 0
         \\    while i < 300:
-        \\        m["k" + String(i)] = i
+        \\        m["k" + string(i)] = i
         \\        i += 1
         \\    assert(len(m) == 300)
         \\    var seen = 0
         \\    for key, held in m:
-        \\        assert(key == "k" + String(held))
+        \\        assert(key == "k" + string(held))
         \\        assert(held == seen)
         \\        seen += 1
         \\    assert(seen == 300)
         \\    i = 0
         \\    while i < 300:
-        \\        assert(m["k" + String(i)] == i)
-        \\        assert(m.has("k" + String(i)))
+        \\        assert(m["k" + string(i)] == i)
+        \\        assert(m.has("k" + string(i)))
         \\        i += 1
         \\    i = 0
         \\    while i < 300:
         \\        if i % 2 == 0:
-        \\            m.remove("k" + String(i))
+        \\            m.remove("k" + string(i))
         \\        i += 1
         \\    assert(len(m) == 150)
         \\    var next = 1
         \\    for key in m:
-        \\        assert(key == "k" + String(next))
+        \\        assert(key == "k" + string(next))
         \\        next += 2
         \\    assert(m.get("k5", 0 - 1) == 5)
         \\    assert(m.get("k4", 0 - 1) == 0 - 1)
@@ -2449,10 +2449,10 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
     );
 }
 
-test "maps: Int keys survive growth, negatives, and the extremes" {
+test "maps: long keys survive growth, negatives, and the extremes" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(Int, Int)
+        \\    var m = new map(long, long)
         \\    var i = 0 - 200
         \\    while i < 200:
         \\        m[i * 3] = i
@@ -2478,16 +2478,16 @@ test "maps: Int keys survive growth, negatives, and the extremes" {
 test "arrays: ranks one through four report their dims and zero-init" {
     try agreeOk(
         \\func main():
-        \\    var a1 = new Array(Int, 5)
+        \\    var a1 = new array(long, 5)
         \\    assert(a1.dim(0) == 5 and a1[4] == 0)
-        \\    var a2 = new Array(Int, 2, 3)
+        \\    var a2 = new array(long, 2, 3)
         \\    assert(a2.dim(0) == 2 and a2.dim(1) == 3)
         \\    assert(a2[1, 2] == 0)
-        \\    var a3 = new Array(Int, 2, 2, 2)
+        \\    var a3 = new array(long, 2, 2, 2)
         \\    assert(a3.dim(2) == 2 and a3[1, 1, 1] == 0)
         \\    a3[1, 1, 1] = 7
         \\    assert(a3[1, 1, 1] == 7 and a3[0, 0, 0] == 0)
-        \\    var a4 = new Array(Int, 2, 2, 2, 2)
+        \\    var a4 = new array(long, 2, 2, 2, 2)
         \\    assert(a4.dim(3) == 2 and a4[1, 1, 1, 1] == 0)
         \\    a4[1, 1, 1, 1] = 9
         \\    assert(a4[1, 1, 1, 1] == 9)
@@ -2498,11 +2498,11 @@ test "arrays: ranks one through four report their dims and zero-init" {
 test "arrays: fill sets every slot; len is the first dimension" {
     try agreeOk(
         \\func main():
-        \\    var row = new Array(Float, 4)
+        \\    var row = new array(double, 4)
         \\    row.fill(1.5)
         \\    assert(row[0] == 1.5 and row[3] == 1.5)
         \\    assert(len(row) == 4)
-        \\    var grid = new Array(Int, 3, 5)
+        \\    var grid = new array(long, 3, 5)
         \\    assert(len(grid) == 3)
         \\
     );
@@ -2511,7 +2511,7 @@ test "arrays: fill sets every slot; len is the first dimension" {
 test "arrays: rank-1 sort, reverse, find, contains" {
     try agreeOk(
         \\func main():
-        \\    var row = new Array(Int, 4)
+        \\    var row = new array(long, 4)
         \\    row[0] = 3
         \\    row[1] = 1
         \\    row[2] = 4
@@ -2534,8 +2534,8 @@ test "arrays: rank-1 sort, reverse, find, contains" {
 test "structs: assigning a copy leaves the source untouched for value fields" {
     try agreeOk(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
         \\    var a = Point(x = 1, y = 2)
@@ -2555,11 +2555,11 @@ test "structs: nested value structs copy deeply" {
     // rejected — so the whole inner field is replaced instead.)
     try agreeOk(
         \\struct Inner:
-        \\    n: Int
+        \\    n: long
         \\
         \\struct Outer:
         \\    inner: Inner
-        \\    tag: Int
+        \\    tag: long
         \\
         \\func main():
         \\    var o = Outer(inner = Inner(n = 1), tag = 0)
@@ -2576,12 +2576,12 @@ test "structs: nested value structs copy deeply" {
 test "structs: namespaced functions can recurse and call peers" {
     try agreeOk(
         \\struct Math:
-        \\    dummy: Int
+        \\    dummy: long
         \\
-        \\    func square(n: Int) -> Int:
+        \\    func square(n: long) -> long:
         \\        return n * n
         \\
-        \\    func hypot_sq(a: Int, b: Int) -> Int:
+        \\    func hypot_sq(a: long, b: long) -> long:
         \\        return Math.square(a) + Math.square(b)
         \\
         \\func main():
@@ -2624,9 +2624,9 @@ test "ownership: copy is a deep, independent duplicate" {
 test "ownership: reassigning an owning var frees the old object with no leak" {
     try agreeOk(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    b.append("first")
-        \\    b = new Builder()
+        \\    b = new builder()
         \\    b.append("second")
         \\    assert(b.build() == "second")
         \\
@@ -2636,7 +2636,7 @@ test "ownership: reassigning an owning var frees the old object with no leak" {
 test "ownership: a late-declared object slot can be filled and used" {
     try agreeOk(
         \\func main():
-        \\    var xs: List(Int)
+        \\    var xs: list(long)
         \\    xs = [7, 8, 9]
         \\    assert(len(xs) == 3)
         \\    xs.append(10)
@@ -2647,8 +2647,8 @@ test "ownership: a late-declared object slot can be filled and used" {
 
 test "ownership: return moves an object out of a function" {
     try agreeOk(
-        \\func make() -> List(Int):
-        \\    var xs = new List(Int)
+        \\func make() -> list(long):
+        \\    var xs = new list(long)
         \\    xs.append(1)
         \\    xs.append(2)
         \\    return xs
@@ -2663,7 +2663,7 @@ test "ownership: return moves an object out of a function" {
 
 test "ownership: a borrowed parameter is read without transfer" {
     try agreeOk(
-        \\func total(xs: List(Int)) -> Int:
+        \\func total(xs: list(long)) -> long:
         \\    var sum = 0
         \\    for x in xs:
         \\        sum = sum + x
@@ -2685,18 +2685,18 @@ test "ownership: a borrowed parameter is read without transfer" {
 test "late var declarations hold the zero value of their type" {
     try agreeOk(
         \\struct Vec3:
-        \\    x: Int
-        \\    y: Int
-        \\    z: Int
+        \\    x: long
+        \\    y: long
+        \\    z: long
         \\
         \\func main():
-        \\    var n: Int
+        \\    var n: long
         \\    assert(n == 0)
-        \\    var f: Float
+        \\    var f: double
         \\    assert(f == 0.0)
-        \\    var flag: Bool
+        \\    var flag: bool
         \\    assert(not flag)
-        \\    var s: String
+        \\    var s: string
         \\    assert(s == "")
         \\    assert(len(s) == 0)
         \\    var v: Vec3
@@ -2707,8 +2707,8 @@ test "late var declarations hold the zero value of their type" {
 
 test "a late var can be assigned after a branch decides its value" {
     try agreeOk(
-        \\func pick(flag: Bool) -> Int:
-        \\    var out: Int
+        \\func pick(flag: bool) -> long:
+        \\    var out: long
         \\    if flag:
         \\        out = 10
         \\    else:
@@ -2733,8 +2733,8 @@ test "constants of every scalar type fold and inline" {
         \\let enabled = true and not false
         \\let prefix = "id_"
         \\
-        \\func label(n: Int) -> String:
-        \\    return prefix + String(n)
+        \\func label(n: long) -> string:
+        \\    return prefix + string(n)
         \\
         \\func main():
         \\    assert(limit == 12)
@@ -2767,14 +2767,14 @@ test "constants reference earlier constants" {
 
 test "a T? holds either a value or none, and says which" {
     try agreeOk(
-        \\func passthrough(n: Int?) -> Int?:
+        \\func passthrough(n: long?) -> long?:
         \\    return n
         \\
-        \\func text(t: String?) -> String?:
+        \\func text(t: string?) -> string?:
         \\    return t
         \\
         \\func main():
-        \\    var n: Int? = none
+        \\    var n: long? = none
         \\    assert(n == none)
         \\    assert(not (n != none))
         \\    n = 7
@@ -2782,7 +2782,7 @@ test "a T? holds either a value or none, and says which" {
         \\    # a real one again.
         \\    assert(passthrough(n) != none)
         \\    assert(not (passthrough(n) == none))
-        \\    var t: String? = "hi"
+        \\    var t: string? = "hi"
         \\    assert(text(t) != none)
         \\    t = none
         \\    assert(t == none)
@@ -2814,7 +2814,7 @@ test "narrowing: a tested name is its payload inside the branch, and both branch
 
 test "narrowing: an early-return guard narrows the rest of the block" {
     try agreeOk(
-        \\func doubled(text: String) -> Int:
+        \\func doubled(text: string) -> long:
         \\    let n = parse_int(text)
         \\    if n == none:
         \\        return 0 - 1
@@ -2880,11 +2880,11 @@ test "narrowing: and carries the test into the rest of the condition" {
 test "narrowing: an assignment of a plain value proves the name present" {
     try agreeOk(
         \\func main():
-        \\    var n: Int? = none
+        \\    var n: long? = none
         \\    n = 3
         \\    assert(n * 2 == 6)
-        \\    var xs: List(Int)? = none
-        \\    xs = new List(Int)
+        \\    var xs: list(long)? = none
+        \\    xs = new list(long)
         \\    xs.append(4)
         \\    assert(len(xs) == 1)
         \\    free(xs)
@@ -2895,7 +2895,7 @@ test "narrowing: an assignment of a plain value proves the name present" {
 test "narrowing: a while condition narrows its body" {
     try agreeOk(
         \\func main():
-        \\    var countdown: Int? = 3
+        \\    var countdown: long? = 3
         \\    var steps = 0
         \\    while countdown != none:
         \\        steps = steps + 1
@@ -2925,12 +2925,12 @@ test "else supplies the fallback, lazily, and chains to the right" {
 
 test "else runs its fallback only when the value is absent" {
     try agreeOk(
-        \\func note(log: Builder, mark: String) -> Int:
+        \\func note(log: builder, mark: string) -> long:
         \\    log.append(mark)
         \\    return 0
         \\
         \\func main():
-        \\    let log = new Builder
+        \\    let log = new builder
         \\    assert((parse_int("1") else note(log, "a")) == 1)
         \\    assert((parse_int("x") else note(log, "b")) == 0)
         \\    assert(log.build() == "b")
@@ -2958,15 +2958,15 @@ test "x else trap is the assert-unwrap" {
 test "an optional crosses a call, a return, and a struct field" {
     try agreeOk(
         \\struct Setting:
-        \\    name: String
-        \\    limit: Int?
+        \\    name: string
+        \\    limit: long?
         \\
-        \\func describe(limit: Int?) -> String:
+        \\func describe(limit: long?) -> string:
         \\    if limit == none:
         \\        return "unlimited"
-        \\    return String(limit)
+        \\    return string(limit)
         \\
-        \\func lookup(found: Bool) -> Int?:
+        \\func lookup(found: bool) -> long?:
         \\    if found:
         \\        return 4
         \\    return none
@@ -2991,10 +2991,10 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
     // and no reference counting anywhere.
     try agreeOk(
         \\struct Node:
-        \\    value: Int
+        \\    value: long
         \\    next: Node?
         \\
-        \\func total(head: Node?) -> Int:
+        \\func total(head: Node?) -> long:
         \\    var sum = 0
         \\    var walk = head
         \\    while walk != none:
@@ -3015,12 +3015,12 @@ test "a value struct may hold an optional of itself, and walking it terminates" 
 test "a compound assignment combines at the payload and stays present" {
     try agreeOk(
         \\func main():
-        \\    var n: Int? = none
+        \\    var n: long? = none
         \\    n = 10
         \\    n += 5
         \\    n *= 2
         \\    assert(n == 30)
-        \\    var s: String? = "a"
+        \\    var s: string? = "a"
         \\    s += "b"
         \\    assert(s == "ab")
         \\
@@ -3030,7 +3030,7 @@ test "a compound assignment combines at the payload and stays present" {
 test "absence survives a round trip through a struct field and a var" {
     try agreeOk(
         \\struct Slot:
-        \\    held: String?
+        \\    held: string?
         \\
         \\func main():
         \\    var slot = Slot(held = none)
@@ -3101,7 +3101,7 @@ test "trap: float-to-int conversion out of range" {
         \\    var big = 1.0
         \\    while big < 1.0e30:
         \\        big = big * 10.0
-        \\    let bad = Int(big)
+        \\    let bad = long(big)
         \\
     , .conversion_range);
 }
@@ -3267,7 +3267,7 @@ test "bounds: pop empties a list before it has nothing to answer" {
 test "bounds: every axis of an array is checked on its own" {
     try agreeOk(
         \\func main():
-        \\    var grid = new Array(Int, 2, 3)
+        \\    var grid = new array(long, 2, 3)
         \\    var row = 1
         \\    var column = 2
         \\    grid[row, column] = 7
@@ -3276,21 +3276,21 @@ test "bounds: every axis of an array is checked on its own" {
     );
     try agreeTrap(
         \\func main():
-        \\    var grid = new Array(Int, 2, 3)
+        \\    var grid = new array(long, 2, 3)
         \\    var row = 2
         \\    let bad = grid[row, 0]
         \\
     , .index_bounds);
     try agreeTrap(
         \\func main():
-        \\    var grid = new Array(Int, 2, 3)
+        \\    var grid = new array(long, 2, 3)
         \\    var column = 3
         \\    let bad = grid[0, column]
         \\
     , .index_bounds);
     try agreeTrap(
         \\func main():
-        \\    var grid = new Array(Int, 2, 3)
+        \\    var grid = new array(long, 2, 3)
         \\    var below = -1
         \\    let bad = grid[0, below]
         \\
@@ -3300,7 +3300,7 @@ test "bounds: every axis of an array is checked on its own" {
 test "bounds: a map answers for a key it holds and traps for one it does not" {
     try agreeOk(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["a"] = 1
         \\    assert(m["a"] == 1)
         \\    assert(m.has("a"))
@@ -3312,7 +3312,7 @@ test "bounds: a map answers for a key it holds and traps for one it does not" {
     );
     try agreeTrap(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["a"] = 1
         \\    var wanted = "b"
         \\    let bad = m[wanted]
@@ -3356,7 +3356,7 @@ test "bounds: a string slice is checked at its length and on its boundaries" {
 test "trap: array index out of bounds" {
     try agreeTrap(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    grid[2, 0] = 1
         \\
     , .index_bounds);
@@ -3365,7 +3365,7 @@ test "trap: array index out of bounds" {
 test "trap: missing map key" {
     try agreeTrap(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m["present"] = 1
         \\    let bad = m["absent"]
         \\
@@ -3375,7 +3375,7 @@ test "trap: missing map key" {
 test "trap: popping an empty list" {
     try agreeTrap(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    let bad = xs.pop()
         \\
     , .empty_collection);
@@ -3422,7 +3422,7 @@ test "trap: use after free" {
 test "trap: using an unfilled late object slot" {
     try agreeTrap(
         \\func main():
-        \\    var xs: List(Int)
+        \\    var xs: list(long)
         \\    let bad = len(xs)
         \\
     , .null_object);
@@ -3431,7 +3431,7 @@ test "trap: using an unfilled late object slot" {
 test "trap: unfilled object slot inside an array of objects" {
     try agreeTrap(
         \\func main():
-        \\    var cells = new Array(List(Int), 2)
+        \\    var cells = new array(list(long), 2)
         \\    cells[0].append(1)
         \\
     , .null_object);
@@ -3472,10 +3472,10 @@ const smiley = "\xF0\x9F\x99\x82";
 test "structs: a smooth pointer transform computes exactly" {
     try agreeOk(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\func smooth(current: Point, target: Point, amount: Float) -> Point:
+        \\func smooth(current: Point, target: Point, amount: double) -> Point:
         \\    return Point(
         \\        x = current.x + (target.x - current.x) * amount,
         \\        y = current.y + (target.y - current.y) * amount,
@@ -3494,10 +3494,10 @@ test "structs: a smooth pointer transform computes exactly" {
 test "structs: namespaced functions execute through qualified calls" {
     try agreeOk(
         \\struct Math:
-        \\    func twice(value: Int) -> Int:
+        \\    func twice(value: long) -> long:
         \\        return value * 2
         \\
-        \\    func plus(left: Int, right: Int) -> Int:
+        \\    func plus(left: long, right: long) -> long:
         \\        return left + right
         \\
         \\func main():
@@ -3508,7 +3508,7 @@ test "structs: namespaced functions execute through qualified calls" {
 
 test "loops, recursion, strings, and builtins compute" {
     try agreeOk(
-        \\func factorial(value: Int) -> Int:
+        \\func factorial(value: long) -> long:
         \\    if value <= 1:
         \\        return 1
         \\    return value * factorial(value - 1)
@@ -3534,19 +3534,19 @@ test "checked string intrinsics slice and inspect UTF-8 bytes" {
 }
 
 test "string intrinsics implement multiline UTF-8-safe edits" {
-    try agreeOk("func continuation(byte: Int) -> Bool:\n" ++
+    try agreeOk("func continuation(byte: long) -> bool:\n" ++
         "    return byte >= 128 and byte < 192\n" ++
         "\n" ++
-        "func previous(value: String, cursor: Int) -> Int:\n" ++
+        "func previous(value: string, cursor: long) -> long:\n" ++
         "    var at = cursor - 1\n" ++
         "    while at > 0 and continuation(value.byte_at(at)):\n" ++
         "        at = at - 1\n" ++
         "    return at\n" ++
         "\n" ++
-        "func inserted(text: String, cursor: Int, added: String) -> String:\n" ++
+        "func inserted(text: string, cursor: long, added: string) -> string:\n" ++
         "    return text[0:cursor] + added + text[cursor:len(text)]\n" ++
         "\n" ++
-        "func erased(text: String, cursor: Int) -> String:\n" ++
+        "func erased(text: string, cursor: long) -> string:\n" ++
         "    let before = previous(text, cursor)\n" ++
         "    return text[0:before] + text[cursor:len(text)]\n" ++
         "\n" ++
@@ -3580,7 +3580,7 @@ test "checked arithmetic and conversions trap" {
     const cases = [_]struct { line: []const u8, code: mir.TrapCode }{
         .{ .line = "assert(9223372036854775807 + 1 == 0)", .code = .integer_overflow },
         .{ .line = "assert(1 // (2 - 2) == 0)", .code = .divide_by_zero },
-        .{ .line = "assert(Int(1.0e300) == 0)", .code = .conversion_range },
+        .{ .line = "assert(long(1.0e300) == 0)", .code = .conversion_range },
         .{ .line = "assert(1 == 0)", .code = .assertion_failed },
     };
     for (cases) |case| {
@@ -3607,7 +3607,7 @@ test "checked arithmetic and conversions trap" {
 
 test "unbounded recursion hits the call depth limit" {
     try agreeTrap(
-        \\func dive(depth: Int) -> Int:
+        \\func dive(depth: long) -> long:
         \\    return dive(depth + 1)
         \\
         \\func main():
@@ -3648,14 +3648,14 @@ test "lists grow, index, slice, iterate, and free explicitly" {
 test "maps upsert, look up, and iterate keys in insertion order" {
     try agreeOk(
         \\func main():
-        \\    var ages = new Map(String, Int)
+        \\    var ages = new map(string, long)
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    ages["ada"] = 37
         \\    assert(len(ages) == 2)
         \\    assert(ages["ada"] == 37)
         \\    assert(ages.has("alan"))
-        \\    var joined = new Builder()
+        \\    var joined = new builder()
         \\    for key in ages:
         \\        joined.append(key)
         \\    assert(joined.build() == "adaalan")
@@ -3671,18 +3671,18 @@ test "maps upsert, look up, and iterate keys in insertion order" {
 
 test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     try agreeOk(
-        \\func corner(grid: Array(Int, _, _)) -> Int:
+        \\func corner(grid: array(long, _, _)) -> long:
         \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
         \\
         \\func main():
-        \\    var grid = new Array(Int, 3, 4)
+        \\    var grid = new array(long, 3, 4)
         \\    assert(grid.dim(0) == 3)
         \\    assert(grid.dim(1) == 4)
         \\    assert(len(grid) == 3)
         \\    assert(grid[2, 3] == 0)
         \\    grid[2, 3] = 7
         \\    assert(corner(grid) == 7)
-        \\    var row = new Array(Float, 4)
+        \\    var row = new array(double, 4)
         \\    row[0] = 2.5
         \\    var total = 0.0
         \\    for value in row:
@@ -3694,13 +3694,13 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
     );
 }
 
-test "conversions: String, parse_int, parse_float, chr, ord over every kind" {
+test "conversions: string, parse_int, parse_float, chr, ord over every kind" {
     try agreeOk(
         \\func main():
-        \\    assert(String(42) == "42")
-        \\    assert(String(-7) == "-7")
-        \\    assert(String(true) == "true")
-        \\    assert(String(2.5) == "2.5")
+        \\    assert(string(42) == "42")
+        \\    assert(string(-7) == "-7")
+        \\    assert(string(true) == "true")
+        \\    assert(string(2.5) == "2.5")
         \\    assert((parse_int("123") else 0) == 123)
         \\    assert((parse_int("-9") else 0) == 0 - 9)
         \\    assert((parse_float("2.5") else 0.0) == 2.5)
@@ -3716,8 +3716,8 @@ test "conversions: String, parse_int, parse_float, chr, ord over every kind" {
 test "structs and nested collections share objects by reference" {
     try agreeOk(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
         \\    var inner = [1, 2]
@@ -3725,7 +3725,7 @@ test "structs and nested collections share objects by reference" {
         \\    let same_bag = bag
         \\    same_bag.items.append(3)
         \\    assert(len(bag.items) == 3)
-        \\    var nested = new List(List(Int))
+        \\    var nested = new list(list(long))
         \\    nested.append(copy bag.items)
         \\    nested[0].append(4)
         \\    assert(len(nested[0]) == 4)
@@ -3744,13 +3744,13 @@ test "collection misuse traps with stable codes" {
         , .code = .index_bounds },
         .{ .source =
         \\func main():
-        \\    var xs: List(Int) = []
+        \\    var xs: list(long) = []
         \\    let bad = xs.pop()
         \\
         , .code = .empty_collection },
         .{ .source =
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let bad = m["ghost"]
         \\
         , .code = .key_missing },
@@ -3772,7 +3772,7 @@ test "collection misuse traps with stable codes" {
         , .code = .use_after_free },
         .{ .source =
         \\func main():
-        \\    var cells = new Array(List(Int), 2)
+        \\    var cells = new array(list(long), 2)
         \\    cells[0].append(1)
         \\
         , .code = .null_object },
@@ -3783,7 +3783,7 @@ test "collection misuse traps with stable codes" {
         , .code = .bad_codepoint },
         .{ .source =
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    grid[2, 0] = 1
         \\
         , .code = .index_bounds },
@@ -3796,7 +3796,7 @@ test "S33: nothing leaks — scope ownership frees what free() used to" {
         \\func main():
         \\    let kept = [1, 2, 3]
         \\    let copied = kept[0:2]
-        \\    var released = new Builder()
+        \\    var released = new builder()
         \\    free(released)
         \\    assert(len(copied) == 2)
         \\
@@ -3855,14 +3855,14 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    var names = ["cyan", "amber"]
         \\    names.sort()
         \\    assert(names[0] == "amber")
-        \\    var row = new Array(Int, 4)
+        \\    var row = new array(long, 4)
         \\    row.fill(7)
         \\    assert(row[3] == 7)
         \\    assert(row.contains(7))
         \\    row[1] = 2
         \\    row.sort()
         \\    assert(row[0] == 2)
-        \\    var ages = new Map(String, Int)
+        \\    var ages = new map(string, long)
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    var listed = ages.keys()
@@ -3884,16 +3884,16 @@ test "short-circuit operands survive block splits everywhere" {
     // rejected the program as an internal compiler error.
     try agreeOk(
         \\struct Flags:
-        \\    left: Bool
-        \\    right: Bool
+        \\    left: bool
+        \\    right: bool
         \\
-        \\func pick(first: Bool, second: Bool) -> Bool:
+        \\func pick(first: bool, second: bool) -> bool:
         \\    return first or second
         \\
         \\func main():
         \\    let a = true
         \\    let b = false
-        \\    var cells = new Array(Bool, 2, 2)
+        \\    var cells = new array(bool, 2, 2)
         \\    cells[0, 1] = a == b or a
         \\    let chosen = pick(a and b, a or b)
         \\    let pair = Flags(left = a or b, right = a and b)
@@ -3921,8 +3921,8 @@ test "file-scope constants fold every value kind" {
         \\let greeting = "hello, " + "loom"
         \\let shout = greeting
         \\let half_width = width // 2 - 1
-        \\let truncated = Int(tau)
-        \\let widened = Float(width)
+        \\let truncated = long(tau)
+        \\let widened = double(width)
         \\let roomy = width >= 80 and tau > 6.0
         \\
         \\func main():
@@ -3944,9 +3944,9 @@ test "file-scope constants fold every value kind" {
 test "struct constants: the Theme case" {
     try agreeOk(
         \\struct Theme:
-        \\    keyword: Int
-        \\    comment: Int
-        \\    bold: Bool
+        \\    keyword: long
+        \\    comment: long
+        \\    bold: bool
         \\
         \\let theme = Theme(keyword = 114, comment = 238, bold = true)
         \\let accent = theme.keyword + 1
@@ -3974,10 +3974,10 @@ test "struct constants: the Theme case" {
 
 test "a trap reports its statement's line and the full call trace" {
     var session = try agree.compare(
-        \\func divide(a: Int, b: Int) -> Int:
+        \\func divide(a: long, b: long) -> long:
         \\    return a // b
         \\
-        \\func ratio(n: Int) -> Int:
+        \\func ratio(n: long) -> long:
         \\    return divide(100, n)
         \\
         \\func main():
@@ -3997,7 +3997,7 @@ test "a trap reports its statement's line and the full call trace" {
 
 test "a stripped program still names its trap frames, without lines" {
     var compiled = try agree.program(
-        \\func boom() -> Int:
+        \\func boom() -> long:
         \\    return 1 // 0
         \\
         \\func main():
@@ -4041,7 +4041,7 @@ test "a runaway recursion reports a capped trace and counts the rest" {
     // Sixty-four frames kept, the rest counted — on both engines, from
     // the same depth limit.
     var session = try agree.compare(
-        \\func spiral(n: Int) -> Int:
+        \\func spiral(n: long) -> long:
         \\    return spiral(n + 1)
         \\
         \\func main():

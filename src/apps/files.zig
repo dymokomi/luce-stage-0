@@ -325,7 +325,7 @@ test "the import loader resolves NAME.luc beside the root and returns missing ot
     defer testing.allocator.free(directory);
     const geo_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo.luc", .{directory});
     defer testing.allocator.free(geo_path);
-    try writeWhole(io, geo_path, "func area() -> Int:\n    return 4\n");
+    try writeWhole(io, geo_path, "func area() -> long:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = directory };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -359,7 +359,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     defer testing.allocator.free(directory);
     const wrong_case = try std.fmt.allocPrint(testing.allocator, "{s}/Geo.luc", .{directory});
     defer testing.allocator.free(wrong_case);
-    try writeWhole(io, wrong_case, "func area() -> Int:\n    return 4\n");
+    try writeWhole(io, wrong_case, "func area() -> long:\n    return 4\n");
 
     var loader: FileLoader = .{ .io = io, .directory = directory };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -379,7 +379,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     // as geo.luc, which is exactly the trap being guarded against.)
     const exact_path = try std.fmt.allocPrint(testing.allocator, "{s}/util.luc", .{directory});
     defer testing.allocator.free(exact_path);
-    try writeWhole(io, exact_path, "func twice(v: Int) -> Int:\n    return v * 2\n");
+    try writeWhole(io, exact_path, "func twice(v: long) -> long:\n    return v * 2\n");
     const exact = try resolver.load(resolver.context, arena.allocator(), "util");
     try testing.expect(exact == .text);
     try testing.expect(std.mem.indexOf(u8, exact.text.bytes, "v * 2") != null);

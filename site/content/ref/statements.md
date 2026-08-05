@@ -126,17 +126,17 @@ The place is read once — every subscript evaluated exactly once — and
 then rebuilt: value structs update functionally up to their root
 binding, and the innermost container element is written in place.
 
-A **nested** place assigns a value (a number, a `String`, or a plain
+A **nested** place assigns a value (a number, a `string`, or a plain
 struct). To restock an *object* field use the single-level form:
 `bag.items = [1, 2]`.
 
 Compound assignment is `+= -= *= /= //= %=`, value-only arithmetic —
-the place is a number, or a `String` for `+=` — and the place is
+the place is a number, or a `string` for `+=` — and the place is
 evaluated once, so `counts[key] += 1` looks the key up a single time.
 
 ```luce run
 func main():
-    var counts = new Map(String, Int)
+    var counts = new map(string, long)
     counts["a"] = 0
     counts["a"] += 5
     var text = "x"
@@ -159,7 +159,7 @@ else:
     ...
 ```
 
-The condition is `Bool`. There is no ternary operator and no `switch`.
+The condition is `bool`. There is no ternary operator and no `switch`.
 
 ## while
 
@@ -171,7 +171,7 @@ while condition:
 ## for
 
 ```
-for name in range(low, high):     Int, excluding high
+for name in range(low, high):     long, excluding high
 for name in sequence:             list or rank-1 array elements, in order
 for name in map:                  map keys, in insertion order
 for index, name in sequence:      position and element
@@ -219,7 +219,7 @@ loom console: 72 columns
 Initializers fold at compile time. What may be folded is: literals,
 other constants (including `module.constant` through an import),
 arithmetic, comparisons, `and`/`or`, string concatenation,
-`Int()`/`Float()`, and value-struct construction.
+`long()`/`double()`, and value-struct construction.
 
 Calls are **not** constant. Heap objects are not constant either, and
 the reason is ownership rather than an arbitrary limit: a top-level

@@ -5,13 +5,13 @@ at the speed of C, and gives memory back without a garbage collector
 and without reference counting anywhere.
 
 ```luce run args=world
-func main(args: List(String)):
+func main(args: list(string)):
     var greeting = "hello"
     if len(args) > 0:
         greeting = greeting + ", " + args[0]
     print(greeting)
 
-    var counts = new Map(String, Int)
+    var counts = new map(string, long)
     for word in ["fig", "pear", "fig"]:
         counts[word] = counts.get(word, 0) + 1
     for word, seen in counts:

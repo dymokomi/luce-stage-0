@@ -245,7 +245,7 @@ pub const KeyEvent = struct {
 /// Where a run's memory comes from: a run-lifetime arena for what a
 /// program cannot grow without bound, and an ordinary freeing
 /// allocator for everything with a death point — heap objects, and
-/// since copy-on-store every String's bytes and every struct value's
+/// since copy-on-store every string's bytes and every struct value's
 /// field run (docs/STRINGS.md).  This is the runtime library's own
 /// `Memory`, not a second one: the oracle hands `libluce_rt` exactly
 /// what compiled code hands it, so nothing is converted on the way in

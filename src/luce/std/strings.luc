@@ -1,6 +1,6 @@
 # strings — the Luce standard string module.
 #
-# The language keeps the primitives: String the immutable UTF-8
+# The language keeps the primitives: string the immutable UTF-8
 # value, literals and f-strings, `+`, comparison, boundary-checked
 # slices `s[a:b]`, `len`, and `s.byte_at(i)`.  Everything built on
 # top of them lives here, in ordinary Luce — and `s.find(x)` is sugar
@@ -13,7 +13,7 @@
 
 # The byte offset of the first occurrence of needle at or after
 # `start`, or -1.  An empty needle matches at `start`.
-func find_from(s: String, needle: String, start: Int) -> Int:
+func find_from(s: string, needle: string, start: long) -> long:
     let size = len(s)
     let needle_size = len(needle)
     if start < 0 or start > size:
@@ -39,24 +39,24 @@ func find_from(s: String, needle: String, start: Int) -> Int:
         at = hit + 1
     return -1
 
-func find(s: String, needle: String) -> Int:
+func find(s: string, needle: string) -> long:
     return find_from(s, needle, 0)
 
-func contains(s: String, needle: String) -> Bool:
+func contains(s: string, needle: string) -> bool:
     return find_from(s, needle, 0) >= 0
 
-func starts_with(s: String, prefix: String) -> Bool:
+func starts_with(s: string, prefix: string) -> bool:
     if len(prefix) > len(s):
         return false
     return s[0:len(prefix)] == prefix
 
-func ends_with(s: String, suffix: String) -> Bool:
+func ends_with(s: string, suffix: string) -> bool:
     if len(suffix) > len(s):
         return false
     return s[len(s) - len(suffix):] == suffix
 
 # How many non-overlapping occurrences; an empty needle counts zero.
-func count(s: String, needle: String) -> Int:
+func count(s: string, needle: string) -> long:
     if len(needle) == 0:
         return 0
     var found = 0
@@ -66,11 +66,11 @@ func count(s: String, needle: String) -> Int:
         at = find_from(s, needle, at + len(needle))
     return found
 
-func is_space_byte(byte: Int) -> Bool:
+func is_space_byte(byte: long) -> bool:
     return byte == 32 or byte == 9 or byte == 13 or byte == 10
 
 # ASCII whitespace off both ends.
-func trim(s: String) -> String:
+func trim(s: string) -> string:
     var first = 0
     while first < len(s) and is_space_byte(s.byte_at(first)):
         first += 1
@@ -81,14 +81,14 @@ func trim(s: String) -> String:
 
 # ASCII case folding; every other byte passes through untouched.
 # Unchanged runs are sliced whole, so multi-byte characters survive.
-func lower(s: String) -> String:
+func lower(s: string) -> string:
     return fold_case(s, 65, 90, 32)
 
-func upper(s: String) -> String:
+func upper(s: string) -> string:
     return fold_case(s, 97, 122, -32)
 
-func fold_case(s: String, first: Int, last: Int, shift: Int) -> String:
-    var out = new Builder()
+func fold_case(s: string, first: long, last: long, shift: long) -> string:
+    var out = new builder()
     var run = 0
     var at = 0
     let size = len(s)
@@ -98,7 +98,7 @@ func fold_case(s: String, first: Int, last: Int, shift: Int) -> String:
             # Adjacent folded bytes leave an empty run; appending it
             # would cost a slice and a service call for nothing.  The
             # folded byte is ASCII by construction (both ranges are),
-            # so it goes in without a String to carry it.
+            # so it goes in without a string to carry it.
             if at > run:
                 out.append(s[run:at])
             out.append_ascii(byte + shift)
@@ -111,10 +111,10 @@ func fold_case(s: String, first: Int, last: Int, shift: Int) -> String:
 
 # Every occurrence of old replaced with replacement; an empty old
 # changes nothing.
-func replace(s: String, old: String, replacement: String) -> String:
+func replace(s: string, old: string, replacement: string) -> string:
     if len(old) == 0:
         return s
-    var out = new Builder()
+    var out = new builder()
     var run = 0
     var at = find_from(s, old, 0)
     while at >= 0:
@@ -128,10 +128,10 @@ func replace(s: String, old: String, replacement: String) -> String:
     return out.build()
 
 # The text repeated `times` times; zero or fewer is "".
-func repeat(s: String, times: Int) -> String:
+func repeat(s: string, times: long) -> string:
     if times <= 0 or len(s) == 0:
         return ""
-    var out = new Builder()
+    var out = new builder()
     for i in range(0, times):
         out.append(s)
     return out.build()
@@ -139,8 +139,8 @@ func repeat(s: String, times: Int) -> String:
 # Split on a separator, keeping empty pieces ("a;;b" has three); an
 # empty separator splits on whitespace runs instead, dropping empties
 # (Python's bare split).
-func split(s: String, separator: String) -> List(String):
-    var pieces: List(String) = []
+func split(s: string, separator: string) -> list(string):
+    var pieces: list(string) = []
     if len(separator) == 0:
         var at = 0
         while at < len(s):
@@ -163,8 +163,8 @@ func split(s: String, separator: String) -> List(String):
     return pieces
 
 # The pieces joined with a separator between each pair.
-func join(parts: List(String), separator: String) -> String:
-    var out = new Builder()
+func join(parts: list(string), separator: string) -> string:
+    var out = new builder()
     for i, piece in parts:
         if i > 0:
             out.append(separator)
@@ -172,16 +172,16 @@ func join(parts: List(String), separator: String) -> String:
     return out.build()
 
 # Space-padded to `width` bytes; text already that wide is unchanged.
-func pad_left(s: String, width: Int) -> String:
+func pad_left(s: string, width: long) -> string:
     return repeat(" ", width - len(s)) + s
 
-func pad_right(s: String, width: Int) -> String:
+func pad_right(s: string, width: long) -> string:
     return s + repeat(" ", width - len(s))
 
-# A Float as fixed-point text: format_float(2.5, 2) is "2.50",
+# A double as fixed-point text: format_float(2.5, 2) is "2.50",
 # rounded half away from zero.  Meant for display of ordinary
-# magnitudes; |value| past ~1e15 falls back to String(value).
-func format_float(value: Float, decimals: Int) -> String:
+# magnitudes; |value| past ~1e15 falls back to string(value).
+func format_float(value: double, decimals: long) -> string:
     if decimals < 0:
         trap("format_float needs decimals >= 0")
     var magnitude = value
@@ -190,23 +190,23 @@ func format_float(value: Float, decimals: Int) -> String:
         magnitude = 0.0 - value
         sign = "-"
     if magnitude > 1.0e15:
-        return String(value)
+        return string(value)
     var scale = 1.0
     for i in range(0, decimals):
         scale *= 10.0
-    # `Int(x)` rounds (docs/NUMERICS.md), so the split at the
+    # `long(x)` rounds (docs/NUMERICS.md), so the split at the
     # integral part says `trunc` out loud — and the `+ 0.5` that used
-    # to hand-roll the rounding of the fraction is what `Int` does
+    # to hand-roll the rounding of the fraction is what `long` does
     # now, correctly, including at the values `floor(x + 0.5)` gets
     # wrong.
-    var whole = Int(trunc(magnitude))
-    var fraction = Int((magnitude - Float(whole)) * scale)
-    if Float(fraction) >= scale:
+    var whole = long(trunc(magnitude))
+    var fraction = long((magnitude - double(whole)) * scale)
+    if double(fraction) >= scale:
         whole += 1
         fraction = 0
     if decimals == 0:
-        return sign + String(whole)
-    var digits = String(fraction)
+        return sign + string(whole)
+    var digits = string(fraction)
     while len(digits) < decimals:
         digits = "0" + digits
-    return sign + String(whole) + "." + digits
+    return sign + string(whole) + "." + digits

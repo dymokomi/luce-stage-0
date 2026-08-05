@@ -70,7 +70,7 @@ fn runLuce(
 
 const greeting =
     \\func main():
-    \\    print("total " + String(3 * 10))
+    \\    print("total " + string(3 * 10))
     \\
 ;
 
@@ -182,8 +182,8 @@ test "check compiles, reports, and writes nothing" {
     // there may be three of them.
     try tree.write("sub/broken.luc",
         \\func main():
-        \\    let count: Int = "seven"
-        \\    print(String(count))
+        \\    let count: long = "seven"
+        \\    print(string(count))
         \\
     );
 
@@ -229,7 +229,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("shape.luc",
-        \\func unreached() -> Int:
+        \\func unreached() -> long:
         \\    return 7
         \\
         \\func main():
@@ -256,7 +256,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     try testing.expect(!tree.exists("shape.lc"));
 
     // A program that does not compile has no IR to print.
-    try tree.write("broken.luc", "func main():\n    let x: Int = \"s\"\n    print(String(x))\n");
+    try tree.write("broken.luc", "func main():\n    let x: long = \"s\"\n    print(string(x))\n");
     const broken = try tree.at(gpa, "broken.luc");
     defer gpa.free(broken);
     var failed = try runLuce(gpa, &tree, &.{ "ir", broken }, null);
@@ -288,7 +288,7 @@ test "a program may arrive on standard input, and is named for what it is" {
         gpa,
         &tree,
         &.{ "check", "-" },
-        "func main():\n    let x: Int = \"s\"\n    print(String(x))\n",
+        "func main():\n    let x: long = \"s\"\n    print(string(x))\n",
     );
     defer complained.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), complained.status);
@@ -403,13 +403,13 @@ test "each --emit shape writes what it says, and the object links into a program
 // ---------------------------------------------------------------------------
 
 const stumbles =
-    \\func at(xs: List(Int), index: Int) -> Int:
+    \\func at(xs: list(long), index: long) -> long:
     \\    return xs[index]
     \\
     \\func main():
     \\    var xs = [1, 2, 3]
     \\    print("before")
-    \\    print(String(at(xs, 7)))
+    \\    print(string(at(xs, 7)))
     \\
 ;
 
@@ -519,14 +519,14 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
         .{
             .name = "refuse",
             .source =
-            \\func check(value: Int) -> Int!:
+            \\func check(value: long) -> long!:
             \\    if value < 0:
             \\        error(f"negative: {value}")
             \\    return value
             \\
             \\func main() -> !:
-            \\    print(String(try check(1)))
-            \\    print(String(try check(-5)))
+            \\    print(string(try check(1)))
+            \\    print(string(try check(-5)))
             \\
             ,
             .status = 3,
@@ -571,8 +571,8 @@ test "a standalone binary reads the arguments it was given, past its own name" {
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
     try tree.write("echo.luc",
-        \\func main(args: List(String)):
-        \\    print(String(len(args)))
+        \\func main(args: list(string)):
+        \\    print(string(len(args)))
         \\    for word in args:
         \\        print(word)
         \\

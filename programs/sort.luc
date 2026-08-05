@@ -1,4 +1,4 @@
-# Sorting, searching, and joining a real List(Int).
+# Sorting, searching, and joining a real list(long).
 #
 #   loom luce programs/sort.luc
 
@@ -8,9 +8,9 @@ func main():
     var values = [42, 7, -3, 99, 0, 13, -40, 8, 77, 1]
     values.sort()
 
-    var pieces: List(String) = []
+    var pieces: list(string) = []
     for value in values:
-        pieces.append(String(value))
+        pieces.append(string(value))
     print(pieces.join(" "))
     assert(values.find(13) == 6)
     assert(values.contains(99))

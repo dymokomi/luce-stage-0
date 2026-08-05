@@ -50,7 +50,7 @@ wagging the dog.
 
 What Luce did instead is make fallibility an **attribute of the
 function** rather than a type. `T!` is not a type: there is no `T!` to
-declare a variable of, to put in a `List`, or to write in a struct
+declare a variable of, to put in a `list`, or to write in a struct
 field, and `return x` in a `-> T!` function just returns `x`, with
 nothing to wrap it in.
 
@@ -77,8 +77,8 @@ why there is no `errdefer` and never will be.
 import std.files
 import std.strings
 
-func load(path: String) -> List(String)!:
-    var found: List(String) = []
+func load(path: string) -> list(string)!:
+    var found: list(string) = []
     let text = try files.read(path)       # `found` is released if this leaves
     for line in text.split("\n"):
         if line != "":
@@ -90,7 +90,7 @@ func main() -> !:
     let lines = try load("data.txt")
     print(f"{len(lines)} non-empty lines, first {lines[0]}")
 
-    let missing = load("nothing.txt") catch new List(String)
+    let missing = load("nothing.txt") catch new list(string)
     print(f"missing: {len(missing)}")
 ```
 
@@ -139,15 +139,15 @@ An uncaught error out of `main() -> !` ends the run and prints the
 words and the **one** place it was raised.
 
 ```luce raise
-func read_setting(text: String) -> Int!:
+func read_setting(text: string) -> long!:
     return parse_int(text) else error(f"not a number: {text}")
 
-func configure(text: String) -> Int!:
+func configure(text: string) -> long!:
     return try read_setting(text) * 2
 
 func main() -> !:
-    print(String(try configure("21")))
-    print(String(try configure("x")))
+    print(string(try configure("21")))
+    print(string(try configure("x")))
 ```
 
 ```output

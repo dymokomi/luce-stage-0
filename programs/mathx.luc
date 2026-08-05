@@ -1,15 +1,15 @@
 # A tiny math module: imported by stats.luc (`import mathx`).
 
-func mean(values: List(Float)) -> Float:
+func mean(values: list(double)) -> double:
     var total = 0.0
     for value in values:
         total = total + value
-    return total / Float(len(values))
+    return total / double(len(values))
 
 # A sorted copy; whoever calls owns it.
 # The smallest and the largest, in one pass — where `sorted` was
 # called only to read its two ends (docs/RETURNS.md).
-func extremes(values: List(Float)) -> (Float, Float):
+func extremes(values: list(double)) -> (double, double):
     if len(values) == 0:
         trap("extremes needs at least one value")
     var smallest = values[0]
@@ -19,12 +19,12 @@ func extremes(values: List(Float)) -> (Float, Float):
         largest = max(largest, value)
     return smallest, largest
 
-func sorted(values: List(Float)) -> List(Float):
+func sorted(values: list(double)) -> list(double):
     var copied = values[0:]
     copied.sort()
     return copied
 
-func median(values: List(Float)) -> Float:
+func median(values: list(double)) -> double:
     var ordered = sorted(values)
     let count = len(ordered)
     var middle = ordered[count // 2]
@@ -32,9 +32,9 @@ func median(values: List(Float)) -> Float:
         middle = (ordered[count // 2 - 1] + ordered[count // 2]) / 2.0
     return middle
 
-func deviation(values: List(Float)) -> Float:
+func deviation(values: list(double)) -> double:
     let center = mean(values)
     var spread = 0.0
     for value in values:
         spread = spread + (value - center) * (value - center)
-    return sqrt(spread / Float(len(values)))
+    return sqrt(spread / double(len(values)))

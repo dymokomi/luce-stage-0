@@ -7,7 +7,7 @@ build stops.
 
 ## sort
 
-Sorting, searching and joining a real `List(Int)`.
+Sorting, searching and joining a real `list(long)`.
 
 ```luce run include=programs/sort.luc
 ```
@@ -51,7 +51,7 @@ is a way the *user* defeated it, so it raises rather than traps.
 
 ## bf — a Brainfuck interpreter
 
-The byte tape is a real `Array`, output accumulates in a `Builder`,
+The byte tape is a real `array`, output accumulates in a `builder`,
 and `chr()` maps cell values to text.
 
 ```luce run include=programs/bf.luc
@@ -84,7 +84,7 @@ rolls written to dice_rolls.txt
 
 ## wordcount
 
-`Map`, `List`, `Builder`, file reading and arguments together.
+`map`, `list`, `builder`, file reading and arguments together.
 
 ```luce module file=input.txt
 the quick brown fox

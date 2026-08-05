@@ -43,19 +43,19 @@ pub const Error = error{OutOfMemory};
 // wording lives here and each pass formats it.
 
 pub const integer_range_message =
-    "integer literal out of range; Int holds -9223372036854775808 to 9223372036854775807";
+    "integer literal out of range; long holds -9223372036854775808 to 9223372036854775807";
 pub const float_range_message =
-    "float literal is not a finite number; Float holds up to about 1.8e308";
+    "float literal is not a finite number; double holds up to about 1.8e308";
 
 /// Binary operand typing: the operator and the two types.  Pass two
 /// appends one more `{s}` of advice when one side is an optional; the
 /// sentence up to there is the same.
 ///
 /// **The sentence ends with a fact, not with advice.**  It used to
-/// offer "conversions are explicit, so write Int(...) or Float(...)",
-/// because `Int` against `Float` was the one mismatch a constructor
-/// could repair.  It is not a mismatch any more — `Int` widens to
-/// `Float` on its own (docs/NUMERICS.md) — so every pair that still
+/// offer "conversions are explicit, so write long(...) or double(...)",
+/// because `long` against `double` was the one mismatch a constructor
+/// could repair.  It is not a mismatch any more — `long` widens to
+/// `double` on its own (docs/NUMERICS.md) — so every pair that still
 /// reaches this message genuinely has nothing to convert between, and
 /// the tail says exactly that.
 pub const mismatched_operands_message =
@@ -140,24 +140,23 @@ pub fn writeMissingFields(
 /// not here — `sort` and `has` are resolved by receiver type, so a
 /// function called `sort` collides with nothing.
 pub const reserved_names = [_][]const u8{
-    "range",       "Int",         "Float",      "Bool",        "String",
-    "List",        "Map",         "Array",      "Builder",     "None",
-    // The lowercase conversion constructors (docs/TYPES.md D8).  The
+    // The three conversion constructors (docs/TYPES.md D8).  The
     // container names are deliberately *not* here: `list` and `map`
     // are answers only in type position, where `resolveBase` decides
     // and a struct of that name is refused where it is declared —
     // reserving them as callables buys nothing and costs `files.list`,
     // which is the right name for what it does.
-    "long",        "double",      "string",     "abs",         "min",
-    "max",         "clamp",       "sqrt",       "floor",       "ceil",
-    "trunc",       "len",         "byte_at",    "assert",      "trap",
-    "parse_int",   "parse_float", "chr",        "ord",         "append",
-    "pop",         "insert",      "remove",     "has",         "dim",
-    "free",        "print",       "file_read",  "file_write",  "file_exists",
-    "key_read",    "key_text",    "error",      "read_line",   "print_error",
-    "clock_ms",    "sleep_ms",    "env",        "file_append", "file_delete",
-    "file_rename", "dir_list",    "term_rows",  "term_cols",   "term_clear",
-    "term_move",   "term_style",  "term_write", "term_flush",
+    "range",       "long",        "double",      "string",      "None",
+    "abs",         "min",         "max",         "clamp",       "sqrt",
+    "floor",       "ceil",        "trunc",       "len",         "byte_at",
+    "assert",      "trap",        "parse_int",   "parse_float", "chr",
+    "ord",         "append",      "pop",         "insert",      "remove",
+    "has",         "dim",         "free",        "print",       "file_read",
+    "file_write",  "file_exists", "key_read",    "key_text",    "error",
+    "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
+    "file_append", "file_delete", "file_rename", "dir_list",    "term_rows",
+    "term_cols",   "term_clear",  "term_move",   "term_style",  "term_write",
+    "term_flush",
 };
 
 pub fn isReserved(name: []const u8) bool {
@@ -231,7 +230,7 @@ pub const FunctionDeclInfo = struct {
     channel: []Type = &.{},
     /// The one type that travels in the value channel.  For a return
     /// shape it is the compiler-synthesized struct the values ride in
-    /// (`(Int, Int)`), which is why nothing below stage 4 grows a case
+    /// (`(long, long)`), which is why nothing below stage 4 grows a case
     /// for multiple results: there is one value, as there always was.
     return_type: Type,
     /// Written `-> T!` or `-> !`: every call site must say `try` or
@@ -261,7 +260,7 @@ pub const StructShape = struct {
 };
 
 /// The folded value of a file-scope constant.  Constants are values
-/// only — scalars, String, and value structs — computed entirely at
+/// only — scalars, string, and value structs — computed entirely at
 /// compile time and inlined at every use site.
 pub const ConstantValue = union(enum) {
     int: i64,
@@ -332,7 +331,7 @@ pub const LocalInfo = struct {
 /// the two senses it owns something: the objects bound to it (S1-S43),
 /// the storage in its slot (docs/STRINGS.md), or both.  They are
 /// separate questions — `let b = a` aliases a's objects and copies its
-/// String fields — so they are answered separately.
+/// string fields — so they are answered separately.
 pub const Release = struct {
     local: LocalId,
     objects: bool = false,

@@ -8,22 +8,22 @@ literal, and the scope that owns one frees it — which is
 
 | Type | Shape |
 |---|---|
-| `List(T)` | A growable sequence. |
-| `Map(K, V)` | An insertion-ordered dictionary; `K` is `Int` or `String`. |
-| `Array(T, ...)` | Fixed shape, up to four dimensions, zero-initialized. |
-| `Builder` | Accumulates text and hands back a `String`. |
+| `list(T)` | A growable sequence. |
+| `map(K, V)` | An insertion-ordered dictionary; `K` is `long` or `string`. |
+| `array(T, ...)` | Fixed shape, up to four dimensions, zero-initialized. |
+| `builder` | Accumulates text and hands back a `string`. |
 
 Operations that belong to one type are written as methods —
 `xs.append(v)`, `m.has(k)` — which is sugar for a plain function with
 the receiver first, in the way Zig's `x.f()` is. The generic
 cross-type builtins stay free functions: `len`, `str`, `print`.
 
-## List
+## list
 
 ```luce run
 func main():
-    var xs = [3, 1, 2]           # List(Int), inferred from the elements
-    var names: List(String) = [] # an empty literal needs its type
+    var xs = [3, 1, 2]           # list(long), inferred from the elements
+    var names: list(string) = [] # an empty literal needs its type
 
     xs.append(4)
     xs.insert(0, 99)
@@ -78,15 +78,15 @@ source 20
 Indexing is bounds-checked, always, in both build modes. Reading past
 the end is a trap.
 
-## Map
+## map
 
-Keys are `Int` or `String`. Iteration is in insertion order, and the
+Keys are `long` or `string`. Iteration is in insertion order, and the
 lookups — index, `has`, `get`, index-set — are O(1) over a dense array
 of entries with a hash index above it.
 
 ```luce run
 func main():
-    var stock = new Map(String, Int)
+    var stock = new map(string, long)
     stock["fig"] = 3
     stock["pear"] = 12
     stock["plum"] = 0
@@ -114,14 +114,14 @@ Indexing a key that is not there is a trap, deliberately: it is a bug
 in the program, not news from the world. Use `has` before the index,
 or `get(key, default)` which cannot trap.
 
-## Array
+## array
 
-An `Array` has a fixed shape given at `new`, and its elements start at
+An `array` has a fixed shape given at `new`, and its elements start at
 the type's zero value. Up to four dimensions; in a type annotation the
 shape is spelled with `_`.
 
 ```luce run
-func total(grid: Array(Int, _, _)) -> Int:
+func total(grid: array(long, _, _)) -> long:
     var sum = 0
     for row in range(0, grid.dim(0)):
         for column in range(0, grid.dim(1)):
@@ -129,14 +129,14 @@ func total(grid: Array(Int, _, _)) -> Int:
     return sum
 
 func main():
-    var grid = new Array(Int, 3, 4)
+    var grid = new array(long, 3, 4)
     for row in range(0, 3):
         for column in range(0, 4):
             grid[row, column] = row * 10 + column
     print(f"{grid.dim(0)} by {grid.dim(1)}, corner {grid[2, 3]}")
     print(f"total {total(grid)}")
 
-    var line = new Array(Float, 4)
+    var line = new array(double, 4)
     line.fill(1.5)
     print(f"rank-1 arrays sort and fill: {line[0]} {len(line)}")
 ```
@@ -147,21 +147,21 @@ total 138
 rank-1 arrays sort and fill: 1.5 4
 ```
 
-A rank-1 `Array` also has `sort`, `reverse`, `find`, `contains` and
+A rank-1 `array` also has `sort`, `reverse`, `find`, `contains` and
 `fill`. `len(a)` is the size of dimension 0, and `a.dim(axis)` gives
 any of them.
 
-## Builder
+## builder
 
-Repeated `+` on strings allocates every time. A `Builder` does not.
+Repeated `+` on strings allocates every time. A `builder` does not.
 
 ```luce run
 func main():
-    var out = new Builder()
+    var out = new builder()
     for i in range(0, 5):
-        out.append(String(i))
+        out.append(string(i))
         out.append(",")
-    out.append_ascii(33)          # one ASCII byte, no String allocated
+    out.append_ascii(33)          # one ASCII byte, no string allocated
     print(out.build())
     print(f"{len(out)} bytes")
 ```
@@ -171,8 +171,8 @@ func main():
 11 bytes
 ```
 
-`append_ascii` traps outside 0..127, because a Builder's bytes become
-a `String` and a `String` is valid UTF-8. Wider characters go in with
+`append_ascii` traps outside 0..127, because a builder's bytes become
+a `string` and a `string` is valid UTF-8. Wider characters go in with
 `append(chr(code))`.
 
 ## Identity, not contents

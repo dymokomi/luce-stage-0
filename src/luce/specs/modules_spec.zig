@@ -17,17 +17,17 @@ const agree = @import("agree.zig");
 
 const geo: agree.File = .{ .name = "geo", .source =
     \\struct Point:
-    \\    x: Float
-    \\    y: Float
+    \\    x: double
+    \\    y: double
     \\
     \\struct Text:
-    \\    func twice(value: Int) -> Int:
+    \\    func twice(value: long) -> long:
     \\        return value * 2
     \\
-    \\func make(x: Float, y: Float) -> Point:
+    \\func make(x: double, y: double) -> Point:
     \\    return Point(x = x, y = y)
     \\
-    \\func length(p: Point) -> Float:
+    \\func length(p: Point) -> double:
     \\    return sqrt(p.x * p.x + p.y * p.y)
     \\
 };
@@ -52,7 +52,7 @@ test "a file is a module: imports, qualified names, and shared types run" {
 test "an imported module compiles and runs the same with CRLF line endings" {
     // The layout rules run on the loaded text, so a module edited on
     // Windows blocks and dedents exactly like any other file.
-    const windows: agree.File = .{ .name = "geo", .source = "func area() -> Int:\r\n    var total = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" };
+    const windows: agree.File = .{ .name = "geo", .source = "func area() -> long:\r\n    var total = 0\r\n\r\n    for i in range(0, 3):\r\n        total = total + i\r\n\r\n    return total\r\n" };
     var program = try agree.project(
         \\import geo
         \\
@@ -68,7 +68,7 @@ test "modules may import each other; mutual recursion crosses files" {
     const even: agree.File = .{ .name = "even", .source =
         \\import odd
         \\
-        \\func check(value: Int) -> Bool:
+        \\func check(value: long) -> bool:
         \\    if value == 0:
         \\        return true
         \\    return odd.check(value - 1)
@@ -77,7 +77,7 @@ test "modules may import each other; mutual recursion crosses files" {
     const odd: agree.File = .{ .name = "odd", .source =
         \\import even
         \\
-        \\func check(value: Int) -> Bool:
+        \\func check(value: long) -> bool:
         \\    if value == 0:
         \\        return false
         \\    return even.check(value - 1)
@@ -109,9 +109,9 @@ test "an import cycle is allowed: a three-file ring loads, compiles, and runs" {
         \\    assert(a.step(9) == 0)
         \\
     , &.{
-        .{ .name = "a", .source = "import b\n\nfunc step(v: Int) -> Int:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
-        .{ .name = "b", .source = "import c\n\nfunc step(v: Int) -> Int:\n    return c.step(v)\n" },
-        .{ .name = "c", .source = "import a\n\nfunc step(v: Int) -> Int:\n    return a.step(v)\n" },
+        .{ .name = "a", .source = "import b\n\nfunc step(v: long) -> long:\n    if v == 0:\n        return 0\n    return b.step(v - 1)\n" },
+        .{ .name = "b", .source = "import c\n\nfunc step(v: long) -> long:\n    return c.step(v)\n" },
+        .{ .name = "c", .source = "import a\n\nfunc step(v: long) -> long:\n    return a.step(v)\n" },
     });
     defer program.deinit();
     try agree.okProgram(&program, .{});
@@ -120,8 +120,8 @@ test "an import cycle is allowed: a three-file ring loads, compiles, and runs" {
 test "constants reach across modules through imports" {
     const config: agree.File = .{ .name = "config", .source =
         \\struct Size:
-        \\    rows: Int
-        \\    cols: Int
+        \\    rows: long
+        \\    cols: long
         \\
         \\let version = "2.0"
         \\let rows = 24

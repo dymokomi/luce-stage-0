@@ -14,8 +14,8 @@ const Span = source_mod.Span;
 
 /// A type as written in source; resolution happens in analysis.
 /// Scalar and struct types are a bare name; composite types carry
-/// arguments (`List(Int)`, `Map(String, Int)`), and an Array's shape
-/// is spelled with `_` wildcards (`Array(Int, _, _)`), counted here.
+/// arguments (`list(long)`, `map(string, long)`), and an array's shape
+/// is spelled with `_` wildcards (`array(long, _, _)`), counted here.
 /// A trailing `?` makes it optional; there is no second level, so one
 /// flag says all there is to say.
 pub const TypeName = struct {
@@ -119,11 +119,11 @@ pub const Expression = union(enum) {
     call: Call,
     binary: Binary,
     unary: Unary,
-    /// new List(Int), new Map(String, Int), new Array(Int, 5, 5),
-    /// new Builder().  Type arguments live in `type_name`; an Array's
+    /// new list(long), new map(string, long), new array(long, 5, 5),
+    /// new builder().  Type arguments live in `type_name`; an array's
     /// runtime dimension expressions live in `dims`.
     new_object: NewObject,
-    /// [1, 2, 3] — a List literal typed by its elements.
+    /// [1, 2, 3] — a list literal typed by its elements.
     list_literal: ListLiteral,
     /// target[i] or target[r, c].
     index: Index,
@@ -222,8 +222,8 @@ pub const ForRange = struct {
 };
 pub const ForEach = struct {
     name: []const u8,
-    /// `for key, value in ...:` — the second binding: a Map's value or
-    /// a List/Array element's index.  Null for the single-name form.
+    /// `for key, value in ...:` — the second binding: a map's value or
+    /// a list/array element's index.  Null for the single-name form.
     value_name: ?[]const u8 = null,
     iterable: *Expression,
     body: Block,

@@ -219,7 +219,7 @@ fn foreignPair(first: Kind, second: Kind) ?Foreign {
             else => null,
         },
         .star => switch (second) {
-            .star => .{ .written = "**", .instead = "import std.math and call math.pow(x, y), or math.ipow(x, y) for Int" },
+            .star => .{ .written = "**", .instead = "import std.math and call math.pow(x, y), or math.ipow(x, y) for long" },
             else => null,
         },
         .equal => switch (second) {
@@ -282,7 +282,7 @@ fn bangIsNotAnOperator(self: *Parser) Error!void {
 }
 
 /// `a < b < c`.  Python reads it as `a < b and b < c`; this grammar
-/// reads it as `(a < b) < c`, which is a Bool compared with an Int and
+/// reads it as `(a < b) < c`, which is a bool compared with a long and
 /// so always a type error one stage later.  Report it here, with the
 /// `and` form written out in the reader's own words when their source
 /// is short enough to quote back.
@@ -352,7 +352,7 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
     if (self.accept(.keyword_not)) |operator| {
         const operand = (try unaryExpression(self)) orelse return null;
         // `not a == b` is `(not a) == b` here and `not (a == b)` in
-        // Python, and with Bool operands both parse and disagree
+        // Python, and with bool operands both parse and disagree
         // (docs/LANGUAGE.md).  A silently different answer is worse
         // than an error, so the reader is asked which one they meant.
         if (binaryPrecedence(self.peekKind()) == .comparison) {
@@ -378,7 +378,7 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
 
 /// `not` is a prefix operator and so binds tighter than every binary
 /// one, comparison included — Zig's and C's reading, not Python's.
-/// Both readings are legal Bool expressions with different answers, so
+/// Both readings are legal bool expressions with different answers, so
 /// the parser refuses to pick and names the two spellings.
 fn notBeforeComparison(
     self: *Parser,
@@ -697,15 +697,15 @@ fn listLiteral(self: *Parser) Error!?*ast.Expression {
     } });
 }
 
-/// new List(Int) | new Map(String, Int) | new Array(Int, DIM...) |
-/// new Builder().  Type arguments come first; an Array's trailing
+/// new list(long) | new map(string, long) | new array(long, DIM...) |
+/// new builder().  Type arguments come first; an array's trailing
 /// arguments are runtime dimension expressions.
 fn newObject(self: *Parser) Error!?*ast.Expression {
     const start = self.advance(); // new
-    // The kind is read without consuming it: List and Map hand the
+    // The kind is read without consuming it: list and map hand the
     // whole `Name(args...)` to typeName, which must see the name.
     if (self.peekKind() != .identifier) {
-        _ = try self.expect(.identifier, "List, Map, Array, or Builder after new");
+        _ = try self.expect(.identifier, "list, map, array, or builder after new");
         return null;
     }
     const name = self.peek();
@@ -727,7 +727,7 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
         closing_end = written.span.end;
     } else if (builtin == .array) {
         _ = self.advance();
-        const opener = (try self.expect(.left_paren, "'(' after Array")) orelse return null;
+        const opener = (try self.expect(.left_paren, "'(' after array")) orelse return null;
         const element = (try self.typeName()) orelse return null;
         const arguments = try self.arena.alloc(ast.TypeName, 1);
         arguments[0] = element;
@@ -746,7 +746,7 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
         try self.report(
             "luce.parse.new",
             name.span,
-            "new builds List, Map, Array, or Builder (structs are values: {s}(...))",
+            "new builds list, map, array, or builder (structs are values: {s}(...))",
             .{kind},
         );
         return null;
@@ -769,16 +769,16 @@ pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
     return node;
 }
 
-/// Expand f"...{expr}..." into a String-typed concatenation:
+/// Expand f"...{expr}..." into a string-typed concatenation:
 /// literal chunks (escapes and `{{`/`}}` decoded) joined with `+`,
-/// each `{expr}` wrapped in `String(expr)`.  A hole is sub-parsed
+/// each `{expr}` wrapped in `string(expr)`.  A hole is sub-parsed
 /// against the real source with absolute spans, so diagnostics
 /// inside interpolations point at the right bytes.
 ///
 /// This is the one place stage 3 desugars rather than records; the
 /// structured form belongs in stage 5 (docs/PIPELINE.md).
 // ---------------------------------------------------------------------------
-// F-strings, desugared here into `+` and `String(...)`
+// F-strings, desugared here into `+` and `string(...)`
 // ---------------------------------------------------------------------------
 
 fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
@@ -788,7 +788,7 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
     // f-string stops at the line and still yields an operand".  It has
     // already reported; expanding the truncated bytes would only add a
     // second message about a brace that was never really open.  Stand
-    // in an empty String and let the rest of the line parse.
+    // in an empty string and let the rest of the line parse.
     if (!closedLiteral(raw, 3)) return placeholderString(self, item);
     const inner = raw[2 .. raw.len - 1]; // between f" and the closing "
     const inner_start = item.span.start + 2;
@@ -825,18 +825,18 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
                     try self.report(
                         "luce.parse.fstring",
                         .{ .start = hole_start + at, .end = hole_start + whole_hole.len },
-                        "unknown format spec ':{s}'; the one form is ':.Nf' — N decimal places of a Float",
+                        "unknown format spec ':{s}'; the one form is ':.Nf' — N decimal places of a double",
                         .{spec},
                     );
                     return null;
                 };
                 break :blk try wrapFormat(self, hole_expr, digits, hole_expr.span());
             } else
-                // The synthesized `String(...)` takes the *hole's*
+                // The synthesized `string(...)` takes the *hole's*
                 // span, not the whole f-string's.  Everything stage 4
                 // says about this call is about what the reader wrote
-                // between the braces — `String() converts Int, Float,
-                // Bool, or String` for a list in a hole — and
+                // between the braces — `string() converts long, double,
+                // bool, or string` for a list in a hole — and
                 // underlining the entire literal makes a reader with
                 // four holes in one line check all four.
                 try wrapStr(self, hole_expr, hole_expr.span());
@@ -870,7 +870,7 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
     }
     result = try appendLiteralChunk(self, result, item.span, literal.items);
     // An empty f-string, or one that is all interpolation, still
-    // yields a String.
+    // yields a string.
     return result orelse try make(self, .{ .string_literal = .{ .decoded = "", .span = item.span } });
 }
 
@@ -893,11 +893,11 @@ fn concat(self: *Parser, left: ?*ast.Expression, right: *ast.Expression) Error!*
     } });
 }
 
-/// String(expr) — the interpolation converts each hole to text.
+/// string(expr) — the interpolation converts each hole to text.
 fn wrapStr(self: *Parser, expr: *ast.Expression, span: Span) Error!*ast.Expression {
     const arguments = try self.arena.alloc(ast.Argument, 1);
     arguments[0] = .{ .name = null, .value = expr, .span = expr.span() };
-    return make(self, .{ .call = .{ .callee = "String", .arguments = arguments, .span = span } });
+    return make(self, .{ .call = .{ .callee = "string", .arguments = arguments, .span = span } });
 }
 
 /// `strings.format_float(expr, decimals)` — what `{x:.2f}` means.
@@ -1084,7 +1084,7 @@ fn closedLiteral(raw: []const u8, least: usize) bool {
     return raw.len >= least and raw[raw.len - 1] == '"';
 }
 
-/// The empty String a truncated literal stands in as.  Stage 2 already
+/// The empty string a truncated literal stands in as.  Stage 2 already
 /// reported the truncation; this keeps the parse going without a
 /// second message about it.
 fn placeholderString(self: *Parser, item: Token) Error!*ast.Expression {

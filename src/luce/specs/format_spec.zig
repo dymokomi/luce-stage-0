@@ -21,20 +21,20 @@ const testing = std.testing;
 test "a module encoded and decoded again is the same program on both engines" {
     var program = try agree.program(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
-        \\func twice(value: Int) -> Int:
+        \\func twice(value: long) -> long:
         \\    return value * 2
         \\
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    for i in range(0, 8):
         \\        xs.append(twice(i))
         \\    let here = Point(x = xs[3], y = len(xs))
         \\    assert(here.x == 6 and here.y == 8)
         \\    assert(twice(21) == 42)
-        \\    print(String(xs[7]) + " " + String(here.x))
+        \\    print(string(xs[7]) + " " + string(here.x))
         \\
     );
     defer program.deinit();

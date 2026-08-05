@@ -8,12 +8,12 @@
 
 func main():
     let n = 400
-    var a = new Array(Float, n * n)
-    var b = new Array(Float, n * n)
-    var c = new Array(Float, n * n)
+    var a = new array(double, n * n)
+    var b = new array(double, n * n)
+    var c = new array(double, n * n)
     for i in range(0, n * n):
-        a[i] = Float((i * 7) % 16) * 0.25
-        b[i] = Float((i * 13) % 16) * 0.25
+        a[i] = double((i * 7) % 16) * 0.25
+        b[i] = double((i * 13) % 16) * 0.25
     for i in range(0, n):
         for k in range(0, n):
             let pivot = a[i * n + k]
@@ -22,4 +22,4 @@ func main():
     var checksum = 0.0
     for i in range(0, n * n):
         checksum += c[i]
-    print(String(Int(trunc(checksum))))
+    print(string(long(trunc(checksum))))

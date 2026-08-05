@@ -15,15 +15,24 @@
 # is written back, not an object that is mutated through a borrow; no
 # hidden globals.
 
-let pi = 3.14159265358979323846
-let tau = 6.28318530717958647692
-let e = 2.71828182845904523536
+# These five are annotated `double` on purpose, and it is the one
+# annotation in this module that is load-bearing rather than tidy.
+# Each carries twenty or twenty-one significant digits so that it
+# rounds to the nearest binary64, and the module's accuracy promise
+# above — ~1e-14 relative for exp and ln — is a claim about that
+# rounding.  An unannotated literal takes the default width, and the
+# default is not this one; at binary32 the epsilon is 1.19e-7 and
+# every sentence at the top of this file becomes false (docs/TYPES.md,
+# the unannotated-site audit).
+let pi: double = 3.14159265358979323846
+let tau: double = 6.28318530717958647692
+let e: double = 2.71828182845904523536
 
-let ln2 = 0.69314718055994530942
-let ln10 = 2.30258509299404568402
+let ln2: double = 0.69314718055994530942
+let ln10: double = 2.30258509299404568402
 
 # Round half away from zero: round(2.5) == 3.0, round(-2.5) == -3.0.
-# The same rounding Int(x) does, which is the point — a language with
+# The same rounding long(x) does, which is the point — a language with
 # two roundings that disagree has a bug in it (docs/NUMERICS.md).
 #
 # Not floor(x + 0.5), which is how this was written and how most
@@ -31,7 +40,7 @@ let ln10 = 2.30258509299404568402
 # exactly 1.0 in binary64, so the floor of it is 1 where the answer is
 # 0.  Splitting at trunc(x) instead is exact — the subtraction below
 # is exact for every x whose fraction is not already zero.
-func round(x: Float) -> Float:
+func round(x: double) -> double:
     let whole = trunc(x)
     let fraction = x - whole
     if fraction >= 0.5:
@@ -42,15 +51,15 @@ func round(x: Float) -> Float:
 
 # e raised to x.  Large x overflows to infinity, very negative x
 # underflows to 0.0 — IEEE semantics, no traps.
-func exp(x: Float) -> Float:
+func exp(x: double) -> double:
     # Reduce: x = k*ln2 + r with r in [-ln2/2, ln2/2], so the series
     # below converges in a few terms; then scale by 2^k.
-    let k = Int(x / ln2)
-    let r = x - Float(k) * ln2
+    let k = long(x / ln2)
+    let r = x - double(k) * ln2
     var term = 1.0
     var total = 1.0
     for i in range(1, 15):
-        term *= r / Float(i)
+        term *= r / double(i)
         total += term
     var factor = 1.0
     if k >= 0:
@@ -62,7 +71,7 @@ func exp(x: Float) -> Float:
     return total * factor
 
 # Natural logarithm.  Non-positive input is a bug, not a value: trap.
-func ln(x: Float) -> Float:
+func ln(x: double) -> double:
     if x <= 0.0:
         trap("ln of a non-positive number")
     # Reduce to m in [1, 2) with x = m * 2^k ...
@@ -81,19 +90,19 @@ func ln(x: Float) -> Float:
     var total = t
     for i in range(1, 14):
         term *= t2
-        total += term / Float(2 * i + 1)
-    return 2.0 * total + Float(k) * ln2
+        total += term / double(2 * i + 1)
+    return 2.0 * total + double(k) * ln2
 
-func log2(x: Float) -> Float:
+func log2(x: double) -> double:
     return ln(x) / ln2
 
-func log10(x: Float) -> Float:
+func log10(x: double) -> double:
     return ln(x) / ln10
 
 # x raised to y.  Negative x needs a whole-number y (otherwise the
 # result is not a real number: trap); 0^y is 0 for positive y, 1 for
 # y == 0, and a trap for negative y.
-func pow(x: Float, y: Float) -> Float:
+func pow(x: double, y: double) -> double:
     if x == 0.0:
         if y > 0.0:
             return 0.0
@@ -106,13 +115,13 @@ func pow(x: Float, y: Float) -> Float:
         trap("pow: negative base needs a whole-number exponent")
     let magnitude = exp(y * ln(0.0 - x))
     # Odd whole exponents keep the sign.
-    if Int(y) % 2 == 1:
+    if long(y) % 2 == 1:
         return 0.0 - magnitude
     return magnitude
 
 # Integer power by squaring; arithmetic is checked, so a result past
-# i64 traps integer_overflow.  Negative exponents have no Int answer.
-func ipow(base: Int, exponent: Int) -> Int:
+# i64 traps integer_overflow.  Negative exponents have no long answer.
+func ipow(base: long, exponent: long) -> long:
     if exponent < 0:
         trap("ipow needs a non-negative exponent")
     var result = 1
@@ -127,49 +136,49 @@ func ipow(base: Int, exponent: Int) -> Int:
     return result
 
 # Sine, by range reduction to (-pi, pi] and a Taylor series.
-func sin(x: Float) -> Float:
+func sin(x: double) -> double:
     var r = x - floor(x / tau) * tau
     if r > pi:
         r -= tau
     var term = r
     var total = r
     for i in range(1, 11):
-        term *= (0.0 - r * r) / Float((2 * i) * (2 * i + 1))
+        term *= (0.0 - r * r) / double((2 * i) * (2 * i + 1))
         total += term
     return total
 
-func cos(x: Float) -> Float:
+func cos(x: double) -> double:
     return sin(x + pi / 2.0)
 
 # Tangent; near odd multiples of pi/2 the true value diverges and the
 # result is a large float, as IEEE division dictates.
-func tan(x: Float) -> Float:
+func tan(x: double) -> double:
     return sin(x) / cos(x)
 
 # -- vectors and statistics --------------------------------------------
 #
-# Whole-array operations over Array(Float, _), the numeric vector
+# Whole-array operations over array(double, _), the numeric vector
 # type.  Sums accumulate left to right — the same order both engines
 # and the C benchmark twins use, so results are bit-reproducible.
 # Empty arrays: sum is 0.0; the operations that have no empty answer
 # (mean, vmin, vmax, variance) trap.
 
-func sum(xs: Array(Float, _)) -> Float:
+func sum(xs: array(double, _)) -> double:
     var total = 0.0
     for i in range(0, len(xs)):
         total += xs[i]
     return total
 
-# The reductions over an array answer `Float?`: an empty array has no
+# The reductions over an array answer `double?`: an empty array has no
 # mean, no smallest and no spread, and "there is nothing there" is the
 # same fact every time with no reason worth carrying (docs/FAILURE.md).
 # A caller that knows the array is non-empty writes `else` once.
-func mean(xs: Array(Float, _)) -> Float?:
+func mean(xs: array(double, _)) -> double?:
     if len(xs) == 0:
         return none
-    return sum(xs) / Float(len(xs))
+    return sum(xs) / double(len(xs))
 
-func vmin(xs: Array(Float, _)) -> Float?:
+func vmin(xs: array(double, _)) -> double?:
     if len(xs) == 0:
         return none
     var smallest = xs[0]
@@ -177,7 +186,7 @@ func vmin(xs: Array(Float, _)) -> Float?:
         smallest = min(smallest, xs[i])
     return smallest
 
-func vmax(xs: Array(Float, _)) -> Float?:
+func vmax(xs: array(double, _)) -> double?:
     if len(xs) == 0:
         return none
     var largest = xs[0]
@@ -189,7 +198,7 @@ func vmax(xs: Array(Float, _)) -> Float?:
 # the same array twice, and there could not have been a `minmax`
 # before: writing one would have meant inventing a bag struct in the
 # standard library (docs/RETURNS.md).
-func minmax(xs: Array(Float, _)) -> (Float?, Float?):
+func minmax(xs: array(double, _)) -> (double?, double?):
     if len(xs) == 0:
         return none, none
     var smallest = xs[0]
@@ -200,7 +209,7 @@ func minmax(xs: Array(Float, _)) -> (Float?, Float?):
     return smallest, largest
 
 # The dot product; lengths must agree.
-func dot(xs: Array(Float, _), ys: Array(Float, _)) -> Float:
+func dot(xs: array(double, _), ys: array(double, _)) -> double:
     if len(xs) != len(ys):
         trap("dot needs arrays of one length")
     var total = 0.0
@@ -209,11 +218,11 @@ func dot(xs: Array(Float, _), ys: Array(Float, _)) -> Float:
     return total
 
 # The Euclidean norm.
-func norm(xs: Array(Float, _)) -> Float:
+func norm(xs: array(double, _)) -> double:
     return sqrt(dot(xs, xs))
 
 # Population variance (mean of squared deviations) and its root.
-func variance(xs: Array(Float, _)) -> Float?:
+func variance(xs: array(double, _)) -> double?:
     if len(xs) == 0:
         return none
     let center = mean(xs) else 0.0
@@ -221,27 +230,27 @@ func variance(xs: Array(Float, _)) -> Float?:
     for i in range(0, len(xs)):
         let d = xs[i] - center
         total += d * d
-    return total / Float(len(xs))
+    return total / double(len(xs))
 
-func stddev(xs: Array(Float, _)) -> Float?:
+func stddev(xs: array(double, _)) -> double?:
     let spread = variance(xs)
     if spread == none:
         return none
     return sqrt(spread)
 
 # xs[i] = value for every element — a typed fill.
-func fill(xs: Array(Float, _), value: Float):
+func fill(xs: array(double, _), value: double):
     for i in range(0, len(xs)):
         xs[i] = value
 
 # xs[i] *= factor for every element.
-func scale(xs: Array(Float, _), factor: Float):
+func scale(xs: array(double, _), factor: double):
     for i in range(0, len(xs)):
         xs[i] *= factor
 
 # xs[i] += factor * ys[i] — the BLAS axpy, the shape most numeric
 # loops reduce to.
-func axpy(xs: Array(Float, _), factor: Float, ys: Array(Float, _)):
+func axpy(xs: array(double, _), factor: double, ys: array(double, _)):
     if len(xs) != len(ys):
         trap("axpy needs arrays of one length")
     for i in range(0, len(xs)):
@@ -252,24 +261,24 @@ func axpy(xs: Array(Float, _), factor: Float, ys: Array(Float, _)):
 # Lehmer / MINSTD: state' = state * 48271 mod (2^31 - 1).  Period
 # 2^31 - 2; not cryptographic — games and shuffles, not secrets.
 #
-# The state is one `Int` in a struct, and every draw writes it back:
+# The state is one `long` in a struct, and every draw writes it back:
 #
 #     var rng = math.Rng(state = 42)
 #     let roll = rng.in_range(1, 7)
 #
-# This was a one-element `List(Int)`, allocated by a `seed` function
+# This was a one-element `list(long)`, allocated by a `seed` function
 # and kept alive for the life of `main`, whose entire purpose was to
-# give an `Int` reference semantics so the *state* could go out
+# give a `long` reference semantics so the *state* could go out
 # through a borrow while the *draw* went out through `return`.  Two
 # values, two channels, one allocation.  `var self` and a second
 # return position between them delete all three (docs/RETURNS.md).
 struct Rng:
     # The generator's whole state.  Any seed works: one out of range
     # is brought into range on first use.
-    state: Int
+    state: long
 
     # The next raw state value in [1, 2^31 - 2].
-    func next(var self) -> Int:
+    func next(var self) -> long:
         # A Lehmer generator has no zero state and none at or past its
         # modulus, so a seed of either shape would stick or wrap.  In
         # range this is the identity — which is the property that
@@ -283,14 +292,14 @@ struct Rng:
         self.state = self.state * 48271 % 2147483647
         return self.state
 
-    # A Float uniform in (0, 1).
-    func real(var self) -> Float:
-        return Float(self.next()) / 2147483647.0
+    # A double uniform in (0, 1).
+    func real(var self) -> double:
+        return double(self.next()) / 2147483647.0
 
-    # An Int uniform in [low, high) — high is exclusive, like range.
+    # A long uniform in [low, high) — high is exclusive, like range.
     # (Slight modulo bias; fine for games, meaningless for spans that
     # small anyway.)
-    func in_range(var self, low: Int, high: Int) -> Int:
+    func in_range(var self, low: long, high: long) -> long:
         if high <= low:
             trap("in_range needs low < high")
         return low + self.next() % (high - low)

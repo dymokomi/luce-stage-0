@@ -253,7 +253,7 @@ pub const Host = struct {
     /// into the run's own arena before the next call can move them.
     ///
     /// **The bytes must be valid UTF-8**, because they become a Luce
-    /// `String` and the language promises that `s[a:b]` is checked
+    /// `string` and the language promises that `s[a:b]` is checked
     /// against character boundaries and `len` counts characters.  A
     /// half-read JPEG would make both of those lies, and the trap they
     /// are supposed to raise would fire — or not — on the *contents*
@@ -261,7 +261,7 @@ pub const Host = struct {
     /// bytes have been through `01_source.prepare` since stage 1 was
     /// written; nothing was checking data.  A file that is not text
     /// answers null and the program traps `file_read_failed`, which is
-    /// true: it could not be read *as a String*.
+    /// true: it could not be read *as a string*.
     ///
     /// Unlike source, data is **not** normalized: no BOM is stripped
     /// and no CRLF is rewritten.  `file_read` hands back the file, and
@@ -960,7 +960,7 @@ const KeyView = struct {
     text: []const u8 = "",
 };
 
-/// Map a decoded key to its stable Luce-visible event, or null for
+/// map a decoded key to its stable Luce-visible event, or null for
 /// bytes that decode to nothing a program should see.  A control key's
 /// name is written into `control_name`, which the caller owns.
 fn keyView(control_name: *[6]u8, decoded: key_mod.Key) ?KeyView {
@@ -1056,7 +1056,7 @@ test "styles render 256-color SGR runs and clamp to defaults" {
     );
 }
 
-test "file_read refuses bytes that cannot be a String, and normalizes nothing" {
+test "file_read refuses bytes that cannot be a string, and normalizes nothing" {
     var written: std.Io.Writer.Allocating = .init(testing.allocator);
     defer written.deinit();
 
@@ -1269,7 +1269,7 @@ test "a prompt is written through the sanitizer before the line is read" {
     // the descriptor was a constant: the prompt goes out rewritten and
     // flushed *before* the read, a CRLF line comes back without its
     // carriage return, and the end of input is a `none` rather than an
-    // empty String.
+    // empty string.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var scripted: Scripted = undefined;
     try scripted.setup("first\r\nsecond\nlast");

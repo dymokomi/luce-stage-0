@@ -224,7 +224,7 @@ fn compileScript(gpa: Allocator, source: []const u8) !luce.mir.Program {
 }
 
 const counter =
-    \\func total(limit: Int) -> Int:
+    \\func total(limit: long) -> long:
     \\    var sum = 0
     \\    var index = 0
     \\    while index < limit:
@@ -233,7 +233,7 @@ const counter =
     \\    return sum
     \\
     \\func main():
-    \\    print(String(total(10)))
+    \\    print(string(total(10)))
     \\
 ;
 
@@ -349,13 +349,13 @@ test "a standalone executable prints, and a trapping one reports and exits nonze
     // A program that says something, then divides by zero two frames
     // down — so the trace has something to say as well.
     var program = try compileScript(gpa,
-        \\func divide(a: Int, b: Int) -> Int:
+        \\func divide(a: long, b: long) -> long:
         \\    return a // b
         \\
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    print("alive")
         \\    if len(args) == 1:
-        \\        print(String(divide(1, 0)))
+        \\        print(string(divide(1, 0)))
         \\
     );
     defer program.deinit();
@@ -398,11 +398,11 @@ test "a release executable keeps the function names and drops the lines" {
     const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
 
     var program = try compileScript(gpa,
-        \\func divide(a: Int, b: Int) -> Int:
+        \\func divide(a: long, b: long) -> long:
         \\    return a // b
         \\
         \\func main():
-        \\    print(String(divide(1, 0)))
+        \\    print(string(divide(1, 0)))
         \\
     );
     defer program.deinit();

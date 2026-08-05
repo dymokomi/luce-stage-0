@@ -662,7 +662,7 @@ pub const Parser = struct {
         if (!try self.enter("type")) return null;
         defer self.leave();
 
-        // `(Int, Int)` where a type belongs.  A return shape is
+        // `(long, long)` where a type belongs.  A return shape is
         // written in exactly one place — after `->` in a declaration —
         // and it is not a type: it cannot annotate a binding, fill a
         // parameter or a field, or stand inside a container
@@ -710,7 +710,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.type",
                         self.peek().span,
-                        "array shape wildcards come last: Array(Int, _, _)",
+                        "array shape wildcards come last: array(long, _, _)",
                         .{},
                     );
                     return null;
@@ -941,7 +941,7 @@ pub const Parser = struct {
         }
         var previous_end = opener.span.end;
         while (!expr.endsList(self.peekKind(), .right_paren)) {
-            // `-> ((Int, Int), Int)`.  `typeName` refuses a `(` where a
+            // `-> ((long, long), long)`.  `typeName` refuses a `(` where a
             // type belongs and says a return shape is not a type; here
             // the reader was writing one, so the sentence is the rule
             // they crossed rather than the one they misused.
@@ -970,9 +970,9 @@ pub const Parser = struct {
             );
             return false;
         }
-        // `-> (Int, Int)?` — the `?` would be marking the *shape*, and
+        // `-> (long, long)?` — the `?` would be marking the *shape*, and
         // a shape is not a value that can be absent.  Each element may
-        // carry one of its own, and `Int?` among them is ordinary.
+        // carry one of its own, and `long?` among them is ordinary.
         if (self.peekKind() == .question) {
             try self.report(
                 "luce.parse.type",
@@ -1083,7 +1083,7 @@ pub const Parser = struct {
         var annotation: ?ast.TypeName = null;
         if (self.accept(.colon) != null) {
             annotation = (try self.typeName()) orelse return null;
-            // `let low: Int, high: Int = minmax(xs)`.  There is one
+            // `let low: long, high: long = minmax(xs)`.  There is one
             // place a return shape is written and it is the signature;
             // the bind takes its types from the call
             // (docs/RETURNS.md).  An annotation on a *single* `let` is

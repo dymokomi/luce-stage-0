@@ -1,13 +1,13 @@
 # Strings and copies
 
-A `String` in Luce is immutable UTF-8, and it is a **value**. It
+A `string` in Luce is immutable UTF-8, and it is a **value**. It
 copies on assignment and on call, it goes into a container with no
 ceremony, and nobody frees it. This page is what that costs, what it
 buys, and the one benchmark row where the bill is still visible.
 
 ## The problem it solved
 
-String bytes used to live in a run-lifetime arena that was never
+A string's bytes used to live in a run-lifetime arena that was never
 reclaimed. A program that built and discarded text grew without bound
 even when it retained nothing at all — and the flagship program did
 exactly that. `programs/editor.luc` splices a line as
@@ -25,11 +25,11 @@ layer, permanently, so the fix had to be something else.
 
 ## The fix: the language's own claim, made literal
 
-*Values copy.* A `String`'s bytes and a struct's field run have
+*Values copy.* A `string`'s bytes and a struct's field run have
 exactly one owner, and **any store into something that outlives the
 current statement copies them**. No owner ever holds a view of bytes
 it did not allocate, so every one of them has a death point, and the
-same machinery that frees a `List` frees a `String`'s bytes.
+same machinery that frees a `list` frees a `string`'s bytes.
 
 The measurements, on a churn loop that builds and discards one string
 per iteration and retains nothing.  These are the runtime's own arena,
@@ -50,15 +50,15 @@ frame either way.
 ## What it cost, and what took most of it back
 
 The bill arrived in one place. `bench/strings` went from **2.35× its C
-twin to 3.40×**: 400,000 `String(i)` results and 400,001 split pieces
+twin to 3.40×**: 400,000 `string(i)` results and 400,001 split pieces
 that used to be unreclaimed bump allocations and shared views became
 800,000 allocate-and-free pairs. The other five benchmarks moved less
 than 1%, exactly as predicted.
 
 **Small-string optimisation took roughly three quarters of that
 back.** A string of 22 bytes or fewer now lives inside the value that
-carries it, so `String(Int)` and `chr` allocate nothing at all. The
-average split piece in that benchmark is 11.7 bytes and every `String(i)`
+carries it, so `string(long)` and `chr` allocate nothing at all. The
+average split piece in that benchmark is 11.7 bytes and every `string(i)`
 is at most 7, so almost every allocation the change added went away
 again.
 
@@ -78,32 +78,32 @@ and the repository says so rather than rounding it off.
 
 What remains is **the copying itself**, not allocation: 400,001
 twelve-byte duplications into list elements. Phase timing confirms it —
-building 400,000 pieces with a `Builder` costs exactly what it cost
+building 400,000 pieces with a `builder` costs exactly what it cost
 before; the extra time appears in the phases that store pieces into
 lists.
 
 ## What this means when you write Luce
 
 **Values in containers are free of ceremony and not free of cost.**
-Appending a `String` to a list copies its bytes. For 11-byte pieces
+Appending a `string` to a list copies its bytes. For 11-byte pieces
 that is a `memcpy` you will never notice; for a megabyte of text in a
 loop it is real.
 
-**A `Builder` is the answer for accumulation.** Repeated `+` allocates
-a new `String` per step; a `Builder` does not, and `append_ascii` puts
-a byte in without the `String` a `chr()` would have made.
+**A `builder` is the answer for accumulation.** Repeated `+` allocates
+a new `string` per step; a `builder` does not, and `append_ascii` puts
+a byte in without the `string` a `chr()` would have made.
 
 ```luce run
 func main():
     # The shape that allocates per step.
     var slow = ""
     for i in range(0, 5):
-        slow += String(i) + ","
+        slow += string(i) + ","
 
     # The shape that does not.
-    var fast = new Builder()
+    var fast = new builder()
     for i in range(0, 5):
-        fast.append(String(i))
+        fast.append(string(i))
         fast.append_ascii(44)
 
     print(slow)
@@ -115,7 +115,7 @@ func main():
 0,1,2,3,4,
 ```
 
-**Slices are values, and cheap ones.** `s[a:b]` on a `String` stays a
+**Slices are values, and cheap ones.** `s[a:b]` on a `string` stays a
 value and does not allocate an object; what it may do is copy bytes
 when it is stored somewhere lasting. `xs[a:b]` on a *list* is
 different — that allocates a new list the receiver owns.
@@ -127,7 +127,7 @@ about searching. That is deliberate: `strings.find_from` locates a
 needle's first byte with `find_byte` and only then compares the rest,
 so the scan is one runtime call the implementation may vectorize
 rather than a Luce loop over `byte_at`. `fold_case` emits folded bytes
-with `append_ascii`, which needs no `String` per character.
+with `append_ascii`, which needs no `string` per character.
 
 Those two are why the whole `strings` module can stay written in
 ordinary Luce and still be fast enough to keep.
@@ -154,7 +154,7 @@ func main():
 
 ## Returning a slice of a parameter
 
-Returning a borrowed *object* is a compile error. A `String` is not an
+Returning a borrowed *object* is a compile error. A `string` is not an
 object, so it copies instead: `strings.trim` ends with
 `return s[first:last]`, a view of its parameter, and what comes out is
 a copy the caller owns. That is why the rule about returns is stated

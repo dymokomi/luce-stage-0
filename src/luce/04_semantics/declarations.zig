@@ -263,6 +263,20 @@ pub const Analyzer = struct {
     }
 
     fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
+        // Before anything else, including the arity checks: a name the
+        // language used to answer to is answered by name, whatever
+        // shape it was written in.  `List(Int)` must be told that
+        // `List` is `list` and not that it "takes no type arguments",
+        // which is a sentence about a struct nobody declared.
+        if (types.retiredSpelling(written.name)) |now| {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "the builtin types are lowercase: {s} is written {s}",
+                .{ written.name, now },
+            );
+            return null;
+        }
         if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
             .boolean, .long, .double, .string => {
                 if (written.arguments.len != 0 or written.wildcards != 0) {
@@ -279,7 +293,7 @@ pub const Analyzer = struct {
             },
             .list => {
                 if (written.arguments.len != 1 or written.wildcards != 0) {
-                    try self.fail("luce.sema.type", written.span, "List takes one element type: List(Int)", .{});
+                    try self.fail("luce.sema.type", written.span, "list takes one element type: list(long)", .{});
                     return null;
                 }
                 const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
@@ -288,12 +302,12 @@ pub const Analyzer = struct {
             },
             .map => {
                 if (written.arguments.len != 2 or written.wildcards != 0) {
-                    try self.fail("luce.sema.type", written.span, "Map takes key and value types: Map(String, Int)", .{});
+                    try self.fail("luce.sema.type", written.span, "map takes key and value types: map(string, long)", .{});
                     return null;
                 }
                 const key = (try self.resolveType(module, written.arguments[0])) orelse return null;
                 if (key != .int and key != .string) {
-                    try self.fail("luce.sema.type", written.arguments[0].span, "Map keys are Int or String", .{});
+                    try self.fail("luce.sema.type", written.arguments[0].span, "map keys are long or string", .{});
                     return null;
                 }
                 const value = (try self.resolveType(module, written.arguments[1])) orelse return null;
@@ -305,7 +319,7 @@ pub const Analyzer = struct {
                     try self.fail(
                         "luce.sema.type",
                         written.span,
-                        "Array spells element and shape: Array(Int, _) up to Array(Int, _, _, _, _)",
+                        "array spells element and shape: array(long, _) up to array(long, _, _, _, _)",
                         .{},
                     );
                     return null;
@@ -316,7 +330,7 @@ pub const Analyzer = struct {
             },
             .builder => {
                 if (written.arguments.len != 0 or written.wildcards != 0) {
-                    try self.fail("luce.sema.type", written.span, "Builder takes no type arguments", .{});
+                    try self.fail("luce.sema.type", written.span, "builder takes no type arguments", .{});
                     return null;
                 }
                 return try self.internHeapType(.builder);
@@ -349,6 +363,20 @@ pub const Analyzer = struct {
     /// see.  A misremembered `Str` or `Bolean` is the commonest of all
     /// type errors and the cheapest to answer well.
     fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!void {
+        // A name the language used to answer to gets told what it is
+        // called now, by name.  Edit distance cannot find `long` from
+        // `Int`, and a reader whose only mistake is remembering an
+        // older spelling is owed the new one rather than "unknown
+        // type" (docs/TYPES.md D8).
+        if (types.retiredSpelling(written.name)) |now| {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "the builtin types are lowercase: {s} is written {s}",
+                .{ written.name, now },
+            );
+            return;
+        }
         const builtin_types = types.builtin_names;
         const prefix = self.modules[module].prefix;
         var suggestion = helpers.Suggestion.init(written.name);
@@ -394,7 +422,7 @@ pub const Analyzer = struct {
         return switch (of) {
             .heap => true,
             .strukt => |layout_index| self.struct_shapes.items[layout_index].carries,
-            // A `List(T)?` holding an object owns it exactly as the
+            // A `list(T)?` holding an object owns it exactly as the
             // unwrapped type would; holding `none` owns nothing (S43),
             // and every ownership walk already no-ops on absence.
             .optional => |payload| self.carriesObjects(payload.asType()),
@@ -402,19 +430,19 @@ pub const Analyzer = struct {
         };
     }
 
-    /// True for types that carry *storage* — a String's bytes, a
+    /// True for types that carry *storage* — a string's bytes, a
     /// struct's field run — as opposed to objects (docs/STRINGS.md).
     ///
     /// Deliberately not `carriesObjects`, and deliberately not wired to
     /// it.  This predicate drives release emission and nothing else:
     /// widening `carriesObjects` to Strings would make `xs.append(name)`
     /// demand `give name` under S21, which is a language change.  A
-    /// String takes no verbs (S32) and still gets reclaimed, which is
+    /// string takes no verbs (S32) and still gets reclaimed, which is
     /// the whole point.
     pub fn ownsStorage(self: *const Analyzer, of: Type) bool {
         return switch (of) {
             // A struct owns its field run whatever is in it, so this
-            // needs no shape lookup — an all-Int struct still has a
+            // needs no shape lookup — an all-long struct still has a
             // run to give back.
             .string, .strukt => true,
             .optional => |payload| self.ownsStorage(payload.asType()),
@@ -623,13 +651,13 @@ pub const Analyzer = struct {
         const found = widest orelse return self.fail(
             "luce.sema.struct",
             self.struct_decls.items[index].declaration.span,
-            "struct {s} always holds more than {d} values; bulk data belongs in a List, Map, or Array, which is one reference",
+            "struct {s} always holds more than {d} values; bulk data belongs in a list, map, or array, which is one reference",
             .{ layout.name, helpers.max_struct_values },
         );
         try self.fail(
             "luce.sema.struct",
             self.fieldSpan(index, found.name),
-            "struct {s} always holds more than {d} values once its nested structs are counted; {s} is {s}, which is {d} of them on its own; write {s}: {s}? to hold those only when they are there, or move bulk data into a List, Map, or Array, which is one reference",
+            "struct {s} always holds more than {d} values once its nested structs are counted; {s} is {s}, which is {d} of them on its own; write {s}: {s}? to hold those only when they are there, or move bulk data into a list, map, or array, which is one reference",
             .{
                 layout.name,
                 helpers.max_struct_values,
@@ -955,7 +983,7 @@ pub const Analyzer = struct {
             return null;
         }
         // The annotation is resolved *before* the fold, not after,
-        // because it is the landing type: `let x: Float = 1` reads its
+        // because it is the landing type: `let x: double = 1` reads its
         // literal at a float rather than folding an integer and being
         // told the two disagree (docs/TYPES.md D3).
         var annotated: ?Type = null;
@@ -1019,7 +1047,7 @@ pub const Analyzer = struct {
 
     /// Fold a constant expression: literals, other constants
     /// (`pi`, `geo.pi`, struct-constant fields), arithmetic and
-    /// comparisons, string concatenation, `Int`/`Float` conversions,
+    /// comparisons, string concatenation, `long`/`double` conversions,
     /// and value-struct construction.  Objects and calls are not
     /// constants.
     ///
@@ -1109,7 +1137,7 @@ pub const Analyzer = struct {
                     },
                     .logic_not => switch (operand.value) {
                         .boolean => |value| return .{ .value = .{ .boolean = !value }, .value_type = .boolean },
-                        else => return self.constantError(unary.span, "not needs a Bool", .{}),
+                        else => return self.constantError(unary.span, "not needs a bool", .{}),
                     },
                 }
             },
@@ -1131,12 +1159,12 @@ pub const Analyzer = struct {
                     }
                     const operand = (try self.foldConstant(module, call.arguments[0].value, null)) orelse return null;
                     if (operand.value != .string) {
-                        return self.constantError(call.span, "ord takes a String, not {s}", .{
+                        return self.constantError(call.span, "ord takes a string, not {s}", .{
                             try self.typeName(operand.value_type),
                         });
                     }
                     const codepoint = helpers.ordOfLiteral(operand.value.string) orelse {
-                        return self.constantError(call.span, "ord has no codepoint to read from an empty String", .{});
+                        return self.constantError(call.span, "ord has no codepoint to read from an empty string", .{});
                     };
                     return .{ .value = .{ .int = codepoint }, .value_type = .int };
                 }
@@ -1178,7 +1206,7 @@ pub const Analyzer = struct {
             // rules — but from a constant, so it is arena-owned here
             // rather than made by the runtime.
             // `{d}` on both, which is exactly what `runtime/text.zig`
-            // writes: a Float's text is Zig's Ryū-derived shortest
+            // writes: a double's text is Zig's Ryū-derived shortest
             // representation that round-trips, and a folded constant
             // has to be the same bytes a run would produce.
             const printed: []const u8 = switch (operand.value) {
@@ -1186,7 +1214,7 @@ pub const Analyzer = struct {
                 .float => |held| try std.fmt.allocPrint(self.arena, "{d}", .{held}),
                 .boolean => |held| if (held) "true" else "false",
                 .string => |held| held,
-                else => return self.constantError(call.span, "String() converts Int, Float, Bool, or String", .{}),
+                else => return self.constantError(call.span, "string() converts long, double, bool, or string", .{}),
             };
             return .{ .value = .{ .string = printed }, .value_type = .string };
         }
@@ -1210,13 +1238,13 @@ pub const Analyzer = struct {
                     }
                     return .{ .value = .{ .int = @intFromFloat(rounded) }, .value_type = .int };
                 },
-                else => return self.constantError(call.span, "Int() converts Float", .{}),
+                else => return self.constantError(call.span, "long() converts double", .{}),
             }
         }
         switch (operand.value) {
             .float => return operand,
             .int => |value| return .{ .value = .{ .float = @floatFromInt(value) }, .value_type = .float },
-            else => return self.constantError(call.span, "Float() converts Int", .{}),
+            else => return self.constantError(call.span, "double() converts long", .{}),
         }
     }
 
@@ -1292,7 +1320,7 @@ pub const Analyzer = struct {
 
         // Numbers that mix, folded (docs/NUMERICS.md).  A constant has
         // to reach the same answer a run would, so arithmetic widens
-        // the Int here too and comparison stays exact — the comparison
+        // the long here too and comparison stays exact — the comparison
         // calls the runtime's own function rather than a second copy
         // of it, because two implementations of one judgment is how
         // they come to disagree.
@@ -1324,8 +1352,8 @@ pub const Analyzer = struct {
             }
         }
 
-        // `/` is real division and answers a Float whatever it
-        // divides, so two Int constants widen here too — and `1 / 0`
+        // `/` is real division and answers a double whatever it
+        // divides, so two long constants widen here too — and `1 / 0`
         // folds to `inf` rather than refusing (docs/NUMERICS.md §2).
         if (binary.op == .divide and left.value_type == .int and right.value_type == .int) {
             const numerator: f64 = @floatFromInt(left.value.int);
@@ -1343,7 +1371,7 @@ pub const Analyzer = struct {
         }
         switch (binary.op) {
             .logic_and, .logic_or => {
-                if (left.value != .boolean) return self.constantError(binary.span, "and/or need Bool operands", .{});
+                if (left.value != .boolean) return self.constantError(binary.span, "and/or need bool operands", .{});
                 const folded = if (binary.op == .logic_and)
                     left.value.boolean and right.value.boolean
                 else
@@ -1409,7 +1437,7 @@ pub const Analyzer = struct {
                 },
                 .string => |a| {
                     if (binary.op != .add) {
-                        return self.constantError(binary.span, "String supports + only", .{});
+                        return self.constantError(binary.span, "string supports + only", .{});
                     }
                     const joined = try std.mem.concat(self.arena, u8, &.{ a, right.value.string });
                     return .{ .value = .{ .string = joined }, .value_type = .string };
@@ -1436,7 +1464,7 @@ pub const Analyzer = struct {
                         };
                     },
                     .boolean => |a| blk: {
-                        if (ordering) return self.constantError(binary.span, "Bool has no ordering", .{});
+                        if (ordering) return self.constantError(binary.span, "bool has no ordering", .{});
                         const same = a == right.value.boolean;
                         break :blk if (binary.op == .equal) same else !same;
                     },
@@ -1554,7 +1582,7 @@ pub const Analyzer = struct {
                 try self.fail(
                     "luce.sema.own",
                     parameter.span,
-                    "give applies to objects (List, Map, Array, Builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                    "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]",
                     .{},
                 );
                 continue;
@@ -1608,7 +1636,7 @@ pub const Analyzer = struct {
         const info = self.functions.items[index];
         const declaration = info.declaration;
         // Four shapes are legal: `func main():` and
-        // `func main(args: List(String)):`, each with or without `-> !`
+        // `func main(args: list(string)):`, each with or without `-> !`
         // — the mark is how a program says the world can stop it, and
         // loom reports what it raised (docs/FAILURE.md).  A program
         // that never reads a command line says nothing about one, which
@@ -1642,7 +1670,7 @@ pub const Analyzer = struct {
                 try self.fail(
                     "luce.sema.main",
                     parameter.type_name.span,
-                    "main's parameter is the command line and must be List(String); it is {s} here",
+                    "main's parameter is the command line and must be list(string); it is {s} here",
                     .{try self.typeName(info.parameter_types[0])},
                 );
             }
@@ -1659,7 +1687,7 @@ pub const Analyzer = struct {
 
     // -- pass one and a half: the layouts a return shape rides in -------
     //
-    // `(Float, Float)` **is** a two-field product value, so it is
+    // `(double, double)` **is** a two-field product value, so it is
     // lowered as one: `return low, high` is a `struct_make` and
     // `let low, high = …` is two `struct_get`s.  Nothing below stage 4
     // grows a case for multiple results — no MIR instruction, no wire
@@ -1694,7 +1722,7 @@ pub const Analyzer = struct {
     /// The layout for one return shape, interned by the name the shape
     /// is written with.
     ///
-    /// **The name is the shape as written** — `(Float, Float)` — and it
+    /// **The name is the shape as written** — `(double, double)` — and it
     /// is unforgeable from source: a struct name is an identifier,
     /// qualified with a module prefix, so nothing a program can declare
     /// collides with a name containing `(`.  It reads correctly in
@@ -1747,8 +1775,8 @@ pub const Analyzer = struct {
         return .{ .strukt = index };
     }
 
-    /// What a function answers, as a reader wrote it: `Int` for one
-    /// value, `(Int, Int)` for a shape, `None` for nothing.  Also the
+    /// What a function answers, as a reader wrote it: `long` for one
+    /// value, `(long, long)` for a shape, `None` for nothing.  Also the
     /// synthesized layout's name, so the two can never disagree.
     pub fn writtenResults(self: *Analyzer, info: *const FunctionDeclInfo) Error![]const u8 {
         if (info.channel.len == 0) return "None";

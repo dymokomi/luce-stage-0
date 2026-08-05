@@ -13,24 +13,24 @@
 # input can still be told no, which is what makes it an error rather
 # than a trap (docs/FAILURE.md).  Call one with `try` to hand the
 # failure to your caller, or with `catch` to answer it here.  `exists`
-# is the exception and answers a plain Bool — but it is a question
+# is the exception and answers a plain bool — but it is a question
 # about the past, so it is never a guard for the call after it: read
 # the file, and handle what the read says.
 
 import std.strings
 
-func exists(path: String) -> Bool:
+func exists(path: string) -> bool:
     return file_exists(path)
 
-func read(path: String) -> String!:
+func read(path: string) -> string!:
     return try file_read(path)
 
-func write(path: String, text: String) -> !:
+func write(path: string, text: string) -> !:
     try file_write(path, text)
 
 # The file's lines, without their newlines.  A trailing final newline
 # (the usual text-file ending) does not produce a phantom empty line.
-func read_lines(path: String) -> List(String)!:
+func read_lines(path: string) -> list(string)!:
     let text = try file_read(path)
     var lines = text.split("\n")
     if len(lines) > 0 and lines[len(lines) - 1] == "":
@@ -39,7 +39,7 @@ func read_lines(path: String) -> List(String)!:
 
 # Write lines joined with newlines, ending with one (the text-file
 # convention); an empty list writes an empty file.
-func write_lines(path: String, lines: List(String)) -> !:
+func write_lines(path: string, lines: list(string)) -> !:
     if len(lines) == 0:
         try file_write(path, "")
         return
@@ -51,25 +51,25 @@ func write_lines(path: String, lines: List(String)) -> !:
 # whatever landed in the first one's shadow.
 #
 # Spelled `append_text` and not `append` because `append` is a
-# reserved name — it is `xs.append(v)`, the List method — and nothing
+# reserved name — it is `xs.append(v)`, the list method — and nothing
 # user-declared may take one, module-qualified or not.
-func append_text(path: String, text: String) -> !:
+func append_text(path: string, text: string) -> !:
     try file_append(path, text)
 
 # The same, one line at a time, each ending in a newline.  An empty
 # list adds nothing at all rather than an empty line.
-func append_lines(path: String, lines: List(String)) -> !:
+func append_lines(path: string, lines: list(string)) -> !:
     if len(lines) == 0:
         return
     try file_append(path, lines.join("\n") + "\n")
 
-func delete(path: String) -> !:
+func delete(path: string) -> !:
     try file_delete(path)
 
 # Move a file.  Renaming onto an existing name replaces it, which is
 # what makes write-then-rename the way to replace a file without ever
 # leaving half of one on disk.
-func rename(from: String, to: String) -> !:
+func rename(from: string, to: string) -> !:
     try file_rename(from, to)
 
 # The names in a directory, sorted.
@@ -78,7 +78,7 @@ func rename(from: String, to: String) -> !:
 # like, which differs between two machines holding the same files —
 # and a program that prints a listing should print the same listing.
 # The names are plain names, not paths: join them yourself.
-func list(path: String) -> List(String)!:
+func list(path: string) -> list(string)!:
     var names = try dir_list(path)
     names.sort()
     return names

@@ -1,10 +1,10 @@
-# Word frequencies: Map, List, Builder, file reading, arguments.
+# Word frequencies: map, list, builder, file reading, arguments.
 #
 #   loom run wordcount.lc FILE [TOP_N]
 
 import std.files
 
-func is_word_byte(byte: Int) -> Bool:
+func is_word_byte(byte: long) -> bool:
     if byte >= 97 and byte <= 122:
         return true
     if byte >= 65 and byte <= 90:
@@ -14,7 +14,7 @@ func is_word_byte(byte: Int) -> Bool:
     return byte == 95 or byte >= 128
 
 # Collect every word of `content` into the counts map.
-func count_words(content: String, counts: Map(String, Int)):
+func count_words(content: string, counts: map(string, long)):
     var at = 0
     while at < len(content):
         if is_word_byte(content.byte_at(at)):
@@ -33,7 +33,7 @@ func count_words(content: String, counts: Map(String, Int)):
 # The most frequent remaining word, and how often (first seen wins
 # ties).  It computed both and could answer only one, so every caller
 # did a second hash lookup for the count this already had.
-func heaviest(counts: Map(String, Int)) -> (String, Int):
+func heaviest(counts: map(string, long)) -> (string, long):
     var best = ""
     var best_count = 0
     for word in counts:
@@ -42,7 +42,7 @@ func heaviest(counts: Map(String, Int)) -> (String, Int):
             best_count = counts[word]
     return best, best_count
 
-func main(args: List(String)) -> !:
+func main(args: list(string)) -> !:
     if len(args) == 0:
         print("usage: wordcount FILE [TOP_N]")
         return
@@ -55,16 +55,16 @@ func main(args: List(String)) -> !:
     # read this used to write had a window between the two calls that
     # nothing could close, and it could not tell "not there" from
     # "would not open" either (docs/FAILURE.md).
-    var counts = new Map(String, Int)
+    var counts = new map(string, long)
     count_words(try files.read(path), counts)
-    print(String(len(counts)) + " distinct words in " + path)
+    print(string(len(counts)) + " distinct words in " + path)
 
     var shown = 0
     while shown < top and len(counts) > 0:
         let word, count = heaviest(counts)
-        var line = new Builder()
+        var line = new builder()
         line.append("  ")
-        line.append(String(count))
+        line.append(string(count))
         line.append("  ")
         line.append(word)
         print(line.build())

@@ -1,8 +1,8 @@
 # Control flow
 
 Blocks are introduced by `:` and marked by four spaces of indentation.
-Conditions are `Bool` and nothing else: there is no truthiness, so an
-`Int` or a `String` cannot stand in for one.
+Conditions are `bool` and nothing else: there is no truthiness, so an
+`long` or a `string` cannot stand in for one.
 
 ## if, elif, else
 
@@ -114,7 +114,7 @@ than a native stack accident, so runaway recursion is a trap with a
 message and a call stack — never a segmentation fault.
 
 ```luce run
-func factorial(n: Int) -> Int:
+func factorial(n: long) -> long:
     if n <= 1:
         return 1
     return n * factorial(n - 1)

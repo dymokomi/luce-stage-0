@@ -82,8 +82,8 @@ The language reserves these; nothing user-declared may take them, and
 one that does is `luce.sema.reserved`.
 
 ```
-range       Int         Float       Bool        String
-List        Map         Array       Builder     None
+range       long         double       bool        string
+list        map         array       builder     None
 abs         min         max         clamp       sqrt
 floor       ceil        len         slice       byte_at
 assert      trap        str         parse_int   parse_float
@@ -104,13 +104,13 @@ declare one.
 ## Number literals
 
 Decimal only. An integer literal is a sequence of digits and yields an
-`Int`; a fraction or an exponent yields a `Float`.
+`long`; a fraction or an exponent yields a `double`.
 
 ```
-12        Int
-1.5       Float
-1e10      Float
-1.5e-3    Float
+12        long
+1.5       double
+1e10      double
+1.5e-3    double
 ```
 
 A `.` starts a fraction only when a digit follows it. There are **no**
@@ -119,7 +119,7 @@ separators — writing one is `luce.lex.number`, naming the reason,
 rather than a silent misreading. A non-finite float literal such as
 `1e400` is refused.
 
-## String literals
+## string literals
 
 `"..."`, on one line. The escapes are exactly four:
 
@@ -134,14 +134,14 @@ Every other escape is rejected by name — `\r`, `\0`, and hex and
 unicode escapes included. A codepoint goes in with `chr(...)`.
 
 An `f"..."` literal is an interpolated string: `{expression}` holes
-are converted with `String(...)` and concatenated. `{{` and `}}` are
+are converted with `string(...)` and concatenated. `{{` and `}}` are
 literal braces. A hole holds one expression, and `"..."` strings
 nested inside a hole are permitted.
 
 A hole may end with a format spec, and `:.Nf` is the only one there
-is — a `Float` to N decimal places, rounded half away from zero. It
+is — a `double` to N decimal places, rounded half away from zero. It
 lowers to `strings.format_float(value, N)`, so a program using one
-needs `import std.strings` exactly as any other String service does.
+needs `import std.strings` exactly as any other string service does.
 A colon inside brackets belongs to the brackets: `f"{s[1:3]}"` is a
 slice, not a spec. [Format specs](/tour/strings/#format-specs) has the
 worked examples.

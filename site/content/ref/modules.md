@@ -102,13 +102,13 @@ The modules are [`math`](/std/math/), [`strings`](/std/strings/) and
 let unit = 1.0
 
 struct Rect:
-    width: Float
-    height: Float
+    width: double
+    height: double
 
-    func area(r: Rect) -> Float:
+    func area(r: Rect) -> double:
         return r.width * r.height
 
-func square(side: Float) -> Rect:
+func square(side: double) -> Rect:
     return Rect(width = side, height = side)
 ```
 

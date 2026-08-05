@@ -44,7 +44,7 @@ error naming the reason. There are no semicolons and no braces.
 Put this in `hello.luc` and hand it to the compiler.
 
 ```luce module file=hello.luc
-func main(args: List(String)):
+func main(args: list(string)):
     var name = "loom"
     if len(args) > 0:
         name = args[0]
@@ -101,21 +101,21 @@ does not turn off a single safety check. See
 ## Errors, at compile time
 
 Luce is statically typed with inference, and the only conversion it
-makes on its own is widening an `Int` to a `Float`. Mistakes are
+makes on its own is widening an `long` to a `double`. Mistakes are
 caught before anything runs, and the message tries to name the fix
 rather than the parser's predicament:
 
 ```luce fail
 func main():
-    let n: Int = 1
-    let s: String = "two"
-    print(String(n + s))
+    let n: long = 1
+    let s: string = "two"
+    print(string(n + s))
 ```
 
 ```output
 luce: compile failed
-main.luc:4:18: operands of + are Int and String, and there is no conversion between them [luce.sema.type]
-        print(String(n + s))
+main.luc:4:18: operands of + are long and string, and there is no conversion between them [luce.sema.type]
+        print(string(n + s))
                      ^~~~~
 ```
 

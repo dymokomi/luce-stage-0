@@ -75,9 +75,9 @@ test "checked integer arithmetic lowers to the overflow intrinsics" {
 test "an optional lowers to its payload beside a presence bit" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    let n = parse_int(args[0])
-        \\    print(String(n else 0))
+        \\    print(string(n else 0))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -93,13 +93,13 @@ test "floats, structs, and the host services all lower" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\struct Point:
-        \\    x: Float
-        \\    y: Float
+        \\    x: double
+        \\    y: double
         \\
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    let p = Point(x = 1.5, y = -0.0)
-        \\    print(String(p.x * 2.0) + String(Int(p.y)) + String(sqrt(4.0)))
-        \\    print(args[0] + String(len(args)) + String(file_exists("nowhere")))
+        \\    print(string(p.x * 2.0) + string(long(p.y)) + string(sqrt(4.0)))
+        \\    print(args[0] + string(len(args)) + string(file_exists("nowhere")))
         \\    term_move(term_rows(), term_cols())
         \\    term_flush()
         \\
@@ -125,9 +125,9 @@ test "the runtime library is called, not reimplemented" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(len(xs)))
+        \\    print(string(len(xs)))
         \\    free(xs)
         \\
     )).?;
@@ -159,11 +159,11 @@ test "a release artifact carries no origin table, and a debug one does" {
     // that quietly shipped none.
     const gpa = std.testing.allocator;
     const source =
-        \\func ratio(value: Int) -> Int:
+        \\func ratio(value: long) -> long:
         \\    return 10 // value
         \\
         \\func main():
-        \\    print(String(ratio(2)))
+        \\    print(string(ratio(2)))
         \\
     ;
 
@@ -210,12 +210,12 @@ test "a hoisted container read lands on the retired row when the handle is null"
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    var row = 0
         \\    while row < 2:
         \\        grid[row, 0] = row * 2
         \\        row = row + 1
-        \\    print(String(grid[1, 0]))
+        \\    print(string(grid[1, 0]))
         \\
     )).?;
     defer gpa.free(rendered);
@@ -241,9 +241,9 @@ test "every runtime declaration carries what the compiler knows about it" {
     // what proves the saying reaches the module.
     const rendered = (try render(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
-        \\    print(String(len(xs)) + String(xs[0]))
+        \\    print(string(len(xs)) + string(xs[0]))
         \\    free(xs)
         \\
     )).?;
@@ -344,9 +344,9 @@ test "arithmetic, comparison, control flow, locals, and String(Int) run" {
         \\        else:
         \\            total = total - index
         \\        index = index + 1
-        \\    print(String(total))
-        \\    print(String(-total))
-        \\    print(String(total // 4))
+        \\    print(string(total))
+        \\    print(string(-total))
+        \\    print(string(total // 4))
         \\
     , &capture, .{});
 
@@ -359,19 +359,19 @@ test "calls and recursion carry values back and traps forward" {
     var capture: Capture = .{};
 
     const status = try run(
-        \\func fib(n: Int) -> Int:
+        \\func fib(n: long) -> long:
         \\    if n < 2:
         \\        return n
         \\    return fib(n - 1) + fib(n - 2)
         \\
-        \\func name_of(name: String, value: Int) -> String:
+        \\func name_of(name: string, value: long) -> string:
         \\    if value > 0:
         \\        return name
         \\    return "none"
         \\
         \\func main():
         \\    print(name_of("fib", fib(20)))
-        \\    print(String(fib(20)))
+        \\    print(string(fib(20)))
         \\
     , &capture, .{});
 
@@ -385,7 +385,7 @@ test "a call inside a loop does not grow the frame" {
     // The scratch slot for the call result lives in the entry block, so
     // a million iterations cost one stack slot, not a million.
     const status = try run(
-        \\func step(total: Int, index: Int) -> Int:
+        \\func step(total: long, index: long) -> long:
         \\    if index % 7 == 0:
         \\        return total + index
         \\    return total
@@ -396,7 +396,7 @@ test "a call inside a loop does not grow the frame" {
         \\    while index < 1000000:
         \\        total = step(total, index)
         \\        index = index + 1
-        \\    print(String(total))
+        \\    print(string(total))
         \\
     , &capture, .{});
 
@@ -428,12 +428,12 @@ test "division by zero traps with the interpreter's code and message" {
     var capture: Capture = .{};
 
     const status = try run(
-        \\func divide(a: Int, b: Int) -> Int:
+        \\func divide(a: long, b: long) -> long:
         \\    return a // b
         \\
         \\func main():
         \\    print("before")
-        \\    print(String(divide(1, 0)))
+        \\    print(string(divide(1, 0)))
         \\    print("after")
         \\
     , &capture, .{});
@@ -455,7 +455,7 @@ test "integer overflow traps instead of wrapping" {
         \\    while step < 100:
         \\        value = value * 3
         \\        step = step + 1
-        \\    print(String(value))
+        \\    print(string(value))
         \\
     , &capture, .{});
 
@@ -511,26 +511,26 @@ test "runaway recursion traps instead of overflowing the machine's stack" {
     // message and a trace, the way docs/LANGUAGE.md says it is — on
     // both engines, at the same call.
     try agree(
-        \\func deep(n: Int) -> Int:
+        \\func deep(n: long) -> long:
         \\    return 1 + deep(n - 1)
         \\
         \\func main():
         \\    print("before")
-        \\    print(String(deep(1000000)))
+        \\    print(string(deep(1000000)))
         \\
     );
 }
 
 test "mutual recursion and a shallow limit agree on where the depth ran out" {
     try agreeGiven(
-        \\func ping(n: Int) -> Int:
+        \\func ping(n: long) -> long:
         \\    return pong(n + 1)
         \\
-        \\func pong(n: Int) -> Int:
+        \\func pong(n: long) -> long:
         \\    return ping(n + 1)
         \\
         \\func main():
-        \\    print(String(ping(0)))
+        \\    print(string(ping(0)))
         \\
     , .{ .call_depth = 7 });
     // A host that allows no frames at all refuses `main` itself.
@@ -551,14 +551,14 @@ test "a debug build reports file, line, column, and the whole call stack" {
     var capture: Capture = .{};
 
     const status = try runBuilt(
-        \\func divide(a: Int, b: Int) -> Int:
+        \\func divide(a: long, b: long) -> long:
         \\    return a // b
         \\
-        \\func ratio(n: Int) -> Int:
+        \\func ratio(n: long) -> long:
         \\    return divide(n, 0)
         \\
         \\func main():
-        \\    print(String(ratio(7)))
+        \\    print(string(ratio(7)))
         \\
     , &capture, .{}, .debug);
 
@@ -576,14 +576,14 @@ test "a release build strips the lines and still names the functions" {
     var capture: Capture = .{};
 
     const status = try runBuilt(
-        \\func divide(a: Int, b: Int) -> Int:
+        \\func divide(a: long, b: long) -> long:
         \\    return a // b
         \\
-        \\func ratio(n: Int) -> Int:
+        \\func ratio(n: long) -> long:
         \\    return divide(n, 0)
         \\
         \\func main():
-        \\    print(String(ratio(7)))
+        \\    print(string(ratio(7)))
         \\
     , &capture, .{}, .release);
 
@@ -603,11 +603,11 @@ test "a deep trace keeps its innermost frames and counts the rest" {
     var capture: Capture = .{};
 
     _ = try run(
-        \\func deep(n: Int) -> Int:
+        \\func deep(n: long) -> long:
         \\    return 1 + deep(n - 1)
         \\
         \\func main():
-        \\    print(String(deep(1000000)))
+        \\    print(string(deep(1000000)))
         \\
     , &capture, .{ .call_depth = 200 });
 
@@ -646,44 +646,44 @@ test "a missing host service fails closed" {
 
 test "lists, maps, strings, and ownership agree with the interpreter" {
     try agree(
-        \\func total(xs: List(Int)) -> Int:
+        \\func total(xs: list(long)) -> long:
         \\    var sum = 0
         \\    for x in xs:
         \\        sum = sum + x
         \\    return sum
         \\
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    var i = 1
         \\    while i <= 5:
         \\        xs.append(i * i)
         \\        i = i + 1
         \\    xs.append(0)
         \\    xs.sort()
-        \\    print(String(xs[0]) + "," + String(xs[5]) + "," + String(len(xs)))
-        \\    print(String(total(xs)))
-        \\    print(String(xs.find(9)) + " " + String(xs.contains(7)))
+        \\    print(string(xs[0]) + "," + string(xs[5]) + "," + string(len(xs)))
+        \\    print(string(total(xs)))
+        \\    print(string(xs.find(9)) + " " + string(xs.contains(7)))
         \\
-        \\    let names = new Map(String, Int)
+        \\    let names = new map(string, long)
         \\    names["one"] = 1
         \\    names["two"] = 2
         \\    names["one"] = 11
-        \\    print(String(len(names)) + " " + String(names["one"]) + " " + String(names.get("three", -1)))
+        \\    print(string(len(names)) + " " + string(names["one"]) + " " + string(names.get("three", -1)))
         \\    for name, count in names:
-        \\        print(name + "=" + String(count))
-        \\    print(String(names.has("two")) + " " + String(len(names.keys())))
+        \\        print(name + "=" + string(count))
+        \\    print(string(names.has("two")) + " " + string(len(names.keys())))
         \\
-        \\    let text = new Builder
+        \\    let text = new builder
         \\    text.append("ab")
         \\    text.append_ascii(99)
         \\    let word = text.build()
-        \\    print(word + " " + String(len(word)) + " " + String(word.byte_at(0)))
-        \\    print(word[1:3] + " " + String(word.find_byte(99, 0)))
-        \\    print(String(41 + 1) + chr(33) + String(ord("A")))
-        \\    print(String("abc" < "abd") + String("abc" == "abc"))
+        \\    print(word + " " + string(len(word)) + " " + string(word.byte_at(0)))
+        \\    print(word[1:3] + " " + string(word.find_byte(99, 0)))
+        \\    print(string(41 + 1) + chr(33) + string(ord("A")))
+        \\    print(string("abc" < "abd") + string("abc" == "abc"))
         \\
         \\    let kept = copy xs
-        \\    print(String(len(kept)))
+        \\    print(string(len(kept)))
         \\    free(kept)
         \\    free(names)
         \\    free(text)
@@ -700,10 +700,10 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
 test "a fresh value moves into every kind of place, and a borrow still copies" {
     try agree(
         \\struct Note:
-        \\    title: String
-        \\    body: String
+        \\    title: string
+        \\    body: string
         \\
-        \\func joined(a: String, b: String) -> String:
+        \\func joined(a: string, b: string) -> string:
         \\    return a + b
         \\
         \\func main():
@@ -713,27 +713,27 @@ test "a fresh value moves into every kind of place, and a borrow still copies" {
         \\    # A list element takes the temporary's allocation; a
         \\    # borrow of an element still copies, because appending can
         \\    # move the very cell it was read out of.
-        \\    var xs: List(String) = [head + tail]
+        \\    var xs: list(string) = [head + tail]
         \\    xs.append(joined(head, tail))
         \\    xs.append(xs[0])
         \\    xs.append(xs[0][0:30])
         \\    xs.insert(0, head + tail)
-        \\    print(String(len(xs)) + " " + String(len(xs[2])) + " " + String(len(xs[4])))
+        \\    print(string(len(xs)) + " " + string(len(xs[2])) + " " + string(len(xs[4])))
         \\
         \\    # A map value moves; the key beside it is a borrow the map
         \\    # copies for itself, and m[k] = m[k] stays legal.
-        \\    var m: Map(String, String) = new Map(String, String)
+        \\    var m: map(string, string) = new map(string, string)
         \\    m[head] = head + tail
         \\    m[head] = m[head]
         \\    m[tail] = joined(tail, head)
-        \\    print(String(len(m)) + " " + String(len(m[head])) + " " + String(len(m[tail])))
+        \\    print(string(len(m)) + " " + string(len(m[head])) + " " + string(len(m[tail])))
         \\
         \\    # A struct field moves at construction and at assignment;
         \\    # a field read out of the same struct copies.
         \\    var note = Note(title = head + tail, body = head)
         \\    note.body = joined(tail, head)
         \\    note.title = note.body
-        \\    print(String(len(note.title)) + " " + String(len(note.body)))
+        \\    print(string(len(note.title)) + " " + string(len(note.body)))
         \\
         \\    free(xs)
         \\    free(m)
@@ -743,13 +743,13 @@ test "a fresh value moves into every kind of place, and a borrow still copies" {
 
 test "a value still live after a store is copied, and a returned borrow too" {
     try agree(
-        \\func fresh(a: String, b: String) -> String:
+        \\func fresh(a: string, b: string) -> string:
         \\    return a + b
         \\
-        \\func borrowed(s: String) -> String:
+        \\func borrowed(s: string) -> string:
         \\    return s[4:40]
         \\
-        \\func passed(s: String) -> String:
+        \\func passed(s: string) -> string:
         \\    return s
         \\
         \\func main():
@@ -760,17 +760,17 @@ test "a value still live after a store is copied, and a returned borrow too" {
         \\    # its bytes; a reassignment that reads its own place is
         \\    # the same question one statement wide.
         \\    var kept = head + tail
-        \\    var xs: List(String) = [kept]
+        \\    var xs: list(string) = [kept]
         \\    xs.append(kept)
         \\    kept = kept[2:44]
         \\    kept = kept + "!"
-        \\    print(String(len(kept)) + " " + String(len(xs[0])) + " " + String(len(xs[1])))
+        \\    print(string(len(kept)) + " " + string(len(xs[0])) + " " + string(len(xs[1])))
         \\
-        \\    # A String return is a copy unless the frame made it.
+        \\    # A string return is a copy unless the frame made it.
         \\    xs.append(fresh(head, tail))
         \\    xs.append(borrowed(head))
         \\    xs.append(passed(head))
-        \\    print(String(len(xs[2])) + " " + String(len(xs[3])) + " " + String(len(xs[4])))
+        \\    print(string(len(xs[2])) + " " + string(len(xs[3])) + " " + string(len(xs[4])))
         \\    free(xs)
         \\
     );
@@ -780,8 +780,8 @@ test "a store that traps still owns what it was handed" {
     try agree(
         \\func main():
         \\    let head = "a string comfortably past the inline threshold"
-        \\    var xs: List(String) = [head]
-        \\    print(String(len(xs)))
+        \\    var xs: list(string) = [head]
+        \\    print(string(len(xs)))
         \\    # The value moved into this call, so the trap inside it is
         \\    # the only thing left that can give the bytes back.
         \\    xs.insert(9, head + "-tail well past the threshold as well")
@@ -800,12 +800,12 @@ test "a fallible call's result is carried, not taken, and still agrees" {
         \\    file_write("notes.txt", "a string comfortably past the inline threshold") catch:
         \\        print("no write")
         \\        return
-        \\    var xs: List(String) = []
+        \\    var xs: list(string) = []
         \\    let text = file_read("notes.txt") catch "(none)"
         \\    xs.append(text)
         \\    xs.append(file_read("notes.txt") catch "(none)")
         \\    xs.append(text + "!")
-        \\    print(String(len(xs)) + " " + String(len(xs[0])) + " " + String(len(xs[2])))
+        \\    print(string(len(xs)) + " " + string(len(xs[0])) + " " + string(len(xs[2])))
         \\    free(xs)
         \\
     );
@@ -814,16 +814,16 @@ test "a fallible call's result is carried, not taken, and still agrees" {
 test "a nested container agrees, and the leak census counts the same" {
     try agree(
         \\func main():
-        \\    let rows = new List(List(Int))
+        \\    let rows = new list(list(long))
         \\    var r = 0
         \\    while r < 3:
-        \\        let row = new List(Int)
+        \\        let row = new list(long)
         \\        row.append(r)
         \\        row.append(r * 10)
         \\        rows.append(give row)
         \\        r = r + 1
-        \\    print(String(len(rows)) + " " + String(rows[2][1]))
-        \\    let leaked = new List(Int)
+        \\    print(string(len(rows)) + " " + string(rows[2][1]))
+        \\    let leaked = new list(long)
         \\    leaked.append(1)
         \\    print("done")
         \\    free(rows)
@@ -834,12 +834,12 @@ test "a nested container agrees, and the leak census counts the same" {
 test "an alias used after the owner freed agrees: use_after_free (S9)" {
     try agree(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.append(1)
         \\    let view = xs
         \\    free(xs)
         \\    print("freed")
-        \\    print(String(len(view)))
+        \\    print(string(len(view)))
         \\
     );
 }
@@ -852,19 +852,19 @@ test "a stale alias whose row was reused agrees: still use_after_free (S9)" {
     // inline, with the row's generation against the handle's.
     try agree(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.append(1)
         \\    let stale = xs
         \\    free(xs)
-        \\    let fresh = new List(Int)
+        \\    let fresh = new list(long)
         \\    fresh.append(10)
         \\    fresh.append(20)
         \\    if stale == fresh:
         \\        print("aliased")
         \\    else:
         \\        print("distinct")
-        \\    print(String(len(fresh)))
-        \\    print(String(len(stale)))
+        \\    print(string(len(fresh)))
+        \\    print(string(len(stale)))
         \\
     );
 }
@@ -875,16 +875,16 @@ test "a reused row is refused by every door, and the newcomer by none" {
     // different route to the row.
     try agree(
         \\func main():
-        \\    var rows = new List(List(Int))
-        \\    var doomed = new List(Int)
+        \\    var rows = new list(list(long))
+        \\    var doomed = new list(long)
         \\    doomed.append(7)
         \\    let stale = doomed
         \\    free(doomed)
-        \\    let fresh = new List(Int)
+        \\    let fresh = new list(long)
         \\    fresh.append(3)
         \\    rows.append(give fresh)
-        \\    print(String(rows[0][0]))
-        \\    print(String(stale[0]))
+        \\    print(string(rows[0][0]))
+        \\    print(string(stale[0]))
         \\
     );
 }
@@ -901,16 +901,16 @@ test "give names its binding, and the two engines read it the same way" {
     // as a differing census rather than a differing print.
     try agree(
         \\func main():
-        \\    var a = new List(List(Int))
-        \\    var b = new List(List(Int))
-        \\    var first = new List(Int)
+        \\    var a = new list(list(long))
+        \\    var b = new list(list(long))
+        \\    var first = new list(long)
         \\    first.append(2)
-        \\    var second = new List(Int)
+        \\    var second = new list(long)
         \\    second.append(3)
         \\    a.append(give first)
         \\    print("adopted")
         \\    b.append(give second)
-        \\    print(String(a[0][0] + b[0][0]))
+        \\    print(string(a[0][0] + b[0][0]))
         \\
     );
 }
@@ -918,10 +918,10 @@ test "give names its binding, and the two engines read it the same way" {
 test "an index out of bounds agrees" {
     try agree(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(1)
         \\    print("one")
-        \\    print(String(xs[3]))
+        \\    print(string(xs[3]))
         \\
     );
 }
@@ -938,7 +938,7 @@ test "an index out of bounds agrees" {
 test "float arithmetic, comparison, and formatting agree over the special values" {
     try agree(
         \\func main():
-        \\    let values = new List(Float)
+        \\    let values = new list(double)
         \\    values.append(0.0)
         \\    values.append(-0.0)
         \\    values.append(1.5)
@@ -952,12 +952,12 @@ test "float arithmetic, comparison, and formatting agree over the special values
         \\        while j < len(values):
         \\            let a = values[i]
         \\            let b = values[j]
-        \\            print(String(a) + " " + String(b) + " = " + String(a + b) + " " + String(a - b) +
-        \\                " " + String(a * b) + " " + String(a / b) + " " + String(a % b))
-        \\            print("  " + String(a == b) + String(a != b) + String(a < b) +
-        \\                String(a <= b) + String(a > b) + String(a >= b))
-        \\            print("  " + String(min(a, b)) + " " + String(max(a, b)) + " " +
-        \\                String(clamp(a, -1.0, 1.0)) + " " + String(abs(a)) + " " + String(-a))
+        \\            print(string(a) + " " + string(b) + " = " + string(a + b) + " " + string(a - b) +
+        \\                " " + string(a * b) + " " + string(a / b) + " " + string(a % b))
+        \\            print("  " + string(a == b) + string(a != b) + string(a < b) +
+        \\                string(a <= b) + string(a > b) + string(a >= b))
+        \\            print("  " + string(min(a, b)) + " " + string(max(a, b)) + " " +
+        \\                string(clamp(a, -1.0, 1.0)) + " " + string(abs(a)) + " " + string(-a))
         \\            j = j + 1
         \\        i = i + 1
         \\    free(values)
@@ -970,9 +970,9 @@ test "negating a float flips the sign bit, so -0.0 survives" {
         \\func main():
         \\    var zero = 0.0
         \\    let negative = -zero
-        \\    print(String(negative) + " " + String(1.0 / negative))
-        \\    print(String(zero == negative) + String(1.0 / zero == 1.0 / negative))
-        \\    print(String(-negative) + " " + String(0.0 - zero))
+        \\    print(string(negative) + " " + string(1.0 / negative))
+        \\    print(string(zero == negative) + string(1.0 / zero == 1.0 / negative))
+        \\    print(string(-negative) + " " + string(0.0 - zero))
         \\
     );
 }
@@ -987,37 +987,37 @@ test "negating a float flips the sign bit, so -0.0 survives" {
 // reductions stay loops long enough to be vectorized.
 test "min and max reductions over an array agree, signed zeros and all" {
     try agree(
-        \\func lowest(xs: Array(Float, _)) -> Float:
+        \\func lowest(xs: array(double, _)) -> double:
         \\    var smallest = xs[0]
         \\    for i in range(1, len(xs)):
         \\        smallest = min(smallest, xs[i])
         \\    return smallest
         \\
-        \\func highest(xs: Array(Float, _)) -> Float:
+        \\func highest(xs: array(double, _)) -> double:
         \\    var largest = xs[0]
         \\    for i in range(1, len(xs)):
         \\        largest = max(largest, xs[i])
         \\    return largest
         \\
         \\func main():
-        \\    let control = new List(Float)
+        \\    let control = new list(double)
         \\    control.append(0.0)
         \\    control.append(-0.0)
         \\    control.append(0.0 / 0.0)
         \\    let n = len(control) * 5
-        \\    var xs = new Array(Float, n)
+        \\    var xs = new array(double, n)
         \\    for pattern in range(0, 32):
         \\        for i in range(0, n):
         \\            xs[i] = control[(pattern // (i % 5 + 1)) % 2]
         \\        let low = lowest(xs)
         \\        let high = highest(xs)
-        \\        print(String(low) + " " + String(1.0 / low) + " " +
-        \\            String(high) + " " + String(1.0 / high))
+        \\        print(string(low) + " " + string(1.0 / low) + " " +
+        \\            string(high) + " " + string(1.0 / high))
         \\    for at in range(0, n):
         \\        for i in range(0, n):
-        \\            xs[i] = Float(i + 1)
+        \\            xs[i] = double(i + 1)
         \\        xs[at] = control[2]
-        \\        print(String(lowest(xs)) + " " + String(highest(xs)))
+        \\        print(string(lowest(xs)) + " " + string(highest(xs)))
         \\    free(xs)
         \\    free(control)
         \\
@@ -1027,7 +1027,7 @@ test "min and max reductions over an array agree, signed zeros and all" {
 test "clamp agrees when the bounds cross and when they are not numbers" {
     try agree(
         \\func main():
-        \\    let bounds = new List(Float)
+        \\    let bounds = new list(double)
         \\    bounds.append(-1.0)
         \\    bounds.append(1.0)
         \\    bounds.append(0.0)
@@ -1037,11 +1037,11 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
         \\    while low < len(bounds):
         \\        var high = 0
         \\        while high < len(bounds):
-        \\            let held = Float(low) - Float(high) * 0.5
-        \\            print(String(clamp(held, bounds[low], bounds[high])))
+        \\            let held = double(low) - double(high) * 0.5
+        \\            print(string(clamp(held, bounds[low], bounds[high])))
         \\            high = high + 1
         \\        low = low + 1
-        \\    print(String(clamp(5, 9, 2)) + " " + String(clamp(0, 9, 2)))
+        \\    print(string(clamp(5, 9, 2)) + " " + string(clamp(0, 9, 2)))
         \\    free(bounds)
         \\
     );
@@ -1050,15 +1050,15 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
 test "the float builtins agree" {
     try agree(
         \\func main():
-        \\    let xs = new List(Float)
+        \\    let xs = new list(double)
         \\    xs.append(0.0)
         \\    xs.append(4.0)
         \\    xs.append(2.999)
         \\    xs.append(-2.999)
         \\    xs.append(1.0 / 0.0)
         \\    for x in xs:
-        \\        print(String(x) + ": " + String(sqrt(abs(x))) + " " + String(floor(x)) +
-        \\            " " + String(ceil(x)) + " " + String(Float(Int(clamp(x, -9.0, 9.0)))))
+        \\        print(string(x) + ": " + string(sqrt(abs(x))) + " " + string(floor(x)) +
+        \\            " " + string(ceil(x)) + " " + string(double(long(clamp(x, -9.0, 9.0)))))
         \\    free(xs)
         \\
     );
@@ -1072,11 +1072,11 @@ test "Int(Float) agrees at the range boundaries" {
         \\    while step < 63:
         \\        scale = scale * 2.0
         \\        step = step + 1
-        \\    print(String(Int(0.0 - scale)))
-        \\    print(String(Int(scale - 1024.0)))
-        \\    print(String(Int(2.7)) + " " + String(Int(-2.7)) + " " + String(Int(-0.0)))
+        \\    print(string(long(0.0 - scale)))
+        \\    print(string(long(scale - 1024.0)))
+        \\    print(string(long(2.7)) + " " + string(long(-2.7)) + " " + string(long(-0.0)))
         \\    print("at the edge")
-        \\    print(String(Int(scale)))
+        \\    print(string(long(scale)))
         \\
     );
 }
@@ -1086,14 +1086,14 @@ test "Int(NaN) and Int(infinity) trap the same way" {
         \\func main():
         \\    let nan = 0.0 / 0.0
         \\    print("before")
-        \\    print(String(Int(nan)))
+        \\    print(string(long(nan)))
         \\
     );
     try agree(
         \\func main():
         \\    let far = -1.0 / 0.0
         \\    print("before")
-        \\    print(String(Int(far)))
+        \\    print(string(long(far)))
         \\
     );
 }
@@ -1101,23 +1101,23 @@ test "Int(NaN) and Int(infinity) trap the same way" {
 test "the Int math builtins agree, and abs of the smallest Int traps" {
     try agree(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(0)
         \\    xs.append(7)
         \\    xs.append(-7)
         \\    xs.append(9223372036854775807)
         \\    xs.append(0 - 9223372036854775807 - 1)
         \\    for x in xs:
-        \\        print(String(min(x, 3)) + " " + String(max(x, 3)) + " " + String(clamp(x, -2, 2)))
+        \\        print(string(min(x, 3)) + " " + string(max(x, 3)) + " " + string(clamp(x, -2, 2)))
         \\    free(xs)
         \\
     );
     try agree(
         \\func main():
-        \\    let xs = new List(Int)
+        \\    let xs = new list(long)
         \\    xs.append(0 - 9223372036854775807 - 1)
-        \\    print(String(abs(7)) + " " + String(abs(-7)))
-        \\    print(String(abs(xs[0])))
+        \\    print(string(abs(7)) + " " + string(abs(-7)))
+        \\    print(string(abs(xs[0])))
         \\
     );
 }
@@ -1129,8 +1129,8 @@ test "the Int math builtins agree, and abs of the smallest Int traps" {
 test "nested struct equality recurses into fields, not the slots holding them" {
     try agree(
         \\struct Inner:
-        \\    n: Int
-        \\    tag: String
+        \\    n: long
+        \\    tag: string
         \\
         \\struct Outer:
         \\    left: Inner
@@ -1140,9 +1140,9 @@ test "nested struct equality recurses into fields, not the slots holding them" {
         \\    let a = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 2, tag = "y"))
         \\    let b = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 2, tag = "y"))
         \\    let c = Outer(left = Inner(n = 1, tag = "x"), right = Inner(n = 3, tag = "y"))
-        \\    print(String(a == b) + String(a != b))
-        \\    print(String(a == c) + String(a != c))
-        \\    print(String(a.left == b.left) + String(a.right == c.right))
+        \\    print(string(a == b) + string(a != b))
+        \\    print(string(a == c) + string(a != c))
+        \\    print(string(a.left == b.left) + string(a.right == c.right))
         \\
     );
 }
@@ -1150,11 +1150,11 @@ test "nested struct equality recurses into fields, not the slots holding them" {
 test "a struct carrying a String copies by value and agrees" {
     try agree(
         \\struct Person:
-        \\    name: String
-        \\    age: Int
-        \\    score: Float
+        \\    name: string
+        \\    age: long
+        \\    score: double
         \\
-        \\func renamed(who: Person, to: String) -> Person:
+        \\func renamed(who: Person, to: string) -> Person:
         \\    var changed = who
         \\    changed.name = to
         \\    return changed
@@ -1162,10 +1162,10 @@ test "a struct carrying a String copies by value and agrees" {
         \\func main():
         \\    var ada = Person(name = "ada", age = 36, score = 1.5)
         \\    let grace = renamed(ada, "grace")
-        \\    print(ada.name + " " + String(ada.age) + " " + String(ada.score))
-        \\    print(grace.name + " " + String(grace.age) + " " + String(grace.score))
+        \\    print(ada.name + " " + string(ada.age) + " " + string(ada.score))
+        \\    print(grace.name + " " + string(grace.age) + " " + string(grace.score))
         \\    ada.age = 37
-        \\    print(String(ada.age) + " " + String(grace.age) + " " + String(ada == grace))
+        \\    print(string(ada.age) + " " + string(grace.age) + " " + string(ada == grace))
         \\
     );
 }
@@ -1173,21 +1173,21 @@ test "a struct carrying a String copies by value and agrees" {
 test "zero-initialized structs agree, nested ones included" {
     try agree(
         \\struct Inner:
-        \\    n: Int
-        \\    tag: String
+        \\    n: long
+        \\    tag: string
         \\
         \\struct Outer:
-        \\    label: String
+        \\    label: string
         \\    inner: Inner
-        \\    weight: Float
+        \\    weight: double
         \\
         \\func main():
-        \\    var grid = new Array(Outer, 2, 2)
+        \\    var grid = new array(Outer, 2, 2)
         \\    print("[" + grid[0, 0].label + "][" + grid[0, 0].inner.tag + "]")
-        \\    print(String(grid[1, 1].inner.n) + " " + String(grid[1, 1].weight))
+        \\    print(string(grid[1, 1].inner.n) + " " + string(grid[1, 1].weight))
         \\    grid[1, 0].inner.n = 7
-        \\    print(String(grid[1, 0].inner.n) + " " + String(grid[0, 1].inner.n))
-        \\    print(String(grid[0, 0] == grid[0, 1]) + String(grid[0, 0] == grid[1, 0]))
+        \\    print(string(grid[1, 0].inner.n) + " " + string(grid[0, 1].inner.n))
+        \\    print(string(grid[0, 0] == grid[0, 1]) + string(grid[0, 0] == grid[1, 0]))
         \\    free(grid)
         \\
     );
@@ -1201,7 +1201,7 @@ test "an inline array access agrees on every element kind and rank" {
     // two ranks, both engines.
     try agree(
         \\func main():
-        \\    var grid = new Array(Int, 3, 4)
+        \\    var grid = new array(long, 3, 4)
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            grid[r, c] = r * 10 + c
@@ -1209,24 +1209,24 @@ test "an inline array access agrees on every element kind and rank" {
         \\    for r in range(0, 3):
         \\        for c in range(0, 4):
         \\            total += grid[r, c]
-        \\    print(String(total) + " " + String(grid.dim(0)) + " " + String(grid.dim(1)) + " " + String(len(grid)))
+        \\    print(string(total) + " " + string(grid.dim(0)) + " " + string(grid.dim(1)) + " " + string(len(grid)))
         \\
-        \\    var names = new Array(String, 3)
-        \\    var flags = new Array(Bool, 3)
-        \\    var weights = new Array(Float, 3)
+        \\    var names = new array(string, 3)
+        \\    var flags = new array(bool, 3)
+        \\    var weights = new array(double, 3)
         \\    for i in range(0, 3):
-        \\        names[i] = "n" + String(i)
+        \\        names[i] = "n" + string(i)
         \\        flags[i] = i % 2 == 0
-        \\        weights[i] = Float(i) * 0.5
+        \\        weights[i] = double(i) * 0.5
         \\    for i in range(0, 3):
-        \\        print(names[i] + " " + String(flags[i]) + " " + String(weights[i]))
+        \\        print(names[i] + " " + string(flags[i]) + " " + string(weights[i]))
         \\
-        \\    var rows = new Array(List(Int), 2)
+        \\    var rows = new array(list(long), 2)
         \\    for i in range(0, 2):
-        \\        var row = new List(Int)
+        \\        var row = new list(long)
         \\        row.append(i)
         \\        rows[i] = give row
-        \\    print(String(rows[0][0] + rows[1][0]))
+        \\    print(string(rows[0][0] + rows[1][0]))
         \\
         \\    free(rows)
         \\    free(weights)
@@ -1244,42 +1244,42 @@ test "a resolution lifted out of a loop still traps where the access is" {
     // freed, and one that does run must trap at the access, not at the
     // preheader.  Both engines, one source, twice.
     try agree(
-        \\func drop(xs: give Array(Float, _)):
+        \\func drop(xs: give array(double, _)):
         \\    free(xs)
         \\
         \\func main():
-        \\    var a = new Array(Float, 4)
+        \\    var a = new array(double, 4)
         \\    let alias = a
         \\    drop(give a)
         \\    var total = 0.0
         \\    for i in range(0, 0):
         \\        total += alias[i]
-        \\    print("survived " + String(Int(total)))
+        \\    print("survived " + string(long(total)))
         \\
     );
     try agree(
-        \\func drop(xs: give Array(Float, _)):
+        \\func drop(xs: give array(double, _)):
         \\    free(xs)
         \\
         \\func main():
-        \\    var a = new Array(Float, 4)
+        \\    var a = new array(double, 4)
         \\    let alias = a
         \\    drop(give a)
         \\    var total = 0.0
         \\    for i in range(0, 4):
         \\        total += alias[i]
-        \\    print("unreachable " + String(Int(total)))
+        \\    print("unreachable " + string(long(total)))
         \\
     );
     // And an index past the end still traps at the access it was made
     // at, with the loop's resolution already lifted above it.
     try agree(
         \\func main():
-        \\    var a = new Array(Float, 4)
+        \\    var a = new array(double, 4)
         \\    var total = 0.0
         \\    for i in range(0, 6):
         \\        total += a[i]
-        \\    print("unreachable " + String(Int(total)))
+        \\    print("unreachable " + string(long(total)))
         \\
     );
 }
@@ -1292,16 +1292,16 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
     // handle's.
     try agree(
         \\func main():
-        \\    var a = new Array(Int, 4)
+        \\    var a = new array(long, 4)
         \\    a.fill(5)
         \\    let alias = a
         \\    free(a)
-        \\    var reborn = new Array(Int, 4)
+        \\    var reborn = new array(long, 4)
         \\    reborn.fill(1)
         \\    var total = 0
         \\    for i in range(0, 3):
         \\        total += alias[i]
-        \\    print("unreachable " + String(total))
+        \\    print("unreachable " + string(total))
         \\
     );
     // And the null handle, whose lifted resolution reads the module's
@@ -1309,12 +1309,12 @@ test "a lifted resolution sees the generation, so a reoccupied row still traps" 
     // the access.
     try agree(
         \\func main():
-        \\    var rows = new Array(Array(Int, _), 2)
+        \\    var rows = new array(array(long, _), 2)
         \\    var inner = rows[0]
         \\    var total = 0
         \\    for i in range(0, 3):
         \\        total += inner[i]
-        \\    print("unreachable " + String(total))
+        \\    print("unreachable " + string(total))
         \\
     );
 }
@@ -1323,14 +1323,14 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
     try agree(
         \\func main():
         \\    let text = "héllo wörld"
-        \\    print(String(len(text)) + " " + String(text.byte_at(0)) + " " + String(text.byte_at(1)))
+        \\    print(string(len(text)) + " " + string(text.byte_at(0)) + " " + string(text.byte_at(1)))
         \\    print(text[0:1] + "|" + text[1:3] + "|" + text[0:0] + "|" + text[3:len(text)])
         \\    var i = 0
         \\    var total = 0
         \\    while i < len(text):
         \\        total += text.byte_at(i)
         \\        i += 1
-        \\    print(String(total))
+        \\    print(string(total))
         \\
     );
     // The end of a String is a legal bound and the byte there is not
@@ -1344,7 +1344,7 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
     try agree(
         \\func main():
         \\    let text = "abc"
-        \\    print(String(text.byte_at(3)))
+        \\    print(string(text.byte_at(3)))
         \\
     );
 }
@@ -1352,15 +1352,15 @@ test "inline String length, byte_at and slicing agree, boundaries included" {
 test "structs inside containers agree" {
     try agree(
         \\struct Cell:
-        \\    value: Int
-        \\    name: String
+        \\    value: long
+        \\    name: string
         \\
         \\func main():
         \\    var cells = [Cell(value = 10, name = "a"), Cell(value = 20, name = "b")]
         \\    cells[1].value = 99
         \\    for cell in cells:
-        \\        print(cell.name + "=" + String(cell.value))
-        \\    print(String(cells[0] == cells[1]) + String(len(cells)))
+        \\        print(cell.name + "=" + string(cell.value))
+        \\    print(string(cells[0] == cells[1]) + string(len(cells)))
         \\    free(cells)
         \\
     );
@@ -1372,20 +1372,20 @@ test "a struct carrying an object is owned and released through its fields" {
     // census is what says it did.
     try agree(
         \\struct Bag:
-        \\    items: List(Int)
-        \\    label: String
+        \\    items: list(long)
+        \\    label: string
         \\
-        \\func fill(label: String) -> Bag:
-        \\    let xs = new List(Int)
+        \\func fill(label: string) -> Bag:
+        \\    let xs = new list(long)
         \\    xs.append(1)
         \\    xs.append(2)
         \\    return Bag(items = give xs, label = label)
         \\
         \\func main():
         \\    var bag = fill("b")
-        \\    print(String(len(bag.items)) + bag.label)
+        \\    print(string(len(bag.items)) + bag.label)
         \\    bag.items.append(3)
-        \\    print(String(len(bag.items)))
+        \\    print(string(len(bag.items)))
         \\
     );
 }
@@ -1401,7 +1401,7 @@ test "a struct carrying an object is owned and released through its fields" {
 
 test "a value-typed optional agrees on absence, narrowing, and else" {
     try agree(
-        \\func maybe(want: Bool) -> Int?:
+        \\func maybe(want: bool) -> long?:
         \\    if want:
         \\        return 7
         \\    return none
@@ -1409,15 +1409,15 @@ test "a value-typed optional agrees on absence, narrowing, and else" {
         \\func main():
         \\    let there = maybe(true)
         \\    if there != none:
-        \\        print("there=" + String(there))
+        \\        print("there=" + string(there))
         \\    let gone = maybe(false)
         \\    if gone == none:
         \\        print("gone")
-        \\    print(String(maybe(false) else -1) + " " + String(maybe(true) else -1))
-        \\    var slot: Int? = none
-        \\    print(String(slot else -2))
+        \\    print(string(maybe(false) else -1) + " " + string(maybe(true) else -1))
+        \\    var slot: long? = none
+        \\    print(string(slot else -2))
         \\    slot = maybe(true)
-        \\    print(String(slot else -2))
+        \\    print(string(slot else -2))
         \\
     );
 }
@@ -1427,21 +1427,21 @@ test "the else fallback runs only where there was no value, and chains" {
     // what says which side ran.  A chain is the same shape nested, and
     // its middle link must not run either once the first supplies one.
     try agree(
-        \\func maybe(want: Bool) -> Int?:
+        \\func maybe(want: bool) -> long?:
         \\    if want:
         \\        return 7
         \\    return none
         \\
-        \\func loud(answer: Int) -> Int:
+        \\func loud(answer: long) -> long:
         \\    print("fallback ran")
         \\    return answer
         \\
         \\func main():
-        \\    print(String(maybe(true) else loud(1)))
-        \\    print(String(maybe(false) else loud(2)))
-        \\    print(String(maybe(true) else maybe(false) else loud(3)))
-        \\    print(String(maybe(false) else maybe(true) else loud(4)))
-        \\    print(String(maybe(false) else maybe(false) else loud(5)))
+        \\    print(string(maybe(true) else loud(1)))
+        \\    print(string(maybe(false) else loud(2)))
+        \\    print(string(maybe(true) else maybe(false) else loud(3)))
+        \\    print(string(maybe(false) else maybe(true) else loud(4)))
+        \\    print(string(maybe(false) else maybe(false) else loud(5)))
         \\
     );
 }
@@ -1450,15 +1450,15 @@ test "parse_int and parse_float agree when the text is a number and when it is n
     // The `Int?`/`Float?` that made optionals load-bearing on day one.
     try agree(
         \\func main():
-        \\    print(String(parse_int("41") else -1))
-        \\    print(String(parse_int("") else -1))
-        \\    print(String(parse_int("12x") else -1))
-        \\    print(String(parse_int("-9") else -1))
-        \\    print(String(parse_float("2.5") else -1.0))
-        \\    print(String(parse_float("nope") else -1.0))
+        \\    print(string(parse_int("41") else -1))
+        \\    print(string(parse_int("") else -1))
+        \\    print(string(parse_int("12x") else -1))
+        \\    print(string(parse_int("-9") else -1))
+        \\    print(string(parse_float("2.5") else -1.0))
+        \\    print(string(parse_float("nope") else -1.0))
         \\    let n = parse_int("77")
         \\    if n != none:
-        \\        print("narrowed=" + String(n + 1))
+        \\        print("narrowed=" + string(n + 1))
         \\
     );
 }
@@ -1467,15 +1467,15 @@ test "x else trap is the assert-unwrap, and it traps where it is written" {
     // The trap code, the message, and every frame of the trace have to
     // match — which is the whole of `calc.luc`'s error path.
     try agree(
-        \\func want(text: String) -> Int:
+        \\func want(text: string) -> long:
         \\    return parse_int(text) else trap("not a number: " + text)
         \\
-        \\func middle(text: String) -> Int:
+        \\func middle(text: string) -> long:
         \\    return want(text) + 1
         \\
         \\func main():
-        \\    print(String(middle("41")))
-        \\    print(String(middle("oops")))
+        \\    print(string(middle("41")))
+        \\    print(string(middle("oops")))
         \\
     );
 }
@@ -1486,21 +1486,21 @@ test "an optional struct field agrees, absent and present" {
     // to box as the `none` tag and read back as the absent pair.
     try agree(
         \\struct Slot:
-        \\    label: String
-        \\    room: Int?
+        \\    label: string
+        \\    room: long?
         \\
         \\func main():
         \\    var empty = Slot(label = "a", room = none)
         \\    if empty.room == none:
         \\        print("a has no room")
         \\    empty.room = 12
-        \\    print("a=" + String(empty.room else 0))
+        \\    print("a=" + string(empty.room else 0))
         \\    let filled = Slot(label = "b", room = 3)
         \\    let room = filled.room
         \\    if room != none:
-        \\        print("b=" + String(room))
+        \\        print("b=" + string(room))
         \\    var zeroed: Slot
-        \\    print(String(zeroed.room else -1))
+        \\    print(string(zeroed.room else -1))
         \\
     );
 }
@@ -1511,10 +1511,10 @@ test "a struct recurses through an optional field, which is what ends it" {
     // in it.  Reading one back is the boxed `strukt` payload.
     try agree(
         \\struct Node:
-        \\    value: Int
+        \\    value: long
         \\    next: Node?
         \\
-        \\func total(from: Node) -> Int:
+        \\func total(from: Node) -> long:
         \\    var sum = from.value
         \\    let step = from.next
         \\    if step != none:
@@ -1524,11 +1524,11 @@ test "a struct recurses through an optional field, which is what ends it" {
         \\func main():
         \\    let tail = Node(value = 2, next = none)
         \\    let head = Node(value = 1, next = tail)
-        \\    print(String(total(head)))
-        \\    print(String(total(tail)))
+        \\    print(string(total(head)))
+        \\    print(string(total(tail)))
         \\    let step = head.next
         \\    if step != none:
-        \\        print("next=" + String(step.value))
+        \\        print("next=" + string(step.value))
         \\
     );
 }
@@ -1539,28 +1539,28 @@ test "a heap optional agrees, and holding none owns nothing (S43)" {
     // the absent one leaves nothing behind to release.  A `none` owns
     // nothing, so neither engine may count it.
     try agree(
-        \\func pick(want: Bool) -> List(Int)?:
+        \\func pick(want: bool) -> list(long)?:
         \\    if want:
-        \\        let made = new List(Int)
+        \\        let made = new list(long)
         \\        made.append(3)
         \\        made.append(4)
         \\        return made
         \\    return none
         \\
         \\func main():
-        \\    var held: List(Int)? = none
+        \\    var held: list(long)? = none
         \\    if held == none:
         \\        print("absent")
         \\    let got = pick(true)
         \\    if got != none:
-        \\        print("len=" + String(len(got)) + " first=" + String(got[0]))
+        \\        print("len=" + string(len(got)) + " first=" + string(got[0]))
         \\        free(got)
         \\    let missing = pick(false)
         \\    if missing == none:
         \\        print("nothing came back")
         \\    let owned = pick(true)
         \\    if owned != none:
-        \\        print("owned=" + String(len(owned)))
+        \\        print("owned=" + string(len(owned)))
         \\
     );
 }
@@ -1573,18 +1573,18 @@ test "optionals in a loop agree, boxed into container cells and back" {
     // than in a frame slot.
     try agree(
         \\struct Cell:
-        \\    tag: String
-        \\    room: Int?
+        \\    tag: string
+        \\    room: long?
         \\
-        \\func even(n: Int) -> Int?:
+        \\func even(n: long) -> long?:
         \\    if n % 2 == 0:
         \\        return n
         \\    return none
         \\
-        \\func show(room: Int?) -> String:
+        \\func show(room: long?) -> string:
         \\    if room == none:
         \\        return "-"
-        \\    return String(room)
+        \\    return string(room)
         \\
         \\func main():
         \\    var seen = 0
@@ -1594,17 +1594,17 @@ test "optionals in a loop agree, boxed into container cells and back" {
         \\        if maybe != none:
         \\            seen = seen + maybe
         \\        i = i + 1
-        \\    print("sum of evens=" + String(seen))
-        \\    var last: Int? = none
+        \\    print("sum of evens=" + string(seen))
+        \\    var last: long? = none
         \\    var j = 0
         \\    while j < 5:
         \\        last = even(j)
         \\        j = j + 1
-        \\    print("last=" + String(last else -1))
-        \\    let cells = new List(Cell)
+        \\    print("last=" + string(last else -1))
+        \\    let cells = new list(Cell)
         \\    var k = 0
         \\    while k < 4:
-        \\        cells.append(Cell(tag = String(k), room = even(k)))
+        \\        cells.append(Cell(tag = string(k), room = even(k)))
         \\        k = k + 1
         \\    var out = ""
         \\    for cell in cells:
@@ -1624,36 +1624,36 @@ test "every payload a T? can hold survives being returned" {
     // eight every other payload rounds up to.
     try agree(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
-        \\func flag(want: Bool) -> Bool?:
+        \\func flag(want: bool) -> bool?:
         \\    if want:
         \\        return false
         \\    return none
         \\
-        \\func text(want: Bool) -> String?:
+        \\func text(want: bool) -> string?:
         \\    if want:
         \\        return "hi"
         \\    return none
         \\
-        \\func ratio(want: Bool) -> Float?:
+        \\func ratio(want: bool) -> double?:
         \\    if want:
         \\        return 2.5
         \\    return none
         \\
-        \\func spot(want: Bool) -> Point?:
+        \\func spot(want: bool) -> Point?:
         \\    if want:
         \\        return Point(x = 1, y = 2)
         \\    return none
         \\
         \\func main():
-        \\    print(String(flag(true) else true) + " " + String(flag(false) else true))
+        \\    print(string(flag(true) else true) + " " + string(flag(false) else true))
         \\    print((text(true) else "-") + " " + (text(false) else "-"))
-        \\    print(String(ratio(true) else -1.0) + " " + String(ratio(false) else -1.0))
+        \\    print(string(ratio(true) else -1.0) + " " + string(ratio(false) else -1.0))
         \\    let here = spot(true)
         \\    if here != none:
-        \\        print("x=" + String(here.x) + " y=" + String(here.y))
+        \\        print("x=" + string(here.x) + " y=" + string(here.y))
         \\    if spot(false) == none:
         \\        print("no spot")
         \\    let f = flag(true)
@@ -1676,15 +1676,15 @@ test "the null object put in a T? is present, because absence is not a handle" {
     // proposed, this program would answer "absent" instead and the two
     // engines would part company here and nowhere else.
     try agree(
-        \\func look(xs: List(Int)?) -> Bool:
+        \\func look(xs: list(long)?) -> bool:
         \\    return xs == none
         \\
         \\func main():
-        \\    var raw: List(Int)
-        \\    print("absent=" + String(look(raw)))
-        \\    let real = new List(Int)
+        \\    var raw: list(long)
+        \\    print("absent=" + string(look(raw)))
+        \\    let real = new list(long)
         \\    real.append(1)
-        \\    print("absent=" + String(look(real)))
+        \\    print("absent=" + string(look(real)))
         \\    free(real)
         \\
     );
@@ -1696,12 +1696,12 @@ test "the null object put in a T? is present, because absence is not a handle" {
 
 test "files, arguments, the screen, and the keyboard agree" {
     try agree(
-        \\func main(args: List(String)) -> !:
-        \\    print(String(len(args)) + " " + args[0] + "," + args[1])
-        \\    print(String(file_exists("notes.txt")))
+        \\func main(args: list(string)) -> !:
+        \\    print(string(len(args)) + " " + args[0] + "," + args[1])
+        \\    print(string(file_exists("notes.txt")))
         \\    try file_write("notes.txt", "hello world")
-        \\    print(String(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
-        \\    print(String(term_rows()) + "x" + String(term_cols()))
+        \\    print(string(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(string(term_rows()) + "x" + string(term_cols()))
         \\    term_clear()
         \\    term_move(2, 3)
         \\    term_style(114, 236, true)
@@ -1767,7 +1767,7 @@ test "standard input, standard error, the clock and the environment agree" {
         \\    let started = clock_ms()
         \\    sleep_ms(25)
         \\    let ended = clock_ms()
-        \\    print("elapsed " + String(ended - started))
+        \\    print("elapsed " + string(ended - started))
         \\    sleep_ms(0)
         \\    sleep_ms(-1)
         \\    print(env("LUCE_MODE") else "(unset)")
@@ -1784,9 +1784,9 @@ test "end of input is absence, and narrowing sees it on both engines" {
         \\    var line = read_line("")
         \\    while line != none:
         \\        count = count + 1
-        \\        print(String(count) + ": " + line)
+        \\        print(string(count) + ": " + line)
         \\        line = read_line("")
-        \\    print("read " + String(count) + " lines, then nothing")
+        \\    print("read " + string(count) + " lines, then nothing")
         \\
     );
 }
@@ -1798,9 +1798,9 @@ test "the file services beyond read and write agree, and so does what they refus
         \\    try file_append("notes.txt", "two\n")
         \\    print(try file_read("notes.txt"))
         \\    try file_rename("notes.txt", "kept.txt")
-        \\    print(String(file_exists("notes.txt")) + " " + String(file_exists("kept.txt")))
+        \\    print(string(file_exists("notes.txt")) + " " + string(file_exists("kept.txt")))
         \\    try file_delete("kept.txt")
-        \\    print(String(file_exists("kept.txt")))
+        \\    print(string(file_exists("kept.txt")))
         \\    file_delete("kept.txt") catch:
         \\        print("nothing to delete")
         \\    file_rename("gone.txt", "elsewhere.txt") catch:
@@ -1815,7 +1815,7 @@ test "a directory listing is a List(String) the program owns, on both engines" {
     try agree(
         \\func main() -> !:
         \\    let names = try dir_list(".")
-        \\    print(String(len(names)))
+        \\    print(string(len(names)))
         \\    for name in names:
         \\        print(name)
         \\    names.sort()
@@ -1841,9 +1841,9 @@ test "a caught listing failure leaks nothing on either engine" {
     try agree(
         \\func main():
         \\    var found = 0
-        \\    let names = dir_list("nowhere") catch new List(String)
+        \\    let names = dir_list("nowhere") catch new list(string)
         \\    found = len(names)
-        \\    print("caught, " + String(found) + " names")
+        \\    print("caught, " + string(found) + " names")
         \\    free(names)
         \\
     );
@@ -1862,7 +1862,7 @@ test "each new host service fails closed on its own" {
     , .{ .diagnostics = false });
     try agreeGiven(
         \\func main():
-        \\    print(String(clock_ms()))
+        \\    print(string(clock_ms()))
         \\
     , .{ .clock = false });
     try agreeGiven(
@@ -1912,20 +1912,20 @@ test "a caught error is handled and the run finishes clean" {
 
 test "error() crosses several frames, and the origin is the raise site" {
     try agree(
-        \\func inner(n: Int) -> Int!:
+        \\func inner(n: long) -> long!:
         \\    if n > 2:
-        \\        error("too big: " + String(n))
+        \\        error("too big: " + string(n))
         \\    return n * 2
         \\
-        \\func middle(n: Int) -> Int!:
+        \\func middle(n: long) -> long!:
         \\    return try inner(n)
         \\
-        \\func outer(n: Int) -> Int!:
+        \\func outer(n: long) -> long!:
         \\    return try middle(n)
         \\
         \\func main() -> !:
-        \\    print(String(try outer(1)))
-        \\    print(String(try outer(5)))
+        \\    print(string(try outer(1)))
+        \\    print(string(try outer(5)))
         \\
     );
 }
@@ -1935,8 +1935,8 @@ test "an error path releases the objects and the String storage it owns" {
     // through released what it owned, so a caught error leaves the
     // heap exactly where a returning call would (S4, S34).
     try agree(
-        \\func gather(path: String) -> Int!:
-        \\    let words = new List(String)
+        \\func gather(path: string) -> long!:
+        \\    let words = new list(string)
         \\    words.append("alpha")
         \\    words.append("beta")
         \\    let held = "prefix-" + path
@@ -1950,7 +1950,7 @@ test "an error path releases the objects and the String storage it owns" {
         \\    while round < 3:
         \\        total = total + (gather("nothing-here.txt") catch -1)
         \\        round = round + 1
-        \\    print(String(total))
+        \\    print(string(total))
         \\
     );
 }
@@ -1968,11 +1968,11 @@ test "text carried across a try keeps the form it was in" {
         \\func main() -> !:
         \\    try file_write("notes.txt", "hello world")
         \\    let short = try file_read("notes.txt")
-        \\    print(short + "/" + String(len(short)))
+        \\    print(short + "/" + string(len(short)))
         \\    try file_write("notes.txt", "a string well past the inline capacity of a value")
         \\    let lengthy = try file_read("notes.txt")
-        \\    print(lengthy + "/" + String(len(lengthy)))
-        \\    print(String(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(lengthy + "/" + string(len(lengthy)))
+        \\    print(string(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
         \\
     );
 }
@@ -1984,7 +1984,7 @@ test "a caught error leaves the value it never produced releasable" {
     // out, and what the caller carries is the empty String rather than
     // whatever the stack held — which the census then proves.
     try agree(
-        \\func load(path: String) -> String!:
+        \\func load(path: string) -> string!:
         \\    return try file_read(path)
         \\
         \\func main():
@@ -1999,14 +1999,14 @@ test "a caught error leaves the value it never produced releasable" {
 
 test "a fallible call handing back an object gives it up on both paths" {
     try agree(
-        \\func load(path: String) -> List(String)!:
-        \\    let lines = new List(String)
+        \\func load(path: string) -> list(string)!:
+        \\    let lines = new list(string)
         \\    lines.append(try file_read(path))
         \\    return lines
         \\
         \\func main():
-        \\    let missing = load("nothing-here.txt") catch new List(String)
-        \\    print(String(len(missing)))
+        \\    let missing = load("nothing-here.txt") catch new list(string)
+        \\    print(string(len(missing)))
         \\    free(missing)
         \\
     );
@@ -2016,7 +2016,7 @@ test "an argument index out of range traps index_bounds on both engines" {
     // `args` is an ordinary List, so reading past it is the language's
     // own bounds trap and not a channel of its own (docs/METHODS.md).
     try agree(
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    print(args[0])
         \\    print(args[9])
         \\
@@ -2026,12 +2026,12 @@ test "an argument index out of range traps index_bounds on both engines" {
 test "a withheld service group fails closed on both engines" {
     try agreeGiven(
         \\func main():
-        \\    print(String(file_exists("notes.txt")))
+        \\    print(string(file_exists("notes.txt")))
         \\
     , .{ .files = false });
     try agreeGiven(
         \\func main():
-        \\    print(String(term_rows()))
+        \\    print(string(term_rows()))
         \\
     , .{ .terminal = false });
     try agreeGiven(
@@ -2053,28 +2053,28 @@ test "owned String bytes agree, census included" {
         \\import std.strings
         \\
         \\struct Tag:
-        \\    label: String
-        \\    count: Int
+        \\    label: string
+        \\    count: long
         \\
-        \\func widen(s: String) -> String:
+        \\func widen(s: string) -> string:
         \\    return strings.trim(s)
         \\
-        \\func drop_first(pieces: List(String)) -> Int:
+        \\func drop_first(pieces: list(string)) -> long:
         \\    pieces.remove(0)
         \\    return 1
         \\
-        \\func measure(left: String, right: Int) -> Int:
+        \\func measure(left: string, right: long) -> long:
         \\    return len(left) + right
         \\
         \\func main():
         \\    let trimmed = widen("   padded   ")
         \\    print(trimmed)
         \\
-        \\    var names = new List(String)
+        \\    var names = new list(string)
         \\    names.append("ada")
         \\    names.append(trimmed + "-lovelace")
         \\    names[0] = names[1]
-        \\    print(names[0] + " " + String(len(names)))
+        \\    print(names[0] + " " + string(len(names)))
         \\    var duplicate = copy names
         \\    free(names)
         \\    print(duplicate[1])
@@ -2087,9 +2087,9 @@ test "owned String bytes agree, census included" {
         \\    copied.label = "other"
         \\    print(tag.label + " " + copied.label)
         \\
-        \\    var table = new Map(String, String)
-        \\    table["k" + String(1)] = "v1"
-        \\    table["k1"] = "v" + String(2)
+        \\    var table = new map(string, string)
+        \\    table["k" + string(1)] = "v1"
+        \\    table["k1"] = "v" + string(2)
         \\    var keys = table.keys()
         \\    var values = table.values()
         \\    print(keys[0] + values[0])
@@ -2098,10 +2098,10 @@ test "owned String bytes agree, census included" {
         \\    table.remove("k1")
         \\    free(table)
         \\
-        \\    var pieces = new List(String)
+        \\    var pieces = new list(string)
         \\    pieces.append("first-piece")
         \\    pieces.append("second")
-        \\    print(String(measure(pieces[0], drop_first(pieces))))
+        \\    print(string(measure(pieces[0], drop_first(pieces))))
         \\    free(pieces)
         \\
         \\    var text = "abcdef"
@@ -2109,11 +2109,11 @@ test "owned String bytes agree, census included" {
         \\    text = text + text
         \\    print(text)
         \\
-        \\    var cells = new Array(String, 3)
-        \\    cells[0] = "x" + String(0)
+        \\    var cells = new array(string, 3)
+        \\    cells[0] = "x" + string(0)
         \\    cells[1] = cells[0]
         \\    cells[0] = "y"
-        \\    print(cells[0] + cells[1] + String(len(cells[2])))
+        \\    print(cells[0] + cells[1] + string(len(cells[2])))
         \\    free(cells)
         \\
     );
@@ -2133,26 +2133,26 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\import std.strings
         \\
         \\struct Held:
-        \\    label: String
+        \\    label: string
         \\
-        \\func echo(s: String) -> String:
+        \\func echo(s: string) -> string:
         \\    return s
         \\
-        \\func grow(s: String) -> String:
+        \\func grow(s: string) -> string:
         \\    return s + s
         \\
         \\func main():
-        \\    var words = new List(String)
-        \\    var table = new Map(String, String)
+        \\    var words = new list(string)
+        \\    var table = new map(string, string)
         \\    for size in [0, 1, 21, 22, 23, 64]:
         \\        let text = strings.repeat("a", size)
         \\        let kept = echo(text)
         \\        words.append(kept)
         \\        table[kept] = kept
         \\        let held = Held(label = kept)
-        \\        print(String(size) + " " + String(len(kept)) + " " + String(len(held.label)) +
-        \\            " " + String(len(words[len(words) - 1])) + " " + String(len(table[kept])) +
-        \\            " " + String(table.has(kept)))
+        \\        print(string(size) + " " + string(len(kept)) + " " + string(len(held.label)) +
+        \\            " " + string(len(words[len(words) - 1])) + " " + string(len(table[kept])) +
+        \\            " " + string(table.has(kept)))
         \\    free(words)
         \\    free(table)
         \\
@@ -2162,11 +2162,11 @@ test "text agrees on both sides of the boundary between its two forms" {
     try agree(
         \\import std.strings
         \\
-        \\func grow(s: String) -> String:
+        \\func grow(s: string) -> string:
         \\    return s + s
         \\
         \\func main():
-        \\    var kept = new List(String)
+        \\    var kept = new list(string)
         \\    for size in [1, 11, 12, 21, 22, 23]:
         \\        var text = strings.repeat("b", size)
         \\        text = grow(text)
@@ -2174,10 +2174,10 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\        var cut = text[0:1]
         \\        cut = cut + text[0:size]
         \\        kept.append(cut)
-        \\        print(String(len(text)) + ":" + text + " " + String(len(cut)) + ":" + cut)
+        \\        print(string(len(text)) + ":" + text + " " + string(len(cut)) + ":" + cut)
         \\    var joined = ""
         \\    for piece in kept:
-        \\        joined = joined + String(len(piece)) + ","
+        \\        joined = joined + string(len(piece)) + ","
         \\    print(joined)
         \\    free(kept)
         \\
@@ -2191,12 +2191,12 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\func main():
         \\    var source = strings.repeat("cd", 40)
         \\    var small = source[0:6]
-        \\    var cells = new Array(String, 2)
+        \\    var cells = new array(string, 2)
         \\    cells[0] = small
         \\    cells[1] = source
         \\    source = "replaced"
         \\    small = small + "!"
-        \\    print(cells[0] + " " + String(len(cells[1])) + " " + small + " " + source)
+        \\    print(cells[0] + " " + string(len(cells[1])) + " " + small + " " + source)
         \\    free(cells)
         \\
     );
@@ -2205,14 +2205,14 @@ test "text agrees on both sides of the boundary between its two forms" {
 test "a loop name agrees whether it borrows its element or copies it" {
     try agree(
         \\func main():
-        \\    var words = new List(String)
+        \\    var words = new list(string)
         \\    words.append("aa")
         \\    words.append("bb")
         \\    words.append("cc")
         \\    var total = 0
         \\    for w in words:
         \\        total += len(w)
-        \\    print(String(total))
+        \\    print(string(total))
         \\    var seen = ""
         \\    for w in words:
         \\        seen = seen + w
@@ -2220,7 +2220,7 @@ test "a loop name agrees whether it borrows its element or copies it" {
         \\    print(seen)
         \\    free(words)
         \\
-        \\    var table = new Map(String, String)
+        \\    var table = new map(string, string)
         \\    table["a"] = "1"
         \\    table["b"] = "2"
         \\    var joined = ""
@@ -2235,10 +2235,10 @@ test "a loop name agrees whether it borrows its element or copies it" {
 test "a trap agrees while every frame is still holding String bytes" {
     try agree(
         \\struct Tag:
-        \\    label: String
-        \\    count: Int
+        \\    label: string
+        \\    count: long
         \\
-        \\func deeper(name: String) -> Int:
+        \\func deeper(name: string) -> long:
         \\    let held = name + "-held"
         \\    var tag = Tag(label = held, count = 1)
         \\    trap(tag.label)
@@ -2246,7 +2246,7 @@ test "a trap agrees while every frame is still holding String bytes" {
         \\func main():
         \\    let outer = "kept" + "-here"
         \\    var also = Tag(label = outer, count = 2)
-        \\    print(String(deeper(also.label)))
+        \\    print(string(deeper(also.label)))
         \\
     );
 }

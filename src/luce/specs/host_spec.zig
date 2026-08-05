@@ -50,8 +50,8 @@ test "print, arguments, and files flow through the host" {
     world.arguments = &one_argument;
 
     var session = try agree.compare(
-        \\func main(args: List(String)) -> !:
-        \\    print("args: " + String(len(args)))
+        \\func main(args: list(string)) -> !:
+        \\    print("args: " + string(len(args)))
         \\    let path = args[0]
         \\    if file_exists(path):
         \\        print(try file_read(path))
@@ -70,10 +70,10 @@ test "an argument out of range traps, and a refused write is an error" {
     // The two failures a host can hand back, and the line between
     // them: an index no argument could have is the program's mistake,
     // and a write the world would not take is not (docs/FAILURE.md).
-    // The command line is an ordinary List now, so the first of those
+    // The command line is an ordinary list now, so the first of those
     // is the language's own bounds trap (docs/METHODS.md).
     var session = try agree.compare(
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    file_write("out.txt", "ignored") catch:
         \\        print("refused")
         \\    let missing = args[5]
@@ -102,24 +102,24 @@ test "main receives the command line, and args[0] is the first user argument" {
     world.arguments = &one_argument;
 
     try agree.printsGiven(
-        \\func main(args: List(String)):
-        \\    print(String(len(args)))
+        \\func main(args: list(string)):
+        \\    print(string(len(args)))
         \\    print(args[0])
         \\
     , .{ .world = world }, "1\nnotes.txt\n");
 }
 
-test "args iterates, slices and joins like any other List(String)" {
+test "args iterates, slices and joins like any other list(string)" {
     // The point of the parameter over `arg(index)`: it composes with
-    // everything `List` already has.
+    // everything `list` already has.
     try agree.printsGiven(
         \\import std.strings
         \\
-        \\func main(argv: List(String)):
+        \\func main(argv: list(string)):
         \\    for name in argv:
         \\        print(name)
         \\    print(strings.join(argv[1:len(argv)], "-"))
-        \\    print(String(argv.contains("beta")))
+        \\    print(string(argv.contains("beta")))
         \\
     , .{}, "alpha\nbeta\nbeta\ntrue\n");
 }
@@ -128,8 +128,8 @@ test "a host with no arguments to offer hands main an empty list, not a trap" {
     // Fail-closed for the host builtins means a trap; `args` is not one
     // of them, and the entry cannot fail before `main` starts.
     try agree.printsGiven(
-        \\func main(args: List(String)):
-        \\    print(String(len(args)))
+        \\func main(args: list(string)):
+        \\    print(string(len(args)))
         \\
     , .console_only, "0\n");
 }
@@ -139,7 +139,7 @@ test "reading past the end of args is the language's own bounds trap" {
     world.arguments = &one_argument;
 
     try agree.trapGiven(
-        \\func main(args: List(String)):
+        \\func main(args: list(string)):
         \\    print(args[1])
         \\
     , .{ .world = world }, .index_bounds);
@@ -150,7 +150,7 @@ test "main's args compose with the raising entry" {
     world.arguments = &one_argument;
 
     try agree.printsGiven(
-        \\func main(args: List(String)) -> !:
+        \\func main(args: list(string)) -> !:
         \\    print(try file_read(args[0]))
         \\
     , .{ .world = world }, "file body\n");
@@ -170,7 +170,7 @@ test "read_line answers a line, then absence; the prompt goes out in front" {
         \\    var line = read_line("> ")
         \\    while line != none:
         \\        count = count + 1
-        \\        print(String(count) + ":" + line)
+        \\        print(string(count) + ":" + line)
         \\        line = read_line("> ")
         \\    print("done")
         \\
@@ -190,7 +190,7 @@ test "the clock, the wait and the environment reach the host" {
         \\func main():
         \\    let started = clock_ms()
         \\    sleep_ms(30)
-        \\    print("elapsed " + String(clock_ms() - started))
+        \\    print("elapsed " + string(clock_ms() - started))
         \\    sleep_ms(0)
         \\    sleep_ms(-5)
         \\    print_error("to stderr")
@@ -220,7 +220,7 @@ test "every host service fails closed when the host withholds it" {
         \\
         ,
         \\func main():
-        \\    print(String(clock_ms()))
+        \\    print(string(clock_ms()))
         \\
         ,
         \\func main():
@@ -260,7 +260,7 @@ test "every host service fails closed when the host withholds it" {
 
 test "an uncaught error names its code, its words, and where it was raised" {
     var session = try agree.compare(
-        \\func save(path: String) -> !:
+        \\func save(path: string) -> !:
         \\    try file_write(path, "body")
         \\
         \\func main() -> !:
@@ -281,15 +281,15 @@ test "an uncaught error names its code, its words, and where it was raised" {
 
 test "error() raises the program's own words, and catch discards them" {
     var session = try agree.compare(
-        \\func check(n: Int) -> Int!:
+        \\func check(n: long) -> long!:
         \\    if n < 0:
-        \\        error("negative: " + String(n))
+        \\        error("negative: " + string(n))
         \\    return n
         \\
         \\func main() -> !:
-        \\    print(String(check(-1) catch 0))
-        \\    print(String(try check(7)))
-        \\    print(String(try check(-2)))
+        \\    print(string(check(-1) catch 0))
+        \\    print(string(try check(7)))
+        \\    print(string(try check(-2)))
         \\
     , .{});
     defer session.deinit();
@@ -319,7 +319,7 @@ test "terminal builtins drive the host screen and key queue" {
         \\    let quit = key_read()
         \\    term_flush()
         \\    print(quit else "?")
-        \\    print(String(term_rows()) + "x" + String(term_cols()))
+        \\    print(string(term_rows()) + "x" + string(term_cols()))
         \\
     , .{ .world = .{ .keys = &keys } });
     defer session.deinit();

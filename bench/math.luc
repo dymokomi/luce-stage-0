@@ -1,4 +1,4 @@
-# Float arithmetic: a mandelbrot membership count.  Pure * + -
+# double arithmetic: a mandelbrot membership count.  Pure * + -
 # comparisons — no library calls in either language, so this measures
 # raw float work.  The C twin is bench/math.c.
 
@@ -8,8 +8,8 @@ func main():
     var inside = 0
     for py in range(0, size):
         for px in range(0, size):
-            let x0 = Float(px) * (3.0 / Float(size)) - 2.25
-            let y0 = Float(py) * (2.5 / Float(size)) - 1.25
+            let x0 = double(px) * (3.0 / double(size)) - 2.25
+            let y0 = double(py) * (2.5 / double(size)) - 1.25
             var x = 0.0
             var y = 0.0
             var iter = 0
@@ -20,4 +20,4 @@ func main():
                 iter += 1
             if iter == max_iter:
                 inside += 1
-    print(String(inside))
+    print(string(inside))

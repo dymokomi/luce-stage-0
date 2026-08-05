@@ -29,19 +29,19 @@ names both readings. Both are fixed by one pair of parentheses.
 `not` is a prefix operator, so it binds *tighter* than `==` — the C,
 Zig and Rust reading. Python's `not` binds *looser*, so a Python
 reader reads `not a == b` as `not (a == b)` and gets the opposite
-answer whenever both operands are `Bool`.
+answer whenever both operands are `bool`.
 
 ```luce fail
 func main():
     let a = true
     let b = false
-    print(String(not a == b))
+    print(string(not a == b))
 ```
 
 ```output
 luce: compile failed
 main.luc:4:18: 'not' binds tighter than '==': write '(not a) == …' for this reading, or 'not (a == …)' for Python's [luce.parse.precedence]
-        print(String(not a == b))
+        print(string(not a == b))
                      ^~~
 ```
 
@@ -52,24 +52,24 @@ neither: the comparisons are non-associative.
 
 ```luce fail
 func main():
-    print(String(1 < 2 < 3))
+    print(string(1 < 2 < 3))
 ```
 
 ```output
 luce: compile failed
 main.luc:2:24: chained comparison: write '1 < 2 and 2 < 3' [luce.parse.chain]
-        print(String(1 < 2 < 3))
+        print(string(1 < 2 < 3))
                            ^
 ```
 
 This costs nothing — `(a < b) < c` was always a type error one stage
-later — and comparing two `Bool`s with `(a < b) == (c < d)` is still
+later — and comparing two `bool`s with `(a < b) == (c < d)` is still
 legal, because the parentheses start a new chain.
 
 ## Arithmetic
 
-`+ - * / // %` on `Int` and on `Float`. `+` also concatenates
-`String`s. Mixing an `Int` and a `Float` widens the `Int`.
+`+ - * / // %` on `long` and on `double`. `+` also concatenates
+`string`s. Mixing an `long` and a `double` widens the `long`.
 
 `//` is **floor division** and `%` is the modulus that pairs with it:
 they floor together, so `%` takes the sign of the divisor and
@@ -82,18 +82,18 @@ they floor together, so `%` takes the sign of the divisor and
 | 7 | −3 | −3 | −2 |
 | −7 | −3 | 2 | −1 |
 
-`Int` arithmetic is checked: overflow, and `//` or `%` by zero, are
-traps in every build mode. `Float` arithmetic is IEEE and does not
+`long` arithmetic is checked: overflow, and `//` or `%` by zero, are
+traps in every build mode. `double` arithmetic is IEEE and does not
 trap.
 
 ## Comparison
 
-`== != < <= > >=` order `Int`, `Float` and `String`. `==` and `!=`
-also apply to `Bool` and to objects, where they compare identity.
+`== != < <= > >=` order `long`, `double` and `string`. `==` and `!=`
+also apply to `bool` and to objects, where they compare identity.
 
 ## Logic
 
-`and`, `or`, `not` take `Bool` and only `Bool`, and `and`/`or`
+`and`, `or`, `not` take `bool` and only `bool`, and `and`/`or`
 short-circuit. There is no truthiness: no other type is a condition.
 
 ## Operators Luce does not have
@@ -109,7 +109,7 @@ than a complaint about the second character:
 | `!x` | `not x` |
 | `===`, `!==` | `==`, `!=` — which already compare by value |
 | `<>` | `!=` |
-| `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `Int` |
+| `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `long` |
 | `<<`, `>>`, `&`, `\|`, `^`, `~` | nothing: there are no bitwise operators |
 
 ```luce fail
@@ -186,7 +186,7 @@ apart out loud, because a struct in Luce is used for both:
 > that distinguishes them is whether the declaration's first parameter
 > is the word `self`.
 
-String methods other than `byte_at` and `find_byte` route to the
+Methods on a `string` other than `byte_at` and `find_byte` route to the
 `strings` standard module: `s.split(",")` *is* `strings.split(s, ",")`
 and needs `import std.strings` in scope, or it is a `luce.sema.import`
 diagnostic naming the missing import.
@@ -198,7 +198,7 @@ and both counts:
 
 ```luce fail
 func main():
-    var xs = new List(Int)
+    var xs = new list(long)
     xs.append(1, 2)
 ```
 
@@ -215,13 +215,13 @@ rather than at the call:
 
 ```luce fail
 func main():
-    var xs = new List(Int)
+    var xs = new list(long)
     xs.append("hello")
 ```
 
 ```output
 luce: compile failed
-main.luc:3:15: argument 1 of append is Int, got String [luce.sema.type]
+main.luc:3:15: argument 1 of append is long, got string [luce.sema.type]
         xs.append("hello")
                   ^~~~~~~
 ```
@@ -231,13 +231,13 @@ a spelling when one is close enough:
 
 ```luce fail
 func main():
-    var xs = new List(Int)
+    var xs = new list(long)
     let found = xs.has(1)
 ```
 
 ```output
 luce: compile failed
-main.luc:3:17: List has no method has (has append insert remove pop sort reverse find contains clear; join lives in strings) [luce.sema.method]
+main.luc:3:17: list has no method has (has append insert remove pop sort reverse find contains clear; join lives in strings) [luce.sema.method]
         let found = xs.has(1)
                     ^~~~~~~~~
 ```
@@ -250,19 +250,19 @@ main.luc:3:17: List has no method has (has append insert remove pop sort reverse
 | `grid[r, c]` | multi-dimensional array element |
 | `m[k]` | map get; a missing key traps |
 | `xs[a:b]` | a **new list**, owned by the receiver; deep when elements are objects |
-| `s[a:b]` | a `String` slice; still a value; checks UTF-8 boundaries |
+| `s[a:b]` | a `string` slice; still a value; checks UTF-8 boundaries |
 
 Open slice ends default to `0` and to the length.
 
 ## Construction
 
 ```
-[1, 2, 3]                  a List literal; element type inferred
+[1, 2, 3]                  a list literal; element type inferred
 []                         empty; needs an annotated binding
-new List(T)
-new Map(K, V)
-new Array(T, size, ...)
-new Builder()
+new list(T)
+new map(K, V)
+new array(T, size, ...)
+new builder()
 Struct(field = expr, ...)  every field, by name
 ```
 

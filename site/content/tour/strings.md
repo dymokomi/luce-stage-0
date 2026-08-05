@@ -1,6 +1,6 @@
 # Strings
 
-A `String` is immutable UTF-8 text, and it is a **value**: it copies
+A `string` is immutable UTF-8 text, and it is a **value**: it copies
 on assignment, it goes into a list without ceremony, and nobody frees
 it.
 
@@ -18,9 +18,9 @@ func main():
     let greeting = "hello, loom"
     print(f"{len(greeting)} bytes")
     print(greeting[0:5])                # a slice; still a value
-    print(String(greeting.byte_at(0)))     # 'h'
-    print(String(greeting.find_byte(44, 0)))  # first comma
-    print(String("apple" < "banana"))
+    print(string(greeting.byte_at(0)))     # 'h'
+    print(string(greeting.find_byte(44, 0)))  # first comma
+    print(string("apple" < "banana"))
 ```
 
 ```output
@@ -59,12 +59,12 @@ to vectorize it.
 ## Interpolation
 
 An `f"..."` string splices expressions written in `{...}`, each one
-converted with `String(...)`.
+converted with `string(...)`.
 
 ```luce run
 struct User:
-    name: String
-    age: Int
+    name: string
+    age: long
 
 func main():
     let user = User(name = "ada", age = 36)
@@ -84,13 +84,13 @@ name is ada, next year 37
 ```
 
 A hole is one expression, and `"..."` strings nested inside a hole are
-fine. `f"..."` desugars to plain `+` concatenation of `String(...)`
-pieces, so the result is a `String` like any other. A `List` in a hole
-is a type error — `String(x)` takes a scalar.
+fine. `f"..."` desugars to plain `+` concatenation of `string(...)`
+pieces, so the result is a `string` like any other. A `list` in a hole
+is a type error — `string(x)` takes a scalar.
 
 ### Format specs
 
-A hole may end `:.Nf` — a `Float` to N decimal places, rounded half
+A hole may end `:.Nf` — a `double` to N decimal places, rounded half
 away from zero. That is the whole spec language: no width, no fill,
 no alignment, no `%`, no `e`. Anything else names the one form that
 exists.
@@ -113,13 +113,13 @@ mean = 24.00
 3 and -3
 ```
 
-The `f` is redundant — the compiler knows the operand is a `Float` —
+The `f` is redundant — the compiler knows the operand is a `double` —
 and is required anyway, because `{x:.2}` means *two significant
 digits* in Python and letting it mean two decimal places here would be
 a quiet disagreement with the language Luce is shaped after.
 
 A spec lowers to `strings.format_float(value, N)`, so it needs the
-import like any other String service. Leave the import out and the
+import like any other string service. Leave the import out and the
 compiler says which syntax needs it, rather than naming a module you
 never wrote:
 
@@ -149,7 +149,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:5:15: unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a Float [luce.parse.fstring]
+main.luc:5:15: unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a double [luce.parse.fstring]
         print(f"{x:.2}")
                   ^~~
 ```
@@ -158,7 +158,7 @@ main.luc:5:15: unknown format spec ':.2'; the one form is ':.Nf' — N decimal p
 
 `import std.strings` brings in everything else. The familiar method
 spelling is sugar for it: with the import in scope, `s.find(x)` *is*
-`strings.find(s, x)`. Without the import, using a String method is a
+`strings.find(s, x)`. Without the import, using a string method is a
 compile error that says so.
 
 ```luce run
@@ -203,11 +203,11 @@ it keeps them.
 
 ```luce run
 func main():
-    print(String(42))
-    print(String(2.5))
-    print(String(true))
-    print(chr(955))              # a codepoint becomes a String
-    print(String(ord("λ")))         # and back
+    print(string(42))
+    print(string(2.5))
+    print(string(true))
+    print(chr(955))              # a codepoint becomes a string
+    print(string(ord("λ")))         # and back
 ```
 
 ```output
@@ -225,7 +225,7 @@ at all, so they answer an *optional*. That is the
 ## Why strings work this way
 
 Strings being values rather than objects is the reason a Luce program
-can loop forever building text without growing: a `String`'s bytes
+can loop forever building text without growing: a `string`'s bytes
 have exactly one owner, and any store into something that outlives the
 current statement copies them. Strings of 22 bytes or fewer live
 inside the value that carries them and allocate nothing at all.

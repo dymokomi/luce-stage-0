@@ -499,11 +499,11 @@ test "a loop that only reads an array lifts its resolution to the preheader" {
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var a = new Array(Float, 8)
+        \\    var a = new array(double, 8)
         \\    var total = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
-        \\    print(String(Int(total)))
+        \\    print(string(long(total)))
         \\
     );
     defer built.deinit(gpa);
@@ -526,15 +526,15 @@ test "a loop that writes plain elements still lifts; matmul's nest lifts all thr
     var built = try planned(gpa,
         \\func main():
         \\    let n = 4
-        \\    var a = new Array(Float, n * n)
-        \\    var b = new Array(Float, n * n)
-        \\    var c = new Array(Float, n * n)
+        \\    var a = new array(double, n * n)
+        \\    var b = new array(double, n * n)
+        \\    var c = new array(double, n * n)
         \\    for i in range(0, n):
         \\        for k in range(0, n):
         \\            let pivot = a[i * n + k]
         \\            for j in range(0, n):
         \\                c[i * n + j] += pivot * b[k * n + j]
-        \\    print(String(Int(c[0])))
+        \\    print(string(long(c[0])))
         \\
     );
     defer built.deinit(gpa);
@@ -552,26 +552,26 @@ test "a loop that can free, allocate, or call refuses to lift" {
     const gpa = testing.allocator;
     for ([_][]const u8{
         // A call can do anything at all.
-        \\func touch(xs: Array(Float, _)) -> Float:
+        \\func touch(xs: array(double, _)) -> double:
         \\    return xs[0]
         \\
         \\func main():
-        \\    var a = new Array(Float, 8)
+        \\    var a = new array(double, 8)
         \\    var total = 0.0
         \\    for i in range(0, 8):
         \\        total = total + touch(a)
-        \\    print(String(Int(total)))
+        \\    print(string(long(total)))
         \\
         ,
         // A fresh object grows the table, and the rows move with it.
         \\func main():
-        \\    var a = new Array(Float, 8)
+        \\    var a = new array(double, 8)
         \\    var total = 0.0
         \\    for i in range(0, 8):
-        \\        var xs = new List(Int)
+        \\        var xs = new list(long)
         \\        total = total + a[i]
         \\        free(xs)
-        \\    print(String(Int(total)))
+        \\    print(string(long(total)))
         \\
     }) |source| {
         var built = try planned(gpa, source);
@@ -586,11 +586,11 @@ test "an inner loop lifts even when the loop around it cannot" {
         \\func main():
         \\    var total = 0.0
         \\    for r in range(0, 2):
-        \\        var a = new Array(Float, 8)
+        \\        var a = new array(double, 8)
         \\        for i in range(0, 8):
         \\            total = total + a[i]
         \\        free(a)
-        \\    print(String(Int(total)))
+        \\    print(string(long(total)))
         \\
     );
     defer built.deinit(gpa);
@@ -613,11 +613,11 @@ test "the reassignment guard has no way to fire from source, and is kept anyway"
     const gpa = testing.allocator;
     var built = try planned(gpa,
         \\func main():
-        \\    var a = new Array(Float, 8)
+        \\    var a = new array(double, 8)
         \\    var total = 0.0
         \\    for i in range(0, 8):
         \\        total = total + a[i]
-        \\    print(String(Int(total)))
+        \\    print(string(long(total)))
         \\
     );
     defer built.deinit(gpa);

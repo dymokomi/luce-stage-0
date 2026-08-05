@@ -1,12 +1,12 @@
 # Lists
 
-A `List(T)` is a growable sequence. A literal infers its element type;
+A `list(T)` is a growable sequence. A literal infers its element type;
 an empty literal needs an annotation.
 
 ```luce run
 func main():
     var xs = [3, 1, 4, 1, 5]
-    var empty: List(String) = []
+    var empty: list(string) = []
 
     xs.append(9)
     xs.insert(0, 2)
@@ -37,7 +37,7 @@ only / 1
 ```
 
 `find` answers `-1` when the value is absent, which is a wart the
-[status page](/status/) admits: `Int?` exists now and the sentinel has
+[status page](/status/) admits: `long?` exists now and the sentinel has
 nothing holding it up.
 
 ## Slices copy
@@ -65,7 +65,7 @@ into another one needs `give` or `copy`.
 
 ```luce run
 func main():
-    var rows = new List(List(Int))
+    var rows = new list(list(long))
     rows.append([1, 2])              # fresh: no word needed
 
     var loose = [3, 4]
@@ -93,7 +93,7 @@ away.
 
 ```luce run
 func main():
-    var rows = new List(List(Int))
+    var rows = new list(list(long))
     rows.append([1, 2, 3])
     rows.append([4])
 

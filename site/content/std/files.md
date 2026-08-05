@@ -15,16 +15,16 @@ error, because file access genuinely does not exist there.
 
 | Signature | Notes |
 |---|---|
-| `files.exists(path) -> Bool` | a question, not a guard |
-| `files.read(path) -> String!` | the whole file |
+| `files.exists(path) -> bool` | a question, not a guard |
+| `files.read(path) -> string!` | the whole file |
 | `files.write(path, text) -> !` | truncates or creates |
-| `files.read_lines(path) -> List(String)!` | newlines stripped; a trailing final newline adds no phantom empty line |
+| `files.read_lines(path) -> list(string)!` | newlines stripped; a trailing final newline adds no phantom empty line |
 | `files.write_lines(path, lines) -> !` | joined with newlines, ends with one; an empty list writes an empty file |
 | `files.append_text(path, text) -> !` | adds to the end, creating the file if it is not there |
 | `files.append_lines(path, lines) -> !` | the same, one line at a time, each ending in a newline; an empty list adds nothing at all rather than an empty line |
 | `files.delete(path) -> !` | deleting a path that is not there is `io_failed`, not a quiet success |
 | `files.rename(from, to) -> !` | moves a file, **replacing** an existing target |
-| `files.list(path) -> List(String)!` | the names in a directory, **sorted**; plain names, not paths |
+| `files.list(path) -> list(string)!` | the names in a directory, **sorted**; plain names, not paths |
 
 Three of those want a sentence of their own.
 
@@ -34,7 +34,7 @@ whatever landed in the first one's shadow. A log wants the append.
 
 It is spelled `append_text` and not `append` because `append` is a
 [reserved name](/ref/lexical/#reserved-names) — it is `xs.append(v)`,
-the `List` method — and the reservation applies to a module-qualified
+the `list` method — and the reservation applies to a module-qualified
 declaration too.
 
 **`rename` replaces.** That is the whole point of write-then-rename: a
@@ -66,7 +66,7 @@ func main() -> !:
     # Written out of order; listed in order, and as plain names.
     for name in ["part-c", "part-a", "part-b"]:
         try files.write(name + ".txt", "")
-    var parts: List(String) = []
+    var parts: list(string) = []
     for name in try files.list("."):
         if name.starts_with("part-"):
             parts.append(name)
@@ -105,7 +105,7 @@ func main() -> !:
     let lines = try files.read_lines("stock.txt")
     print(f"{len(lines)} lines, last is {lines[len(lines) - 1]}")
 
-    var kept: List(String) = []
+    var kept: list(string) = []
     for line in lines:
         if line != "pear":
             kept.append(line)
@@ -121,7 +121,7 @@ kept 2
 
 ## exists is the exception, and it is not a guard
 
-`exists` answers a plain `Bool`, because asking whether a path is
+`exists` answers a plain `bool`, because asking whether a path is
 there is not itself an operation that can half-succeed. But it is a
 question about the **past**, never a guard for the call after it:
 there is a window between the two that nothing can close, and a guard
@@ -157,10 +157,10 @@ written
 ```luce run
 import std.files
 
-func load_or_default(path: String) -> String:
+func load_or_default(path: string) -> string:
     return files.read(path) catch "default contents\n"
 
-func load_or_fail(path: String) -> String!:
+func load_or_fail(path: string) -> string!:
     return try files.read(path)
 
 func main() -> !:

@@ -58,7 +58,7 @@ test "math: exp and ln are accurate and inverse" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: Float, b: Float) -> Bool:
+        \\func close(a: double, b: double) -> bool:
         \\    return abs(a - b) < 0.000000001
         \\
         \\func main():
@@ -91,7 +91,7 @@ test "math: pow covers the sign and zero cases" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: Float, b: Float) -> Bool:
+        \\func close(a: double, b: double) -> bool:
         \\    return abs(a - b) < 0.000000001
         \\
         \\func main():
@@ -143,7 +143,7 @@ test "math: trig against known values, across periods" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: Float, b: Float) -> Bool:
+        \\func close(a: double, b: double) -> bool:
         \\    return abs(a - b) < 0.0000000001
         \\
         \\func main():
@@ -166,7 +166,7 @@ test "math: log2 and log10" {
     try agreeOk(
         \\import std.math
         \\
-        \\func close(a: Float, b: Float) -> Bool:
+        \\func close(a: double, b: double) -> bool:
         \\    return abs(a - b) < 0.000000001
         \\
         \\func main():
@@ -183,14 +183,14 @@ test "math: vector operations compute exactly on exact inputs" {
         \\import std.math
         \\
         \\func main():
-        \\    var xs = new Array(Float, 5)
+        \\    var xs = new array(double, 5)
         \\    for i in range(0, 5):
-        \\        xs[i] = Float(i) * 0.5
+        \\        xs[i] = double(i) * 0.5
         \\    assert(math.sum(xs) == 5.0)
         \\    assert((math.mean(xs) else -1.0) == 1.0)
         \\    assert((math.vmin(xs) else -1.0) == 0.0)
         \\    assert((math.vmax(xs) else -1.0) == 2.0)
-        \\    var ys = new Array(Float, 5)
+        \\    var ys = new array(double, 5)
         \\    math.fill(ys, 2.0)
         \\    assert(math.sum(ys) == 10.0)
         \\    assert(math.dot(xs, ys) == 10.0)
@@ -213,7 +213,7 @@ test "math: a reduction over an empty array is absent, not a trap" {
         \\import std.math
         \\
         \\func main():
-        \\    var empty = new Array(Float, 0)
+        \\    var empty = new array(double, 0)
         \\    assert(math.mean(empty) == none)
         \\    assert(math.vmin(empty) == none)
         \\    assert(math.vmax(empty) == none)
@@ -228,8 +228,8 @@ test "math: a shape mismatch is still a trap, because the caller could have chec
         \\import std.math
         \\
         \\func main():
-        \\    var a = new Array(Float, 2)
-        \\    var b = new Array(Float, 3)
+        \\    var a = new array(double, 2)
+        \\    var b = new array(double, 3)
         \\    let d = math.dot(a, b)
         \\
     , .explicit_trap);
@@ -247,7 +247,7 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\    var negative_seed = math.Rng(state = -7)
         \\    assert(negative_seed.next() >= 1)
         \\    var die = math.Rng(state = 2026)
-        \\    var seen = new Map(Int, Bool)
+        \\    var seen = new map(long, bool)
         \\    for i in range(0, 200):
         \\        let roll = die.in_range(1, 7)
         \\        assert(roll >= 1 and roll <= 6)
@@ -370,7 +370,7 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
         \\    assert(words[0] == "the" and words[1] == "quick" and words[2] == "brown")
         \\    let blanks = strings.split("   ", "")
         \\    assert(len(blanks) == 0)
-        \\    let empty: List(String) = []
+        \\    let empty: list(string) = []
         \\    assert(strings.join(empty, ", ") == "")
         \\    assert(strings.join(["only"], ", ") == "only")
         \\
@@ -523,7 +523,7 @@ test "files: append, rename, delete and list reach the services beyond read and 
         \\func main() -> !:
         \\    try files.append_text("log.txt", "one line\n")
         \\    try files.append_lines("log.txt", ["two", "three"])
-        \\    try files.append_lines("log.txt", new List(String))
+        \\    try files.append_lines("log.txt", new list(string))
         \\    print(try files.read("log.txt"))
         \\    try files.rename("log.txt", "kept.txt")
         \\    assert(files.exists("kept.txt") and not files.exists("log.txt"))

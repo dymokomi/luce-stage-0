@@ -28,17 +28,17 @@ pub const Intrinsic = enum {
     floor,
     ceil,
     /// `trunc(x)` — toward zero, the fourth of the four roundings.
-    /// It arrived with `Int(x)`'s rounding: before that, `Int(x)` was
+    /// It arrived with `long(x)`'s rounding: before that, `long(x)` was
     /// the only way to say "toward zero" and taking it would have
     /// punched a hole in a set that `floor`, `ceil` and `math.round`
     /// otherwise complete (docs/NUMERICS.md §7).
     trunc,
-    /// Comparison across the Int/Float line, exactly (docs/NUMERICS.md).
-    /// Three arguments — the operator as an `Int`, then the `Int`
-    /// operand, then the `Float` one — because `Binary` carries a
+    /// Comparison across the long/double line, exactly (docs/NUMERICS.md).
+    /// Three arguments — the operator as an `long`, then the `long`
+    /// operand, then the `double` one — because `Binary` carries a
     /// single `operand_type` and cannot say that its two sides are
-    /// different types.  Stage 4 mirrors the operator when the Float
-    /// was written on the left, so the Int is always argument one.
+    /// different types.  Stage 4 mirrors the operator when the double
+    /// was written on the left, so the long is always argument one.
     compare_int_float,
     len,
     string_slice,
@@ -117,7 +117,7 @@ pub const Intrinsic = enum {
     /// One line from standard input, with the prompt the host writes
     /// and flushes before it blocks — the same discipline `key_read`
     /// follows, and the reason a prompt is an argument rather than a
-    /// print of its own.  Answers `String?`: end of input is "there is
+    /// print of its own.  Answers `string?`: end of input is "there is
     /// nothing there", with no reason worth carrying (docs/FAILURE.md).
     read_line,
     /// A line to standard error.  A second console, not a second
@@ -141,7 +141,7 @@ pub const Intrinsic = enum {
     file_delete,
     file_rename,
     dir_list,
-    /// The two halves of value storage (docs/STRINGS.md).  A String's
+    /// The two halves of value storage (docs/STRINGS.md).  A string's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
     /// outlives the statement needs, and `drop_storage` is the death
@@ -212,7 +212,7 @@ pub const Instruction = union(enum) {
 pub const Local = struct {
     name: []const u8,
     local_type: Type,
-    /// True when this slot owns the String bytes and struct field runs
+    /// True when this slot owns the string bytes and struct field runs
     /// it holds, and releases them when it dies (docs/STRINGS.md).
     /// False for a parameter, which borrows its caller's, and for the
     /// hidden slots a block-split spill uses, which borrow whatever

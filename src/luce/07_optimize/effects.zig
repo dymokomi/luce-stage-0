@@ -47,7 +47,7 @@ pub const Effect = enum {
     /// did not trap, neither would the second), but an unread one must
     /// stay, because deleting it would delete a trap.
     ///
-    /// **Nothing that allocates value storage is `stable`.**  A String
+    /// **Nothing that allocates value storage is `stable`.**  A string
     /// or a struct value has an owner and a death point now
     /// (docs/STRINGS.md), so two identical makes are two allocations
     /// with two releases, and folding them would leave one release
@@ -69,7 +69,7 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
 
         .unary => |unary| switch (unary.op) {
             .logic_not => .pure,
-            // Negating Int(min) overflows; negating a float cannot.
+            // Negating long(min) overflows; negating a float cannot.
             .negate => if (function.result_types[unary.operand] == .float) .pure else .stable,
         },
         .convert => |convert| switch (convert.kind) {
@@ -80,14 +80,14 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
             .pure
         else if (binary.operand_type == .float)
             // IEEE arithmetic answers everything, `/0` included, so
-            // every Float operator is pure — and since `/` is real
-            // division and always answers a Float
+            // every double operator is pure — and since `/` is real
+            // division and always answers a double
             // (docs/NUMERICS.md §2), `/` is now always in this arm.
             // The operators that can still trap are `//` and `%`, the
-            // two that produce an Int.
+            // two that produce a long.
             .pure
         else if (binary.operand_type == .string)
-            // String `+` allocates bytes somebody has to free.
+            // string `+` allocates bytes somebody has to free.
             .impure
         else
             // Integer arithmetic traps on overflow and on `// 0`, and
@@ -134,7 +134,7 @@ pub fn classify(function: *const Function, instruction: Instruction) Effect {
 fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
-        // for the same reason `negate` is: abs(Int.min) overflows.
+        // for the same reason `negate` is: abs(long.min) overflows.
         .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_int_float => .pure,
         .abs => if (first_argument) |argument|
             (if (argument == .float) .pure else .stable)
@@ -151,7 +151,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // `forget` is the whole of what a `catch` does.
         .errored, .forget, .raise_error => .impure,
 
-        // Text.  A String is a value, so these read nothing another
+        // Text.  A string is a value, so these read nothing another
         // instruction can change.  The parsers answer absence rather
         // than trapping, so they are pure; the rest can trap.
         .parse_int,
@@ -166,7 +166,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         => .stable,
 
         // Both make fresh owned text, so both have an identity
-        // (docs/STRINGS.md); `str` of a Builder reads the heap on top
+        // (docs/STRINGS.md); `str` of a builder reads the heap on top
         // of that.
         .chr_code, .str_value => .impure,
 
@@ -241,7 +241,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     };
 }
 
-/// Can a resolved Array view survive this instruction?
+/// Can a resolved array view survive this instruction?
 ///
 /// Stage 8 resolves a handle *once per basic block* and reuses the SSA
 /// values it got — the row's address, the axis lengths, the element
@@ -257,7 +257,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
 ///     view reused past a free would skip the `use_after_free` the
 ///     next access owes and could read a whole different object's
 ///     storage;
-///   * **no Array's storage is replaced** — `dims` and `elements`
+///   * **no array's storage is replaced** — `dims` and `elements`
 ///     never move for a *live* array, which is the whole reason this
 ///     is the container the inline path starts with.
 ///
@@ -304,7 +304,7 @@ pub fn viewStable(instruction: Instruction) bool {
 
         .intrinsic => |call| switch (call.kind) {
             // Scalars and text: no handle is resolved, nothing is
-            // attached, nothing is freed.  `str` of a Builder reads a
+            // attached, nothing is freed.  `str` of a builder reads a
             // row, which is a read.
             .abs,
             .min,
@@ -353,8 +353,8 @@ pub fn viewStable(instruction: Instruction) bool {
             // re-labels an owner.
             .list_sort, .list_reverse, .give_object => true,
 
-            // Value storage only: a String's bytes and a struct's
-            // field run are not the object table and not an Array's
+            // Value storage only: a string's bytes and a struct's
+            // field run are not the object table and not an array's
             // storage (docs/STRINGS.md).
             .own_storage, .drop_storage, .export_storage => true,
 
@@ -370,7 +370,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .clear_object,
             => false,
             // Grow a container's own buffer.  That buffer is not the
-            // table and not an Array's, but a List's elements are
+            // table and not an array's, but a list's elements are
             // read through the same row, so this stays conservative.
             .append_value, .append_ascii, .insert_value => false,
 
@@ -400,7 +400,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .file_rename,
             => true,
             // The one host service that makes an object: it takes a
-            // table row, which is exactly what a resolved Array view
+            // table row, which is exactly what a resolved array view
             // cannot survive.
             .dir_list => false,
         },

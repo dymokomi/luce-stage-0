@@ -298,7 +298,7 @@ test "CRLF line endings compile, and keep every line and column" {
     // is what makes the layout rules see the same text.
     var result = try compile_mod.compile(
         testing.allocator,
-        "func main():\r\n    let a = 1\r\n\r\n    let b = a\r\n    let c: String = b\r\n",
+        "func main():\r\n    let a = 1\r\n\r\n    let b = a\r\n    let c: string = b\r\n",
         script,
     );
     defer result.deinit();
@@ -397,7 +397,7 @@ test "luce.parse.expression: a broken f-string hole reports the sub-parse error"
 }
 
 test "luce.sema.convert: an f-string hole must be a scalar" {
-    // A hole is a `String(...)` the reader did not write, so a List in
+    // A hole is a `string(...)` the reader did not write, so a list in
     // one is answered by the constructor's own message, at the hole.
     try expectRejected(
         \\func main():
@@ -482,7 +482,7 @@ test "luce.parse.expected: a malformed binding name is reported at the name" {
 
 test "luce.parse.precedence: 'not' in front of a comparison must be parenthesized" {
     // Two languages Luce reads like disagree about what this means and
-    // both readings are legal Bool expressions, so the parser refuses
+    // both readings are legal bool expressions, so the parser refuses
     // to pick (docs/LANGUAGE.md).  Either pair of parentheses settles
     // it, and each spelling then means what it says.
     try expectRejectedAt(
@@ -516,7 +516,7 @@ test "luce.parse.chain: comparison operators do not chain" {
     // and reaches the type checker unharmed.
     var result = try compile_mod.compile(
         testing.allocator,
-        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(String(c))\n",
+        "func main():\n    let a = 1\n    let c = (0 < a) == (a < 10)\n    print(string(c))\n",
         .{ .allow_host = true },
     );
     defer result.deinit();
@@ -591,16 +591,16 @@ test "luce.parse.type: the four shapes a return list is not" {
     , "luce.parse.type", "a function that answers nothing writes no arrow");
 
     try expectSaying(
-        \\func f() -> (Int):
+        \\func f() -> (long):
         \\    return 1
         \\
         \\func main():
         \\    return
         \\
-    , "luce.parse.type", "one value needs no parentheses: write -> Int");
+    , "luce.parse.type", "one value needs no parentheses: write -> long");
 
     try expectSaying(
-        \\func f() -> ((Int, Int), Int):
+        \\func f() -> ((long, long), long):
         \\    return 1
         \\
         \\func main():
@@ -609,7 +609,7 @@ test "luce.parse.type: the four shapes a return list is not" {
     , "luce.parse.type", "return shapes do not nest: there are no tuples");
 
     try expectSaying(
-        \\func f() -> (Int, Int)?:
+        \\func f() -> (long, long)?:
         \\    return 1, 2
         \\
         \\func main():
@@ -622,10 +622,10 @@ test "luce.parse.type: a return shape is not a type, in any position" {
     // A binding, a parameter, a struct field, a container element.
     // The sentence to keep is the second half.
     for ([_][]const u8{
-        "func main():\n    let p: (Int, Int) = 1\n",
-        "func f(p: (Int, Int)):\n    return\n\nfunc main():\n    return\n",
-        "struct Pair:\n    both: (Int, Int)\n\nfunc main():\n    return\n",
-        "func main():\n    var xs: List((Int, Int)) = []\n",
+        "func main():\n    let p: (long, long) = 1\n",
+        "func f(p: (long, long)):\n    return\n\nfunc main():\n    return\n",
+        "struct Pair:\n    both: (long, long)\n\nfunc main():\n    return\n",
+        "func main():\n    var xs: list((long, long)) = []\n",
     }) |source| {
         try expectSaying(
             source,
@@ -645,7 +645,7 @@ test "luce.parse.expression: there are still no tuples, and the parser already s
 
 test "luce.parse.assign: a destructuring bind declares its names, and one keyword governs it" {
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1, 2
         \\
         \\func main():
@@ -656,7 +656,7 @@ test "luce.parse.assign: a destructuring bind declares its names, and one keywor
     , "luce.parse.assign", "a destructuring bind declares its names: write let or var in front");
 
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1, 2
         \\
         \\func main():
@@ -665,7 +665,7 @@ test "luce.parse.assign: a destructuring bind declares its names, and one keywor
     , "luce.parse.assign", "one let or one var governs the whole bind");
 
     try expectSaying(
-        \\func minmax() -> (Int, Int)!:
+        \\func minmax() -> (long, long)!:
         \\    return 1, 2
         \\
         \\func main():
@@ -676,18 +676,18 @@ test "luce.parse.assign: a destructuring bind declares its names, and one keywor
 
 test "luce.parse.type: a destructuring bind takes its types from the call" {
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1, 2
         \\
         \\func main():
-        \\    let low: Int, high: Int = minmax()
+        \\    let low: long, high: long = minmax()
         \\
     , "luce.parse.type", "a destructuring bind takes its types from the call");
 }
 
 test "luce.sema.shape: the bind's arity is the call's" {
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1, 2
         \\
         \\func main():
@@ -698,7 +698,7 @@ test "luce.sema.shape: the bind's arity is the call's" {
     // One value, two names: the call is named, because that is what
     // makes the sentence actionable.
     try expectSaying(
-        \\func one() -> Int:
+        \\func one() -> long:
         \\    return 1
         \\
         \\func main():
@@ -709,7 +709,7 @@ test "luce.sema.shape: the bind's arity is the call's" {
 
 test "luce.sema.return: the return's arity is the signature's" {
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1
         \\
         \\func main():
@@ -718,7 +718,7 @@ test "luce.sema.return: the return's arity is the signature's" {
     , "luce.sema.return", "minmax answers 2 values, got 1");
 
     try expectSaying(
-        \\func count() -> Int:
+        \\func count() -> long:
         \\    return 1, 2
         \\
         \\func main():
@@ -740,7 +740,7 @@ test "luce.sema.return: the return's arity is the signature's" {
     // earlier, by the arms that route a `return` to the single-value
     // channel or refuse a comma outright.
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1, 2, 3
         \\
         \\func main():
@@ -753,9 +753,9 @@ test "luce.sema.return: the return's arity is the signature's" {
     // `return` is measured against.
     try expectSaying(
         \\struct Rng:
-        \\    state: Int
+        \\    state: long
         \\
-        \\    func next(var self) -> Int:
+        \\    func next(var self) -> long:
         \\        return self.state, 1
         \\
         \\func main():
@@ -769,9 +769,9 @@ test "luce.sema.call: two places, and no exceptions" {
     // pass-through, which Go allows and this language does not,
     // because refusing it is what makes the rule have no exceptions.
     for ([_][]const u8{
-        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    assert(minmax() == 1)\n",
-        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    let x = minmax() + 1\n",
-        "func minmax() -> (Int, Int):\n    return 1, 2\n\nfunc main():\n    var xs = [1]\n    xs.append(minmax())\n",
+        "func minmax() -> (long, long):\n    return 1, 2\n\nfunc main():\n    assert(minmax() == 1)\n",
+        "func minmax() -> (long, long):\n    return 1, 2\n\nfunc main():\n    let x = minmax() + 1\n",
+        "func minmax() -> (long, long):\n    return 1, 2\n\nfunc main():\n    var xs = [1]\n    xs.append(minmax())\n",
     }) |source| {
         try expectSaying(
             source,
@@ -781,10 +781,10 @@ test "luce.sema.call: two places, and no exceptions" {
     }
 
     try expectSaying(
-        \\func minmax() -> (Int, Int):
+        \\func minmax() -> (long, long):
         \\    return 1, 2
         \\
-        \\func pass() -> (Int, Int):
+        \\func pass() -> (long, long):
         \\    return minmax()
         \\
         \\func main():
@@ -802,7 +802,7 @@ test "luce.sema.own: one object cannot be owned twice, and only a comma can writ
     // to poison; the comma is what puts something after a return for
     // the first time (OWNERSHIP.md S45).
     try expectSaying(
-        \\func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+        \\func bad(xs: give list(long)) -> (list(long), list(long)):
         \\    return xs, xs
         \\
         \\func main():
@@ -816,7 +816,7 @@ test "luce.sema.own: one object cannot be owned twice, and only a comma can writ
     // The two beside it need no new check at all: the alias arm and
     // the borrow arm are the existing ones, reached per position.
     try expectSaying(
-        \\func bad(xs: give List(Int)) -> (List(Int), List(Int)):
+        \\func bad(xs: give list(long)) -> (list(long), list(long)):
         \\    let alias = xs
         \\    return xs, alias
         \\
@@ -826,7 +826,7 @@ test "luce.sema.own: one object cannot be owned twice, and only a comma can writ
     , "luce.sema.own", "alias aliases an object it does not own; return copy alias or return the owning name [OWNERSHIP.md S16, S17]");
 
     try expectSaying(
-        \\func bad(xs: give List(Int), borrowed: List(Int)) -> (List(Int), List(Int)):
+        \\func bad(xs: give list(long), borrowed: list(long)) -> (list(long), list(long)):
         \\    return xs, borrowed
         \\
         \\func main():
@@ -845,7 +845,7 @@ test "luce.sema.own: one object cannot be owned twice, and only a comma can writ
 
 test "luce.sema.self: self is only a parameter of a function inside a struct" {
     try expectOnlySayingAt(
-        \\func loose(self) -> Int:
+        \\func loose(self) -> long:
         \\    return 1
         \\
         \\func main():
@@ -865,9 +865,9 @@ test "luce.sema.self: a namespace function called as a method says which it is" 
     // ordinary first argument; `x.foo()` is a type and a receiver.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
-        \\    func doubled(p: Point) -> Int:
+        \\    func doubled(p: Point) -> long:
         \\        return p.x * 2
         \\
         \\func main():
@@ -882,12 +882,12 @@ test "luce.sema.self: a namespace function called as a method says which it is" 
 
 test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
     // This replaces "Point has no methods", which was true until a
-    // struct could have one, and matches the List/Map/Builder family.
+    // struct could have one, and matches the list/map/builder family.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
-        \\    func length(self) -> Int:
+        \\    func length(self) -> long:
         \\        return self.x
         \\
         \\func main():
@@ -901,7 +901,7 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
     // With nothing close, the sentence still names both.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = Point(x = 1)
@@ -919,9 +919,9 @@ test "luce.sema.name: there are no bound method values" {
     // The sentence is the one `let f = Point.length` already gets.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
-        \\    func length(self) -> Int:
+        \\    func length(self) -> long:
         \\        return self.x
         \\
         \\func main():
@@ -943,7 +943,7 @@ test "luce.sema.self: a var self receiver must be a writable place" {
     // target is, and the two can never drift (docs/METHODS.md).
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\    func grow(var self):
         \\        self.x = self.x + 1
@@ -956,7 +956,7 @@ test "luce.sema.self: a var self receiver must be a writable place" {
 
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\    func origin() -> Point:
         \\        return Point(x = 0)
@@ -976,7 +976,7 @@ test "luce.sema.self: the static form of a var self method is refused" {
     // semantics rather than one.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\    func grow(var self):
         \\        self.x = self.x + 1
@@ -993,9 +993,9 @@ test "luce.sema.self: var self needs a struct that carries no objects" {
     // S28 already put the corpus, and the diagnostic cites them.
     try expectSaying(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
-        \\    func stash(var self, n: Int):
+        \\    func stash(var self, n: long):
         \\        self.items.append(n)
         \\
         \\func main():
@@ -1013,9 +1013,9 @@ test "luce.sema.self: the receiver is written back, not returned" {
     // `rng`, which is what `Point.scale(p, 2.0)` was refused for.
     try expectSaying(
         \\struct Rng:
-        \\    state: Int
+        \\    state: long
         \\
-        \\    func next(var self) -> Int:
+        \\    func next(var self) -> long:
         \\        self.state = self.state + 1
         \\        return self.state
         \\
@@ -1029,9 +1029,9 @@ test "luce.sema.self: the receiver is written back, not returned" {
 test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
-        \\    func moved(self, dx: Int, dy: Int) -> Int:
+        \\    func moved(self, dx: long, dy: long) -> long:
         \\        return self.x + dx + dy
         \\
         \\func main():
@@ -1050,7 +1050,7 @@ test "luce.sema.method: a method checks its arity against the declaration minus 
 
 test "luce.sema.main: a script needs func main(), with or without the command line" {
     try expectRejected("func other():\n    return\n", "luce.sema.main");
-    try expectRejected("func main(x: Int):\n    return\n", "luce.sema.main");
+    try expectRejected("func main(x: long):\n    return\n", "luce.sema.main");
 }
 
 // "script entry must be exactly func main():" was not true —
@@ -1061,7 +1061,7 @@ test "luce.sema.main: a script needs func main(), with or without the command li
 
 test "luce.sema.main: a return type on the entry names the other legal form" {
     try expectOnlySayingAt(
-        \\func main() -> Int:
+        \\func main() -> long:
         \\    return 1
         \\
     ,
@@ -1078,32 +1078,32 @@ test "luce.sema.main: a return type on the entry names the other legal form" {
 // mistakes that are left get one sentence each and a caret on the part
 // that is wrong.
 
-test "luce.sema.main: the entry's parameter is the command line and must be List(String)" {
+test "luce.sema.main: the entry's parameter is the command line and must be list(string)" {
     try expectOnlySayingAt(
-        \\func main(n: Int):
+        \\func main(n: long):
         \\    return
         \\
     ,
         "luce.sema.main",
-        "main's parameter is the command line and must be List(String); it is Int here",
+        "main's parameter is the command line and must be list(string); it is long here",
         1,
         14,
     );
-    // A List of the wrong thing is the same mistake and says so with
+    // A list of the wrong thing is the same mistake and says so with
     // the type it was actually given.
     try expectSaying(
-        \\func main(xs: List(Int)):
+        \\func main(xs: list(long)):
         \\    return
         \\
     ,
         "luce.sema.main",
-        "main's parameter is the command line and must be List(String); it is List(Int) here",
+        "main's parameter is the command line and must be list(string); it is list(long) here",
     );
 }
 
 test "luce.sema.main: the entry takes at most the one parameter" {
     try expectOnlySayingAt(
-        \\func main(a: List(String), b: Int):
+        \\func main(a: list(string), b: long):
         \\    return
         \\
     ,
@@ -1117,7 +1117,7 @@ test "luce.sema.main: the entry takes at most the one parameter" {
 test "luce.sema.main: the entry's parameter takes no verb" {
     // S13 says `give` appears at both ends; the entry has one end.
     try expectOnlySayingAt(
-        \\func main(args: give List(String)):
+        \\func main(args: give list(string)):
         \\    return
         \\
     ,
@@ -1138,15 +1138,15 @@ test "luce.sema.retired: arg and arg_count name their replacement" {
         \\
     ,
         "luce.sema.retired",
-        "arg was retired: declare func main(args: List(String)): and index args",
+        "arg was retired: declare func main(args: list(string)): and index args",
     );
     try expectHostSaying(
         \\func main():
-        \\    print(String(arg_count()))
+        \\    print(string(arg_count()))
         \\
     ,
         "luce.sema.retired",
-        "arg_count was retired: declare func main(args: List(String)): and write len(args)",
+        "arg_count was retired: declare func main(args: list(string)): and write len(args)",
     );
 }
 
@@ -1155,7 +1155,7 @@ test "arg is an ordinary word again, and a program that declares one gets its ow
     // resolved: the two names left `reserved_names` with the builtins,
     // so they are available to a program like any other.
     var result = try compile_mod.compile(testing.allocator,
-        \\func arg(index: Int) -> Int:
+        \\func arg(index: long) -> long:
         \\    return index * 2
         \\
         \\func main():
@@ -1180,8 +1180,8 @@ test "luce.sema.main: all four legal entry shapes compile" {
     for ([_][]const u8{
         "func main():\n    return\n",
         "func main() -> !:\n    return\n",
-        "func main(args: List(String)):\n    return\n",
-        "func main(command_line: List(String)) -> !:\n    return\n",
+        "func main(args: list(string)):\n    return\n",
+        "func main(command_line: list(string)) -> !:\n    return\n",
     }) |source| {
         var result = try compile_mod.compile(testing.allocator, source, script);
         defer result.deinit();
@@ -1200,10 +1200,10 @@ test "luce.sema.main: all four legal entry shapes compile" {
 // Compound assignment (value-only arithmetic sugar)
 // ---------------------------------------------------------------------------
 
-test "luce.sema.type: compound assignment is numbers, or += on String" {
+test "luce.sema.type: compound assignment is numbers, or += on string" {
     // Objects have no compound assignment.
     try expectRejected("func main():\n    var xs = [1, 2]\n    xs *= 3\n", "luce.sema.type");
-    // Non-+ operators do not apply to String.
+    // Non-+ operators do not apply to string.
     try expectRejected("func main():\n    var s = \"a\"\n    s -= \"b\"\n", "luce.sema.type");
     // The two sides must share a type.
     try expectRejected("func main():\n    var n = 1\n    n += 2.0\n", "luce.sema.type");
@@ -1230,7 +1230,7 @@ test "luce.sema.name: an unknown name is rejected" {
 
 test "luce.sema.name: a function used as a value is named, not denied" {
     try expectOnlySayingAt(
-        \\func helper() -> Int:
+        \\func helper() -> long:
         \\    return 1
         \\
         \\func main():
@@ -1247,7 +1247,7 @@ test "luce.sema.name: a function used as a value is named, not denied" {
 test "luce.sema.name: a struct used as a value says how to build one" {
     try expectOnlySayingAt(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = Point
@@ -1293,9 +1293,9 @@ test "luce.sema.name: a missing namespace member offers one of that namespace" {
 test "luce.sema.name: a struct namespace answers for its own members" {
     try expectOnlySayingAt(
         \\struct Words:
-        \\    count: Int
+        \\    count: long
         \\
-        \\    func classify() -> Int:
+        \\    func classify() -> long:
         \\        return 1
         \\
         \\func main():
@@ -1312,9 +1312,9 @@ test "luce.sema.name: a struct namespace answers for its own members" {
 test "luce.sema.name: a struct namespace with no such member says so" {
     try expectOnlySayingAt(
         \\struct Words:
-        \\    count: Int
+        \\    count: long
         \\
-        \\    func classify() -> Int:
+        \\    func classify() -> long:
         \\        return 1
         \\
         \\func main():
@@ -1338,10 +1338,10 @@ test "luce.sema.duplicate: a name cannot be declared twice" {
 test "luce.sema.duplicate: a duplicate struct points at the first" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\struct P:
-        \\    y: Int
+        \\    y: long
         \\
         \\func main():
         \\    return
@@ -1352,9 +1352,9 @@ test "luce.sema.duplicate: a duplicate struct points at the first" {
 test "luce.sema.duplicate: a duplicate field points at the first" {
     try expectOnlySayingAt(
         \\struct S:
-        \\    x: Int
-        \\    y: Int
-        \\    x: Int
+        \\    x: long
+        \\    y: long
+        \\    x: long
         \\
         \\func main():
         \\    return
@@ -1423,9 +1423,9 @@ test "luce.sema.let: a let binding cannot be reassigned" {
 // ---------------------------------------------------------------------------
 
 // The mismatch message ends with a fact, not with advice.  It used to
-// offer "conversions are explicit, so write Int(...) or Float(...)",
-// because `Int` against `Float` was the one mismatch a constructor
-// could repair; `Int` widens to `Float` on its own now
+// offer "conversions are explicit, so write long(...) or double(...)",
+// because `long` against `double` was the one mismatch a constructor
+// could repair; `long` widens to `double` on its own now
 // (docs/NUMERICS.md), so every pair that still reaches the message
 // genuinely has nothing between it, and the sentence says so.  What
 // those three programs do *instead* of failing is pinned in
@@ -1440,7 +1440,7 @@ test "luce.sema.type: a mismatch with no conversion says so" {
         \\
     ,
         "luce.sema.type",
-        "operands of + are Int and String, and there is no conversion between them",
+        "operands of + are long and string, and there is no conversion between them",
         4,
         13,
     );
@@ -1448,22 +1448,22 @@ test "luce.sema.type: a mismatch with no conversion says so" {
 
 test "luce.sema.type: an annotation says so when nothing converts" {
     try expectOnlySayingAt(
-        "func main():\n    let s: String = 1\n",
+        "func main():\n    let s: string = 1\n",
         "luce.sema.type",
-        "s declared String but initialized with Int, and there is no conversion between them",
+        "s declared string but initialized with long, and there is no conversion between them",
         2,
         5,
     );
 }
 
-// Promotion is one direction.  A `Float` never becomes an `Int`
+// Promotion is one direction.  A `double` never becomes an `long`
 // without being asked, which is what stops float contagion silently:
-// it is refused at the first place an `Int` is required, by a message
+// it is refused at the first place an `long` is required, by a message
 // that was already in the tree (docs/NUMERICS.md §9).
 
-test "luce.sema.type: n /= 2 on an Int place names the one-character fix" {
+test "luce.sema.type: n /= 2 on a long place names the one-character fix" {
     // The migration's sharpest edge (docs/NUMERICS.md §9): `/` answers
-    // a Float, so this is a narrowing nobody wrote.  That it is an
+    // a double, so this is a narrowing nobody wrote.  That it is an
     // error rather than a silent truncation is the whole safety story.
     try expectOnlySayingAt(
         \\func main():
@@ -1472,15 +1472,15 @@ test "luce.sema.type: n /= 2 on an Int place names the one-character fix" {
         \\
     ,
         "luce.sema.type",
-        "/ answers a Float and this place is Int; write '//=' for the integer quotient",
+        "/ answers a double and this place is long; write '//=' for the integer quotient",
         3,
         5,
     );
 }
 
-test "luce.sema.type: a Float where an Int is required is still refused" {
+test "luce.sema.type: a double where a long is required is still refused" {
     try expectRejectedAt(
-        \\func take(n: Int) -> Int:
+        \\func take(n: long) -> long:
         \\    return n
         \\
         \\func main():
@@ -1496,13 +1496,13 @@ test "luce.sema.type: a Float where an Int is required is still refused" {
     , "luce.sema.type");
     try expectRejected(
         \\func main():
-        \\    let n: Int = 2.5
+        \\    let n: long = 2.5
         \\
     , "luce.sema.type");
 }
 
 // `and`/`or` used to underline both operands and name neither, in a
-// compiler where `condition must be Bool, not Int` already did both.
+// compiler where `condition must be bool, not long` already did both.
 //
 // The left-operand case pins its *end* as well as its start, because
 // those are the same column here: `n and true` and `n` both begin at
@@ -1516,7 +1516,7 @@ test "luce.sema.type: a bad left operand of and is named, and underlined alone" 
         \\    if n and true:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of and must be Bool, not Int", 3, 8, 9);
+    , "luce.sema.type", "the left operand of and must be bool, not long", 3, 8, 9);
 }
 
 test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
@@ -1528,7 +1528,7 @@ test "luce.sema.type: a bad left operand of or is named, and underlined alone" {
         \\    if total + 1 or false:
         \\        return
         \\
-    , "luce.sema.type", "the left operand of or must be Bool, not Int", 3, 8, 17);
+    , "luce.sema.type", "the left operand of or must be bool, not long", 3, 8, 17);
 }
 
 test "luce.sema.type: a bad right operand of or is named, and underlined alone" {
@@ -1538,30 +1538,30 @@ test "luce.sema.type: a bad right operand of or is named, and underlined alone" 
         \\    if true or n:
         \\        return
         \\
-    , "luce.sema.type", "the right operand of or must be Bool, not Int", 3, 16, 17);
+    , "luce.sema.type", "the right operand of or must be bool, not long", 3, 16, 17);
 }
 
 test "luce.sema.absent: a type name takes no article" {
-    // Was "n is Int, and a Int is always there; only a Int? is ever
+    // Was "n is long, and a long is always there; only a long? is ever
     // none" — twice ungrammatical, and tautological besides.
     try expectOnlySayingAt(
-        "func main():\n    let n: Int = none\n",
+        "func main():\n    let n: long = none\n",
         "luce.sema.absent",
-        "n is Int, which is always there; only Int? is ever none",
+        "n is long, which is always there; only long? is ever none",
         2,
-        18,
+        19,
     );
 }
 
 test "luce.sema.return: a returned type takes no article either" {
     try expectOnlySayingAt(
-        \\func f() -> Int:
+        \\func f() -> long:
         \\    return
         \\
         \\func main():
         \\    let x = f()
         \\
-    , "luce.sema.return", "return needs a value of type Int", 2, 5);
+    , "luce.sema.return", "return needs a value of type long", 2, 5);
 }
 
 // `//` is floor division, and the message that used to greet a
@@ -1601,7 +1601,7 @@ test "luce.parse.fstring: an unknown format spec names the one that exists" {
         \\
     ,
         "luce.parse.fstring",
-        "unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a Float",
+        "unknown format spec ':.2'; the one form is ':.Nf' — N decimal places of a double",
         5,
         15,
     );
@@ -1625,7 +1625,7 @@ test "luce.parse.fstring: an unknown format spec names the one that exists" {
 
 test "luce.sema.import: a format spec is std.strings, and says so" {
     // It lowers to `strings.format_float`, so it needs the import that
-    // every other String service needs — the same rule, not a new one.
+    // every other string service needs — the same rule, not a new one.
     //
     // The rule was always right and the words were not: this said
     // "unknown namespace strings; import std.strings to use it",
@@ -1652,31 +1652,31 @@ test "luce.sema.import: a format spec is std.strings, and says so" {
     // reported per file").
 }
 
-test "luce.sema.convert: String() takes a scalar, and names build() for a Builder" {
+test "luce.sema.convert: string() takes a scalar, and names build() for a builder" {
     // The one reason `str` could not simply be renamed: it took a heap
     // object, and a scalar constructor should not (docs/NUMERICS.md §7).
     try expectOnlySayingAt(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    b.append("x")
-        \\    let text = String(b)
+        \\    let text = string(b)
         \\    free(b)
         \\
     ,
         "luce.sema.convert",
-        "String() converts a scalar; a Builder hands over its text with .build()",
+        "string() converts a scalar; a builder hands over its text with .build()",
         4,
         16,
     );
     try expectOnlySayingAt(
         \\func main():
         \\    var xs = [1, 2]
-        \\    let text = String(xs)
+        \\    let text = string(xs)
         \\    free(xs)
         \\
     ,
         "luce.sema.convert",
-        "String() converts Int, Float, Bool, or String, not List(Int)",
+        "string() converts long, double, bool, or string, not list(long)",
         3,
         16,
     );
@@ -1692,17 +1692,17 @@ test "luce.sema.call: str is gone, and is not a name anybody kept" {
     , "luce.sema.call");
 }
 
-test "luce.sema.type: a condition must be Bool" {
+test "luce.sema.type: a condition must be bool" {
     try expectRejected("func main():\n    if 1:\n        return\n", "luce.sema.type");
 }
 
 test "luce.sema.type: an annotation must match the initializer" {
-    try expectRejected("func main():\n    let a: Int = \"x\"\n", "luce.sema.type");
+    try expectRejected("func main():\n    let a: long = \"x\"\n", "luce.sema.type");
 }
 
-test "luce.sema.convert: Int and Float convert only their opposite" {
-    try expectRejected("func main():\n    let a = Int(\"x\")\n", "luce.sema.convert");
-    try expectRejected("func main():\n    let a = Float(true)\n", "luce.sema.convert");
+test "luce.sema.convert: long and double convert only their opposite" {
+    try expectRejected("func main():\n    let a = long(\"x\")\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = double(true)\n", "luce.sema.convert");
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,7 +1712,7 @@ test "luce.sema.convert: Int and Float convert only their opposite" {
 test "luce.sema.field: an unknown struct field is rejected" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = P(x = 1)
@@ -1723,7 +1723,7 @@ test "luce.sema.field: an unknown struct field is rejected" {
 
 test "luce.sema.call: arity and unknown callees are checked" {
     try expectRejected(
-        \\func add(a: Int, b: Int) -> Int:
+        \\func add(a: long, b: long) -> long:
         \\    return a + b
         \\
         \\func main():
@@ -1741,7 +1741,7 @@ test "luce.sema.method: map get takes (key, default) of the right types" {
     // Too few is a count mistake and says both counts.
     try expectSayingAt(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let x = m.get("k")
         \\
     , "luce.sema.method", "get takes 2 arguments, got 1", 3, 13);
@@ -1749,17 +1749,17 @@ test "luce.sema.method: map get takes (key, default) of the right types" {
     // reported as one, at the argument rather than at the call.
     try expectSayingAt(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let x = m.get("k", "wrong")
         \\
-    , "luce.sema.type", "argument 2 of get is Int, got String", 3, 24);
+    , "luce.sema.type", "argument 2 of get is long, got string", 3, 24);
 }
 
-test "luce.sema.loop: two-name for needs a Map or a sequence" {
-    // A Builder is not iterable at all.
+test "luce.sema.loop: two-name for needs a map or a sequence" {
+    // A builder is not iterable at all.
     try expectRejected(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    for a, c in b:
         \\        b.append("x")
         \\
@@ -1769,7 +1769,7 @@ test "luce.sema.loop: two-name for needs a Map or a sequence" {
 test "luce.sema.duplicate: the two for-loop names must differ" {
     try expectRejected(
         \\func main():
-        \\    var m = new Map(Int, Int)
+        \\    var m = new map(long, long)
         \\    m[1] = 1
         \\    for k, k in m:
         \\        let unused = k
@@ -1788,8 +1788,8 @@ test "luce.sema.index: only heap containers index, with the right key" {
 test "luce.sema.construct: a struct needs all fields, named, once" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
         \\    let p = P(x = 1)
@@ -1804,8 +1804,8 @@ test "luce.sema.construct: a struct needs all fields, named, once" {
 test "luce.sema.construct: one missing field is named in the singular" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: Int
-        \\    b: Int
+        \\    a: long
+        \\    b: long
         \\
         \\func main():
         \\    let p = P(a = 1)
@@ -1816,9 +1816,9 @@ test "luce.sema.construct: one missing field is named in the singular" {
 test "luce.sema.construct: two missing fields take no serial comma" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: Int
-        \\    b: Int
-        \\    c: Int
+        \\    a: long
+        \\    b: long
+        \\    c: long
         \\
         \\func main():
         \\    let p = P(a = 1)
@@ -1829,10 +1829,10 @@ test "luce.sema.construct: two missing fields take no serial comma" {
 test "luce.sema.construct: every missing field is named, in declaration order" {
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: Int
-        \\    b: Int
-        \\    c: Int
-        \\    d: Int
+        \\    a: long
+        \\    b: long
+        \\    c: long
+        \\    d: long
         \\
         \\func main():
         \\    let p = P(b = 1)
@@ -1845,9 +1845,9 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
     // different words for the same mistake at file scope (context.zig).
     try expectOnlySayingAt(
         \\struct P:
-        \\    a: Int
-        \\    b: Int
-        \\    c: Int
+        \\    a: long
+        \\    b: long
+        \\    c: long
         \\
         \\let origin = P(a = 1)
         \\
@@ -1858,7 +1858,7 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
 }
 
 test "luce.sema.new: new builds only the heap types" {
-    try expectRejected("func main():\n    let a = new Array(Int)\n", "luce.sema.new");
+    try expectRejected("func main():\n    let a = new array(long)\n", "luce.sema.new");
 }
 
 test "luce.sema.loop: break and continue need a loop" {
@@ -1867,7 +1867,7 @@ test "luce.sema.loop: break and continue need a loop" {
 
 test "luce.sema.return: return paths and value shape are checked" {
     try expectRejected(
-        \\func f() -> Int:
+        \\func f() -> long:
         \\    let x = 1
         \\
         \\func main():
@@ -1901,7 +1901,7 @@ test "luce.sema.struct: a struct cannot be empty or self-containing" {
 test "luce.sema.struct: a direct cycle names the field and the fix" {
     try expectOnlySayingAt(
         \\struct Node:
-        \\    value: Int
+        \\    value: long
         \\    next: Node
         \\
         \\func main():
@@ -1939,7 +1939,7 @@ test "luce.sema.struct: a mutual cycle is one message that walks the loop" {
 test "luce.sema.struct: a three-struct cycle reads the whole way round" {
     try expectOnlySayingAt(
         \\struct A:
-        \\    n: Int
+        \\    n: long
         \\    b: B
         \\
         \\struct B:
@@ -1992,7 +1992,7 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
     // suggestion, compiled.
     var result = try compile_mod.compile(testing.allocator,
         \\struct Node:
-        \\    value: Int
+        \\    value: long
         \\    next: Node?
         \\
         \\func main():
@@ -2014,7 +2014,7 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
 }
 
 test "luce.sema.const: a top-level let is a constant, not a computation" {
-    try expectRejected("let bad = new List(Int)\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("let bad = new list(long)\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.host: host builtins are gated off by default" {
@@ -2169,9 +2169,9 @@ test "luce.parse.expression: the comparison operators of other languages" {
 
 test "luce.parse.expression: '**' names the std function that does it" {
     try expectOnlySayingAcross(
-        "func main():\n    let a = 2 ** 3\n    print(String(a))\n",
+        "func main():\n    let a = 2 ** 3\n    print(string(a))\n",
         "luce.parse.expression",
-        "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for Int",
+        "there is no '**' operator: import std.math and call math.pow(x, y), or math.ipow(x, y) for long",
         2,
         15,
         17,
@@ -2269,7 +2269,7 @@ test "luce.parse.expected: a struct field needs a type after its colon" {
 
 test "luce.parse.type: array shape wildcards must come last" {
     try expectRejected(
-        "func f(a: Array(Int, _, Int)):\n    return\n\nfunc main():\n    return\n",
+        "func f(a: array(long, _, long)):\n    return\n\nfunc main():\n    return\n",
         "luce.parse.type",
     );
 }
@@ -2287,7 +2287,7 @@ test "luce.parse.assign: cannot assign through a call result" {
 test "luce.sema.field: a nested place checks each field on the way down" {
     try expectRejected(
         \\struct Inner:
-        \\    n: Int
+        \\    n: long
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -2304,7 +2304,7 @@ test "luce.sema.own: a nested place cannot assign an object slot" {
     // restock an object field; a chain leaf must be a value.
     try expectRejected(
         \\struct Bag:
-        \\    items: List(Int)
+        \\    items: list(long)
         \\
         \\struct Holder:
         \\    bag: Bag
@@ -2319,11 +2319,11 @@ test "luce.sema.own: a nested place cannot assign an object slot" {
 test "luce.sema.own: cannot index into object-carrying elements in a chain" {
     try expectRejected(
         \\struct Bag:
-        \\    label: String
-        \\    items: List(Int)
+        \\    label: string
+        \\    items: list(long)
         \\
         \\func main():
-        \\    var bags = new List(Bag)
+        \\    var bags = new list(Bag)
         \\    bags.append(Bag(label = "a", items = [1]))
         \\    bags[0].label = "b"
         \\
@@ -2349,10 +2349,10 @@ test "luce.sema.name: give needs a name that exists" {
 test "luce.sema.duplicate: a struct cannot be declared twice" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\struct P:
-        \\    y: Int
+        \\    y: long
         \\
         \\func main():
         \\    return
@@ -2363,8 +2363,8 @@ test "luce.sema.duplicate: a struct cannot be declared twice" {
 test "luce.sema.duplicate: a struct cannot repeat a field" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
-        \\    x: Int
+        \\    x: long
+        \\    x: long
         \\
         \\func main():
         \\    return
@@ -2391,8 +2391,53 @@ test "luce.sema.reserved: a function cannot take a builtin's name" {
 }
 
 test "luce.sema.reserved: a struct cannot take a type keyword's name" {
-    try expectRejected("struct Int:\n    x: Int\n\nfunc main():\n    return\n", "luce.sema.reserved");
+    try expectRejected("struct long:\n    x: long\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
+
+// spelling:off — these two programs exist to be refused, so they are
+// the one place in the tree that still writes the retired names.
+//
+// The rename is a breaking change and every program written before it
+// says `Int`.  A reader who writes one of the retired spellings is
+// told what it is called now, by name, in both places one can appear:
+// a type annotation and a conversion call.  Edit distance cannot find
+// `long` from `Int`, so nothing else would answer at all.
+test "luce.sema.type: a retired TitleCase type name names its replacement" {
+    try expectMessage(
+        \\func main():
+        \\    let n: Int = 1
+        \\    assert(n == 1)
+        \\
+    , "the builtin types are lowercase: Int is written long");
+    try expectMessage(
+        \\func main():
+        \\    let x: Float = 1.5
+        \\    assert(x == 1.5)
+        \\
+    , "the builtin types are lowercase: Float is written double");
+    try expectMessage(
+        \\func main():
+        \\    var xs: List(Int) = []
+        \\    assert(len(xs) == 0)
+        \\
+    , "the builtin types are lowercase: List is written list");
+}
+
+test "luce.sema.call: a retired conversion constructor names its replacement" {
+    try expectMessage(
+        \\func main():
+        \\    let n = Int(1.5)
+        \\    assert(n == 2)
+        \\
+    , "the builtin types are lowercase: Int is written long");
+    try expectMessage(
+        \\func main():
+        \\    assert(String(1) == "1")
+        \\
+    , "the builtin types are lowercase: String is written string");
+}
+
+// spelling:on
 
 test "luce.sema.reserved: a struct cannot take a builtin type's name" {
     // Lowercase names are the language's (docs/TYPES.md D8).  A struct
@@ -2420,11 +2465,11 @@ test "luce.sema.reserved: a function cannot take a terminal service's name" {
     // builtin.  One per shape: no arguments, some arguments, and the
     // one whose name a program is most likely to reach for.
     try expectRejected(
-        "func term_rows() -> Int:\n    return 1\n\nfunc main():\n    return\n",
+        "func term_rows() -> long:\n    return 1\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
     );
     try expectRejected(
-        "func term_write(text: String):\n    return\n\nfunc main():\n    return\n",
+        "func term_write(text: string):\n    return\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
     );
     try expectRejected(
@@ -2439,7 +2484,7 @@ test "luce.sema.reserved: a local cannot take a terminal service's name" {
 
 test "luce.sema.reserved: a struct cannot take a terminal service's name" {
     try expectRejected(
-        "struct term_style:\n    x: Int\n\nfunc main():\n    return\n",
+        "struct term_style:\n    x: long\n\nfunc main():\n    return\n",
         "luce.sema.reserved",
     );
 }
@@ -2450,7 +2495,7 @@ test "luce.sema.reserved: a struct cannot take a terminal service's name" {
 
 test "luce.sema.type: a wrong argument type is rejected" {
     try expectRejected(
-        \\func f(a: Int):
+        \\func f(a: long):
         \\    return
         \\
         \\func main():
@@ -2461,7 +2506,7 @@ test "luce.sema.type: a wrong argument type is rejected" {
 
 test "luce.sema.type: a returned value must match the declared return type" {
     try expectRejected(
-        \\func f() -> Int:
+        \\func f() -> long:
         \\    return "x"
         \\
         \\func main():
@@ -2477,7 +2522,7 @@ test "luce.sema.type: a list literal is homogeneous" {
 test "luce.sema.type: a struct field takes its declared type" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = P(x = "s")
@@ -2485,7 +2530,7 @@ test "luce.sema.type: a struct field takes its declared type" {
     , "luce.sema.type");
 }
 
-test "luce.sema.type: not needs a Bool" {
+test "luce.sema.type: not needs a bool" {
     try expectRejected("func main():\n    let a = not 1\n", "luce.sema.type");
 }
 
@@ -2493,19 +2538,19 @@ test "luce.sema.type: negation needs a number" {
     try expectRejected("func main():\n    let a = -\"x\"\n", "luce.sema.type");
 }
 
-test "luce.sema.type: Bool has no ordering" {
+test "luce.sema.type: bool has no ordering" {
     try expectRejected("func main():\n    let a = true < false\n", "luce.sema.type");
 }
 
-test "luce.sema.type: and needs Bool operands" {
+test "luce.sema.type: and needs bool operands" {
     try expectRejected("func main():\n    let a = 1 and 2\n", "luce.sema.type");
 }
 
-test "luce.sema.type: String has no arithmetic operator" {
+test "luce.sema.type: string has no arithmetic operator" {
     try expectRejected("func main():\n    let a = \"x\" - \"y\"\n", "luce.sema.type");
 }
 
-test "luce.sema.type: range bounds must be Int" {
+test "luce.sema.type: range bounds must be long" {
     try expectRejected("func main():\n    for i in range(1.0, 2.0):\n        return\n", "luce.sema.type");
 }
 
@@ -2514,7 +2559,7 @@ test "luce.sema.type: range bounds must be Int" {
 // ---------------------------------------------------------------------------
 
 test "luce.sema.convert: a conversion takes exactly one argument" {
-    try expectRejected("func main():\n    let a = Int(1, 2)\n", "luce.sema.convert");
+    try expectRejected("func main():\n    let a = long(1, 2)\n", "luce.sema.convert");
 }
 
 // ---------------------------------------------------------------------------
@@ -2539,7 +2584,7 @@ test "luce.sema.call: the entry function cannot be called" {
 
 test "luce.sema.call: function arguments are positional, not named" {
     try expectRejected(
-        \\func f(a: Int):
+        \\func f(a: long):
         \\    return
         \\
         \\func main():
@@ -2571,7 +2616,7 @@ test "luce.sema.call: a builtin's arguments are positional" {
 // luce.sema.method — distinct paths
 // ---------------------------------------------------------------------------
 
-test "luce.sema.method: an unknown method on a List is rejected" {
+test "luce.sema.method: an unknown method on a list is rejected" {
     try expectRejected("func main():\n    var xs = [1]\n    xs.frobnicate()\n", "luce.sema.method");
 }
 
@@ -2610,11 +2655,11 @@ test "luce.sema.method: strings has no such function" {
     , "luce.sema.method");
 }
 
-test "luce.sema.import: String methods need import strings" {
+test "luce.sema.import: string methods need import strings" {
     try expectRejected("func main():\n    let s = \"x\"\n    let n = s.find(\"y\")\n", "luce.sema.import");
 }
 
-test "luce.sema.import: join on List(String) needs import strings" {
+test "luce.sema.import: join on list(string) needs import strings" {
     try expectRejected(
         \\func main():
         \\    let parts = ["a", "b"]
@@ -2643,10 +2688,10 @@ test "luce.sema.type: a routed strings call checks argument types" {
     , "luce.sema.type");
 }
 
-test "luce.sema.method: Map has no such method" {
+test "luce.sema.method: map has no such method" {
     try expectRejected(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    m.frobnicate()
         \\
     , "luce.sema.method");
@@ -2656,31 +2701,31 @@ test "luce.sema.method: Map has no such method" {
 // luce.sema.index — distinct paths
 // ---------------------------------------------------------------------------
 
-test "luce.sema.index: only a String is sliced, so a number is refused" {
+test "luce.sema.index: only a string is sliced, so a number is refused" {
     try expectRejected("func main():\n    let text = 1[0:1]\n", "luce.sema.index");
 }
 
-test "luce.sema.index: a String is sliced, not indexed" {
+test "luce.sema.index: a string is sliced, not indexed" {
     try expectRejected("func main():\n    let s = \"abc\"\n    let c = s[0]\n", "luce.sema.index");
 }
 
-test "luce.sema.index: a List indexes with an Int, not a Bool" {
+test "luce.sema.index: a list indexes with a long, not a bool" {
     try expectRejected("func main():\n    var xs = [1]\n    let a = xs[true]\n", "luce.sema.index");
 }
 
-test "luce.sema.index: an Array wants one index per dimension" {
+test "luce.sema.index: an array wants one index per dimension" {
     try expectRejected(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    let a = grid[0]
         \\
     , "luce.sema.index");
 }
 
-test "luce.sema.index: a Map cannot be sliced" {
+test "luce.sema.index: a map cannot be sliced" {
     try expectRejected(
         \\func main():
-        \\    var m = new Map(Int, Int)
+        \\    var m = new map(long, long)
         \\    let a = m[0:1]
         \\
     , "luce.sema.index");
@@ -2693,7 +2738,7 @@ test "luce.sema.index: a Map cannot be sliced" {
 test "luce.sema.construct: an unknown field is rejected" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = P(x = 1, z = 2)
@@ -2704,7 +2749,7 @@ test "luce.sema.construct: an unknown field is rejected" {
 test "luce.sema.construct: a field cannot be given twice" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = P(x = 1, x = 2)
@@ -2715,7 +2760,7 @@ test "luce.sema.construct: a field cannot be given twice" {
 test "luce.sema.construct: fields are named, not positional" {
     try expectRejected(
         \\struct P:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = P(1)
@@ -2726,7 +2771,7 @@ test "luce.sema.construct: fields are named, not positional" {
 test "luce.sema.construct: a function-namespace struct has no value fields" {
     try expectRejected(
         \\struct Util:
-        \\    func helper() -> Int:
+        \\    func helper() -> long:
         \\        return 1
         \\
         \\func main():
@@ -2739,12 +2784,12 @@ test "luce.sema.construct: a function-namespace struct has no value fields" {
 // luce.sema.new — distinct paths
 // ---------------------------------------------------------------------------
 
-test "luce.sema.new: new Array takes one to four dimension sizes" {
-    try expectRejected("func main():\n    var a = new Array(Int, 1, 2, 3, 4, 5)\n", "luce.sema.new");
+test "luce.sema.new: new array takes one to four dimension sizes" {
+    try expectRejected("func main():\n    var a = new array(long, 1, 2, 3, 4, 5)\n", "luce.sema.new");
 }
 
-test "luce.sema.new: array dimensions are Int" {
-    try expectRejected("func main():\n    var a = new Array(Int, true)\n", "luce.sema.new");
+test "luce.sema.new: array dimensions are long" {
+    try expectRejected("func main():\n    var a = new array(long, true)\n", "luce.sema.new");
 }
 
 // ---------------------------------------------------------------------------
@@ -2765,7 +2810,7 @@ test "luce.sema.loop: a non-iterable cannot drive for-each" {
 
 test "luce.sema.return: a typed function must return a value" {
     try expectRejected(
-        \\func f() -> Int:
+        \\func f() -> long:
         \\    return
         \\
         \\func main():
@@ -2809,7 +2854,7 @@ test "luce.sema.struct: mutually recursive structs have no finite value" {
 
 test "luce.sema.const: a call is not a constant" {
     try expectRejected(
-        \\func f() -> Int:
+        \\func f() -> long:
         \\    return 1
         \\
         \\let bad = f()
@@ -2840,7 +2885,7 @@ test "luce.sema.literal: an over-large integer literal is rejected" {
     try expectRejected("func main():\n    let a = 99999999999999999999\n", "luce.sema.literal");
 }
 
-test "luce.sema.literal: a negated literal past Int's minimum is rejected too" {
+test "luce.sema.literal: a negated literal past long's minimum is rejected too" {
     try expectRejected("func main():\n    let a = -9223372036854775809\n", "luce.sema.literal");
     try expectRejected("func main():\n    let a = 9223372036854775808\n", "luce.sema.literal");
 }
@@ -2856,7 +2901,7 @@ test "luce.sema.const: a non-finite float constant is rejected as well" {
     try expectRejected("let a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
-test "luce.sema.const: ord of an empty String has no codepoint to fold" {
+test "luce.sema.const: ord of an empty string has no codepoint to fold" {
     try expectRejected("let a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
@@ -2896,7 +2941,7 @@ test "luce.sema.nesting: a flat chain in a constant is bounded too" {
 }
 
 test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
-    // f"{x}{x}..." desugars to String(x) + String(x) + ..., which is the
+    // f"{x}{x}..." desugars to string(x) + string(x) + ..., which is the
     // same flat chain wearing different clothes.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
@@ -2943,7 +2988,7 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
     // As a condition.
     try expectMessage(
         \\func main():
-        \\    var flag: Bool? = none
+        \\    var flag: bool? = none
         \\    if flag:
         \\        return
         \\
@@ -2951,38 +2996,38 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
     // As a method receiver.
     try expectRejected(
         \\func main():
-        \\    var xs: List(Int)? = none
+        \\    var xs: list(long)? = none
         \\    xs.append(1)
         \\
     , "luce.sema.absent");
     // As something to index.
     try expectRejected(
         \\func main():
-        \\    var xs: List(Int)? = none
+        \\    var xs: list(long)? = none
         \\    let first = xs[0]
         \\
     , "luce.sema.index");
     // As something to iterate.
     try expectRejected(
         \\func main():
-        \\    var xs: List(Int)? = none
+        \\    var xs: list(long)? = none
         \\    for x in xs:
         \\        return
         \\
     , "luce.sema.loop");
     // As something to hand over, or to free.
     try expectRejected(
-        \\func consume(xs: give List(Int)):
+        \\func consume(xs: give list(long)):
         \\    free(xs)
         \\
         \\func main():
-        \\    var xs: List(Int)? = none
+        \\    var xs: list(long)? = none
         \\    consume(give xs)
         \\
     , "luce.sema.absent");
     try expectRejected(
         \\func main():
-        \\    var xs: List(Int)? = none
+        \\    var xs: list(long)? = none
         \\    free(xs)
         \\
     , "luce.sema.absent");
@@ -2991,7 +3036,7 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
 test "luce.sema.absent: a field is not a local, so it is told to bind a name" {
     try expectMessage(
         \\struct Bag:
-        \\    items: List(Int)?
+        \\    items: list(long)?
         \\
         \\func main():
         \\    let bag = Bag(items = none)
@@ -3008,13 +3053,13 @@ test "luce.sema.absent: none needs somewhere to be none of" {
     , "luce.sema.absent");
     try expectMessage(
         \\func main():
-        \\    assert(String(none) == "")
+        \\    assert(string(none) == "")
         \\
     , "none needs a type here");
     // A place that is always there cannot be none.
     try expectRejected(
         \\func main():
-        \\    var n: Int = none
+        \\    var n: long = none
         \\
     , "luce.sema.absent");
     try expectRejected(
@@ -3048,14 +3093,14 @@ test "luce.sema.absent: none needs somewhere to be none of" {
 test "luce.sema.absent: a test or a fallback that can never fire is refused" {
     try expectMessage(
         \\func main():
-        \\    var n: Int? = none
+        \\    var n: long? = none
         \\    n = 4
         \\    assert(n != none)
         \\
     , "n already holds a value here");
     try expectMessage(
         \\func main():
-        \\    var n: Int? = none
+        \\    var n: long? = none
         \\    n = 4
         \\    assert((n else 0) == 4)
         \\
@@ -3072,19 +3117,19 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
     // left, so the narrowing from outside does not hold inside.
     try expectMessage(
         \\func main():
-        \\    var n: Int? = 1
+        \\    var n: long? = 1
         \\    var total = 0
         \\    while total < 10:
         \\        total = total + n
         \\        n = none
         \\
-    , "operands of + are Int and Int?");
+    , "operands of + are long and long?");
     // One arm narrowing is not both arms narrowing.  (Where *both*
     // arms do — `if n == none: n = 1` — the join keeps it, and that is
     // the point of a join.)
     try expectMessage(
-        \\func maybe(flag: Bool) -> Int:
-        \\    var n: Int? = none
+        \\func maybe(flag: bool) -> long:
+        \\    var n: long? = none
         \\    if flag:
         \\        n = 1
         \\    return n * 2
@@ -3092,10 +3137,10 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\func main():
         \\    assert(maybe(true) == 2)
         \\
-    , "operands of * are Int? and Int");
+    , "operands of * are long? and long");
     // A call cannot narrow: only the name itself.
     try expectRejected(
-        \\func check(n: Int?) -> Bool:
+        \\func check(n: long?) -> bool:
         \\    return n != none
         \\
         \\func main():
@@ -3109,7 +3154,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
 test "luce.parse.type: T?? is refused where it is written" {
     try expectRejected(
         \\func main():
-        \\    var n: Int?? = none
+        \\    var n: long?? = none
         \\
     , "luce.parse.type");
 }
@@ -3117,17 +3162,17 @@ test "luce.parse.type: T?? is refused where it is written" {
 test "luce.sema.type: a container element may not be optional" {
     try expectMessage(
         \\func main():
-        \\    var xs = new List(Int?)
+        \\    var xs = new list(long?)
         \\
     , "a list element cannot be optional");
     try expectRejected(
         \\func main():
-        \\    var m = new Map(String, Int?)
+        \\    var m = new map(string, long?)
         \\
     , "luce.sema.type");
     try expectRejected(
         \\func main():
-        \\    var grid = new Array(Int?, 2)
+        \\    var grid = new array(long?, 2)
         \\
     , "luce.sema.type");
 }
@@ -3150,7 +3195,7 @@ test "luce.sema.limit: reporting is capped so one broken file cannot flood" {
     try text.appendSlice(testing.allocator, "func main():\n");
     for (0..5000) |index| {
         var line: [64]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let a{d}: Int = \"x\"\n", .{index}));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    let a{d}: long = \"x\"\n", .{index}));
     }
     var result = try compile_mod.compile(testing.allocator, text.items, script);
     defer result.deinit();
@@ -3171,8 +3216,8 @@ test "luce.sema.limit: reporting is capped so one broken file cannot flood" {
 test "every statement is checked, not just the first that fails" {
     var result = try compile_mod.compile(testing.allocator,
         \\func main():
-        \\    let a: Int = "x"
-        \\    let b: Bool = 1
+        \\    let a: long = "x"
+        \\    let b: bool = 1
         \\    let c = 1 < true
         \\
     , script);
@@ -3234,7 +3279,7 @@ test "a misspelled local name suggests the one in scope" {
 
 test "a misspelled function, field, type, and method each suggest the real one" {
     try expectMessage(
-        \\func compute(a: Int) -> Int:
+        \\func compute(a: long) -> long:
         \\    return a
         \\
         \\func main():
@@ -3243,20 +3288,24 @@ test "a misspelled function, field, type, and method each suggest the real one" 
     , "did you mean compute?");
     try expectMessage(
         \\struct Point:
-        \\    across: Int
-        \\    down: Int
+        \\    across: long
+        \\    down: long
         \\
         \\func main():
         \\    let p = Point(across = 1, down = 2)
         \\    assert(p.acros == 1)
         \\
     , "did you mean across?");
+    // The builtin names are lowercase, so a typo of one is lowercase
+    // too.  A reader who writes the retired TitleCase spelling exactly
+    // is answered by name instead, which is a better sentence than any
+    // guess (docs/TYPES.md D8) — the spec for it is below.
     try expectMessage(
         \\func main():
-        \\    let a: Strng = "x"
+        \\    let a: strng = "x"
         \\    assert(len(a) == 1)
         \\
-    , "did you mean String?");
+    , "did you mean string?");
     try expectMessage(
         \\func main():
         \\    var xs = [1, 2]
@@ -3269,8 +3318,8 @@ test "a name too short to guess from suggests nothing" {
     // `z` is one edit from `x` and means nothing like it.
     try expectMessage(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
         \\    let p = Point(x = 1, y = 2)
@@ -3281,31 +3330,31 @@ test "a name too short to guess from suggests nothing" {
 
 test "a function that can fall off the end names the type it owes" {
     try expectMessage(
-        \\func pick(a: Int) -> Float:
+        \\func pick(a: long) -> double:
         \\    if a > 0:
         \\        return 1.0
         \\
         \\func main():
         \\    assert(pick(1) == 1.0)
         \\
-    , "pick must return Float on every path");
+    , "pick must return double on every path");
 }
 
 test "storing a borrowed parameter is not told to give it" {
     // give on a borrow is its own error (S12), so advising it would
     // only earn the reader a second message one keystroke later.
     try expectMessage(
-        \\func stash(index: Map(String, List(Int)), hits: List(Int)):
+        \\func stash(index: map(string, list(long)), hits: list(long)):
         \\    index["latest"] = hits
         \\
         \\func main():
-        \\    var m = new Map(String, List(Int))
+        \\    var m = new map(string, list(long))
         \\
     , "borrowed parameter and can never be given away");
 }
 
 test "an f-string hole is underlined, not the whole literal" {
-    // The synthesized `String(...)` used to carry the whole f-string's
+    // The synthesized `string(...)` used to carry the whole f-string's
     // span, so a reader with four holes on one line was shown all four
     // and told one of them was wrong.
     try expectHostSayingAt(
@@ -3319,7 +3368,7 @@ test "an f-string hole is underlined, not the whole literal" {
         \\
     ,
         "luce.sema.convert",
-        "String() converts Int, Float, Bool, or String, not List(Int)",
+        "string() converts long, double, bool, or string, not list(long)",
         6,
         30,
     );
@@ -3364,7 +3413,7 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     // signature, recompiles, and produces the real message.
     const say = "try applies to a call that can fail, and this one cannot; drop the try";
     try expectOnlySayingAt(
-        \\func plain() -> Int:
+        \\func plain() -> long:
         \\    return 1
         \\
         \\func main():
@@ -3379,7 +3428,7 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     );
     // The arm that was always right, kept honest.
     try expectOnlySayingAt(
-        \\func plain() -> Int:
+        \\func plain() -> long:
         \\    return 1
         \\
         \\func main() -> !:
@@ -3394,7 +3443,7 @@ test "luce.sema.fallible: a try with nothing to try says so, in either kind of f
     );
     // And a try that really does hand an error up still says that.
     try expectOnlySayingAt(
-        \\func risky() -> Int!:
+        \\func risky() -> long!:
         \\    return 1
         \\
         \\func main():
@@ -3417,7 +3466,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
     // found the keyword 'catch'", which leaves the reader to work out
     // which of the two catch forms they have met.
     try expectSayingAt(
-        \\func risky() -> Int!:
+        \\func risky() -> long!:
         \\    return 1
         \\
         \\func main():
@@ -3433,7 +3482,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
         21,
     );
     try expectSayingAt(
-        \\func risky() -> Int!:
+        \\func risky() -> long!:
         \\    return 1
         \\
         \\func main():
@@ -3451,7 +3500,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
     // Both fixes the message names actually compile.
     var fallback = try compile_mod.compile(
         testing.allocator,
-        \\func risky() -> Int!:
+        \\func risky() -> long!:
         \\    return 1
         \\
         \\func main():
@@ -3467,7 +3516,7 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
 
     var guarded = try compile_mod.compile(
         testing.allocator,
-        \\func risky() -> Int!:
+        \\func risky() -> long!:
         \\    return 1
         \\
         \\func main():
@@ -3528,7 +3577,7 @@ test "luce.sema.unreachable: each terminator is named, with its line" {
 test "luce.sema.unreachable: an if counts only when both arms leave" {
     // Both arms return, so nothing below the `if` runs.
     try expectOnlySayingAt(
-        \\func pick(n: Int) -> Int:
+        \\func pick(n: long) -> long:
         \\    if n > 0:
         \\        return 1
         \\    else:
@@ -3550,7 +3599,7 @@ test "luce.sema.unreachable: an if counts only when both arms leave" {
     // written in.
     var guard = try compile_mod.compile(
         testing.allocator,
-        \\func pick(n: Int) -> Int:
+        \\func pick(n: long) -> long:
         \\    if n > 0:
         \\        return 1
         \\    let reached = n
@@ -3583,7 +3632,7 @@ test "a terminator as the last statement of its block is the ordinary case" {
     // an arm with code after the `if`.
     var result = try compile_mod.compile(
         testing.allocator,
-        \\func first(n: Int) -> Int:
+        \\func first(n: long) -> long:
         \\    var i = 0
         \\    while i < n:
         \\        if i == 2:
@@ -3612,7 +3661,7 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     // zero and a register to build.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
     for (1..21) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
@@ -3621,11 +3670,11 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     try expectRejected(text.items, "luce.sema.struct");
 }
 
-/// `struct S0: v: Int`, then `levels` layouts of two fields each, so
+/// `struct S0: v: long`, then `levels` layouts of two fields each, so
 /// `S{levels}` is exactly `2^levels` values.  The header of `S{k}` is
 /// on line `3k` and its first field on line `3k + 1`.
 fn doublingStructs(text: *std.ArrayList(u8), levels: usize) !void {
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
     for (1..levels + 1) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(
@@ -3662,7 +3711,7 @@ test "luce.sema.struct: the value limit is exact in both directions" {
             "luce.sema.struct",
             "struct S13 always holds more than 4096 values once its nested structs are counted; " ++
                 "a is S12, which is 4096 of them on its own; write a: S12? to hold those only when " ++
-                "they are there, or move bulk data into a List, Map, or Array, which is one reference",
+                "they are there, or move bulk data into a list, map, or array, which is one reference",
             40,
             5,
         );
@@ -3670,22 +3719,22 @@ test "luce.sema.struct: the value limit is exact in both directions" {
 }
 
 test "luce.sema.struct: a struct too wide from its own fields names no field" {
-    // 4097 Int fields: nothing is nested, so there is no widest
+    // 4097 long fields: nothing is nested, so there is no widest
     // struct field to point at and the shorter sentence is the honest
-    // one.  Naming `f0: Int` as the culprit would be advice that does
+    // one.  Naming `f0: long` as the culprit would be advice that does
     // not work.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
     try text.appendSlice(testing.allocator, "struct Wide:\n");
     for (0..4097) |index| {
         var line: [32]u8 = undefined;
-        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: Int\n", .{index}));
+        try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "    f{d}: long\n", .{index}));
     }
     try text.appendSlice(testing.allocator, "func main():\n    var g: Wide\n");
     try expectOnlySayingAt(
         text.items,
         "luce.sema.struct",
-        "struct Wide always holds more than 4096 values; bulk data belongs in a List, Map, or Array, which is one reference",
+        "struct Wide always holds more than 4096 values; bulk data belongs in a list, map, or array, which is one reference",
         1,
         1,
     );
@@ -3711,7 +3760,7 @@ test "the value limit counts what a struct always holds, so `?` is an answer" {
 
     var optional: std.ArrayList(u8) = .empty;
     defer optional.deinit(testing.allocator);
-    try optional.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    try optional.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
     for (1..14) |level| {
         var line: [64]u8 = undefined;
         try optional.appendSlice(testing.allocator, try std.fmt.bufPrint(
@@ -3730,7 +3779,7 @@ test "the value limit counts what a struct always holds, so `?` is an answer" {
     var recursive = try compile_mod.compile(
         testing.allocator,
         \\struct Node:
-        \\    value: Int
+        \\    value: long
         \\    next: Node?
         \\
         \\func main():
@@ -3751,7 +3800,7 @@ test "a wide struct graph with no cycle compiles, and quickly" {
     // path is exponential here; both are settled once instead.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
-    try text.appendSlice(testing.allocator, "struct S0:\n    v: Int\n");
+    try text.appendSlice(testing.allocator, "struct S0:\n    v: long\n");
     for (1..11) |level| {
         var line: [64]u8 = undefined;
         try text.appendSlice(testing.allocator, try std.fmt.bufPrint(&line, "struct S{d}:\n    a: S{d}\n    b: S{d}\n", .{ level, level - 1, level - 1 }));
@@ -3775,7 +3824,7 @@ test "luce.sema.struct: a cycle through a wide graph is still found" {
         \\
         \\struct C:
         \\    back: A
-        \\    value: Int
+        \\    value: long
         \\
         \\func main():
         \\    assert(true)
@@ -3901,7 +3950,7 @@ test "luce.sema.fallible: error() needs a caller that said it can fail" {
 }
 
 test "luce.sema.call: a fallible builtin that answers nothing has nothing to test" {
-    // What `if files.write_lines(...)` became.  There is no Bool left
+    // What `if files.write_lines(...)` became.  There is no bool left
     // to swallow, so the mistake is unwritable rather than silent.
     try expectHostError(
         \\func main() -> !:
@@ -3913,13 +3962,13 @@ test "luce.sema.call: a fallible builtin that answers nothing has nothing to tes
 
 test "luce.sema.own: the two sides of catch agree on ownership" {
     try expectHostError(
-        \\func load(path: String) -> List(String)!:
-        \\    let lines = new List(String)
+        \\func load(path: string) -> list(string)!:
+        \\    let lines = new list(string)
         \\    lines.append(try file_read(path))
         \\    return lines
         \\
         \\func main():
-        \\    let kept = new List(String)
+        \\    let kept = new list(string)
         \\    let got = load("notes.txt") catch kept
         \\    free(kept)
         \\
@@ -3938,12 +3987,12 @@ test "luce.parse.expected: catch guards a plain assignment, not a compound one" 
 
 test "luce.sema.main: a script entry may say ! and nothing else" {
     try expectRejected(
-        \\func main() -> Int!:
+        \\func main() -> long!:
         \\    return 1
         \\
     , "luce.sema.main");
     try expectRejected(
-        \\func main() -> Int:
+        \\func main() -> long:
         \\    return 1
         \\
     , "luce.sema.main");
@@ -3997,8 +4046,8 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // A field of a let-bound struct.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
-        \\    y: Int
+        \\    x: long
+        \\    y: long
         \\
         \\func main():
         \\    let p = Point(x = 1, y = 2)
@@ -4010,7 +4059,7 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // many steps down the leaf sits.
     try expectSaying(
         \\struct Inner:
-        \\    value: Int
+        \\    value: long
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -4024,7 +4073,7 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // And compound assignment through a chain is an assignment too.
     try expectSaying(
         \\struct Inner:
-        \\    value: Int
+        \\    value: long
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -4051,7 +4100,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     // nested place; each reaches it by its own path.
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    let p = Point(x = 1)
@@ -4060,7 +4109,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     , "luce.sema.field", "Point has no field z");
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
         \\    var p = Point(x = 1)
@@ -4069,7 +4118,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     , "luce.sema.field", "Point has no field z");
     try expectSaying(
         \\struct Inner:
-        \\    value: Int
+        \\    value: long
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -4082,7 +4131,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
     // A near miss is spelled out; a name nothing resembles is not.
     try expectSaying(
         \\struct Point:
-        \\    value: Int
+        \\    value: long
         \\
         \\func main():
         \\    let p = Point(value = 1)
@@ -4094,7 +4143,7 @@ test "luce.sema.field: an unknown field is named wherever the chain meets it" {
 test "luce.sema.type: a nested place and a compound assignment check their own types" {
     try expectSaying(
         \\struct Inner:
-        \\    value: Int
+        \\    value: long
         \\
         \\struct Outer:
         \\    inner: Inner
@@ -4103,14 +4152,14 @@ test "luce.sema.type: a nested place and a compound assignment check their own t
         \\    var held = Outer(inner = Inner(value = 1))
         \\    held.inner.value = 1.5
         \\
-    , "luce.sema.type", "this place holds Int but the value is Float");
+    , "luce.sema.type", "this place holds long but the value is double");
     // `compoundCombine`'s own "needs matching types" has no case
     // here, and cannot: all four callers — name, field, element,
     // chain — compare the place with the value before they combine,
     // each in its own words, so the helper's copy of the check is
     // never the one that fires.  What the helper *does* answer for is
     // the place that has no compound form at all, which is where a
-    // Bool lands.
+    // bool lands.
     try expectSaying(
         \\func main():
         \\    var flags = [true, false]
@@ -4130,9 +4179,9 @@ test "luce.sema.type: an empty list literal needs somewhere to learn its element
     , "luce.sema.type", "an empty [] needs an annotation");
     try expectSaying(
         \\func main():
-        \\    var xs: Int = []
+        \\    var xs: long = []
         \\
-    , "luce.sema.type", "[] builds a List, but xs is annotated Int");
+    , "luce.sema.type", "[] builds a list, but xs is annotated long");
     try expectSaying(
         \\func main():
         \\    let size = len([])
@@ -4143,22 +4192,22 @@ test "luce.sema.type: an empty list literal needs somewhere to learn its element
 test "luce.sema.index: every shape of index says what it will accept" {
     try expectSaying(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2, 2, 2)
+        \\    var grid = new array(long, 2, 2, 2, 2)
         \\    let bad = grid[0, 0, 0, 0, 0]
         \\
     , "luce.sema.index", "at most 4 index dimensions");
     try expectSaying(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    let bad = grid[0, 1.5]
         \\
-    , "luce.sema.index", "array indices are Int");
+    , "luce.sema.index", "array indices are long");
     try expectSaying(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    let bad = b[0]
         \\
-    , "luce.sema.index", "Builder has no index");
+    , "luce.sema.index", "builder has no index");
     // A slice's bounds are a *type* fault rather than an indexing one:
     // what is wrong is the value written, not the shape of the access.
     try expectSaying(
@@ -4166,10 +4215,10 @@ test "luce.sema.index: every shape of index says what it will accept" {
         \\    var xs = [1, 2, 3]
         \\    let bad = xs[0:1.5]
         \\
-    , "luce.sema.type", "slice bounds are Int");
+    , "luce.sema.type", "slice bounds are long");
     try expectSaying(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    let bad = b[0:1]
         \\
     , "luce.sema.index", "cannot be sliced");
@@ -4178,7 +4227,7 @@ test "luce.sema.index: every shape of index says what it will accept" {
 test "luce.sema.loop: for takes a rank-1 array and nothing wider" {
     try expectSaying(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    for cell in grid:
         \\        let unused = cell
         \\
@@ -4191,34 +4240,34 @@ test "luce.sema.method: each receiver kind names the methods it has" {
         \\    var s = "abc"
         \\    let bad = s.byte_at("x")
         \\
-    , "luce.sema.type", "argument 1 of byte_at is Int, got String", 3, 25);
+    , "luce.sema.type", "argument 1 of byte_at is long, got string", 3, 25);
     try expectSayingAt(
         \\func main():
         \\    var s = "abc"
         \\    let bad = s.find_byte("x", 0)
         \\
-    , "luce.sema.type", "argument 1 of find_byte is Int, got String", 3, 27);
+    , "luce.sema.type", "argument 1 of find_byte is long, got string", 3, 27);
     try expectSaying(
         \\func main():
-        \\    var grid = new Array(Int, 2, 2)
+        \\    var grid = new array(long, 2, 2)
         \\    grid.sort()
         \\
     , "luce.sema.method", "only rank-1 arrays have sort");
     try expectSaying(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let bad = m.hass("a")
         \\
     , "luce.sema.method", "did you mean has?");
     try expectSaying(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    b.appen("x")
         \\
     , "luce.sema.method", "did you mean append?");
     try expectSaying(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    b.zzzzzz()
         \\
     , "luce.sema.method", "(append append_ascii build clear)");
@@ -4238,10 +4287,10 @@ test "luce.sema.method: each receiver kind names the methods it has" {
 //
 // `lowerUserCall` has always written two different sentences for two
 // different mistakes — "add takes 2 arguments, got 1" for a count and
-// "argument 2 of add is Int, got String" for a type, the latter
+// "argument 2 of add is long, got string" for a type, the latter
 // underlined at the argument itself.  The built-in methods wrote one
 // sentence for both, phrased as a count: `xs.append("hi")` on a
-// `List(Int)` was told "append takes one element value" while holding
+// `list(long)` was told "append takes one element value" while holding
 // exactly one element value, and the caret covered the whole call.
 //
 // These pin the sentence, the code and the caret column together,
@@ -4251,14 +4300,14 @@ test "luce.sema.method: each receiver kind names the methods it has" {
 test "luce.sema.method: a count mistake names the method and both counts" {
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.append(1, 2)
         \\
     , "luce.sema.method", "append takes 1 argument, got 2", 3, 5);
     // Zero is a count like any other, and reads differently from two.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.append()
         \\
     , "luce.sema.method", "append takes 1 argument, got 0", 3, 5);
@@ -4266,7 +4315,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
     // one sentence for every arity is one sentence to keep true.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.sort(1)
         \\
     , "luce.sema.method", "sort takes 0 arguments, got 1", 3, 5);
@@ -4276,7 +4325,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
     // per-method count check had always been able to answer it.
     try expectSayingAt(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let x = m.get("a", 1, 2)
         \\
     , "luce.sema.method", "get takes 2 arguments, got 3", 3, 13);
@@ -4285,32 +4334,32 @@ test "luce.sema.method: a count mistake names the method and both counts" {
 test "luce.sema.type: a wrong argument type names the position, both types, and underlines the argument" {
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.append("hello")
         \\
-    , "luce.sema.type", "argument 1 of append is Int, got String", 3, 15);
+    , "luce.sema.type", "argument 1 of append is long, got string", 3, 15);
     // The second slot is reported as the second slot, and the caret
     // moves to it rather than staying on the receiver.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(String)
+        \\    var xs = new list(string)
         \\    xs.insert("zero", 0)
         \\
-    , "luce.sema.type", "argument 1 of insert is Int, got String", 3, 15);
+    , "luce.sema.type", "argument 1 of insert is long, got string", 3, 15);
     try expectSayingAt(
         \\func main():
-        \\    var b = new Builder()
+        \\    var b = new builder()
         \\    b.append(65)
         \\
-    , "luce.sema.type", "argument 1 of append is String, got Int", 3, 14);
+    , "luce.sema.type", "argument 1 of append is string, got long", 3, 14);
     // The map says what its key and value types *are*, rather than
     // calling them "the map's key and value types".
     try expectSayingAt(
         \\func main():
-        \\    var m = new Map(String, Int)
+        \\    var m = new map(string, long)
         \\    let x = m.get(1, 2)
         \\
-    , "luce.sema.type", "argument 1 of get is String, got Int", 3, 19);
+    , "luce.sema.type", "argument 1 of get is string, got long", 3, 19);
 }
 
 test "luce.sema.type: a T? argument to a method earns the same advice it earns anywhere" {
@@ -4319,17 +4368,17 @@ test "luce.sema.type: a T? argument to a method earns the same advice it earns a
     // value" and no mention of absence at all.  It is now the one
     // `lowerUserCall` writes, down to the name in the parentheses.
     try expectSayingAt(
-        \\func maybe() -> Int?:
+        \\func maybe() -> long?:
         \\    return none
         \\
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    let m = maybe()
         \\    xs.append(m)
         \\
     ,
         "luce.sema.type",
-        "argument 1 of append is Int, got Int?; test it first (if m != none:) or supply a fallback (m else …)",
+        "argument 1 of append is long, got long?; test it first (if m != none:) or supply a fallback (m else …)",
         7,
         15,
     );
@@ -4354,34 +4403,34 @@ test "luce.sema.call: a builtin counts its arguments the way a function does" {
 }
 
 test "luce.sema.method: a missing method names the receiver it is missing from" {
-    // Map and Builder always said which they were; List and Array
+    // map and builder always said which they were; list and array
     // said "no method sortt here", where "here" named nothing.
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.sortt()
         \\
-    , "luce.sema.method", "List has no method sortt; did you mean sort?", 3, 5);
+    , "luce.sema.method", "list has no method sortt; did you mean sort?", 3, 5);
     try expectSayingAt(
         \\func main():
-        \\    var xs = new List(Int)
+        \\    var xs = new list(long)
         \\    xs.zzzzzz()
         \\
     ,
         "luce.sema.method",
-        "List has no method zzzzzz (has append insert remove pop sort reverse find contains clear; join lives in strings)",
+        "list has no method zzzzzz (has append insert remove pop sort reverse find contains clear; join lives in strings)",
         3,
         5,
     );
-    // An Array is offered the methods an Array has, not a List's.
+    // An array is offered the methods an array has, not a list's.
     try expectSayingAt(
         \\func main():
-        \\    var grid = new Array(Int, 4)
+        \\    var grid = new array(long, 4)
         \\    grid.zzzzzz()
         \\
-    , "luce.sema.method", "Array has no method zzzzzz (has dim fill sort reverse find contains)", 3, 5);
-    // A String method routes through the strings module, but the
-    // reader wrote a String — answering "strings has no function"
+    , "luce.sema.method", "array has no method zzzzzz (has dim fill sort reverse find contains)", 3, 5);
+    // A string method routes through the strings module, but the
+    // reader wrote a string — answering "strings has no function"
     // names a desugaring target they never typed.
     try expectSayingAt(
         \\import std.strings
@@ -4390,12 +4439,12 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
         \\    let s = "x"
         \\    let n = s.frobnicate()
         \\
-    , "luce.sema.method", "String has no method frobnicate, and neither has the strings module", 5, 13);
+    , "luce.sema.method", "string has no method frobnicate, and neither has the strings module", 5, 13);
 }
 
 test "luce.sema.call: a user function agrees with itself about one argument" {
     try expectSayingAt(
-        \\func twice(a: Int) -> Int:
+        \\func twice(a: long) -> long:
         \\    return a * 2
         \\
         \\func main():
@@ -4410,8 +4459,8 @@ test "luce.sema.own: the checks that have no name to suggest still say what to d
     // The third is what a container element read reaches.
     try expectSaying(
         \\func main():
-        \\    var outer = new List(List(Int))
-        \\    var source = new List(List(Int))
+        \\    var outer = new list(list(long))
+        \\    var source = new list(list(long))
         \\    outer.append(source[0])
         \\    free(outer)
         \\    free(source)
@@ -4421,13 +4470,13 @@ test "luce.sema.own: the checks that have no name to suggest still say what to d
     // Both arms of `else` decide ownership together, because the
     // binding that receives the answer either owns or does not.
     try expectHostSaying(
-        \\func pick(which: Bool) -> List(Int)?:
+        \\func pick(which: bool) -> list(long)?:
         \\    if which:
-        \\        return new List(Int)
+        \\        return new list(long)
         \\    return none
         \\
         \\func main():
-        \\    let kept = new List(Int)
+        \\    let kept = new list(long)
         \\    let got = pick(true) else kept
         \\    free(kept)
         \\
@@ -4439,8 +4488,8 @@ test "luce.sema.own: the checks that have no name to suggest still say what to d
         \\import std.strings
         \\
         \\func main():
-        \\    var parts = new List(String)
-        \\    var other = new List(String)
+        \\    var parts = new list(string)
+        \\    var other = new list(string)
         \\    let joined = parts.join(give other)
         \\    free(parts)
         \\
@@ -4458,34 +4507,34 @@ test "luce.sema.name: a port is not a place, however it is written" {
 test "luce.sema.type: a written type is checked against the arguments it may take" {
     try expectSaying(
         \\func main():
-        \\    var x: Int(String) = 1
+        \\    var x: long(string) = 1
         \\
-    , "luce.sema.type", "Int takes no type arguments");
+    , "luce.sema.type", "long takes no type arguments");
     try expectSaying(
         \\func main():
-        \\    var m: Map(Int) = new Map(Int, Int)
+        \\    var m: map(long) = new map(long, long)
         \\
-    , "luce.sema.type", "Map takes key and value types");
+    , "luce.sema.type", "map takes key and value types");
     try expectSaying(
         \\func main():
-        \\    var a: Array(Int) = new Array(Int, 2)
+        \\    var a: array(long) = new array(long, 2)
         \\
-    , "luce.sema.type", "Array spells element and shape");
+    , "luce.sema.type", "array spells element and shape");
     try expectSaying(
         \\func main():
-        \\    var b: Builder(Int) = new Builder()
+        \\    var b: builder(long) = new builder()
         \\
-    , "luce.sema.type", "Builder takes no type arguments");
+    , "luce.sema.type", "builder takes no type arguments");
     try expectSaying(
         \\struct Point:
-        \\    x: Int
+        \\    x: long
         \\
         \\func main():
-        \\    var p: Point(Int) = Point(x = 1)
+        \\    var p: Point(long) = Point(x = 1)
         \\
     , "luce.sema.type", "Point takes no type arguments");
     // `None?` has no test because it has no input: `resolveBase`
-    // answers Bool, Int, Float, String, a struct or a heap type and
+    // answers bool, long, double, string, a struct or a heap type and
     // nothing else, and `Type.optionalOf` refuses only `none` and a
     // second `?`.  Writing `None?` is `unknown type None` one step
     // earlier.  The guard stays because it is the null arm of a shared
