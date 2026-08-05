@@ -186,13 +186,15 @@ ratified roadmap (named args, visibility, bitwise/hex) come **enums**,
 then **union**, "and I think we're good."  Enums lean C: explicit
 member values (bytes or numbers) when written, sequential defaults
 when not; the design memo brings the backing-type, conversion, and
-exhaustive-dispatch questions.  Union's one deciding question is
-**tagged vs raw**, flagged now with the safety argument — a raw
-overlay is an unchecked cast in a language whose every guarantee
-assumes values are what they say, while a tagged union is what
-FAILURE.md was missing when it refused `Result<T, E>` — and with the
-bits-reinterpretation view (TYPES.md D4) as the principled home for
-genuine raw-overlay needs.
+exhaustive-dispatch questions.  Union's one deciding question —
+tagged vs raw — is **ratified: tagged** (owner, 2026-08-04: "Tagged
+unions obviously").  A raw overlay would have been an unchecked cast
+in a language whose every guarantee assumes values are what they say;
+the bits-reinterpretation view (TYPES.md D4) remains the principled
+home for genuine raw-overlay needs.  The design memo, when its turn
+comes, designs the tagged world: payload-per-member over the enum
+machinery, checked access, exhaustive dispatch, and the question of
+whether `T?` becomes a two-member tagged union under the hood.
 
 
 No enums, no tagged unions, no `match`.  This is the second-order
