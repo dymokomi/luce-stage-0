@@ -1,0 +1,9 @@
+namespace-called-as-method	src/luce/04_semantics/builder.zig	s/if \(info.receiver == .not\) \{/if (false) {/
+double-move-check	src/luce/04_semantics/builder.zig	s/if \(std.mem.indexOfScalar\(LocalId, moved.items, found.info.local\) != null\) \{/if (false) {/
+shape-two-positions	src/luce/04_semantics/builder.zig	s/info.results.len >= 2 and !as_statement and shape_position != .bind/false/
+var-self-static-form	src/luce/04_semantics/builder.zig	s/if \(info.receiver == .writes\) \{/if (false) {/
+var-self-let-receiver	src/luce/04_semantics/builder.zig	s/orelse return null;\n                if \(!found.info.mutable\)/orelse return null;\n                if (false)/
+bind-arity	src/luce/04_semantics/builder.zig	s/if \(shape.fields.len != bind.names.len\) \{/if (false) {/
+return-arity	src/luce/04_semantics/builder.zig	s/if \(returned.values.len != self.results.len\)/if (false)/
+write-back-copies-storage	src/luce/04_semantics/builder.zig	s/registers\[0\] = try self.ownedForStore\(.\{\n            .register = try self.code.load\(receiver.info.local\),\n            .value_type = self.channel\[0\],\n        \}\);/registers[0] = try self.code.load(receiver.info.local);/
+channel-temporary-parked	src/luce/04_semantics/builder.zig	s/try self.parkFreshStorage\(.\{\n            .register = answered.register,\n            .value_type = info.return_type,\n        \}\);//
