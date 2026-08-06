@@ -169,7 +169,7 @@ pub const Lowering = struct {
 
     // Reading back what was recorded ---------------------------------------
 
-    pub fn resultType(self: *const Lowering, register: Register) Type {
+    fn resultType(self: *const Lowering, register: Register) Type {
         return self.result_types.items[register];
     }
 

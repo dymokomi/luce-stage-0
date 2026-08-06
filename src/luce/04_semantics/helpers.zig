@@ -319,7 +319,7 @@ pub const Suggestion = struct {
 /// live cell exceeds `limit` — callers only ever ask "is this within
 /// a few edits", so the exact value past the limit is never read.
 /// Returns `limit + 1` for "further than that".
-pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
+fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     if (a.len > max_suggestion_length or b.len > max_suggestion_length) return limit + 1;
     const difference = if (a.len > b.len) a.len - b.len else b.len - a.len;
     if (difference > limit) return limit + 1;

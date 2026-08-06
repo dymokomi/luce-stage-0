@@ -850,7 +850,7 @@ pub const FunctionBuilder = struct {
     /// (docs/STRINGS.md).
     pub const StorageClass = enum { owns, borrows };
 
-    pub fn declareLocal(
+    fn declareLocal(
         self: *FunctionBuilder,
         name: []const u8,
         local_type: Type,
