@@ -973,7 +973,7 @@ That is the only edit this memo makes to the previous one.
 |---|---|---|
 | `calc.luc:20` | `struct Step` + 8 constructions + 25 field reads | `-> (Int, Int)`; the struct is **deleted** |
 | `std/math.luc:229-251` | `seed` allocating a `List(Int)`; `random_step`, `random`, `random_int` all taking it | `struct Rng` with `func next(var self) -> Int` (§5) |
-| `dice.luc:25-30` | `math.seed(seed)` + `math.random_int(rng, 1, 7)` | `Rng(state = seed)` + `rng.in_range(1, 7)` |
+| `dice.luc:25-30` | `math.seed(seed)` + `math.random_int(rng, 1, 7)` | `Rng(state = seed)` + `rng.in_range(1, 7)` — since spelled `math.rng(seed)`, once `state` took its `private` marker (docs/VISIBILITY.md §6) |
 | `wordcount.luc:34-41, 65` | `heaviest -> String`, count re-looked-up | `heaviest -> (String, Int)`; one hash lookup deleted |
 | `std/math.luc:159-174` | `vmin` and `vmax`, two traversals | a `minmax -> (Float?, Float?)` beside them, one traversal; `bench/stats.luc:34-35` and `programs/stats.luc:21-24` become its users, the second losing a whole sort |
 | `editor.luc:212-299` | `Draw.emit -> Int`; six call sites set `at` from a bound they computed themselves | `Draw.emit -> (Int, Int)` — the columns used *and* where it stopped; the clip argument stops being load-bearing |

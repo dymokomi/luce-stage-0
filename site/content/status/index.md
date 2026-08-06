@@ -165,11 +165,19 @@ workaround-dense and the proof that the language moved.
    nothing consumed one, and it was one of the two things keeping the
    backend from lowering everything a program can say. The backend is
    now total. A real `Bytes` would be designed fresh.
-9. **No integer-division spelling.** A decrement is written
-   `(tape[pointer] + 255) % 256`; neither `//` nor `rem_euclid`
-   exists.
-10. **No visibility.** The standard library leaks two internal
-    helpers. Cheap, and it matters before userland libraries exist.
+9. ~~**No integer-division spelling.**~~ **Shipped.** `//` is floor
+   division, `%` is the modulus that pairs with it, and `/` is real
+   division; the decrement that was written
+   `(tape[pointer] + 255) % 256` is `(tape[pointer] - 1) % 256`, the
+   spelling its author meant.
+10. ~~**No visibility.**~~ **Shipped.** A declaration is public unless
+    it says `private` — per declaration, or as an indented region
+    inside a struct — and touching a marked name from outside its
+    file is `luce.sema.private`, answered as *private*, never as
+    *unknown*. The two leaked string helpers are marked, `Rng.state`
+    is too, and `math.rng(seed)` is the constructor the idiom that
+    reached through it always wanted
+    ([the rules](/ref/modules/#visibility)).
 11. **No bitwise operators, no hex literals, no digit separators.**
     Refused by name rather than misread, which is right — but it caps
     what userland can reach.

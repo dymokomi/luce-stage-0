@@ -10,8 +10,9 @@ import std.math
 
 ## Constants
 
-`math.pi`, `math.tau`, `math.e`, `math.ln2`, `math.ln10`. All five are
-compile-time constants and fold at their use sites.
+`math.pi`, `math.tau`, `math.e`. All three are compile-time constants
+and fold at their use sites. (The module also keeps `ln2` and `ln10`
+for `log2` and `log10`, marked `private` — internals, not surface.)
 
 ## Scalar functions
 
@@ -146,12 +147,14 @@ from its seed.
 
 | Signature | Notes |
 |---|---|
-| `math.Rng(state: long)` | a generator. Any seed works — `folded` puts it in `[1, 2³¹ − 2]` |
+| `math.rng(seed: long) -> Rng` | the constructor. Any seed works — an out-of-range one is brought into `[1, 2³¹ − 2]` on first use |
 | `rng.next() -> long` | the raw next state in `[1, 2³¹ − 2]`; the two below are the friendly faces over it |
 | `rng.real() -> double` | in the open interval (0, 1) |
 | `rng.in_range(low, high) -> long` | in `[low, high)`, `high` exclusive like `range`; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses |
 
-The receiver must be a `var`: `var rng = math.Rng(state = 42)`.
+The receiver must be a `var`: `var rng = math.rng(42)`. The state
+itself is a `private` field — reaching through it was never the API,
+and `Rng(state = 42)` no longer compiles outside the module.
 
 Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
 

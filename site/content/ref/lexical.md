@@ -55,9 +55,44 @@ main.luc:2:1: a block is indented exactly 4 spaces past the one containing it, n
 
 ## Identifiers
 
-`[A-Za-z_][A-Za-z0-9_]*`. Case is significant. Convention, which the
+`[A-Za-z][A-Za-z0-9_]*`. Case is significant. Convention, which the
 compiler relies on for type names, is TitleCase for types and
 snake_case for everything else.
+
+**A name starts with a letter.** A leading underscore is refused
+everywhere a word can stand — `luce.lex.name` — because the language
+has a real `private` keyword, so a sigil has nothing left to encode
+and would only grow folklore meanings the compiler does not enforce.
+Interior and trailing underscores are the house style (`word_end`,
+`append_text`), and the lone `_` stays what it is: the array-shape
+wildcard, which is not a name.
+
+```luce fail
+func main():
+    let _total = 1
+```
+
+```output
+luce: compile failed
+main.luc:2:9: a name starts with a letter: _total is not a name [luce.lex.name]
+        let _total = 1
+            ^~~~~~
+```
+
+```luce fail
+func main():
+    let _ = read_count()
+
+func read_count() -> long:
+    return 3
+```
+
+```output
+luce: compile failed
+main.luc:2:9: _ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name [luce.parse.expected]
+        let _ = read_count()
+            ^
+```
 
 There is **no shadowing**: a name declared in an enclosing scope
 cannot be re-declared in an inner one.
@@ -67,8 +102,8 @@ cannot be re-declared in an inner one.
 ```
 and      break    catch    continue copy     elif     else
 false    for      func     give     if       import   in
-let      new      none     not      or       return   self
-struct   true     try      var      while
+let      new      none     not      or       private  public
+return   self     struct   true     try      var      while
 ```
 
 `self` is the receiver of a [method](../statements/#methods). It is a

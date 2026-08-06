@@ -1196,9 +1196,31 @@ a message and a call stack, never a segfault.
 A file is a module, like Zig.  `import name` binds the sibling file
 `name.luc` as a namespace: `name.func(...)`, `name.Struct(x = ...)`,
 `name.Struct.member(...)`, and `p: name.Struct` annotations reach its
-top level.  Scope stays per file — nothing is visible without an
+top level — all of it, unless a declaration is marked `private`.
+Scope stays per file — nothing is visible without an
 import, and using a namespace you didn't import is a compile error
-(`luce.sema.import`).  Modules may import each other; the graph loads
+(`luce.sema.import`).
+
+**Visibility** (docs/VISIBILITY.md, ratified): a declaration is
+public unless it says `private` — written in full, before `func`,
+before a top-level `let`, before `struct`, and on a struct field;
+`public` is legal anywhere `private` is and inert where it restates
+the default.  Inside a struct — and only there — `private:` and
+`public:` open an indented region of members.  The unit is the file,
+never the struct: within its own module a private declaration is
+reachable from anywhere, including from public declarations —
+visibility gates the reference site's module, not the call graph.
+Touching a marked name from outside is `luce.sema.private`, answered
+as *private*, never as *unknown*.  Construction composes with named
+fields: an outside site may name unmarked fields only, and every
+private field needs a default or the struct is only constructible
+through the module's own public functions — the factory pattern,
+named in the diagnostic.  A public surface may name only public
+types, refused at the declaration; `main` never needs marking and
+cannot be `private`, because the runtime is the one caller no marker
+can gate.  A name, one more rule beside this: **a name starts with a
+letter** — a leading underscore is `luce.lex.name`, because with a
+real `private` keyword a sigil has nothing left to encode.  Modules may import each other; the graph loads
 each file once, so cross-file mutual recursion just works.  A module
 importing *itself* is a mistake rather than a cycle, and says so
 (`luce.import.self`).  The

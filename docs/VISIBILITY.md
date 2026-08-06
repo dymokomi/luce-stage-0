@@ -1,19 +1,15 @@
 # Public until it says `private` — what an import may reach
 
-> **Every Luce block here is tagged `historical`, and that is the
-> honest tag** — the same arrangement `docs/ARGS.md` opened with, for
-> the same reason.  `tools/doccheck.zig` compiles every fenced `luce`
-> sample in the documents it knows about, and `historical` is its one
-> exemption: *"a syntax that was proposed and refused, or a fragment
-> quoted out of a program nobody wrote."*  A memo written before its
-> feature exists is entirely the second of those — the samples write
-> `public` and `private` words and region labels the compiler refuses
-> today, and the rest quote code that is about to change.
-> `docs/VISIBILITY.md` registers in `tools/documents.zig`'s `records`
-> list with the memo (the ARGS precedent: registered on landing, every
-> fence exempt honestly), and the fences that become current drop the
-> tag in `Order`'s last step, which is the only state in which the tag
-> would be a lie.
+> **Built.**  This memo opened with every fence tagged `historical`,
+> honestly — the feature did not exist.  `Order`'s last step executed
+> the promise the tag carried: every single-file fence now compiles or
+> is refused under `tools/doccheck.zig` (`luce` and `luce refused`),
+> and the tag survives only where it stays the honest one — the
+> multi-file demonstrations, which the doc guard cannot load siblings
+> for and which run executably as the site's own fences instead
+> (`site/content/ref/modules.md` §Visibility, compiled and compared on
+> every build), and the quotations of idioms that no longer exist.
+> The "As built" section at the bottom is the run's record.
 
 > **The rule.**  A declaration is **public** unless it says `private`
 > — written in full, before `func`, before a top-level `let`, before
@@ -197,7 +193,7 @@ omitted *on purpose* (`docs/MISSING.md`'s Tier 5 audit says so:
 **reachable** anyway is the visibility gap, not a documentation
 gap"*).  Both compile today from any program, in both spellings:
 
-```luce historical
+```luce refused
 import std.strings
 
 func main():
@@ -419,7 +415,7 @@ func main():
     # mathx.luc:22: error: sorted is private to mathx [luce.sema.private]
 ```
 
-```luce historical
+```luce refused
 # 2 — the standard library, identical rule, identical sentence
 import std.strings
 
@@ -429,7 +425,7 @@ func main():
     # error: fold_case is private to strings [luce.sema.private]
 ```
 
-```luce historical
+```luce refused
 # 3 — the method sugar routes to the same declaration and the same
 # refusal, so the leak has no second door
 import std.strings
@@ -509,7 +505,7 @@ survives as the guard against anyone marking it later (§8).
 
 ## 2. A public surface names public types (D4)
 
-```luce historical
+```luce refused
 # geo.luc
 private struct Inner:              # the author hid the type…
     n: long
@@ -719,7 +715,7 @@ Inside a struct body, at member position, `private:` or `public:`
 opens an **indented block** of members — fields and funcs alike — and
 every member in the block takes the label's visibility:
 
-```luce historical
+```luce
 struct Rng:
     private:
         state: long
@@ -1346,7 +1342,62 @@ veto window, as the first draft's recommendations did.
 
 ---
 
+---
+
+## As built
+
+`Order` executed in five commits on 2026-08-06, one per step, each
+landing green on the full suite:
+
+1. **R3** — `luce.lex.name` in stage 2 (uses and declarations alike,
+   f-string holes included, since a hole re-lexes through the same
+   `lex()`), the bare-`_` refusal at every declaring production in
+   stage 3, both fuzz corpora extended.  Zero corpus casualties,
+   checked rather than assumed.
+2. **The keywords, the markers, and the regions** — `public` and
+   `private` fully reserved; the three-state marker on the four
+   declaration forms and the field record; regions parsed and
+   dissolved onto member markers before stage 3 ends; every §8 parse
+   refusal with its sentence.  A marked member inside a region still
+   parses, carrying the region's word, so one mistake is one message.
+   The editor grammar regenerated (`storage`), `editor.luc` two rows,
+   the site highlighter held by its agreement test.
+3. **Enforcement** — `luce.sema.private` at the call funnel
+   (`lowerUserCall`, `lowerReceiverCall`, `callUser` — the last is
+   the strings routing, so the sugar has no second door), the
+   namespace constant read in bodies and folds, `resolveBase`'s
+   dotted arm, `fieldReachable` beside every `findField`, and both
+   construction fronts — `lowerConstruct` *and* `foldConstruct`,
+   because the constant folder is a second door to the same struct
+   and holds the same policy.  Per-field marks live beside
+   `field_defaults`; `types.StructLayout` untouched.  D4 lands in
+   collection with "in this file" for the root module.  Every
+   did-you-mean filtered to visible names.  Landed green against the
+   still-unmarked tree, proven by fixtures alone.
+4. **The six markers and the factory** — §10's table verbatim; the
+   ten `Rng(state = …)` sites became `math.rng(…)`; the strings-page
+   coverage exemptions deleted (marked names are not surface, so the
+   roster never sees them); the two positive pins live in the specs
+   that run on both engines.
+5. **Docs and site** — this memo's checkable fences dropped
+   `historical` (`luce` / `luce refused`; the multi-file
+   demonstrations run instead as `site/content/ref/modules.md`
+   §Visibility's compiled fences, refusals and all), LANGUAGE.md
+   §Modules carries the rule, MISSING.md item 10 is closed and its
+   Tier 5 sentence resolved, the math page documents three constants
+   and the factory, and the status page says shipped.
+
+**One wart the run surfaced, recorded so the next reader is not
+puzzled**: §3's `Session` example writes the defaulted `token` before
+the required `id`, which the trailing-defaults rule (docs/ARGS.md D3,
+fields included) refuses — the shipped fixtures and the site order the
+fields legally (`name`, `private id`, `private token = 0`).  The
+example above stays as ratified prose; the compilable versions are the
+law's spelling of it.
+
+---
+
 *Amended to the second ruling; rounds one and two survive with the
-default flipped; D15 rides as recommendations.  `Order` executes, and
-the "As built" section lands here, step by step, the way ARGS.md's
-did.*
+default flipped; D15 rode as recommendations and is built as
+recommended.  `Order` executed; the record above is step by step, the
+way ARGS.md's was.*

@@ -22,8 +22,10 @@ name.constant
 p: name.Struct              in an annotation
 ```
 
-Scope stays per file. Nothing is visible without an import, and using
-a namespace you did not import is `luce.sema.import`.
+An import reaches the imported file's top level — **all of it, unless
+a declaration is marked `private`**. Scope stays per file. Nothing is
+visible without an import, and using a namespace you did not import is
+`luce.sema.import`.
 
 Modules may import each other; the graph loads each file once, so
 cross-file mutual recursion works. A module importing itself is
@@ -32,6 +34,115 @@ one module file.
 
 Errors inside an imported file render at the path it was really opened
 from, with the source line and a caret.
+
+## Visibility
+
+A declaration is **public** unless it says `private` — written in
+full, before `func`, before a top-level `let`, before `struct`, and on
+a struct field. `public` may be written anywhere `private` may; where
+it restates the default it is legal and inert. Inside a struct — and
+only there — `private:` and `public:` open an indented **region** of
+members, the way every colon in the language opens a block; regions
+may repeat and appear in any order, and members outside any region
+take the default.
+
+The unit is the **file**, never the struct: within its own module a
+private declaration is reachable from anywhere, including from public
+declarations — visibility gates the reference site's module, not the
+call graph. Touching a marked name from outside is
+`luce.sema.private`, and it is answered as *private*, never as
+*unknown*: the name exists, is withheld, and the refusal traces to a
+`private` marker somebody wrote.
+
+```luce module file=geo.luc
+private func helper() -> long:
+    return 41
+
+func visible() -> long:
+    return helper() + 1
+
+private let seed = 41
+let answer = seed + 1
+```
+
+```luce fail
+import geo
+
+func main():
+    print(string(geo.helper()))
+```
+
+```output
+luce: compile failed
+main.luc:4:18: helper is private to geo [luce.sema.private]
+        print(string(geo.helper()))
+                     ^~~~~~~~~~~~
+```
+
+The public surface crosses untouched — and a public constant may fold
+from private ones, because the *value* crosses the boundary, not the
+name:
+
+```luce run
+import geo
+
+func main():
+    print(string(geo.visible()))
+    print(string(geo.answer))
+```
+
+```output
+42
+42
+```
+
+A private **field** composes with construction: an outside site may
+name unmarked fields only, and every private field must carry a
+default or the struct is not constructible outside its module — the
+factory pattern, named in the diagnostic.
+
+```luce module file=session.luc
+struct Session:
+    name: string
+    private id: long
+    private token: long = 0
+
+func open(name: string) -> Session:
+    return Session(name = name, id = 7)
+```
+
+```luce fail
+import session
+
+func main():
+    let s = session.Session(name = "dy")
+    print(s.name)
+```
+
+```output
+luce: compile failed
+main.luc:4:13: Session cannot be constructed here: id is marked private in session and has no default; construction belongs to a public function of session [luce.sema.private]
+        let s = session.Session(name = "dy")
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
+```luce run
+import session
+
+func main():
+    let s = session.open("dy")
+    print(s.name)
+```
+
+```output
+dy
+```
+
+A public declaration's surface may name only public types: a public
+function whose parameter or result mentions a private struct is
+refused at the declaration, on the line that can fix it. And `main`
+never needs marking — `public` on it is inert, `private` on it is
+refused, because the runtime is the one caller no marker can gate.
 
 ## Sibling resolution
 

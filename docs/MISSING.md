@@ -304,8 +304,9 @@ the proof the language moved.
    - **`files.append` is unwritable.**  `append` is a reserved name
      (it is `xs.append(v)`), and the reservation applies to a
      module-qualified declaration too, so the module reads
-     `files.append_text`.  That is item 10's visibility question
-     wearing a different hat.
+     `files.append_text`.  Item 10's visibility run did **not** close
+     this: `append` is reserved by the method table, and visibility
+     does not unreserve names (docs/VISIBILITY.md §6).
 7. ~~**No default or named arguments.**  `term_style(fg, bg, bold)` is
    called 15 times across `programs/`; 14 end in the same noise word
    `false`.~~ — **Closed** (docs/ARGS.md, ratified and built).  Every
@@ -323,8 +324,13 @@ the proof the language moved.
    gone: `bf.luc:42` is `(tape[pointer] - 1) % 256`, the spelling its
    author meant, and `math.luc`'s sign-safe parity is
    `long(y) % 2 == 1`.  `/` became real division in the same memo.
-10. **No visibility.**  std leaks `is_space_byte` and `fold_case`.
-    Cheap, and matters before userland libraries exist.
+10. ~~**No visibility.**  std leaks `is_space_byte` and `fold_case`.
+    Cheap, and matters before userland libraries exist.~~ —
+    **Closed** (docs/VISIBILITY.md, ratified through three rounds and
+    built).  Public by default; `private` in full, per declaration and
+    as struct regions; `luce.sema.private` at every resolution site,
+    both spellings of the strings leak included; six markers and the
+    `math.rng(seed)` factory are the whole migration.
 11. **No bitwise operators, no hex literals, no digit separators.**
     Refused by name rather than misread, which is right — but it caps
     what userland can reach.
@@ -445,8 +451,9 @@ the proof the language moved.
   `OWNERSHIP.md` are both fixed.  `STD.md` documents sixteen of the
   eighteen functions in `strings.luc`, and the two it omits —
   `fold_case` and `is_space_byte` — are omitted on purpose because
-  they are internals; that they are *reachable* anyway is the
-  visibility gap above, not a documentation gap.
+  they are internals; they were *reachable* anyway until item 10's
+  visibility run marked them `private`, and now the documentation and
+  the compiler say the same thing.
 
 ---
 
