@@ -955,6 +955,15 @@ narrowed silently: at 255 it traps `conversion_range` rather than
 wrapping to zero.  A plain `b = b + 1` has nowhere to write the
 narrowing down and is still refused.
 
+Assignment targets a **place**: a name, a field, or an index, nested
+freely — `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag =
+"x"`.  The place is read once (every subscript evaluated once), then
+rebuilt: value structs update functionally up to their root binding,
+and the innermost container element is written in place.  A nested
+place assigns a **value** (a number, string, or plain struct); to
+restock an *object* field use the single-level form
+(`bag.items = [1, 2]`).
+
 ### Zero values
 
 **Every type has a zero value.**  It is what `var name: Type` with no
@@ -964,9 +973,9 @@ field.  The numbers are `0`, `bool` is `false`, `string` is `""`, a
 `T?` is `none`, and an object reference is null and traps on use until
 something assigns over it.
 
-The third of those is the one with a rule attached: **a compound store
-into a map key that does not exist defines the entry at the value
-type's zero, and then applies.**
+A zero is normally something a place *starts* at.  One rule makes one
+appear later: **a compound store into a map key that does not exist
+defines the entry at the value type's zero, and then applies.**
 
 ```luce fragment
 var counts = new map(string, long)
@@ -1000,14 +1009,12 @@ index is a position in something that already has a shape, not a name
 that can be called into being, and `append` is the verb that grows a
 list.
 
-Assignment targets a **place**: a name, a field, or an index, nested
-freely — `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag =
-"x"`.  The place is read once (every subscript evaluated once), then
-rebuilt: value structs update functionally up to their root binding,
-and the innermost container element is written in place.  A nested
-place assigns a **value** (a number, string, or plain struct); to
-restock an *object* field use the single-level form
-(`bag.items = [1, 2]`).
+**Only a map index that is itself the place defines.**
+`t.counts[word] += 1` defines, because `t.counts[word]` is the place.
+`m[key].field += 1` does not: the place is the *field*, and the map
+index in front of it is a step on the way down — asking, not writing.
+Defining it would have to invent a whole struct nobody wrote, so it
+keeps `key_missing`.
 
 ## Scope
 
