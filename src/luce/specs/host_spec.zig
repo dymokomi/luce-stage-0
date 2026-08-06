@@ -366,6 +366,51 @@ test "the assignment form takes a binding too, and the place keeps its old value
     );
 }
 
+test "a call site that raised after it returned gives nothing back twice" {
+    // The shape a thousand-line program found and no small one had
+    // (`programs/adventure.luc`, `src/luce/specs/adventure_spec.zig`):
+    // **one** call site, run more than once, answering a value that
+    // owns storage, and raising on a later turn than the one it
+    // returned on.
+    //
+    // A fallible call's answer has to survive the branch on its
+    // outcome, so stage 4 stores it in a slot.  That store used to
+    // stand in front of the branch — where the failing edge reaches it
+    // too, and a call that raised never wrote its result register.  So
+    // the slot took whatever the register held from the *previous* run
+    // of the same instruction, which is the last answer, whose storage
+    // the merge block had already released.  Releasing the slot then
+    // freed it a second time.  It survived every small program in this
+    // suite because a first raise finds the register at its zero and
+    // two raising sites are two registers: it needs a *loop*, and one
+    // turn that worked before one that did not.
+    //
+    // The store stands on the returning side now, so the failing edge
+    // leaves the slot holding the emptied value its own release wrote
+    // back — and releasing that frees nothing.
+    try agree.ok(
+        \\struct Turn:
+        \\    at: long = 0
+        \\    note: string = "start"
+        \\
+        \\    func act(var self, order: string) -> !:
+        \\        if order == "no":
+        \\            error("cannot " + order)
+        \\        self.at += 1
+        \\        self.note = order + " " + string(self.at)
+        \\
+        \\func main():
+        \\    var turn = Turn()
+        \\    let orders = ["go", "no", "go", "no", "go"]
+        \\    for order in orders:
+        \\        turn.act(order) catch reason:
+        \\            print(reason)
+        \\    assert(turn.at == 3)
+        \\    assert(turn.note == "go 3")
+        \\
+    );
+}
+
 test "the caught error is consumed: the binding reads it, forget still clears it" {
     // A `catch` that read the words must still leave the channel empty
     // — the run finishes rather than ending errored, and the caller

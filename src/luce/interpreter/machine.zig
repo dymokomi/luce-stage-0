@@ -544,6 +544,32 @@ pub const Machine = struct {
                         self.releaseSlots(finished);
                         self.frame_storage.shrinkRetainingCapacity(finished.slots_at);
                         if (self.stack.items.len == 0) return .{ .errored = {} };
+                        // **A call that raised answered nothing, and
+                        // the register it would have answered into has
+                        // to say so.**  Registers are frame storage
+                        // reused turn after turn, so leaving it alone
+                        // leaves the answer this same instruction gave
+                        // the *last* time it ran — and stage 4 stores
+                        // that register into the slot that carries the
+                        // answer across the branch on the outcome
+                        // (`openFallible`), on the failing edge as
+                        // well as the returning one, because a
+                        // register may not cross a block.  Releasing
+                        // the slot then gives back storage the earlier
+                        // turn already gave back.
+                        //
+                        // Emptying it is exactly what the compiled
+                        // path does before it returns `errored`
+                        // (`08_llvm/lower.zig`'s `leaveErrored`), and
+                        // the same shape: the tag it had, with no
+                        // storage under it, which every release reads
+                        // as nothing to free.
+                        const parent = &self.stack.items[self.stack.items.len - 1];
+                        const parent_function = &self.program.functions[parent.function];
+                        if (parent_function.result_types[finished.destination] != .none) {
+                            const answered = &self.frame_storage.items[parent.slots_at + finished.destination];
+                            answered.* = runtime.Runtime.emptied(answered.*);
+                        }
                         continue :dispatch;
                     },
                 }
