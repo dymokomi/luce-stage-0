@@ -4403,7 +4403,7 @@ const Body = struct {
             .error_message => {
                 const out = try self.scratch(self.module.value_type, value_alignment, "catch.reason");
                 _ = try self.callRuntime(.luce_rt_error_message, .void, &.{ rt, out }, "");
-                self.values[register] = try self.unboxed(.string, out, "catch.reason");
+                self.produced[register].value = try self.unboxed(.string, out, "catch.reason");
             },
             .forget => {
                 _ = try self.callRuntime(.luce_rt_forget_error, .void, &.{rt}, "");

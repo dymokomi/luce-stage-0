@@ -277,7 +277,7 @@ pub export fn luce_rt_raise_io(
 /// one; an empty channel would mean damaged IR, and answering `""`
 /// keeps a damaged module from reading whatever the last error left
 /// behind.
-export fn luce_rt_error_message(runtime: *const Runtime, out: *Value) callconv(.c) void {
+pub export fn luce_rt_error_message(runtime: *const Runtime, out: *Value) callconv(.c) void {
     const raised = runtime.raised orelse {
         out.* = Value.ofString("");
         return;
