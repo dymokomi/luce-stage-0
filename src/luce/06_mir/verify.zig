@@ -466,20 +466,17 @@ fn verifyInstruction(
 /// answering?  Only these two shapes can, so only these two may be
 /// asked about by `errored` — an `errored` naming anything else is a
 /// module that could branch on a word nobody wrote.
+///
+/// Which intrinsics count is `Intrinsic.isFallible`, the same answer
+/// stage 4 asks for before it will let a call site go without `try` or
+/// `catch`.  This used to keep its own copy of that list, both guarded
+/// by an `else`, so a seventh fallible intrinsic added to one and not
+/// the other was silent in both directions.
 fn raisesError(program: *const Program, function: *const Function, register: Register) bool {
     return switch (function.instructions[register]) {
         .call => |call| call.function < program.functions.len and
             program.functions[call.function].fallible,
-        .intrinsic => |intrinsic| switch (intrinsic.kind) {
-            .file_read,
-            .file_write,
-            .file_append,
-            .file_delete,
-            .file_rename,
-            .dir_list,
-            => true,
-            else => false,
-        },
+        .intrinsic => |intrinsic| intrinsic.kind.isFallible(),
         else => false,
     };
 }

@@ -189,6 +189,304 @@ pub const Intrinsic = enum {
     /// inline is copied into storage the caller owns, and everything
     /// already independent of the frame moves untouched.
     export_storage,
+
+    // -- per-intrinsic facts, classified once ---------------------------
+    //
+    // Each of the three below was written twice or guarded by an
+    // `else`, which is the same defect wearing two hats: adding an
+    // intrinsic and forgetting to classify it was silent.  They live
+    // on the enum, they name every tag, and they have no `else` — so
+    // a new tag is a compile error here until somebody decides what it
+    // is.  `07_optimize/effects.zig`'s `intrinsicEffect` is the model.
+
+    /// Can this intrinsic come back **errored** rather than answering?
+    ///
+    /// Stage 4 asks so a call site is made to say which of `try` and
+    /// `catch` it means; `06_mir/verify.zig` asks so an `errored` may
+    /// name only an instruction that really has an outcome.  The two
+    /// used to keep separate lists, and a program where they disagreed
+    /// is one that could branch on a word nobody wrote.
+    pub fn isFallible(self: Intrinsic) bool {
+        return switch (self) {
+            // The six file services the world can say no to, with no
+            // non-racy check that stands in for the result
+            // (docs/FAILURE.md).
+            .file_read,
+            .file_write,
+            .file_append,
+            .file_delete,
+            .file_rename,
+            .dir_list,
+            => true,
+
+            .abs,
+            .min,
+            .max,
+            .clamp,
+            .sqrt,
+            .floor,
+            .ceil,
+            .trunc,
+            .compare_long_double,
+            .len,
+            .string_slice,
+            .string_byte,
+            .string_find_byte,
+            .assert_true,
+            .trap_message,
+            .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
+            .errored,
+            .forget,
+            .raise_error,
+            .index_get,
+            .index_set,
+            .list_slice,
+            .append_value,
+            .append_ascii,
+            .pop_value,
+            .insert_value,
+            .remove_entry,
+            .has_key,
+            .key_at,
+            .value_at,
+            .dim_size,
+            .free_object,
+            .give_object,
+            .copy_object,
+            .list_sort,
+            .list_reverse,
+            .list_find,
+            .list_contains,
+            .clear_object,
+            .map_keys,
+            .map_values,
+            .map_get,
+            .map_place,
+            .array_fill,
+            .str_value,
+            .parse_int,
+            .parse_float,
+            .chr_code,
+            .ord_text,
+            .print,
+            .file_exists,
+            .term_rows,
+            .term_cols,
+            .term_clear,
+            .term_move,
+            .term_style,
+            .term_write,
+            .term_flush,
+            .key_read,
+            .key_text,
+            .read_line,
+            .print_error,
+            .clock_ms,
+            .sleep_ms,
+            .env_get,
+            .own_storage,
+            .drop_storage,
+            .export_storage,
+            => false,
+        };
+    }
+
+    /// Does this intrinsic answer text (or a field run) that **nobody
+    /// else owns** — storage the receiving register is responsible for
+    /// — rather than a view into something that already has an owner?
+    ///
+    /// Stage 4's ownership walk asks, to decide whether a value needs
+    /// releasing where it dies (docs/STRINGS.md).
+    pub fn makesFreshStorage(self: Intrinsic) bool {
+        return switch (self) {
+            // `str` and `chr` allocate, as do the host services that
+            // answer text; `pop` takes the element's storage out of its
+            // container, which leaves it owned by nobody; `copy`
+            // duplicates; `own_storage` is the taking of a copy itself.
+            .str_value,
+            .chr_code,
+            .file_read,
+            .key_read,
+            .read_line,
+            .env_get,
+            .pop_value,
+            .copy_object,
+            .own_storage,
+            => true,
+
+            // Everything else that answers text answers a *view*: a
+            // slice, an element, a field, a map key, the key-text slot,
+            // a constant, a parameter.  The rest answer no text at all.
+            .abs,
+            .min,
+            .max,
+            .clamp,
+            .sqrt,
+            .floor,
+            .ceil,
+            .trunc,
+            .compare_long_double,
+            .len,
+            .string_slice,
+            .string_byte,
+            .string_find_byte,
+            .assert_true,
+            .trap_message,
+            .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
+            .errored,
+            .forget,
+            .raise_error,
+            .index_get,
+            .index_set,
+            .list_slice,
+            .append_value,
+            .append_ascii,
+            .insert_value,
+            .remove_entry,
+            .has_key,
+            .key_at,
+            .value_at,
+            .dim_size,
+            .free_object,
+            .give_object,
+            .list_sort,
+            .list_reverse,
+            .list_find,
+            .list_contains,
+            .clear_object,
+            .map_keys,
+            .map_values,
+            .map_get,
+            .map_place,
+            .array_fill,
+            .parse_int,
+            .parse_float,
+            .ord_text,
+            .print,
+            .file_write,
+            .file_exists,
+            .file_append,
+            .file_delete,
+            .file_rename,
+            .dir_list,
+            .term_rows,
+            .term_cols,
+            .term_clear,
+            .term_move,
+            .term_style,
+            .term_write,
+            .term_flush,
+            .key_text,
+            .print_error,
+            .clock_ms,
+            .sleep_ms,
+            .drop_storage,
+            .export_storage,
+            => false,
+        };
+    }
+
+    /// Which argument is a **store into the receiver** — the one
+    /// `libluce_rt` keeps rather than reads — or null when none is.
+    ///
+    /// Stage 4 asks so a literal in that position lands at the
+    /// container's element width rather than at `int`, and so the
+    /// copy-on-store hazard is seen before a later operand can free
+    /// the text being stored.  The receiver's own shape is the
+    /// caller's business: these positions are the list methods', and a
+    /// map or a builder spelling the same name stores nothing here.
+    pub fn storedArgument(self: Intrinsic) ?usize {
+        return switch (self) {
+            .append_value => 1,
+            .insert_value => 2,
+
+            .abs,
+            .min,
+            .max,
+            .clamp,
+            .sqrt,
+            .floor,
+            .ceil,
+            .trunc,
+            .compare_long_double,
+            .len,
+            .string_slice,
+            .string_byte,
+            .string_find_byte,
+            .assert_true,
+            .trap_message,
+            .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
+            .errored,
+            .forget,
+            .raise_error,
+            .index_get,
+            .index_set,
+            .list_slice,
+            .append_ascii,
+            .pop_value,
+            .remove_entry,
+            .has_key,
+            .key_at,
+            .value_at,
+            .dim_size,
+            .free_object,
+            .give_object,
+            .copy_object,
+            .list_sort,
+            .list_reverse,
+            .list_find,
+            .list_contains,
+            .clear_object,
+            .map_keys,
+            .map_values,
+            .map_get,
+            .map_place,
+            .array_fill,
+            .str_value,
+            .parse_int,
+            .parse_float,
+            .chr_code,
+            .ord_text,
+            .print,
+            .file_read,
+            .file_write,
+            .file_exists,
+            .file_append,
+            .file_delete,
+            .file_rename,
+            .dir_list,
+            .term_rows,
+            .term_cols,
+            .term_clear,
+            .term_move,
+            .term_style,
+            .term_write,
+            .term_flush,
+            .key_read,
+            .key_text,
+            .read_line,
+            .print_error,
+            .clock_ms,
+            .sleep_ms,
+            .env_get,
+            .own_storage,
+            .drop_storage,
+            .export_storage,
+            => null,
+        };
+    }
 };
 
 /// The words the runtime says back (`support/vocabulary.zig`).  Named

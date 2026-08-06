@@ -50,8 +50,9 @@ const LocalId = mir.LocalId;
 // ---------------------------------------------------------------------------
 
 /// One free builtin: what it is called, what it lowers to, how many
-/// arguments it takes, whether it needs the host gate, and whether a
-/// call to it can leave a container different from how it found it.
+/// arguments it takes, whether it needs the host gate, whether a call
+/// to it can leave a container different from how it found it, and
+/// whether it answers its operand's own width.
 pub const Builtin = struct {
     name: []const u8,
     kind: mir.Intrinsic,
@@ -62,6 +63,13 @@ pub const Builtin = struct {
     /// unwinding.  `isPureBuiltin` reads it, which is what decides
     /// whether a container resolution may be lifted out of a loop.
     pure: bool = true,
+    /// True for the eight whose result type *is* their operand's, so
+    /// their operands must land where the whole call lands
+    /// (docs/TYPES.md §9).  Every other builtin names its own operand
+    /// types and takes no landing.  `lowerIntrinsic` reads it; it was
+    /// an `else`-guarded switch 6,300 lines below this table, which is
+    /// a per-builtin fact written away from the row it belongs to.
+    polymorphic: bool = false,
 };
 
 /// **The one table.**  `lowerIntrinsic` resolves a call through it and
@@ -76,14 +84,14 @@ pub const Builtin = struct {
 /// exactly how the old grammar came to highlight builtins the language
 /// had deleted (tools/vscode-luce/README.md).
 pub const builtins = [_]Builtin{
-    .{ .name = "abs", .kind = .abs, .arity = 1 },
-    .{ .name = "min", .kind = .min, .arity = 2 },
-    .{ .name = "max", .kind = .max, .arity = 2 },
-    .{ .name = "clamp", .kind = .clamp, .arity = 3 },
-    .{ .name = "sqrt", .kind = .sqrt, .arity = 1 },
-    .{ .name = "floor", .kind = .floor, .arity = 1 },
-    .{ .name = "ceil", .kind = .ceil, .arity = 1 },
-    .{ .name = "trunc", .kind = .trunc, .arity = 1 },
+    .{ .name = "abs", .kind = .abs, .arity = 1, .polymorphic = true },
+    .{ .name = "min", .kind = .min, .arity = 2, .polymorphic = true },
+    .{ .name = "max", .kind = .max, .arity = 2, .polymorphic = true },
+    .{ .name = "clamp", .kind = .clamp, .arity = 3, .polymorphic = true },
+    .{ .name = "sqrt", .kind = .sqrt, .arity = 1, .polymorphic = true },
+    .{ .name = "floor", .kind = .floor, .arity = 1, .polymorphic = true },
+    .{ .name = "ceil", .kind = .ceil, .arity = 1, .polymorphic = true },
+    .{ .name = "trunc", .kind = .trunc, .arity = 1, .polymorphic = true },
     .{ .name = "len", .kind = .len, .arity = 1 },
     .{ .name = "assert", .kind = .assert_true, .arity = 1 },
     .{ .name = "trap", .kind = .trap_message, .arity = 1 },
@@ -924,25 +932,7 @@ pub const FunctionBuilder = struct {
             // hands out a copy rather than a view of the callee's
             // frame.
             .call => true,
-            .intrinsic => |call| switch (call.kind) {
-                // `str`, `chr` and the host services allocate; `pop`
-                // takes the element's storage out of its container,
-                // which leaves it owned by nobody; `copy` duplicates.
-                .str_value,
-                .chr_code,
-                .file_read,
-                .key_read,
-                .read_line,
-                .env_get,
-                .pop_value,
-                .copy_object,
-                .own_storage,
-                => true,
-                // Everything else that answers text answers a *view*:
-                // a slice, an element, a field, a map key, the key-text
-                // slot, a constant, a parameter.
-                else => false,
-            },
+            .intrinsic => |call| call.kind.makesFreshStorage(),
             else => false,
         };
     }
@@ -5703,15 +5693,14 @@ pub const FunctionBuilder = struct {
     }
 
     /// Which argument of a method is a *store* into the receiver —
-    /// the one `libluce_rt` will keep rather than read.
+    /// the one `libluce_rt` will keep rather than read.  The positions
+    /// are `Intrinsic.storedArgument`'s; this adds the receiver's
+    /// shape, which is what says a list is being appended to and not a
+    /// builder of the same spelling.
     fn storedElement(self: *const FunctionBuilder, kind: mir.Intrinsic, receiver: Type) ?usize {
         const descriptor = self.analyzer.heapOf(receiver) orelse return null;
         if (descriptor != .list) return null;
-        return switch (kind) {
-            .append_value => 1,
-            .insert_value => 2,
-            else => null,
-        };
+        return kind.storedArgument();
     }
 
     const MethodFound = struct { kind: mir.Intrinsic, result: Type };
@@ -6477,11 +6466,7 @@ pub const FunctionBuilder = struct {
         // down, and it is silent in exactly the same way.  Every other
         // builtin names its own operand types and takes no landing.
         const arguments = arguments: {
-            const polymorphic = switch (matched.kind) {
-                .abs, .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc => true,
-                else => false,
-            };
-            const landing = if (polymorphic) landingType(wanted orelse .none) else null;
+            const landing = if (matched.polymorphic) landingType(wanted orelse .none) else null;
             if (landing) |place| {
                 const places = try self.arena().alloc(Type, expressions.len);
                 @memset(places, place);
@@ -6829,7 +6814,7 @@ pub const FunctionBuilder = struct {
             try self.code.unwind();
             return .{ .value = .{ .register = emitted, .value_type = .none } };
         }
-        if (isFallibleIntrinsic(matched.kind)) {
+        if (matched.kind.isFallible()) {
             if (!fallible_allowed) {
                 try self.fail(
                     "luce.sema.fallible",
@@ -6842,24 +6827,6 @@ pub const FunctionBuilder = struct {
             return .{ .value = try self.openFallible(emitted, result) };
         }
         return .{ .value = .{ .register = emitted, .value_type = result } };
-    }
-
-    /// The host services the world can say no to.  Each answers an
-    /// outcome its call site has to say which of `try` and `catch` it
-    /// means, and `06_mir/verify.zig` keeps the same list — a program
-    /// where the two disagree is one that could branch on a word
-    /// nobody wrote.
-    fn isFallibleIntrinsic(kind: mir.Intrinsic) bool {
-        return switch (kind) {
-            .file_read,
-            .file_write,
-            .file_append,
-            .file_delete,
-            .file_rename,
-            .dir_list,
-            => true,
-            else => false,
-        };
     }
 
     fn failIntrinsic(self: *FunctionBuilder, call: ast.Call, message: []const u8) Error!IntrinsicResult {
