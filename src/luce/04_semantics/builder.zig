@@ -1803,10 +1803,6 @@ pub const FunctionBuilder = struct {
         expressions: []const *ast.Expression,
         landing: Landing,
     ) Error!?[]Typed {
-        const expected: ?[]const Type = switch (landing) {
-            .places => |places| places,
-            .nothing, .method, .stored_element, .subscripts => null,
-        };
         var spill_storage: [inline_operands]?LocalId = undefined;
         var split_storage: [inline_operands]bool = undefined;
         const wide = expressions.len > inline_operands;
@@ -1862,12 +1858,17 @@ pub const FunctionBuilder = struct {
             // *named* `list(int)` is still refused there, because it
             // already has a type and D6 says no list converts to
             // another.
-            if (try self.landsOn(landing, values, index, expressions.len)) |place| {
-                self.wanted = landingType(place);
-                self.wanted_element = self.elementOf(place);
+            const place = try self.landsOn(landing, values, index, expressions.len);
+            if (place) |landed| {
+                self.wanted = landingType(landed);
+                self.wanted_element = self.elementOf(landed);
             }
-            const value = if (expression.* == .none_literal and expected != null)
-                ((try self.lowerTyped(expression, expected.?[index], expression.span(), "this place")) orelse
+            // A bare `none` has no type of its own; the place it lands
+            // on supplies one, whichever way the batch knows the place
+            // — written down up front (`.places`) or answered by the
+            // receiver (`.method`), the same answer either way.
+            const value = if (expression.* == .none_literal and place != null)
+                ((try self.lowerTyped(expression, place.?, expression.span(), "this place")) orelse
                     return null).value
             else
                 (try self.lowerExpression(expression, false)) orelse return null;
@@ -5770,9 +5771,8 @@ pub const FunctionBuilder = struct {
     ///
     /// False after reporting.  `wanted` is positional and its length
     /// is the arity.
-    /// What a built-in method takes, given the receiver it is called
-    /// on — **the one table**, and null when the receiver has no such
-    /// method.
+    /// What a method takes, given the receiver it is called on — **the
+    /// one table**, and null when the receiver has no such method.
     ///
     /// It is consulted twice, which is the whole reason it exists as a
     /// function rather than as `&.{...}` in the dispatch below.  Once
@@ -5784,6 +5784,18 @@ pub const FunctionBuilder = struct {
     /// by `methodTakes`, to check what actually arrived.  Two answers
     /// from one table cannot disagree; two tables would.
     ///
+    /// A **struct** receiver's methods are user declarations, and the
+    /// declaration is the table: `p.f(…)` *means* `Point.f(p, …)`
+    /// (docs/METHODS.md), so its arguments land on
+    /// `parameter_types[1..]` exactly as the static spelling lands
+    /// them.  It did not always — a struct receiver answered null, so
+    /// the two spellings disagreed about what literals they accept:
+    /// `p.f(none)` was refused while `Point.f(p, none)` compiled, and
+    /// `p.f(0.1)` on a `double` parameter read its literal at binary32
+    /// and widened a different number.  A namespace function still
+    /// answers null: its receiver is not parameter zero, and the call
+    /// is refused as such before an argument's type could matter.
+    ///
     /// A string receiver whose name is not a primitive answers null:
     /// that call is `strings.name(s, ...)`, a library function with a
     /// signature of its own, and the ordinary call path lands its
@@ -5794,6 +5806,16 @@ pub const FunctionBuilder = struct {
                 if (std.mem.eql(u8, name, primitive.name)) return primitive.takes;
             }
             return null;
+        }
+        if (receiver == .strukt) {
+            const layout = self.analyzer.structs.items[receiver.strukt];
+            const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ layout.name, name });
+            defer self.temporary().free(qualified);
+            const function_index = self.analyzer.function_names.get(qualified) orelse return null;
+            const info = self.analyzer.functions.items[function_index];
+            if (info.receiver == .not) return null;
+            if (info.parameter_types.len == 0) return null;
+            return info.parameter_types[1..];
         }
         const descriptor = self.analyzer.heapOf(receiver) orelse return null;
         return switch (descriptor) {

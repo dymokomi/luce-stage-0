@@ -1855,6 +1855,49 @@ test "methods: a method may take and answer objects, and ownership is the plain-
     );
 }
 
+test "methods: the method form lands its arguments where the static form lands them" {
+    // The assertion behind docs/METHODS.md's "the same call": both
+    // spellings give an argument the same landing type.  A struct
+    // receiver used to answer nothing to `lowerOperandsInto`, so
+    // `p.pick(none)` was refused while `Point.pick(p, none)` compiled
+    // — the wart docs/ARGS.md §4 files, fixed by `methodParameters`
+    // answering for struct receivers.
+    try agreeOk(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func pick(self, fallback: long?) -> long:
+        \\        return fallback else self.x
+        \\
+        \\func main():
+        \\    let p = Point(x = 7)
+        \\    assert(Point.pick(p, none) == 7)
+        \\    assert(p.pick(none) == 7)
+        \\    assert(p.pick(3) == 3)
+        \\
+    );
+}
+
+test "methods: a literal argument lands at the parameter's width on both spellings" {
+    // `0.1` has no type until it lands (docs/TYPES.md D3).  Through
+    // the method form it used to land at binary32 and widen — a
+    // different number than the binary64 `0.1` the static form reads,
+    // so the two spellings of one call computed different answers.
+    try agreeOk(
+        \\struct Gauge:
+        \\    reading: double
+        \\
+        \\    func matches(self, level: double) -> bool:
+        \\        return self.reading == level
+        \\
+        \\func main():
+        \\    let gauge = Gauge(reading = 0.1)
+        \\    assert(Gauge.matches(gauge, 0.1))
+        \\    assert(gauge.matches(0.1))
+        \\
+    );
+}
+
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:
