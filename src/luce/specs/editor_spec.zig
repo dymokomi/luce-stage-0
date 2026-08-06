@@ -111,3 +111,48 @@ test "the editor's keys reach the file, and the unsaved gate holds" {
 
 /// What the scripted keys leave in the file.
 const expected_content = "ab    \nxhello\nworld\n";
+
+test "a save that will not land says what the runtime said, not what the editor guessed" {
+    // `save` used to build "cannot write " and the path itself, which
+    // is the program writing the runtime's sentence a second time and
+    // happening to agree with it.  `catch reason:` reads the words the
+    // error carried, so the status line is the answer rather than a
+    // guess (docs/FAILURE.md).
+    const keys = [_]agree.World.Key{
+        .{ .name = "text", .text = "x" },
+        .{ .name = "ctrl_s" },
+        .{ .name = "ctrl_q" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "hello\n");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    world.refuse_writes = true;
+    var session = try agree.compare(editor, .{ .world = world });
+    defer session.deinit();
+
+    const shown = try screenText(session.printed());
+    defer testing.allocator.free(shown);
+    try testing.expect(std.mem.indexOf(u8, shown, "cannot write notes.txt") != null);
+    // The write was refused, so nothing about the file moved.
+    try testing.expectEqualStrings("hello\n", session.file().?.content);
+}
+
+/// The characters a transcript put on the screen, with the frame
+/// bookkeeping taken out.
+///
+/// The editor colours per character, so it calls `term_write` once per
+/// character and the transcript is one `[write]` line each: what a
+/// reader sees as a sentence is never a substring of it.  The caller
+/// owns the result.
+fn screenText(transcript: []const u8) ![]u8 {
+    var shown: std.ArrayList(u8) = .empty;
+    errdefer shown.deinit(testing.allocator);
+    var lines = std.mem.splitScalar(u8, transcript, '\n');
+    while (lines.next()) |line| {
+        const prefix = "[write]";
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        try shown.appendSlice(testing.allocator, line[prefix.len..]);
+    }
+    return shown.toOwnedSlice(testing.allocator);
+}
