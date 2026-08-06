@@ -60,6 +60,138 @@ test "integers: the four operations and precedence" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The bit set (docs/BITWISE.md)
+// ---------------------------------------------------------------------------
+//
+// Go's precedence, two's complement on the integers, shifts that move
+// bits with the count as the one thing that traps, and the literals
+// R3 brought in.  Every row runs on both engines.
+
+test "the bit set: & | ^ ~ at both widths, in hex and binary spellings" {
+    try agreeOk(
+        \\func main():
+        \\    assert(0xF0 & 0x3C == 0x30)
+        \\    assert(0xF0 | 0x0F == 0xFF)
+        \\    assert(0b1100 ^ 0b1010 == 0b0110)
+        \\    assert(~0 == -1)
+        \\    assert(~5 == -6)
+        \\    assert(~(-1) == 0)
+        \\    let wide: long = 0xFFFF_FFFF
+        \\    assert(wide & 0xFF == 0xFF)
+        \\    assert(wide + 0 == 4_294_967_295)
+        \\    # Negative operands operate on the representation.
+        \\    assert(-1 & 0xFF == 0xFF)
+        \\    assert(-2 | 1 == -1)
+        \\    assert(-1 ^ -1 == 0)
+        \\
+    );
+}
+
+test "the bit set: shifts transport bits, sign-extend, and check the count" {
+    try agreeOk(
+        \\func main():
+        \\    assert(1 << 4 == 16)
+        \\    assert(255 >> 4 == 15)
+        \\    assert(1 << 0 == 1)
+        \\    # `>>` is arithmetic: the operands are signed (D3).
+        \\    assert(-8 >> 1 == -4)
+        \\    assert(-1 >> 5 == -1)
+        \\    # `<<` discards high bits without trapping (R2): at int,
+        \\    # 1 << 31 lands on the sign bit.
+        \\    var one = 1
+        \\    assert(one << 31 == -2147483648)
+        \\    var wide: long = 1
+        \\    assert(wide << 63 == -9223372036854775808)
+        \\    assert(wide << 62 == 4611686018427387904)
+        \\
+    );
+}
+
+test "the bit set: Go's precedence means flags read as written" {
+    try agreeOk(
+        \\func main():
+        \\    let flags = 0b1010
+        \\    let mask = 0b0010
+        \\    # `&` binds with `*`, so this is (flags & mask) != 0 —
+        \\    # the parse C famously gets wrong (R1).
+        \\    assert(flags & mask != 0)
+        \\    # `|` and `^` bind with `+`.
+        \\    assert(1 | 2 * 4 == 9)
+        \\    assert(4 ^ 1 + 2 == 7)
+        \\    assert(1 << 3 + 1 == 9)
+        \\    assert((1 << 3) + 1 == 9)
+        \\    assert(1 + (1 << 3) == 9)
+        \\
+    );
+}
+
+test "the bit set: compound forms write back like every other operator" {
+    try agreeOk(
+        \\func main():
+        \\    var bits = 0b1111
+        \\    bits &= 0b1010
+        \\    assert(bits == 0b1010)
+        \\    bits |= 0b0101
+        \\    assert(bits == 0b1111)
+        \\    bits ^= 0b0110
+        \\    assert(bits == 0b1001)
+        \\    bits <<= 2
+        \\    assert(bits == 0b100100)
+        \\    bits >>= 4
+        \\    assert(bits == 0b10)
+        \\
+    );
+}
+
+test "the bit set: storage widths widen before the operator, like arithmetic" {
+    try agreeOk(
+        \\func main():
+        \\    var cells = new array(byte, 2)
+        \\    cells[0] = 0xF0
+        \\    cells[1] = 0x0F
+        \\    # A byte widens to int before the operator sees it (D2),
+        \\    # so no expression ever has an 8-bit type.
+        \\    assert(cells[0] | cells[1] == 0xFF)
+        \\    assert(cells[0] >> 4 == 0xF)
+        \\    assert(~cells[1] == -16)
+        \\
+    );
+}
+
+test "the bit set: a shift count out of range traps, at either width and either sign" {
+    // Held in vars so the folder cannot see them — the runtime check
+    // is what these prove, on both engines at the same instruction.
+    try agree.trap(
+        \\func main():
+        \\    var x = 1
+        \\    var count = 32
+        \\    let y = x << count
+        \\
+    , .shift_out_of_range);
+    try agree.trap(
+        \\func main():
+        \\    var x: long = 1
+        \\    var count: long = 64
+        \\    let y = x << count
+        \\
+    , .shift_out_of_range);
+    try agree.trap(
+        \\func main():
+        \\    var x = 8
+        \\    var count = -1
+        \\    let y = x >> count
+        \\
+    , .shift_out_of_range);
+    try agree.trap(
+        \\func main():
+        \\    var x: long = 8
+        \\    var count: long = -3
+        \\    let y = x >> count
+        \\
+    , .shift_out_of_range);
+}
+
 // `string(x)` completes the family of conversion constructors, each
 // named for the type it produces, and `str` is gone (docs/NUMERICS.md
 // §7).  `builder` is why they are not the same function: `str(b)`

@@ -43,7 +43,12 @@ pub const LocalId = u32;
 
 pub const BinaryOp = vocabulary.BinaryOp;
 
-pub const UnaryOp = enum { negate, logic_not };
+pub const UnaryOp = enum {
+    negate,
+    logic_not,
+    /// `~x` — two's complement, so it is `-x - 1` (docs/BITWISE.md D3).
+    bit_not,
+};
 
 pub const Intrinsic = enum {
     abs,

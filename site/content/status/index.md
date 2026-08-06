@@ -180,9 +180,13 @@ workaround-dense and the proof that the language moved.
     reached through it always wanted
     ([the chapter](/tour/visibility/),
     [the rules](/ref/modules/#visibility)).
-11. **No bitwise operators, no hex literals, no digit separators.**
-    Refused by name rather than misread, which is right — but it caps
-    what userland can reach.
+11. ~~**No bitwise operators, no hex literals, no digit separators.**~~
+    **Shipped.** `& | ^ ~ << >>` on the integers at Go's precedence
+    (so `flags & mask != 0` reads correctly), shifts that move bits
+    with the count as the one thing that traps, the five compound
+    forms, and the literals: `0xFF`, `0b1010`, `1_000_000`. Octal
+    stays refused by name
+    ([the operator rules](/ref/lexical/#operators-and-punctuation)).
 12. **No codepoint iteration.** `for c in "abc"` is refused; every
     UTF-8 walk is hand-written, and the same function is copied across
     two namespaces in one file.

@@ -2748,6 +2748,26 @@ pub const FunctionBuilder = struct {
             });
             return null;
         }
+        // The bit set has its compound forms too (docs/BITWISE.md
+        // D5), and its own gate: integers only, at the two arithmetic
+        // widths.
+        switch (op) {
+            .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
+                if (place_type != .int and place_type != .long) {
+                    try self.fail(
+                        "luce.sema.type",
+                        span,
+                        "{s} works on int and long; {s} has no bits a program may see",
+                        .{
+                            context.operatorText(op),
+                            try self.analyzer.typeName(place_type),
+                        },
+                    );
+                    return null;
+                }
+            },
+            else => {},
+        }
         const operation: mir.BinaryOp = switch (op) {
             .add => .add,
             .subtract => .subtract,
@@ -2755,7 +2775,12 @@ pub const FunctionBuilder = struct {
             .divide => .divide,
             .floor_divide => .floor_divide,
             .modulo => .modulo,
-            else => unreachable, // the parser only builds these five
+            .bit_and => .bit_and,
+            .bit_or => .bit_or,
+            .bit_xor => .bit_xor,
+            .shift_left => .shift_left,
+            .shift_right => .shift_right,
+            else => unreachable, // the parser only builds these ten
         };
         // **The combine happens at the type the operator computes at,
         // and the answer comes back to the place's own width** (D5).
@@ -4832,6 +4857,11 @@ pub const FunctionBuilder = struct {
             .less_equal => .less_equal,
             .greater => .greater,
             .greater_equal => .greater_equal,
+            .bit_and => .bit_and,
+            .bit_or => .bit_or,
+            .bit_xor => .bit_xor,
+            .shift_left => .shift_left,
+            .shift_right => .shift_right,
             .logic_and, .logic_or, .coalesce, .catch_error => unreachable, // answered above
         };
 
@@ -4891,10 +4921,41 @@ pub const FunctionBuilder = struct {
         if (try self.refusesAbsence(right, "this operator", binary.span, binary.right)) return null;
 
         const arithmetic = switch (operation) {
-            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => true,
+            .add,
+            .subtract,
+            .multiply,
+            .divide,
+            .floor_divide,
+            .modulo,
+            .bit_and,
+            .bit_or,
+            .bit_xor,
+            .shift_left,
+            .shift_right,
+            => true,
             else => false,
         };
         if (arithmetic) {
+            // The bit set operates on the integers and nothing else
+            // (docs/BITWISE.md D2): a double has no bits a program may
+            // see, and the sentence says which fact refused it.
+            switch (operation) {
+                .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
+                    if (operand_type != .int and operand_type != .long) {
+                        try self.fail(
+                            "luce.sema.type",
+                            binary.span,
+                            "{s} works on int and long; {s} has no bits a program may see",
+                            .{
+                                context.operatorText(binary.op),
+                                try self.analyzer.typeName(operand_type),
+                            },
+                        );
+                        return null;
+                    }
+                },
+                else => {},
+            }
             const string_concat = operation == .add and operand_type == .string;
             if (!operand_type.isNumeric() and !string_concat) {
                 try self.fail("luce.sema.type", binary.span, "{s} does not support this operator", .{
@@ -5219,6 +5280,22 @@ pub const FunctionBuilder = struct {
                 return .{
                     .register = try self.code.emit(.{ .unary = .{ .op = .logic_not, .operand = operand.register } }, .boolean),
                     .value_type = .boolean,
+                };
+            },
+            .bit_not => {
+                // Integers only (docs/BITWISE.md D2); a storage width
+                // complements at its arithmetic type, like every other
+                // operator (docs/TYPES.md D5).
+                if (!operand.value_type.isNumeric() or operand.value_type.isFloating()) {
+                    try self.fail("luce.sema.type", unary.span, "~ works on int and long; {s} has no bits a program may see", .{
+                        try self.analyzer.typeName(operand.value_type),
+                    });
+                    return null;
+                }
+                const at = try self.promoted(operand);
+                return .{
+                    .register = try self.code.emit(.{ .unary = .{ .op = .bit_not, .operand = at.register } }, at.value_type),
+                    .value_type = at.value_type,
                 };
             },
         }

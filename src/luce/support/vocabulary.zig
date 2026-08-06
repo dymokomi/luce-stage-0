@@ -37,6 +37,18 @@ pub const BinaryOp = enum {
     /// while it was C's, and the two differ on exactly the negatives
     /// the memo spent a table on.
     modulo,
+    /// The bit set (docs/BITWISE.md): two's complement on the
+    /// integers, Go's precedence, and shifts that move bits rather
+    /// than multiply — with the count checked (`shift_out_of_range`),
+    /// which is the one place these trap.
+    bit_and,
+    bit_or,
+    bit_xor,
+    shift_left,
+    /// Arithmetic — the operands are signed, and manufacturing a
+    /// positive number out of a negative one silently is not the
+    /// house posture (D3).  Mask first for the logical reading.
+    shift_right,
     equal,
     not_equal,
     less,
@@ -66,7 +78,18 @@ pub const BinaryOp = enum {
             .less_equal => .greater_equal,
             .greater => .less,
             .greater_equal => .less_equal,
-            .add, .subtract, .multiply, .divide, .floor_divide, .modulo => unreachable,
+            .add,
+            .subtract,
+            .multiply,
+            .divide,
+            .floor_divide,
+            .modulo,
+            .bit_and,
+            .bit_or,
+            .bit_xor,
+            .shift_left,
+            .shift_right,
+            => unreachable,
         };
     }
 };
@@ -144,6 +167,10 @@ pub const TrapCode = enum {
     null_object,
     bad_codepoint,
     not_owned,
+    /// A shift count below zero or at/past the operand's width
+    /// (docs/BITWISE.md R2).  C leaves this undefined and Go silently
+    /// masks; Luce says it out loud.  Appended, so nothing renumbers.
+    shift_out_of_range,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -165,6 +192,7 @@ pub const TrapCode = enum {
             .null_object => "null object reference",
             .bad_codepoint => "invalid character code",
             .not_owned => "object is owned by a container",
+            .shift_out_of_range => "shift count out of range",
         };
     }
 };

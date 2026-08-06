@@ -74,6 +74,9 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 
         .unary => |unary| switch (unary.op) {
             .logic_not => .pure,
+            // A complement moves bits and nothing else — no width of
+            // it can trap (docs/BITWISE.md D3).
+            .bit_not => .pure,
             // Negating the smallest integer overflows at either
             // width; negating a float cannot, at either width.
             .negate => if (function.result_types[unary.operand].isFloating()) .pure else .stable,

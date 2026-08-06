@@ -331,9 +331,14 @@ the proof the language moved.
     as struct regions; `luce.sema.private` at every resolution site,
     both spellings of the strings leak included; six markers and the
     `math.rng(seed)` factory are the whole migration.
-11. **No bitwise operators, no hex literals, no digit separators.**
+11. ~~**No bitwise operators, no hex literals, no digit separators.**
     Refused by name rather than misread, which is right — but it caps
-    what userland can reach.
+    what userland can reach.~~ — **Closed** (docs/BITWISE.md, ratified
+    and built).  `& | ^ ~ << >>` on the integers at Go's precedence,
+    shifts as bit transport with the count checked
+    (`shift_out_of_range`), `0xFF`, `0b1010`, `_` separators; octal
+    stays refused by name.  What it unblocks is `std.zip` — CRC-32
+    and Huffman without division-and-modulo soup.
 12. **No codepoint iteration.**  `for c in "abc"` is refused; every
     UTF-8 walk is hand-written, and `editor.luc:53`
     (`Text.continuation`) and `:156` (`Words.continuation_byte`) are

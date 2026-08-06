@@ -435,6 +435,7 @@ pub const Machine = struct {
                         const operand = registers[operation.operand];
                         registers[item] = switch (operation.op) {
                             .logic_not => operators.logicalNot(operand),
+                            .bit_not => operators.bitNot(operand),
                             .negate => operators.negate(&self.runtime, operand) catch |mistake|
                                 return self.caught(mistake),
                         };

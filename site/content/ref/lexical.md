@@ -154,11 +154,17 @@ Decimal only. An integer literal is a sequence of digits and yields an
 1.5e-3    double
 ```
 
-A `.` starts a fraction only when a digit follows it. There are **no**
-hexadecimal, binary or octal literals and **no** `_` digit
-separators — writing one is `luce.lex.number`, naming the reason,
-rather than a silent misreading. A non-finite float literal such as
-`1e400` is refused.
+A `.` starts a fraction only when a digit follows it. A non-finite
+float literal such as `1e400` is refused.
+
+**Hexadecimal and binary integers** are written `0xFF` and `0b1010`
+(case-insensitive digits and prefix), and `_` **digit separators** sit
+between digits of any literal: `1_000_000`, `0xFF_FF`, `0b1010_1010`.
+A separator anywhere else — leading, trailing, doubled, or beside the
+prefix or the point — is `luce.lex.number` naming the rule. There are
+**no octal literals**: `0o17` is refused by name, and a decimal
+integer may not start with a zero, so C's silent `0755` cannot be
+written at all.
 
 ## string literals
 
@@ -190,11 +196,40 @@ worked examples.
 ## Operators and punctuation
 
 ```
-+  -  *  /  %          arithmetic
-== != <  <= >  >=      comparison (non-associative)
-=  += -= *= /= %=      assignment
-:  ,  .  ->  ?  !      declaration and type syntax
-(  )  [  ]  _          grouping, indexing, array shape
++  -  *  /  %  //          arithmetic
+&  |  ^  ~  << >>          bitwise (int and long only)
+== != <  <= >  >=          comparison (non-associative)
+=  += -= *= /= //= %=      assignment
+&= |= ^= <<= >>=           assignment, the bit set's five
+:  ,  .  ->  ?  !          declaration and type syntax
+(  )  [  ]  _              grouping, indexing, array shape
+```
+
+The bitwise precedence is Go's, not C's: `&`, `<<` and `>>` bind at
+the multiply level, `|` and `^` at the add level — so
+`flags & mask != 0` means `(flags & mask) != 0`, the reading C
+famously gets wrong. Shifts move bits rather than multiply: `<<`
+discards high bits without trapping, `>>` sign-extends (the operands
+are signed), and the one thing that traps is a **count** below zero
+or at the operand's width — `shift_out_of_range`, where C leaves
+undefined behavior and Go silently masks.
+
+```luce run
+func main():
+    let flags = 0b1010
+    print(string(flags & 0b0010 != 0))
+    print(string(0xF0 | 0x0F))
+    print(string(~0))
+    print(string(-8 >> 1))
+    print(string(1_000_000 >> 3))
+```
+
+```output
+true
+255
+-1
+-4
+125000
 ```
 
 ## Diagnostics

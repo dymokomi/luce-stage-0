@@ -20,7 +20,18 @@ const Value = value.Value;
 /// Comparison answers a Bool; arithmetic answers the operand type.
 pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Value) Error!Value {
     switch (op) {
-        .add, .subtract, .multiply, .divide, .floor_divide, .modulo => {},
+        .add,
+        .subtract,
+        .multiply,
+        .divide,
+        .floor_divide,
+        .modulo,
+        .bit_and,
+        .bit_or,
+        .bit_xor,
+        .shift_left,
+        .shift_right,
+        => {},
         else => return Value.ofBoolean(compare(op, left, right)),
     }
 
@@ -73,6 +84,24 @@ fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T
                 @divFloor(left, right)
             else
                 @mod(left, right);
+            return boxInteger(T, computed);
+        },
+        // The bit set (docs/BITWISE.md): two's complement on the
+        // representation, `>>` arithmetic because the operands are
+        // signed, and `<<` transporting bits rather than multiplying —
+        // the count is the one thing checked (R2).
+        .bit_and => return boxInteger(T, left & right),
+        .bit_or => return boxInteger(T, left | right),
+        .bit_xor => return boxInteger(T, left ^ right),
+        .shift_left, .shift_right => {
+            if (right < 0 or right >= @bitSizeOf(T)) {
+                return runtime.fail(.shift_out_of_range);
+            }
+            const count: std.math.Log2Int(T) = @intCast(right);
+            const computed = if (op == .shift_left)
+                left << count
+            else
+                left >> count;
             return boxInteger(T, computed);
         },
         else => unreachable,
@@ -321,7 +350,18 @@ pub fn compareLongDouble(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
         .greater => order == .gt,
         .greater_equal => order != .lt,
         // The analyzer emits this intrinsic for comparisons only.
-        .add, .subtract, .multiply, .divide, .floor_divide, .modulo => unreachable,
+        .add,
+        .subtract,
+        .multiply,
+        .divide,
+        .floor_divide,
+        .modulo,
+        .bit_and,
+        .bit_or,
+        .bit_xor,
+        .shift_left,
+        .shift_right,
+        => unreachable,
     };
 }
 
@@ -373,6 +413,16 @@ pub fn orderedBefore(context: void, left: Value, right: Value) bool {
 }
 
 /// Unary `-`.  Negating the smallest i64 has no representable result.
+/// `~x` — two's complement, so it is `-x - 1` at either width and
+/// cannot overflow (docs/BITWISE.md D3).
+pub fn bitNot(operand: Value) Value {
+    return switch (operand.view()) {
+        .int => |held| Value.ofInt(~held),
+        .long => |held| Value.ofLong(~held),
+        else => unreachable,
+    };
+}
+
 pub fn negate(runtime: *Runtime, operand: Value) Error!Value {
     return switch (operand.view()) {
         .int => |held| if (held == std.math.minInt(i32))

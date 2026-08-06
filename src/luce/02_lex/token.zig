@@ -114,6 +114,19 @@ pub const Kind = enum {
     arrow,
     plus,
     minus,
+    /// The bit set (docs/BITWISE.md): `&`, `|`, `^`, `~`, `<<`, `>>`
+    /// and the five compound-assignment forms.
+    ampersand,
+    pipe,
+    caret,
+    tilde,
+    shift_left,
+    shift_right,
+    ampersand_assign,
+    pipe_assign,
+    caret_assign,
+    shift_left_assign,
+    shift_right_assign,
     star,
     slash,
     /// `//`, floor division — the integer pair with `%`

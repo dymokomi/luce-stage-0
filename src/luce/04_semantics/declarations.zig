@@ -1377,6 +1377,10 @@ pub const Analyzer = struct {
                         .boolean => |value| return .{ .value = .{ .boolean = !value }, .value_type = .boolean },
                         else => return self.constantError(unary.span, "not needs a bool", .{}),
                     },
+                    .bit_not => switch (operand.value) {
+                        .long => |value| return .{ .value = .{ .long = ~value }, .value_type = operand.value_type },
+                        else => return self.constantError(unary.span, "~ works on int and long; {s} has no bits a program may see", .{try self.typeName(operand.value_type)}),
+                    },
                 }
             },
             .binary => |binary| return self.foldBinary(module, binary, wanted),
@@ -1733,6 +1737,49 @@ pub const Analyzer = struct {
                 else
                     left.value.boolean or right.value.boolean;
                 return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
+            },
+            // The bit set folds with the run's own semantics
+            // (docs/BITWISE.md D6): transport, two's complement, and
+            // the count as the one refusal — a constant shift with a
+            // bad count is the compile-time face of the trap.
+            .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
+                if (left.value != .long or
+                    (left.value_type != .int and left.value_type != .long))
+                {
+                    return self.constantError(binary.span, "{s} works on int and long; {s} has no bits a program may see", .{
+                        context.operatorText(binary.op),
+                        try self.typeName(left.value_type),
+                    });
+                }
+                const a = left.value.long;
+                const b = right.value.long;
+                const narrow = left.value_type == .int;
+                const folded: i64 = switch (binary.op) {
+                    .bit_and => a & b,
+                    .bit_or => a | b,
+                    .bit_xor => a ^ b,
+                    .shift_left, .shift_right => blk: {
+                        const width: i64 = if (narrow) 32 else 64;
+                        if (b < 0 or b >= width) {
+                            return self.constantError(binary.span, "constant shift count out of range", .{});
+                        }
+                        if (narrow) {
+                            const held: i32 = @intCast(a);
+                            const count: u5 = @intCast(b);
+                            break :blk if (binary.op == .shift_left)
+                                held << count
+                            else
+                                held >> count;
+                        }
+                        const count: u6 = @intCast(b);
+                        break :blk if (binary.op == .shift_left)
+                            a << count
+                        else
+                            a >> count;
+                    },
+                    else => unreachable,
+                };
+                return .{ .value = .{ .long = folded }, .value_type = left.value_type };
             },
             .add, .subtract, .multiply, .divide, .floor_divide, .modulo => switch (left.value) {
                 .long => |a| {

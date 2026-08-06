@@ -923,6 +923,22 @@ they are a service the host does not offer yet.
 
 ## Arithmetic and assignment
 
+**The bit set** (docs/BITWISE.md, ratified): `&`, `|`, `^`, `~`,
+`<<`, `>>` on `int` and `long` only — a float has no bits a program
+may see, and `byte`/`short` widen to `int` first exactly as
+arithmetic widens them.  Two's complement throughout: `~x` is
+`-x - 1`, and `>>` is an arithmetic shift because the operands are
+signed.  Precedence is Go's, not C's — `&` and the shifts bind at the
+multiply level, `|` and `^` at the add level — so `flags & mask != 0`
+means what it reads as.  Shifts move bits rather than multiply: `<<`
+discards high bits without trapping, and the one thing that traps is
+a count below zero or at the operand's width (`shift_out_of_range` —
+C leaves that undefined and Go silently masks).  The five compound
+forms `&=`, `|=`, `^=`, `<<=`, `>>=` exist, constants fold with
+identical semantics (a bad constant count is a compile error), and
+the literals came in the same run: `0xFF`, `0b1010`, and `_`
+separators between digits — no octal.
+
 **A literal has no type until it lands on one** (docs/TYPES.md §1).
 It is read from its text at the width of the place it reaches — an
 annotation, an argument, a return, a struct field, a container

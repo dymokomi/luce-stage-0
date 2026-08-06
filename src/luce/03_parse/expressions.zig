@@ -49,8 +49,12 @@ fn binaryPrecedence(kind: Kind) Precedence {
         .keyword_and => .logic_and,
         .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => .comparison,
         .keyword_else, .keyword_catch => .coalesce,
-        .plus, .minus => .additive,
-        .star, .slash, .slash_slash, .percent => .multiplicative,
+        // Go's precedence for the bit set (docs/BITWISE.md R1): `|`
+        // and `^` bind with `+`, `&` and the shifts with `*` — which
+        // is what makes `flags & mask != 0` mean what it reads as,
+        // the parse C famously gets wrong.
+        .plus, .minus, .pipe, .caret => .additive,
+        .star, .slash, .slash_slash, .percent, .ampersand, .shift_left, .shift_right => .multiplicative,
         else => .none,
     };
 }
@@ -76,6 +80,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_copy,
         .keyword_try,
         .minus,
+        .tilde,
         .left_paren,
         .left_bracket,
         => true,
@@ -101,6 +106,11 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
         .slash => .divide,
         .slash_slash => .floor_divide,
         .percent => .modulo,
+        .ampersand => .bit_and,
+        .pipe => .bit_or,
+        .caret => .bit_xor,
+        .shift_left => .shift_left,
+        .shift_right => .shift_right,
         else => unreachable,
     };
 }
@@ -247,11 +257,20 @@ fn foreignPair(first: Kind, second: Kind) ?Foreign {
         },
         .less => switch (second) {
             .greater => .{ .written = "<>", .instead = "write '!=' to compare for difference" },
-            .less => .{ .written = "<<", .instead = "Luce has no bitwise operators; multiply by a power of two" },
+            // `<<` and `>>` lex whole now (docs/BITWISE.md), so the
+            // old "no bitwise operators" rows can never fire and are
+            // gone.
             else => null,
         },
-        .greater => switch (second) {
-            .greater => .{ .written = ">>", .instead = "Luce has no bitwise operators; divide by a power of two" },
+        // `&&` and `||` were the lexer's kindness while `&` was a
+        // stray; the characters are operators now, so the hint moved
+        // here — the same sentence, one stage later.
+        .ampersand => switch (second) {
+            .ampersand => .{ .written = "&&", .instead = "write 'and'; a single '&' is bitwise" },
+            else => null,
+        },
+        .pipe => switch (second) {
+            .pipe => .{ .written = "||", .instead = "write 'or'; a single '|' is bitwise" },
             else => null,
         },
         else => null,
@@ -384,6 +403,14 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
         const operand = (try unaryExpression(self)) orelse return null;
         return make(self, .{ .unary = .{
             .op = .negate,
+            .operand = operand,
+            .span = .{ .start = operator.span.start, .end = operand.span().end },
+        } });
+    }
+    if (self.accept(.tilde)) |operator| {
+        const operand = (try unaryExpression(self)) orelse return null;
+        return make(self, .{ .unary = .{
+            .op = .bit_not,
             .operand = operand,
             .span = .{ .start = operator.span.start, .end = operand.span().end },
         } });

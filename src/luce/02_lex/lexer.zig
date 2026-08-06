@@ -513,7 +513,9 @@ const Lexer = struct {
                 }
             },
             '<' => {
-                if (self.peek(1) == '=') {
+                if (self.peek(1) == '<') {
+                    try self.shiftOperator(.shift_left, .shift_left_assign);
+                } else if (self.peek(1) == '=') {
                     try self.emit(.less_equal, .{ .start = self.offset, .end = self.offset + 2 });
                     self.offset += 2;
                 } else {
@@ -521,13 +523,19 @@ const Lexer = struct {
                 }
             },
             '>' => {
-                if (self.peek(1) == '=') {
+                if (self.peek(1) == '>') {
+                    try self.shiftOperator(.shift_right, .shift_right_assign);
+                } else if (self.peek(1) == '=') {
                     try self.emit(.greater_equal, .{ .start = self.offset, .end = self.offset + 2 });
                     self.offset += 2;
                 } else {
                     try self.single(.greater);
                 }
             },
+            '&' => try self.maybeAssign(.ampersand, .ampersand_assign),
+            '|' => try self.maybeAssign(.pipe, .pipe_assign),
+            '^' => try self.maybeAssign(.caret, .caret_assign),
+            '~' => try self.single(.tilde),
             '"' => try self.string(),
             '\'' => try self.characterLiteral(),
             '0'...'9' => try self.number(),
@@ -547,6 +555,18 @@ const Lexer = struct {
     fn single(self: *Lexer, kind: Kind) Error!void {
         try self.emit(kind, .{ .start = self.offset, .end = self.offset + 1 });
         self.offset += 1;
+    }
+
+    /// `<<` / `<<=` and `>>` / `>>=`: two characters already read as
+    /// the operator, with an optional `=` behind them.
+    fn shiftOperator(self: *Lexer, bare: Kind, compound: Kind) Error!void {
+        if (self.peek(2) == '=') {
+            try self.emit(compound, .{ .start = self.offset, .end = self.offset + 3 });
+            self.offset += 3;
+        } else {
+            try self.emit(bare, .{ .start = self.offset, .end = self.offset + 2 });
+            self.offset += 2;
+        }
     }
 
     /// An operator that may be followed by '=' to form a compound
@@ -729,7 +749,20 @@ const Lexer = struct {
     /// still emitted so the parser has an operand.
     fn number(self: *Lexer) Error!void {
         const start = self.offset;
-        while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
+        // `0x` and `0b` open the two non-decimal bases the language
+        // has (docs/BITWISE.md R3); octal stays refused by name below.
+        if (self.source[start] == '0' and
+            (self.peek(1) == 'x' or self.peek(1) == 'X' or
+                self.peek(1) == 'b' or self.peek(1) == 'B'))
+        {
+            return self.basedNumber(if (self.peek(1) == 'x' or self.peek(1) == 'X')
+                .hex
+            else
+                .binary);
+        }
+        while (self.offset < self.source.len and
+            (isDigit(self.source[self.offset]) or self.source[self.offset] == '_'))
+        {
             self.offset += 1;
         }
         const integer_end = self.offset;
@@ -739,7 +772,9 @@ const Lexer = struct {
         {
             is_float = true;
             self.offset += 1;
-            while (self.offset < self.source.len and isDigit(self.source[self.offset])) {
+            while (self.offset < self.source.len and
+                (isDigit(self.source[self.offset]) or self.source[self.offset] == '_'))
+            {
                 self.offset += 1;
             }
         }
@@ -774,6 +809,14 @@ const Lexer = struct {
             return;
         }
 
+        // Separators sit between digits and nowhere else
+        // (docs/BITWISE.md D7): never doubled, never at either end of
+        // a digit run, never beside the point or the exponent mark.
+        if (try self.misplacedSeparator(span)) {
+            try self.emit(if (is_float) .float_literal else .int_literal, span);
+            return;
+        }
+
         // A literal glued to identifier characters is one malformed
         // number, not a number and a word.
         if (self.offset < self.source.len and isWordStart(self.source[self.offset])) {
@@ -803,6 +846,95 @@ const Lexer = struct {
             );
         }
         try self.emit(if (is_float) .float_literal else .int_literal, span);
+    }
+
+    /// Scan a `0x`/`0b` literal: the prefix, then digits of the base
+    /// with `_` separators between them (docs/BITWISE.md R3, D7).
+    /// Always an integer — there are no hex floats — and always
+    /// emitted, so the parser has an operand whatever was wrong.
+    fn basedNumber(self: *Lexer, base: enum { hex, binary }) Error!void {
+        const start = self.offset;
+        self.offset += 2; // 0x or 0b
+        const digits_start = self.offset;
+        while (self.offset < self.source.len) {
+            const character = self.source[self.offset];
+            const fits = switch (base) {
+                .hex => isDigit(character) or
+                    (character >= 'a' and character <= 'f') or
+                    (character >= 'A' and character <= 'F'),
+                .binary => character == '0' or character == '1',
+            };
+            if (!fits and character != '_') break;
+            self.offset += 1;
+        }
+        const span: Span = .{ .start = start, .end = self.offset };
+        if (self.offset == digits_start) {
+            // `0x` with nothing after it, or `0xg…` — swallow the
+            // glued word so one mistake is one message.
+            while (self.offset < self.source.len and isWordPart(self.source[self.offset])) {
+                self.offset += 1;
+            }
+            const whole: Span = .{ .start = start, .end = self.offset };
+            try self.report(
+                "luce.lex.number",
+                whole,
+                "a {s} literal needs at least one digit after {s}",
+                .{
+                    if (base == .hex) "hexadecimal" else "binary",
+                    if (base == .hex) "0x" else "0b",
+                },
+            );
+            try self.emit(.int_literal, whole);
+            return;
+        }
+        if (try self.misplacedSeparator(span)) {
+            try self.emit(.int_literal, span);
+            return;
+        }
+        // Glued to word characters past the base's digits: `0b12`,
+        // `0xFFzz` — one malformed literal.
+        if (self.offset < self.source.len and isWordPart(self.source[self.offset])) {
+            while (self.offset < self.source.len and isWordPart(self.source[self.offset])) {
+                self.offset += 1;
+            }
+            const whole: Span = .{ .start = start, .end = self.offset };
+            try self.report(
+                "luce.lex.number",
+                whole,
+                "malformed numeric literal: a digit does not belong to the base",
+                .{},
+            );
+            try self.emit(.int_literal, whole);
+            return;
+        }
+        try self.emit(.int_literal, span);
+    }
+
+    /// Report the first separator that is not between two digits of
+    /// its run.  True when one was reported; the literal is still
+    /// emitted by the caller, so the parser keeps its operand.
+    fn misplacedSeparator(self: *Lexer, span: Span) Error!bool {
+        const text = span.slice(self.source);
+        for (text, 0..) |character, index| {
+            if (character != '_') continue;
+            const before_ok = index > 0 and (isDigit(text[index - 1]) or
+                isHexDigit(text[index - 1]));
+            const after_ok = index + 1 < text.len and (isDigit(text[index + 1]) or
+                isHexDigit(text[index + 1]));
+            // `0x_` would pass the digit test through `x`; the prefix
+            // letters are not digits a separator may touch.
+            const after_prefix = index == 2 and text.len > 2 and text[0] == '0' and
+                (text[1] == 'x' or text[1] == 'X' or text[1] == 'b' or text[1] == 'B');
+            if (before_ok and after_ok and !after_prefix) continue;
+            try self.report(
+                "luce.lex.number",
+                .{ .start = span.start + index, .end = span.start + index + 1 },
+                "a digit separator sits between digits: 1_000, 0xFF_FF",
+                .{},
+            );
+            return true;
+        }
+        return false;
     }
 
     /// True when a numeric literal was just emitted and ends exactly
@@ -1329,18 +1461,21 @@ fn spellingFor(codepoint: u21) ?[]const u8 {
 fn numberProblem(text: []const u8) []const u8 {
     if (text.len >= 2 and text[0] == '0') {
         switch (text[1]) {
-            'x', 'X' => return "hexadecimal literals are not in the language; write the value in decimal",
-            'b', 'B' => return "binary literals are not in the language; write the value in decimal",
-            'o', 'O' => return "octal literals are not in the language; write the value in decimal",
+            // Hex and binary are in the language now (docs/BITWISE.md
+            // R3) and never reach here; octal keeps its refusal.
+            'o', 'O' => return "octal literals are not in the language; write the value in decimal or hexadecimal",
             else => {},
         }
-    }
-    if (std.mem.indexOfScalar(u8, text, '_') != null) {
-        return "digit separators are not in the language";
     }
     const last = text[text.len - 1];
     if (last == 'e' or last == 'E') return "an exponent needs at least one digit";
     return "a number cannot be followed by letters";
+}
+
+fn isHexDigit(character: u8) bool {
+    return isDigit(character) or
+        (character >= 'a' and character <= 'f') or
+        (character >= 'A' and character <= 'F');
 }
 
 /// A short "here is the Luce way" note for the punctuation people
@@ -1350,11 +1485,11 @@ fn numberProblem(text: []const u8) []const u8 {
 /// arriving from C, and a doubled `^` or `~` is not an operator
 /// anywhere and stays a repeated stray.
 fn doubledOperator(character: u8) ?[]const u8 {
-    return switch (character) {
-        '&' => "and",
-        '|' => "or",
-        else => null,
-    };
+    // `&` and `|` were here while they were strays; they are operators
+    // now (docs/BITWISE.md), and `&&`/`||` fail in the parser with the
+    // second character as an ordinary unexpected token.
+    _ = character;
+    return null;
 }
 
 fn hintFor(character: u8) ?[]const u8 {
@@ -1362,7 +1497,7 @@ fn hintFor(character: u8) ?[]const u8 {
         '!' => "use 'not'; '!=' is inequality",
         ';' => "a statement ends at the line, not at a ';'",
         '{', '}' => "blocks are indentation; braces belong to f-strings",
-        '&', '|', '^', '~' => "there are no bitwise operators",
+
         '\'' => "strings are written with double quotes",
         '\\' => "a backslash only escapes inside a string",
         else => null,
@@ -1520,10 +1655,20 @@ test "every decimal literal shape lexes, and only a fraction makes a float" {
     });
 }
 
-test "an unsupported literal base names itself and still yields an operand" {
+test "hex, binary, and separated literals lex clean; octal stays refused by name" {
     const allocator = testing.allocator;
-    const shapes = [_][]const u8{ "0xFF", "0b1010", "0o17", "1_000", "1e" };
-    for (shapes) |shape| {
+    // The three R3 brought in (docs/BITWISE.md).
+    const legal = [_][]const u8{ "0xFF", "0b1010", "1_000", "0xFF_FF", "0b1010_1010", "0Xff", "0B01" };
+    for (legal) |shape| {
+        var text: [32]u8 = undefined;
+        const source = try std.fmt.bufPrint(&text, "a = {s}\n", .{shape});
+        try lexKinds(allocator, source, &.{
+            .identifier, .assign, .int_literal, .newline, .end_of_file,
+        });
+    }
+    // Octal keeps its refusal, and an unfinished exponent its own.
+    const refused = [_][]const u8{ "0o17", "1e" };
+    for (refused) |shape| {
         var text: [32]u8 = undefined;
         const source = try std.fmt.bufPrint(&text, "a = {s}\n", .{shape});
         try lexWithDiagnostics(
@@ -1533,14 +1678,32 @@ test "an unsupported literal base names itself and still yields an operand" {
             &.{"luce.lex.number"},
         );
     }
+    // A misplaced separator names its rule, at the separator.
+    const misplaced = [_][]const u8{ "1__0", "1_", "0x_FF", "1_.5" };
+    for (misplaced) |shape| {
+        var text: [32]u8 = undefined;
+        const source = try std.fmt.bufPrint(&text, "a = {s}\n", .{shape});
+        var diagnostics = Diagnostics.init(allocator);
+        defer diagnostics.deinit();
+        const tokens = (try lex(allocator, source, &diagnostics)).tokens;
+        defer allocator.free(tokens);
+        try testing.expect(diagnostics.count() >= 1);
+        try testing.expectEqualStrings("luce.lex.number", diagnostics.at(0).?.code);
+    }
+    // An empty base names what it needs.
+    try lexWithDiagnostics(
+        allocator,
+        "a = 0x\n",
+        &.{ .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.number"},
+    );
 }
 
 test "a malformed literal names the reason it is malformed" {
     try testing.expectEqualStrings(
-        "hexadecimal literals are not in the language; write the value in decimal",
-        numberProblem("0xFF"),
+        "octal literals are not in the language; write the value in decimal or hexadecimal",
+        numberProblem("0o17"),
     );
-    try testing.expectEqualStrings("digit separators are not in the language", numberProblem("1_000"));
     try testing.expectEqualStrings("an exponent needs at least one digit", numberProblem("1e"));
     try testing.expectEqualStrings("a number cannot be followed by letters", numberProblem("12ab"));
 }
@@ -1563,14 +1726,11 @@ test "a leading zero in a decimal integer is refused, and only there" {
     try lexKinds(testing.allocator, "a = 0\n", &.{ .identifier, .assign, .int_literal, .newline, .end_of_file });
     try lexKinds(testing.allocator, "a = 0.5\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
     try lexKinds(testing.allocator, "a = 0e1\n", &.{ .identifier, .assign, .float_literal, .newline, .end_of_file });
-    // The base prefixes keep their own, better message.
-    const allocator = testing.allocator;
-    var diagnostics = Diagnostics.init(allocator);
-    defer diagnostics.deinit();
-    const tokens = (try lex(allocator, "a = 0xFF\n", &diagnostics)).tokens;
-    defer allocator.free(tokens);
-    try testing.expectEqual(@as(usize, 1), diagnostics.count());
-    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "hexadecimal") != null);
+    // A base prefix is not a leading zero: `0xFF` is a legal literal
+    // (docs/BITWISE.md R3) and lexes clean.
+    try lexKinds(testing.allocator, "a = 0xFF\n", &.{
+        .identifier, .assign, .int_literal, .newline, .end_of_file,
+    });
 }
 
 test "a fraction with no integer part names the fix and still yields an operand" {
@@ -1878,7 +2038,7 @@ test "a lone apostrophe does not swallow the rest of the line" {
 
 test "habitual punctuation gets a hint toward the Luce spelling" {
     const allocator = testing.allocator;
-    for ([_][]const u8{ "a = 1;\n", "a = 1 & 2\n", "a = {1}\n" }) |source| {
+    for ([_][]const u8{ "a = 1;\n", "a = {1}\n" }) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
         const tokens = (try lex(allocator, source, &diagnostics)).tokens;
@@ -1893,7 +2053,7 @@ test "several malformed constructs on one line each get their own diagnostic" {
     const allocator = testing.allocator;
     var diagnostics = Diagnostics.init(allocator);
     defer diagnostics.deinit();
-    const tokens = (try lex(allocator, "a = 0xFF ; \"open\nb = 1_0 $ 2\nc = 3\n", &diagnostics)).tokens;
+    const tokens = (try lex(allocator, "a = 0o17 ; \"open\nb = 1__0 $ 2\nc = 3\n", &diagnostics)).tokens;
     defer allocator.free(tokens);
     var codes: [8][]const u8 = undefined;
     var found: usize = 0;

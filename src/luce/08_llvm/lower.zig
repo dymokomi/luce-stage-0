@@ -3999,6 +3999,39 @@ const Body = struct {
             .add => return self.emitChecked(.@"sadd.with.overflow", width, left, right),
             .subtract => return self.emitChecked(.@"ssub.with.overflow", width, left, right),
             .multiply => return self.emitChecked(.@"smul.with.overflow", width, left, right),
+            // The bit set moves bits and never checks anything but a
+            // shift's count (docs/BITWISE.md R2): the trap fires
+            // first, so `shl`/`ashr` only ever see a legal count and
+            // no poison is manufactured.
+            .bit_and => return self.wip.bin(.@"and", left, right, "bits"),
+            .bit_or => return self.wip.bin(.@"or", left, right, "bits"),
+            .bit_xor => return self.wip.bin(.xor, left, right, "bits"),
+            .shift_left, .shift_right => {
+                const builder = self.module.builder;
+                const bits: i64 = if (of == .int) 32 else 64;
+                const below = try self.wip.icmp(
+                    .slt,
+                    right,
+                    try builder.intValue(width, 0),
+                    "count.below",
+                );
+                const above = try self.wip.icmp(
+                    .sge,
+                    right,
+                    try builder.intValue(width, bits),
+                    "count.above",
+                );
+                try self.check(
+                    try self.wip.bin(.@"or", below, above, "count.bad"),
+                    .shift_out_of_range,
+                );
+                return self.wip.bin(
+                    if (operation == .shift_left) .shl else .ashr,
+                    left,
+                    right,
+                    "bits",
+                );
+            },
             // `/` is real division and always answers a float, so an
             // integer one is IR the verifier already refused
             // (docs/NUMERICS.md §2).
@@ -4117,6 +4150,14 @@ const Body = struct {
             .multiply => .fmul,
             .divide => .fdiv,
             .floor_divide, .modulo => unreachable, // answered above
+            // The verifier refuses bit operations on floats before
+            // either engine sees them (docs/BITWISE.md D2).
+            .bit_and,
+            .bit_or,
+            .bit_xor,
+            .shift_left,
+            .shift_right,
+            => return self.fail("bit operations on the float path"),
             .equal,
             .not_equal,
             .less,
@@ -4192,6 +4233,11 @@ const Body = struct {
                 .divide,
                 .floor_divide,
                 .modulo,
+                .bit_and,
+                .bit_or,
+                .bit_xor,
+                .shift_left,
+                .shift_right,
                 => return self.fail("arithmetic on the comparison path"),
             };
             return self.wip.fcmp(.normal, condition, left, right, "compare");
@@ -4228,6 +4274,11 @@ const Body = struct {
                 .divide,
                 .floor_divide,
                 .modulo,
+                .bit_and,
+                .bit_or,
+                .bit_xor,
+                .shift_left,
+                .shift_right,
                 => return self.fail("arithmetic on the comparison path"),
             },
             .boolean => switch (operation.op) {
@@ -4238,6 +4289,11 @@ const Body = struct {
                 .greater,
                 .greater_equal,
                 => return self.fail("an ordering comparison on Bool"),
+                .bit_and,
+                .bit_or,
+                .bit_xor,
+                .shift_left,
+                .shift_right,
                 .add,
                 .subtract,
                 .multiply,
@@ -4256,6 +4312,11 @@ const Body = struct {
                 .greater,
                 .greater_equal,
                 => return self.fail("an ordering comparison on a heap object"),
+                .bit_and,
+                .bit_or,
+                .bit_xor,
+                .shift_left,
+                .shift_right,
                 .add,
                 .subtract,
                 .multiply,
@@ -4286,6 +4347,16 @@ const Body = struct {
         switch (operation.op) {
             .logic_not => {
                 self.produced[register].value = try self.wip.bin(.xor, operand, .true, "not");
+            },
+            .bit_not => {
+                const of = self.function.result_types[operation.operand];
+                const width = try self.module.valueType(of);
+                self.produced[register].value = try self.wip.bin(
+                    .xor,
+                    operand,
+                    try self.module.builder.intValue(width, -1),
+                    "complement",
+                );
             },
             .negate => switch (self.function.result_types[operation.operand]) {
                 .int, .long => {

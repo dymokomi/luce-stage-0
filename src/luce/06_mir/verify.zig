@@ -350,6 +350,16 @@ fn verifyInstruction(
                 if (binary.op == .divide and binary.operand_type == .long) {
                     return error.TypeMismatch;
                 }
+                // The bit set operates on the integers and nothing
+                // else (docs/BITWISE.md D2): a float has no bits a
+                // program may see, and a string certainly does not.
+                switch (binary.op) {
+                    .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
+                        if (binary.operand_type != .int and binary.operand_type != .long)
+                            return error.TypeMismatch;
+                    },
+                    else => {},
+                }
                 try expectType(result, binary.operand_type);
             }
         },
@@ -359,6 +369,12 @@ fn verifyInstruction(
                 .negate => {
                     if (!operand.isNumeric()) return error.TypeMismatch;
                     if (isStorageWidth(operand)) return error.TypeMismatch;
+                    try expectType(result, operand);
+                },
+                .bit_not => {
+                    // Integers only, at the two arithmetic widths
+                    // (docs/BITWISE.md D2).
+                    if (operand != .int and operand != .long) return error.TypeMismatch;
                     try expectType(result, operand);
                 },
                 .logic_not => {

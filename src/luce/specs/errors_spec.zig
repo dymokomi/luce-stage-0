@@ -2508,64 +2508,59 @@ test "luce.parse.expression: '**' names the std function that does it" {
     );
 }
 
-test "luce.parse.expression: the shifts say there are no bitwise operators" {
-    try expectOnlySayingAcross(
-        "func main():\n    let a = 1\n    let b = a << 2\n",
-        "luce.parse.expression",
-        "there is no '<<' operator: Luce has no bitwise operators; multiply by a power of two",
-        3,
-        15,
-        17,
+test "luce.sema.type: the bit set works on integers, said with the fact that refused it" {
+    // docs/BITWISE.md D2: a double has no bits a program may see.
+    try expectRejected(
+        "func main():\n    let a = 1.5 & 2.0\n    print_error(string(a))\n",
+        "luce.sema.type",
     );
-    try expectOnlySayingAcross(
-        "func main():\n    let a = 8\n    let b = a >> 2\n",
-        "luce.parse.expression",
-        "there is no '>>' operator: Luce has no bitwise operators; divide by a power of two",
+    try expectSayingAt(
+        "func main():\n    let x = 1.5\n    let b = x << 2.0\n",
+        "luce.sema.type",
+        "<< works on int and long; float has no bits a program may see",
         3,
-        15,
-        17,
+        13,
+    );
+    try expectSayingAt(
+        "func main():\n    let x = 1.5\n    let b = ~x\n",
+        "luce.sema.type",
+        "~ works on int and long; float has no bits a program may see",
+        3,
+        13,
     );
 }
 
-test "the operator pair must touch to be read as one operator" {
-    // `a < > b` is two operators spaced out, not a `<>` — the reader
-    // who writes `<>` writes it closed up.  Answering the spaced form
-    // as a foreign operator would be inventing an intent.
-    try expectSaying(
-        "func main():\n    let a = 1\n    if a < > 2:\n        return\n",
-        "luce.parse.expression",
-        "expected an expression, found '>'",
-    );
+test "luce.sema.const: a constant shift with a bad count is the trap's compile-time face" {
+    // docs/BITWISE.md D6: the folder answers what a run answers, and
+    // a count out of range cannot quietly fold to anything.
+    try expectRejected("let bad = 1 << 64\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("let bad = 1 << -1\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectCompiles("let fine: long = 1 << 62\n\nfunc main():\n    let x = fine\n    if x > 0:\n        return\n");
 }
 
-test "luce.lex.character: '&&' and '||' name the Luce keyword" {
-    // These never become tokens at all, so the lexer is where they
-    // are answered — but the answer is the same shape as the parser's.
+test "luce.parse.expression: '&&' and '||' name the Luce keyword" {
+    // `&` and `|` are operators now (docs/BITWISE.md), so the doubled
+    // forms reach the parser — with the same kindness they always got.
     try expectSayingAt(
         "func main():\n    let a = true\n    if a && a:\n        return\n",
-        "luce.lex.character",
-        "there is no '&&' operator: write 'and'",
+        "luce.parse.expression",
+        "there is no '&&' operator: write 'and'; a single '&' is bitwise",
         3,
         10,
     );
     try expectSayingAt(
         "func main():\n    let a = true\n    if a || a:\n        return\n",
-        "luce.lex.character",
-        "there is no '||' operator: write 'or'",
+        "luce.parse.expression",
+        "there is no '||' operator: write 'or'; a single '|' is bitwise",
         3,
         10,
     );
-    // A single one keeps the general answer, and a longer run is
-    // still a run of noise rather than an operator.
-    try expectSaying(
-        "func main():\n    let a = 1 & 2\n",
-        "luce.lex.character",
-        "unexpected character '&' (there are no bitwise operators)",
-    );
+    // A tripled habit reads as `&` then `&&`, and the doubled pair
+    // is where the sentence lands.
     try expectSaying(
         "func main():\n    let a = 1 &&& 2\n",
-        "luce.lex.character",
-        "unexpected character '&' (there are no bitwise operators), repeated 3 times",
+        "luce.parse.expression",
+        "there is no '&&' operator: write 'and'; a single '&' is bitwise",
     );
 }
 

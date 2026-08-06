@@ -86,6 +86,11 @@ pub fn comparisonOf(op: ast.BinaryOp) ?vocabulary.BinaryOp {
         .divide,
         .floor_divide,
         .modulo,
+        .bit_and,
+        .bit_or,
+        .bit_xor,
+        .shift_left,
+        .shift_right,
         .logic_and,
         .logic_or,
         .coalesce,
@@ -163,7 +168,11 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 /// (`06_mir.Instruction.const_long`); what `lands` decides is the
 /// range, not the carrier.  Null means out of that range.
 pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i64 {
-    const magnitude = std.fmt.parseInt(u64, text, 10) catch return null;
+    // Base 0 reads the `0x`/`0b` prefixes and steps over `_`
+    // separators — both already validated by the lexer
+    // (docs/BITWISE.md R3, D7).  `0o` never arrives: stage 2 refuses
+    // octal by name and the compile has already failed.
+    const magnitude = std.fmt.parseInt(u64, text, 0) catch return null;
     // The range of the width it landed on, both ends, carried at
     // `i128` so that `long`'s own extremes are ordinary numbers here.
     // One statement covers all four widths and both signs, including

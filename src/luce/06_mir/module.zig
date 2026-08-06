@@ -54,7 +54,10 @@ pub const magic = "LUCE";
 /// 25 — `exit_program` joins the intrinsics (docs/LANGUAGE.md's
 /// fourth way a run ends), appended inside the host group, so every
 /// tag after `dir_list` renumbers under the same one-line warrant.
-pub const format_version: u32 = 26;
+/// 27 — the bit set arrives (docs/BITWISE.md): five `BinaryOp` tags
+/// and one `UnaryOp`, appended, plus `shift_out_of_range` in the trap
+/// codes, appended likewise.
+pub const format_version: u32 = 27;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -954,6 +957,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 26), format_version);
-    try testing.expectEqual(@as(u64, 13823646443989489997), hasher.final());
+    try testing.expectEqual(@as(u32, 27), format_version);
+    try testing.expectEqual(@as(u64, 15558557180154979482), hasher.final());
 }

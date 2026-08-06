@@ -45,6 +45,13 @@ pub const BinaryOp = enum {
     less_equal,
     greater,
     greater_equal,
+    /// The bit set (docs/BITWISE.md): Go's precedence, integers only,
+    /// with the shift count as the one thing that traps.
+    bit_and,
+    bit_or,
+    bit_xor,
+    shift_left,
+    shift_right,
     logic_and,
     logic_or,
     /// `a else b` — the value of `a` when it is there, `b` when it is
@@ -59,7 +66,12 @@ pub const BinaryOp = enum {
     catch_error,
 };
 
-pub const UnaryOp = enum { negate, logic_not };
+pub const UnaryOp = enum {
+    negate,
+    logic_not,
+    /// `~x` — two's complement, so it is `-x - 1` (docs/BITWISE.md).
+    bit_not,
+};
 
 pub const Argument = struct {
     /// The name the argument was written with — a struct field in a
