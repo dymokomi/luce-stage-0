@@ -2384,13 +2384,24 @@ pub const FunctionBuilder = struct {
                     const subscripts = try self.arena().alloc(Register, lowered.len);
                     for (lowered, subscripts) |value_operand, *slot| slot.* = value_operand.register;
                     accessor.* = .{ .index = .{ .object = current, .subscripts = subscripts } };
-                    const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
-                    read_arguments[0] = current;
-                    @memcpy(read_arguments[1..], subscripts);
-                    current = try self.code.emit(
-                        .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
-                        element_type,
-                    );
+                    // Only the **last** step is the place the compound
+                    // operator reads; every step above it is an
+                    // ordinary read on the way down and keeps its
+                    // trap.  `s.counts[word] += 1` defines the key
+                    // exactly as `counts[word] += 1` does, because the
+                    // leaf is the same place either way.
+                    const leaf = accessor == &accessors[accessors.len - 1];
+                    current = if (leaf and assign.compound != null)
+                        try self.compoundPlaceRead(object_value, subscripts, element_type)
+                    else read: {
+                        const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
+                        read_arguments[0] = current;
+                        @memcpy(read_arguments[1..], subscripts);
+                        break :read try self.code.emit(
+                            .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
+                            element_type,
+                        );
+                    };
                     current_type = element_type;
                 },
                 else => unreachable, // only field/index steps are collected
@@ -2428,6 +2439,53 @@ pub const FunctionBuilder = struct {
             .register = new_value,
             .value_type = current_type,
         }));
+    }
+
+    /// The read at the head of a compound store into `object[...]`,
+    /// and the one place in the language where a read may **define**
+    /// what it reads.
+    ///
+    /// A **map** defines a missing key at the value type's zero and
+    /// answers that, rather than trapping `key_missing`: the operator
+    /// standing to the left says this read is half of a write, and a
+    /// write into a map is how a map grows.  `counts[word] += 1` is
+    /// therefore a complete counter, while `counts[word] =
+    /// counts[word] + 1` still traps on the first occurrence — the two
+    /// spellings diverge on purpose, because only one of them says on
+    /// the left that a key is being written (docs/LANGUAGE.md, "Zero
+    /// values").
+    ///
+    /// **Everything else keeps its bounds trap.**  A list or an array
+    /// reads through `index_get` exactly as before: an index is a
+    /// position in something that already has a shape, not a name that
+    /// can be called into being, and `append` is the verb that grows a
+    /// list.  The verifier refuses `map_place` on either of them, so
+    /// this is not a rule stage 4 has to remember.
+    fn compoundPlaceRead(
+        self: *FunctionBuilder,
+        object: Typed,
+        subscripts: []const Register,
+        element_type: Type,
+    ) Error!Register {
+        // `checkIndex` has already answered for this object, so it has
+        // a heap shape and the map arm has exactly one subscript.
+        if (self.analyzer.heapOf(object.value_type).? == .map) {
+            const arguments = try self.arena().alloc(Register, 3);
+            arguments[0] = object.register;
+            arguments[1] = subscripts[0];
+            arguments[2] = try self.code.zeroOf(element_type);
+            return self.code.emit(
+                .{ .intrinsic = .{ .kind = .map_place, .arguments = arguments } },
+                element_type,
+            );
+        }
+        const arguments = try self.arena().alloc(Register, subscripts.len + 1);
+        arguments[0] = object.register;
+        @memcpy(arguments[1..], subscripts);
+        return self.code.emit(
+            .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
+            element_type,
+        );
     }
 
     /// Combine the current value of a compound-assignment place with
@@ -2774,13 +2832,9 @@ pub const FunctionBuilder = struct {
         if (assign.compound) |op| {
             // Read the element once (the base and indices were lowered
             // once, above), combine, and store back.
-            const read_arguments = try self.arena().alloc(Register, indices.len + 1);
-            read_arguments[0] = object.register;
-            for (indices, read_arguments[1..]) |index_value, *slot| slot.* = index_value.register;
-            const current = try self.code.emit(
-                .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
-                element_type,
-            );
+            const subscripts = try self.arena().alloc(Register, indices.len);
+            for (indices, subscripts) |index_value, *slot| slot.* = index_value.register;
+            const current = try self.compoundPlaceRead(object, subscripts, element_type);
             store = (try self.compoundCombine(op, current, element_type, value.*, assign.span)) orelse return;
         }
         const arguments = try self.arena().alloc(Register, values.len);
@@ -6611,6 +6665,7 @@ pub const FunctionBuilder = struct {
             .map_keys,
             .map_values,
             .map_get,
+            .map_place,
             .array_fill,
             => unreachable,
 

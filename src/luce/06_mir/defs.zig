@@ -121,6 +121,13 @@ pub const Intrinsic = enum {
     map_keys,
     map_values,
     map_get,
+    /// `m[k] OP= v` reads its place through this rather than
+    /// `index_get`: a missing key is **defined** at the zero given as
+    /// the third operand instead of trapping, because the operator on
+    /// the left says this read is half of a write.  Maps only — a list
+    /// or array compound assignment still reads through `index_get`
+    /// and still traps out of range.
+    map_place,
     array_fill,
     str_value,
     parse_int,

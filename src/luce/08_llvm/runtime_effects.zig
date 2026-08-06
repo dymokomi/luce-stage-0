@@ -168,6 +168,7 @@ pub const Service = enum {
     luce_rt_map_keys,
     luce_rt_map_values,
     luce_rt_map_get,
+    luce_rt_map_place,
     luce_rt_array_fill,
 
     // -- strings and conversions --------------------------------------
@@ -559,6 +560,12 @@ pub fn describe(service: Service) Effect {
         },
 
         // -- containers that change something -------------------------
+        // `map_place` reads like `map_get` and writes like a store:
+        // a key it does not find, it defines.
+        .luce_rt_map_place => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_in, .value_in, .value_out },
+        },
         .luce_rt_index_set => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .values_in, .plain, .value_in },

@@ -4705,6 +4705,12 @@ const Body = struct {
                 try self.boxedRegister(of[1], "key"),
                 try self.boxedRegister(of[2], "fallback"),
             }),
+            .map_place => try self.callAnswering(register, .luce_rt_map_place, &.{
+                rt,
+                try self.boxedRegister(of[0], "target"),
+                try self.boxedRegister(of[1], "key"),
+                try self.boxedRegister(of[2], "zero"),
+            }),
             .array_fill => try self.callChecked(.luce_rt_array_fill, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),

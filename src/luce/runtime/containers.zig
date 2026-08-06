@@ -42,7 +42,8 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
 
 /// `a[i]`, `m[key]`, `grid[r, c]`.  A list or array index out of range
 /// traps; a missing map key traps `key_missing` (`m.get(k, default)` is
-/// the total form).
+/// the total form, and `mapPlace` is what a compound store reads
+/// instead — a read that defines, because it is half of a write).
 pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!Value {
     const object = try runtime.resolve(target);
     switch (object.data) {
@@ -456,6 +457,48 @@ pub fn mapGet(runtime: *Runtime, target: Value, key: Value, fallback: Value) Err
         return object.data.map.entries.items[at].value;
     }
     return fallback;
+}
+
+/// `m[key] OP= v` — the place a compound store reads, brought into
+/// existence at `zero` when the key is not there yet.
+///
+/// **This is the one read in the language that defines.**  A plain
+/// `m[key]` traps `key_missing` and always will: asking a map for
+/// something you never put in it is a bug in the program, not news
+/// from the world.  A compound store is not asking.  It says in its
+/// operator that it is writing, so the place it writes into is
+/// defined first, at the value type's zero — and the divergence
+/// between `m[k] += 1` and `m[k] = m[k] + 1` is deliberate, because
+/// only one of the two spells a write on the left of the read
+/// (docs/LANGUAGE.md, "Zero values").
+///
+/// **Maps only.**  A list or an array index that is out of range
+/// still traps: an index is a position in something that already has
+/// a shape, not a name that can be brought into being, and `append`
+/// is the verb that grows a list.  The verifier refuses this
+/// intrinsic on anything but a map, which is what makes the other
+/// three arms below unreachable rather than merely unreached.
+///
+/// `key` and `zero` are both **borrows**: an entry that is already
+/// there copies neither, and a fresh one copies both into storage it
+/// owns and frees with itself.  What comes back is a borrow of the
+/// value the map now holds, exactly as `indexGet` answers — the
+/// `index_set` that follows frees it and stores the combination.
+pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error!Value {
+    const object = try runtime.resolve(target);
+    switch (object.data) {
+        .map => |*map| {
+            if (map.find(&key)) |at| return map.entries.items[at].value;
+            const owned_key = try runtime.ownValue(key);
+            errdefer runtime.dropStorage(owned_key);
+            const owned_zero = try runtime.ownValue(zero);
+            errdefer runtime.dropStorage(owned_zero);
+            try map.insert(runtime.objects, .{ .key = owned_key, .value = owned_zero });
+            runtime.adopt(owned_zero);
+            return owned_zero;
+        },
+        .list, .array, .builder => unreachable, // the verifier refuses these
+    }
 }
 
 /// `a.fill(v)` — every cell replaced.  A cell owns its storage, so the
