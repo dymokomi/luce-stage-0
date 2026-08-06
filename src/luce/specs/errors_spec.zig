@@ -3726,6 +3726,129 @@ test "luce.parse.expected: a catch block cannot initialize a binding" {
     try testing.expect(guarded == .success);
 }
 
+test "luce.parse.expected: a catch block with a binding cannot initialize one either" {
+    // The same refusal, and it has to reach the binding form too: the
+    // Pratt loop declines `catch NAME:` for the statement, so without
+    // this the reader would get "expected end of line after the
+    // binding" back again for exactly the mistake the message above
+    // was written for.
+    try expectHostSayingAt(
+        \\func risky() -> long!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let a = risky() catch reason:
+        \\        print(reason)
+        \\
+    ,
+        "luce.parse.expected",
+        "a catch block supplies no value, so it cannot initialize a: " ++
+            "write 'let a = … catch VALUE', or declare a first and guard the assignment",
+        5,
+        21,
+    );
+}
+
+test "luce.parse.expected: a catch handler's body goes on the next line" {
+    // `catch NAME:` needs the newline behind its colon to be told from
+    // a slice whose start ends in a fallback name, so a handler written
+    // on one line reads as the operator form and leaves a colon behind.
+    // "Expected end of line, found ':'" is true and useless.
+    try expectHostSayingAt(
+        \\func risky() -> long!:
+        \\    return 1
+        \\
+        \\func main():
+        \\    risky() catch reason: print(reason)
+        \\
+    ,
+        "luce.parse.expected",
+        "a catch handler is a block: put its body on the next line, indented under 'reason:'",
+        5,
+        25,
+    );
+}
+
+test "luce.sema.fallible: catch with a binding names the binding in the refusal" {
+    // The plain form says "drop the catch".  With a binding that is
+    // half the advice, because the name goes too — and the reason it
+    // goes is the sentence worth reading.
+    try expectHostSayingAt(
+        \\func plain(n: long) -> long:
+        \\    return n
+        \\
+        \\func main():
+        \\    plain(1) catch reason:
+        \\        print(reason)
+        \\
+    ,
+        "luce.sema.fallible",
+        "catch guards a call that can fail, and this statement has none; " ++
+            "drop the catch, and reason with it — there is no error for it to name",
+        5,
+        5,
+    );
+}
+
+test "luce.sema.duplicate: a handler's binding obeys the no-shadowing rule" {
+    try expectHostSayingAt(
+        \\func risky() -> long!:
+        \\    error("no")
+        \\
+        \\func main():
+        \\    let reason = "already here"
+        \\    risky() catch reason:
+        \\        print(reason)
+        \\
+    ,
+        "luce.sema.duplicate",
+        "reason is already declared on line 5",
+        6,
+        19,
+    );
+}
+
+test "luce.sema.name: a handler's binding does not outlive its block" {
+    try expectHostSayingAt(
+        \\func risky() -> !:
+        \\    error("no")
+        \\
+        \\func main():
+        \\    risky() catch reason:
+        \\        print(reason)
+        \\    print(reason)
+        \\
+    ,
+        "luce.sema.name",
+        "unknown name reason",
+        7,
+        11,
+    );
+}
+
+test "a slice whose start falls back to a name is still a slice" {
+    // The lookahead that tells `catch NAME:` from the operator form
+    // turns on the newline, and this is the program that says why: no
+    // newline lives inside brackets, so the colon here is the slice's.
+    try expectCompiles(
+        \\func first(xs: list(long)) -> long!:
+        \\    if len(xs) == 0:
+        \\        error("empty")
+        \\    return xs[0]
+        \\
+        \\func main():
+        \\    let xs = new list(long)
+        \\    xs.append(1)
+        \\    xs.append(2)
+        \\    xs.append(3)
+        \\    let base = 0
+        \\    let part = xs[first(xs) catch base : 3]
+        \\    assert(len(part) == 2)
+        \\    free(part)
+        \\
+    );
+}
+
 // ---------------------------------------------------------------------------
 // luce.sema.unreachable — a statement below one that never comes back
 // ---------------------------------------------------------------------------
