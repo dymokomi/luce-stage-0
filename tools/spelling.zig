@@ -38,6 +38,7 @@
 //! test makes about the committed grammar.
 
 const std = @import("std");
+const catalogue = @import("documents.zig");
 
 /// The names that must not appear, and what each is written as now.
 /// The same list `support/types.zig`'s `retiredSpelling` answers with,
@@ -79,23 +80,11 @@ const trees = [_]Tree{
     .{ .path = "src/luce/specs", .suffix = ".zig", .scope = .zig_multiline },
 };
 
-/// The living documents, by name.  A list rather than a directory,
-/// because `docs/` holds both kinds and only one of them is bound by
-/// this — `tools/doccheck.zig` reads the same distinction and the two
-/// lists are meant to be read together.
-const living = [_][]const u8{
-    "docs/LANGUAGE.md",
-    "docs/OWNERSHIP.md",
-    "docs/STD.md",
-    "docs/CODEGEN.md",
-    "docs/MISSING.md",
-    "docs/ENGINE.md",
-    "docs/MODES.md",
-    "docs/PIPELINE.md",
-    "docs/README.md",
-    "README.md",
-    "CLAUDE.md",
-};
+/// The living documents, by name — `tools/documents.zig`, which
+/// `tools/doccheck.zig` reads for the samples while this reads it for
+/// the sentences.  The two used to keep a list each, said of them that
+/// they were "meant to be read together", and disagreed by one entry.
+const living = catalogue.living;
 
 /// One place a retired name still appears.
 pub const Sighting = struct {

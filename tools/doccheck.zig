@@ -52,60 +52,31 @@
 //!
 //! ## What counts as living
 //!
-//! The first `living_count` entries of `documents` below.  A **living**
-//! document describes the language as it is: a reader is entitled to
-//! paste its code into a file and have it compile, and it gets no
-//! exemptions.  A **decision record** — `docs/NUMERICS.md`,
-//! `docs/RETURNS.md`, `docs/TYPES.md` and the rest — describes what was
-//! decided and when; its code is checked too, and the parts of it that
-//! are the language of their day say so with `historical`.
+//! `tools/documents.zig` says, and it is the only place that does — a
+//! **living** document describes the language as it is, so a reader is
+//! entitled to paste its code into a file and have it compile, and it
+//! gets no exemptions; a **decision record** describes what was decided
+//! and when, and the parts of it that are the language of their day say
+//! so with `historical`.
 //!
-//! `tools/spelling.zig` reads the same split, for the sentences rather
+//! `tools/spelling.zig` reads that same list, for the sentences rather
 //! than the samples: a living document may not spell a retired type
-//! name in its prose either.
+//! name in its prose either.  The two used to keep a list each, "meant
+//! to be read together", and they disagreed by one.
 
 const std = @import("std");
 const luce = @import("luce");
+const catalogue = @import("documents.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// The documents whose Luce must compile.  Paths are relative to the
-/// repository root, which is where the build runs its tests from —
-/// the same assumption `tools/spelling.zig` and `tools/grammar.zig`
-/// make.
+/// The documents whose Luce must compile, living ones first.
+pub const documents = catalogue.all;
+
 /// How many of `documents` are living.  The living ones come first so
 /// that "the living documents carry no exemptions" is a slice rather
 /// than a convention, and the test below asserts it as one.
-pub const living_count = 10;
-
-pub const documents = [_][]const u8{
-    // Living: a reader may paste any of this into a file.
-    "docs/LANGUAGE.md",
-    "docs/OWNERSHIP.md",
-    "docs/STD.md",
-    "docs/CODEGEN.md",
-    "docs/MISSING.md",
-    "docs/ENGINE.md",
-    "docs/MODES.md",
-    "docs/PIPELINE.md",
-    "README.md",
-    "CLAUDE.md",
-    // Decision records.  Their code is checked too — a memo that
-    // shows the language of its day is welcome to, and says so with
-    // `historical`; what it may not do is show code that reads as
-    // current and is not.  The tag is the whole exemption and one
-    // grep lists every use of it.
-    "docs/METHODS.md",
-    "docs/RETURNS.md",
-    "docs/NUMERICS.md",
-    "docs/STRINGS.md",
-    "docs/FAILURE.md",
-    "docs/MEMORY.md",
-    "docs/V2.md",
-    "docs/TYPES.md",
-    "docs/VECTOR.md",
-    "docs/ARGS.md",
-};
+pub const living_count = catalogue.living.len;
 
 /// How a fence's body becomes a file.
 pub const Wrap = enum { file, fragment };
@@ -477,7 +448,7 @@ test "every Luce sample in every living document compiles" {
     // Written down rather than derived: a document list that empties
     // itself passes vacuously, which is exactly the failure this guard
     // exists to prevent.
-    try testing.expectEqual(@as(usize, 20), documents.len);
+    try testing.expectEqual(@as(usize, 21), documents.len);
     try testing.expect(census.found >= 90);
     // And the exemption stays a decision record's: a living document
     // that reaches for `historical` is a living document that has
