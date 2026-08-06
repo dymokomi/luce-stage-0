@@ -202,6 +202,29 @@ alone must be `try`ed or `catch`ed; ignoring it is
 An ignored returned object is a statement temporary and is freed at
 the end of the statement.
 
+## Guarded statements
+
+Two statement shapes take an indented `catch` handler, and no others:
+a call written as a statement, and a plain assignment whose value is a
+call.
+
+```
+CALL catch:                       CALL catch NAME:
+    ...                               ...
+
+PLACE = CALL catch:               PLACE = CALL catch NAME:
+    ...                               ...
+```
+
+The handler guards exactly one call, so which statement failed has one
+answer. `NAME` binds the error's message — an immutable `string`
+scoped to the handler block. A `let` takes no handler (the handler
+supplies no value) and neither does a compound assignment (it reads
+its place before the call, so two things stand in front of the word
+and only one can fail). Both are `luce.parse.expected`. A handler
+behind a call that cannot fail is `luce.sema.fallible`. See
+[failure](../failure/).
+
 ## File-scope constants
 
 A top-level `let` declares a compile-time constant.

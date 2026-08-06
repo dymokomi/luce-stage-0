@@ -681,3 +681,47 @@ test "a read that writes is never pure, whatever a later pass would like to beli
     // checked nothing at all.
     try testing.expect(found);
 }
+
+test "reading the error channel is never pure either, for the same reason" {
+    // `error_message` reads state a neighbouring instruction writes:
+    // the `forget` beside it empties the channel, so folding two reads
+    // across one would answer the words twice for an error that only
+    // has them once.
+    //
+    // And it is unreachable from source for exactly the reason above:
+    // `dead` deletes only what nothing reads, and stage 4 emits this
+    // straight into the store that gives the binding its copy, so no
+    // program can produce an unread one.  The sweep said so —
+    // classifying it `.pure` survived the whole suite, which is a
+    // statement about `dead`'s reach and not about the table.  Pinned
+    // against the table, where the claim actually lives.
+    var program = try compileRaw(
+        \\func check(n: long) -> long!:
+        \\    if n < 0:
+        \\        error("negative")
+        \\    return n
+        \\
+        \\func main():
+        \\    check(-1) catch reason:
+        \\        print(reason)
+        \\
+    );
+    defer program.deinit();
+
+    var found = false;
+    for (program.functions) |function| {
+        for (function.blocks) |block| {
+            for (block.items) |item| {
+                const instruction = function.instructions[item];
+                if (instruction != .intrinsic) continue;
+                if (instruction.intrinsic.kind != .error_message) continue;
+                found = true;
+                try testing.expectEqual(
+                    optimize.effects.Effect.impure,
+                    optimize.effects.classify(&function, item),
+                );
+            }
+        }
+    }
+    try testing.expect(found);
+}

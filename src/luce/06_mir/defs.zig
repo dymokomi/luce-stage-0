@@ -93,7 +93,8 @@ pub const Intrinsic = enum {
     /// the ordinary way.  `forget` discards the pending error and its
     /// words — what `catch` does, and the reason a caught error leaks
     /// nothing; it stands *after* any `error_message` reading the same
-    /// error, because a forgotten error has no words left to name.
+    /// error, and after the copy that reading takes, so nothing has to
+    /// know how long a forgotten error's words stay readable.
     errored,
     error_message,
     forget,

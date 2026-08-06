@@ -155,11 +155,14 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .none_value, .is_none, .optional_wrap, .optional_unwrap => .pure,
 
         // The error channel is mutable state one instruction writes
-        // and the next reads, so none of these may be folded, deleted
-        // or reordered: `errored` reads what the call in front of it
-        // left, `error_message` reads the words the same error carries,
-        // and `forget` is the whole of what a `catch` does — moving
-        // `error_message` past it would read a channel that is empty.
+        // and the next reads, so none may be folded or deleted:
+        // `errored` reads what the call in front of it left,
+        // `error_message` reads the words the same error carries, and
+        // `forget` is the whole of what a `catch` does.  `.impure` says
+        // nothing about *order* — nothing here reorders — and the order
+        // that matters is `error_message` before `forget`, which stage
+        // 4 emits and LLVM keeps because both take the runtime pointer
+        // and one of them writes through it.
         .errored, .error_message, .forget, .raise_error => .impure,
 
         // Text.  A string is a value, so these read nothing another

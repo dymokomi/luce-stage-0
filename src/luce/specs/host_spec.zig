@@ -330,6 +330,30 @@ test "catch NAME: binds the words the error carried, whichever code it was" {
     );
 }
 
+test "the assignment form takes a binding too, and the place keeps its old value" {
+    // `place = call() catch NAME:` is the second statement shape the
+    // handler attaches to, and the handler runs where the call raised
+    // — so the assignment never happened and `text` still holds what
+    // it held (docs/FAILURE.md).
+    var session = try agree.compare(
+        \\func main():
+        \\    var text = "unchanged"
+        \\    var note = ""
+        \\    text = file_read("missing.txt") catch reason:
+        \\        note = reason
+        \\    print(text)
+        \\    print(note)
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "unchanged\n" ++
+            "cannot read missing.txt\n",
+        session.printed(),
+    );
+}
+
 test "the caught error is consumed: the binding reads it, forget still clears it" {
     // A `catch` that read the words must still leave the channel empty
     // — the run finishes rather than ending errored, and the caller
@@ -384,6 +408,14 @@ test "a handler's binding is a local: it owns a copy, and gives it back" {
         \\        index = index + 1
         \\    assert(seen > 2200)
         \\    assert(early() > 22)
+        \\    # And out of a loop from inside a handler: `break` unwinds
+        \\    # scopes innermost first, and the binding's is one of them.
+        \\    var stopped: long = 0
+        \\    while true:
+        \\        check(-7) catch reason:
+        \\            stopped = len(reason)
+        \\            break
+        \\    assert(stopped > 22)
         \\
     );
 }

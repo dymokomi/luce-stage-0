@@ -4055,11 +4055,15 @@ pub const FunctionBuilder = struct {
         // The binding lives in a scope of its own, wrapped around the
         // handler's: it is not one of the handler's statements, and a
         // `return` or a `break` out of the handler has to release it on
-        // the way past like any other local (S1).  Its words are read
-        // *before* `forget` empties the channel, and stored the
-        // ordinary way — `error_message` hands back a borrow of
-        // run-lifetime storage, so the store is what takes the copy the
-        // name owns (docs/STRINGS.md).
+        // the way past like any other local (S1).
+        //
+        // **The whole read stands in front of `forget`**, copy
+        // included.  `error_message` hands back a borrow of the words
+        // and the store is what copies them (docs/STRINGS.md), and
+        // while those words would in fact survive the clear — `forget`
+        // nulls a pointer and the arena holding them goes with the run
+        // — writing it this way means nothing here depends on that.
+        // The channel is read, copied, and only then emptied.
         const binding = guarded.binding orelse {
             try self.code.forget();
             try self.lowerBlock(guarded.handler);
@@ -4069,10 +4073,10 @@ pub const FunctionBuilder = struct {
         };
         try self.pushScope();
         const words = try self.code.errorMessage();
-        try self.code.forget();
         if (try self.declareLocal(binding.text, .string, false, .alias, binding.span)) |local| {
             try self.storeOwned(local, .{ .register = words, .value_type = .string });
         }
+        try self.code.forget();
         try self.lowerBlock(guarded.handler);
         try self.emitScopeEnd();
         self.popScope();

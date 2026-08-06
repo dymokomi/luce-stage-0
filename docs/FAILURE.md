@@ -206,12 +206,13 @@ inventing those codes would be a lie.
 > answers a **borrow** of the words rather than a copy — the arena
 > holding them outlives the run, so this is exactly the shape
 > `key_text` already had, and the binding's own store is what takes the
-> copy it owns. It stands in front of the `forget` beside it, because a
-> forgotten error has no words left to name, and it is `.impure` so
-> nothing may move it past. And a scope of its own wrapped around the
-> handler's, so the binding is not one of the handler's statements and
-> a `return` or `break` out of the handler releases it like any other
-> local (S1).
+> copy it owns. It stands in front of the `forget` beside it, and so
+> does the copy: the words would in fact survive the clear, because
+> `forget` only nulls a pointer, but reading, copying and *then*
+> emptying means nothing has to know that. And a scope of its own
+> wrapped around the handler's, so the binding is not one of the
+> handler's statements and a `return` or `break` out of the handler
+> releases it like any other local (S1).
 >
 > The one thing that cost more than expected was the lookahead. The
 > line above says one token separates the two spellings; `catch NAME:`

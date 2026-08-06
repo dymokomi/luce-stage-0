@@ -261,10 +261,11 @@ export fn luce_rt_raise_io(
 /// A **borrow**, exactly as `key_text` is: the message lives in the
 /// run's arena, which nothing releases, so handing back a view costs no
 /// allocation and the place that keeps it copies in the ordinary way
-/// (docs/STRINGS.md).  Emitted before the `forget` beside it, so the
-/// channel it reads is never the empty one; an empty channel would
-/// mean damaged IR, and answering `""` keeps a damaged module from
-/// reading whatever the last error left behind.
+/// (docs/STRINGS.md).  Stage 4 emits this — and the copy — in front of
+/// the `forget` beside it, so the channel it reads is never the empty
+/// one; an empty channel would mean damaged IR, and answering `""`
+/// keeps a damaged module from reading whatever the last error left
+/// behind.
 export fn luce_rt_error_message(runtime: *const Runtime, out: *Value) callconv(.c) void {
     const raised = runtime.raised orelse {
         out.* = Value.ofString("");
