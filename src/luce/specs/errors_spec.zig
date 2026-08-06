@@ -369,6 +369,60 @@ test "luce.lex.name: a name starts with a letter, and the sentence names the wor
     try expectRejected("func main():\n    print(_x)\n", "luce.lex.name");
 }
 
+test "luce.sema.private: main is the entry and cannot be private" {
+    // VISIBILITY.md D7: the one caller main exists for is the runtime,
+    // which no marker can gate, so the marker could only assert
+    // something false.  `public` on it is inert-legal like any other
+    // restated default.
+    try expectOnlySayingAt(
+        "private func main():\n    return\n",
+        "luce.sema.private",
+        "main is the entry and cannot be private: the runtime starts it",
+        1,
+        14,
+    );
+    try expectCompiles("public func main():\n    return\n");
+}
+
+test "luce.sema.private: a public surface names public types, refused at the declaration" {
+    // VISIBILITY.md D4 (Rust's side): only the author of the marks can
+    // trip this, and the sentence names both edits that would restore
+    // honesty.  The refusal fires in the root module too, where the
+    // mark lives in "this file".
+    try expectOnlySayingAt(
+        "private struct Inner:\n    n: long\n\nfunc read() -> Inner:\n    return Inner(n = 1)\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "read is public and answers Inner, which is marked private in this file; mark read private or remove the mark on Inner",
+        4,
+        16,
+    );
+    try expectOnlySayingAt(
+        "private struct Inner:\n    n: long\n\nfunc read(p: Inner) -> long:\n    return 1\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "read is public and takes Inner, which is marked private in this file; mark read private or remove the mark on Inner",
+        4,
+        14,
+    );
+    try expectOnlySayingAt(
+        "private struct Inner:\n    n: long\n\nstruct Outer:\n    held: Inner\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "held of Outer is public and holds Inner, which is marked private in this file; mark held private or remove the mark on Inner",
+        5,
+        11,
+    );
+    // A container in the surface publishes its element exactly as the
+    // bare name would.
+    try expectRejected(
+        "private struct Inner:\n    n: long\n\nfunc read() -> list(Inner):\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+    );
+    // The quiet common case: a private function may traffic in the
+    // private type freely, and a private field may hold one.
+    try expectCompiles(
+        "private struct Inner:\n    n: long\n\nprivate func read() -> Inner:\n    return Inner(n = 1)\n\nstruct Outer:\n    private held: Inner\n\nfunc main():\n    let inner = read()\n    let outer = Outer(held = inner)\n    let sum = outer.held.n + inner.n\n    if sum == 0:\n        return\n",
+    );
+}
+
 test "the bare underscore declares nothing, and the wildcard keeps its one home" {
     // VISIBILITY.md D9: the lone `_` stays what it is — the
     // array-shape wildcard — so the refusal teaches that one place.

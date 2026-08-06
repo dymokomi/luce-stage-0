@@ -1116,6 +1116,371 @@ test "luce.import.limit: an import graph past the module ceiling is refused" {
     try testing.expect(fine == .success);
 }
 
+// ---------------------------------------------------------------------------
+// Visibility (docs/VISIBILITY.md §8: the cross-module rows)
+// ---------------------------------------------------------------------------
+
+/// Compile `root` against `modules` and require exactly one refusal
+/// whose code is `luce.sema.private` and whose message is `saying`.
+fn expectPrivateSaying(root: []const u8, modules: []const TestModule, saying: []const u8) !void {
+    var files: TestLoader = .{ .modules = modules };
+    var result = try compile_mod.compileProject(testing.allocator, root, files.loader(), .{ .allow_host = true });
+    defer result.deinit();
+    if (result == .success) {
+        std.debug.print("expected '{s}', but this compiled:\n{s}", .{ saying, root });
+        return error.TestUnexpectedResult;
+    }
+    errdefer printDiagnostics(&result);
+    try testing.expectEqual(@as(usize, 1), result.failure.count());
+    const found = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.sema.private", found.code);
+    try testing.expectEqualStrings(saying, found.message);
+}
+
+fn expectProjectCompiles(root: []const u8, modules: []const TestModule) !void {
+    var files: TestLoader = .{ .modules = modules };
+    var result = try compile_mod.compileProject(testing.allocator, root, files.loader(), .{ .allow_host = true });
+    defer result.deinit();
+    if (result == .failure) {
+        printDiagnostics(&result);
+        std.debug.print("expected a clean compile of:\n{s}", .{root});
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// The memo's corpus in one module: every marked shape §8's rows need.
+const vault_module: TestModule = .{ .name = "vault", .source =
+    \\private func helper() -> long:
+    \\    return 41
+    \\
+    \\func visible() -> long:
+    \\    return helper() + 1
+    \\
+    \\private let seed = 41
+    \\let answer = seed + 1
+    \\
+    \\private struct Inner:
+    \\    n: long
+    \\
+    \\    func make() -> Inner:
+    \\        return Inner(n = 1)
+    \\
+    \\struct Handle:
+    \\    private:
+    \\        slot: long
+    \\    label: long
+    \\
+    \\func fresh() -> Handle:
+    \\    return Handle(slot = 1, label = 2)
+    \\
+    \\struct Session:
+    \\    name: string
+    \\    private id: long
+    \\    private token: long = 0
+    \\
+    \\    func title(self) -> string:
+    \\        return self.name
+    \\
+    \\    private func stamp(self) -> long:
+    \\        return self.id
+    \\
+    \\func open(name: string) -> Session:
+    \\    return Session(name = name, id = 7)
+    \\
+};
+
+test "luce.sema.private: a private function is withheld, and the call graph is not" {
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.helper()))
+        \\
+    , &.{vault_module}, "helper is private to vault");
+    // A public function calling its module's own private one is
+    // ordinary code: visibility gates the reference site's module,
+    // never the call graph (D1).
+    try expectProjectCompiles(
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.visible()))
+        \\
+    , &.{vault_module});
+}
+
+test "luce.sema.private: a private constant is withheld, and its folded value crosses" {
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.seed))
+        \\
+    , &.{vault_module}, "seed is private to vault");
+    // D8: a public constant folds from private ones; the value
+    // crossed, not the name — in a body and in a constant initializer.
+    try expectProjectCompiles(
+        \\import vault
+        \\
+        \\let doubled = vault.answer * 2
+        \\
+        \\func main():
+        \\    print(string(vault.answer + doubled))
+        \\
+    , &.{vault_module});
+    // The same gate holds inside a constant initializer's fold.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\let stolen = vault.seed + 1
+        \\
+        \\func main():
+        \\    print(string(stolen))
+        \\
+    , &.{vault_module}, "seed is private to vault");
+}
+
+test "luce.sema.private: a private struct is withheld from annotation, construction, and namespace" {
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func read(p: vault.Inner) -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{vault_module}, "Inner is private to vault");
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let p = vault.Inner(n = 1)
+        \\    print(string(p.n))
+        \\
+    , &.{vault_module}, "Inner is private to vault");
+    // A namespace function of a private struct is reached through the
+    // struct's name, and it is the struct that is withheld.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let p = vault.Inner.make()
+        \\    print(string(p.n))
+        \\
+    , &.{vault_module}, "Inner is private to vault");
+}
+
+test "luce.sema.private: a private field refuses reads, writes, and construction naming" {
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    var h = vault.fresh()
+        \\    print(string(h.slot))
+        \\
+    , &.{vault_module}, "slot of Handle is private to vault");
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    var h = vault.fresh()
+        \\    h.slot = 3
+        \\
+    , &.{vault_module}, "slot of Handle is private to vault");
+    // Naming a private field at construction — even one with a
+    // default — is refused: the default is the module's chosen value
+    // for a slot the module kept (§3).
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let s = vault.Session(name = "x", token = 9)
+        \\    print(s.name)
+        \\
+    , &.{vault_module}, "token of Session is private to vault");
+}
+
+test "luce.sema.private: a required private field forecloses outside construction" {
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let s = vault.Session(name = "x")
+        \\    print(s.name)
+        \\
+    , &.{vault_module}, "Session cannot be constructed here: id is marked private in vault and has no default; construction belongs to a public function of vault");
+    // The pattern the diagnostic names, working: the factory, the
+    // public field, and the public method all cross the boundary.
+    try expectProjectCompiles(
+        \\import vault
+        \\
+        \\func main():
+        \\    let s = vault.open("dy")
+        \\    print(s.name)
+        \\    print(s.title())
+        \\
+    , &.{vault_module});
+}
+
+test "luce.sema.private: a private method is withheld from the value spelling too" {
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let s = vault.open("dy")
+        \\    print(string(s.stamp()))
+        \\
+    , &.{vault_module}, "stamp is private to vault");
+}
+
+test "a typo near a private name is unknown, and the private name is never suggested" {
+    var files: TestLoader = .{ .modules = &.{vault_module} };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.helperr()))
+        \\
+    , files.loader(), .{ .allow_host = true });
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    errdefer printDiagnostics(&result);
+    try testing.expectEqual(@as(usize, 1), result.failure.count());
+    const found = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.sema.call", found.code);
+    try testing.expect(std.mem.indexOf(u8, found.message, "unknown function") != null);
+    try testing.expect(std.mem.indexOf(u8, found.message, "did you mean") == null);
+}
+
+test "the private path is checked per module: A sees its own, B does not, one compile" {
+    // Module a declares and uses its private helper; module b touches
+    // the same helper and is refused by name.  Both facts in one
+    // compile, which is what proves the check reads the *reference
+    // site's* module and not some global mode.
+    const a: TestModule = .{ .name = "a", .source =
+        \\private func inner() -> long:
+        \\    return 1
+        \\
+        \\func outer() -> long:
+        \\    return inner()
+        \\
+    };
+    const b: TestModule = .{ .name = "b", .source =
+        \\import a
+        \\
+        \\func steal() -> long:
+        \\    return a.inner()
+        \\
+    };
+    var files: TestLoader = .{ .modules = &.{ a, b } };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import a
+        \\import b
+        \\
+        \\func main():
+        \\    print(string(a.outer() + b.steal()))
+        \\
+    , files.loader(), .{ .allow_host = true });
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    errdefer printDiagnostics(&result);
+    try testing.expectEqual(@as(usize, 1), result.failure.count());
+    const found = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.sema.private", found.code);
+    try testing.expectEqualStrings("inner is private to a", found.message);
+}
+
+test "mutual recursion crosses files unmarked, and is refused by name when one is marked" {
+    const even: TestModule = .{ .name = "even", .source =
+        \\import odd
+        \\
+        \\func check(value: long) -> bool:
+        \\    if value == 0:
+        \\        return true
+        \\    return odd.check(value - 1)
+        \\
+    };
+    const odd_open: TestModule = .{ .name = "odd", .source =
+        \\import even
+        \\
+        \\func check(value: long) -> bool:
+        \\    if value == 0:
+        \\        return false
+        \\    return even.check(value - 1)
+        \\
+    };
+    const root =
+        \\import even
+        \\
+        \\func main():
+        \\    print(string(even.check(4)))
+        \\
+    ;
+    try expectProjectCompiles(root, &.{ even, odd_open });
+    const odd_marked: TestModule = .{ .name = "odd", .source =
+        \\import even
+        \\
+        \\private func check(value: long) -> bool:
+        \\    if value == 0:
+        \\        return false
+        \\    return even.check(value - 1)
+        \\
+    };
+    try expectPrivateSaying(root, &.{ even, odd_marked }, "check is private to odd");
+}
+
+test "a private region and a per-declaration marker produce the same stage-4 facts" {
+    // The two spellings of Rng's wall, held to the same refusal
+    // sentence — which is the observable form of "regions die in
+    // stage 3" (D15).
+    const region: TestModule = .{ .name = "rng", .source =
+        \\struct Rng:
+        \\    private:
+        \\        state: long
+        \\
+        \\    func next(var self) -> long:
+        \\        self.state = self.state * 48271 % 2147483647
+        \\        return self.state
+        \\
+        \\func rng(seed: long) -> Rng:
+        \\    return Rng(state = seed)
+        \\
+    };
+    const marker: TestModule = .{ .name = "rng", .source =
+        \\struct Rng:
+        \\    private state: long
+        \\
+        \\    func next(var self) -> long:
+        \\        self.state = self.state * 48271 % 2147483647
+        \\        return self.state
+        \\
+        \\func rng(seed: long) -> Rng:
+        \\    return Rng(state = seed)
+        \\
+    };
+    const stealing =
+        \\import rng
+        \\
+        \\func main():
+        \\    var r = rng.Rng(state = 42)
+        \\    print(string(r.next()))
+        \\
+    ;
+    const using =
+        \\import rng
+        \\
+        \\func main():
+        \\    var r = rng.rng(42)
+        \\    print(string(r.next()))
+        \\
+    ;
+    for ([_]TestModule{ region, marker }) |shape| {
+        try expectPrivateSaying(stealing, &.{shape}, "state of Rng is private to rng");
+        try expectProjectCompiles(using, &.{shape});
+    }
+}
+
 test "a namespaced constant resolves through the import that bound it" {
     // The positive half of the namespace rule, which the rejection
     // tests below never state: an imported module's file-scope

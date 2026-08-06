@@ -592,17 +592,77 @@ pub const FunctionBuilder = struct {
         return key[self.prefix.len + 1 ..];
     }
 
-    fn offerDeclarations(self: *FunctionBuilder, suggestion: *helpers.Suggestion) void {
-        const tables = [_]*const std.StringHashMapUnmanaged(u32){
-            &self.analyzer.function_names,
-            &self.analyzer.struct_names,
-            &self.analyzer.constant_names,
-        };
-        for (tables) |table| {
-            var keys = table.keyIterator();
-            while (keys.next()) |key| {
-                if (self.visibleName(key.*)) |name| suggestion.offer(name);
+    /// The declaration-level gate at every site a call resolves
+    /// (docs/VISIBILITY.md §1): a private function, or any member of a
+    /// private struct, is reachable from its own file and nowhere
+    /// else.  True when the call may proceed.  The refusal names the
+    /// withheld declaration and its module — private is never
+    /// "unknown" (D2), and it fires *after* existence is established,
+    /// which is what the code buys.
+    fn functionReachable(self: *FunctionBuilder, function_index: u32, span: Span) Error!bool {
+        const info = self.analyzer.functions.items[function_index];
+        if (info.module == self.module) return true;
+        // A namespace function of a private struct is reached through
+        // the struct's name, and it is the struct that is withheld.
+        if (info.enclosing) |owner| {
+            const strukt = self.analyzer.struct_decls.items[owner].declaration;
+            if (strukt.visibility == .private) {
+                try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
+                    strukt.name,
+                    self.analyzer.moduleName(info.module),
+                });
+                return false;
             }
+        }
+        if (info.declaration.visibility == .private) {
+            try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
+                info.declaration.name,
+                self.analyzer.moduleName(info.module),
+            });
+            return false;
+        }
+        return true;
+    }
+
+    /// The field-level gate at every site a field is read, written, or
+    /// named (docs/VISIBILITY.md §1, §3).  Within the declaring module
+    /// the bit is never consulted.
+    fn fieldReachable(
+        self: *FunctionBuilder,
+        layout_index: u32,
+        field_index: u32,
+        span: Span,
+    ) Error!bool {
+        const info = self.analyzer.struct_decls.items[layout_index];
+        if (info.module == self.module) return true;
+        if (field_index >= info.field_visibility.len) return true;
+        if (info.field_visibility[field_index] != .private) return true;
+        try self.fail("luce.sema.private", span, "{s} of {s} is private to {s}", .{
+            self.analyzer.structs.items[layout_index].fields[field_index].name,
+            info.declaration.name,
+            self.analyzer.moduleName(info.module),
+        });
+        return false;
+    }
+
+    fn offerDeclarations(self: *FunctionBuilder, suggestion: *helpers.Suggestion) void {
+        var functions = self.analyzer.function_names.iterator();
+        while (functions.next()) |entry| {
+            const info = self.analyzer.functions.items[entry.value_ptr.*];
+            if (info.declaration.visibility == .private and info.module != self.module) continue;
+            if (self.visibleName(entry.key_ptr.*)) |name| suggestion.offer(name);
+        }
+        var structs = self.analyzer.struct_names.iterator();
+        while (structs.next()) |entry| {
+            const info = self.analyzer.struct_decls.items[entry.value_ptr.*];
+            if (info.declaration.visibility == .private and info.module != self.module) continue;
+            if (self.visibleName(entry.key_ptr.*)) |name| suggestion.offer(name);
+        }
+        var constants = self.analyzer.constant_names.iterator();
+        while (constants.next()) |entry| {
+            const info = self.analyzer.constant_infos.items[entry.value_ptr.*];
+            if (info.declaration.visibility == .private and info.module != self.module) continue;
+            if (self.visibleName(entry.key_ptr.*)) |name| suggestion.offer(name);
         }
     }
 
@@ -685,20 +745,35 @@ pub const FunctionBuilder = struct {
         if (try self.failNotAValue(written, joined, span)) return;
 
         // Members of this namespace only: `math.sed` wants `seed`
-        // offered, never a same-named function of another module.
+        // offered, never a same-named function of another module — and
+        // never a name the namespace withheld (VISIBILITY.md D2:
+        // did-you-mean offers visible names only).
         const scope = joined[0 .. joined.len - member.len];
         var suggestion = helpers.Suggestion.init(member);
-        const tables = [_]*const std.StringHashMapUnmanaged(u32){
-            &self.analyzer.function_names,
-            &self.analyzer.struct_names,
-            &self.analyzer.constant_names,
-        };
-        for (tables) |table| {
-            var keys = table.keyIterator();
-            while (keys.next()) |key| {
-                if (!std.mem.startsWith(u8, key.*, scope)) continue;
-                const tail = key.*[scope.len..];
-                if (tail.len == 0 or std.mem.indexOfScalar(u8, tail, '.') != null) continue;
+        {
+            var entries = self.analyzer.function_names.iterator();
+            while (entries.next()) |entry| {
+                const tail = namespaceTail(scope, entry.key_ptr.*) orelse continue;
+                const info = self.analyzer.functions.items[entry.value_ptr.*];
+                if (info.declaration.visibility == .private and info.module != self.module) continue;
+                suggestion.offer(tail);
+            }
+        }
+        {
+            var entries = self.analyzer.struct_names.iterator();
+            while (entries.next()) |entry| {
+                const tail = namespaceTail(scope, entry.key_ptr.*) orelse continue;
+                const info = self.analyzer.struct_decls.items[entry.value_ptr.*];
+                if (info.declaration.visibility == .private and info.module != self.module) continue;
+                suggestion.offer(tail);
+            }
+        }
+        {
+            var entries = self.analyzer.constant_names.iterator();
+            while (entries.next()) |entry| {
+                const tail = namespaceTail(scope, entry.key_ptr.*) orelse continue;
+                const info = self.analyzer.constant_infos.items[entry.value_ptr.*];
+                if (info.declaration.visibility == .private and info.module != self.module) continue;
                 suggestion.offer(tail);
             }
         }
@@ -712,6 +787,15 @@ pub const FunctionBuilder = struct {
             return;
         }
         try self.fail("luce.sema.name", span, "{s} has no member {s}", .{ namespace, member });
+    }
+
+    /// The immediate member `key` names inside `scope` ("geo."), or
+    /// null when the key lives elsewhere or deeper.
+    fn namespaceTail(scope: []const u8, key: []const u8) ?[]const u8 {
+        if (!std.mem.startsWith(u8, key, scope)) return null;
+        const tail = key[scope.len..];
+        if (tail.len == 0 or std.mem.indexOfScalar(u8, tail, '.') != null) return null;
+        return tail;
     }
 
     /// Remember that `name`'s declaration was abandoned, so its later
@@ -746,13 +830,17 @@ pub const FunctionBuilder = struct {
             return;
         }
         var suggestion = helpers.Suggestion.init(written);
-        var functions = self.analyzer.function_names.keyIterator();
-        while (functions.next()) |key| {
-            if (self.visibleName(key.*)) |name| suggestion.offer(name);
+        var functions = self.analyzer.function_names.iterator();
+        while (functions.next()) |entry| {
+            const info = self.analyzer.functions.items[entry.value_ptr.*];
+            if (info.declaration.visibility == .private and info.module != self.module) continue;
+            if (self.visibleName(entry.key_ptr.*)) |name| suggestion.offer(name);
         }
-        var structs = self.analyzer.struct_names.keyIterator();
-        while (structs.next()) |key| {
-            if (self.visibleName(key.*)) |name| suggestion.offer(name);
+        var structs = self.analyzer.struct_names.iterator();
+        while (structs.next()) |entry| {
+            const info = self.analyzer.struct_decls.items[entry.value_ptr.*];
+            if (info.declaration.visibility == .private and info.module != self.module) continue;
+            if (self.visibleName(entry.key_ptr.*)) |name| suggestion.offer(name);
         }
         if (suggestion.best()) |closest| {
             try self.fail("luce.sema.call", span, "unknown function {s}; did you mean {s}?", .{ written, closest });
@@ -763,16 +851,25 @@ pub const FunctionBuilder = struct {
 
     /// Report a field a struct does not have, offering the closest one
     /// it does.  A struct's fields are right there in the layout, so
-    /// there is never an excuse for this message not to help.
+    /// there is never an excuse for this message not to help — and a
+    /// field withheld from this module is never offered (VISIBILITY.md
+    /// D2: did-you-mean offers visible names only).
     fn failUnknownField(
         self: *FunctionBuilder,
         code: []const u8,
-        layout: StructLayout,
+        layout_index: u32,
         field: []const u8,
         span: Span,
     ) Error!void {
+        const layout = self.analyzer.structs.items[layout_index];
+        const info = self.analyzer.struct_decls.items[layout_index];
         var suggestion = helpers.Suggestion.init(field);
-        for (layout.fields) |candidate| suggestion.offer(candidate.name);
+        for (layout.fields, 0..) |candidate, index| {
+            if (info.module != self.module and
+                index < info.field_visibility.len and
+                info.field_visibility[index] == .private) continue;
+            suggestion.offer(candidate.name);
+        }
         if (suggestion.best()) |closest| {
             try self.fail(code, span, "{s} has no field {s}; did you mean {s}?", .{ layout.name, field, closest });
             return;
@@ -2464,9 +2561,10 @@ pub const FunctionBuilder = struct {
                     const layout_index = current_type.strukt;
                     const layout = self.analyzer.structs.items[layout_index];
                     const field_index = layout.findField(field.name) orelse {
-                        try self.failUnknownField("luce.sema.field", layout, field.name, field.span);
+                        try self.failUnknownField("luce.sema.field", layout_index, field.name, field.span);
                         return;
                     };
+                    if (!try self.fieldReachable(layout_index, field_index, field.span)) return;
                     accessor.* = .{ .field = .{ .parent = current, .layout = layout_index, .field_index = field_index } };
                     current = try self.code.emit(.{ .struct_get = .{
                         .target = current,
@@ -2828,9 +2926,10 @@ pub const FunctionBuilder = struct {
         const layout_index = local_type.strukt;
         const layout = self.analyzer.structs.items[layout_index];
         const field_index = layout.findField(target.field) orelse {
-            try self.failUnknownField("luce.sema.field", layout, target.field, target.span);
+            try self.failUnknownField("luce.sema.field", layout_index, target.field, target.span);
             return;
         };
+        if (!try self.fieldReachable(layout_index, field_index, target.span)) return;
         const expected = layout.fields[field_index].field_type;
         // An object field follows the verb rule and its owner drops
         // the old value (S25); only the owning binding can restock it.
@@ -4573,6 +4672,14 @@ pub const FunctionBuilder = struct {
                 const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
                 // geo.pi — an imported module's file-scope constant.
                 if (self.analyzer.constant_names.get(joined)) |constant| {
+                    const info = self.analyzer.constant_infos.items[constant];
+                    if (info.declaration.visibility == .private and info.module != self.module) {
+                        try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
+                            field.name,
+                            self.analyzer.moduleName(info.module),
+                        });
+                        return null;
+                    }
                     return self.emitConstant(constant);
                 }
                 try self.failNamespaceMember(base, field.name, joined, field.span);
@@ -4611,9 +4718,10 @@ pub const FunctionBuilder = struct {
                 else => member,
             };
             if (try self.failNotAValue(written, member, field.span)) return null;
-            try self.failUnknownField("luce.sema.field", layout, field.name, field.span);
+            try self.failUnknownField("luce.sema.field", layout_index, field.name, field.span);
             return null;
         };
+        if (!try self.fieldReachable(layout_index, field_index, field.span)) return null;
         const field_type = layout.fields[field_index].field_type;
         return .{
             .register = try self.code.emit(.{ .struct_get = .{
@@ -5385,6 +5493,7 @@ pub const FunctionBuilder = struct {
         shape_position: ShapePosition,
     ) Error!?Typed {
         const info = self.analyzer.functions.items[function_index];
+        if (!try self.functionReachable(function_index, span)) return null;
         if (info.is_entry) {
             try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
             return null;
@@ -5851,6 +5960,7 @@ pub const FunctionBuilder = struct {
             try self.failUnknownMethod(layout_index, layout, method);
             return null;
         };
+        if (!try self.functionReachable(function_index, method.span)) return null;
         const info = self.analyzer.functions.items[function_index];
         // The whole difference between a namespace and a method is
         // whether the declaration's first parameter is the word `self`,
@@ -6152,6 +6262,8 @@ pub const FunctionBuilder = struct {
         for (self.analyzer.functions.items) |candidate| {
             if (candidate.enclosing != layout_index) continue;
             if (candidate.receiver == .not) continue;
+            // Never a method this module cannot call (VISIBILITY.md D2).
+            if (candidate.declaration.visibility == .private and candidate.module != self.module) continue;
             const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
             suggestion.offer(candidate.name[dot + 1 ..]);
         }
@@ -6404,9 +6516,14 @@ pub const FunctionBuilder = struct {
         const qualified = try std.fmt.allocPrint(self.arena(), "strings.{s}", .{method.name});
         const function_index = self.analyzer.function_names.get(qualified) orelse {
             var suggestion = helpers.Suggestion.init(method.name);
-            var keys = self.analyzer.function_names.keyIterator();
-            while (keys.next()) |key| {
-                if (std.mem.startsWith(u8, key.*, "strings.")) suggestion.offer(key.*["strings.".len..]);
+            var entries = self.analyzer.function_names.iterator();
+            while (entries.next()) |entry| {
+                if (!std.mem.startsWith(u8, entry.key_ptr.*, "strings.")) continue;
+                // A withheld helper is not a method anyone is owed
+                // (VISIBILITY.md D2).
+                const info = self.analyzer.functions.items[entry.value_ptr.*];
+                if (info.declaration.visibility == .private and info.module != self.module) continue;
+                suggestion.offer(entry.key_ptr.*["strings.".len..]);
             }
             // The reader wrote a method on a string; `strings` is the
             // module it routes to, and answering with the routing
@@ -6437,6 +6554,10 @@ pub const FunctionBuilder = struct {
         as_statement: bool,
         fallible_allowed: bool,
     ) Error!?Typed {
+        // The method sugar routes to the same declaration and the same
+        // refusal, so the leak has no second door (VISIBILITY.md §1):
+        // `s.fold_case(…)` arrives here as `strings.fold_case`.
+        if (!try self.functionReachable(function_index, span)) return null;
         const info = self.analyzer.functions.items[function_index];
         // **The whole of why a swallowed failure is unwritable.**  A
         // function that says it can fail cannot be called as if it
@@ -6726,6 +6847,16 @@ pub const FunctionBuilder = struct {
         layout_index: u32,
     ) Error!?Typed {
         const layout = self.analyzer.structs.items[layout_index];
+        // A marked struct constructed outside its module is the type
+        // refusal; construction is never reached (VISIBILITY.md §8).
+        const decl_info = self.analyzer.struct_decls.items[layout_index];
+        if (decl_info.declaration.visibility == .private and decl_info.module != self.module) {
+            try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
+                decl_info.declaration.name,
+                self.analyzer.moduleName(decl_info.module),
+            });
+            return null;
+        }
         if (layout.fields.len == 0) {
             try self.fail(
                 "luce.sema.construct",
@@ -6752,9 +6883,13 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             const field_index = layout.findField(name) orelse {
-                try self.failUnknownField("luce.sema.construct", layout, name, argument.span);
+                try self.failUnknownField("luce.sema.construct", layout_index, name, argument.span);
                 return null;
             };
+            // Naming a private field — even one with a default — is
+            // refused: a default is the module's chosen value for a
+            // slot the module kept (VISIBILITY.md §3).
+            if (!try self.fieldReachable(layout_index, field_index, argument.span)) return null;
             if (seen[field_index]) {
                 try self.fail("luce.sema.construct", argument.span, context.duplicate_field_message, .{name});
                 return null;
@@ -6810,6 +6945,29 @@ pub const FunctionBuilder = struct {
                 .value_type = filled.value_type,
             });
             seen[field_index] = true;
+        }
+        // A still-missing field has no default.  Missing and *private*
+        // makes the struct not constructible here at all, and the
+        // diagnostic names the pattern that is: a public function of
+        // the declaring module (VISIBILITY.md §3).
+        if (decl_info.module != self.module) {
+            for (seen, 0..) |given, field_index| {
+                if (given) continue;
+                if (field_index >= decl_info.field_visibility.len) continue;
+                if (decl_info.field_visibility[field_index] != .private) continue;
+                try self.fail(
+                    "luce.sema.private",
+                    span,
+                    "{s} cannot be constructed here: {s} is marked private in {s} and has no default; construction belongs to a public function of {s}",
+                    .{
+                        decl_info.declaration.name,
+                        layout.fields[field_index].name,
+                        self.analyzer.moduleName(decl_info.module),
+                        self.analyzer.moduleName(decl_info.module),
+                    },
+                );
+                return null;
+            }
         }
         for (seen) |given| {
             if (given) continue;

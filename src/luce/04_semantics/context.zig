@@ -294,6 +294,12 @@ pub const StructDeclInfo = struct {
     /// in turn — the same lazy, cycle-checked shape a file-scope
     /// constant has.
     field_defaults: []FieldDefault = &.{},
+    /// One entry per collected field, beside `field_defaults`: the
+    /// visibility the field wrote (docs/VISIBILITY.md §3).
+    /// `types.StructLayout` stays untouched — the ARGS step-5
+    /// precedent: what lowering needs lives in the layout, what
+    /// checking needs lives here.
+    field_visibility: []ast.Visibility = &.{},
 };
 
 /// One struct field's default: the written expression and, once

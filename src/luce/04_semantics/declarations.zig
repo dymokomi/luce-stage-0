@@ -209,6 +209,56 @@ pub const Analyzer = struct {
         return std.fmt.allocPrint(self.arena, "{s}.{s}", .{ prefix, name });
     }
 
+    /// The name a refusal calls `module` — the prefix a program
+    /// writes in front of the dot.  Only ever read for a declaring
+    /// module in a cross-module refusal, and the root module cannot be
+    /// imported, so the answer is never empty where it is used.
+    pub fn moduleName(self: *const Analyzer, module: usize) []const u8 {
+        return self.modules[module].prefix;
+    }
+
+    /// The visibility rule entire (docs/VISIBILITY.md D1): a
+    /// declaration of `owner` marked `visibility` is reachable from
+    /// `from` unless it says private and `from` is another file.
+    /// Within one file the bit is never consulted.
+    pub fn reachable(owner: usize, visibility: ast.Visibility, from: usize) bool {
+        return visibility != .private or owner == from;
+    }
+
+    /// Where a D4 sentence says the mark lives: the module's name, or
+    /// "this file" for the root — which nothing can import, but whose
+    /// own surface checks still run and still land on the marker's
+    /// author.
+    pub fn markedIn(self: *const Analyzer, module: usize) []const u8 {
+        const prefix = self.modules[module].prefix;
+        return if (prefix.len == 0) "this file" else prefix;
+    }
+
+    /// The private struct `of` mentions, if any — transitively through
+    /// containers and optionals, because a `list(Inner)` in a public
+    /// signature publishes Inner exactly as a bare `Inner` would
+    /// (docs/VISIBILITY.md §2).  It does not look *into* a struct's
+    /// fields: mentioning a public struct that privately holds hidden
+    /// types publishes nothing, and those fields were checked at their
+    /// own declaration.
+    pub fn privateMentioned(self: *const Analyzer, of: Type) ?u32 {
+        return switch (of) {
+            .strukt => |index| if (self.struct_decls.items[index].declaration.visibility == .private)
+                index
+            else
+                null,
+            .heap => |index| switch (self.heap_types.items[index]) {
+                .list => |element| self.privateMentioned(element),
+                // A map key is long or string, never a struct.
+                .map => |pair| self.privateMentioned(pair.value),
+                .array => |shape| self.privateMentioned(shape.element),
+                .builder => null,
+            },
+            .optional => |payload| self.privateMentioned(payload.asType()),
+            else => null,
+        };
+    }
+
     /// True when `module` imports `name`.
     pub fn importsModule(self: *const Analyzer, module: usize, name: []const u8) bool {
         for (self.modules[module].tree.imports) |imported| {
@@ -360,7 +410,21 @@ pub const Analyzer = struct {
                 try self.fail("luce.sema.import", written.span, "unknown module {s}; import {s} to use its types", .{ head, try self.importSpelling(head) });
                 return null;
             }
-            if (self.struct_names.get(written.name)) |index| return .{ .strukt = index };
+            if (self.struct_names.get(written.name)) |index| {
+                // Private is not unknown (VISIBILITY.md D2): the name
+                // exists and is withheld, and the sentence says which.
+                const info = self.struct_decls.items[index];
+                if (!reachable(info.module, info.declaration.visibility, module)) {
+                    try self.fail(
+                        "luce.sema.private",
+                        written.span,
+                        "{s} is private to {s}",
+                        .{ info.declaration.name, self.moduleName(info.module) },
+                    );
+                    return null;
+                }
+                return .{ .strukt = index };
+            }
             try self.failUnknownType(module, written);
             return null;
         }
@@ -564,6 +628,8 @@ pub const Analyzer = struct {
             defer fields.deinit(self.arena);
             var field_defaults: std.ArrayList(context.FieldDefault) = .empty;
             defer field_defaults.deinit(self.arena);
+            var field_visibility: std.ArrayList(ast.Visibility) = .empty;
+            defer field_visibility.deinit(self.arena);
             // The first field that declared a default, for D3's
             // sentence when a required one follows it — the same
             // trailing rule a parameter list keeps (docs/ARGS.md D8).
@@ -594,11 +660,37 @@ pub const Analyzer = struct {
                     continue;
                 }
                 const field_type = (try self.resolveType(info.module, field.type_name)) orelse continue;
+                // D4, for a field: a reachable field may not publish a
+                // hidden type.  Only the author of the marks can trip
+                // this — nothing is private until someone writes it —
+                // and the refusal lands on the line that can be fixed.
+                // The field is still collected: its type resolved, and
+                // dropping it would turn one mistake into a cascade
+                // about the struct that holds it.
+                if (declaration.visibility != .private and field.visibility != .private) {
+                    if (self.privateMentioned(field_type)) |hidden| {
+                        const target = self.struct_decls.items[hidden].declaration;
+                        try self.fail(
+                            "luce.sema.private",
+                            field.type_name.span,
+                            "{s} of {s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                            .{
+                                field.name,
+                                declaration.name,
+                                target.name,
+                                self.markedIn(info.module),
+                                field.name,
+                                target.name,
+                            },
+                        );
+                    }
+                }
                 try fields.append(self.arena, .{
                     .name = try self.arena.dupe(u8, field.name),
                     .field_type = field_type,
                 });
                 try field_defaults.append(self.arena, .{ .expression = field.default });
+                try field_visibility.append(self.arena, field.visibility);
             }
             for (declaration.functions) |function| {
                 for (declaration.fields) |field| {
@@ -617,6 +709,7 @@ pub const Analyzer = struct {
             }
             self.structs.items[index].fields = try fields.toOwnedSlice(self.arena);
             self.struct_decls.items[index].field_defaults = try field_defaults.toOwnedSlice(self.arena);
+            self.struct_decls.items[index].field_visibility = try field_visibility.toOwnedSlice(self.arena);
         }
 
         // A struct containing itself (directly or through another
@@ -978,7 +1071,29 @@ pub const Analyzer = struct {
         for (0..self.constant_infos.items.len) |index| {
             const module = self.constant_infos.items[index].module;
             self.diagnostics.scope = self.modules[module].file;
-            _ = try self.evaluateConstant(@intCast(index));
+            const folded = try self.evaluateConstant(@intCast(index));
+            // D4, for a constant: a reachable constant may not hold a
+            // value of a hidden type — an importer could read it and
+            // hold what it cannot name.
+            if (folded) |value| {
+                const info = self.constant_infos.items[index];
+                if (info.declaration.visibility == .private) continue;
+                if (self.privateMentioned(value.value_type)) |hidden| {
+                    const target = self.struct_decls.items[hidden].declaration;
+                    try self.fail(
+                        "luce.sema.private",
+                        info.declaration.name_span,
+                        "{s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                        .{
+                            info.declaration.name,
+                            target.name,
+                            self.markedIn(info.module),
+                            info.declaration.name,
+                            target.name,
+                        },
+                    );
+                }
+            }
         }
         self.diagnostics.scope = source_mod.root_file;
     }
@@ -1193,6 +1308,19 @@ pub const Analyzer = struct {
                     if (self.importsModule(module, head)) {
                         const joined = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ head, field.name });
                         if (self.constant_names.get(joined)) |index| {
+                            // The fold happens inside the declaring
+                            // module and the *value* crosses (D8); the
+                            // gate is on saying the name.
+                            const info = self.constant_infos.items[index];
+                            if (!reachable(info.module, info.declaration.visibility, module)) {
+                                try self.fail(
+                                    "luce.sema.private",
+                                    field.span,
+                                    "{s} is private to {s}",
+                                    .{ field.name, self.moduleName(info.module) },
+                                );
+                                return null;
+                            }
                             return self.evaluateConstant(index);
                         }
                         return self.constantError(field.span, "{s} has no constant {s}", .{ head, field.name });
@@ -1207,6 +1335,18 @@ pub const Analyzer = struct {
                 const field_index = layout.findField(field.name) orelse {
                     return self.constantError(field.span, "{s} has no field {s}", .{ layout.name, field.name });
                 };
+                const owner = self.struct_decls.items[target.value.strukt.layout];
+                if (owner.module != module and
+                    field_index < owner.field_visibility.len and
+                    owner.field_visibility[field_index] == .private)
+                {
+                    try self.fail("luce.sema.private", field.span, "{s} of {s} is private to {s}", .{
+                        field.name,
+                        owner.declaration.name,
+                        self.moduleName(owner.module),
+                    });
+                    return null;
+                }
                 return .{
                     .value = target.value.strukt.fields[field_index],
                     .value_type = layout.fields[field_index].field_type,
@@ -1398,6 +1538,17 @@ pub const Analyzer = struct {
     ) Error!?TypedConstant {
         const layout = self.structs.items[layout_index];
         const result_type: Type = .{ .strukt = layout_index };
+        // The construction gates a body's construction has, in fold
+        // order (VISIBILITY.md §3): the folder is a second front door
+        // to the same struct, and it holds the same door policy.
+        const decl_info = self.struct_decls.items[layout_index];
+        if (decl_info.declaration.visibility == .private and decl_info.module != module) {
+            try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
+                decl_info.declaration.name,
+                self.moduleName(decl_info.module),
+            });
+            return null;
+        }
         if (self.carriesObjects(result_type)) {
             return self.constantError(span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
         }
@@ -1415,6 +1566,17 @@ pub const Analyzer = struct {
             const field_index = layout.findField(name) orelse {
                 return self.constantError(argument.span, "{s} has no field {s}", .{ layout.name, name });
             };
+            if (decl_info.module != module and
+                field_index < decl_info.field_visibility.len and
+                decl_info.field_visibility[field_index] == .private)
+            {
+                try self.fail("luce.sema.private", argument.span, "{s} of {s} is private to {s}", .{
+                    name,
+                    decl_info.declaration.name,
+                    self.moduleName(decl_info.module),
+                });
+                return null;
+            }
             if (seen[field_index]) {
                 return self.constantError(argument.span, duplicate_field_message, .{name});
             }
@@ -1442,6 +1604,25 @@ pub const Analyzer = struct {
             const filled = (try self.fieldDefault(layout_index, field_index)) orelse return null;
             fields[field_index] = filled.value;
             seen[field_index] = true;
+        }
+        if (decl_info.module != module) {
+            for (seen, 0..) |given, field_index| {
+                if (given) continue;
+                if (field_index >= decl_info.field_visibility.len) continue;
+                if (decl_info.field_visibility[field_index] != .private) continue;
+                try self.fail(
+                    "luce.sema.private",
+                    span,
+                    "{s} cannot be constructed here: {s} is marked private in {s} and has no default; construction belongs to a public function of {s}",
+                    .{
+                        decl_info.declaration.name,
+                        layout.fields[field_index].name,
+                        self.moduleName(decl_info.module),
+                        self.moduleName(decl_info.module),
+                    },
+                );
+                return null;
+            }
         }
         for (seen) |given| {
             if (given) continue;
@@ -1721,6 +1902,25 @@ pub const Analyzer = struct {
         }
 
         const is_entry = top_level and in_root and std.mem.eql(u8, declaration.name, "main");
+        // The entry is selected by name and called by the runtime
+        // through the ABI — there is no import edge for a marker to
+        // gate, so `private` on it could only assert something false
+        // (VISIBILITY.md D7).  `public` is inert-legal like any other
+        // restated default.
+        if (is_entry and declaration.visibility == .private) {
+            try self.fail(
+                "luce.sema.private",
+                declaration.name_span,
+                "main is the entry and cannot be private: the runtime starts it",
+                .{},
+            );
+        }
+        // Whether this declaration is part of the module's reachable
+        // surface, for D4 below: a private function, or any member of
+        // a private struct, publishes nothing.
+        const surface = declaration.visibility != .private and
+            (enclosing == null or
+                self.struct_decls.items[enclosing.?].declaration.visibility != .private);
         var parameter_types: std.ArrayList(Type) = .empty;
         defer parameter_types.deinit(self.arena);
         var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
@@ -1774,6 +1974,21 @@ pub const Analyzer = struct {
                 continue;
             }
             const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
+            // D4: a public surface names public types.  Only the
+            // author of the marks can trip this, and the refusal names
+            // both edits that would restore honesty (VISIBILITY.md §2).
+            if (surface) {
+                if (self.privateMentioned(resolved)) |hidden| {
+                    const target = self.struct_decls.items[hidden].declaration;
+                    try self.fail(
+                        "luce.sema.private",
+                        parameter.type_name.span,
+                        "{s} is public and takes {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                        .{ declaration.name, target.name, self.markedIn(module), declaration.name, target.name },
+                    );
+                    continue;
+                }
+            }
             if (parameter.mode == .give and !self.carriesObjects(resolved)) {
                 try self.fail(
                     "luce.sema.own",
@@ -1814,6 +2029,18 @@ pub const Analyzer = struct {
         defer results.deinit(self.arena);
         for (declaration.returns) |written| {
             const resolved = (try self.resolveType(module, written)) orelse continue;
+            if (surface) {
+                if (self.privateMentioned(resolved)) |hidden| {
+                    const target = self.struct_decls.items[hidden].declaration;
+                    try self.fail(
+                        "luce.sema.private",
+                        written.span,
+                        "{s} is public and answers {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                        .{ declaration.name, target.name, self.markedIn(module), declaration.name, target.name },
+                    );
+                    continue;
+                }
+            }
             try results.append(self.arena, resolved);
         }
         // A `var self` method's receiver is result zero: its results
