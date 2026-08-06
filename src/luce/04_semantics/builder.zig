@@ -49,14 +49,28 @@ const LocalId = mir.LocalId;
 // The free builtins
 // ---------------------------------------------------------------------------
 
-/// One free builtin: what it is called, what it lowers to, how many
-/// arguments it takes, whether it needs the host gate, whether a call
-/// to it can leave a container different from how it found it, and
-/// whether it answers its operand's own width.
+/// One parameter slot of a builtin: its name, and its default where
+/// the corpus asked for one (docs/ARGS.md D10) — the same folded
+/// constant a user parameter's default is, at the type the checking
+/// switch below expects for that slot.
+pub const Slot = struct {
+    name: []const u8,
+    default: ?context.TypedConstant = null,
+};
+
+/// One free builtin: what it is called, what it lowers to, the slots
+/// it takes, whether it needs the host gate, whether a call to it can
+/// leave a container different from how it found it, and whether it
+/// answers its operand's own width.
 pub const Builtin = struct {
     name: []const u8,
     kind: mir.Intrinsic,
-    arity: usize,
+    /// The signature: **a builtin is a declaration the compiler
+    /// writes in a table instead of in Luce, and the table is its
+    /// signature** (docs/ARGS.md §3).  `parameters.len` is what
+    /// `arity` used to be; the names are what a call site may write,
+    /// and the defaults are trailing exactly as a declaration's are.
+    parameters: []const Slot = &.{},
     host: bool = false,
     /// False for the two calls that are not a pure walk over their
     /// arguments: `free` ends an object's life, and `error` leaves by
@@ -72,6 +86,12 @@ pub const Builtin = struct {
     polymorphic: bool = false,
 };
 
+/// `-1` and `false`, as `term_style`'s table row spells them — the
+/// two defaults the shipped corpus asked for (docs/ARGS.md §3), and
+/// today the only ones any builtin has.
+const default_background: context.TypedConstant = .{ .value = .{ .long = -1 }, .value_type = .long };
+const default_not_bold: context.TypedConstant = .{ .value = .{ .boolean = false }, .value_type = .boolean };
+
 /// **The one table.**  `lowerIntrinsic` resolves a call through it and
 /// `isPureBuiltin` asks it what a call costs.  Those were two lists of
 /// the same thirty-nine names, 3,375 lines apart in this file, with
@@ -82,47 +102,55 @@ pub const Builtin = struct {
 /// language spells*: `tools/grammar.zig` generates the editor grammar
 /// from these tables rather than from a copy of them, and a copy is
 /// exactly how the old grammar came to highlight builtins the language
-/// had deleted (tools/vscode-luce/README.md).
+/// had deleted (tools/vscode-luce/README.md).  `site/src/coverage.zig`
+/// reads the rows *textually* — a top-level row starts at one indent,
+/// a slot one deeper — and holds `ref/builtins.md` to both the names
+/// and the parameter names, so the table and the reference cannot
+/// drift.
 pub const builtins = [_]Builtin{
-    .{ .name = "abs", .kind = .abs, .arity = 1, .polymorphic = true },
-    .{ .name = "min", .kind = .min, .arity = 2, .polymorphic = true },
-    .{ .name = "max", .kind = .max, .arity = 2, .polymorphic = true },
-    .{ .name = "clamp", .kind = .clamp, .arity = 3, .polymorphic = true },
-    .{ .name = "sqrt", .kind = .sqrt, .arity = 1, .polymorphic = true },
-    .{ .name = "floor", .kind = .floor, .arity = 1, .polymorphic = true },
-    .{ .name = "ceil", .kind = .ceil, .arity = 1, .polymorphic = true },
-    .{ .name = "trunc", .kind = .trunc, .arity = 1, .polymorphic = true },
-    .{ .name = "len", .kind = .len, .arity = 1 },
-    .{ .name = "assert", .kind = .assert_true, .arity = 1 },
-    .{ .name = "trap", .kind = .trap_message, .arity = 1 },
-    .{ .name = "error", .kind = .raise_error, .arity = 1, .pure = false },
-    .{ .name = "free", .kind = .free_object, .arity = 1, .pure = false },
-    .{ .name = "parse_int", .kind = .parse_int, .arity = 1 },
-    .{ .name = "parse_float", .kind = .parse_float, .arity = 1 },
-    .{ .name = "chr", .kind = .chr_code, .arity = 1 },
-    .{ .name = "ord", .kind = .ord_text, .arity = 1 },
-    .{ .name = "print", .kind = .print, .arity = 1, .host = true },
-    .{ .name = "file_read", .kind = .file_read, .arity = 1, .host = true },
-    .{ .name = "file_write", .kind = .file_write, .arity = 2, .host = true },
-    .{ .name = "file_exists", .kind = .file_exists, .arity = 1, .host = true },
-    .{ .name = "term_rows", .kind = .term_rows, .arity = 0, .host = true },
-    .{ .name = "term_cols", .kind = .term_cols, .arity = 0, .host = true },
-    .{ .name = "term_clear", .kind = .term_clear, .arity = 0, .host = true },
-    .{ .name = "term_move", .kind = .term_move, .arity = 2, .host = true },
-    .{ .name = "term_style", .kind = .term_style, .arity = 3, .host = true },
-    .{ .name = "term_write", .kind = .term_write, .arity = 1, .host = true },
-    .{ .name = "term_flush", .kind = .term_flush, .arity = 0, .host = true },
-    .{ .name = "key_read", .kind = .key_read, .arity = 0, .host = true },
-    .{ .name = "key_text", .kind = .key_text, .arity = 0, .host = true },
-    .{ .name = "read_line", .kind = .read_line, .arity = 1, .host = true },
-    .{ .name = "print_error", .kind = .print_error, .arity = 1, .host = true },
-    .{ .name = "clock_ms", .kind = .clock_ms, .arity = 0, .host = true },
-    .{ .name = "sleep_ms", .kind = .sleep_ms, .arity = 1, .host = true },
-    .{ .name = "env", .kind = .env_get, .arity = 1, .host = true },
-    .{ .name = "file_append", .kind = .file_append, .arity = 2, .host = true },
-    .{ .name = "file_delete", .kind = .file_delete, .arity = 1, .host = true },
-    .{ .name = "file_rename", .kind = .file_rename, .arity = 2, .host = true },
-    .{ .name = "dir_list", .kind = .dir_list, .arity = 1, .host = true },
+    .{ .name = "abs", .kind = .abs, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
+    .{ .name = "min", .kind = .min, .parameters = &.{ .{ .name = "a" }, .{ .name = "b" } }, .polymorphic = true },
+    .{ .name = "max", .kind = .max, .parameters = &.{ .{ .name = "a" }, .{ .name = "b" } }, .polymorphic = true },
+    .{ .name = "clamp", .kind = .clamp, .parameters = &.{ .{ .name = "value" }, .{ .name = "low" }, .{ .name = "high" } }, .polymorphic = true },
+    .{ .name = "sqrt", .kind = .sqrt, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
+    .{ .name = "floor", .kind = .floor, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
+    .{ .name = "ceil", .kind = .ceil, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
+    .{ .name = "trunc", .kind = .trunc, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
+    .{ .name = "len", .kind = .len, .parameters = &.{.{ .name = "value" }} },
+    .{ .name = "assert", .kind = .assert_true, .parameters = &.{.{ .name = "condition" }} },
+    .{ .name = "trap", .kind = .trap_message, .parameters = &.{.{ .name = "message" }} },
+    .{ .name = "error", .kind = .raise_error, .parameters = &.{.{ .name = "message" }}, .pure = false },
+    .{ .name = "free", .kind = .free_object, .parameters = &.{.{ .name = "object" }}, .pure = false },
+    .{ .name = "parse_int", .kind = .parse_int, .parameters = &.{.{ .name = "text" }} },
+    .{ .name = "parse_float", .kind = .parse_float, .parameters = &.{.{ .name = "text" }} },
+    .{ .name = "chr", .kind = .chr_code, .parameters = &.{.{ .name = "code" }} },
+    .{ .name = "ord", .kind = .ord_text, .parameters = &.{.{ .name = "text" }} },
+    .{ .name = "print", .kind = .print, .parameters = &.{.{ .name = "text" }}, .host = true },
+    .{ .name = "file_read", .kind = .file_read, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "file_write", .kind = .file_write, .parameters = &.{ .{ .name = "path" }, .{ .name = "content" } }, .host = true },
+    .{ .name = "file_exists", .kind = .file_exists, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "term_rows", .kind = .term_rows, .host = true },
+    .{ .name = "term_cols", .kind = .term_cols, .host = true },
+    .{ .name = "term_clear", .kind = .term_clear, .host = true },
+    .{ .name = "term_move", .kind = .term_move, .parameters = &.{ .{ .name = "row" }, .{ .name = "column" } }, .host = true },
+    .{ .name = "term_style", .kind = .term_style, .host = true, .parameters = &.{
+        .{ .name = "fg" },
+        .{ .name = "bg", .default = default_background },
+        .{ .name = "bold", .default = default_not_bold },
+    } },
+    .{ .name = "term_write", .kind = .term_write, .parameters = &.{.{ .name = "text" }}, .host = true },
+    .{ .name = "term_flush", .kind = .term_flush, .host = true },
+    .{ .name = "key_read", .kind = .key_read, .host = true },
+    .{ .name = "key_text", .kind = .key_text, .host = true },
+    .{ .name = "read_line", .kind = .read_line, .parameters = &.{.{ .name = "prompt" }}, .host = true },
+    .{ .name = "print_error", .kind = .print_error, .parameters = &.{.{ .name = "text" }}, .host = true },
+    .{ .name = "clock_ms", .kind = .clock_ms, .host = true },
+    .{ .name = "sleep_ms", .kind = .sleep_ms, .parameters = &.{.{ .name = "milliseconds" }}, .host = true },
+    .{ .name = "env", .kind = .env_get, .parameters = &.{.{ .name = "name" }}, .host = true },
+    .{ .name = "file_append", .kind = .file_append, .parameters = &.{ .{ .name = "path" }, .{ .name = "content" } }, .host = true },
+    .{ .name = "file_delete", .kind = .file_delete, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "file_rename", .kind = .file_rename, .parameters = &.{ .{ .name = "from" }, .{ .name = "to" } }, .host = true },
+    .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
 };
 
 /// Names the language spelled once and does not any more, and what to
@@ -158,30 +186,42 @@ const Typed = struct {
 /// one that is worth a longer sentence (docs/RETURNS.md).
 const ShapePosition = enum { refused, bind, returning };
 
+/// One slot of a callable surface, as name resolution sees it
+/// (docs/ARGS.md): what the slot is called, whether a call site may
+/// name it — a method receiver is not nameable (D7) — and whether it
+/// carries a default (D2).  A user declaration and a builtin's table
+/// row both flatten to this, which is what lets one resolver serve
+/// every call path (D10).
+const CallSlot = struct {
+    name: []const u8,
+    nameable: bool = true,
+    defaulted: bool = false,
+};
+
 /// The slot argument `index` of `arguments` fills, with no reporting
-/// (docs/ARGS.md D4, D5): positional arguments fill parameters left to
-/// right, a name fills the parameter that spells it, and a receiver
-/// slot is never filled by name.  `hidden` is how many leading
-/// parameters the call site does not write — 1 in the method form,
-/// whose receiver stands in front of the dot; 0 otherwise.  The answer
-/// indexes the declared list, `hidden` included.  Null where the call
-/// is malformed; `resolveSlots` is the half that says how.
+/// (docs/ARGS.md D4, D5): positional arguments fill slots left to
+/// right, a name fills the slot that spells it, and a receiver slot
+/// is never filled by name.  `hidden` is how many leading slots the
+/// call site does not write — 1 in the method form, whose receiver
+/// stands in front of the dot; 0 otherwise.  The answer indexes the
+/// declared list, `hidden` included.  Null where the call is
+/// malformed; `resolveSlots` is the half that says how.
 ///
 /// Two callers, one rule: `landsOn` asks it mid-batch so a literal
 /// lands at the type of the slot it will fill, and `resolveSlots` asks
 /// it while checking — one implementation, so the two can never
 /// disagree about which slot that is.
 fn argumentSlot(
-    parameters: []const ast.Parameter,
+    slots: []const CallSlot,
     hidden: usize,
     arguments: []const ast.Argument,
     index: usize,
 ) ?usize {
     const argument = arguments[index];
     if (argument.name) |written| {
-        for (parameters[hidden..], hidden..) |parameter, slot| {
-            if (parameter.receiver != .not) continue;
-            if (std.mem.eql(u8, parameter.name, written)) return slot;
+        for (slots[hidden..], hidden..) |candidate, slot| {
+            if (!candidate.nameable) continue;
+            if (std.mem.eql(u8, candidate.name, written)) return slot;
         }
         return null;
     }
@@ -190,16 +230,16 @@ fn argumentSlot(
         if (earlier.name == null) positional += 1;
     }
     const slot = hidden + positional;
-    return if (slot < parameters.len) slot else null;
+    return if (slot < slots.len) slot else null;
 }
 
-/// How many of a signature's slots carry a default — the second
-/// number in the count sentence, and the suffix a call may omit
+/// How many of a surface's slots carry a default — the second number
+/// in the count sentence, and the suffix a call may omit
 /// (docs/ARGS.md D3).
-fn defaultCount(defaults: []const ?context.TypedConstant) usize {
+fn defaultCount(slots: []const CallSlot) usize {
     var count: usize = 0;
-    for (defaults) |default| {
-        if (default != null) count += 1;
+    for (slots) |slot| {
+        if (slot.defaulted) count += 1;
     }
     return count;
 }
@@ -1794,7 +1834,8 @@ pub const FunctionBuilder = struct {
                         return null;
                     const info = self.analyzer.functions.items[function_index];
                     if (info.declaration.parameters.len != info.parameter_types.len) return null;
-                    const slot = argumentSlot(info.declaration.parameters, 1, method.arguments, index - 1) orelse
+                    const surface = try self.declarationSlots(info.declaration.parameters, info.parameter_defaults);
+                    const slot = argumentSlot(surface, 1, method.arguments, index - 1) orelse
                         return null;
                     return info.parameter_types[slot];
                 }
@@ -5074,6 +5115,35 @@ pub const FunctionBuilder = struct {
     // Struct construction, explicit conversion, namespaced calls, and
     // builtin methods on values.
 
+    /// A declaration's parameters flattened to the resolver's
+    /// vocabulary: a receiver slot is not nameable (D7), and a slot
+    /// with a folded default says so.  Arena-owned.
+    fn declarationSlots(
+        self: *FunctionBuilder,
+        parameters: []const ast.Parameter,
+        defaults: []const ?context.TypedConstant,
+    ) Error![]CallSlot {
+        const surface = try self.arena().alloc(CallSlot, parameters.len);
+        for (parameters, defaults, surface) |parameter, default, *slot| {
+            slot.* = .{
+                .name = parameter.name,
+                .nameable = parameter.receiver == .not,
+                .defaulted = default != null,
+            };
+        }
+        return surface;
+    }
+
+    /// A builtin's table row flattened the same way — the table is its
+    /// signature (docs/ARGS.md §3).  Arena-owned.
+    fn builtinSlots(self: *FunctionBuilder, matched: Builtin) Error![]CallSlot {
+        const surface = try self.arena().alloc(CallSlot, matched.parameters.len);
+        for (matched.parameters, surface) |parameter, *slot| {
+            slot.* = .{ .name = parameter.name, .defaulted = parameter.default != null };
+        }
+        return surface;
+    }
+
     /// Which parameter slot each written argument fills — the name
     /// resolution of docs/ARGS.md, shared by every spelling of a user
     /// call.  The rules, each with its own sentence: positional
@@ -5082,21 +5152,21 @@ pub const FunctionBuilder = struct {
     /// (D5), a slot is filled once, and `self` is not a nameable
     /// argument (D7).
     ///
-    /// `parameters` is the declared list; `hidden` is how many of its
-    /// leading slots the call site does not write — 1 in the method
-    /// form, whose receiver stands in front of the dot; 0 otherwise.
-    /// The answers index the declared list, `hidden` included, so they
-    /// index `parameter_types` directly.  `seen` has one flag per
-    /// declared slot; the caller pre-marks the hidden ones.  Count
-    /// mistakes point at the call (`span`); name mistakes point at the
-    /// argument.  Null after reporting; arena-owned otherwise.
+    /// `surface` is the declared list flattened to `CallSlot`s;
+    /// `hidden` is how many of its leading slots the call site does
+    /// not write — 1 in the method form, whose receiver stands in
+    /// front of the dot; 0 otherwise.  The answers index the declared
+    /// list, `hidden` included, so they index `parameter_types`
+    /// directly.  `seen` has one flag per declared slot; the caller
+    /// pre-marks the hidden ones.  Count mistakes point at the call
+    /// (`span`); name mistakes point at the argument.  Null after
+    /// reporting; arena-owned otherwise.
     fn resolveSlots(
         self: *FunctionBuilder,
         callee: []const u8,
         code: []const u8,
-        parameters: []const ast.Parameter,
+        surface: []const CallSlot,
         hidden: usize,
-        defaulted: usize,
         call_arguments: []const ast.Argument,
         seen: []bool,
         span: Span,
@@ -5110,23 +5180,23 @@ pub const FunctionBuilder = struct {
                 // argument ends the positional run, so this argument
                 // has no slot to count into.  Name the first slot
                 // still open, which is the fix.
-                for (parameters, seen) |parameter, given| {
-                    if (given or parameter.receiver != .not) continue;
-                    try self.fail(code, argument.span, "a positional argument cannot follow a named one; write {s} = …", .{parameter.name});
+                for (surface, seen) |candidate, given| {
+                    if (given or !candidate.nameable) continue;
+                    try self.fail(code, argument.span, "a positional argument cannot follow a named one; write {s} = …", .{candidate.name});
                     return null;
                 }
                 try self.fail(code, argument.span, "a positional argument cannot follow a named one", .{});
                 return null;
             }
-            const slot = argumentSlot(parameters, hidden, call_arguments, index) orelse {
+            const slot = argumentSlot(surface, hidden, call_arguments, index) orelse {
                 if (argument.name != null) {
-                    try self.failUnknownParameter(callee, code, parameters, hidden, argument);
+                    try self.failUnknownParameter(callee, code, surface, hidden, argument);
                     return null;
                 }
                 // A positional argument past the last slot: the count
                 // sentence, which is about the call and not about any
                 // one argument.
-                try self.failArgumentCount(callee, code, parameters, hidden, defaulted, call_arguments.len, span);
+                try self.failArgumentCount(callee, code, surface, hidden, call_arguments.len, span);
                 return null;
             };
             if (argument.name) |written| {
@@ -5156,7 +5226,7 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         callee: []const u8,
         code: []const u8,
-        parameters: []const ast.Parameter,
+        surface: []const CallSlot,
         hidden: usize,
         argument: ast.Argument,
     ) Error!void {
@@ -5166,7 +5236,7 @@ pub const FunctionBuilder = struct {
                 try self.fail("luce.sema.self", argument.span, "self is the receiver; it is written in front of the dot, not named", .{});
                 return;
             }
-            if (parameters.len != 0 and parameters[0].receiver != .not) {
+            if (surface.len != 0 and !surface[0].nameable) {
                 try self.fail("luce.sema.self", argument.span, "self is the receiver, not a parameter: write {s}({s}, …)", .{
                     callee,
                     try self.writtenTarget(argument.value),
@@ -5175,9 +5245,9 @@ pub const FunctionBuilder = struct {
             }
         }
         var suggestion = helpers.Suggestion.init(written);
-        for (parameters[hidden..]) |parameter| {
-            if (parameter.receiver != .not) continue;
-            suggestion.offer(parameter.name);
+        for (surface[hidden..]) |candidate| {
+            if (!candidate.nameable) continue;
+            suggestion.offer(candidate.name);
         }
         if (suggestion.best()) |closest| {
             try self.fail(code, argument.span, "{s} has no parameter {s}; did you mean {s}?", .{ callee, written, closest });
@@ -5185,10 +5255,10 @@ pub const FunctionBuilder = struct {
         }
         var takes: std.ArrayList(u8) = .empty;
         defer takes.deinit(self.temporary());
-        for (parameters[hidden..]) |parameter| {
-            if (parameter.receiver != .not) continue;
+        for (surface[hidden..]) |candidate| {
+            if (!candidate.nameable) continue;
             if (takes.items.len != 0) try takes.appendSlice(self.temporary(), ", ");
-            try takes.appendSlice(self.temporary(), parameter.name);
+            try takes.appendSlice(self.temporary(), candidate.name);
         }
         if (takes.items.len == 0) {
             try self.fail(code, argument.span, "{s} has no parameter {s}; it takes no arguments", .{ callee, written });
@@ -5204,13 +5274,13 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         callee: []const u8,
         code: []const u8,
-        parameters: []const ast.Parameter,
+        surface: []const CallSlot,
         hidden: usize,
-        defaulted: usize,
         written_count: usize,
         span: Span,
     ) Error!void {
-        const takes = parameters.len - hidden;
+        const defaulted = defaultCount(surface);
+        const takes = surface.len - hidden;
         if (defaulted != 0) {
             const required = takes - defaulted;
             try self.fail(code, span, "{s} takes {d} argument{s} and {d} with a default, got {d}", .{
@@ -5238,28 +5308,27 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         callee: []const u8,
         code: []const u8,
-        parameters: []const ast.Parameter,
-        defaults: []const ?context.TypedConstant,
+        surface: []const CallSlot,
         seen: []const bool,
         span: Span,
     ) Error!bool {
         var missing: usize = 0;
-        for (seen, 0..) |given, slot| {
-            if (given or defaults[slot] != null) continue;
+        for (surface, seen) |candidate, given| {
+            if (given or candidate.defaulted) continue;
             missing += 1;
         }
         if (missing == 0) return true;
         var names: std.ArrayList(u8) = .empty;
         defer names.deinit(self.temporary());
         var written: usize = 0;
-        for (parameters, seen, 0..) |parameter, given, slot| {
-            if (given or defaults[slot] != null) continue;
+        for (surface, seen) |candidate, given| {
+            if (given or candidate.defaulted) continue;
             if (written != 0) {
                 if (missing > 2) try names.appendSlice(self.temporary(), ",");
                 try names.appendSlice(self.temporary(), " ");
                 if (written + 1 == missing) try names.appendSlice(self.temporary(), "and ");
             }
-            try names.appendSlice(self.temporary(), parameter.name);
+            try names.appendSlice(self.temporary(), candidate.name);
             written += 1;
         }
         try self.fail(code, span, "{s} is missing {s}", .{ callee, names.items });
@@ -5370,12 +5439,13 @@ pub const FunctionBuilder = struct {
             // signature left to check a call against.
             return null;
         }
+        const surface = try self.declarationSlots(parameters, info.parameter_defaults);
         const seen = try self.temporary().alloc(bool, parameters.len);
         defer self.temporary().free(seen);
         @memset(seen, false);
-        const slots = (try self.resolveSlots(name, "luce.sema.call", parameters, 0, defaultCount(info.parameter_defaults), call_arguments, seen, span)) orelse
+        const slots = (try self.resolveSlots(name, "luce.sema.call", surface, 0, call_arguments, seen, span)) orelse
             return null;
-        if (!(try self.checkRequiredSlots(name, "luce.sema.call", parameters, info.parameter_defaults, seen, span))) return null;
+        if (!(try self.checkRequiredSlots(name, "luce.sema.call", surface, seen, span))) return null;
         // Ownership handoffs are never invisible: a give parameter
         // needs give NAME, copy NAME, or something fresh at the call
         // site; a borrow parameter refuses a give (S13, S14).
@@ -5821,13 +5891,14 @@ pub const FunctionBuilder = struct {
             // the declaration carries the diagnostic.
             return null;
         }
+        const surface = try self.declarationSlots(parameters, info.parameter_defaults);
         const seen = try self.temporary().alloc(bool, parameters.len);
         defer self.temporary().free(seen);
         @memset(seen, false);
         seen[0] = true; // the receiver, already in hand
-        const slots = (try self.resolveSlots(method.name, "luce.sema.method", parameters, 1, defaultCount(info.parameter_defaults), method.arguments, seen, method.span)) orelse
+        const slots = (try self.resolveSlots(method.name, "luce.sema.method", surface, 1, method.arguments, seen, method.span)) orelse
             return null;
-        if (!(try self.checkRequiredSlots(method.name, "luce.sema.method", parameters, info.parameter_defaults, seen, method.span))) return null;
+        if (!(try self.checkRequiredSlots(method.name, "luce.sema.method", surface, seen, method.span))) return null;
 
         // Ownership at the call site is the plain-call rule said once
         // per argument: a give parameter needs `give`/`copy`/something
@@ -6389,7 +6460,10 @@ pub const FunctionBuilder = struct {
             break :covered true;
         };
         if (!covered) {
-            const defaulted = defaultCount(info.parameter_defaults);
+            var defaulted: usize = 0;
+            for (info.parameter_defaults) |default| {
+                if (default != null) defaulted += 1;
+            }
             if (defaulted != 0) {
                 const required = total - defaulted;
                 try self.fail("luce.sema.call", span, "{s} takes {d} argument{s} and {d} with a default, got {d}", .{
@@ -6765,7 +6839,10 @@ pub const FunctionBuilder = struct {
     /// a heap object and its text comes out through `b.build()`, which
     /// is the method it should always have had.
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
-        if (call.arguments.len != 1 or call.arguments[0].name != null) {
+        // One slot, named `value` like the reference spells it
+        // (docs/ARGS.md D1: names are optional everywhere, so the
+        // constructors take theirs too).
+        if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
             try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
             return null;
         }
@@ -6893,7 +6970,8 @@ pub const FunctionBuilder = struct {
         // is left alone — it traps at run time, and a fold that
         // changed that would be a fold that changed the program.
         if (matched.kind == .ord_text and call.arguments.len == 1 and
-            call.arguments[0].name == null and call.arguments[0].value.* == .string_literal)
+            helpers.argumentMayName(call.arguments[0], "text") and
+            call.arguments[0].value.* == .string_literal)
         {
             if (helpers.ordOfLiteral(call.arguments[0].value.string_literal.decoded)) |codepoint| {
                 return .{ .value = .{
@@ -6912,21 +6990,19 @@ pub const FunctionBuilder = struct {
             );
             return .failed;
         }
-        if (call.arguments.len != matched.arity) {
-            try self.fail("luce.sema.call", call.span, "{s} takes {d} argument{s}, got {d}", .{
-                matched.name,
-                matched.arity,
-                helpers.plural(matched.arity),
-                call.arguments.len,
-            });
+        // Which slot each argument fills: the table is the builtin's
+        // signature (docs/ARGS.md §3), so names and defaults resolve
+        // through the same machinery a user call's do — the resolver
+        // needs nothing but the slots.
+        const surface = try self.builtinSlots(matched);
+        const seen = try self.temporary().alloc(bool, surface.len);
+        defer self.temporary().free(seen);
+        @memset(seen, false);
+        const slots = (try self.resolveSlots(matched.name, "luce.sema.call", surface, 0, call.arguments, seen, call.span)) orelse
             return .failed;
-        }
+        if (!(try self.checkRequiredSlots(matched.name, "luce.sema.call", surface, seen, call.span))) return .failed;
         var argument_expressions: [3]*ast.Expression = undefined;
         for (call.arguments, 0..) |argument, index| {
-            if (argument.name != null) {
-                try self.fail("luce.sema.call", argument.span, "builtin arguments are positional", .{});
-                return .failed;
-            }
             // Builtins borrow (S11); a give with no owner to receive
             // it would silently become an early free (free's operand
             // is a name and gets its own diagnosis).
@@ -6949,17 +7025,33 @@ pub const FunctionBuilder = struct {
         // number into a place that said `double` — the same
         // double-rounding `methodParameters` exists to stop one level
         // down, and it is silent in exactly the same way.  Every other
-        // builtin names its own operand types and takes no landing.
-        const arguments = arguments: {
+        // builtin names its own operand types and takes no landing;
+        // the polymorphic landing is one type for every slot, so a
+        // reordered name cannot land a literal differently.
+        const written = written: {
             const landing = if (matched.polymorphic) landingType(wanted orelse .none) else null;
             if (landing) |place| {
                 const places = try self.arena().alloc(Type, expressions.len);
                 @memset(places, place);
-                break :arguments (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse
+                break :written (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse
                     return .failed;
             }
-            break :arguments (try self.lowerOperands(expressions)) orelse return .failed;
+            break :written (try self.lowerOperands(expressions)) orelse return .failed;
         };
+        // Written values land on the slots they resolved to, and a
+        // slot nobody filled takes its default from the table — the
+        // constant register the written literal would have been
+        // (docs/ARGS.md D2, D10).
+        const arguments = try self.arena().alloc(Typed, surface.len);
+        for (written, slots) |value, slot| arguments[slot] = value;
+        for (matched.parameters, seen, 0..) |parameter, given, slot| {
+            if (given) continue;
+            const filled = parameter.default.?;
+            arguments[slot] = .{
+                .register = try self.emitConstantValue(filled.value, filled.value_type),
+                .value_type = filled.value_type,
+            };
+        }
 
         // Argument and result typing per builtin.
         var result: Type = .none;
@@ -7191,7 +7283,7 @@ pub const FunctionBuilder = struct {
             .term_move => {
                 if (!try self.widensInto(&arguments[0], .long) or
                     !try self.widensInto(&arguments[1], .long))
-                    return self.failIntrinsic(call, "term_move takes (row long, col long)");
+                    return self.failIntrinsic(call, "term_move takes (row long, column long)");
                 result = .none;
             },
             .term_style => {

@@ -3110,8 +3110,23 @@ test "luce.sema.call: a builtin checks its arity" {
     try expectRejected("func main():\n    let a = len(1, 2)\n", "luce.sema.call");
 }
 
-test "luce.sema.call: a builtin's arguments are positional" {
-    try expectRejected("func main():\n    let a = len(x = 1)\n", "luce.sema.call");
+test "luce.sema.call: a builtin's argument names come from its table" {
+    // `len(value = 1)` is legal now — the "builtin arguments are
+    // positional" refusal went with docs/ARGS.md step 6 — so a wrong
+    // name gets the same sentence a user function's would.
+    try expectSaying(
+        "func main():\n    let a = len(x = 1)\n",
+        "luce.sema.call",
+        "len has no parameter x (takes value)",
+    );
+}
+
+test "luce.sema.call: a wrong builtin parameter name offers the closest slot" {
+    try expectHostSaying(
+        "func main():\n    term_style(114, bald = true)\n",
+        "luce.sema.call",
+        "term_style has no parameter bald; did you mean bold?",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -5056,11 +5071,19 @@ test "luce.sema.call: a builtin counts its arguments the way a function does" {
         \\    print("hi", "there")
         \\
     , "luce.sema.call", "print takes 1 argument, got 2", 2, 5);
+    // Too few arguments names the slots left open, exactly as a user
+    // function's call would (docs/ARGS.md §8).
     try expectSayingAt(
         \\func main():
         \\    let x = min(1)
         \\
-    , "luce.sema.call", "min takes 2 arguments, got 1", 2, 13);
+    , "luce.sema.call", "min is missing b", 2, 13);
+    // Too many is still the count sentence.
+    try expectSayingAt(
+        \\func main():
+        \\    let x = min(1, 2, 3)
+        \\
+    , "luce.sema.call", "min takes 2 arguments, got 3", 2, 13);
 }
 
 test "luce.sema.method: a missing method names the receiver it is missing from" {

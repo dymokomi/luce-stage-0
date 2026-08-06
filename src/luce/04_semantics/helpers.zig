@@ -543,3 +543,12 @@ test "a suggestion keeps the closest name, and stays quiet when nothing is close
     exact.offerAll(&.{"append"});
     try testing.expectEqual(@as(?[]const u8, null), exact.best());
 }
+
+/// Whether one argument is unnamed or names exactly `name` — the
+/// whole of name resolution for a surface of one slot (docs/ARGS.md),
+/// which is what the conversion constructors and the folded `ord` are.
+/// Both passes ask it, so it lives here.
+pub fn argumentMayName(argument: ast.Argument, name: []const u8) bool {
+    const written = argument.name orelse return true;
+    return std.mem.eql(u8, written, name);
+}

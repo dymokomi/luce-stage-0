@@ -477,6 +477,28 @@ test "terminal builtins drive the host screen and key queue" {
         "24x80\n", session.printed());
 }
 
+test "term_style's defaults fill from the table, on both engines" {
+    // docs/ARGS.md §3: the table is the builtin's signature, and its
+    // two defaults — bg = -1, bold = false — are the whole of what
+    // the fifteen-call corpus was writing out by hand.  The host log
+    // shows the same three values whichever way the call spelled
+    // them.
+    var session = try agree.compare(
+        \\func main():
+        \\    term_style(114)
+        \\    term_style(200, bold = true)
+        \\    term_style(bold = true, fg = 15, bg = 3)
+        \\    term_flush()
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings("[style]114,-1,false\n" ++
+        "[style]200,-1,true\n" ++
+        "[style]15,3,true\n" ++
+        "[flush]\n", session.printed());
+}
+
 test "a keyboard with nothing left on it answers none, and empties key_text with it" {
     // One key, then the script is spent.  What the second `key_read`
     // answers is the whole of this fix: `none`, so the program can

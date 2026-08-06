@@ -9,19 +9,19 @@ receiver first, resolved by the receiver's type, not dispatched.
 
 | Signature | Notes |
 |---|---|
-| `len(x) -> long` | `string` bytes; list, map, builder or rank-1 array length; an `array`'s dimension 0 |
+| `len(value) -> long` | `string` bytes; list, map, builder or rank-1 array length; an `array`'s dimension 0 |
 | `print(text: string)` | host-gated |
 | `range(low: long, high: long)` | `for` only; excludes `high` |
 | `assert(condition: bool)` | traps `assertion_failed` |
 | `trap(message: string)` | never returns; traps `explicit_trap` |
 | `error(message: string)` | never returns; raises `user_error` |
-| `free(x)` | early release of an owned object; poisons the name |
-| `abs(x)` | any number; answers its operand's type |
+| `free(object)` | early release of an owned object; poisons the name |
+| `abs(value)` | any number; answers its operand's type |
 | `min(a, b)`, `max(a, b)` | any two numbers of the same type |
-| `clamp(x, low, high)` | any three numbers of the same type |
-| `sqrt(x)` | a `float` or a `double`, and **the same width back** |
-| `floor(x)`, `ceil(x)` | ″ |
-| `trunc(x)` | ″; toward zero, and `math.round` is the fourth |
+| `clamp(value, low, high)` | any three numbers of the same type |
+| `sqrt(value)` | a `float` or a `double`, and **the same width back** |
+| `floor(value)`, `ceil(value)` | ″ |
+| `trunc(value)` | ″; toward zero, and `math.round` is the fourth |
 | `chr(code: long) -> string` | traps `bad_codepoint` on an invalid codepoint |
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
@@ -127,8 +127,8 @@ an overrun frame waits 0 ms
 | Signature | Notes |
 |---|---|
 | `file_read(path: string) -> string!` | the whole file; 64 MiB ceiling |
-| `file_write(path: string, text: string) -> !` | truncates or creates |
-| `file_append(path: string, text: string) -> !` | adds to the end, creating the file if it is not there |
+| `file_write(path: string, content: string) -> !` | truncates or creates |
+| `file_append(path: string, content: string) -> !` | adds to the end, creating the file if it is not there |
 | `file_delete(path: string) -> !` | an absent path is `io_failed`, not a quiet success |
 | `file_rename(from: string, to: string) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
 | `file_exists(path: string) -> bool` | a question about the past, not a guard |
@@ -145,7 +145,7 @@ call after it.
 |---|---|
 | `term_rows() -> long`, `term_cols() -> long` | |
 | `term_clear()`, `term_move(row, column)` | |
-| `term_style(foreground, background, bold)` | 256-color SGR; `-1` is the default |
+| `term_style(fg, bg = -1, bold = false)` | 256-color SGR; `-1`, the default, is the terminal's own color |
 | `term_write(text: string)` | sanitized; a program cannot emit a control sequence |
 | `term_flush()` | |
 | `key_read() -> string?` | presents the pending frame, then blocks; a stable name, or `none` at end of input |

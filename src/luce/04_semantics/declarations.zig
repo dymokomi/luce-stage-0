@@ -1242,7 +1242,7 @@ pub const Analyzer = struct {
             .binary => |binary| return self.foldBinary(module, binary, wanted),
             .call => |call| {
                 if (types.conversionNamed(call.callee) != null) {
-                    if (call.arguments.len != 1 or call.arguments[0].name != null) {
+                    if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
                         return self.constantError(call.span, "{s}(value) takes one argument", .{call.callee});
                     }
                     const operand = (try self.foldConstant(module, call.arguments[0].value, null)) orelse return null;
@@ -1252,7 +1252,7 @@ pub const Analyzer = struct {
                 // can be written as one: `ord("(")` where another
                 // language would need character literal syntax.
                 if (std.mem.eql(u8, call.callee, "ord")) {
-                    if (call.arguments.len != 1 or call.arguments[0].name != null) {
+                    if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "text")) {
                         return self.constantError(call.span, "ord(text) takes one argument", .{});
                     }
                     const operand = (try self.foldConstant(module, call.arguments[0].value, null)) orelse return null;

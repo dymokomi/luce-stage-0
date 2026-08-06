@@ -206,9 +206,102 @@ fn builtins(repository: Repository) !Names {
     const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
         return error.BuiltinTableNotFound;
 
-    try rowNames(&names, table, ".{ .name = \"");
+    // A top-level row starts at one indent; a parameter *slot* is a
+    // `.{ .name = "…" }` one indent deeper (docs/ARGS.md §3), and
+    // must not read as a builtin of its own — `fg` is not a builtin.
+    var lines = std.mem.splitScalar(u8, table, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, builtin_row_marker)) continue;
+        const rest = line[builtin_row_marker.len..];
+        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
+        try names.add(rest[0..stop]);
+    }
     if (names.items.items.len < 30) return error.BuiltinTableTooSmall;
     return names;
+}
+
+/// How a top-level builtin row opens, at the table's own indent.
+const builtin_row_marker = "    .{ .name = \"";
+
+/// One builtin and the parameter names its table row declares — the
+/// signature docs/ARGS.md §3 says the table is.
+const BuiltinSignature = struct {
+    name: []const u8,
+    parameters: [][]const u8,
+};
+
+/// Every builtin's parameter names, parsed from the same table text
+/// `builtins` reads.  A one-line row carries its slots inline; a
+/// multi-line row (`term_style`) carries one slot per deeper-indented
+/// line.  Caller frees with `freeSignatures`.
+fn builtinSignatures(repository: Repository) ![]BuiltinSignature {
+    const source = try repository.read("src/luce/04_semantics/builder.zig");
+    defer repository.gpa.free(source);
+    const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
+        return error.BuiltinTableNotFound;
+
+    var rows: std.ArrayList(BuiltinSignature) = .empty;
+    errdefer freeSignaturesList(repository.gpa, &rows);
+    var parameters: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (parameters.items) |parameter| repository.gpa.free(parameter);
+        parameters.deinit(repository.gpa);
+    }
+
+    var lines = std.mem.splitScalar(u8, table, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, builtin_row_marker)) {
+            if (rows.items.len != 0) {
+                rows.items[rows.items.len - 1].parameters = try parameters.toOwnedSlice(repository.gpa);
+            }
+            const rest = line[builtin_row_marker.len..];
+            const stop = std.mem.indexOfScalar(u8, rest, '"') orelse return error.BuiltinTableDamaged;
+            try rows.append(repository.gpa, .{
+                .name = try repository.gpa.dupe(u8, rest[0..stop]),
+                .parameters = &.{},
+            });
+            // Inline slots on the same line, past the builtin's own
+            // `.name`.
+            try slotNames(repository.gpa, &parameters, rest[stop..]);
+            continue;
+        }
+        // A slot line of a multi-line row.
+        if (rows.items.len != 0) try slotNames(repository.gpa, &parameters, line);
+    }
+    if (rows.items.len != 0) {
+        rows.items[rows.items.len - 1].parameters = try parameters.toOwnedSlice(repository.gpa);
+    }
+    return rows.toOwnedSlice(repository.gpa);
+}
+
+/// Every `.name = "…"` in `text` — the slots of one row's remainder.
+fn slotNames(gpa: std.mem.Allocator, into: *std.ArrayList([]const u8), text: []const u8) !void {
+    const marker = ".name = \"";
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, at, marker)) |found| {
+        const rest = text[found + marker.len ..];
+        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse return;
+        try into.append(gpa, try gpa.dupe(u8, rest[0..stop]));
+        at = found + marker.len + stop;
+    }
+}
+
+fn freeSignatures(gpa: std.mem.Allocator, rows: []BuiltinSignature) void {
+    for (rows) |row| {
+        gpa.free(row.name);
+        for (row.parameters) |parameter| gpa.free(parameter);
+        gpa.free(row.parameters);
+    }
+    gpa.free(rows);
+}
+
+fn freeSignaturesList(gpa: std.mem.Allocator, rows: *std.ArrayList(BuiltinSignature)) void {
+    for (rows.items) |row| {
+        gpa.free(row.name);
+        for (row.parameters) |parameter| gpa.free(parameter);
+        gpa.free(row.parameters);
+    }
+    rows.deinit(gpa);
 }
 
 /// Every word the lexer reserves, from `02_lex/token.zig`'s one table.
@@ -505,6 +598,48 @@ test "the reference names every builtin the analyzer dispatches" {
     defer names.deinit();
 
     try expectDocumented(repository, "ref/builtins.md", names, &.{});
+}
+
+test "the reference names every builtin's parameters" {
+    // One level down from the test above (docs/ARGS.md §3): the table
+    // is the builtin's signature, so the line of ref/builtins.md that
+    // shows `name(` must carry every parameter name the table
+    // declares.  This is what stops the table and the prose drifting
+    // the way the old grammar drifted.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    const rows = try builtinSignatures(repository);
+    defer freeSignatures(gpa, rows);
+    try std.testing.expect(rows.len >= 30);
+
+    const page = try repository.read("site/content/ref/builtins.md");
+    defer gpa.free(page);
+
+    var missing: usize = 0;
+    for (rows) |row| {
+        if (row.parameters.len == 0) continue;
+        const opened = try std.fmt.allocPrint(gpa, "{s}(", .{row.name});
+        defer gpa.free(opened);
+        var found_signature = false;
+        var lines = std.mem.splitScalar(u8, page, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.indexOf(u8, line, opened) == null) continue;
+            found_signature = true;
+            for (row.parameters) |parameter| {
+                if (namesWord(line, parameter)) continue;
+                std.debug.print("ref/builtins.md: the {s} line does not name its parameter '{s}'\n", .{ row.name, parameter });
+                missing += 1;
+            }
+            break;
+        }
+        if (!found_signature) {
+            std.debug.print("ref/builtins.md never shows {s}(…)\n", .{row.name});
+            missing += 1;
+        }
+    }
+    if (missing != 0) return error.UndocumentedBuiltinParameters;
 }
 
 test "the reference names every method a receiver answers to" {

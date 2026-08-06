@@ -2129,6 +2129,27 @@ test "struct field defaults: constants and parameter defaults reach them" {
     );
 }
 
+test "builtins: the table is the signature, so a call may name its slots" {
+    // docs/ARGS.md D10: free builtins take names from the widened
+    // table — `len(value = …)` is legal, and `min(b = …, a = …)`
+    // reorders like any user call.
+    try agreeOk(
+        \\func main():
+        \\    var xs = [1, 2, 3]
+        \\    assert(len(value = xs) == 3)
+        \\    assert(min(a = 3, b = 9) == 3)
+        \\    assert(min(b = 9, a = 3) == 3)
+        \\    assert(max(3, b = 9) == 9)
+        \\    assert(clamp(value = 42, low = 0, high = 10) == 10)
+        \\    assert(abs(value = -7) == 7)
+        \\    assert(chr(code = 65) == "A")
+        \\    assert(ord(text = "A") == 65)
+        \\    assert(long(value = 2.5) == 3)
+        \\    free(object = xs)
+        \\
+    );
+}
+
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:
