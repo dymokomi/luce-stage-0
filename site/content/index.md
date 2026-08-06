@@ -1,5 +1,7 @@
 # Luce
 
+**Good for humans. Good for computers.**
+
 Luce is a small statically typed language that looks like Python, runs
 at the speed of C, and gives memory back without a garbage collector
 and without reference counting anywhere.

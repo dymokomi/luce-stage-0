@@ -1,5 +1,7 @@
 # LuciaOS
 
+**Good for humans. Good for computers.**
+
 LuciaOS v2 is a small computing environment built language-first:
 **Luce**, a statically typed, Python-looking-but-not-Python language,
 and **loom**, the terminal that runs compiled Luce programs against
