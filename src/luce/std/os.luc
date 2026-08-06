@@ -1,0 +1,73 @@
+# os — the Luce standard system-facts module.
+#
+# What machine is this?  Three questions with numeric answers, over
+# the host builtins that ask them: how much physical memory the
+# machine has, how much of it is still available to ask for, and how
+# many processors it has.  A program reads `os.total_memory()` instead
+# of remembering a builtin name, the way `files.read` stands in front
+# of `file_read`.
+#
+# The host gate applies, because a machine's size is the world's
+# business and not the program's: importing this module in a host-less
+# context and calling one of these is a compile error, which is the
+# truth.  A host that cannot tell — a platform whose numbers it does
+# not know how to ask for — refuses the call with `host_unavailable`
+# rather than inventing a number, so nothing here can quietly answer
+# zero.
+#
+# Nothing here can fail in the `!` sense and nothing answers `none`.
+# A fact the host knows is a number; a fact it does not know is a
+# refusal, which is a trap, because a program that asks a host for
+# something it does not have has asked the wrong host (docs/FAILURE.md).
+#
+# What these numbers are **for** is reporting and sizing, not
+# deciding: memory moves under a program's feet between the reading
+# and the use of it, so `available_memory()` is a gauge and never a
+# guarantee.  Luce allocates through the runtime, which traps on
+# exhaustion with a code; that is what a program checks against, and
+# this module is what a program prints.
+
+# Bytes of physical memory the machine has.  Fixed for the life of the
+# run — this is the hardware's size, not a quota and not a limit the
+# program is held to.
+func total_memory() -> long:
+    return os_total_memory()
+
+# Bytes of memory the machine could still hand out.  This one moves:
+# ask it twice and expect two answers, because everything else running
+# on the machine is moving it.
+#
+# **What "available" means is the host's word, and the hosts differ.**
+# On macOS it is the free, inactive and purgeable pages together — the
+# memory the kernel can supply without swapping, which is the number
+# Activity Monitor's "memory available" is built from, and it is much
+# larger than "free" alone because macOS keeps very little memory
+# idle.  On Linux it is the kernel's own MemAvailable estimate where
+# that can be read, and free plus buffers otherwise.  Neither is a
+# promise: it is what was true at the moment of asking.
+func available_memory() -> long:
+    return os_available_memory()
+
+# How many processors the machine has, counting the ones the host
+# would schedule work onto — logical processors, so a machine with
+# simultaneous multithreading counts the threads.
+#
+# Luce has no threads, so this is a fact to report and not yet a fact
+# to act on. It is here because the machine's facts are one subject
+# and the alternative was asking for it in a later ABI version, which
+# would have cost every artifact a rebuild to learn one number.
+func cpu_count() -> long:
+    return os_cpu_count()
+
+# Bytes of memory in use: everything the machine has, less what it
+# could still hand out.  Never negative — `available_memory()` is a
+# subset of `total_memory()` on every host.
+#
+# **It takes its own two readings.**  So it is as approximate as the
+# second of them is, and it does not equal `total_memory() -
+# available_memory()` for readings taken anywhere else in the program:
+# the machine moved in between.  A program that wants one consistent
+# pair should read `available_memory()` once and subtract it itself,
+# and even that pair is only as fresh as the moment it was taken.
+func used_memory() -> long:
+    return os_total_memory() - os_available_memory()

@@ -248,6 +248,18 @@ test "every host service fails closed when the host withholds it" {
         \\    free(names)
         \\
         ,
+        \\func main():
+        \\    print(string(os_total_memory()))
+        \\
+        ,
+        \\func main():
+        \\    print(string(os_available_memory()))
+        \\
+        ,
+        \\func main():
+        \\    print(string(os_cpu_count()))
+        \\
+        ,
     };
     for (cases) |source| {
         try agree.trapGiven(source, .console_only, .host_unavailable);
@@ -609,4 +621,85 @@ test "exit fails closed: a host that cannot carry a status refuses the call" {
         \\    exit(1)
         \\
     , .{ .exit = false }, .host_unavailable);
+}
+
+// ---------------------------------------------------------------------------
+// The machine's own facts
+// ---------------------------------------------------------------------------
+//
+// Three services of one shape, and the one shape in the table that
+// answers a *number* through an out-parameter: the answer carries
+// whether the host could tell at all.  These rows exercise the
+// builtins directly; `std_spec.zig` exercises `std.os` over them.
+
+test "the three machine facts reach the host and come back as written" {
+    try agree.prints(
+        \\func main():
+        \\    print(string(os_total_memory()))
+        \\    print(string(os_available_memory()))
+        \\    print(string(os_cpu_count()))
+        \\
+    ,
+        \\8589934592
+        \\3221225472
+        \\4
+        \\
+    );
+}
+
+test "a fact asked twice is asked twice, not folded to one call" {
+    // Available memory moves, which is the reason a program asks it in
+    // a loop — so the optimizer must not treat two readings as one.
+    // The seeded world answers the same number both times, so what
+    // this actually holds is that the second call still *happens* and
+    // still crosses both engines the same way.
+    try agree.prints(
+        \\func main():
+        \\    var seen = 0
+        \\    for round in range(0, 3):
+        \\        seen = seen + 1
+        \\        print(string(os_available_memory()))
+        \\    print("read " + string(seen))
+        \\
+    ,
+        \\3221225472
+        \\3221225472
+        \\3221225472
+        \\read 3
+        \\
+    );
+}
+
+test "a host that cannot tell refuses exactly as one without the slot does" {
+    // Two roads, one trap.  The slot is present and answers `no`; the
+    // program must not be able to tell that from a host that never
+    // offered the service, because in neither case did anyone measure
+    // anything.
+    const unmeasurable: agree.Provided = .{ .world = .{ .unmeasurable = true } };
+    try agree.trapGiven(
+        \\func main():
+        \\    print(string(os_total_memory()))
+        \\
+    , unmeasurable, .host_unavailable);
+    try agree.trapGiven(
+        \\func main():
+        \\    print(string(os_total_memory()))
+        \\
+    , .{ .machine = false }, .host_unavailable);
+}
+
+test "a refused fact stops the program where it stood" {
+    // Fail-closed means the trap lands at the call, before the number
+    // could reach anything: the print after it never runs, on either
+    // engine.
+    var session = try agree.compare(
+        \\func main():
+        \\    print("asking")
+        \\    let bytes = os_available_memory()
+        \\    print("got " + string(bytes))
+        \\
+    , .{ .world = .{ .unmeasurable = true } });
+    defer session.deinit();
+    try testing.expectEqualStrings("asking\n", session.printed());
+    try testing.expectEqual(mir.TrapCode.host_unavailable, session.end.trapped);
 }

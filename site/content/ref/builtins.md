@@ -134,6 +134,21 @@ func main():
 an overrun frame waits 0 ms
 ```
 
+### The machine
+
+| Signature | Notes |
+|---|---|
+| `os_total_memory() -> long` | bytes of physical memory the machine has; fixed for the life of the run |
+| `os_available_memory() -> long` | bytes it could still hand out. This one **moves**: ask twice and expect two answers |
+| `os_cpu_count() -> long` | how many processors the host would schedule work onto — logical ones, so simultaneous multithreading counts threads |
+
+Read them through [`std.os`](/std/os/), which is where they are
+documented and where the word "available" is pinned down per platform.
+None of them can fail in the `!` sense and none answers `none`: a fact
+the host knows is a number, and a fact it does not know is a **refusal**
+— `host_unavailable`, the same trap a withheld service gives. A host is
+never made to invent a number for a machine it could not measure.
+
 ### Files
 
 | Signature | Notes |

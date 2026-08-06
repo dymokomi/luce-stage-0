@@ -70,14 +70,15 @@ pub const type_names = [_][]const u8{
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
 pub const builtins = [_][]const u8{
-    "abs",         "min",         "max",         "clamp",       "sqrt",
-    "floor",       "ceil",        "trunc",       "len",         "range",
-    "assert",      "trap",        "error",       "parse_int",   "parse_float",
-    "chr",         "ord",         "print",       "print_error", "read_line",
-    "env",         "clock_ms",    "sleep_ms",    "file_read",   "file_write",
-    "file_append", "file_exists", "file_delete", "file_rename", "dir_list",
-    "term_rows",   "term_cols",   "term_clear",  "term_move",   "term_style",
-    "term_write",  "term_flush",  "key_read",    "key_text",    "exit",
+    "abs",             "min",                 "max",          "clamp",       "sqrt",
+    "floor",           "ceil",                "trunc",        "len",         "range",
+    "assert",          "trap",                "error",        "parse_int",   "parse_float",
+    "chr",             "ord",                 "print",        "print_error", "read_line",
+    "env",             "clock_ms",            "sleep_ms",     "file_read",   "file_write",
+    "file_append",     "file_exists",         "file_delete",  "file_rename", "dir_list",
+    "term_rows",       "term_cols",           "term_clear",   "term_move",   "term_style",
+    "term_write",      "term_flush",          "key_read",     "key_text",    "exit",
+    "os_total_memory", "os_available_memory", "os_cpu_count",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,

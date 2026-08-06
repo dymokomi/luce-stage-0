@@ -105,6 +105,23 @@ pub const World = struct {
     /// real one.  Two engines cannot agree on a wall clock, and what
     /// is under test is the marshalling, not the calendar.
     clock: i64 = 1_000,
+    /// The machine this world claims to be, for the same reason the
+    /// clock is not a real one: two engines cannot agree on what the
+    /// real machine had free between the two runs, and what is under
+    /// test is that the number crosses the boundary intact.
+    ///
+    /// A plausible machine — eight gibibytes, rather more than half of
+    /// them spoken for — so a spec can assert the relations `std.os`
+    /// promises (`available <= total`, `used = total - available`) on
+    /// numbers a person can check by eye.
+    total_memory: i64 = 8 * 1024 * 1024 * 1024,
+    available_memory: i64 = 3 * 1024 * 1024 * 1024,
+    cpu_count: i64 = 4,
+    /// A machine this world cannot measure: every fact answers `no`,
+    /// which is the host saying it cannot tell and the program meeting
+    /// `host_unavailable` — the refusal a null slot gives, arriving
+    /// through a slot that is there.
+    unmeasurable: bool = false,
 
     pub const Key = struct { name: []const u8, text: []const u8 = "" };
 
@@ -161,6 +178,23 @@ pub const World = struct {
     fn tick(self: *World) i64 {
         defer self.clock += clock_step;
         return self.clock;
+    }
+
+    /// The machine's three facts, or null for a world that cannot
+    /// measure itself.  Fixed numbers rather than moving ones: the two
+    /// engines run one after the other, and a fact that changed
+    /// between them would be a disagreement about the machine rather
+    /// than about the lowering.
+    fn totalMemory(self: *World) ?i64 {
+        return if (self.unmeasurable) null else self.total_memory;
+    }
+
+    fn availableMemory(self: *World) ?i64 {
+        return if (self.unmeasurable) null else self.available_memory;
+    }
+
+    fn cpuCount(self: *World) ?i64 {
+        return if (self.unmeasurable) null else self.cpu_count;
     }
 
     fn append(self: *World, path: []const u8, content: []const u8) bool {
@@ -272,6 +306,14 @@ pub const Provided = struct {
     /// host may run programs whose exits it cannot carry, and `exit`
     /// then fails closed (`host_unavailable`).
     exit: bool = true,
+    /// The three machine-fact slots, one group: a host either knows
+    /// how to ask its platform about itself or does not, and a program
+    /// that reaches one of them without it fails closed like every
+    /// other withheld effect.  Distinct from `World.unmeasurable`,
+    /// which is a host that *has* the slots and cannot tell — the two
+    /// refusals arrive at the same trap by different roads, and both
+    /// are worth a spec.
+    machine: bool = true,
     /// The depth limit both engines run under.  The ABI's default is
     /// the interpreter's default, so a spec only names this when it
     /// wants a shallower one.
@@ -291,6 +333,7 @@ pub const Provided = struct {
         .clock = false,
         .environment = false,
         .exit = false,
+        .machine = false,
     };
 
     /// A host with a console and nothing else: every other service is
@@ -443,6 +486,9 @@ pub const Capture = struct {
             .sleep_ms = if (provided.clock) sleepMilliseconds else null,
             .exited = if (provided.exit) exited else null,
             .env = if (provided.environment) environmentValue else null,
+            .os_total_memory = if (provided.machine) totalMemory else null,
+            .os_available_memory = if (provided.machine) availableMemory else null,
+            .os_cpu_count = if (provided.machine) cpuCount else null,
         };
     }
 
@@ -716,6 +762,23 @@ pub const Capture = struct {
         return of(context).world.tick();
     }
 
+    fn totalMemory(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(of(context).world.totalMemory(), answer);
+    }
+
+    fn availableMemory(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(of(context).world.availableMemory(), answer);
+    }
+
+    fn cpuCount(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(of(context).world.cpuCount(), answer);
+    }
+
+    fn told(fact: ?i64, answer: *i64) abi.Answer {
+        answer.* = fact orelse return .no;
+        return .yes;
+    }
+
     fn sleepMilliseconds(context: ?*anyopaque, milliseconds: i64) callconv(.c) abi.Answer {
         var encoded: [32]u8 = undefined;
         of(context).record("[sleep]", std.fmt.bufPrint(
@@ -797,6 +860,9 @@ pub const Reference = struct {
             .sleep_ms = if (self.provided.clock) sleepMilliseconds else null,
             .env = if (self.provided.environment) environmentValue else null,
             .exited = if (self.provided.exit) exitedHook else null,
+            .os_total_memory = if (self.provided.machine) totalMemory else null,
+            .os_available_memory = if (self.provided.machine) availableMemory else null,
+            .os_cpu_count = if (self.provided.machine) cpuCount else null,
             .arg_count = if (self.provided.arguments) argCount else null,
             .arg = if (self.provided.arguments) argAt else null,
             .terminal = if (self.provided.terminal) .{
@@ -947,6 +1013,18 @@ pub const Reference = struct {
 
     fn exitedHook(context: *anyopaque, status: i64) void {
         of(context).exit_status = status;
+    }
+
+    fn totalMemory(context: *anyopaque) ?i64 {
+        return of(context).world.totalMemory();
+    }
+
+    fn availableMemory(context: *anyopaque) ?i64 {
+        return of(context).world.availableMemory();
+    }
+
+    fn cpuCount(context: *anyopaque) ?i64 {
+        return of(context).world.cpuCount();
     }
 
     pub fn run(self: *Reference, compiled: *const mir.Program) !void {

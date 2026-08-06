@@ -182,17 +182,17 @@ pub const reserved_names = [_][]const u8{
     // and a struct of that name is refused where it is declared —
     // reserving them as callables buys nothing and costs `files.list`,
     // which is the right name for what it does.
-    "range",       "long",        "double",      "string",      "None",
-    "abs",         "min",         "max",         "clamp",       "sqrt",
-    "floor",       "ceil",        "trunc",       "len",         "byte_at",
-    "assert",      "trap",        "parse_int",   "parse_float", "chr",
-    "ord",         "append",      "pop",         "insert",      "remove",
-    "has",         "dim",         "free",        "print",       "file_read",
-    "file_write",  "file_exists", "key_read",    "key_text",    "error",
-    "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
-    "file_append", "file_delete", "file_rename", "dir_list",    "term_rows",
-    "term_cols",   "term_clear",  "term_move",   "term_style",  "term_write",
-    "term_flush",  "exit",
+    "range",       "long",        "double",          "string",              "None",
+    "abs",         "min",         "max",             "clamp",               "sqrt",
+    "floor",       "ceil",        "trunc",           "len",                 "byte_at",
+    "assert",      "trap",        "parse_int",       "parse_float",         "chr",
+    "ord",         "append",      "pop",             "insert",              "remove",
+    "has",         "dim",         "free",            "print",               "file_read",
+    "file_write",  "file_exists", "key_read",        "key_text",            "error",
+    "read_line",   "print_error", "clock_ms",        "sleep_ms",            "env",
+    "file_append", "file_delete", "file_rename",     "dir_list",            "term_rows",
+    "term_cols",   "term_clear",  "term_move",       "term_style",          "term_write",
+    "term_flush",  "exit",        "os_total_memory", "os_available_memory", "os_cpu_count",
 };
 
 pub fn isReserved(name: []const u8) bool {

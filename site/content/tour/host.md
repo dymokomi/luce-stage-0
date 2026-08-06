@@ -110,6 +110,13 @@ guarding. That is exactly what `programs/life.luc` does.
 
 `env(name)` answers `string?`: one variable, or `none` when unset.
 
+The machine itself is a host service too — how much memory it has, how
+much is left, how many processors — read through
+[`std.os`](/std/os/). Those are the one part of the surface that
+answers neither `?` nor `!`: a fact the host knows is a number, and a
+fact it does not know is a refusal, because a host is never made to
+invent one.
+
 ```luce run
 func main():
     let started = clock_ms()

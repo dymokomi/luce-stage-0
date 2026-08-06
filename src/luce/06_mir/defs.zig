@@ -190,6 +190,16 @@ pub const Intrinsic = enum {
     /// Host-gated and fail-closed like every effect: a host with no
     /// `exited` slot traps `host_unavailable` at the call.
     exit_program,
+    /// The machine's own facts, behind `std.os`: bytes of physical
+    /// memory, bytes of it still available to ask for, and how many
+    /// processors there are.  Each answers a `long` and none can be
+    /// folded — `os_available_memory` moves under the program's feet,
+    /// which is the whole reason to ask it — and the host answering
+    /// "I cannot tell" is `host_unavailable`, the same refusal a
+    /// withheld service gives.
+    os_total_memory,
+    os_available_memory,
+    os_cpu_count,
     /// The two halves of value storage (docs/STRINGS.md).  A string's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
@@ -306,6 +316,9 @@ pub const Intrinsic = enum {
             .sleep_ms,
             .env_get,
             .exit_program,
+            .os_total_memory,
+            .os_available_memory,
+            .os_cpu_count,
             .own_storage,
             .drop_storage,
             .export_storage,
@@ -408,6 +421,9 @@ pub const Intrinsic = enum {
             .clock_ms,
             .sleep_ms,
             .exit_program,
+            .os_total_memory,
+            .os_available_memory,
+            .os_cpu_count,
             .drop_storage,
             .export_storage,
             => false,
@@ -503,6 +519,9 @@ pub const Intrinsic = enum {
             .sleep_ms,
             .env_get,
             .exit_program,
+            .os_total_memory,
+            .os_available_memory,
+            .os_cpu_count,
             .own_storage,
             .drop_storage,
             .export_storage,
