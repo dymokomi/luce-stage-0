@@ -2434,8 +2434,10 @@ pub const FunctionBuilder = struct {
     /// the right-hand side under OP — `place OP= value` reads the
     /// place once (the caller supplies `current`) and stores this.
     /// Type rules are a binary expression's exactly: numeric
-    /// arithmetic, plus string concat for `+=`.  Returns the register
-    /// holding the combined value, or null after reporting.
+    /// arithmetic, plus string concat for `+=`.  A storage-width place
+    /// combines at its arithmetic type and narrows back with the range
+    /// check, so the answer is always at `place_type`.  Returns the
+    /// register holding the combined value, or null after reporting.
     fn compoundCombine(
         self: *FunctionBuilder,
         op: ast.BinaryOp,
@@ -2486,20 +2488,44 @@ pub const FunctionBuilder = struct {
             .modulo => .modulo,
             else => unreachable, // the parser only builds these five
         };
+        // **The combine happens at the type the operator computes at,
+        // and the answer comes back to the place's own width** (D5).
+        // No operator computes at a storage width, so `b += 1` on a
+        // `byte` place is `b = byte(b + 1)` exactly: promote to `int`,
+        // add there, and narrow back through the same checked
+        // conversion that spelling already pays for.
+        //
+        // Nothing is narrowed silently, which is what lets this stand
+        // beside "narrowing is implicit in no direction and no
+        // context" rather than against it: 255 + 1 traps
+        // `conversion_range` where a C `unsigned char` would wrap to
+        // zero.  The place's declared type is where the narrowing is
+        // written down — a plain `b = b + 1` has no place to say it
+        // and is still refused.
+        //
+        // `string` has no arithmetic type and needs none: `+=`
+        // concatenates at `string` and comes back at `string`.
+        const at = place_type.arithmeticType() orelse place_type;
+        const left = try self.promoted(.{ .register = current, .value_type = place_type });
+        const right = try self.promoted(value);
         const combined = try self.code.emit(.{ .binary = .{
             .op = operation,
-            .operand_type = place_type,
-            .left = current,
-            .right = value.register,
-        } }, place_type);
+            .operand_type = at,
+            .left = left.register,
+            .right = right.register,
+        } }, at);
+        const answer = if (at.eql(place_type))
+            combined
+        else
+            try self.code.emit(.{ .convert = combined }, place_type);
         // `s += t` concatenates into fresh storage that no expression
         // parked, so a place that keeps a copy would leave the join
         // behind (docs/STRINGS.md).  Parking it makes the statement's
         // end reclaim it either way.
         if (string_concat) {
-            try self.parkFreshStorage(.{ .register = combined, .value_type = place_type });
+            try self.parkFreshStorage(.{ .register = answer, .value_type = place_type });
         }
-        return combined;
+        return answer;
     }
 
     fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {

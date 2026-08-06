@@ -978,6 +978,55 @@ test "compound assignment on struct fields and container elements" {
     );
 }
 
+test "compound assignment on a storage width combines at its arithmetic type" {
+    // D5: no operator computes at a storage width, so `b += 1` on a
+    // `byte` is `b = byte(b + 1)` — promote to `int`, combine, narrow
+    // back.  Every place form, because the promotion is stated once
+    // in `compoundCombine` and all four of them go through it.
+    try agreeOk(
+        \\struct Pixel:
+        \\    level: byte
+        \\
+        \\func main():
+        \\    var b: byte = 250
+        \\    b += 5
+        \\    assert(b == 255)
+        \\    b -= 255
+        \\    assert(b == 0)
+        \\    var s: short = 32000
+        \\    s += 767
+        \\    assert(s == 32767)
+        \\    var h: half = 1.0
+        \\    h += 0.5
+        \\    assert(h == 1.5)
+        \\    var p = Pixel(level = 100)
+        \\    p.level += 55
+        \\    assert(p.level == 155)
+        \\    var shades = new array(byte, 2)
+        \\    shades[0] += 200
+        \\    assert(shades[0] == 200)
+        \\    var counts = new map(string, byte)
+        \\    counts["k"] = 12
+        \\    counts["k"] *= 20
+        \\    assert(counts["k"] == 240)
+        \\
+    );
+}
+
+test "trap: a storage-width compound assignment narrows back with the range check" {
+    // The half of D5 that makes the promotion honest.  `b += 1` at 255
+    // is not 0: the narrowing back into the place is the same checked
+    // conversion `byte(b + 1)` pays for, so it stops the program
+    // rather than wrapping.
+    try agreeTrap(
+        \\func main():
+        \\    var b: byte = 255
+        \\    b += 1
+        \\    assert(b == 0)
+        \\
+    , .conversion_range);
+}
+
 test "a compound index target evaluates its index expression once" {
     // If `xs[next()]` were evaluated twice the counter would land on
     // 2 and the wrong slot would change; once, it lands on 1.
