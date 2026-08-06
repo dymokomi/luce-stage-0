@@ -129,7 +129,7 @@ pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !vo
 fn header(out: *Buffer, where: Where) !void {
     try out.add("<header class=\"top\">\n<a class=\"mark\" href=\"");
     try prefix(out, where.url);
-    try out.add("\"><span class=\"glyph\" aria-hidden=\"true\"></span>Luce</a>\n<nav class=\"tabs\">\n");
+    try out.add("\">Luce</a>\n<nav class=\"tabs\">\n");
     for (&site.sections) |*section| {
         const current = where.section != null and where.section.? == section;
         try out.add(if (current) "<a class=\"here\" href=\"" else "<a href=\"");
@@ -140,6 +140,7 @@ fn header(out: *Buffer, where: Where) !void {
         \\</nav>
         \\<div class="tools">
         \\<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+        \\<a class="cross" href="https://luciaos.com">LuciaOS</a>
         \\<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
         \\</div>
         \\<div id="hits" hidden></div>
