@@ -46,6 +46,9 @@ pub const module_format = @import("specs/format_spec.zig");
 /// The flagship program, driven by a scripted keyboard: the only
 /// thing that says what `programs/editor.luc` *does*.
 pub const editor = @import("specs/editor_spec.zig");
+/// The largest program in the tree, driven by a scripted player: five
+/// files importing each other, played through end to end.
+pub const adventure = @import("specs/adventure_spec.zig");
 
 test {
     _ = agree;
@@ -58,6 +61,7 @@ test {
     _ = optimizer;
     _ = module_format;
     _ = editor;
+    _ = adventure;
 
     // The backend's end-to-end proof: source to machine code to a
     // loaded shared library.  It stays beside the backend it proves

@@ -1,0 +1,158 @@
+# journal — the save file, written and read back.
+#
+# Five lines of plain text: a tag, the room, the move count, what is
+# being carried, and where the player has been.  A save is small
+# because a `Realm` is mostly the story, and the story is in the
+# program; what changes over a game is where you are, what you took,
+# and what you have seen.
+#
+#     adventure 1
+#     room Gallery
+#     moves 14
+#     held brass key|glass lens
+#     seen Gate|Courtyard|Hall|Gallery
+#
+# **Everything here says `!`.**  A save file is text off a disk: the
+# read can fail because the world decided, and what comes back can
+# name a room this story has never had.  Neither is a bug in the
+# program that asked, so neither is a trap — they are news, and they
+# travel to whoever asked for the load (docs/FAILURE.md).  The chain
+# is three files deep and written with no `if` for it: `read` says
+# `try files.read(...)`, `Save.into` says `try realm.hold(...)`, and
+# `adventure.luc` decides — once, at the two places a load can be
+# asked for — whether to end the run or say the words and play on.
+#
+# A `Save` is the one description of the format, and `text` and `read`
+# are inverses across it: nothing else in the program knows that the
+# carried things are joined with a bar.
+
+import world
+import std.files
+import std.paths
+import std.strings
+
+# The first line, and the only version there is: a file that does not
+# open with it is not a save of this game.
+let tag = "adventure 1"
+
+# A save file that has been read and understood, but not yet put back
+# into a realm.  It carries two lists, so it is object-carrying: the
+# `make` below takes them with `give` and the `return` moves the whole
+# tree to the caller (OWNERSHIP.md S27, S28).
+struct Save:
+    room: string
+    moves: long
+
+    private:
+        held: list(string)
+        seen: list(string)
+
+    func make(room: string, moves: long, held: give list(string), seen: give list(string)) -> Save:
+        return Save(room = room, moves = moves, held = give held, seen = give seen)
+
+    # What a realm would save as, right now.  `carrying()` and
+    # `visited()` hand over lists they have just built, so they fill
+    # the `give` slots above with no verb at the call site: there is
+    # no other name for either of them to poison (OWNERSHIP.md S27).
+    func of(realm: world.Realm, at: long, moves: long) -> Save:
+        return Save.make(
+            room = realm.name_at(at),
+            moves = moves,
+            held = realm.carrying(),
+            seen = realm.visited(),
+        )
+
+    # The five lines, which `read` below is the inverse of.
+    func text(self) -> string:
+        var out = new builder()
+        out.append(tag + "\n")
+        out.append("room " + self.room + "\n")
+        out.append("moves " + string(self.moves) + "\n")
+        out.append("held " + self.held.join("|") + "\n")
+        out.append("seen " + self.seen.join("|") + "\n")
+        return out.build()
+
+    # What this save says is in the player's hands.  `return
+    # self.held` would hand back a borrow, which the language refuses
+    # (OWNERSHIP.md S17) — the list belongs to the save, and a caller
+    # holding the same one could outlive it.  `copy` is the answer,
+    # and it is written where its cost is (S31).
+    func carried(self) -> list(string):
+        return copy self.held
+
+    # Put this save back into a realm and answer the room it left the
+    # player in.  Everything the realm was is forgotten first: a
+    # restore that only added would hand the player a second brass key
+    # for every load.
+    func into(self, realm: world.Realm) -> long!:
+        realm.forget()
+        for name in self.held:
+            try realm.hold(name)
+        for name in self.seen:
+            try realm.mark_seen(name)
+        let at = realm.where(self.room)
+        if at == none:
+            error("the save is in " + self.room + ", which this story has no room called")
+        realm.visit(at)
+        return at
+
+# The name a save is kept under: a bare one gets the game's own
+# extension, an explicit one is taken exactly as written.
+func named(path: string) -> string:
+    if len(paths.extension(path)) == 0:
+        return path + ".sav"
+    return path
+
+# Write the realm's changeable half to `path`.
+func write(path: string, realm: world.Realm, at: long, moves: long) -> !:
+    let save = Save.of(realm, at, moves)
+    try files.write(path, save.text())
+
+# Read `path` and understand it, or say what is wrong with it.
+func read(path: string) -> Save!:
+    let text = try files.read(path)
+    let lines = text.split("\n")
+    if len(lines) == 0 or lines[0].trim() != tag:
+        error(paths.base(path) + " does not begin \"" + tag + "\" and is not a save of this game")
+
+    var room = ""
+    var moves: long = 0
+    var held: list(string) = []
+    var seen: list(string) = []
+    for i, line in lines:
+        if i == 0 or len(line.trim()) == 0:
+            continue
+        let key = first_word(line)
+        let rest = after_first(line)
+        if key == "room":
+            room = rest
+        elif key == "moves":
+            moves = parse_int(rest) else error("the move count is not a number: " + rest)
+        elif key == "held":
+            held = pieces(rest)
+        elif key == "seen":
+            seen = pieces(rest)
+        else:
+            error(paths.base(path) + " has a line this game cannot read: " + key)
+    if len(room) == 0:
+        error(paths.base(path) + " does not say which room the player is in")
+    return Save.make(room = room, moves = moves, held = give held, seen = give seen)
+
+# A bar-separated field, and the empty one that means nothing at all
+# rather than one empty name.
+private func pieces(text: string) -> list(string):
+    if len(text) == 0:
+        return new list(string)
+    return text.split("|")
+
+private func first_word(line: string) -> string:
+    let space = line.find_byte(32, 0)
+    if space < 0:
+        return line
+    return line[0:space]
+
+private func after_first(line: string) -> string:
+    let space = line.find_byte(32, 0)
+    if space < 0:
+        return ""
+    return line[space + 1:len(line)].trim()

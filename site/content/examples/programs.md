@@ -108,6 +108,43 @@ the fox and the dog and the fox
   2  and
 ```
 
+## adventure — a game in five files
+
+The largest program in the tree, and the one written to be read as a
+*project* rather than a file. `adventure.luc` is the turn — read a
+line, act on it, say what happened — and it imports four modules that
+each know one thing:
+
+```text
+adventure.luc   the loop, and the only file that talks to the world
+  command.luc   what the typing means: a verb, a noun, and the
+                synonym tables, all private
+  story.luc     what the game is about: eight rooms, seven doors,
+                six things, built through world's factories with
+                named arguments
+    world.luc   what a room, a way and a thing are — three flat
+                tables of value structs inside one Realm, every
+                field private but the names
+  journal.luc   what a save file is: one struct, `text` and `read`
+                inverses across it, and `!` all the way down
+```
+
+It is the tree's worked example of several things at once: private
+fields with public [factories](/tour/visibility/), `T?` narrowed in
+the command loop, a [failure](/ref/failure/) chain three files deep
+caught once at the top, `give` and `copy` where a list crosses a
+module boundary, and `exit(0)` when the player types `quit`.
+
+It cannot be shown running on this page, because a page has no
+keyboard — but it is played entirely through standard input, which is
+how its specification in the repository drives a whole playthrough on
+both engines and compares every byte of it.
+
+```sh
+build/loom run programs/adventure.lc          # a new game
+build/loom run programs/adventure.lc rescue   # resume rescue.sav
+```
+
 ## The ones that need a terminal
 
 Two programs cannot be shown here, because they draw on a real screen.

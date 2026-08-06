@@ -115,6 +115,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("programs/editor.luc"),
     });
 
+    // The five files of the adventure engine, for the same reason and
+    // by the same road: a spec that drives the game has to drive the
+    // one that ships, and this one is a *project* — the root and the
+    // four modules it imports all go in, because `agree.project`
+    // compiles them together the way `luce build` does.
+    for ([_][]const u8{ "adventure", "world", "story", "command", "journal" }) |program_file| {
+        specs.addAnonymousImport(b.fmt("{s}.luc", .{program_file}), .{
+            .root_source_file = b.path(b.fmt("programs/{s}.luc", .{program_file})),
+        });
+    }
+
     // Where the specification finds the library to link a compiled
     // program against.  A path rather than a linked dependency: the
     // harness drives `cc` itself, because the link is part of what it
@@ -458,6 +469,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "calc" },
         .{ .name = "stats", .deps = &.{"mathx"} },
         .{ .name = "dice" },
+        .{ .name = "adventure", .deps = &.{ "world", "story", "command", "journal" } },
     };
     for (bundled) |program| {
         const compile_program = b.addRunArtifact(compiler);
