@@ -106,6 +106,10 @@ let      new      none     not      or       private  public
 return   self     struct   true     try      var      while
 ```
 
+`private` and `public` mark a declaration's
+[visibility](../statements/#visibility), and inside a struct they also
+stand as the region labels `private:` and `public:`.
+
 `self` is the receiver of a [method](../statements/#methods). It is a
 keyword rather than a convention so that nothing can shadow it and no
 declaration can call something else by that name — which is what makes

@@ -118,6 +118,69 @@ Copying a struct never duplicates or moves the objects inside it —
 ownership stays where it was. `copy bag` deep-copies them if that is
 what you want.
 
+## Fields a module keeps
+
+A field marked `private` — here through an indented `private:` region —
+belongs to the file that declared it. `Account` keeps money in whole
+cents so it never rounds, and the only way an importer can get one is
+`account.open`, because a required private field closes construction
+from outside. That is the factory pattern, and the compiler names it
+when you need it.
+
+```luce module file=account.luc
+struct Account:
+    owner: string
+
+    private:
+        cents: long
+
+    func balance(self) -> double:
+        return double(self.cents) / 100.0
+
+    func deposit(var self, amount: double):
+        self.cents = self.cents + long(amount * 100.0)
+
+func open(owner: string) -> Account:
+    return Account(owner = owner, cents = 0)
+```
+
+```luce run
+import account
+
+func main():
+    var a = account.open("dy")
+    a.deposit(12.50)
+    a.deposit(0.75)
+    print(f"{a.owner} has {a.balance()}")
+```
+
+```output
+dy has 13.25
+```
+
+`owner` said nothing, so it is public and crosses. `cents` did, so the
+representation stays where the invariant is enforced:
+
+```luce fail
+import account
+
+func main():
+    var a = account.open("dy")
+    a.cents = 100000
+    print(f"{a.owner} has {a.balance()}")
+```
+
+```output
+luce: compile failed
+main.luc:5:5: cents of Account is private to account [luce.sema.private]
+        a.cents = 100000
+        ^~~~~~~
+```
+
+[The visibility chapter](/tour/visibility/) has the rest: the word on
+functions and constants, `public`, regions, and what the compiler says
+at every kind of crossing.
+
 ## Recursive value structs
 
 `Struct?` is how a value struct holds one of itself: the recursion

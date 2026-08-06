@@ -44,7 +44,9 @@ it restates the default it is legal and inert. Inside a struct — and
 only there — `private:` and `public:` open an indented **region** of
 members, the way every colon in the language opens a block; regions
 may repeat and appear in any order, and members outside any region
-take the default.
+take the default. Where each word may stand, and the parse rules that
+police it, are on [statements](../statements/#visibility); the
+[tour chapter](/tour/visibility/) works the whole feature through.
 
 The unit is the **file**, never the struct: within its own module a
 private declaration is reachable from anywhere, including from public
@@ -52,7 +54,23 @@ declarations — visibility gates the reference site's module, not the
 call graph. Touching a marked name from outside is
 `luce.sema.private`, and it is answered as *private*, never as
 *unknown*: the name exists, is withheld, and the refusal traces to a
-`private` marker somebody wrote.
+`private` marker somebody wrote. A did-you-mean suggestion offers
+visible names only, so a private name is never suggested and never
+leaks through the typo path.
+
+Every reference site checks the same bit: a call, a constant read, a
+method on an imported struct's value, a type annotation, a
+construction, and the `s.method(...)` string sugar that routes to
+`std.strings`.
+
+| Written, from outside | Said |
+|---|---|
+| `geo.helper()`, marked | `helper is private to geo` |
+| `geo.seed`, marked constant | `seed is private to geo` |
+| `p: store.Inner`, marked struct | `Inner is private to store` |
+| `h.slot`, marked field | `slot of Handle is private to handle` |
+| `session.Session(token = 7)`, marked field named | `token of Session is private to session` |
+| `geo.helperr`, a typo near a marked name | `unknown function helperr` — and no suggestion names a private one |
 
 ```luce module file=geo.luc
 private func helper() -> long:
@@ -138,11 +156,51 @@ func main():
 dy
 ```
 
+A private field *with* a default is filled from it silently; only a
+required one closes construction. A struct with no marked fields
+constructs from outside exactly as it always did.
+
 A public declaration's surface may name only public types: a public
 function whose parameter or result mentions a private struct is
-refused at the declaration, on the line that can fix it. And `main`
-never needs marking — `public` on it is inert, `private` on it is
-refused, because the runtime is the one caller no marker can gate.
+refused at the declaration, on the line that can fix it, naming both
+edits that would restore honesty. A private field's type is not part
+of the public surface and may be private — which is what lets a struct
+hide an implementation type entirely.
+
+```luce fail
+private struct Inner:
+    n: long
+
+func read() -> Inner:
+    return Inner(n = 1)
+
+func main():
+    print(string(read().n))
+```
+
+```output
+luce: compile failed
+main.luc:4:16: read is public and answers Inner, which is marked private in this file; mark read private or remove the mark on Inner [luce.sema.private]
+    func read() -> Inner:
+                   ^~~~~
+```
+
+`main` never needs marking. The runtime starts it by name rather than
+through an import, so `public` on it is inert like any other restated
+default and `private` on it is refused: an entry the world cannot
+start is a contradiction.
+
+```luce fail
+private func main():
+    print("x")
+```
+
+```output
+luce: compile failed
+main.luc:1:14: main is the entry and cannot be private: the runtime starts it [luce.sema.private]
+    private func main():
+                 ^~~~
+```
 
 ## Sibling resolution
 

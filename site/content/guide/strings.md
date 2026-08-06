@@ -130,7 +130,10 @@ rather than a Luce loop over `byte_at`. `fold_case` emits folded bytes
 with `append_ascii`, which needs no `string` per character.
 
 Those two are why the whole `strings` module can stay written in
-ordinary Luce and still be fast enough to keep.
+ordinary Luce and still be fast enough to keep. `fold_case` is also
+marked `private`: it is an internal of `lower` and `upper`, and
+[visibility](/tour/visibility/) is what keeps a fast internal from
+becoming a public promise by accident.
 
 ```luce run
 import std.strings

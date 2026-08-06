@@ -21,6 +21,11 @@ Sorting, searching and joining a real `list(long)`.
 `stats.luc` imports `mathx.luc` as a sibling module. Both compile into
 one program and one `.lc`.
 
+It is also the tree's worked example of [visibility](/tour/visibility/):
+`mathx.sorted` is marked `private`, because it exists for `median` and
+for nothing else. `stats.luc` reaches `mean`, `extremes`, `median` and
+`deviation`, and reaching `sorted` would be `luce.sema.private`.
+
 ```luce module include=programs/mathx.luc
 ```
 

@@ -36,8 +36,8 @@ An import reaches the imported file's top level: `name.func(...)`,
 and `p: name.Struct` in an annotation — all of it, unless a
 declaration is marked `private`. A private declaration stays reachable
 everywhere in its own file; touching it from outside is
-`luce.sema.private`, answered as *private*, never as *unknown*
-([the reference has the rules](/ref/modules/#visibility)).
+`luce.sema.private`, answered as *private*, never as *unknown*. That
+is [the next chapter](../visibility/), worked through.
 
 Modules may import each other; the graph loads each file once, so
 cross-file mutual recursion just works. A module importing *itself* is

@@ -1,7 +1,7 @@
 # Where to go next
 
-That is the language. Twelve chapters covered every construct Luce
-has: there is no chapter thirteen holding back generics or traits or
+That is the language. Thirteen chapters covered every construct Luce
+has: there is no chapter fourteen holding back generics or traits or
 async, because those are not in it.
 
 ## What you have seen
@@ -11,8 +11,9 @@ types with inference, and one widening: `long` into `double`. Checked
 arithmetic and bounds checks that no build mode turns off. Scope
 ownership with `give`, `copy` and `free`. `T?` for absence with
 narrowing and `else`. `T!` for failure with `try`, `catch` and
-`error`. A file as a module and a reserved `std.` namespace. Effects
-as host services, gated at compile time.
+`error`. A file as a module and a reserved `std.` namespace, public
+until a declaration says `private`. Effects as host services, gated at
+compile time.
 
 ## What you have not
 
@@ -40,9 +41,9 @@ the exact grammar, every operator's precedence, all 43 ownership
 situations with individual anchors, every trap code, every builtin
 signature. It is the document to cite.
 
-**Read the library.** [The standard library](/std/) is three modules —
-`math`, `strings`, `files` — written in ordinary Luce and embedded in
-the compiler.
+**Read the library.** [The standard library](/std/) is four modules —
+`math`, `strings`, `files`, `paths` — written in ordinary Luce and
+embedded in the compiler.
 
 ## Writing something real
 

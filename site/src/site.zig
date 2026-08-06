@@ -36,7 +36,7 @@ pub const sections = [_]Section{
         .slug = "tour",
         .label = "Tour",
         .title = "A tour of Luce",
-        .blurb = "Start here. Twelve short chapters, in order, from installing the compiler to writing a program that reads a file.",
+        .blurb = "Start here. Thirteen short chapters, in order, from installing the compiler to writing a program that reads a file.",
         .pages = &.{
             .{ .slug = "hello", .title = "Hello, Luce", .blurb = "Build the toolchain, compile a program, run it." },
             .{ .slug = "values", .title = "Values and types", .blurb = "Int, Float, Bool, String, and the rule that there are no implicit conversions." },
@@ -48,6 +48,7 @@ pub const sections = [_]Section{
             .{ .slug = "absence", .title = "Absence", .blurb = "T?, none, narrowing, and else — saying that a thing might not be there." },
             .{ .slug = "failure", .title = "Failure", .blurb = "T!, try, catch and error — and the rule that decides between a trap and an error." },
             .{ .slug = "modules", .title = "Modules", .blurb = "A file is a module; the standard library lives under std." },
+            .{ .slug = "visibility", .title = "Visibility", .blurb = "Public until it says private — the marker, the struct regions, and the factory pattern." },
             .{ .slug = "host", .title = "The outside world", .blurb = "Printing, arguments, files, and the terminal — every effect is a host service." },
             .{ .slug = "next", .title = "Where to go next", .blurb = "What you have seen, what you have not, and where each of them is written down." },
         },
