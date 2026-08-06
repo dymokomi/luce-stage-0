@@ -1,5 +1,22 @@
 # Architecture audit — the accumulated whole, after the storm
 
+> **Executed, the XS/S set.**  Findings 1, 2, 4, 5, 7, 9, 10 and 11 are
+> done and marked below with their commits, in the order the closing
+> section asked for — 5 first, because collapsing the side arrays was
+> mechanical then and would not have been once the vector layers landed
+> on the same pattern.  Findings 3, 6 and 8 are M-sized and stay
+> scheduled.  `zig build test` 1204 → **1207**, the delta being three
+> new drift guards; `bench/compare.sh` against the base is noise on
+> every row across two interleaved passes.
+>
+> One thing to know before merging: findings 4, 9 and 11 are each
+> rooted in `04_semantics/builder.zig`, which was under a concurrent
+> agent's territory hold for the `catch` binding.  The audit's own
+> evidence names that file for all three, so there was no version of
+> the prescribed set that avoided it.  The edits there are six small
+> regions and all six are deletions of a list or one-token
+> substitutions; none adds a line inside the `try`/`catch` machinery.
+
 Audited at `fdba034`.  `zig build test`: 58/58 steps, **1187/1187 tests
 passed**.  73,741 lines of Zig across 100 files.
 
@@ -42,17 +59,17 @@ almost every finding below.
 
 | # | Finding | Verdict | Effort |
 |---|---|---|---|
-| 1 | The site's highlighter is a fourth copy of the word tables, and has already drifted | Restructure | XS |
-| 2 | The runtime ABI is described twice and nothing compares the descriptions | Restructure | S |
+| 1 | The site's highlighter is a fourth copy of the word tables, and has already drifted | **Done** (`13e0974`) | XS |
+| 2 | The runtime ABI is described twice and nothing compares the descriptions | **Done** (`d22f936`) | S |
 | 3 | The method tables are the builtin-table consolidation, left half-finished | Restructure | M |
-| 4 | `isFallibleIntrinsic` vs `verify.zig`: a carried-over finding the storm did not clear | Restructure | XS |
-| 5 | Three register-indexed arrays are one record, written at the same seven sites | Restructure | S |
+| 4 | `isFallibleIntrinsic` vs `verify.zig`: a carried-over finding the storm did not clear | **Done** (`fdb06ee`) | XS |
+| 5 | Three register-indexed arrays are one record, written at the same seven sites | **Done** (`85a3364`) | S |
 | 6 | The literal-landing rule is a twin, and the twins already guard differently | Restructure | S |
-| 7 | The two "living document" lists disagree by one entry | Sectioning | XS |
+| 7 | The two "living document" lists disagree by one entry | **Done** (`9f6e125`) | XS |
 | 8 | Four guards, four copies of the walking and extracting machinery | Restructure | M |
-| 9 | The width-polymorphic set is a fourth list beside a table with a spare column | Sectioning | XS |
-| 10 | Comment-vs-code drift in two hot files and one README | Sectioning | XS |
-| 11 | Three `pub` declarations with no external caller | Sectioning | XS |
+| 9 | The width-polymorphic set is a fourth list beside a table with a spare column | **Done** (`fdb06ee`) | XS |
+| 10 | Comment-vs-code drift in two hot files and one README | **Done** (`13e0974`, `d22f936`, `9f6e125`) | XS |
+| 11 | Three `pub` declarations with no external caller | **Done** (`680a267`) | XS |
 | A | `builder.zig` is one subject | **Fine as is** | — |
 | B | `lower.zig` is one subject | **Fine as is** | — |
 | C | The import graph has no cycles | **Fine as is** | — |
@@ -121,6 +138,30 @@ a name in this repo already — it is the one `build.zig:149` describes.
 already wrong, already public, and already has its fix sitting 200
 lines away.
 
+> **Done** (`13e0974`), and the audit undercounted the drift.  Beyond
+> the five type names, the three deleted builtins and the missing
+> `trunc`, `methods` was also missing `build` (`builder_methods` gained
+> it) and the `lexed` snapshot in the deleted guard was missing `self`.
+> Six stale places, not four.
+>
+> The guard is a two-way check and it lives in `coverage.zig` rather
+> than in `highlight.zig` as prescribed, for one reason: `coverage.zig`
+> is a test-only leaf and `highlight.zig` is production code the
+> generator renders through.  Putting the test in `highlight.zig` would
+> have meant publishing `Repository`, `open` and five scrapers out of a
+> test-only file and giving production code an import edge into it.  The
+> substance is the audit's — the compiler's sources are read at test
+> time, no snapshot survives — and what moves instead is five word
+> tables and `inTable`, `pub` for the guard and documented as such.
+>
+> `coverage.zig` gained three scrapers to make the check total: the
+> lexer's keyword table, `reserved_names`, and `retiredSpelling`.  It
+> checks **both** directions, which the audit's prescription (assert
+> `inTable` for every name the scrapers return) does not: a
+> forward-only check never sees `str`.  Demonstrated by putting `str`
+> back and taking `assert` out — `'assert' has 0 classes, want 1` and
+> `'str' is not a name the language spells`.
+
 ---
 
 ## 2. The runtime ABI is described twice and nothing compares the descriptions
@@ -169,6 +210,26 @@ because Rust's ABI carries types; C's does not, which is precisely why
 this one needs the test.
 
 **Effort: S.**
+
+> **Done** (`d22f936`), by the comptime the audit sketches, with two
+> additions.  It is seventy entry points now, not sixty-nine.  The
+> shape check goes past arity to the pointee: `.value_in` must be a
+> `*const Value` and not merely a pointer, `.run` must be the runtime,
+> `returns_noalias` must sit on something that can carry it.  And a
+> second test closes the direction the first cannot see — an export
+> with no `Service` tag is a symbol generated code has no way to call.
+>
+> Demonstrated both ways: `luce_rt_leaked: described with 2
+> parameter(s), declared with 1`, and `luce_rt_close: parameter 0 is
+> described .value_in and declared *runtime.heap.Runtime`.
+>
+> One thing the audit could not have known: publishing the exports is
+> not enough to name them.  `runtime.zig`'s `comptime { _ = @import(…) }`
+> is load-bearing — replacing it with a `pub const` alone made
+> `libluce_rt.a` link empty, because a namespace's `pub` declarations
+> are analyzed when something reaches them and the linker is not
+> something Zig can see reaching one.  Both are there now, with the
+> reason written down.
 
 ---
 
@@ -256,6 +317,22 @@ right; it has not reached the predicates.
 
 **Effort: XS.**
 
+> **Done** (`fdb06ee`), all three, as exhaustive methods on `Intrinsic`
+> in `06_mir/defs.zig`: `isFallible`, `makesFreshStorage` and
+> `storedArgument`.  Both of `isFallible`'s callers ask the type now.
+> `storedElement` keeps the receiver-shape narrowing that is genuinely
+> its own and takes the positions from the enum.
+>
+> Demonstrated: a new `Intrinsic` tag fails to compile at all three,
+> named — `unhandled enumeration value: 'file_touch'` at `defs.zig`
+> lines 211, 306 and 408.
+>
+> **Territory:** the three call sites are in
+> `04_semantics/builder.zig`, which was held for the `catch` binding.
+> There is no form of this finding that avoids that file — the audit's
+> evidence is three line numbers in it — so it was done rather than
+> deferred; see the note at the top of this document.
+
 ---
 
 ## 5. Three register-indexed arrays are one record, written at the same seven sites
@@ -334,6 +411,23 @@ the difference between a pattern that extends and one that accretes.
 `@memset` of `.{}`, and `self.values[r]` becomes `self.produced[r].value`.
 Worth doing *before* the vector layers, not after.
 
+> **Done** (`85a3364`), exactly as written: `Produced { value, box,
+> outcome }`, one `produced: []Produced`, one `alloc`, one `@memset` of
+> `.{}`, one `free`.  129 read and write sites moved mechanically; the
+> three field doc comments moved with the fields, so the reasoning
+> about why `box` exists now sits on `box`.
+>
+> No behaviour change and no cost: `bench/compare.sh` against the base,
+> two interleaved passes, moves every row by under 4% in *both*
+> directions between passes — `strings` is +3.5% then +0.7%, `arrays32`
+> is −1.2% then +2.9% — which is the shape of noise and not of a
+> regression.  Nothing about the generated code can differ; this is a
+> compile-time data structure.
+>
+> The two deeper moves the finding records — retiring `boxes`, and
+> making `outcomes` a second *value* — are untouched and still stand as
+> written.
+
 ---
 
 ## 6. The literal-landing rule is a twin, and the twins already guard differently
@@ -407,6 +501,13 @@ already `pub`.  Either give `spelling_guard` that import in `build.zig`
 `tools/documents.zig` both read.  One declaration, one truth.
 
 **Effort: XS.**
+
+> **Done** (`9f6e125`), by the second option.  The first would have
+> dragged the whole `luce` module into `spelling.zig` for a list of
+> filenames; `tools/documents.zig` imports nothing and is read by both.
+> `docs/README.md` joins the living set, which is what half the guard
+> already treated it as, and `doccheck`'s deliberate anti-vacuity count
+> moves 20 → 21.
 
 ---
 
@@ -520,6 +621,9 @@ already promises this is where such facts live.
 
 **Effort: XS.**
 
+> **Done** (`fdb06ee`), exactly so.  **Territory:** in
+> `04_semantics/builder.zig`; see the note at the top.
+
 ---
 
 ## 10. Comment-vs-code drift in two hot files and one README
@@ -546,6 +650,15 @@ trusting the rest, and in this tree the rest is worth trusting.
 
 **Verdict: sectioning.**  **Effort: XS.**
 
+> **Done**, all three, each in the commit that fixed what it described:
+> the runtime-effects header (`d22f936`) no longer states a count at all
+> — it names the set and points at the test that proves it, which is a
+> number that cannot go stale; `tools/README.md` (`9f6e125`) names the
+> four guards that grew there and the thing worth knowing about them,
+> that each is a step of `zig build test`; and `highlight.zig`'s
+> pointer at `lowerIntrinsic` (`13e0974`) now names the file-scope
+> table.
+
 ---
 
 ## 11. Three `pub` declarations with no external caller
@@ -559,6 +672,11 @@ returns three, which is a good result for 111 commits:
   tests, all in the file.
 
 **Verdict: sectioning.**  Drop the `pub`.  **Effort: XS.**
+
+> **Done** (`680a267`).  One correction: `declareLocal` has five
+> callers, not one — but all five are in `builder.zig`, so the verdict
+> stands unchanged.  **Territory:** one of the three is in
+> `04_semantics/builder.zig`; see the note at the top.
 
 ---
 
@@ -799,6 +917,13 @@ these is architectural.  All of them are the same fix — derive, or
 prove agreement in a test that reads both sources — and the tree
 already knows how, because it did exactly that for the free-builtin
 table and for the editor grammar and wrote down what the copy had cost.
+
+> **Done, and in that order.**  Findings 1, 2, 4, 5, 7, 9, 10 and 11
+> are closed; 3, 6 and 8 stand as scheduled below.  What the day
+> actually cost was closer to half of one, and the two findings that
+> took most of it were the two the audit ranked hardest — the runtime
+> ABI's shapes, and the highlighter's guard, which needed three new
+> scrapers before it could be written against the real sources.
 
 **Before the roadmap resumes**, do findings 1, 2, 4, 7, 9, 10 and 11:
 they are XS or S, they total perhaps a day, and every one of them
