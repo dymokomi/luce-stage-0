@@ -626,7 +626,15 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
 }
 
 /// The shared `( ... )` argument list: positional values, or
-/// `name = value` for struct construction.  A trailing comma is fine.
+/// `name = value` — a named argument, or a field of a struct
+/// construction; stage 4 decides which and enforces the rules
+/// (docs/ARGS.md).  `self = value` parses as the name "self" so the
+/// analyzer can refuse it with a sentence about the receiver instead
+/// of a parse error about the keyword.  A trailing comma is fine.
+///
+/// A named argument's span covers the name as well as the value, so a
+/// diagnostic about the *name* — unknown, duplicated — underlines
+/// what the reader wrote, not just the value beside it.
 ///
 /// The loop stops at a newline as well as at the closer, because a
 /// newline inside brackets only reaches the parser when the group was
@@ -639,16 +647,20 @@ fn argumentList(self: *Parser, opener: Token) Error!?struct { arguments: []ast.A
     var previous_end = opener.span.end;
     while (!endsList(self.peekKind(), .right_paren)) {
         var argument_name: ?[]const u8 = null;
-        if (self.peekKind() == .identifier and self.peekAhead(1) == .assign) {
+        var name_start: ?usize = null;
+        const named_next = self.peekAhead(1) == .assign and
+            (self.peekKind() == .identifier or self.peekKind() == .keyword_self);
+        if (named_next) {
             const named = self.advance();
             _ = self.advance(); // =
             argument_name = self.text(named);
+            name_start = named.span.start;
         }
         const value = (try expression(self)) orelse return null;
         try arguments.append(self.arena, .{
             .name = argument_name,
             .value = value,
-            .span = value.span(),
+            .span = .{ .start = name_start orelse value.span().start, .end = value.span().end },
         });
         previous_end = value.span().end;
         if (self.accept(.comma) == null) break;

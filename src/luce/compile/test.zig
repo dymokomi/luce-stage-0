@@ -600,6 +600,45 @@ test "the IR dump is readable and deterministic" {
     try testing.expect(std.mem.indexOf(u8, first, "multiply.int") != null);
 }
 
+test "a named call lowers to byte-identical MIR — names die in stage 4" {
+    // docs/ARGS.md D11: names are resolved away before MIR exists, so
+    // the reordered, named call and the plain positional call are the
+    // same program, byte for byte through the printer.  This is the
+    // cheapest possible proof that neither the instruction set nor the
+    // serialized module moved — format_version stays where it is.
+    const positional =
+        \\func size(width: long, height: long, deep: bool) -> long:
+        \\    if deep:
+        \\        return width * height * 2
+        \\    return width * height
+        \\
+        \\func main():
+        \\    assert(size(3, 4, false) == 12)
+        \\
+    ;
+    const named =
+        \\func size(width: long, height: long, deep: bool) -> long:
+        \\    if deep:
+        \\        return width * height * 2
+        \\    return width * height
+        \\
+        \\func main():
+        \\    assert(size(width = 3, height = 4, deep = false) == 12)
+        \\
+    ;
+    var plain = try expectCompiles(positional);
+    defer plain.deinit();
+    const plain_dump = try mir.print(testing.allocator, &plain);
+    defer testing.allocator.free(plain_dump);
+
+    var permuted = try expectCompiles(named);
+    defer permuted.deinit();
+    const permuted_dump = try mir.print(testing.allocator, &permuted);
+    defer testing.allocator.free(permuted_dump);
+
+    try testing.expectEqualStrings(plain_dump, permuted_dump);
+}
+
 test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     // A full-dump snapshot of the two trickiest lowerings at once:
     // short-circuit `and` splitting a block, and scope ownership

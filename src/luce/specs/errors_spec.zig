@@ -1038,7 +1038,10 @@ test "luce.sema.self: the receiver is written back, not returned" {
     , "luce.sema.shape", "next answers 1 value, got 2 names");
 }
 
-test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
+test "luce.sema.method: a missing method argument is named, without the receiver" {
+    // Too few arguments names the slots left open (docs/ARGS.md §8),
+    // and `self` is never among them — the receiver is not a slot the
+    // call site fills.
     try expectSaying(
         \\struct Point:
         \\    x: long
@@ -1052,7 +1055,25 @@ test "luce.sema.method: a method checks its arity against the declaration minus 
         \\
     ,
         "luce.sema.method",
-        "moved takes 2 arguments, got 1",
+        "moved is missing dy",
+    );
+}
+
+test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func moved(self, dx: long, dy: long) -> long:
+        \\        return self.x + dx + dy
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    assert(p.moved(1, 2, 3) == 1)
+        \\
+    ,
+        "luce.sema.method",
+        "moved takes 2 arguments, got 3",
     );
 }
 
@@ -2775,15 +2796,116 @@ test "luce.sema.call: the entry function cannot be called" {
     try expectRejected("func main():\n    main()\n", "luce.sema.call");
 }
 
-test "luce.sema.call: function arguments are positional, not named" {
-    try expectRejected(
-        \\func f(a: long):
-        \\    return
+// Named arguments (docs/ARGS.md §8).  `f(a = 1)` compiles now — the
+// "function arguments are positional" refusal is gone — and each rule
+// that replaced it gets its own sentence, pinned by its words because
+// luce.sema.call is emitted from many sites.
+
+test "luce.sema.call: a positional argument cannot follow a named one" {
+    try expectSaying(
+        \\func size(width: long, height: long) -> long:
+        \\    return width * height
         \\
         \\func main():
-        \\    f(a = 1)
+        \\    let a = size(width = 1, 2)
         \\
-    , "luce.sema.call");
+    , "luce.sema.call", "a positional argument cannot follow a named one; write height = ");
+}
+
+test "luce.sema.call: an unknown argument name offers the closest parameter" {
+    try expectSaying(
+        \\func size(width: long, height: long) -> long:
+        \\    return width * height
+        \\
+        \\func main():
+        \\    let a = size(1, heigt = 2)
+        \\
+    , "luce.sema.call", "size has no parameter heigt; did you mean height?");
+}
+
+test "luce.sema.call: an unknown argument name with nothing close enumerates the surface" {
+    try expectSaying(
+        \\func size(width: long, height: long) -> long:
+        \\    return width * height
+        \\
+        \\func main():
+        \\    let a = size(1, x = 2)
+        \\
+    , "luce.sema.call", "size has no parameter x (takes width, height)");
+}
+
+test "luce.sema.call: a parameter given by position and by name is refused" {
+    try expectSaying(
+        \\func size(width: long, height: long) -> long:
+        \\    return width * height
+        \\
+        \\func main():
+        \\    let a = size(1, width = 2)
+        \\
+    , "luce.sema.call", "width was given twice, by position and by name");
+}
+
+test "luce.sema.call: a parameter named twice is refused" {
+    try expectSaying(
+        \\func size(width: long, height: long) -> long:
+        \\    return width * height
+        \\
+        \\func main():
+        \\    let a = size(width = 1, width = 2)
+        \\
+    , "luce.sema.call", "width was given twice");
+}
+
+test "luce.sema.call: every missing argument is named at once" {
+    try expectSaying(
+        \\func volume(width: long, height: long, depth: long) -> long:
+        \\    return width * height * depth
+        \\
+        \\func main():
+        \\    let a = volume(1)
+        \\
+    , "luce.sema.call", "volume is missing height and depth");
+}
+
+test "luce.sema.self: self is not a nameable argument on the static spelling" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func read(self) -> long:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    let a = Point.read(self = p)
+        \\
+    , "luce.sema.self", "self is the receiver, not a parameter: write Point.read(p, ");
+}
+
+test "luce.sema.self: self is not a nameable argument on the method form" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func plus(self, other: long) -> long:
+        \\        return self.x + other
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    let a = p.plus(self = 2)
+        \\
+    , "luce.sema.self", "self is the receiver; it is written in front of the dot, not named");
+}
+
+test "luce.sema.type: a named argument's type mistake names the parameter" {
+    try expectSaying(
+        \\func size(width: long, height: long) -> long:
+        \\    return width * height
+        \\
+        \\func main():
+        \\    let a = size(1, height = "x")
+        \\
+    , "luce.sema.type", "height of size is long, got string");
 }
 
 test "luce.sema.call: a None function's result is not a value" {
@@ -2817,8 +2939,25 @@ test "luce.sema.method: a method checks its arity" {
     try expectRejected("func main():\n    var xs = [1]\n    xs.append(1, 2)\n", "luce.sema.method");
 }
 
-test "luce.sema.method: method arguments are positional" {
-    try expectRejected("func main():\n    var xs = [1]\n    xs.append(v = 1)\n", "luce.sema.method");
+test "luce.sema.method: a builtin method's arguments are positional" {
+    // Its table holds types computed from the receiver and no names
+    // (docs/ARGS.md D10) — while a *struct* method's arguments may be
+    // named, because its declaration is readable source.
+    try expectSaying(
+        "func main():\n    var xs = [1]\n    xs.append(v = 1)\n",
+        "luce.sema.method",
+        "append is a builtin method and its arguments are positional",
+    );
+}
+
+test "luce.sema.method: a routed string method stays positional and names the spelling that isn't" {
+    try expectSaying(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let n = "abc".find(needle = "b")
+        \\
+    , "luce.sema.method", "find routes to std.strings and its arguments are positional here; write strings.find(");
 }
 
 test "luce.sema.method: more arguments than any method takes is still that method's count" {

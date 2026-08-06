@@ -62,8 +62,10 @@ pub const BinaryOp = enum {
 pub const UnaryOp = enum { negate, logic_not };
 
 pub const Argument = struct {
-    /// Field name for named construction (Point(x = 1)); null for
-    /// positional call arguments.
+    /// The name the argument was written with — a struct field in a
+    /// construction (Point(x = 1)) or a parameter in a call
+    /// (find(s, start = 2), docs/ARGS.md); null for a positional
+    /// argument.  The span covers the name when there is one.
     name: ?[]const u8,
     value: *Expression,
     span: Span,

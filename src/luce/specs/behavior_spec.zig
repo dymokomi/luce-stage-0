@@ -1898,6 +1898,101 @@ test "methods: a literal argument lands at the parameter's width on both spellin
     );
 }
 
+// ---------------------------------------------------------------------------
+// Named arguments (docs/ARGS.md)
+// ---------------------------------------------------------------------------
+//
+// Every parameter has a name, and a call site may use it: positional
+// arguments fill slots left to right, the first named argument ends
+// the positional run (D4), names may reorder (D5), and names are never
+// required (D1).  Names die in stage 4 — the specs below run the same
+// MIR a positional call runs, which is what the printer test in
+// compile/test.zig pins byte for byte.
+
+test "named arguments: a call may name, mix, and reorder its arguments" {
+    try agreeOk(
+        \\func size(width: long, height: long, deep: bool) -> long:
+        \\    if deep:
+        \\        return width * height * 2
+        \\    return width * height
+        \\
+        \\func main():
+        \\    let flat = size(3, 4, false)
+        \\    assert(size(width = 3, height = 4, deep = false) == flat)
+        \\    assert(size(3, height = 4, deep = false) == flat)
+        \\    assert(size(3, 4, deep = false) == flat)
+        \\    assert(size(deep = false, height = 4, width = 3) == flat)
+        \\    assert(size(height = 4, width = 3, deep = true) == flat * 2)
+        \\
+    );
+}
+
+test "named arguments: evaluation stays in written order, binding lands by name" {
+    // D5's clause, proven rather than stated: `f(b = one(), a = two())`
+    // runs one() first, and each value still lands on the slot it
+    // names.
+    try agreeOk(
+        \\func logged(log: list(long), value: long) -> long:
+        \\    log.append(value)
+        \\    return value
+        \\
+        \\func pair(a: long, b: long) -> long:
+        \\    return a * 10 + b
+        \\
+        \\func main():
+        \\    var log = new list(long)
+        \\    let got = pair(b = logged(log, 7), a = logged(log, 3))
+        \\    assert(got == 37)
+        \\    assert(log[0] == 7 and log[1] == 3)
+        \\    free(log)
+        \\
+    );
+}
+
+test "named arguments: all four spellings of a user call take them" {
+    // One resolver behind plain, namespaced, static and method calls
+    // (docs/ARGS.md §3) — including std module functions, which are
+    // ordinary Luce declarations.
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func plus(self, other: long, twice: bool) -> long:
+        \\        if twice:
+        \\            return self.x + other * 2
+        \\        return self.x + other
+        \\
+        \\func main():
+        \\    let p = Point(x = 10)
+        \\    assert(p.plus(other = 5, twice = false) == 15)
+        \\    assert(p.plus(twice = true, other = 5) == 20)
+        \\    assert(Point.plus(p, twice = true, other = 5) == 20)
+        \\    assert(strings.find(s = "abcb", needle = "b") == 1)
+        \\    assert(strings.find(needle = "b", s = "abcb") == 1)
+        \\
+    );
+}
+
+test "named arguments: a named literal lands at the slot it names" {
+    // The permutation runs before anything is lowered (docs/ARGS.md
+    // §4): `f(wide = 0.1)` with a double parameter reads binary64's
+    // 0.1, not a reordered widening of binary32's.
+    try agreeOk(
+        \\func held(narrow: float, wide: double) -> bool:
+        \\    return wide == 0.1 and double(narrow) != 0.1
+        \\
+        \\func main():
+        \\    # binary32's 0.1 widened is not binary64's 0.1, so the
+        \\    # assertion holds only if each literal landed at the
+        \\    # width of the slot it *names* — written in the other
+        \\    # order.
+        \\    assert(held(wide = 0.1, narrow = 0.1))
+        \\
+    );
+}
+
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:

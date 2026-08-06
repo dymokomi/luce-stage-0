@@ -158,6 +158,41 @@ const Typed = struct {
 /// one that is worth a longer sentence (docs/RETURNS.md).
 const ShapePosition = enum { refused, bind, returning };
 
+/// The slot argument `index` of `arguments` fills, with no reporting
+/// (docs/ARGS.md D4, D5): positional arguments fill parameters left to
+/// right, a name fills the parameter that spells it, and a receiver
+/// slot is never filled by name.  `hidden` is how many leading
+/// parameters the call site does not write — 1 in the method form,
+/// whose receiver stands in front of the dot; 0 otherwise.  The answer
+/// indexes the declared list, `hidden` included.  Null where the call
+/// is malformed; `resolveSlots` is the half that says how.
+///
+/// Two callers, one rule: `landsOn` asks it mid-batch so a literal
+/// lands at the type of the slot it will fill, and `resolveSlots` asks
+/// it while checking — one implementation, so the two can never
+/// disagree about which slot that is.
+fn argumentSlot(
+    parameters: []const ast.Parameter,
+    hidden: usize,
+    arguments: []const ast.Argument,
+    index: usize,
+) ?usize {
+    const argument = arguments[index];
+    if (argument.name) |written| {
+        for (parameters[hidden..], hidden..) |parameter, slot| {
+            if (parameter.receiver != .not) continue;
+            if (std.mem.eql(u8, parameter.name, written)) return slot;
+        }
+        return null;
+    }
+    var positional: usize = 0;
+    for (arguments[0..index]) |earlier| {
+        if (earlier.name == null) positional += 1;
+    }
+    const slot = hidden + positional;
+    return if (slot < parameters.len) slot else null;
+}
+
 pub const FunctionBuilder = struct {
     analyzer: *Analyzer,
     module: usize,
@@ -1735,9 +1770,28 @@ pub const FunctionBuilder = struct {
         switch (landing) {
             .nothing => return null,
             .places => |places| return places[index],
-            .method => |name| {
+            .method => |method| {
                 if (index == 0) return null;
-                const wanted = (try self.methodParameters(values[0].value_type, name)) orelse
+                // A struct receiver's parameters come from the
+                // declaration, and which slot this argument fills is
+                // what decides its landing — names may reorder
+                // (docs/ARGS.md D5), so the slot is answered silently
+                // by the same rule the checker applies after the
+                // batch, through the one `argumentSlot`.
+                if (values[0].value_type == .strukt) {
+                    const function_index = (try self.structMethod(values[0].value_type.strukt, method.name)) orelse
+                        return null;
+                    const info = self.analyzer.functions.items[function_index];
+                    if (info.declaration.parameters.len != info.parameter_types.len) return null;
+                    const slot = argumentSlot(info.declaration.parameters, 1, method.arguments, index - 1) orelse
+                        return null;
+                    return info.parameter_types[slot];
+                }
+                // A builtin method's arguments are positional (D10); a
+                // named one gets no landing here and its refusal after
+                // the batch.
+                if (method.arguments[index - 1].name != null) return null;
+                const wanted = (try self.methodParameters(values[0].value_type, method.name)) orelse
                     return null;
                 return if (index - 1 < wanted.len) wanted[index - 1] else null;
             },
@@ -1775,14 +1829,24 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// A method batch's landing needs the written arguments as well as
+    /// the name: which slot an argument fills is what says where it
+    /// lands, and a named argument may fill a slot its position does
+    /// not (docs/ARGS.md D5).
+    const MethodLanding = struct {
+        name: []const u8,
+        arguments: []const ast.Argument,
+    };
+
     const Landing = union(enum) {
         /// Nothing is written down; every operand takes the default.
         nothing,
         /// One type per operand, positionally.
         places: []const Type,
         /// Operand zero is a method receiver and names what the rest
-        /// take, through `methodParameters`.
-        method: []const u8,
+        /// take — through the declaration for a struct receiver,
+        /// through `methodParameters` for a builtin one.
+        method: MethodLanding,
         /// Operand zero is a container, the last operand is a value
         /// going into it, and everything between is an index.
         stored_element,
@@ -4998,6 +5062,182 @@ pub const FunctionBuilder = struct {
     //
     // Struct construction, explicit conversion, namespaced calls, and
     // builtin methods on values.
+
+    /// Which parameter slot each written argument fills — the name
+    /// resolution of docs/ARGS.md, shared by every spelling of a user
+    /// call.  The rules, each with its own sentence: positional
+    /// arguments fill slots left to right and **the first named
+    /// argument ends the positional run** (D4), names may reorder
+    /// (D5), a slot is filled once, and `self` is not a nameable
+    /// argument (D7).
+    ///
+    /// `parameters` is the declared list; `hidden` is how many of its
+    /// leading slots the call site does not write — 1 in the method
+    /// form, whose receiver stands in front of the dot; 0 otherwise.
+    /// The answers index the declared list, `hidden` included, so they
+    /// index `parameter_types` directly.  `seen` has one flag per
+    /// declared slot; the caller pre-marks the hidden ones.  Count
+    /// mistakes point at the call (`span`); name mistakes point at the
+    /// argument.  Null after reporting; arena-owned otherwise.
+    fn resolveSlots(
+        self: *FunctionBuilder,
+        callee: []const u8,
+        code: []const u8,
+        parameters: []const ast.Parameter,
+        hidden: usize,
+        call_arguments: []const ast.Argument,
+        seen: []bool,
+        span: Span,
+    ) Error!?[]u32 {
+        const slots = try self.arena().alloc(u32, call_arguments.len);
+        var positional: usize = 0;
+        var named = false;
+        for (call_arguments, slots, 0..) |argument, *filled, index| {
+            if (argument.name == null and named) {
+                // D4: the strict rule, Kotlin 1.3's — the first named
+                // argument ends the positional run, so this argument
+                // has no slot to count into.  Name the first slot
+                // still open, which is the fix.
+                for (parameters, seen) |parameter, given| {
+                    if (given or parameter.receiver != .not) continue;
+                    try self.fail(code, argument.span, "a positional argument cannot follow a named one; write {s} = …", .{parameter.name});
+                    return null;
+                }
+                try self.fail(code, argument.span, "a positional argument cannot follow a named one", .{});
+                return null;
+            }
+            const slot = argumentSlot(parameters, hidden, call_arguments, index) orelse {
+                if (argument.name != null) {
+                    try self.failUnknownParameter(callee, code, parameters, hidden, argument);
+                    return null;
+                }
+                // A positional argument past the last slot: the count
+                // sentence, which is about the call and not about any
+                // one argument.
+                try self.failArgumentCount(callee, code, parameters, hidden, call_arguments.len, span);
+                return null;
+            };
+            if (argument.name) |written| {
+                named = true;
+                if (seen[slot]) {
+                    if (slot < hidden + positional) {
+                        try self.fail(code, argument.span, "{s} was given twice, by position and by name", .{written});
+                    } else {
+                        try self.fail(code, argument.span, "{s} was given twice", .{written});
+                    }
+                    return null;
+                }
+            } else {
+                positional += 1;
+            }
+            seen[slot] = true;
+            filled.* = @intCast(slot);
+        }
+        return slots;
+    }
+
+    /// The named argument that names no parameter (docs/ARGS.md §8):
+    /// `self` gets the receiver sentence, anything else the
+    /// did-you-mean, and the enumerate-the-surface fallback when
+    /// nothing is close enough.
+    fn failUnknownParameter(
+        self: *FunctionBuilder,
+        callee: []const u8,
+        code: []const u8,
+        parameters: []const ast.Parameter,
+        hidden: usize,
+        argument: ast.Argument,
+    ) Error!void {
+        const written = argument.name.?;
+        if (std.mem.eql(u8, written, "self")) {
+            if (hidden != 0) {
+                try self.fail("luce.sema.self", argument.span, "self is the receiver; it is written in front of the dot, not named", .{});
+                return;
+            }
+            if (parameters.len != 0 and parameters[0].receiver != .not) {
+                try self.fail("luce.sema.self", argument.span, "self is the receiver, not a parameter: write {s}({s}, …)", .{
+                    callee,
+                    try self.writtenTarget(argument.value),
+                });
+                return;
+            }
+        }
+        var suggestion = helpers.Suggestion.init(written);
+        for (parameters[hidden..]) |parameter| {
+            if (parameter.receiver != .not) continue;
+            suggestion.offer(parameter.name);
+        }
+        if (suggestion.best()) |closest| {
+            try self.fail(code, argument.span, "{s} has no parameter {s}; did you mean {s}?", .{ callee, written, closest });
+            return;
+        }
+        var takes: std.ArrayList(u8) = .empty;
+        defer takes.deinit(self.temporary());
+        for (parameters[hidden..]) |parameter| {
+            if (parameter.receiver != .not) continue;
+            if (takes.items.len != 0) try takes.appendSlice(self.temporary(), ", ");
+            try takes.appendSlice(self.temporary(), parameter.name);
+        }
+        if (takes.items.len == 0) {
+            try self.fail(code, argument.span, "{s} has no parameter {s}; it takes no arguments", .{ callee, written });
+            return;
+        }
+        try self.fail(code, argument.span, "{s} has no parameter {s} (takes {s})", .{ callee, written, takes.items });
+    }
+
+    /// The count sentence: how many arguments the call site may write,
+    /// against how many it wrote.
+    fn failArgumentCount(
+        self: *FunctionBuilder,
+        callee: []const u8,
+        code: []const u8,
+        parameters: []const ast.Parameter,
+        hidden: usize,
+        written_count: usize,
+        span: Span,
+    ) Error!void {
+        const takes = parameters.len - hidden;
+        try self.fail(code, span, "{s} takes {d} argument{s}, got {d}", .{
+            callee,
+            takes,
+            helpers.plural(takes),
+            written_count,
+        });
+    }
+
+    /// Every required slot the call left unfilled, named at once —
+    /// never the first only, for `writeMissingFields`' reason.  True
+    /// when nothing is missing.
+    fn checkRequiredSlots(
+        self: *FunctionBuilder,
+        callee: []const u8,
+        code: []const u8,
+        parameters: []const ast.Parameter,
+        seen: []const bool,
+        span: Span,
+    ) Error!bool {
+        var missing: usize = 0;
+        for (seen) |given| {
+            if (!given) missing += 1;
+        }
+        if (missing == 0) return true;
+        var names: std.ArrayList(u8) = .empty;
+        defer names.deinit(self.temporary());
+        var written: usize = 0;
+        for (parameters, seen) |parameter, given| {
+            if (given) continue;
+            if (written != 0) {
+                if (missing > 2) try names.appendSlice(self.temporary(), ",");
+                try names.appendSlice(self.temporary(), " ");
+                if (written + 1 == missing) try names.appendSlice(self.temporary(), "and ");
+            }
+            try names.appendSlice(self.temporary(), parameter.name);
+            written += 1;
+        }
+        try self.fail(code, span, "{s} is missing {s}", .{ callee, names.items });
+        return false;
+    }
+
     fn lowerCall(
         self: *FunctionBuilder,
         call: ast.Call,
@@ -5091,62 +5331,83 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        if (call_arguments.len != info.parameter_types.len) {
-            try self.fail("luce.sema.call", span, "{s} takes {d} argument{s}, got {d}", .{
-                name,
-                info.parameter_types.len,
-                helpers.plural(info.parameter_types.len),
-                call_arguments.len,
-            });
+        // Which slot each argument fills is settled before any of them
+        // is lowered: it is what says what type the argument lands in
+        // (docs/ARGS.md §4) — the order `lowerConstruct` has kept
+        // since construction shipped.
+        const parameters = info.declaration.parameters;
+        if (parameters.len != info.parameter_types.len) {
+            // A parameter of this declaration failed to resolve, and
+            // the declaration carries the diagnostic; there is no
+            // signature left to check a call against.
             return null;
         }
-        const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
-        for (call_arguments, expressions) |argument, *slot| {
-            if (argument.name != null) {
-                try self.fail("luce.sema.call", argument.span, "function arguments are positional", .{});
-                return null;
-            }
-            slot.* = argument.value;
-        }
+        const seen = try self.temporary().alloc(bool, parameters.len);
+        defer self.temporary().free(seen);
+        @memset(seen, false);
+        const slots = (try self.resolveSlots(name, "luce.sema.call", parameters, 0, call_arguments, seen, span)) orelse
+            return null;
+        if (!(try self.checkRequiredSlots(name, "luce.sema.call", parameters, seen, span))) return null;
         // Ownership handoffs are never invisible: a give parameter
         // needs give NAME, copy NAME, or something fresh at the call
         // site; a borrow parameter refuses a give (S13, S14).
-        for (expressions, 0..) |argument, index| {
-            if (index >= info.parameter_modes.len) break;
-            if (info.parameter_modes[index] == .give) {
-                if (!(try self.yieldsOwnership(argument))) {
+        for (call_arguments, slots) |argument, slot| {
+            if (info.parameter_modes[slot] == .give) {
+                if (!(try self.yieldsOwnership(argument.value))) {
                     try self.failNeedsOwnership(
-                        call_arguments[index].span,
-                        try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ index + 1, name }),
-                        argument,
+                        argument.span,
+                        try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ slot + 1, name }),
+                        argument.value,
                         "S13, S14",
                     );
                     return null;
                 }
-            } else if (argument.* == .give) {
+            } else if (argument.value.* == .give) {
                 try self.fail(
                     "luce.sema.own",
-                    call_arguments[index].span,
+                    argument.span,
                     "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
                     .{name},
                 );
                 return null;
             }
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .places = info.parameter_types })) orelse return null;
-        const registers = try self.arena().alloc(Register, call_arguments.len);
-        for (values, 0..) |value, index| {
-            const fitted = (try self.fit(value, info.parameter_types[index])) orelse {
-                try self.fail("luce.sema.type", call_arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
-                    index + 1,
-                    name,
-                    try self.analyzer.typeName(info.parameter_types[index]),
-                    try self.analyzer.typeName(value.value_type),
-                    try self.mismatchAdvice(info.parameter_types[index], value.value_type, expressions[index]),
-                });
+        // Arguments are evaluated in the order they are written and
+        // bound to the slots they name (D5): the batch runs in source
+        // order, and only the destination index is permuted.
+        const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
+        const places = try self.arena().alloc(Type, call_arguments.len);
+        for (call_arguments, expressions, places, slots) |argument, *expression, *place, slot| {
+            expression.* = argument.value;
+            place.* = info.parameter_types[slot];
+        }
+        const values = (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse return null;
+        const registers = try self.arena().alloc(Register, info.parameter_types.len);
+        for (values, slots, 0..) |value, slot, index| {
+            const fitted = (try self.fit(value, info.parameter_types[slot])) orelse {
+                // A type mistake points at the argument, spelled the
+                // way the reader spelled it: by name where it was
+                // named, by position where it was counted.
+                if (call_arguments[index].name) |written| {
+                    try self.fail("luce.sema.type", call_arguments[index].span, "{s} of {s} is {s}, got {s}{s}", .{
+                        written,
+                        name,
+                        try self.analyzer.typeName(info.parameter_types[slot]),
+                        try self.analyzer.typeName(value.value_type),
+                        try self.mismatchAdvice(info.parameter_types[slot], value.value_type, expressions[index]),
+                    });
+                } else {
+                    try self.fail("luce.sema.type", call_arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
+                        slot + 1,
+                        name,
+                        try self.analyzer.typeName(info.parameter_types[slot]),
+                        try self.analyzer.typeName(value.value_type),
+                        try self.mismatchAdvice(info.parameter_types[slot], value.value_type, expressions[index]),
+                    });
+                }
                 return null;
             };
-            registers[index] = fitted.register;
+            registers[slot] = fitted.register;
         }
         if (info.return_type == .none and !as_statement) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
@@ -5320,14 +5581,12 @@ pub const FunctionBuilder = struct {
         const expressions = try self.arena().alloc(*ast.Expression, method.arguments.len + 1);
         expressions[0] = method.target;
         for (method.arguments, 0..) |argument, index| {
-            if (argument.name != null) {
-                try self.fail("luce.sema.method", argument.span, "method arguments are positional", .{});
-                return null;
-            }
             expressions[index + 1] = argument.value;
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .method = method.name })) orelse
-            return null;
+        const values = (try self.lowerOperandsInto(expressions, .{ .method = .{
+            .name = method.name,
+            .arguments = method.arguments,
+        } })) orelse return null;
         const receiver = values[0];
         const arguments = values[1..];
         if (try self.refusesAbsence(receiver, "a method's receiver", method.span, method.target)) {
@@ -5341,6 +5600,7 @@ pub const FunctionBuilder = struct {
                 // strings.find(s, x) (docs/STD.md).
                 for (string_methods) |primitive| {
                     if (!std.mem.eql(u8, method.name, primitive.name)) continue;
+                    if (try self.refuseNamedMethodArguments(method)) return null;
                     if (!try self.methodTakes(method, arguments, receiver.value_type)) return null;
                     break :blk .{ .kind = primitive.kind, .result = primitive.result };
                 }
@@ -5354,6 +5614,7 @@ pub const FunctionBuilder = struct {
                 {
                     return self.stringsCall(method, values, as_statement);
                 }
+                if (try self.refuseNamedMethodArguments(method)) return null;
                 if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
                     break :blk found;
                 }
@@ -5435,6 +5696,28 @@ pub const FunctionBuilder = struct {
     // dispatch, no reference, and no second semantics
     // (docs/METHODS.md).
 
+    /// The declaration behind `x.f(…)` on a struct value, silently:
+    /// the function `Struct.f` when it is a *method*, null when there
+    /// is no such name or the name is a namespace function — whose
+    /// receiver is not parameter zero, and whose method-form call
+    /// `lowerReceiverCall` refuses with the sentence that says so.
+    ///
+    /// This is what makes the method form land its arguments where the
+    /// static form lands them: `landsOn` asks it mid-batch, before an
+    /// argument is lowered, because a struct receiver used to answer
+    /// nothing there — so `p.f(none)` was refused while
+    /// `Point.f(p, none)` compiled, and a `0.1` read its text at
+    /// binary32 on one spelling and binary64 on the other
+    /// (docs/ARGS.md §4).
+    fn structMethod(self: *FunctionBuilder, layout_index: u32, name: []const u8) Error!?u32 {
+        const layout = self.analyzer.structs.items[layout_index];
+        const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ layout.name, name });
+        defer self.temporary().free(qualified);
+        const function_index = self.analyzer.function_names.get(qualified) orelse return null;
+        if (self.analyzer.functions.items[function_index].receiver == .not) return null;
+        return function_index;
+    }
+
     /// `x.f(a, b)` where `x` is a struct value.  `values` is the whole
     /// operand run with the receiver at zero, already lowered by
     /// `lowerValueMethod` — a method's arguments take their types from
@@ -5484,33 +5767,37 @@ pub const FunctionBuilder = struct {
             return null;
         }
 
-        // The receiver is parameter zero, so the arity a reader wrote
-        // is one less than the one the declaration has.
-        const wanted = info.parameter_types[1..];
-        const arguments = values[1..];
-        if (arguments.len != wanted.len) {
-            try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
-                method.name,
-                wanted.len,
-                helpers.plural(wanted.len),
-                arguments.len,
-            });
+        // Which slot each argument fills: the receiver is parameter
+        // zero and stands in front of the dot, so the call site writes
+        // slots one up — the `hidden = 1` case of the one resolver
+        // every user-call spelling shares (docs/ARGS.md §4).
+        const parameters = info.declaration.parameters;
+        if (parameters.len != info.parameter_types.len) {
+            // A parameter of this declaration failed to resolve, and
+            // the declaration carries the diagnostic.
             return null;
         }
+        const seen = try self.temporary().alloc(bool, parameters.len);
+        defer self.temporary().free(seen);
+        @memset(seen, false);
+        seen[0] = true; // the receiver, already in hand
+        const slots = (try self.resolveSlots(method.name, "luce.sema.method", parameters, 1, method.arguments, seen, method.span)) orelse
+            return null;
+        if (!(try self.checkRequiredSlots(method.name, "luce.sema.method", parameters, seen, method.span))) return null;
 
         // Ownership at the call site is the plain-call rule said once
         // per argument: a give parameter needs `give`/`copy`/something
         // fresh, and a borrow parameter refuses a `give` (S13, S14).
         // The receiver never takes a verb — it is a struct value.
-        for (method.arguments, 0..) |argument, index| {
-            if (info.parameter_modes[index + 1] == .give) {
+        for (method.arguments, slots) |argument, slot| {
+            if (info.parameter_modes[slot] == .give) {
                 if (!(try self.yieldsOwnership(argument.value))) {
                     try self.failNeedsOwnership(
                         argument.span,
                         try std.fmt.allocPrint(
                             self.arena(),
                             "argument {d} of {s} takes ownership",
-                            .{ index + 1, method.name },
+                            .{ slot, method.name },
                         ),
                         argument.value,
                         "S13, S14",
@@ -5528,20 +5815,32 @@ pub const FunctionBuilder = struct {
             }
         }
 
-        const registers = try self.arena().alloc(Register, values.len);
+        const registers = try self.arena().alloc(Register, info.parameter_types.len);
         registers[0] = values[0].register;
-        for (arguments, wanted, 0..) |value, want, index| {
+        for (method.arguments, slots, 0..) |argument, slot, index| {
+            const value = values[index + 1];
+            const want = info.parameter_types[slot];
             const fitted = (try self.fit(value, want)) orelse {
-                try self.fail("luce.sema.type", method.arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
-                    index + 1,
-                    method.name,
-                    try self.analyzer.typeName(want),
-                    try self.analyzer.typeName(value.value_type),
-                    try self.absenceAdvice(value.value_type, method.arguments[index].value),
-                });
+                if (argument.name) |written| {
+                    try self.fail("luce.sema.type", argument.span, "{s} of {s} is {s}, got {s}{s}", .{
+                        written,
+                        method.name,
+                        try self.analyzer.typeName(want),
+                        try self.analyzer.typeName(value.value_type),
+                        try self.absenceAdvice(value.value_type, argument.value),
+                    });
+                } else {
+                    try self.fail("luce.sema.type", argument.span, "argument {d} of {s} is {s}, got {s}{s}", .{
+                        slot,
+                        method.name,
+                        try self.analyzer.typeName(want),
+                        try self.analyzer.typeName(value.value_type),
+                        try self.absenceAdvice(value.value_type, argument.value),
+                    });
+                }
                 return null;
             };
-            registers[index + 1] = fitted.register;
+            registers[slot] = fitted.register;
         }
         if (info.results.len == 0 and !as_statement) {
             try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
@@ -5749,6 +6048,24 @@ pub const FunctionBuilder = struct {
         return kind.storedArgument();
     }
 
+    /// A builtin method's arguments are positional (docs/ARGS.md D10):
+    /// its tables hold types computed from the receiver and no names,
+    /// and a parallel name list would be exactly the drift the
+    /// one-table comment on `builtins` records.  True after reporting.
+    fn refuseNamedMethodArguments(self: *FunctionBuilder, method: ast.Method) Error!bool {
+        for (method.arguments) |argument| {
+            if (argument.name == null) continue;
+            try self.fail(
+                "luce.sema.method",
+                argument.span,
+                "{s} is a builtin method and its arguments are positional",
+                .{method.name},
+            );
+            return true;
+        }
+        return false;
+    }
+
     const MethodFound = struct { kind: mir.Intrinsic, result: Type };
 
     fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []const u8) Error!?MethodFound {
@@ -5788,17 +6105,11 @@ pub const FunctionBuilder = struct {
     /// by `methodTakes`, to check what actually arrived.  Two answers
     /// from one table cannot disagree; two tables would.
     ///
-    /// A **struct** receiver's methods are user declarations, and the
-    /// declaration is the table: `p.f(…)` *means* `Point.f(p, …)`
-    /// (docs/METHODS.md), so its arguments land on
-    /// `parameter_types[1..]` exactly as the static spelling lands
-    /// them.  It did not always — a struct receiver answered null, so
-    /// the two spellings disagreed about what literals they accept:
-    /// `p.f(none)` was refused while `Point.f(p, none)` compiled, and
-    /// `p.f(0.1)` on a `double` parameter read its literal at binary32
-    /// and widened a different number.  A namespace function still
-    /// answers null: its receiver is not parameter zero, and the call
-    /// is refused as such before an argument's type could matter.
+    /// A **struct** receiver is not answered here: its methods are
+    /// user declarations, and `landsOn` reads the declaration through
+    /// `structMethod` so a *named* argument can land at the slot it
+    /// fills rather than the position it sits at (docs/ARGS.md §4).
+    /// This table is builtin methods only, and they are positional.
     ///
     /// A string receiver whose name is not a primitive answers null:
     /// that call is `strings.name(s, ...)`, a library function with a
@@ -5810,16 +6121,6 @@ pub const FunctionBuilder = struct {
                 if (std.mem.eql(u8, name, primitive.name)) return primitive.takes;
             }
             return null;
-        }
-        if (receiver == .strukt) {
-            const layout = self.analyzer.structs.items[receiver.strukt];
-            const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ layout.name, name });
-            defer self.temporary().free(qualified);
-            const function_index = self.analyzer.function_names.get(qualified) orelse return null;
-            const info = self.analyzer.functions.items[function_index];
-            if (info.receiver == .not) return null;
-            if (info.parameter_types.len == 0) return null;
-            return info.parameter_types[1..];
         }
         const descriptor = self.analyzer.heapOf(receiver) orelse return null;
         return switch (descriptor) {
@@ -5944,6 +6245,20 @@ pub const FunctionBuilder = struct {
                 method.span,
                 "string manipulation lives in the standard library: import std.strings to use {s} (docs/STD.md)",
                 .{method.name},
+            );
+            return null;
+        }
+        // The routed spelling stays positional: the batch landed its
+        // arguments from the receiver, not from strings' declaration,
+        // so a reordered literal would land at the wrong width.  The
+        // static spelling names freely (docs/ARGS.md D10).
+        for (method.arguments) |argument| {
+            if (argument.name == null) continue;
+            try self.fail(
+                "luce.sema.method",
+                argument.span,
+                "{s} routes to std.strings and its arguments are positional here; write strings.{s}(…) to name them",
+                .{ method.name, method.name },
             );
             return null;
         }
