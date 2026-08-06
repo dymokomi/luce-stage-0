@@ -115,7 +115,7 @@ All offsets are byte offsets, like the primitives.  The module never
 splits a UTF-8 character: it slices at ASCII positions or at match
 positions of valid UTF-8 needles.
 
-Two primitives carry the weight.  `find_from` locates a needle's
+Two primitives carry the weight.  `find` locates a needle's
 first byte with `find_byte` and only then compares the rest, so the
 scan itself is one call the runtime may vectorize rather than a Luce
 loop over `byte_at`; `fold_case` emits folded bytes with
@@ -126,8 +126,8 @@ the module is fast enough to stay written in Luce (docs/CODEGEN.md
 ```text
 import std.strings
 
-strings.find(s, needle)          # first byte offset, or -1
-strings.find_from(s, needle, start)
+strings.find(s, needle, start = 0)  # first occurrence at or after
+                                    # start, or -1 (docs/ARGS.md)
 strings.contains(s, needle)      # bool
 strings.starts_with(s, prefix)   strings.ends_with(s, suffix)
 strings.count(s, needle)         # non-overlapping occurrences

@@ -22,8 +22,7 @@ match positions of valid UTF-8 needles.
 
 | Signature | Returns |
 |---|---|
-| `strings.find(s, needle) -> long` | first byte offset, or `-1` |
-| `strings.find_from(s, needle, start) -> long` | first occurrence at or after `start` |
+| `strings.find(s, needle, start = 0) -> long` | first occurrence at or after `start`, or `-1` |
 | `strings.contains(s, needle) -> bool` | |
 | `strings.starts_with(s, prefix) -> bool` | |
 | `strings.ends_with(s, suffix) -> bool` | |
@@ -35,7 +34,7 @@ import std.strings
 func main():
     let path = "src/luce/std/strings.luc"
     print(string(path.find("/")))
-    print(string(path.find_from("/", 4)))
+    print(string(path.find("/", 4)))
     print(string(path.find("nowhere")))
     print(f"{path.contains("std")} {path.starts_with("src")} {path.ends_with(".luc")}")
     print(string(path.count("/")))
@@ -179,7 +178,7 @@ display — both are exact descriptions of different numbers.
 
 ## Why this module is fast enough to stay in Luce
 
-Two primitives carry the weight. `find_from` locates a needle's first
+Two primitives carry the weight. `find` locates a needle's first
 byte with `find_byte` and only then compares the rest, so the scan
 itself is **one runtime call the implementation may vectorize** rather
 than a Luce loop over `byte_at`. And `fold_case`, which `lower` and
@@ -192,16 +191,16 @@ enters.
 
 ## The one sentinel
 
-`find` and `find_from` answer `-1` for "not found". `long?` exists now,
-so the sentinel is a wart with nothing holding it up — and
-`find_from` overloads it: a `start` below zero or past the end of the
-string answers `-1` too, which is an *argument* error and not the same
-fact as "absent". `find` is `find_from(s, needle, 0)` and cannot reach
-that case, so the sentinel means only one thing there.
+`find` answers `-1` for "not found". `long?` exists now, so the
+sentinel is a wart with nothing holding it up — and `find` overloads
+it: a `start` below zero or past the end of the string answers `-1`
+too, which is an *argument* error and not the same fact as "absent".
+It used to be worse: `find` and `find_from` were two declarations
+that disagreed about whether that case was reachable at all, until
+the `start` default merged them (docs/ARGS.md).
 
-The two also disagree with `count` about the empty needle: `find` and
-`find_from` treat it as a match at `start`, while `count` counts it
-zero times. Both answers are defensible and they are not the same
-answer.
+`find` also disagrees with `count` about the empty needle: `find`
+treats it as a match at `start`, while `count` counts it zero times.
+Both answers are defensible and they are not the same answer.
 
 The [status page](/status/) keeps this on the list.

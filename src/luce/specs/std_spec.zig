@@ -275,7 +275,11 @@ test "math: the generator is deterministic, in range, and covers its die" {
 // strings
 // ---------------------------------------------------------------------------
 
-test "strings: find, find_from, contains, starts_with, ends_with, count" {
+test "strings: find (with its start default), contains, starts_with, ends_with, count" {
+    // `find_from` merged into `find(s, needle, start = 0)`
+    // (docs/ARGS.md §9): one declaration, one answer to a `start`
+    // outside the string — -1, the argument error the old wrapper
+    // could never reach.
     try agreeOk(
         \\import std.strings
         \\
@@ -284,11 +288,12 @@ test "strings: find, find_from, contains, starts_with, ends_with, count" {
         \\    assert(strings.find(s, "world") == 6)
         \\    assert(strings.find(s, "xyz") == -1)
         \\    assert(strings.find(s, "") == 0)
-        \\    assert(strings.find_from(s, "o", 5) == 7)
-        \\    assert(strings.find_from(s, "o", 8) == -1)
-        \\    assert(strings.find_from(s, "", 3) == 3)
-        \\    assert(strings.find_from(s, "o", -1) == -1)
-        \\    assert(strings.find_from(s, "o", 99) == -1)
+        \\    assert(strings.find(s, "o", 5) == 7)
+        \\    assert(strings.find(s, "o", start = 8) == -1)
+        \\    assert(strings.find(s, "", 3) == 3)
+        \\    assert(strings.find(s, "o", -1) == -1)
+        \\    assert(strings.find(s, "o", 99) == -1)
+        \\    assert("hello world".find("o", 5) == 7)
         \\    assert(strings.contains(s, "lo w"))
         \\    assert(not strings.contains(s, "zzz"))
         \\    assert(strings.starts_with(s, "hello"))

@@ -587,7 +587,7 @@ ordinary Luce:
 import std.strings
 
 s.find(sub)          # byte offset of first occurrence, -1 if absent
-s.find_from(sub, i)  # first occurrence at or after offset i
+s.find(sub, i)       # the same find: start defaults to 0
 s.contains(sub)      # bool
 s.starts_with(p)     # bool
 s.ends_with(p)       # bool

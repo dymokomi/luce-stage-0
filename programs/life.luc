@@ -65,13 +65,13 @@ struct World:
             term_move(row, 0)
             for col in range(0, grid.dim(1)):
                 if grid[row, col]:
-                    term_style(114, -1, false)
+                    term_style(114)
                     term_write("██")
                 else:
-                    term_style(238, -1, false)
+                    term_style(238)
                     term_write(" ·")
         term_move(grid.dim(0), 0)
-        term_style(252, 237, false)
+        term_style(252, 237)
         term_write(" generation " + string(generation) + "  |  any key: step   space: run   Ctrl-Q: quit ")
 
 func main():

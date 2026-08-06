@@ -212,12 +212,12 @@ struct Words:
 struct State:
     path: string
     content: string
-    cursor: long
-    scroll: long
-    dirty: bool
     message: string
-    quit_pending: bool
-    quit: bool
+    cursor: long = 0
+    scroll: long = 0
+    dirty: bool = false
+    quit_pending: bool = false
+    quit: bool = false
 
     func vertical(var self, target_line: long):
         let total = Text.count_lines(self.content)
@@ -329,7 +329,7 @@ struct State:
             left = left + " "
             pad = pad - 1
         let bar = left + hint
-        term_style(theme.status_fg, theme.status_bg, false)
+        term_style(theme.status_fg, theme.status_bg)
         let ignored = Draw.emit(bar, 0, len(bar), cols)
 
     func frame(self):
@@ -353,9 +353,9 @@ struct State:
                 Draw.line(self.content, at, finish, text_width)
                 at = finish + 1
             else:
-                term_style(theme.gutter, -1, false)
+                term_style(theme.gutter)
                 term_write("   ~")
-        self.status(rows, cols, cursor_line, cursor_column)
+        self.status(rows = rows, cols = cols, line = cursor_line, column = cursor_column)
         term_move(
             clamp(cursor_line - self.scroll, 0, visible - 1),
             clamp(side + cursor_column, 0, cols - 1),
@@ -382,7 +382,7 @@ struct Draw:
         while at < finish and used < width:
             let byte = content.byte_at(at)
             if byte == 35:
-                term_style(theme.comment, -1, false)
+                term_style(theme.comment)
                 used = used + Draw.emit(content, at, finish, width - used)
                 at = finish
             elif byte == 34:
@@ -398,14 +398,14 @@ struct Draw:
                     else:
                         close = close + 1
                 close = min(close, finish)
-                term_style(theme.text, -1, false)
+                term_style(theme.text)
                 used = used + Draw.emit(content, at, close, width - used)
                 at = close
             elif Words.is_digit(byte):
                 var stop = at + 1
                 while stop < finish and (Words.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 46):
                     stop = stop + 1
-                term_style(theme.number, -1, false)
+                term_style(theme.number)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
             elif Words.is_word_start(byte):
@@ -414,27 +414,27 @@ struct Draw:
                     stop = stop + 1
                 let kind = Words.classify(content[at:stop])
                 if kind == 1:
-                    term_style(theme.keyword, -1, true)
+                    term_style(theme.keyword, bold = true)
                 elif kind == 2:
-                    term_style(theme.kind, -1, false)
+                    term_style(theme.kind)
                 elif kind == 3:
-                    term_style(theme.builtin, -1, false)
+                    term_style(theme.builtin)
                 else:
-                    term_style(theme.plain, -1, false)
+                    term_style(theme.plain)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
             else:
                 var stop = Text.next_boundary(content, at)
                 stop = min(stop, finish)
-                term_style(theme.punct, -1, false)
+                term_style(theme.punct)
                 used = used + Draw.emit(content, at, stop, width - used)
                 at = stop
 
     func gutter(number: long, current: bool):
         if current:
-            term_style(theme.gutter_current, -1, false)
+            term_style(theme.gutter_current)
         else:
-            term_style(theme.gutter, -1, false)
+            term_style(theme.gutter)
         term_write(Fmt.pad_left(string(number), 4) + " ")
 
 func main(args: list(string)):
@@ -450,16 +450,10 @@ func main(args: list(string)):
     var greeting = ""
     opening = files.read(path) catch:
         greeting = "new file"
-    var state = State(
-        path = path,
-        content = opening,
-        cursor = 0,
-        scroll = 0,
-        dirty = false,
-        message = greeting,
-        quit_pending = false,
-        quit = false,
-    )
+    # The five fields that start at the zero of their type live on the
+    # declaration now (docs/ARGS.md): a second construction site could
+    # not get them wrong.
+    var state = State(path = path, content = opening, message = greeting)
     while not state.quit:
         let visible = max(term_rows() - 1, 1)
         state.adjust(visible)

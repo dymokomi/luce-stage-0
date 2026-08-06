@@ -123,7 +123,7 @@ different — that allocates a new list the receiver owns.
 ## Search is a primitive because the library builds on it
 
 The language keeps `len`, `byte_at` and `find_byte`, and nothing else
-about searching. That is deliberate: `strings.find_from` locates a
+about searching. That is deliberate: `strings.find` locates a
 needle's first byte with `find_byte` and only then compares the rest,
 so the scan is one runtime call the implementation may vectorize
 rather than a Luce loop over `byte_at`. `fold_case` emits folded bytes
@@ -140,7 +140,7 @@ func main():
     var at: long = 0
     var found = 0
     while true:
-        let next = haystack.find_from(";", at)
+        let next = haystack.find(";", at)
         if next < 0:
             break
         found += 1

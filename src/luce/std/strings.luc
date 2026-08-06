@@ -12,8 +12,13 @@
 # byte, so a match never starts or ends mid-character).
 
 # The byte offset of the first occurrence of needle at or after
-# `start`, or -1.  An empty needle matches at `start`.
-func find_from(s: string, needle: string, start: long) -> long:
+# `start`, or -1 — for a match that never comes, and for a `start`
+# outside the string, which is an argument error and not a missing
+# needle.  An empty needle matches at `start`.  `start` defaults to
+# the whole string: `find(s, needle)` is the everyday call, and
+# `find_from` was this function wearing the default as a second
+# declaration (docs/ARGS.md §9).
+func find(s: string, needle: string, start: long = 0) -> long:
     let size = len(s)
     let needle_size = len(needle)
     if start < 0 or start > size:
@@ -39,11 +44,8 @@ func find_from(s: string, needle: string, start: long) -> long:
         at = hit + 1
     return -1
 
-func find(s: string, needle: string) -> long:
-    return find_from(s, needle, 0)
-
 func contains(s: string, needle: string) -> bool:
-    return find_from(s, needle, 0) >= 0
+    return find(s, needle) >= 0
 
 func starts_with(s: string, prefix: string) -> bool:
     if len(prefix) > len(s):
@@ -60,10 +62,10 @@ func count(s: string, needle: string) -> long:
     if len(needle) == 0:
         return 0
     var found = 0
-    var at = find_from(s, needle, 0)
+    var at = find(s, needle)
     while at >= 0:
         found += 1
-        at = find_from(s, needle, at + len(needle))
+        at = find(s, needle, at + len(needle))
     return found
 
 func is_space_byte(byte: byte) -> bool:
@@ -82,10 +84,10 @@ func trim(s: string) -> string:
 # ASCII case folding; every other byte passes through untouched.
 # Unchanged runs are sliced whole, so multi-byte characters survive.
 func lower(s: string) -> string:
-    return fold_case(s, 65, 90, 32)
+    return fold_case(s, first = 65, last = 90, shift = 32)
 
 func upper(s: string) -> string:
-    return fold_case(s, 97, 122, -32)
+    return fold_case(s, first = 97, last = 122, shift = -32)
 
 func fold_case(s: string, first: long, last: long, shift: long) -> string:
     var out = new builder()
@@ -116,12 +118,12 @@ func replace(s: string, old: string, replacement: string) -> string:
         return s
     var out = new builder()
     var run: long = 0
-    var at = find_from(s, old, 0)
+    var at = find(s, old)
     while at >= 0:
         out.append(s[run:at])
         out.append(replacement)
         run = at + len(old)
-        at = find_from(s, old, run)
+        at = find(s, old, run)
     if run == 0:
         return s
     out.append(s[run:])
@@ -154,11 +156,11 @@ func split(s: string, separator: string) -> list(string):
             at = word_end
         return pieces
     var run: long = 0
-    var at = find_from(s, separator, 0)
+    var at = find(s, separator)
     while at >= 0:
         pieces.append(s[run:at])
         run = at + len(separator)
-        at = find_from(s, separator, run)
+        at = find(s, separator, run)
     pieces.append(s[run:])
     return pieces
 
