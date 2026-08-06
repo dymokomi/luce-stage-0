@@ -602,8 +602,10 @@ test "the IR dump is readable and deterministic" {
 
 test "a named call lowers to byte-identical MIR — names die in stage 4" {
     // docs/ARGS.md D11: names are resolved away before MIR exists, so
-    // the reordered, named call and the plain positional call are the
-    // same program, byte for byte through the printer.  This is the
+    // the named call (in declared order — reordering moves register
+    // numbering with evaluation order, the As-built ledger's point) and
+    // the plain positional call are the same program, byte for byte
+    // through the printer.  This is the
     // cheapest possible proof that neither the instruction set nor the
     // serialized module moved — format_version stays where it is.
     const positional =

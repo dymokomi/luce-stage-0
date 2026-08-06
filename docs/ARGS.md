@@ -1864,6 +1864,10 @@ construction would be.  Deviations:
 - **`func f(self = …)` is `luce.parse.self`**, not §8's
   `luce.sema.self`: the `=` is refused where `self` is parsed, beside
   the annotation refusal it mirrors.
+- **`Point.scale(p, self = q)` is `luce.sema.self`**, not §8's
+  `luce.sema.call`: naming the receiver slot is a `self` mistake
+  wherever it is made, so it answers with the `self` sentence rather
+  than the unknown-name one.
 - **§8's fold-once example `1 / 0` does not refuse** — `/` widens and
   folds to `inf` (docs/NUMERICS.md §2).  The executable spec pins
   `1 // 0`, which is the refusal the language actually has.

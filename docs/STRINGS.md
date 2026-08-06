@@ -313,7 +313,7 @@ Two costs, both honest:
 - Reading a String *out of storage* into a register becomes two
   selects, not one load — but only there. Once the register holds
   `{ptr, len}`, `len`, `byte_at` and `s[a:b]` are as they are today, so
-  `find_from`'s inner loop over a parameter is untouched.
+  `find`'s inner loop over a parameter is untouched.
 - An inline string's bytes live in the cell, so a `{ptr, len}` derived
   from one points into container memory that moves on `append`. The
   fix is to materialise inline reads into a statement temporary — a
@@ -892,7 +892,7 @@ Five things the SSO section did not have quite right.
    answers a value that may be inline, and a `{ptr, i64}` slot could
    only record a pointer into the runtime's answer scratch. Locals that
    *borrow* — every parameter, every block-split spill — keep the two
-   words they had, which is what keeps `find_from`'s inner loop over a
+   words they had, which is what keeps `find`'s inner loop over a
    String parameter exactly as it was.
 
    Errors arrived after this and had to honour it. A fallible call's

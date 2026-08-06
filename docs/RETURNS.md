@@ -1070,8 +1070,8 @@ mistakes the rule prevents:
 
 ### What this memo does not touch
 
-`std/strings.luc:14-40`'s `find_from -> Int` returns `-1` for "not
-found" — a sentinel where `Int?` would now serve. That is a genuine
+`std/strings.luc`'s `find -> long` returns `-1` for "not found" — a
+sentinel where `long?` would now serve. That is a genuine
 wart, it is the same *kind* of wart, and it is **not this feature**:
 optionals already shipped and the fix is `-> Int?`, not `-> (Bool, Int)`.
 Writing it as a pair would be the Go `comma, ok` idiom, which exists in

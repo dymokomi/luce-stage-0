@@ -48,6 +48,7 @@ pub const records = [_][]const u8{
     "docs/TYPES.md",
     "docs/VECTOR.md",
     "docs/ARGS.md",
+    "docs/VISIBILITY.md",
 };
 
 /// Both, living first — so "the living documents carry no exemptions"
