@@ -446,7 +446,7 @@ Three things make it pay, and all three are needed together:
 
   **The metadata exists now, and the honest number is: it moved
   nothing this suite measures** (task #45, ruled and executed
-  2026-08-06).  The Builder is vendored (`08_llvm/builder/`, three
+  2026-08-06).  The IR builder is vendored (`08_llvm/builder/`, three
   files, `LUCE:`-marked deviations only) and attaches `!alias.scope`
   and `!noalias` on every row-fact load and every scalar cell access
   — two scopes, rows and elements, that never overlap by
