@@ -90,6 +90,16 @@ pub fn run(
             machine.releaseFrameStorage();
             return .{ .trap = reported };
         },
+        // The unwind skipped releases the way a trap's does, so the
+        // census counts what was standing; the frames are standing
+        // here too, and their value storage goes back the same way.
+        .exited => {
+            machine.releaseFrameStorage();
+            return .{ .exited = .{
+                .status = machine.runtime.exit_status.?,
+                .leaked_objects = machine.runtime.live,
+            } };
+        },
     }
 }
 
@@ -112,6 +122,11 @@ pub const CallOutcome = union(enum) {
     /// trap every frame on the way out released what it owned, so
     /// there is nothing standing to sweep.
     errored,
+    /// The program said `exit(status)`.  The status is
+    /// `Runtime.exit_status`; the unwind skipped releases the way a
+    /// trap's does, and nothing is reported — an exit is not news
+    /// about a bug.
+    exited,
 };
 
 /// One live call.  Frames live on an explicit heap-allocated stack, so
@@ -194,10 +209,16 @@ pub const Machine = struct {
     fn caught(self: *Machine, mistake: EvalError) error{OutOfMemory}!CallOutcome {
         return switch (mistake) {
             error.OutOfMemory => error.OutOfMemory,
-            error.Trap => .{ .trap = .{
-                .code = self.runtime.pending.?.code,
-                .message = self.runtime.pending.?.message,
-            } },
+            // An exit rides the trap edge with nothing pending —
+            // recorded status, no report — exactly as the compiled
+            // path's unwind does (runtime/exports.zig).
+            error.Trap => if (self.runtime.exit_status != null)
+                .exited
+            else
+                .{ .trap = .{
+                    .code = self.runtime.pending.?.code,
+                    .message = self.runtime.pending.?.message,
+                } },
         };
     }
 
@@ -867,6 +888,17 @@ pub const Machine = struct {
                 // in the arena rather than in owned storage.
                 const words = try self.arena.dupe(u8, registers[arguments[0]].asString());
                 return self.runtime.failMessage(.explicit_trap, words);
+            },
+            .exit_program => {
+                // The host records the number at the site, while the
+                // program is still leaving — the same moment the
+                // compiled path calls `abi.Host.exited` — then the
+                // unwind rides the trap edge with nothing pending.
+                const host = try self.service();
+                const callback = host.exited orelse return self.runtime.fail(.host_unavailable);
+                callback(host.context, registers[arguments[0]].asLong());
+                self.runtime.exit_status = registers[arguments[0]].asLong();
+                return error.Trap;
             },
 
             // -- host effects, not semantics --------------------------

@@ -192,7 +192,7 @@ pub const reserved_names = [_][]const u8{
     "read_line",   "print_error", "clock_ms",    "sleep_ms",    "env",
     "file_append", "file_delete", "file_rename", "dir_list",    "term_rows",
     "term_cols",   "term_clear",  "term_move",   "term_style",  "term_write",
-    "term_flush",
+    "term_flush",  "exit",
 };
 
 pub fn isReserved(name: []const u8) bool {

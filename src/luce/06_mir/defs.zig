@@ -181,6 +181,15 @@ pub const Intrinsic = enum {
     file_delete,
     file_rename,
     dir_list,
+    /// `exit(status)` — the program chooses to stop, carrying a
+    /// status the host maps onto whatever its world calls one.  A
+    /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
+    /// is wrong), not an error (nothing failed), and the unwind rides
+    /// the trap edge exactly as exhaustion does — every frame returns,
+    /// nothing is reported, and `luce_rt_status` answers `exited`.
+    /// Host-gated and fail-closed like every effect: a host with no
+    /// `exited` slot traps `host_unavailable` at the call.
+    exit_program,
     /// The two halves of value storage (docs/STRINGS.md).  A string's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
@@ -296,6 +305,7 @@ pub const Intrinsic = enum {
             .clock_ms,
             .sleep_ms,
             .env_get,
+            .exit_program,
             .own_storage,
             .drop_storage,
             .export_storage,
@@ -397,6 +407,7 @@ pub const Intrinsic = enum {
             .print_error,
             .clock_ms,
             .sleep_ms,
+            .exit_program,
             .drop_storage,
             .export_storage,
             => false,
@@ -491,6 +502,7 @@ pub const Intrinsic = enum {
             .clock_ms,
             .sleep_ms,
             .env_get,
+            .exit_program,
             .own_storage,
             .drop_storage,
             .export_storage,

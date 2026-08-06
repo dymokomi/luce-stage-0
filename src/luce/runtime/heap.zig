@@ -651,6 +651,13 @@ pub const Runtime = struct {
     /// entry wrapper turns it into a distinct status.
     exhausted: bool = false,
 
+    /// Set when the program said `exit(status)`.  The unwind rides
+    /// the trap edge exactly as exhaustion does — every frame
+    /// returns, nothing is reported — and `luce_rt_status` turns
+    /// this into a status of its own so a host can tell "the program
+    /// chose to stop" from every other way a run ends.
+    exit_status: ?i64 = null,
+
     /// What a compiled artifact's functions are called, and where
     /// their instructions came from (trace.zig).  Empty for the
     /// interpreter, which reads the program it is walking instead.

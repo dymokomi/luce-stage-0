@@ -817,6 +817,8 @@ dir_list(path)               # list(string)! — plain names, unsorted
 term_rows()   term_cols()   term_clear()   term_move(row, col)
 term_style(fg, bg, bold)   term_write(text)   term_flush()
 key_read()   key_text()          # key_read is string?
+
+exit(status)                 # never returns; the run ends `exited`
 ```
 
 Three shapes and one rule behind them (docs/FAILURE.md).  A file
@@ -825,6 +827,18 @@ stands in for the result.  `read_line`, `env` and `key_read` are `?`
 because "there is nothing there" is the whole of what they have to
 say — end of input, and a variable nobody set, carry no reason worth a
 message.  Everything else either cannot fail or is an effect.
+
+**`exit(status)` is the fourth way a run ends**, beside finishing,
+trapping, and an uncaught error: the program chose to stop, and chose
+the number.  Not a trap — nothing is wrong — and not an error —
+nothing failed.  It never returns: a statement after it in the same
+block is `luce.sema.unreachable`, the run unwinds the way a trap's
+unwind does (no releases run, and the leak census reports what was
+standing, on both engines), and the host carries the status — on
+POSIX, the low eight bits of the process's exit code.  The status
+crosses at the call site through the host's `exited` slot, so a host
+that cannot carry one refuses the call (`host_unavailable`) rather
+than losing the number.
 
 `key_read` is `string?` for the same fact `read_line` is, off the same
 descriptor: a keyboard runs dry when the pipe driving it ends or the

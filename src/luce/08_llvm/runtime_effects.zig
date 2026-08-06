@@ -117,6 +117,7 @@ pub const Service = enum {
     luce_rt_raise,
     luce_rt_unwound,
     luce_rt_report,
+    luce_rt_exit,
 
     // -- errors, and the one position they carry ----------------------
     luce_rt_raise_error,
@@ -395,6 +396,13 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .run, .unknown, .unknown },
             .nounwind = false,
             .willreturn = false,
+            .cold = true,
+        },
+        // Records that the program chose to stop; the unwind that
+        // follows rides the trap edge (docs/LANGUAGE.md).
+        .luce_rt_exit => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .plain },
             .cold = true,
         },
 

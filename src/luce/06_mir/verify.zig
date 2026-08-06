@@ -595,6 +595,11 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .string);
             try expectType(result, .none);
         },
+        .exit_program => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .long);
+            try expectType(result, .none);
+        },
         .null_object => {
             try exactly(arguments, 0);
             if (result != .heap) return error.BadIntrinsic;

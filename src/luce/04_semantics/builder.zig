@@ -151,6 +151,7 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_delete", .kind = .file_delete, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "file_rename", .kind = .file_rename, .parameters = &.{ .{ .name = "from" }, .{ .name = "to" } }, .host = true },
     .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
 };
 
 /// Names the language spelled once and does not any more, and what to
@@ -5058,7 +5059,9 @@ pub const FunctionBuilder = struct {
     fn isLeavingCall(expression: *const ast.Expression) bool {
         if (expression.* != .call) return false;
         const callee = expression.call.callee;
-        return std.mem.eql(u8, callee, "trap") or std.mem.eql(u8, callee, "error");
+        return std.mem.eql(u8, callee, "trap") or
+            std.mem.eql(u8, callee, "error") or
+            std.mem.eql(u8, callee, "exit");
     }
 
     /// `a else b` — `a` when it is there, `b` when it is not.  The
@@ -7482,6 +7485,11 @@ pub const FunctionBuilder = struct {
             .sleep_ms => {
                 if (!try self.widensInto(&arguments[0], .long))
                     return self.failIntrinsic(call, "sleep_ms takes a long of milliseconds");
+                result = .none;
+            },
+            .exit_program => {
+                if (!try self.widensInto(&arguments[0], .long))
+                    return self.failIntrinsic(call, "exit takes a long status");
                 result = .none;
             },
             .env_get => {

@@ -529,3 +529,84 @@ test "a keyboard with nothing left on it answers none, and empties key_text with
         session.printed(),
     );
 }
+
+// ---------------------------------------------------------------------------
+// exit — the fourth way a run ends
+// ---------------------------------------------------------------------------
+//
+// Not a trap (nothing is wrong), not an error (nothing failed): the
+// program chose to stop, and the status it chose crosses the host
+// boundary at the exit site.  Both engines unwind the same way a trap
+// unwinds — no releases run — so the transcript, the status, and the
+// census are all compared, and `exit(0)` is still `exited`, distinct
+// from a run that finished.
+
+test "exit ends the run with its status, and everything before it happened" {
+    // A statement *after* an exit in the same block is refused
+    // statically — `luce.sema.unreachable` names the exit that leaves
+    // first (the errors_spec has the row) — so the dead branch here is
+    // behind a condition the analyzer cannot fold.
+    var session = try agree.compare(
+        \\func main():
+        \\    print("before")
+        \\    var stopping = true
+        \\    if stopping:
+        \\        exit(3)
+        \\    print("after")
+        \\
+    , .{});
+    defer session.deinit();
+    try std.testing.expectEqualStrings("before\n", session.printed());
+    try std.testing.expectEqual(agree.End{ .exited = 3 }, session.end);
+}
+
+test "exit(0) is exited, not finished — the program said so" {
+    try agree.exits(
+        \\func main():
+        \\    exit(0)
+        \\
+    , .{}, 0);
+}
+
+test "exit unwinds through nested calls, and the census counts what stood" {
+    // The unwind skips releases exactly as a trap's does, on both
+    // engines: the list `main` owns and the one `stop` owns are both
+    // standing when the run ends, and `settle` holds the two engines
+    // to the same census.
+    try agree.exits(
+        \\func stop(code: long):
+        \\    var mine = [1, 2, 3]
+        \\    print("stopping " + string(len(mine)))
+        \\    exit(code)
+        \\
+        \\func main():
+        \\    var kept = [4, 5]
+        \\    print("have " + string(len(kept)))
+        \\    stop(7)
+        \\
+    , .{}, 7);
+}
+
+test "a negative and a large status cross the boundary intact" {
+    // The host receives the long the program wrote; what an OS does
+    // with it is the loader's business (POSIX keeps the low byte),
+    // and the boundary itself does not editorialize.
+    try agree.exits(
+        \\func main():
+        \\    exit(-1)
+        \\
+    , .{}, -1);
+    try agree.exits(
+        \\func main():
+        \\    exit(70000)
+        \\
+    , .{}, 70000);
+}
+
+test "exit fails closed: a host that cannot carry a status refuses the call" {
+    try agree.trapGiven(
+        \\func main():
+        \\    exit(1)
+        \\
+    , .{ .exit = false }, .host_unavailable);
+}

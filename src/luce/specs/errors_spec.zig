@@ -2323,6 +2323,17 @@ test "luce.sema.const: a top-level let is a constant, not a computation" {
 
 test "luce.sema.host: host builtins are gated off by default" {
     try expectRejected("func main():\n    print(\"hi\")\n", "luce.sema.host");
+    // `exit` ends the process, which is the host's world exactly as
+    // much as its console is.
+    try expectRejected("func main():\n    exit(0)\n", "luce.sema.host");
+}
+
+test "luce.sema.type: exit takes a long status, said when it is not one" {
+    try expectRejectedOptions(
+        "func main():\n    exit(\"done\")\n",
+        hosted,
+        "luce.sema.type",
+    );
 }
 
 // ===========================================================================
@@ -4321,6 +4332,15 @@ test "luce.sema.unreachable: each terminator is named, with its line" {
         "func main():\n    trap(\"no\")\n    let b = 1\n",
         "luce.sema.unreachable",
         "this cannot run: the trap on line 2 leaves the block first; delete it, or move it above the trap",
+        3,
+        5,
+    );
+    // Hosted, because `exit` itself is behind the gate; the sentence
+    // under test is the same shape every terminator gets.
+    try expectHostSayingAt(
+        "func main():\n    exit(0)\n    let after = 1\n",
+        "luce.sema.unreachable",
+        "this cannot run: the exit on line 2 leaves the block first; delete it, or move it above the exit",
         3,
         5,
     );

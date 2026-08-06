@@ -104,6 +104,9 @@ pub const Host = struct {
     trace_storage: [trace_text_bytes]u8 = undefined,
     trace_used: usize = 0,
     leaked: ?i64 = null,
+    /// The status `exit(status)` carried, recorded by the `exited`
+    /// slot; null when the program never exited.
+    exit_status: ?i64 = null,
     /// What a compiled artifact raised and nobody caught, if it did.
     /// One position and not a trace, which is the whole of what an
     /// error carries (docs/FAILURE.md).
@@ -214,6 +217,7 @@ pub const Host = struct {
             .file_delete = cFileDelete,
             .file_rename = cFileRename,
             .dir_list = cDirList,
+            .exited = cExited,
         };
     }
 
@@ -712,6 +716,14 @@ pub const Host = struct {
 
     fn cFinished(context: ?*anyopaque, leaked: i64) callconv(.c) void {
         of(context).leaked = leaked;
+    }
+
+    /// The program said `exit(status)`.  Recorded here, at the exit
+    /// site, while the program is still unwinding; the runner reads it
+    /// back once `luce_main` answers `.exited` and maps it onto the
+    /// process's own exit code.
+    fn cExited(context: ?*anyopaque, status: i64) callconv(.c) void {
+        of(context).exit_status = status;
     }
 
     /// How much of `words` fits in `capacity` **without cutting a UTF-8

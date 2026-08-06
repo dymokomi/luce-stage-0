@@ -114,7 +114,14 @@ const trace = @import("../runtime/trace.zig");
 /// `Answer` convention and read by nobody.  An artifact built against
 /// the old reading asks again forever at the end of its input, so it
 /// has to be rebuilt rather than tolerated.
-pub const version: u32 = 9;
+///
+/// 10 — a run can end because the program said so.  `Status` gains
+/// `exited`, and one optional slot arrives at the end of the table:
+/// `exited(status)`, called at the `exit(status)` site — before the
+/// unwind, so the host records the number while the program is still
+/// leaving — and fail-closed like every effect: a host without the
+/// slot traps `host_unavailable` at the call.  No field moved.
+pub const version: u32 = 10;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -140,6 +147,11 @@ pub const Status = enum(i32) {
     /// answer would have changed what every existing loader believes,
     /// so the new one took the next free number.
     errored = 3,
+    /// The program said `exit(status)`.  Nothing is wrong and nothing
+    /// failed; `Host.exited` was called with the status at the exit
+    /// site, and the host maps it onto whatever its world calls one —
+    /// on POSIX, the low eight bits of a process's exit code.
+    exited = 4,
     _,
 };
 
@@ -247,6 +259,17 @@ pub const default_call_depth: i64 = 256;
 pub const FinishedFn = *const fn (
     context: ?*anyopaque,
     leaked: i64,
+) callconv(.c) void;
+
+/// The program said `exit(status)`.  Called once, at the exit site
+/// and before the unwind, so the host holds the number while the
+/// program is still leaving; `luce_main` then returns `.exited`, and
+/// the host acts on what it recorded.  Optional and fail-closed like
+/// every effect: a null slot traps `host_unavailable` at the call,
+/// because a host that cannot carry a status cannot honor an exit.
+pub const ExitedFn = *const fn (
+    context: ?*anyopaque,
+    status: i64,
 ) callconv(.c) void;
 
 /// Read a whole file.  `yes` fills `text`/`length` with bytes borrowed
@@ -493,6 +516,9 @@ pub const Host = extern struct {
     file_delete: ?FileDeleteFn = null,
     file_rename: ?FileRenameFn = null,
     dir_list: ?DirListFn = null,
+    /// Version 10: the program's chosen end, appended like everything
+    /// before it so no field moves.
+    exited: ?ExitedFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -527,6 +553,7 @@ pub const Slot = enum(u32) {
     file_delete = 25,
     file_rename = 26,
     dir_list = 27,
+    exited = 28,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

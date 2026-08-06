@@ -268,6 +268,10 @@ pub const Provided = struct {
     diagnostics: bool = true,
     clock: bool = true,
     environment: bool = true,
+    /// The `exited` slot, its own group like every other effect: a
+    /// host may run programs whose exits it cannot carry, and `exit`
+    /// then fails closed (`host_unavailable`).
+    exit: bool = true,
     /// The depth limit both engines run under.  The ABI's default is
     /// the interpreter's default, so a spec only names this when it
     /// wants a shallower one.
@@ -286,6 +290,7 @@ pub const Provided = struct {
         .diagnostics = false,
         .clock = false,
         .environment = false,
+        .exit = false,
     };
 
     /// A host with a console and nothing else: every other service is
@@ -371,6 +376,9 @@ pub const Capture = struct {
     trace_length: usize = 0,
     /// Objects the run did not free, or null when it never finished.
     leaked: ?i64 = null,
+    /// The status `exit(status)` carried, or null when the program
+    /// never exited.
+    exit_status: ?i64 = null,
     /// What this host answers when asked how deep calls may go.
     call_depth: i64 = abi.default_call_depth,
 
@@ -433,6 +441,7 @@ pub const Capture = struct {
             .print_error = if (provided.diagnostics) printError else null,
             .clock_ms = if (provided.clock) clockMilliseconds else null,
             .sleep_ms = if (provided.clock) sleepMilliseconds else null,
+            .exited = if (provided.exit) exited else null,
             .env = if (provided.environment) environmentValue else null,
         };
     }
@@ -519,6 +528,10 @@ pub const Capture = struct {
 
     fn finished(context: ?*anyopaque, leaked: i64) callconv(.c) void {
         of(context).leaked = leaked;
+    }
+
+    fn exited(context: ?*anyopaque, status: i64) callconv(.c) void {
+        of(context).exit_status = status;
     }
 
     fn fileRead(
@@ -745,6 +758,9 @@ pub const Reference = struct {
     error_message: []const u8 = "",
     error_origin: std.ArrayList(u8) = .empty,
     leaked: ?u32 = null,
+    /// The status `exit(status)` carried, or null when the program
+    /// never exited.
+    exit_status: ?i64 = null,
 
     pub fn deinit(self: *Reference) void {
         self.printed.deinit(self.gpa);
@@ -780,6 +796,7 @@ pub const Reference = struct {
             .clock_ms = if (self.provided.clock) clockMilliseconds else null,
             .sleep_ms = if (self.provided.clock) sleepMilliseconds else null,
             .env = if (self.provided.environment) environmentValue else null,
+            .exited = if (self.provided.exit) exitedHook else null,
             .arg_count = if (self.provided.arguments) argCount else null,
             .arg = if (self.provided.arguments) argAt else null,
             .terminal = if (self.provided.terminal) .{
@@ -928,6 +945,10 @@ pub const Reference = struct {
         return .{ .name = pressed.name, .text = pressed.text };
     }
 
+    fn exitedHook(context: *anyopaque, status: i64) void {
+        of(context).exit_status = status;
+    }
+
     pub fn run(self: *Reference, compiled: *const mir.Program) !void {
         self.world = self.provided.world;
         var arena = std.heap.ArenaAllocator.init(self.gpa);
@@ -940,6 +961,10 @@ pub const Reference = struct {
         );
         switch (result) {
             .success => |ended| self.leaked = ended.leaked_objects,
+            .exited => |ended| {
+                self.exit_status = ended.status;
+                self.leaked = ended.leaked_objects;
+            },
             .trap => |raised| {
                 self.trap_code = raised.code;
                 // The arena goes at the end of this function, so keep
@@ -1183,6 +1208,8 @@ pub const End = union(enum) {
     finished: u32,
     trapped: mir.TrapCode,
     errored: mir.ErrorCode,
+    /// The program said `exit(status)` — the fourth way a run ends.
+    exited: i64,
 };
 
 /// One comparison, held open.  Most specs never touch it — they say
@@ -1296,6 +1323,16 @@ fn settle(reference: *Reference, capture: *Capture, status: abi.Status) !End {
         try testing.expectEqualStrings(reference.error_origin.items, capture.errorOrigin());
         return .{ .errored = code };
     }
+    if (reference.exit_status) |chosen| {
+        // The program's chosen end: the same status number on both
+        // engines, and the same census — the unwind skips releases on
+        // both arms, so what was standing is part of what the program
+        // did (docs/LANGUAGE.md).
+        try testing.expectEqual(abi.Status.exited, status);
+        try testing.expectEqual(chosen, capture.exit_status.?);
+        try testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);
+        return .{ .exited = chosen };
+    }
     try testing.expectEqual(abi.Status.ok, status);
     try testing.expectEqual(@as(?mir.TrapCode, null), capture.trap_code);
     try testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);
@@ -1364,6 +1401,10 @@ fn expectClean(session: *const Session) !void {
             std.debug.print("unexpected error: {s} ({s})\n", .{ session.message(), @tagName(code) });
             return error.TestUnexpectedResult;
         },
+        .exited => |status| {
+            std.debug.print("unexpected exit({d})\n", .{status});
+            return error.TestUnexpectedResult;
+        },
     }
 }
 
@@ -1406,6 +1447,33 @@ fn expectTrapped(session: *const Session, code: mir.TrapCode) !void {
             std.debug.print("expected trap {s}, got error {s}\n", .{
                 @tagName(code), @tagName(raised),
             });
+            return error.TestUnexpectedResult;
+        },
+        .exited => |status| {
+            std.debug.print("expected trap {s}, got exit({d})\n", .{ @tagName(code), status });
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
+/// The run ends because the program said `exit(status)`, with exactly
+/// this status on both engines — and the same transcript and census in
+/// front of it, which `settle` already held them to.
+pub fn exits(source: []const u8, provided: Provided, status: i64) !void {
+    var session = try compare(source, provided);
+    defer session.deinit();
+    switch (session.end) {
+        .exited => |chosen| try testing.expectEqual(status, chosen),
+        .finished => {
+            std.debug.print("expected exit({d}), the run finished\n", .{status});
+            return error.TestUnexpectedResult;
+        },
+        .trapped => |raised| {
+            std.debug.print("expected exit({d}), got trap {s}\n", .{ status, @tagName(raised) });
+            return error.TestUnexpectedResult;
+        },
+        .errored => |raised| {
+            std.debug.print("expected exit({d}), got error {s}\n", .{ status, @tagName(raised) });
             return error.TestUnexpectedResult;
         },
     }

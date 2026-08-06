@@ -137,6 +137,11 @@ fn finish(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_i
             err.print("luce: out of memory\n", .{}) catch {};
             return report.exit_exhausted;
         },
+        .exited => {
+            // The program's chosen end: quiet, and the process
+            // carries the low eight bits the way POSIX does.
+            return @intCast((services.exit_status orelse 0) & 0xff);
+        },
         _ => {
             err.print("luce: the program returned an unknown status\n", .{}) catch {};
             return report.exit_broken;

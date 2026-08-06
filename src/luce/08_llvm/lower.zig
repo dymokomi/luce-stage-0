@@ -412,6 +412,7 @@ const Module = struct {
             ),
             .file_delete => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .dir_list => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
+            .exited => builder.fnType(.void, &.{ .ptr, .i64 }, .normal),
         };
     }
 
@@ -1171,12 +1172,29 @@ const Module = struct {
             &.{ started, outcome },
             "status",
         );
+        // The census is published for a run that finished and for one
+        // that exited: memory is explicit, so what an `exit(status)`
+        // left standing is part of what the program did.  A trapped,
+        // errored, or exhausted run publishes nothing, as before.
+        const status_ok = try wip.icmp(
+            .eq,
+            status,
+            try self.builder.intValue(.i32, @intFromEnum(abi.Status.ok)),
+            "status.ok",
+        );
+        const status_exited = try wip.icmp(
+            .eq,
+            status,
+            try self.builder.intValue(.i32, @intFromEnum(abi.Status.exited)),
+            "status.exited",
+        );
+        const censusable = try wip.bin(.@"or", status_ok, status_exited, "censusable");
         try self.reportLeaks(
             &wip,
             host,
             context,
             started,
-            try wip.bin(.@"or", trapped, errored, "no.census"),
+            try wip.bin(.xor, censusable, try self.builder.intValue(.i1, 1), "no.census"),
         );
         _ = try self.callService(&wip, .luce_rt_close, .void, &.{started}, "");
         _ = try wip.ret(status);
@@ -4854,6 +4872,20 @@ const Body = struct {
                 // A duration already elapsed is not a bug and not a
                 // failure: the host waits no time and answers yes.
                 _ = try self.callHost(.sleep_ms, &.{self.produced[of[0]].value}, "slept");
+            },
+            .exit_program => {
+                // The host records the number at the site, while the
+                // program is still leaving; the runtime records that
+                // the run exited; and the frame leaves on the
+                // unwinding edge, exactly as exhaustion does.  Nothing
+                // is reported — an exit is not news about a bug.
+                _ = try self.invokeHost(.exited, &.{self.produced[of[0]].value}, "exited");
+                _ = try self.callRuntime(.luce_rt_exit, .void, &.{
+                    rt,
+                    self.produced[of[0]].value,
+                }, "");
+                try self.leaveUnwinding();
+                self.seek(try self.wip.block(0, "after.exit"));
             },
             .file_exists => {
                 const path, const path_length = try self.textParts(of[0], "path");

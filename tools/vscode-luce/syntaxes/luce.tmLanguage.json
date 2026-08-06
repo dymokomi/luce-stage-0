@@ -55,7 +55,7 @@
         },
         {
           "name": "support.function.builtin.host.luce",
-          "match": "\\b(?:print|file_read|file_write|file_exists|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list)\\b"
+          "match": "\\b(?:print|file_read|file_write|file_exists|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list|exit)\\b"
         }
       ]
     },

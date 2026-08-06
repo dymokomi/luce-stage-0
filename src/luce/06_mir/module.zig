@@ -50,7 +50,11 @@ pub const magic = "LUCE";
 /// against the wrong tags.  Appending would have been the rule had
 /// the version *not* moved — it is what `runtime.Value.Tag`, which is
 /// ABI rather than wire, still does.
-pub const format_version: u32 = 24;
+///
+/// 25 — `exit_program` joins the intrinsics (docs/LANGUAGE.md's
+/// fourth way a run ends), appended inside the host group, so every
+/// tag after `dir_list` renumbers under the same one-line warrant.
+pub const format_version: u32 = 25;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -950,6 +954,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 24), format_version);
-    try testing.expectEqual(@as(u64, 4563114960401847313), hasher.final());
+    try testing.expectEqual(@as(u32, 25), format_version);
+    try testing.expectEqual(@as(u64, 7999746441911610128), hasher.final());
 }

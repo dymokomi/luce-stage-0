@@ -254,6 +254,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .file_delete,
         .file_rename,
         .dir_list,
+        .exit_program,
         => .impure,
     };
 }
@@ -347,6 +348,9 @@ pub fn viewStable(instruction: Instruction) bool {
             .str_value,
             .assert_true,
             .trap_message,
+            // Ending the run touches no handle either — the frame
+            // unwinds and nothing after it reads a view.
+            .exit_program,
             // The error channel is not the object table.
             .errored,
             .error_message,

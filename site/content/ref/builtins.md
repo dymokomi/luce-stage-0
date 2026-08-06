@@ -110,6 +110,18 @@ that has **already elapsed** — zero, or the negative left by
 failure. There is no time left to wait, so it returns at once. An
 animation loop can subtract without guarding.
 
+### The exit
+
+| Signature | Notes |
+|---|---|
+| `exit(status: long)` | the program's chosen end — the fourth way a run stops, beside finishing, trapping, and an uncaught error. It never returns: the run unwinds, nothing after the call executes, and the host carries the status — on POSIX, the low eight bits of the process's exit code |
+
+Not a trap (nothing is wrong) and not an error (nothing failed):
+`exit(0)` from the middle of `main` is an ordinary way for a program
+that has said everything it came to say to stop saying it. Host-gated
+like every effect — a host that cannot carry a status refuses the call
+(`host_unavailable`) rather than losing the number.
+
 ```luce run
 func main():
     let started = clock_ms()

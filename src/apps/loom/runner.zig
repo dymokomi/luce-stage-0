@@ -600,6 +600,14 @@ fn runLoaded(
             try err.print("loom: out of memory\n", .{});
             return report.exit_exhausted;
         },
+        .exited => {
+            // The program's chosen end: quiet, and the process
+            // carries the low eight bits the way POSIX does.  A tail
+            // that could not be delivered still outranks a clean
+            // status, exactly as it does for `.ok`.
+            const chosen: u8 = @intCast((services.exit_status orelse 0) & 0xff);
+            return if (delivered or chosen != 0) chosen else report.exit_broken;
+        },
         _ => {
             try err.print("loom: the program returned an unknown status\n", .{});
             return report.exit_broken;

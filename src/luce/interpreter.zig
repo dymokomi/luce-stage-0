@@ -97,6 +97,16 @@ pub const Result = union(enum) {
     trap: Trap,
     /// The program ended with an uncaught error.
     errored: Raised,
+    /// The program said `exit(status)` — its chosen end, the fourth
+    /// way a run stops (docs/LANGUAGE.md).  The unwind skips releases
+    /// exactly as a trap's does, so `leaked_objects` counts what was
+    /// standing, the same census the compiled path reports.
+    exited: Exited,
+};
+
+pub const Exited = struct {
+    status: i64,
+    leaked_objects: u32 = 0,
 };
 
 /// How deep a program may call.  Runaway recursion traps rather than
@@ -192,6 +202,11 @@ pub const Host = struct {
         arena: Allocator,
         name: []const u8,
     ) error{OutOfMemory}!?[]const u8 = null,
+    /// The program said `exit(status)`.  Called at the site, before
+    /// the unwind, so the host holds the number while the program is
+    /// still leaving — the same moment `abi.Host.exited` is called on
+    /// the compiled path.
+    exited: ?*const fn (context: *anyopaque, status: i64) void = null,
     /// The interactive screen for the `term_*` and `key_*` builtins.
     terminal: ?Terminal = null,
 };

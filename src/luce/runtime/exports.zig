@@ -91,6 +91,10 @@ pub const Status = enum(i32) {
     /// so out loud.  Not a trap: nothing about the program is wrong,
     /// the world said no and nobody caught it.
     errored = 3,
+    /// The program said `exit(status)` — its chosen end, the fourth
+    /// way a run stops.  The status itself is `Runtime.exit_status`,
+    /// read through `luce_rt_exit_status`.
+    exited = 4,
 };
 
 /// The outcome of a call, as generated code passes it around: what a
@@ -169,8 +173,19 @@ pub export fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64 {
 /// How the run ended, given the outcome the entry function answered.
 pub export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Status {
     if (runtime.exhausted) return .exhausted;
+    if (runtime.exit_status != null) return .exited;
     if (outcome == raised_error) return .errored;
     return if (outcome != survived) .trapped else .ok;
+}
+
+/// The program chose to stop: record the status and let the unwind
+/// ride the trap edge, exactly as exhaustion does.  Nothing lands in
+/// `Runtime.pending`, so `luce_rt_report` reports nothing — an exit
+/// is not news about a bug.  The status itself travels through the
+/// host's `exited` slot, called at the exit site before this; here it
+/// only decides what `luce_rt_status` answers.
+pub export fn luce_rt_exit(runtime: *Runtime, status: i64) callconv(.c) void {
+    runtime.exit_status = status;
 }
 
 // ---------------------------------------------------------------------------

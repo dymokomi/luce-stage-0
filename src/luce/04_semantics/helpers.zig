@@ -350,7 +350,9 @@ fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
 fn leavesByCall(expression: *const ast.Expression) bool {
     if (expression.* != .call) return false;
     const callee = expression.call.callee;
-    return std.mem.eql(u8, callee, "trap") or std.mem.eql(u8, callee, "error");
+    return std.mem.eql(u8, callee, "trap") or
+        std.mem.eql(u8, callee, "error") or
+        std.mem.eql(u8, callee, "exit");
 }
 
 /// Conservative all-paths-return: a block returns when some statement
