@@ -6,15 +6,21 @@
 //! So this is a forgiving scanner that classifies bytes and never
 //! rejects any.
 //!
-//! **The word tables below are copied from the language**, and
-//! `test "every name the language spells has a class here"` is what
-//! keeps them honest.  Copied and not imported: the compiler's tables
-//! live inside the `luce` module, and this generator links nothing —
-//! it drives the built binaries as subprocesses (site/build.sh), which
-//! is what lets it verify what the toolchain really does.  The test is
-//! the whole guard, so it checks every table.  The two that had one
-//! were the two that stayed correct; `builtins` had none and drifted
-//! nine names behind the language.
+//! **The word tables below are copies of the language's**, and they
+//! have to be: the compiler's tables live inside the `luce` module, and
+//! this generator links nothing — it drives the built binaries as
+//! subprocesses (site/build.sh), which is what lets it verify what the
+//! toolchain really does.
+//!
+//! What keeps them honest is `coverage.zig`, which reads the compiler's
+//! own sources off the disk at test time and holds these tables to
+//! them, both ways: a name the language spells and these do not is a
+//! failed build, and so is a name here the language no longer has.
+//! They are `pub` for that guard and for nothing else.  The guard used
+//! to live here and was a *fifth* copy of the same snapshot, so it
+//! proved only that the copy equalled the copy: while it passed, these
+//! tables lost five type names, kept three deleted builtins and missed
+//! two methods.
 //!
 //! Classes, and the CSS they reach:
 //!
@@ -26,7 +32,7 @@ const std = @import("std");
 const Buffer = @import("buffer.zig");
 
 /// Reserved words that read as control or declaration.
-const keywords = [_][]const u8{
+pub const keywords = [_][]const u8{
     "func",     "struct", "let", "var",   "if",     "elif",
     "else",     "while",  "for", "in",    "return", "break",
     "continue", "and",    "or",  "not",   "true",   "false",
@@ -36,34 +42,41 @@ const keywords = [_][]const u8{
 /// The words that move ownership.  They get a class of their own
 /// because they are the language's one genuinely unusual idea, and a
 /// reader scanning a page should be able to see every one of them.
-const verbs = [_][]const u8{ "give", "copy", "free", "new" };
+pub const verbs = [_][]const u8{ "give", "copy", "free", "new" };
 
 /// Type names the language itself spells.  Any other capitalised
 /// identifier is highlighted as a type too — that is the convention
 /// the language enforces for structs.
-const type_names = [_][]const u8{
-    // The language's own, lowercase (docs/TYPES.md D8).
-    "bool", "long", "double", "string",
-    "list", "map",  "array",  "builder",
+///
+/// The compiler's lists are `builtin_table` and `retiredSpelling` in
+/// `support/types.zig`.
+pub const type_names = [_][]const u8{
+    // The language's own, lowercase (docs/TYPES.md D8): the seven-rung
+    // numeric ladder, `bool`, `string`, and the four heap shapes.
+    "bool",    "byte",   "short",   "int",    "long",
+    "half",    "float",  "double",  "string", "list",
+    "map",     "array",  "builder",
     // Retiring: the rename step takes these with it.
-    "Bool", "Int",  "Float",  "String",
-    "List", "Map",  "Array",  "Builder",
+    "Bool",   "Int",
+    "Float",   "String", "List",    "Map",    "Array",
+    "Builder",
 };
 
 /// Everything callable by name on its own: the free builtins, the
-/// host-gated ones, and `range`.  The compiler's list is the table in
-/// `04_semantics/builder.zig`'s `lowerIntrinsic`, less `free`, which
-/// is a verb above.
-const builtins = [_][]const u8{
+/// host-gated ones, and `range`.  The compiler's list is the
+/// file-scope `builtins` table in `04_semantics/builder.zig`, less
+/// `free`, which is a verb above, and less the conversion
+/// constructors, which are named for the types they produce and are
+/// spelled in `type_names`.
+pub const builtins = [_][]const u8{
     "abs",         "min",         "max",         "clamp",       "sqrt",
-    "floor",       "ceil",        "len",         "range",       "assert",
-    "trap",        "error",       "str",         "parse_int",   "parse_float",
+    "floor",       "ceil",        "trunc",       "len",         "range",
+    "assert",      "trap",        "error",       "parse_int",   "parse_float",
     "chr",         "ord",         "print",       "print_error", "read_line",
     "env",         "clock_ms",    "sleep_ms",    "file_read",   "file_write",
     "file_append", "file_exists", "file_delete", "file_rename", "dir_list",
-    "arg",         "arg_count",   "term_rows",   "term_cols",   "term_clear",
-    "term_move",   "term_style",  "term_write",  "term_flush",  "key_read",
-    "key_text",
+    "term_rows",   "term_cols",   "term_clear",  "term_move",   "term_style",
+    "term_write",  "term_flush",  "key_read",    "key_text",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,
@@ -75,14 +88,14 @@ const builtins = [_][]const u8{
 /// The compiler's lists are `list_methods`, `array_methods`,
 /// `map_methods` and `builder_methods` in `04_semantics/builder.zig`,
 /// plus the two String primitives beside them.
-const methods = [_][]const u8{
-    "byte_at", "find_byte", "append", "append_ascii", "insert",
-    "remove",  "pop",       "clear",  "sort",         "reverse",
-    "find",    "contains",  "dim",    "fill",         "has",
-    "get",     "keys",      "values",
+pub const methods = [_][]const u8{
+    "byte_at", "find_byte", "append",   "append_ascii", "build",
+    "insert",  "remove",    "pop",      "clear",        "sort",
+    "reverse", "find",      "contains", "dim",          "fill",
+    "has",     "get",       "keys",     "values",
 };
 
-fn inTable(table: []const []const u8, word: []const u8) bool {
+pub fn inTable(table: []const []const u8, word: []const u8) bool {
     for (table) |entry| {
         if (std.mem.eql(u8, entry, word)) return true;
     }
@@ -284,92 +297,4 @@ test "a method reads as language only behind its receiver" {
     try std.testing.expect(std.mem.indexOf(u8, html, ".<span class=\"b\">find</span>") != null);
     // A bare `find` is somebody's own function and is left alone.
     try std.testing.expect(std.mem.indexOf(u8, html, "= find(") != null);
-}
-
-test "every name the language spells has a class here" {
-    // This is the whole guard on the tables above, so it covers all
-    // four of them.  `keywords`/`verbs` had a check like this and
-    // stayed correct; `builtins` had none and fell nine names behind.
-    //
-    // The lists below are copied from the compiler — the generator
-    // links nothing, so they cannot be imported (see this file's
-    // header).  What the test proves is that the copies are complete
-    // and that no name is filed under two classes at once.
-
-    // `02_lex/lexer.zig`: what the lexer reserves as a word token.
-    const lexed = [_][]const u8{
-        "func",  "struct", "let",  "var",    "if",    "elif",     "else",
-        "while", "for",    "in",   "return", "break", "continue", "and",
-        "or",    "not",    "true", "false",  "new",   "import",   "give",
-        "copy",  "none",   "try",  "catch",
-    };
-    for (lexed) |word| {
-        const as_keyword = inTable(&keywords, word);
-        const as_verb = inTable(&verbs, word);
-        try std.testing.expect(as_keyword or as_verb);
-        try std.testing.expect(!(as_keyword and as_verb));
-    }
-
-    // `04_semantics/declarations.zig`'s `reserved_names`: everything
-    // the language keeps for itself, which no program may redeclare
-    // and every one of which may therefore appear in a sample.
-    const reserved = [_][]const u8{
-        "range",       "Int",         "Float",       "Bool",       "String",
-        "List",        "Map",         "Array",       "Builder",    "None",
-        "long",        "double",      "string",      "abs",        "min",
-        "max",         "clamp",       "sqrt",        "floor",      "ceil",
-        "len",         "byte_at",     "assert",      "trap",       "str",
-        "parse_int",   "parse_float", "chr",         "ord",        "append",
-        "pop",         "insert",      "remove",      "has",        "dim",
-        "free",        "print",       "file_read",   "file_write", "file_exists",
-        "arg",         "arg_count",   "key_read",    "key_text",   "error",
-        "read_line",   "print_error", "clock_ms",    "sleep_ms",   "env",
-        "file_append", "file_delete", "file_rename", "dir_list",   "term_rows",
-        "term_cols",   "term_clear",  "term_move",   "term_style", "term_write",
-        "term_flush",
-    };
-    // The receiver methods `reserved_names` does not carry: a program
-    // *may* declare these, because they are resolved by receiver type
-    // and so collide with nothing — but where a program does not, they
-    // are the language and must read as it.  Sources are the four
-    // method tables in `04_semantics/builder.zig`, plus `find_byte`
-    // beside them.  The `term_*` services moved out of this list and
-    // into the one above when the language reserved them.
-    const also = [_][]const u8{
-        "find_byte",    "clear", "sort", "reverse", "find",
-        "contains",     "fill",  "get",  "keys",    "values",
-        "append_ascii",
-    };
-
-    for (&[_][]const []const u8{ &reserved, &also }) |list| {
-        for (list) |word| {
-            var classes: usize = 0;
-            if (inTable(&keywords, word)) classes += 1;
-            if (inTable(&verbs, word)) classes += 1;
-            if (inTable(&type_names, word)) classes += 1;
-            if (inTable(&builtins, word)) classes += 1;
-            if (inTable(&methods, word)) classes += 1;
-            // A capitalised name the tables do not spell is still a
-            // type: that is the rule `render` applies to any struct a
-            // sample declares, and `None` reaches it that way.
-            if (classes == 0 and std.ascii.isUpper(word[0])) continue;
-            if (classes != 1) {
-                std.debug.print("'{s}' has {d} classes, want 1\n", .{ word, classes });
-                return error.TestUnexpectedResult;
-            }
-        }
-    }
-
-    // And nothing in the tables is spelled twice across them.
-    const tables = [_][]const []const u8{ &keywords, &verbs, &type_names, &builtins, &methods };
-    for (tables, 0..) |table, position| {
-        for (table) |word| {
-            for (tables[position + 1 ..]) |other| {
-                if (inTable(other, word)) {
-                    std.debug.print("'{s}' is in two tables\n", .{word});
-                    return error.TestUnexpectedResult;
-                }
-            }
-        }
-    }
 }

@@ -26,16 +26,23 @@
 //!
 //! ## Why the sources are read rather than copied
 //!
-//! `highlight.zig` keeps pinned copies of the same tables and an
-//! agreement test over them, because the highlighter must run inside
-//! the generator and the generator links no part of the tree it
-//! documents.  These checks have no such constraint: they run only
-//! under `zig test`, where the repository is right there on disk.  So
-//! they read it, and there is nothing to keep in step.
+//! `highlight.zig` keeps pinned copies of the same tables, because the
+//! highlighter must run inside the generator and the generator links no
+//! part of the tree it documents.  These checks have no such
+//! constraint: they run only under `zig test`, where the repository is
+//! right there on disk.  So they read it, and there is nothing to keep
+//! in step.
+//!
+//! Which is why the highlighter's own guard lives down here rather than
+//! beside its tables (last section).  It used to sit in `highlight.zig`
+//! and check the copies against a *second* copy, so it proved only that
+//! the copy equalled the copy; it passed while the tables lost five
+//! type names and kept three deleted builtins.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const highlight = @import("highlight.zig");
 
 // ---------------------------------------------------------------------------
 // Finding the repository
@@ -168,8 +175,21 @@ fn enumMember(line: []const u8) ?[]const u8 {
 // The compiler's lists
 // ---------------------------------------------------------------------------
 
-/// Every builtin the analyzer dispatches, from `lowerIntrinsic`'s own
-/// table — the single place a builtin is added.
+/// The first quoted field of every row of a `.{ .field = "name", … }`
+/// table, where `marker` is the opening of that field.  How four of the
+/// compiler's lists are written.
+fn rowNames(names: *Names, table: []const u8, marker: []const u8) !void {
+    var lines = std.mem.splitScalar(u8, table, '\n');
+    while (lines.next()) |line| {
+        const start = std.mem.indexOf(u8, line, marker) orelse continue;
+        const rest = line[start + marker.len ..];
+        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
+        try names.add(rest[0..stop]);
+    }
+}
+
+/// Every builtin the analyzer dispatches, from the file-scope table it
+/// reads — the single place a builtin is added.
 fn builtins(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
@@ -186,15 +206,60 @@ fn builtins(repository: Repository) !Names {
     const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
         return error.BuiltinTableNotFound;
 
-    var lines = std.mem.splitScalar(u8, table, '\n');
-    while (lines.next()) |line| {
-        const marker = ".{ .name = \"";
-        const start = std.mem.indexOf(u8, line, marker) orelse continue;
-        const rest = line[start + marker.len ..];
-        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
-        try names.add(rest[0..stop]);
-    }
+    try rowNames(&names, table, ".{ .name = \"");
     if (names.items.items.len < 30) return error.BuiltinTableTooSmall;
+    return names;
+}
+
+/// Every word the lexer reserves, from `02_lex/token.zig`'s one table.
+fn lexerKeywords(repository: Repository) !Names {
+    var names: Names = .{ .gpa = repository.gpa };
+    errdefer names.deinit();
+
+    const source = try repository.read("src/luce/02_lex/token.zig");
+    defer repository.gpa.free(source);
+
+    const table = between(source, "pub const keywords = [_]struct { word: []const u8, kind: Kind }{", "\n};") orelse
+        return error.KeywordTableNotFound;
+
+    try rowNames(&names, table, ".{ .word = \"");
+    if (names.items.items.len < 20) return error.KeywordTableTooSmall;
+    return names;
+}
+
+/// Every name the language keeps for itself, which no program may
+/// redeclare — so every one of them may stand in a sample meaning what
+/// the language means by it.
+fn reservedNames(repository: Repository) !Names {
+    var names: Names = .{ .gpa = repository.gpa };
+    errdefer names.deinit();
+
+    const source = try repository.read("src/luce/04_semantics/context.zig");
+    defer repository.gpa.free(source);
+
+    const table = between(source, "pub const reserved_names = [_][]const u8{", "\n};") orelse
+        return error.ReservedNamesNotFound;
+
+    try quotedWhere(&names, table, isPlainName);
+    if (names.items.items.len < 40) return error.ReservedNamesTooSmall;
+    return names;
+}
+
+/// The TitleCase type names the language spelled once and does not any
+/// more.  A sample may still show one — that is what the table is for —
+/// so the site still owes them a colour.
+fn retiredTypeNames(repository: Repository) !Names {
+    var names: Names = .{ .gpa = repository.gpa };
+    errdefer names.deinit();
+
+    const source = try repository.read("src/luce/support/types.zig");
+    defer repository.gpa.free(source);
+
+    const table = between(source, "const retired = [_]struct { was: []const u8, now: []const u8 }{", "\n    };") orelse
+        return error.RetiredSpellingsNotFound;
+
+    try rowNames(&names, table, ".{ .was = \"");
+    if (names.items.items.len == 0) return error.RetiredSpellingsEmpty;
     return names;
 }
 
@@ -552,14 +617,7 @@ fn typeNames(repository: Repository) !Names {
     const table = between(source, "const builtin_table = [_]struct { name: []const u8, is: Builtin }{", "\n};") orelse
         return error.TypeTableNotFound;
 
-    var lines = std.mem.splitScalar(u8, table, '\n');
-    while (lines.next()) |line| {
-        const marker = ".{ .name = \"";
-        const start = std.mem.indexOf(u8, line, marker) orelse continue;
-        const rest = line[start + marker.len ..];
-        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
-        try names.add(rest[0..stop]);
-    }
+    try rowNames(&names, table, ".{ .name = \"");
     if (names.items.items.len < 10) return error.TypeTableTooSmall;
     return names;
 }
@@ -595,4 +653,97 @@ test "the reference names every conversion constructor" {
         "array",
         "builder",
     });
+}
+
+// ---------------------------------------------------------------------------
+// The highlighter's word tables
+// ---------------------------------------------------------------------------
+
+/// Every name the language spells, out of the six tables that spell
+/// them.  The caller owns it.
+fn vocabulary(repository: Repository) !Names {
+    var names: Names = .{ .gpa = repository.gpa };
+    errdefer names.deinit();
+
+    const readers = [_]*const fn (Repository) anyerror!Names{
+        lexerKeywords,
+        reservedNames,
+        builtins,
+        methods,
+        typeNames,
+        retiredTypeNames,
+    };
+    for (readers) |read| {
+        var found = try read(repository);
+        defer found.deinit();
+        for (found.items.items) |name| try names.add(name);
+    }
+    return names;
+}
+
+/// The five word tables `render` classifies against, in class order.
+const highlight_tables = [_][]const []const u8{
+    &highlight.keywords,
+    &highlight.verbs,
+    &highlight.type_names,
+    &highlight.builtins,
+    &highlight.methods,
+};
+
+test "the highlighter spells the language, and only the language" {
+    // `highlight.zig` cannot import the compiler — it runs inside the
+    // generator, which links no part of the tree it documents — so its
+    // word tables are copies.  This is what keeps them honest, and it
+    // reads the compiler's own sources rather than a snapshot of them.
+    // The guard this replaces was a snapshot, and it passed while the
+    // tables lost five type names and kept three deleted builtins.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    var spelled = try vocabulary(repository);
+    defer spelled.deinit();
+
+    var wrong: usize = 0;
+
+    // Forward: a name the language spells reads as the language.
+    for (spelled.items.items) |name| {
+        var classes: usize = 0;
+        for (highlight_tables) |table| {
+            if (highlight.inTable(table, name)) classes += 1;
+        }
+        // A capitalised name no table spells is still a type: that is
+        // the rule `render` applies to any struct a sample declares,
+        // and `None` reaches it that way.
+        if (classes == 0 and std.ascii.isUpper(name[0])) continue;
+        if (classes == 1) continue;
+        std.debug.print("highlight.zig: '{s}' has {d} classes, want 1\n", .{ name, classes });
+        wrong += 1;
+    }
+
+    // Backward: a name that reads as the language is one the language
+    // has.  This is the half a snapshot cannot do — `str`, `arg` and
+    // `arg_count` were coloured as builtins after they were deleted,
+    // and a forward-only check never sees them.
+    for (highlight_tables) |table| {
+        for (table) |name| {
+            if (spelled.has(name)) continue;
+            std.debug.print("highlight.zig: '{s}' is not a name the language spells\n", .{name});
+            wrong += 1;
+        }
+    }
+
+    if (wrong != 0) return error.HighlighterDisagreesWithLanguage;
+}
+
+test "no word the highlighter spells is filed under two classes" {
+    for (highlight_tables, 0..) |table, position| {
+        for (table) |word| {
+            for (highlight_tables[position + 1 ..]) |other| {
+                if (!highlight.inTable(other, word)) continue;
+                std.debug.print("highlight.zig: '{s}' is in two tables\n", .{word});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
 }
