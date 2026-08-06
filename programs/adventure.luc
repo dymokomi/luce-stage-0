@@ -1,0 +1,216 @@
+# adventure — a text adventure, in five files.
+#
+#   loom run adventure.lc                 a new game
+#   loom run adventure.lc rescue          resume rescue.sav
+#
+# The engine is split the way the problem is:
+#
+#   adventure.luc   the turn: read a line, act on it, say what happened
+#     command.luc   what the typing means
+#     story.luc     what the game is about
+#       world.luc   what a room, a way and a thing are
+#     journal.luc   what a save file is
+#
+# Only this file talks to the world outside: `read_line`, `print`, and
+# the one `exit` a player asks for by typing quit.  `world` and
+# `command` touch nothing at all, which is why the specification can
+# run the whole game against a scripted keyboard and get the same
+# bytes twice (src/luce/specs/adventure_spec.zig).
+#
+# The two ways a run can end badly are handled in two different
+# places, on purpose.  A save named on the command line is the run's
+# whole premise: if it cannot be read there is nothing to play, so
+# `main` says `try` and loom prints the words and the line they came
+# from.  A `save` or `load` typed mid-game is not: the player is still
+# standing in a room, so the loop catches the reason, says it, and
+# asks again (docs/FAILURE.md).
+
+import world
+import story
+import command
+import journal
+import std.strings
+
+# Where `save` and `load` with no name of their own go.
+let save_file = "adventure.sav"
+
+# The player: where they are, how long they have been at it, and
+# whether the story is over.  Three values and no objects, which is
+# what lets the turn be a `var self` method — `play.act(...)` means
+# `play = Play.act(play, ...)`, copy in and copy out, with the whole
+# realm borrowed beside it (docs/METHODS.md).
+struct Play:
+    at: long
+    moves: long = 0
+    done: bool = false
+
+    # One turn.
+    #
+    # It is fallible because two of the verbs touch a disk.  The
+    # write-back stands on the returning edge only, so a turn that
+    # raises leaves the move count where it was — which is the right
+    # answer: the turn did not happen.
+    func act(var self, realm: world.Realm, order: command.Order) -> !:
+        if order.empty():
+            print("Say what you want to do, or type help.")
+            return
+        self.moves += 1
+        let verb = order.verb
+
+        if verb == "look":
+            self.look(realm)
+        elif verb == "go":
+            self.travel(realm, order.noun)
+        elif verb == "take":
+            self.take(realm, order.noun)
+        elif verb == "drop":
+            self.put_down(realm, order.noun)
+        elif verb == "examine":
+            self.examine(realm, order.noun)
+        elif verb == "inventory":
+            self.inventory(realm)
+        elif verb == "save":
+            try journal.write(save_file, realm, self.at, self.moves)
+            print("Saved to " + save_file + ".")
+        elif verb == "load":
+            let save = try journal.read(save_file)
+            self.at = try save.into(realm)
+            self.moves = save.moves
+            let back = save.carried()
+            if len(back) == 0:
+                print("Loaded " + save_file + ", empty-handed.")
+            else:
+                print("Loaded " + save_file + ", carrying " + back.join(", ") + ".")
+            self.look(realm)
+        elif verb == "help":
+            print(help())
+        elif verb == "quit":
+            # The one place the game ends the *run* rather than the
+            # story.  A player who typed quit has said the whole of
+            # what they want, and there is nothing below this worth
+            # unwinding to; `exit` says so and never comes back
+            # (docs/LANGUAGE.md).
+            let places, things = realm.tally()
+            print("You walked into " + counted(places, "room", "rooms") + " and are carrying " + counted(things, "thing", "things") + ".")
+            print("Farewell.")
+            exit(0)
+        else:
+            print("I do not know how to " + order.said() + ".")
+
+    # -- the verbs, one method each ------------------------------------
+
+    func look(self, realm: world.Realm):
+        print(realm.look(self.at))
+
+    func travel(var self, realm: world.Realm, direction: string):
+        if len(direction) == 0:
+            print("Go where?")
+            return
+        let way = realm.way_out(self.at, direction)
+        if way == none:
+            print("There is no way " + direction + " from here.")
+            return
+        if way.shut():
+            let wanted = way.opens_with()
+            if not realm.holding(wanted):
+                print("The way " + direction + " is locked. It wants a " + wanted + ".")
+                return
+            if realm.unlock(self.at, direction):
+                print("The " + wanted + " turns, and the way " + direction + " opens.")
+        self.at = way.beyond()
+        let arriving = not realm.seen(self.at)
+        realm.visit(self.at)
+        print(realm.look(self.at, brief = not arriving))
+
+    func take(var self, realm: world.Realm, name: string):
+        if len(name) == 0:
+            print("Take what?")
+            return
+        if realm.holding(name):
+            print("You already have the " + name + ".")
+            return
+        let thing = realm.thing_in(self.at, name)
+        if thing == none:
+            print("There is no " + name + " here.")
+            return
+        if realm.pick_up(self.at, name):
+            print("Taken.")
+        else:
+            print("The " + name + " is not going anywhere.")
+
+    func put_down(var self, realm: world.Realm, name: string):
+        if len(name) == 0:
+            print("Drop what?")
+            return
+        if realm.put_down(self.at, name):
+            print("Dropped.")
+        else:
+            print("You are not carrying a " + name + ".")
+
+    func examine(self, realm: world.Realm, name: string):
+        if len(name) == 0:
+            print("Examine what?")
+            return
+        let close = realm.describe(self.at, name)
+        if close == none:
+            print("You see no " + name + " here.")
+            return
+        print(close)
+
+    func inventory(self, realm: world.Realm):
+        let held = realm.carrying()
+        if len(held) == 0:
+            print("You are carrying nothing.")
+            return
+        print("You are carrying: " + held.join(", ") + ".")
+
+# "1 room", "4 rooms".  English needs the count and both words, and
+# there is nowhere better to keep them than the sentence that asks.
+private func counted(count: long, one: string, many: string) -> string:
+    if count == 1:
+        return f"{count} {one}"
+    return f"{count} {many}"
+
+func help() -> string:
+    var lines = new builder()
+    lines.append("look                  what is here\n")
+    lines.append("north south east      or n s e w, up, down — walking\n")
+    lines.append("west up down          a bare direction is a step\n")
+    lines.append("take THING            pick something up\n")
+    lines.append("drop THING            put it back down\n")
+    lines.append("examine THING         look at it closely (x)\n")
+    lines.append("inventory             what you are carrying (i)\n")
+    lines.append("save / load           " + save_file + "\n")
+    lines.append("quit                  stop playing")
+    return lines.build()
+
+func main(args: list(string)) -> !:
+    var realm = story.build()
+    var play = Play(at = story.start(realm))
+
+    # A save named on the command line decides where the game starts.
+    # Unreadable or damaged, it ends the run right here — there is no
+    # game to play instead of the one that was asked for.
+    if len(args) > 0:
+        let save = try journal.read(journal.named(args[0]))
+        play.at = try save.into(realm)
+        play.moves = save.moves
+
+    print(story.opening())
+    realm.visit(play.at)
+    play.look(realm)
+
+    while not play.done:
+        # `read_line` answers `string?`, and `none` is the end of
+        # input — a pipe that ran dry, or Ctrl-D at a terminal.  There
+        # is nobody left to ask what to do, so the game stops without
+        # a word about it.
+        let typed = read_line("> ")
+        if typed == none:
+            break
+        play.act(realm, command.parse(typed)) catch reason:
+            print("The world says no: " + reason)
+        let last = story.ending(realm, play.at, play.moves)
+        if len(last) > 0:
+            print(last)
+            play.done = true

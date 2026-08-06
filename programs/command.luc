@@ -1,0 +1,104 @@
+# command — what the player typed, in the two words the engine acts on.
+#
+# A text adventure's parser is a verb and a noun and a great many
+# words that mean the same verb.  This module is that table and
+# nothing else: it never looks at a realm, so "take the moon" parses
+# exactly as well as "take the lamp" and the engine is the one that
+# has to say no.
+#
+# The whole surface is `parse` and the `Order` it answers.  The
+# synonym tables under it are `private` because they are a matter of
+# taste that will change — a module's callers should not be able to
+# depend on `x` meaning `examine` today (docs/VISIBILITY.md §1).
+
+import std.strings
+
+# One parsed line: what to do, and what to do it to.
+struct Order:
+    verb: string
+    noun: string = ""
+
+    private:
+        # What the player actually typed, case and all, kept for the
+        # one message that has to quote it back.
+        typed: string = ""
+
+    func make(verb: string, noun: string = "", typed: string = "") -> Order:
+        return Order(verb = verb, noun = noun, typed = typed)
+
+    # Nothing was typed but the return key.
+    func empty(self) -> bool:
+        return len(self.verb) == 0
+
+    # The line as it was written, for "I do not know how to …".
+    func said(self) -> string:
+        return self.typed
+
+# Read one line of typing.  The verb comes back canonical, the noun
+# comes back as the words that were left after the little words were
+# dropped, and a bare direction — "north", or just "n" — is the `go`
+# it plainly means.
+func parse(text: string) -> Order:
+    let line = text.trim()
+    let words = line.lower().split("")
+    if len(words) == 0:
+        return Order.make(verb = "")
+
+    let head = canonical(words[0])
+    if is_direction(head):
+        return Order.make(verb = "go", noun = head, typed = line)
+
+    var rest: list(string) = []
+    for i, word in words:
+        if i > 0 and not is_noise(word):
+            rest.append(word)
+    var noun = rest.join(" ")
+    if head == "go":
+        noun = canonical(noun)
+    return Order.make(verb = head, noun = noun, typed = line)
+
+# The verb a word means.  Anything unrecognized comes back as itself,
+# so the engine's "I do not know how to fly" quotes the player.
+private func canonical(word: string) -> string:
+    if word == "n" or word == "north":
+        return "north"
+    if word == "s" or word == "south":
+        return "south"
+    if word == "e" or word == "east":
+        return "east"
+    if word == "w" or word == "west":
+        return "west"
+    if word == "u" or word == "up":
+        return "up"
+    if word == "d" or word == "down":
+        return "down"
+    if word == "go" or word == "walk" or word == "head":
+        return "go"
+    if word == "l" or word == "look":
+        return "look"
+    if word == "x" or word == "examine" or word == "inspect" or word == "read":
+        return "examine"
+    if word == "get" or word == "grab" or word == "take":
+        return "take"
+    if word == "put" or word == "drop":
+        return "drop"
+    if word == "i" or word == "inv" or word == "inventory":
+        return "inventory"
+    if word == "q" or word == "quit":
+        return "quit"
+    if word == "?" or word == "help" or word == "commands":
+        return "help"
+    return word
+
+private func is_direction(word: string) -> bool:
+    if word == "north" or word == "south" or word == "east" or word == "west":
+        return true
+    return word == "up" or word == "down"
+
+# The words that carry no meaning here.  "take the brass key" and
+# "take brass key" are one order, and the noun the engine matches on
+# is the thing's own name either way.
+private func is_noise(word: string) -> bool:
+    if word == "the" or word == "a" or word == "an":
+        return true
+    return word == "at" or word == "to" or word == "into" or word == "toward"

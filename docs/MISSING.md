@@ -368,6 +368,29 @@ the proof the language moved.
     into the site or a test in `luce` that reads the site's text.
     Neither is obviously right, which is why this is written down
     rather than done.
+15. **A field of an element needs a `var` root binding.**  `xs[i] = v`
+    through a `let`-bound list is ordinary content mutation (S38), and
+    `xs[i].field = v` through the same binding is refused — "`xs` is
+    let-bound; use var for reassignment" — because the place rule
+    walks to the root binding and a nested place rebuilds value
+    structs up to it.  Nothing is reassigned: the write lands in the
+    container either way.  `programs/world.luc` therefore opens five
+    of its methods with `var slots = self.<table>`, an alias declared
+    `var` for no reason a reader can see, and the comment there has to
+    explain it.  The fix is either to stop at the innermost container
+    when the path crosses one (which the assignment rule already
+    describes) or to say the restriction out loud in the message; the
+    diagnostic naming *reassignment* for a write that is not one is
+    the part that misleads.
+16. **`assert(x != none)` does not narrow.**  Five shapes narrow and
+    they are the right five (docs/LANGUAGE.md), but the first thing a
+    person writes above a use is an assertion, and it leaves the name
+    a `T?` — so the next line is `luce.sema.absent` and the fix is to
+    rewrite the assertion as `if x == none: trap("…")`.  The
+    diagnostic names `if` and `else`, which is what saves it; the
+    shape itself is still a papercut, and `assert` of a comparison
+    with `none` is a narrowing form the flow analysis could read
+    exactly as it reads a guard that leaves.
 
 ---
 

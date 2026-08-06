@@ -124,6 +124,24 @@ answering differently about a leak census, a trap's position, and one
 boolean. That is not a property a golden-output file has, because
 nobody writes a leak census by hand.
 
+**And once, the oracle was the one that was wrong.** `"a call site
+that raised after it returned gives nothing back twice"`
+(`specs/host_spec.zig`) is a use-after-free the *interpreter* had and
+the compiled path did not: a fallible call's answer is stored into the
+slot that carries it across the branch on its outcome, on the failing
+edge as well as the returning one, because a register may not cross a
+block — and the interpreter's `unwind` left the result register
+holding the answer the same instruction gave the *last* time it ran,
+whose storage that turn had already released. `08_llvm/lower.zig`
+empties the result slot before it returns `errored`; the interpreter
+now does the same. It needed a loop, and one turn that worked before
+one that did not, which is why a thousand lines of small programs
+never met it and `programs/adventure.luc` did on its first playthrough.
+That is the argument for a corpus with a *large* program in it, and it
+cuts both ways: an oracle is only an oracle where the two arms are
+written independently, and the price of that is that either one can be
+the one that is wrong.
+
 ### What the oracle costs to keep
 
 Measured. An interpreted run of a spec-sized program is *below the

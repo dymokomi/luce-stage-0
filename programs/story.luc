@@ -1,0 +1,133 @@
+# story — the observatory: eight rooms, seven doors, six things, and
+# the one thing that finishes it.
+#
+# This is the only file that says what the game is *about*.  `world`
+# knows what a room is, `command` knows what a verb is, `adventure`
+# knows what a turn is; none of them knows that there is a lens in
+# the library, and swapping this file for another one is how you get
+# another game out of the same engine.
+#
+# It is written as one function of named arguments, because a map is
+# a table and a table wants columns: `link(from = hall, direction =
+# "down", to = cellar, back = "up", locked = true, needs = brass_key)`
+# says the whole of a door, and the two `Way`s it makes cannot
+# disagree about which one is locked (docs/ARGS.md).
+
+import world
+
+private let gate_room = "Gate"
+private let dome_room = "Dome"
+private let eyepiece = "glass lens"
+private let brass_key = "brass key"
+private let iron_crank = "iron crank"
+
+# Build the whole realm; the caller owns it (OWNERSHIP.md S28).
+func build() -> world.Realm:
+    var realm = world.Realm.empty()
+
+    let gate = realm.add_room(world.Room.make(
+        name = gate_room,
+        description = "Iron gates, one hinge gone, standing open on a gravel drive.\nThe observatory's dome is a pale shell above the trees to the north.",
+    ))
+    let courtyard = realm.add_room(world.Room.make(
+        name = "Courtyard",
+        description = "Gravel gives way to flagstones. A stone bench faces the doors\nof the house, and ivy has taken the east wall down to its knees.",
+    ))
+    let hall = realm.add_room(world.Room.make(
+        name = "Hall",
+        description = "A cold hall with a chequered floor. Stairs climb to the gallery,\nand a low door in the floor is set with a brass plate.",
+    ))
+    let library = realm.add_room(world.Room.make(
+        name = "Library",
+        description = "Shelves to the ceiling and a ladder that does not reach them.\nSomebody has been reading here, and not long ago.",
+    ))
+    let gallery = realm.add_room(world.Room.make(
+        name = "Gallery",
+        description = "A balcony of instruments under dust sheets. A folding stair\nhangs from the ceiling with its counterweight missing.",
+    ))
+    let cellar = realm.add_room(world.Room.make(
+        name = "Cellar",
+        description = "Coal dust and cold. The observatory's machinery comes down\nthis far and ends in a bare iron shaft.",
+    ))
+    let garden = realm.add_room(world.Room.make(
+        name = "Garden",
+        description = "A walled garden gone to seed. Something bright is caught\nin the roots of the pear tree.",
+    ))
+    let dome = realm.add_room(world.Room.make(
+        name = dome_room,
+        description = "The dome. The great telescope stands with its eyepiece empty,\npointed at a shutter nobody has opened in thirty years.",
+    ))
+
+    realm.link(from = gate, direction = "north", to = courtyard, back = "south")
+    realm.link(from = courtyard, direction = "north", to = hall, back = "south")
+    realm.link(from = courtyard, direction = "east", to = garden, back = "west")
+    realm.link(from = hall, direction = "west", to = library, back = "east")
+    realm.link(from = hall, direction = "up", to = gallery, back = "down")
+    realm.link(
+        from = hall,
+        direction = "down",
+        to = cellar,
+        back = "up",
+        locked = true,
+        needs = brass_key,
+    )
+    realm.link(
+        from = gallery,
+        direction = "up",
+        to = dome,
+        back = "down",
+        locked = true,
+        needs = iron_crank,
+    )
+
+    realm.add_thing(world.Thing.make(
+        name = brass_key,
+        description = "A brass key, green at the teeth. It is the size of the plate\nin the hall floor.",
+        at = garden,
+    ))
+    realm.add_thing(world.Thing.make(
+        name = iron_crank,
+        description = "A crank of black iron, heavy and cold, with a square socket.",
+        at = cellar,
+    ))
+    realm.add_thing(world.Thing.make(
+        name = eyepiece,
+        description = "A lens ground for an eyepiece, still in its wax paper.",
+        at = library,
+    ))
+    realm.add_thing(world.Thing.make(
+        name = "leather journal",
+        description = "The observatory log. The last entry is a date, and under it\none word: shutter.",
+        at = library,
+    ))
+    realm.add_thing(world.Thing.make(
+        name = "stone bench",
+        description = "Cold, and rooted to the flagstones.",
+        at = courtyard,
+        portable = false,
+    ))
+    realm.add_thing(world.Thing.make(
+        name = "telescope",
+        description = "Brass and dust, and an eyepiece socket with nothing in it.",
+        at = dome,
+        portable = false,
+    ))
+
+    return realm
+
+# Where a new game begins.  `where` answers a `long?` because a name
+# is only a name until a realm has been asked; this realm was built
+# three lines above with that room in it, and `else` says what to do
+# if it somehow were not (docs/LANGUAGE.md).
+func start(realm: world.Realm) -> long:
+    return realm.where(gate_room) else 0
+
+func opening() -> string:
+    return "THE SHUTTER\nAn observatory, thirty years shut. Type help if you have not\nbeen here before.\n"
+
+# The end of the story, or "" while it is still going.  One condition:
+# the lens, in the dome, in the player's own hands.
+func ending(realm: world.Realm, at: long, moves: long) -> string:
+    if realm.name_at(at) != dome_room or not realm.holding(eyepiece):
+        return ""
+    return "You unwrap the lens and press it into the empty socket. It seats\nwith a sound like a latch. The shutter above is still shut, but the\neyepiece holds the whole dark of it now, and thirty years late the\nobservatory is looking again.\n\nYou finished the story in " + string(moves) + " turns."
