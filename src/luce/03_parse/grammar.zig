@@ -838,6 +838,17 @@ pub const Parser = struct {
             );
             return null;
         }
+        if (self.peekKind() == .assign) {
+            // The receiver is not an argument a caller supplies, so
+            // there is nothing for a default to fill (docs/ARGS.md D7).
+            try self.report(
+                "luce.parse.self",
+                self.peek().span,
+                "self is the receiver and takes no default",
+                .{},
+            );
+            return null;
+        }
         return .{
             .name = "self",
             .name_span = word.span,
@@ -877,14 +888,27 @@ pub const Parser = struct {
             if ((try self.expect(.colon, "':' after the parameter name")) == null) return null;
             const mode: ast.ParameterMode = if (self.accept(.keyword_give) != null) .give else .borrow;
             const parameter_type = (try self.typeName()) orelse return null;
+            // `= EXPRESSION` — the parameter's default, one new
+            // production in the one place a parameter is parsed
+            // (docs/ARGS.md §1).  What the expression may *be* is
+            // stage 4's question: the folder decides, so a bad default
+            // is a constant's diagnostic and not a parse error.
+            var default_value: ?*ast.Expression = null;
+            var written_end = parameter_type.span.end;
+            if (self.accept(.assign) != null) {
+                const written = (try self.expression()) orelse return null;
+                default_value = written;
+                written_end = written.span().end;
+            }
             try parameters.append(self.arena, .{
                 .name = self.text(parameter_name),
                 .name_span = parameter_name.span,
                 .mode = mode,
                 .type_name = parameter_type,
-                .span = .{ .start = parameter_name.span.start, .end = parameter_type.span.end },
+                .default = default_value,
+                .span = .{ .start = parameter_name.span.start, .end = written_end },
             });
-            previous_end = parameter_type.span.end;
+            previous_end = written_end;
             if (self.accept(.comma) == null) break;
         }
         if (try self.missingSeparator(previous_end)) return null;

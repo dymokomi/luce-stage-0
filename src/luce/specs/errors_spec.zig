@@ -2897,6 +2897,127 @@ test "luce.sema.self: self is not a nameable argument on the method form" {
     , "luce.sema.self", "self is the receiver; it is written in front of the dot, not named");
 }
 
+// Defaults (docs/ARGS.md §8, Order step 4).
+
+test "luce.sema.call: defaults are trailing" {
+    try expectSaying(
+        \\func range_of(start: long = 0, finish: long):
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.call", "start has a default, so finish needs one too — the parameters with defaults come last");
+}
+
+test "luce.sema.const: a call is not a default" {
+    try expectSaying(
+        \\func cost() -> long:
+        \\    return 1
+        \\
+        \\func f(a: long = cost()):
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "a default is a constant: cost(…) is a call");
+}
+
+test "luce.sema.const: an object is not a default" {
+    try expectSaying(
+        \\func f(xs: list(long) = [1]):
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "a default is a constant, and an object is not one");
+}
+
+test "luce.sema.const: a default cannot read an earlier parameter" {
+    try expectSaying(
+        \\func f(a: long, b: long = a):
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "a default cannot use a: it is folded before any call is made");
+}
+
+test "luce.sema.own: a give parameter has no default" {
+    try expectSaying(
+        \\func f(xs: give list(long) = [1]):
+        \\    free(xs)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "a give parameter takes ownership of an object, and an object is never a default");
+}
+
+test "luce.sema.type: a default lands at the parameter's type or is refused" {
+    try expectSaying(
+        \\func f(start: long = "zero"):
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.type", "start is long and its default is string");
+}
+
+test "luce.sema.const: a default folds once, at the declaration, called or not" {
+    // The fold happens where the declaration is, so `1 // 0` is a
+    // compile error even though nothing ever calls f — the proof the
+    // evaluation is declaration-time (docs/ARGS.md §2).
+    try expectSaying(
+        \\func f(a: long = 1 // 0):
+        \\    return
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "constant division by zero");
+}
+
+test "luce.parse.self: self takes no default" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func f(self = 1) -> long:
+        \\        return 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.self", "self is the receiver and takes no default");
+}
+
+test "luce.sema.call: the count sentence names the defaults" {
+    try expectSaying(
+        \\func grown(base: long, step: long = 5, twice: bool = false) -> long:
+        \\    return base + step
+        \\
+        \\func main():
+        \\    let a = grown(1, 2, false, 4)
+        \\
+    , "luce.sema.call", "grown takes 1 argument and 2 with a default, got 4");
+}
+
+test "luce.sema.call: only the required slots are ever missing" {
+    try expectSaying(
+        \\func f(a: long, b: long, c: long = 0) -> long:
+        \\    return a + b + c
+        \\
+        \\func main():
+        \\    let x = f()
+        \\
+    , "luce.sema.call", "f is missing a and b");
+}
+
 test "luce.sema.type: a named argument's type mistake names the parameter" {
     try expectSaying(
         \\func size(width: long, height: long) -> long:

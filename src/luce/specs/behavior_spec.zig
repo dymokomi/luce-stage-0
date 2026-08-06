@@ -1993,6 +1993,83 @@ test "named arguments: a named literal lands at the slot it names" {
     );
 }
 
+test "defaults: an omitted trailing argument is filled from the declaration" {
+    // D2 and D3 of docs/ARGS.md: a default is a folded compile-time
+    // constant, materialised at each call site, and the suffix a call
+    // omits is the suffix the declaration filled in — by count or by
+    // name.
+    try agreeOk(
+        \\func grown(base: long, step: long = 5, twice: bool = false) -> long:
+        \\    var total = base + step
+        \\    if twice:
+        \\        total = total * 2
+        \\    return total
+        \\
+        \\func main():
+        \\    assert(grown(1) == 6)
+        \\    assert(grown(1, 2) == 3)
+        \\    assert(grown(1, 2, true) == 6)
+        \\    assert(grown(1, twice = true) == 12)
+        \\    assert(grown(base = 1, step = 0) == 1)
+        \\
+    );
+}
+
+test "defaults: a constant, a string, a struct value, and none all serve" {
+    // The whole of what a default may be is what foldConstant folds
+    // (docs/ARGS.md §2): other file-scope constants, string literals,
+    // value-struct construction — and, through D9, `none` where the
+    // parameter says what it is absent of.
+    try agreeOk(
+        \\let step_default = 4
+        \\
+        \\struct Point:
+        \\    x: long
+        \\    y: long
+        \\
+        \\func stepped(base: long, step: long = step_default * 2) -> long:
+        \\    return base + step
+        \\
+        \\func greet(name: string = "loom") -> string:
+        \\    return "hi " + name
+        \\
+        \\func corner(p: Point = Point(x = 1, y = 2)) -> long:
+        \\    return p.x + p.y
+        \\
+        \\func pick(value: long? = none, fallback: long = 7) -> long:
+        \\    return value else fallback
+        \\
+        \\func main():
+        \\    assert(stepped(1) == 9)
+        \\    assert(greet() == "hi loom")
+        \\    assert(greet("luce") == "hi luce")
+        \\    assert(corner() == 3)
+        \\    assert(corner(Point(x = 5, y = 5)) == 10)
+        \\    assert(pick() == 7)
+        \\    assert(pick(3) == 3)
+        \\    assert(pick(fallback = 9) == 9)
+        \\
+    );
+}
+
+test "defaults: both method spellings fill the same slots" {
+    try agreeOk(
+        \\struct Counter:
+        \\    count: long
+        \\
+        \\    func bumped(self, step: long = 1) -> long:
+        \\        return self.count + step
+        \\
+        \\func main():
+        \\    let counter = Counter(count = 10)
+        \\    assert(counter.bumped() == 11)
+        \\    assert(counter.bumped(5) == 15)
+        \\    assert(Counter.bumped(counter) == 11)
+        \\    assert(Counter.bumped(counter, step = 3) == 13)
+        \\
+    );
+}
+
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:

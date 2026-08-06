@@ -343,6 +343,10 @@ pub const Parameter = struct {
     /// type, and stage 4 is where that is known.
     receiver: Receiver = .not,
     type_name: TypeName,
+    /// `= EXPRESSION` after the type: the parameter's default, folded
+    /// to a compile-time constant by stage 4 (docs/ARGS.md D2).  Null
+    /// for a required parameter.
+    default: ?*Expression = null,
     span: Span,
 };
 

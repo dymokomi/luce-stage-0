@@ -132,6 +132,14 @@ pub const Analyzer = struct {
     constant_infos: std.ArrayList(ConstantInfo) = .empty,
     constant_names: std.StringHashMapUnmanaged(u32) = .empty,
 
+    /// What the fold underway is *for*, when it is not a file-scope
+    /// `let`: "a default" while a parameter or field default folds
+    /// (docs/ARGS.md D2), null otherwise.  The folder's answer never
+    /// changes with it — only the sentence a refusal opens with, so a
+    /// reader who wrote `start: long = g()` is told about defaults and
+    /// not about a `let` they never wrote.
+    fold_subject: ?[]const u8 = null,
+
     fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
         self.struct_shapes.deinit(self.temporary);
@@ -1234,6 +1242,9 @@ pub const Analyzer = struct {
                 if (self.struct_names.get(qualified)) |layout_index| {
                     return self.foldConstruct(module, call.arguments, call.span, layout_index);
                 }
+                if (self.fold_subject) |subject| {
+                    return self.constantError(call.span, "{s} is a constant: {s}(…) is a call", .{ subject, call.callee });
+                }
                 return self.constantError(call.span, "constants fold at compile time; calls are not constant", .{});
             },
             .method => |method| {
@@ -1247,9 +1258,15 @@ pub const Analyzer = struct {
                         }
                     }
                 }
+                if (self.fold_subject) |subject| {
+                    return self.constantError(method.span, "{s} is a constant: {s}(…) is a call", .{ subject, method.name });
+                }
                 return self.constantError(method.span, "constants fold at compile time; calls are not constant", .{});
             },
             .new_object, .list_literal, .slice_range, .index => {
+                if (self.fold_subject) |subject| {
+                    return self.constantError(expression.span(), "{s} is a constant, and an object is not one", .{subject});
+                }
                 return self.constantError(expression.span(), "constants are values; objects cannot be file-scope [OWNERSHIP.md S35]", .{});
             },
             .give, .copy => {
@@ -1671,6 +1688,11 @@ pub const Analyzer = struct {
         defer parameter_types.deinit(self.arena);
         var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
         defer parameter_modes.deinit(self.arena);
+        var parameter_defaults: std.ArrayList(?TypedConstant) = .empty;
+        defer parameter_defaults.deinit(self.arena);
+        // The first parameter that declared a default, for D3's
+        // sentence when a required one follows it.
+        var first_defaulted: ?[]const u8 = null;
         // The entry's parameter is collected like every other one: it
         // is the command line, it has a type, and `checkEntry` below
         // is what says which type it has to be (OWNERSHIP.md S44).
@@ -1711,6 +1733,7 @@ pub const Analyzer = struct {
                 receiver = parameter.receiver;
                 try parameter_types.append(self.arena, .{ .strukt = owner });
                 try parameter_modes.append(self.arena, .borrow);
+                try parameter_defaults.append(self.arena, null);
                 continue;
             }
             const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
@@ -1723,8 +1746,32 @@ pub const Analyzer = struct {
                 );
                 continue;
             }
+            // Defaults are trailing (docs/ARGS.md D3): a parameter
+            // with one may be followed only by parameters with one.
+            // It is what keeps a defaulted signature one signature
+            // with a shorter legal spelling rather than an overload
+            // set, and what stops a must-be-named parameter arriving
+            // through a hole in the ordering rule.
+            if (parameter.default == null) {
+                if (first_defaulted) |earlier| {
+                    try self.fail(
+                        "luce.sema.call",
+                        parameter.span,
+                        "{s} has a default, so {s} needs one too — the parameters with defaults come last",
+                        .{ earlier, parameter.name },
+                    );
+                    continue;
+                }
+            } else if (first_defaulted == null) {
+                first_defaulted = parameter.name;
+            }
+            var folded: ?TypedConstant = null;
+            if (parameter.default) |written| {
+                folded = (try self.foldDefault(module, declaration, parameter, resolved, written)) orelse continue;
+            }
             try parameter_types.append(self.arena, resolved);
             try parameter_modes.append(self.arena, parameter.mode);
+            try parameter_defaults.append(self.arena, folded);
         }
         var results: std.ArrayList(Type) = .empty;
         defer results.deinit(self.arena);
@@ -1754,6 +1801,7 @@ pub const Analyzer = struct {
             .module = module,
             .parameter_types = try parameter_types.toOwnedSlice(self.arena),
             .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
+            .parameter_defaults = try parameter_defaults.toOwnedSlice(self.arena),
             .receiver = receiver,
             .enclosing = enclosing,
             .results = try results.toOwnedSlice(self.arena),
@@ -1762,6 +1810,142 @@ pub const Analyzer = struct {
             .fallible = declaration.fallible,
             .is_entry = is_entry,
         });
+    }
+
+    /// Fold one parameter default at the parameter's own type
+    /// (docs/ARGS.md D2): evaluated once, at the declaration, by the
+    /// folder that already folds file-scope `let` — and materialised
+    /// at each call site as the constant register the same literal
+    /// would have produced written out, so the lowered program is
+    /// byte-identical to the one with the argument written.  Null
+    /// after reporting.
+    fn foldDefault(
+        self: *Analyzer,
+        module: usize,
+        declaration: *const ast.FuncDecl,
+        parameter: ast.Parameter,
+        resolved: Type,
+        written: *const ast.Expression,
+    ) Error!?TypedConstant {
+        // A give parameter takes ownership of an object and an object
+        // is never a constant — two rules that already refuse this,
+        // handed the one sentence they imply (docs/ARGS.md §5, D12).
+        if (parameter.mode == .give) {
+            try self.fail(
+                "luce.sema.own",
+                parameter.span,
+                "a give parameter takes ownership of an object, and an object is never a default [OWNERSHIP.md S13, S32]",
+                .{},
+            );
+            return null;
+        }
+        if (self.carriesObjects(resolved)) {
+            try self.fail("luce.sema.const", parameter.span, "a default is a constant, and an object is not one", .{});
+            return null;
+        }
+        if (helpers.deeperThan(written, helpers.max_expression_depth)) {
+            try self.fail(
+                "luce.sema.nesting",
+                parameter.span,
+                "expression nested too deeply (limit {d})",
+                .{helpers.max_expression_depth},
+            );
+            return null;
+        }
+        // A default is folded before any call is made, so no
+        // parameter has a value it could read — the fact that keeps
+        // signatures from becoming programs (docs/ARGS.md, Refused:
+        // call-time defaults).
+        if (parameterRead(declaration, written)) |read| {
+            try self.fail(
+                "luce.sema.const",
+                written.span(),
+                "a default cannot use {s}: it is folded before any call is made",
+                .{read},
+            );
+            return null;
+        }
+        self.fold_subject = "a default";
+        defer self.fold_subject = null;
+        var folded = (try self.foldConstant(module, written, resolved)) orelse return null;
+        if (folded.value_type.widensTo(resolved)) folded = widenConstant(folded, resolved);
+        if (!folded.value_type.eql(resolved)) {
+            try self.fail("luce.sema.type", parameter.span, "{s} is {s} and its default is {s}", .{
+                parameter.name,
+                try self.typeName(resolved),
+                try self.typeName(folded.value_type),
+            });
+            return null;
+        }
+        return folded;
+    }
+
+    /// The first of the declaration's parameter names `expression`
+    /// reads — `self` included — or null when it reads none.  A pure
+    /// syntactic walk: whether the name means anything else is the
+    /// folder's question, asked after this one so the better sentence
+    /// wins.
+    fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expression) ?[]const u8 {
+        switch (expression.*) {
+            .int_literal, .float_literal, .bool_literal, .string_literal, .none_literal => return null,
+            .name => |name| {
+                for (declaration.parameters) |parameter| {
+                    if (std.mem.eql(u8, parameter.name, name.text)) return name.text;
+                }
+                return null;
+            },
+            .field => |field| return parameterRead(declaration, field.target),
+            .call => |call| {
+                for (call.arguments) |argument| {
+                    if (parameterRead(declaration, argument.value)) |read| return read;
+                }
+                return null;
+            },
+            .method => |method| {
+                if (parameterRead(declaration, method.target)) |read| return read;
+                for (method.arguments) |argument| {
+                    if (parameterRead(declaration, argument.value)) |read| return read;
+                }
+                return null;
+            },
+            .binary => |binary| {
+                if (parameterRead(declaration, binary.left)) |read| return read;
+                return parameterRead(declaration, binary.right);
+            },
+            .unary => |unary| return parameterRead(declaration, unary.operand),
+            .new_object => |made| {
+                for (made.dims) |dim| {
+                    if (parameterRead(declaration, dim)) |read| return read;
+                }
+                return null;
+            },
+            .list_literal => |list| {
+                for (list.elements) |element| {
+                    if (parameterRead(declaration, element)) |read| return read;
+                }
+                return null;
+            },
+            .index => |indexed| {
+                if (parameterRead(declaration, indexed.target)) |read| return read;
+                for (indexed.indices) |position| {
+                    if (parameterRead(declaration, position)) |read| return read;
+                }
+                return null;
+            },
+            .slice_range => |slice| {
+                if (parameterRead(declaration, slice.target)) |read| return read;
+                if (slice.start) |start| {
+                    if (parameterRead(declaration, start)) |read| return read;
+                }
+                if (slice.end) |end| {
+                    if (parameterRead(declaration, end)) |read| return read;
+                }
+                return null;
+            },
+            .give => |verb| return parameterRead(declaration, verb.operand),
+            .copy => |verb| return parameterRead(declaration, verb.operand),
+            .try_call => |tried| return parameterRead(declaration, tried.operand),
+        }
     }
 
     fn checkEntry(self: *Analyzer) Error!void {

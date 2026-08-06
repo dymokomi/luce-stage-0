@@ -237,6 +237,13 @@ pub const FunctionDeclInfo = struct {
     module: usize,
     parameter_types: []Type,
     parameter_modes: []ast.ParameterMode,
+    /// One entry per parameter: the folded default where the
+    /// declaration wrote one (docs/ARGS.md D2), null where the
+    /// parameter is required.  Defaults are trailing (D3), so the
+    /// non-null entries are a suffix.  A call site materialises a
+    /// missing argument from here as the constant register the same
+    /// literal would have produced written out — nothing reaches MIR.
+    parameter_defaults: []?TypedConstant,
     /// Whether this function's first parameter is `self`, and whether
     /// it writes it back (docs/METHODS.md).  `.not` for every one of
     /// the namespace functions a struct has always been able to hold —

@@ -193,6 +193,17 @@ fn argumentSlot(
     return if (slot < parameters.len) slot else null;
 }
 
+/// How many of a signature's slots carry a default — the second
+/// number in the count sentence, and the suffix a call may omit
+/// (docs/ARGS.md D3).
+fn defaultCount(defaults: []const ?context.TypedConstant) usize {
+    var count: usize = 0;
+    for (defaults) |default| {
+        if (default != null) count += 1;
+    }
+    return count;
+}
+
 pub const FunctionBuilder = struct {
     analyzer: *Analyzer,
     module: usize,
@@ -5085,6 +5096,7 @@ pub const FunctionBuilder = struct {
         code: []const u8,
         parameters: []const ast.Parameter,
         hidden: usize,
+        defaulted: usize,
         call_arguments: []const ast.Argument,
         seen: []bool,
         span: Span,
@@ -5114,7 +5126,7 @@ pub const FunctionBuilder = struct {
                 // A positional argument past the last slot: the count
                 // sentence, which is about the call and not about any
                 // one argument.
-                try self.failArgumentCount(callee, code, parameters, hidden, call_arguments.len, span);
+                try self.failArgumentCount(callee, code, parameters, hidden, defaulted, call_arguments.len, span);
                 return null;
             };
             if (argument.name) |written| {
@@ -5186,17 +5198,30 @@ pub const FunctionBuilder = struct {
     }
 
     /// The count sentence: how many arguments the call site may write,
-    /// against how many it wrote.
+    /// against how many it wrote — and, where the signature has
+    /// defaults, how many of its slots have one (docs/ARGS.md §8).
     fn failArgumentCount(
         self: *FunctionBuilder,
         callee: []const u8,
         code: []const u8,
         parameters: []const ast.Parameter,
         hidden: usize,
+        defaulted: usize,
         written_count: usize,
         span: Span,
     ) Error!void {
         const takes = parameters.len - hidden;
+        if (defaulted != 0) {
+            const required = takes - defaulted;
+            try self.fail(code, span, "{s} takes {d} argument{s} and {d} with a default, got {d}", .{
+                callee,
+                required,
+                helpers.plural(required),
+                defaulted,
+                written_count,
+            });
+            return;
+        }
         try self.fail(code, span, "{s} takes {d} argument{s}, got {d}", .{
             callee,
             takes,
@@ -5206,26 +5231,29 @@ pub const FunctionBuilder = struct {
     }
 
     /// Every required slot the call left unfilled, named at once —
-    /// never the first only, for `writeMissingFields`' reason.  True
-    /// when nothing is missing.
+    /// never the first only, for `writeMissingFields`' reason — and a
+    /// slot with a default is never missing: it is filled from the
+    /// declaration (docs/ARGS.md D2).  True when nothing is missing.
     fn checkRequiredSlots(
         self: *FunctionBuilder,
         callee: []const u8,
         code: []const u8,
         parameters: []const ast.Parameter,
+        defaults: []const ?context.TypedConstant,
         seen: []const bool,
         span: Span,
     ) Error!bool {
         var missing: usize = 0;
-        for (seen) |given| {
-            if (!given) missing += 1;
+        for (seen, 0..) |given, slot| {
+            if (given or defaults[slot] != null) continue;
+            missing += 1;
         }
         if (missing == 0) return true;
         var names: std.ArrayList(u8) = .empty;
         defer names.deinit(self.temporary());
         var written: usize = 0;
-        for (parameters, seen) |parameter, given| {
-            if (given) continue;
+        for (parameters, seen, 0..) |parameter, given, slot| {
+            if (given or defaults[slot] != null) continue;
             if (written != 0) {
                 if (missing > 2) try names.appendSlice(self.temporary(), ",");
                 try names.appendSlice(self.temporary(), " ");
@@ -5345,9 +5373,9 @@ pub const FunctionBuilder = struct {
         const seen = try self.temporary().alloc(bool, parameters.len);
         defer self.temporary().free(seen);
         @memset(seen, false);
-        const slots = (try self.resolveSlots(name, "luce.sema.call", parameters, 0, call_arguments, seen, span)) orelse
+        const slots = (try self.resolveSlots(name, "luce.sema.call", parameters, 0, defaultCount(info.parameter_defaults), call_arguments, seen, span)) orelse
             return null;
-        if (!(try self.checkRequiredSlots(name, "luce.sema.call", parameters, seen, span))) return null;
+        if (!(try self.checkRequiredSlots(name, "luce.sema.call", parameters, info.parameter_defaults, seen, span))) return null;
         // Ownership handoffs are never invisible: a give parameter
         // needs give NAME, copy NAME, or something fresh at the call
         // site; a borrow parameter refuses a give (S13, S14).
@@ -5408,6 +5436,22 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             registers[slot] = fitted.register;
+        }
+        // A slot nobody filled takes its default: the constant
+        // register the same literal would have produced at the call
+        // site (docs/ARGS.md D2) — no code path, no branch, no second
+        // entry point.  A struct default owns the field run it just
+        // made, so it is parked as the statement temporary a written
+        // construction would be (S3).
+        for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
+            if (given) continue;
+            const filled = maybe_default.?;
+            const made: Typed = .{
+                .register = try self.emitConstantValue(filled.value, filled.value_type),
+                .value_type = filled.value_type,
+            };
+            try self.parkFreshStorage(made);
+            registers[slot] = made.register;
         }
         if (info.return_type == .none and !as_statement) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
@@ -5781,9 +5825,9 @@ pub const FunctionBuilder = struct {
         defer self.temporary().free(seen);
         @memset(seen, false);
         seen[0] = true; // the receiver, already in hand
-        const slots = (try self.resolveSlots(method.name, "luce.sema.method", parameters, 1, method.arguments, seen, method.span)) orelse
+        const slots = (try self.resolveSlots(method.name, "luce.sema.method", parameters, 1, defaultCount(info.parameter_defaults), method.arguments, seen, method.span)) orelse
             return null;
-        if (!(try self.checkRequiredSlots(method.name, "luce.sema.method", parameters, seen, method.span))) return null;
+        if (!(try self.checkRequiredSlots(method.name, "luce.sema.method", parameters, info.parameter_defaults, seen, method.span))) return null;
 
         // Ownership at the call site is the plain-call rule said once
         // per argument: a give parameter needs `give`/`copy`/something
@@ -5841,6 +5885,18 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             registers[slot] = fitted.register;
+        }
+        // A slot nobody filled takes its default (docs/ARGS.md D2),
+        // parked like the written construction it stands in for (S3).
+        for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
+            if (given) continue;
+            const filled = maybe_default.?;
+            const made: Typed = .{
+                .register = try self.emitConstantValue(filled.value, filled.value_type),
+                .value_type = filled.value_type,
+            };
+            try self.parkFreshStorage(made);
+            registers[slot] = made.register;
         }
         if (info.results.len == 0 and !as_statement) {
             try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
@@ -6324,16 +6380,36 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        if (values.len != info.parameter_types.len) {
-            try self.fail("luce.sema.call", span, "{s} takes {d} argument{s}, got {d}", .{
-                name,
-                info.parameter_types.len,
-                helpers.plural(info.parameter_types.len),
-                values.len,
-            });
+        const total = info.parameter_types.len;
+        if (info.parameter_defaults.len != total) return null; // the declaration already carries a diagnostic
+        const covered = values.len <= total and covered: {
+            for (info.parameter_defaults[values.len..]) |default| {
+                if (default == null) break :covered false;
+            }
+            break :covered true;
+        };
+        if (!covered) {
+            const defaulted = defaultCount(info.parameter_defaults);
+            if (defaulted != 0) {
+                const required = total - defaulted;
+                try self.fail("luce.sema.call", span, "{s} takes {d} argument{s} and {d} with a default, got {d}", .{
+                    name,
+                    required,
+                    helpers.plural(required),
+                    defaulted,
+                    values.len,
+                });
+            } else {
+                try self.fail("luce.sema.call", span, "{s} takes {d} argument{s}, got {d}", .{
+                    name,
+                    total,
+                    helpers.plural(total),
+                    values.len,
+                });
+            }
             return null;
         }
-        const registers = try self.arena().alloc(Register, values.len);
+        const registers = try self.arena().alloc(Register, total);
         for (values, 0..) |value, index| {
             const fitted = (try self.fit(value, info.parameter_types[index])) orelse {
                 try self.fail("luce.sema.type", span, "argument {d} of {s} is {s}, got {s}{s}", .{
@@ -6346,6 +6422,18 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             registers[index] = fitted.register;
+        }
+        // The suffix the call omitted takes its defaults — how the
+        // routed spelling `s.find(x)` reaches a `find` with a
+        // defaulted `start` (docs/ARGS.md D2, D3).
+        for (info.parameter_defaults[values.len..], values.len..) |maybe_default, slot| {
+            const filled = maybe_default.?;
+            const made: Typed = .{
+                .register = try self.emitConstantValue(filled.value, filled.value_type),
+                .value_type = filled.value_type,
+            };
+            try self.parkFreshStorage(made);
+            registers[slot] = made.register;
         }
         if (info.return_type == .none and !as_statement) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
