@@ -4105,6 +4105,9 @@ pub const Function = struct {
     debug_locations: std.AutoHashMapUnmanaged(Instruction.Index, DebugLocation) = .empty,
     debug_values: []const Instruction.Index = &.{},
     extra: []const u32 = &.{},
+    // LUCE: attachments with *final* instruction indices, sorted by
+    // instruction, filled by `WipFunction.finish`.
+    metadata_attachments: []const WipFunction.MetadataAttachment = &.{},
 
     pub const Index = enum(u32) {
         none = maxInt(u32),
@@ -5121,6 +5124,7 @@ pub const Function = struct {
     };
 
     pub fn deinit(self: *Function, gpa: Allocator) void {
+        gpa.free(self.metadata_attachments); // LUCE
         gpa.free(self.extra);
         gpa.free(self.debug_values);
         self.debug_locations.deinit(gpa);
@@ -5233,6 +5237,17 @@ pub const WipFunction = struct {
     debug_locations: std.AutoArrayHashMapUnmanaged(Instruction.Index, DebugLocation),
     debug_values: std.AutoArrayHashMapUnmanaged(Instruction.Index, void),
     extra: std.ArrayList(u32),
+    // LUCE: metadata attached to arbitrary instructions — what this
+    // vendored copy exists for (08_llvm/builder.zig has the warrant).
+    // Wip instruction indices here; `finish` maps them to final ones.
+    metadata_attachments: std.ArrayListUnmanaged(MetadataAttachment) = .empty,
+
+    // LUCE: one attachment: `!kind !metadata` on one instruction.
+    pub const MetadataAttachment = struct {
+        instruction: Instruction.Index,
+        kind: @import("ir.zig").FixedMetadataKind,
+        metadata: Metadata,
+    };
 
     pub const Cursor = struct { block: Block.Index, instruction: u32 = 0 };
 
@@ -6803,6 +6818,28 @@ pub const WipFunction = struct {
         }
 
         assert(function.instructions.len == final_instructions_len);
+
+        // LUCE: attachments recorded against wip instruction indices
+        // become attachments against final ones, sorted by instruction
+        // so the bitcode writer can walk them in one pass.
+        const attachments = try gpa.alloc(
+            MetadataAttachment,
+            self.metadata_attachments.items.len,
+        );
+        errdefer gpa.free(attachments);
+        for (attachments, self.metadata_attachments.items) |*final, wip| final.* = .{
+            .instruction = instructions.items[@intFromEnum(wip.instruction)],
+            .kind = wip.kind,
+            .metadata = wip.metadata,
+        };
+        std.mem.sort(MetadataAttachment, attachments, {}, struct {
+            fn before(_: void, lhs: MetadataAttachment, rhs: MetadataAttachment) bool {
+                return @intFromEnum(lhs.instruction) < @intFromEnum(rhs.instruction);
+            }
+        }.before);
+        gpa.free(function.metadata_attachments);
+        function.metadata_attachments = attachments;
+
         function.extra = wip_extra.finish();
         function.blocks = blocks;
         function.names = names.ptr;
@@ -6812,7 +6849,31 @@ pub const WipFunction = struct {
         function.debug_values = debug_values;
     }
 
+    // LUCE: attach `!kind !metadata` to the instruction behind `value`.
+    // The value must be an instruction — a load, store, call, or any
+    // other — and the metadata any node the Builder can make
+    // (`metadataTuple`, `metadataConstant`, `metadataString`).  What a
+    // kind means is LLVM's to say; what this vendored copy adds is
+    // only the missing doorway (task #45's ruling).
+    pub fn attachMetadata(
+        self: *WipFunction,
+        value: Value,
+        kind: @import("ir.zig").FixedMetadataKind,
+        metadata: Metadata,
+    ) Allocator.Error!void {
+        const instruction = switch (value.unwrap()) {
+            .instruction => |instruction| instruction,
+            .constant, .metadata => unreachable, // only instructions carry attachments
+        };
+        try self.metadata_attachments.append(self.builder.gpa, .{
+            .instruction = instruction,
+            .kind = kind,
+            .metadata = metadata,
+        });
+    }
+
     pub fn deinit(self: *WipFunction) void {
+        self.metadata_attachments.deinit(self.builder.gpa); // LUCE
         self.extra.deinit(self.builder.gpa);
         self.debug_values.deinit(self.builder.gpa);
         self.debug_locations.deinit(self.builder.gpa);
@@ -9839,6 +9900,10 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
             var block_incoming_len: u32 = undefined;
             try w.writeAll(" {\n");
             var maybe_dbg_index: ?u32 = null;
+            // LUCE: side-table attachments print after the line they
+            // belong to, exactly as the bitcode carries them; sorted
+            // by instruction, so one cursor walks them.
+            var attachment_print_at: usize = 0;
             for (params_len..function.instructions.len) |instruction_i| {
                 const instruction_index: Function.Instruction.Index = @enumFromInt(instruction_i);
                 const instruction = function.instructions.get(@intFromEnum(instruction_index));
@@ -10326,6 +10391,23 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
 
                 if (maybe_dbg_index) |dbg_index| {
                     try w.print(", !dbg !{d}", .{dbg_index});
+                }
+                // LUCE: this instruction's attachments, in order,
+                // through the same formatter the weights go through.
+                while (attachment_print_at < function.metadata_attachments.len and
+                    @intFromEnum(function.metadata_attachments[attachment_print_at].instruction) == instruction_i)
+                {
+                    const attachment = function.metadata_attachments[attachment_print_at];
+                    var kind_buffer: [40]u8 = undefined;
+                    const prefix = std.fmt.bufPrint(
+                        &kind_buffer,
+                        ", !{s} ",
+                        .{@tagName(attachment.kind)},
+                    ) catch unreachable;
+                    try w.print("{f}", .{
+                        try metadata_formatter.fmt(prefix, attachment.metadata, null),
+                    });
+                    attachment_print_at += 1;
                 }
                 try w.writeByte('\n');
             }
@@ -15283,13 +15365,47 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         }, metadata_adapter);
                     }
 
+                    // LUCE: the side table of attachments, sorted by
+                    // final instruction index; `attach_at` walks it in
+                    // step with the loop below.
+                    const attachments = func.metadata_attachments;
+                    var attach_at: usize = 0;
+
                     var instr_index: u32 = 0;
+                    var absolute_index: u32 = 0;
                     for (func.instructions.items(.tag), func.instructions.items(.data)) |instr_tag, data| switch (instr_tag) {
-                        .arg, .block => {}, // not an actual instruction
+                        .arg, .block => {
+                            absolute_index += 1;
+                        }, // not an actual instruction
                         else => {
+                            // LUCE: emit this instruction's attachments.
+                            while (attach_at < attachments.len and
+                                @intFromEnum(attachments[attach_at].instruction) == absolute_index)
+                            {
+                                try metadata_attach_block.writeAbbrevAdapted(MetadataAttachmentBlock.AttachmentInstructionSingle{
+                                    .inst = instr_index,
+                                    .kind = attachments[attach_at].kind,
+                                    .metadata = attachments[attach_at].metadata,
+                                }, metadata_adapter);
+                                attach_at += 1;
+                            }
+                            absolute_index += 1;
                             instr_index += 1;
                         },
                         .br_cond, .@"switch" => {
+                            // LUCE: side-table attachments land on a
+                            // branch the same way, before its weights.
+                            while (attach_at < attachments.len and
+                                @intFromEnum(attachments[attach_at].instruction) == absolute_index)
+                            {
+                                try metadata_attach_block.writeAbbrevAdapted(MetadataAttachmentBlock.AttachmentInstructionSingle{
+                                    .inst = instr_index,
+                                    .kind = attachments[attach_at].kind,
+                                    .metadata = attachments[attach_at].metadata,
+                                }, metadata_adapter);
+                                attach_at += 1;
+                            }
+                            absolute_index += 1;
                             const weights = switch (instr_tag) {
                                 .br_cond => func.extraData(Function.Instruction.BrCond, data).weights,
                                 .@"switch" => func.extraData(Function.Instruction.Switch, data).weights,
