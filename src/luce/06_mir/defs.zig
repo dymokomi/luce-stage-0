@@ -82,14 +82,20 @@ pub const Intrinsic = enum {
     is_none,
     optional_wrap,
     optional_unwrap,
-    /// The two an error needs beyond its terminators (docs/FAILURE.md).
-    /// `errored` asks whether the fallible call or intrinsic naming its
-    /// one argument came back errored rather than returning; it is the
-    /// only instruction that may read that register's outcome, and it
-    /// must stand in the same block as what it asks about.  `forget`
-    /// discards the pending error and its words — what `catch` does,
-    /// and the reason a caught error leaks nothing.
+    /// The three an error needs beyond its terminators
+    /// (docs/FAILURE.md).  `errored` asks whether the fallible call or
+    /// intrinsic naming its one argument came back errored rather than
+    /// returning; it is the only instruction that may read that
+    /// register's outcome, and it must stand in the same block as what
+    /// it asks about.  `error_message` reads the words out of the
+    /// channel — what `catch NAME:` binds — and answers a borrow of
+    /// run-lifetime storage, so a place that keeps them takes a copy in
+    /// the ordinary way.  `forget` discards the pending error and its
+    /// words — what `catch` does, and the reason a caught error leaks
+    /// nothing; it stands *after* any `error_message` reading the same
+    /// error, because a forgotten error has no words left to name.
     errored,
+    error_message,
     forget,
     /// `error("…")` — record `user_error` and the program's own words
     /// in the channel.  Not a terminator: the `unwind` that follows it

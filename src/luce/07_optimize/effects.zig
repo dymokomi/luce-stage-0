@@ -155,10 +155,12 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .none_value, .is_none, .optional_wrap, .optional_unwrap => .pure,
 
         // The error channel is mutable state one instruction writes
-        // and the next reads, so neither may be folded or deleted:
-        // `errored` reads what the call in front of it left, and
-        // `forget` is the whole of what a `catch` does.
-        .errored, .forget, .raise_error => .impure,
+        // and the next reads, so none of these may be folded, deleted
+        // or reordered: `errored` reads what the call in front of it
+        // left, `error_message` reads the words the same error carries,
+        // and `forget` is the whole of what a `catch` does — moving
+        // `error_message` past it would read a channel that is empty.
+        .errored, .error_message, .forget, .raise_error => .impure,
 
         // Text.  A string is a value, so these read nothing another
         // instruction can change.  The parsers answer absence rather
@@ -344,6 +346,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .trap_message,
             // The error channel is not the object table.
             .errored,
+            .error_message,
             .forget,
             .raise_error,
             => true,

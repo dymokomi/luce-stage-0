@@ -623,6 +623,10 @@ fn verifyIntrinsic(
         },
         // Settled above, before the operands were typed.
         .errored => return error.BadIntrinsic,
+        .error_message => {
+            try exactly(arguments, 0);
+            try expectType(result, .string);
+        },
         .forget => {
             try exactly(arguments, 0);
             try expectType(result, .none);

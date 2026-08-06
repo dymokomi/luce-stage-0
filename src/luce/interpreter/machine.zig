@@ -682,6 +682,13 @@ pub const Machine = struct {
             // than its argument: it can only stand where the call it
             // names has just returned, and nothing else can be in it.
             .errored => return .ofBoolean(self.runtime.raised != null),
+            // The words, borrowed out of the arena that holds them, so
+            // both engines hand `catch NAME:` the same view and the
+            // binding's own store is what copies.
+            .error_message => {
+                const raised = self.runtime.raised orelse return .ofString("");
+                return .ofString(raised.message);
+            },
             .forget => {
                 self.runtime.forget();
                 return .none;

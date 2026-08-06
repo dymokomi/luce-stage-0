@@ -4389,6 +4389,14 @@ const Body = struct {
                     "errored",
                 );
             },
+            // The words, borrowed out of the arena that holds them —
+            // the same shape `key_text` has, and for the same reason:
+            // run-lifetime storage a place that keeps it copies from.
+            .error_message => {
+                const out = try self.scratch(self.module.value_type, value_alignment, "catch.reason");
+                _ = try self.callRuntime(.luce_rt_error_message, .void, &.{ rt, out }, "");
+                self.values[register] = try self.unboxed(.string, out, "catch.reason");
+            },
             .forget => {
                 _ = try self.callRuntime(.luce_rt_forget_error, .void, &.{rt}, "");
             },

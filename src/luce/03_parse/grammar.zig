@@ -1122,13 +1122,14 @@ pub const Parser = struct {
         if ((try self.expect(.assign, "'=' with an initial value")) == null) return null;
         const value = (try self.expression()) orelse return null;
         // `let a = risky() catch:` — the block form of catch, in the one
-        // place it cannot go.  A handler block supplies no value, and a
-        // binding is nothing but a value; the expression form is what a
-        // binding takes, and the block form wants a name that already
-        // exists to assign to (docs/FAILURE.md).  Saying "expected end
-        // of line, found 'catch'" leaves the reader to guess which of
-        // those two facts they have met.
-        if (self.peekKind() == .keyword_catch and self.peekAhead(1) == .colon) {
+        // place it cannot go, with or without a binding of its own.  A
+        // handler block supplies no value, and a binding is nothing but
+        // a value; the expression form is what a binding takes, and the
+        // block form wants a name that already exists to assign to
+        // (docs/FAILURE.md).  Saying "expected end of line, found
+        // 'catch'" leaves the reader to guess which of those two facts
+        // they have met.
+        if (self.peekKind() == .keyword_catch and expr.opensHandler(self)) {
             try self.report(
                 "luce.parse.expected",
                 self.peek().span,
@@ -1456,6 +1457,7 @@ pub const Parser = struct {
                 );
                 return null;
             }
+            if (try self.handlerOnOneLine(left)) return null;
             try self.endOfStatement("end of line after the expression");
             return .{ .expression = .{ .value = left, .span = left.span() } };
         }
@@ -1485,18 +1487,51 @@ pub const Parser = struct {
             }
             return self.guarded(assigned);
         }
+        if (try self.handlerOnOneLine(value)) return null;
         try self.endOfStatement("end of line after the assignment");
         return assigned;
     }
 
-    /// The `catch:` handler behind a statement whose call may raise.
+    /// `f() catch reason: print(reason)` — the binding handler with its
+    /// body on the same line.
+    ///
+    /// `opensHandler` needs the newline to tell `catch NAME:` from a
+    /// slice whose start ends in a fallback name, so without one the
+    /// Pratt loop read the whole thing as the operator form and left a
+    /// colon behind.  "Expected end of line, found ':'" is true and
+    /// useless: the reader wrote a handler, and what they need to know
+    /// is that its body goes on the next line.  Only a `catch` whose
+    /// fallback is a bare name can arrive here, which is exactly the
+    /// shape that was meant.
+    fn handlerOnOneLine(self: *Parser, value: *ast.Expression) Error!bool {
+        if (self.peekKind() != .colon) return false;
+        if (value.* != .binary or value.binary.op != .catch_error) return false;
+        if (value.binary.right.* != .name) return false;
+        try self.report(
+            "luce.parse.expected",
+            self.peek().span,
+            "a catch handler is a block: put its body on the next line, indented under '{s}:'",
+            .{value.binary.right.name.text},
+        );
+        return true;
+    }
+
+    /// The `catch:` handler behind a statement whose call may raise,
+    /// and the optional name `catch reason:` binds the error's words
+    /// to for the length of the block (docs/FAILURE.md).
     fn guarded(self: *Parser, attempt: ast.Statement) Error!?ast.Statement {
         const keyword = self.advance(); // catch
+        var reason: ?ast.Name = null;
+        if (self.peekKind() == .identifier) {
+            const name = self.advance();
+            reason = .{ .text = self.text(name), .span = name.span };
+        }
         const handler = (try self.block("catch")) orelse return null;
         const held = try self.arena.create(ast.Statement);
         held.* = attempt;
         return .{ .guarded = .{
             .attempt = held,
+            .binding = reason,
             .handler = handler,
             .span = .{ .start = attempt.span().start, .end = keyword.span.end },
         } };
