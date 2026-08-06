@@ -155,9 +155,12 @@ workaround-dense and the proof that the language moved.
    environment access, stderr, reading a line, directory listing,
    delete/rename and append mode all shipped with host ABI version 8.
    What is still absent is `exit` and path manipulation.
-7. **No default or named arguments.** `term_style(fg, bg, bold)` is
-   called 15 times across `programs/` and 14 of them end in the same
-   noise word `false`.
+7. ~~**No default or named arguments.**~~ Closed: every parameter has
+   a name a call site may write, defaults are trailing compile-time
+   constants, struct fields take the same clause, and the builtin
+   table carries `term_style(fg, bg = -1, bold = false)` — the calls
+   that ended in the same noise word `false` now write the argument
+   that varies and nothing else.
 8. ~~**`Bytes` is unconstructible.**~~ Cut. Nothing produced one and
    nothing consumed one, and it was one of the two things keeping the
    backend from lowering everything a program can say. The backend is

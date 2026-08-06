@@ -148,7 +148,7 @@ name it exactly, and reading them back gives 65504.
 ## struct
 
 A named product of fields. Fields are annotated; construction names
-every field; assignment copies.
+its fields — every one without a default; assignment copies.
 
 ```luce run
 struct Point:
@@ -164,6 +164,26 @@ func main():
 
 ```output
 1.5 9
+```
+
+A field may declare a trailing **default**, the same clause a
+parameter takes: a compile-time constant the construction site may
+omit. Defaults come last, and a struct every one of whose fields has
+one constructs bare.
+
+```luce run
+struct Options:
+    depth: long = 3
+    wide: bool = false
+
+func main():
+    let plain = Options()
+    let tuned = Options(depth = 9)
+    print(f"{plain.depth} {plain.wide} {tuned.depth}")
+```
+
+```output
+3 false 9
 ```
 
 A struct may declare functions in its own namespace. They are plain

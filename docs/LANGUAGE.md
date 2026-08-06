@@ -425,6 +425,77 @@ borrow or an alias in any position is S17 exactly, and **no object may
 travel twice** — `return xs, xs` is a compile error, because two moves
 of one handle would free it twice.
 
+## Calls: names at the site, defaults at the declaration
+
+Every parameter has a name, and a call site may use it — never must
+(docs/ARGS.md).  Positional arguments come first and fill slots left
+to right; **the first named argument ends the positional run**, and
+everything after it is named.  Named arguments may be written in any
+order.  A parameter may declare a default, `= EXPRESSION` after its
+type: the default is a **compile-time constant**, folded once at the
+declaration by the same folder that folds file-scope `let`, and
+materialised at each call site — the lowered program is byte-identical
+to the one with the argument written out.  Defaults are trailing: a
+parameter with one may be followed only by parameters with one.
+Struct fields take the same clause, under the same rules, and a struct
+every one of whose fields has a default constructs bare: `Options()`.
+
+```luce
+func grown(base: long, step: long = 5, twice: bool = false) -> long:
+    var total = base + step
+    if twice:
+        total = total * 2
+    return total
+
+struct Options:
+    depth: long = 3
+    wide: bool = false
+
+func main():
+    assert(grown(1) == 6)                   # step and twice defaulted
+    assert(grown(1, twice = true) == 12)    # named, skipping step
+    assert(grown(step = 0, base = 2) == 2)  # names may reorder
+    let plain = Options()                   # every field has a default
+    assert(plain.depth == 3 and not plain.wide)
+```
+
+**Arguments are evaluated in the order they are written, and bound to
+the slots they name.**  When a call reorders, evaluation order and
+parameter order differ — `f(b = one(), a = two())` calls `one()`
+first.  This sits beside the left-to-right rule above rather than
+replacing it: an unreordered call evaluates exactly as it always did.
+
+A positional argument may not follow a named one:
+
+```luce refused
+func size(width: long, height: long) -> long:
+    return width * height
+
+func main():
+    let a = size(width = 1, 2)
+```
+
+The boundaries, each one sentence: `self` is the receiver, not a
+nameable argument, and takes no default; a `give` parameter cannot
+have a default, because it takes ownership of an object and an object
+is never a constant; a default cannot read another parameter, because
+it is folded before any call is made; and objects (`new list(long)`,
+`[1, 2, 3]`) are not defaults, because a default with no owner would
+need a second lifetime model.  Free builtins take names and defaults
+from the table that is their signature — `term_style(fg, bg = -1,
+bold = false)` — while **builtin value methods** (`xs.append`,
+`m.get`) stay positional: their tables hold types computed from the
+receiver, and no names.
+
+Two pieces of guidance the compiler cannot check (docs/ARGS.md §7).
+A default belongs on a slot whose omission cannot violate an
+invariant — two knobs whose defaults are only jointly sensible are
+the one real way this feature goes wrong in code that compiles (Zig's
+*Faulty Default Field Values* rule, adopted).  And defaults must not
+become the way an argument list grows: shipped Luce's arity histogram
+tops out at one declaration of arity 5, and if arity ≥ 5 ever reaches
+double figures, the right answer is a struct, not another default.
+
 ## Methods
 
 A function declared inside a struct is a **method** exactly when its
@@ -1081,12 +1152,16 @@ let pi = 3.14159            # in any order — never in a cycle
 let version = "2"
 let banner = "loom " + version
 let theme = Theme(keyword = 176, comment = 244)   # value structs too
+let missing: long? = none   # a typed absence: the annotation says
+                            # what is absent (docs/ARGS.md D9)
 ```
 
 Initializers fold at compile time: literals, other constants
 (including `module.constant` through imports), arithmetic,
 comparisons, `and`/`or`, string concatenation, `long()`/`double()`,
-and value-struct construction.  Calls, objects (`list`, `map`,
+value-struct construction — and `none`, when a `T?` annotation says
+what it is absent of; a bare `let x = none` is still refused, because
+nothing does.  Calls, objects (`list`, `map`,
 `array`, `builder`, object-carrying structs), and verbs are not
 constant — constants are values, so ownership never applies to them.
 Constants share the file's one namespace with structs and functions,
@@ -1191,5 +1266,9 @@ decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
 beyond the message, garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
-and enums/unions.  (string interpolation shipped: see f-strings
-above.)
+enums/unions, and **positional-only and keyword-only parameter
+markers** (Python's `/` and `*`, Dart's `{}` section): one kind of
+parameter, and the trailing-defaults rule is what keeps a
+must-be-named parameter from arriving by accident (docs/ARGS.md D6).
+(string interpolation shipped: see f-strings above; named and default
+arguments shipped: see "Calls" above.)

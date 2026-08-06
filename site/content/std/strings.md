@@ -144,7 +144,7 @@ func main():
 ```output
 100000000000000000000
 loom: trap: format_float needs decimals >= 0 [explicit_trap]
-    at strings.format_float (std/strings.luc:186:9)
+    at strings.format_float (std/strings.luc:188:9)
     at main (main.luc:5:5)
 ```
 

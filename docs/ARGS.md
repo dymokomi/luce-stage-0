@@ -923,7 +923,7 @@ them. Nothing in this memo reaches either (§6), but a design that
 
 ### Struct fields take the same clause (D8)
 
-```luce historical
+```luce
 struct State:
     path: string
     content: string
@@ -1791,3 +1791,147 @@ listen.
   Pandora's box, and the memo declines to open it. The tripwire in
   §7 is a measurement a person takes, not a rule a compiler
   enforces.
+
+---
+
+## As built
+
+Recorded per step, against `Order` above.  Where the memo and the
+code disagreed, the code won and the disagreement is written down
+here rather than quietly fixed.
+
+### Step 1 — the struct-method landing fix (`cfb983e`)
+
+As specified, plus one piece the memo's citation implied but did not
+say: `lowerOperandsInto` asked only `.places` where a bare `none`
+may land, so answering the `.method` landing was not enough — the
+`none` path now takes its type from `landsOn` for every batch kind,
+which is the same answer for `.places` and the newly-real one for
+`.method`.  Two behavior specs pin both halves (`p.pick(none)` and
+the binary32/binary64 literal disagreement).
+
+**Superseded in step 3**: `methodParameters` answering
+`parameter_types[1..]` positionally cannot serve a *named* argument,
+so the struct branch moved out of it into `structMethod`, and the
+landing asks `argumentSlot` — the same slot function the checker
+asks, so the two cannot disagree.  `methodParameters` is builtin
+methods (and the string primitives) again, as its doc comment now
+says.
+
+### Step 2 — `none` as a constant (`37232e2`)
+
+As specified: `ConstantValue.absent`, one union member carrying
+nothing.  `let x: long = none` gets the lowering walk's own sentence
+("long is always there; only long? is ever none") under
+`luce.sema.const`, and the bare form's refusal now names the fix.
+
+### Step 3 — names on user functions (`a7662b7`)
+
+As specified, with one resolver (`resolveSlots`) behind all four
+spellings and one slot function (`argumentSlot`) behind both it and
+the landing.  Deviations and boundaries:
+
+- **The too-few count sentence gave way everywhere.**  §8 shows `f is
+  missing b` only for the defaulted rows; as built, *any* under-full
+  call names its open slots at once — including builtin and method
+  calls, so `min(1)` says `min is missing b`.  Too many is still the
+  count sentence.  One pinned spec updated each.
+- **The routed string spelling is a fifth surface the memo did not
+  enumerate.**  `s.find(needle = "x")` is refused — the batch lands
+  those arguments from the receiver, not from `strings.find`'s
+  declaration, so a reordered literal would land at the wrong width —
+  with a sentence naming the spelling that does take names:
+  `write strings.find(…)`.
+- The positional-after-named hint writes `write height = …` and stops
+  short of echoing the argument's text (§8's `write height = 2`); the
+  fix is named, the value is not re-quoted.
+- The MIR identity test pins a *same-order* named call byte-identical
+  to the positional one.  A reordering call evaluates in written
+  order (D5), so its constants are emitted in a different order and
+  the dump differs by register numbering — the same program, not the
+  same bytes, exactly as D5 promises.
+
+### Step 4 — defaults on user functions (`29fd687`)
+
+As specified: `ast.Parameter.default`, folded at collection with the
+parameter type as landing, filled in as a constant register and — for
+a struct default — parked as the statement temporary a written
+construction would be.  Deviations:
+
+- **The trailing rule lives in stage 4**, not stage 3 as `Order`'s
+  step 4 line says: §8 assigns it `luce.sema.call` / `luce.sema.struct`,
+  and the sema codes won.  The parser only parses the clause.
+- **`func f(self = …)` is `luce.parse.self`**, not §8's
+  `luce.sema.self`: the `=` is refused where `self` is parsed, beside
+  the annotation refusal it mirrors.
+- **§8's fold-once example `1 / 0` does not refuse** — `/` widens and
+  folds to `inf` (docs/NUMERICS.md §2).  The executable spec pins
+  `1 // 0`, which is the refusal the language actually has.
+- **A `T?` parameter defaults to `none` and nothing else**:
+  `start: long? = 5` is refused (`start is long? and its default is
+  int`), because `widensTo` deliberately has no `T <: T?` hop in the
+  folder.  The memo's list ends at `none` for optionals, so this is a
+  boundary stated rather than a promise broken.
+- The default-vs-declaration sentences fold through one
+  `fold_subject` field on the Analyzer, saved and restored across
+  nested folds so a constant read *from* a default still speaks of
+  constants.
+
+### Step 5 — defaults on struct fields (`1619761`)
+
+As specified, plus one mechanism the memo did not spell out: field
+defaults fold **lazily with cycle detection** (`ConstantInfo`'s state
+machine — a default may construct another struct and lean on its
+defaults, and `A.x = B().y` / `B.y = A().x` is caught as "depends on
+itself") and are **driven eagerly** after the constants settle, so a
+bad default is a compile error whether or not anything constructs the
+struct — the promise parameter defaults already keep.  Nothing joined
+`types.StructLayout`: defaults live on `StructDeclInfo`, stage 4's
+own, which is what keeps the serialized module untouched.
+
+### Step 6 — names and defaults on free builtins (`836220c`)
+
+As specified — `arity` became `parameters`, the 39 rows, term_style's
+two defaults and no others — with the resolver generalised over
+`CallSlot` so builtins share the user-call machinery outright rather
+than growing a copy.  Deviations:
+
+- **The conversions took the name `value`** and folded `ord` takes
+  `text` — the fourth refusal site reworded rather than merely
+  deleted, since `{s}(value) takes one argument` already spelled the
+  name.
+- `term_move`'s `col` became `column` on the way into the table, per
+  the plain-English naming rule.
+- `coverage.zig` reads the table by row indent (a slot must not read
+  as a builtin) and holds the `ref/builtins.md` line that shows each
+  signature to every parameter name the table declares.
+
+### Step 7 — the corpus (`5a68ec0`)
+
+§9's six rows, in one commit rather than six — the site's strings
+pages compile against the fresh toolchain, so the `find_from` merge
+and every page that spelled it had to move together.  The merge keeps
+`find_from`'s body (a `start` outside the string answers `-1`), which
+is the one answer the memo said the pair owed.
+
+### Step 8 — docs and site (this commit)
+
+§10's list, including the stale *"no receivers"* on
+`ref/statements.md`.  Two notes against the memo's own preamble:
+
+- **`docs/ARGS.md` was already in `tools/documents.zig` when this run
+  began** — registered, with every fence `historical`, when the memo
+  landed — so "the last step of `Order` is where it joins" had
+  already happened.  What this step did instead is audit the fences:
+  the one that now compiles as written (the `struct State` clause
+  under D8) lost the tag, and every other keeps it honestly — each is
+  an earlier language's spelling or a fragment quoted out of a
+  program nobody wrote, which is the exemption's charter.
+- **`docs/VECTOR.md` is registered too**, so the quiet-failure worry
+  in §10 (an unregistered memo invisible to the guard) had already
+  been fixed in the tree; it is named here so the worry has an
+  answer on record.
+
+The tripwires of §7 went into `docs/LANGUAGE.md`'s new "Calls"
+section as guidance, beside the evaluation-order clause and D9's
+`none` under "File-scope constants".

@@ -47,6 +47,7 @@ and each says so in its own preamble.
 | [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, `int(x)`-style conversions. Ratified and built. |
 | [METHODS.md](METHODS.md) | `main(args)`, `self`, `var self` as copy-in/copy-out. Ratified and built. |
 | [RETURNS.md](RETURNS.md) | Multiple returns without first-class tuples. Ratified and built. |
+| [ARGS.md](ARGS.md) | Named and default arguments: names optional everywhere, defaults as trailing folded constants, struct fields on the same clause, nothing below stage 4 moving. D1–D12 ratified and built. |
 | [VECTOR.md](VECTOR.md) | Vectorizing checked reductions without weakening a single trap: prove, or speculate-and-replay. All three layers ratified. |
 | [STRINGS.md](STRINGS.md) | Why string bytes have an owner, phase by phase, with the timing after each step. |
 

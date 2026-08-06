@@ -27,9 +27,13 @@ gcd(1071, 462): 21
 gcd(17, 5): 1
 ```
 
-Arguments are positional. There are no default values and no named
-arguments. Every path through a function that declares a return type
-must return, and the compiler checks that.
+Arguments fill parameters left to right, and a call site may name
+them — `gcd(a = 1071, b = 462)` — in any order, with the first named
+argument ending the positional run. A parameter may declare a
+trailing default, a compile-time constant filled in when a call omits
+it, so `func pad(s: string, width: long = 8)` answers both `pad(s)`
+and `pad(s, 12)`. Every path through a function that declares a
+return type must return, and the compiler checks that.
 
 Functions are not values: there are no first-class functions, no
 closures and no function pointers. A name in call position is a
@@ -59,8 +63,11 @@ here 3,4  there 10,4
 origin 0,0
 ```
 
-Every field must be given a value at construction; there is no partial
-initialization and no default.
+Every field without a default must be given a value at construction;
+a field may declare one — `cursor: long = 0` — and then a
+construction site that says nothing gets the declaration's value.
+There is no partial initialization: a slot is written by the site or
+by the declaration, always.
 
 ## Functions inside a struct
 

@@ -178,11 +178,12 @@ The corpus that argued for it, item by item:
   checked, which is the rule's definition of a bug.
 - `strings.find` returns `-1` because `long?` did not exist.  It does
   now, so the sentinel is a wart with nothing holding it up any more.
-  The overload is `find_from`'s, not `find`'s: `strings.luc:19-20`
-  returns `-1` for a `start` outside the string, which is an *argument
-  error* and not the same fact as "absent", while `find` passes
-  `start = 0` and can never reach that branch.  And `find_from`'s
-  empty-needle case returns success where `count`'s returns zero.
+  The two-declaration half of this entry is settled: `find_from`
+  merged into `find(s, needle, start = 0)` (docs/ARGS.md §9), so there
+  is one function and one answer to a `start` outside the string —
+  `-1`, an *argument error* the old `find` could never reach.  What
+  remains open is the sentinel itself, and the empty-needle
+  disagreement with `count` (a match at `start` there, zero here).
 
 ---
 
@@ -305,9 +306,13 @@ the proof the language moved.
      module-qualified declaration too, so the module reads
      `files.append_text`.  That is item 10's visibility question
      wearing a different hat.
-7. **No default or named arguments.**  `term_style(fg, bg, bold)` is
+7. ~~**No default or named arguments.**  `term_style(fg, bg, bold)` is
    called 15 times across `programs/`; 14 end in the same noise word
-   `false`.
+   `false`.~~ — **Closed** (docs/ARGS.md, ratified and built).  Every
+   parameter has a name a call site may write, defaults are trailing
+   folded constants, struct fields take the same clause, and the
+   builtin table carries `term_style(fg, bg = -1, bold = false)` — the
+   fifteen sites now write the argument that varies and nothing else.
 8. ~~**`Bytes` is unconstructible.**~~  Cut (docs/ENGINE.md step 1):
    `var b: Bytes` compiled, nothing produced one and nothing consumed
    one, and it was one of the two things keeping stage 10 from being

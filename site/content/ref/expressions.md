@@ -132,9 +132,52 @@ is a subtraction of a negation, `--a` is a double negation, and
 
 ## Calls
 
-Arguments are positional and are evaluated left to right. There are no
-default values, no named arguments, and no variadics. Functions are
-not values — a name in call position denotes a function, statically.
+Positional arguments fill parameters left to right, and a call site
+may **name** any argument: `size(3, height = 4)`. The first named
+argument ends the positional run — everything after it must be named —
+and named arguments may be written in any order. Names are never
+required. Arguments are evaluated in the order they are *written* and
+bound to the slots they *name*; the two differ only when a call
+reorders. A parameter may declare a trailing **default**, a
+compile-time constant filled in wherever a call omits the argument.
+There are no variadics. Functions are not values — a name in call
+position denotes a function, statically.
+
+```luce run
+func grown(base: long, step: long = 5, twice: bool = false) -> long:
+    var total = base + step
+    if twice:
+        total = total * 2
+    return total
+
+func main():
+    print(string(grown(1)))
+    print(string(grown(1, twice = true)))
+    print(string(grown(step = 0, base = 2)))
+```
+
+```output
+6
+12
+2
+```
+
+A positional argument may not follow a named one:
+
+```luce fail
+func size(width: long, height: long) -> long:
+    return width * height
+
+func main():
+    let a = size(width = 1, 2)
+```
+
+```output
+luce: compile failed
+main.luc:5:29: a positional argument cannot follow a named one; write height = … [luce.sema.call]
+        let a = size(width = 1, 2)
+                                ^
+```
 
 Forms:
 

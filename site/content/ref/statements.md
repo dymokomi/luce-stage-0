@@ -29,12 +29,16 @@ A parenthesised list of **two or more** types is a
 [return shape](../types/#return-shapes): the function answers that
 many values. It is not a type, and it may be written nowhere but here.
 
-A parameter may be prefixed `give` to take ownership of an object.
-Every path through a function that declares a value return type must
-return; the compiler checks it.
+A parameter may be prefixed `give` to take ownership of an object,
+and may declare a trailing default — `start: long = 0`, a
+compile-time constant a call site may omit; call sites may also name
+arguments (see [calls](../expressions/#calls)). Every path through a
+function that declares a value return type must return; the compiler
+checks it.
 
-There are no default values, no named arguments, no variadics, no
-receivers and no first-class functions.
+A function declared inside a struct whose first parameter is the word
+`self` is a [method](#methods), called on a receiver. There are no
+variadics and no first-class functions.
 
 ## struct
 
