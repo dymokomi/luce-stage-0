@@ -691,6 +691,11 @@ test "each std page names every function and constant its module exports" {
         try expectDocumented(repository, "std/paths.md", names, &.{});
     }
     {
+        var names = try standardModule(repository, "os");
+        defer names.deinit();
+        try expectDocumented(repository, "std/os.md", names, &.{});
+    }
+    {
         var names = try standardModule(repository, "strings");
         defer names.deinit();
         // No exemptions: `is_space_byte` and `fold_case` are marked

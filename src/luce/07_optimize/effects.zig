@@ -255,6 +255,12 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .file_rename,
         .dir_list,
         .exit_program,
+        // A machine fact is a host call, and one of them — available
+        // memory — answers differently each time it is asked, which
+        // is the reason a program asks it twice.
+        .os_total_memory,
+        .os_available_memory,
+        .os_cpu_count,
         => .impure,
     };
 }
@@ -351,6 +357,11 @@ pub fn viewStable(instruction: Instruction) bool {
             // Ending the run touches no handle either — the frame
             // unwinds and nothing after it reads a view.
             .exit_program,
+            // A machine fact is a number in and out; no object table
+            // is touched to produce one.
+            .os_total_memory,
+            .os_available_memory,
+            .os_cpu_count,
             // The error channel is not the object table.
             .errored,
             .error_message,

@@ -658,3 +658,90 @@ test "files: a write the world will not take is an error, not a trap" {
         \\
     , refusing, .io_failed, "cannot write out.txt");
 }
+
+// ---------------------------------------------------------------------------
+// os
+// ---------------------------------------------------------------------------
+//
+// The machine's facts, over the harness's seeded world: eight
+// gibibytes, three of them available, four processors.  Fixed numbers
+// and not the real machine's, for the same reason the harness's clock
+// is not a real clock — the two engines run one after the other, and a
+// fact that moved between them would be a disagreement about the
+// machine rather than about the lowering.  So the values themselves
+// can be asserted here, on both arms, and not only their relations.
+
+test "os: the machine's numbers cross the boundary intact, on both engines" {
+    try agreeOk(
+        \\import std.os
+        \\
+        \\func main():
+        \\    assert(os.total_memory() == 8589934592)
+        \\    assert(os.available_memory() == 3221225472)
+        \\    assert(os.cpu_count() == 4)
+        \\    assert(os.used_memory() == 5368709120)
+        \\
+    );
+}
+
+test "os: available fits inside total, and used is a part of the whole" {
+    // The relations the module promises on *any* machine, written the
+    // way a program would check them rather than against the seeded
+    // constants.
+    //
+    // Note what is not here: `used_memory() == total - available` for
+    // an `available` read on the line above.  It holds on the seeded
+    // world, where nothing moves, and the test above asserts it there
+    // — but `used_memory` takes its own two readings, so on a live
+    // machine it is false, which is exactly what the site build found
+    // when this page claimed it.
+    try agreeOk(
+        \\import std.os
+        \\
+        \\func main():
+        \\    let total = os.total_memory()
+        \\    let available = os.available_memory()
+        \\    assert(total > 0)
+        \\    assert(available > 0)
+        \\    assert(available <= total)
+        \\    assert(os.used_memory() >= 0)
+        \\    assert(os.used_memory() <= total)
+        \\    assert(os.cpu_count() >= 1)
+        \\
+    );
+}
+
+test "os: a host with no machine slots refuses, and touches nothing" {
+    var blind = budget;
+    blind.machine = false;
+    try agree.trapGiven(
+        \\import std.os
+        \\
+        \\func main():
+        \\    print(string(os.total_memory()))
+        \\
+    , blind, .host_unavailable);
+}
+
+test "os: a host that has the slots and cannot tell refuses the same way" {
+    // The other road to the same trap: the service is there, and its
+    // answer is "I cannot tell you".  A program must not be able to
+    // tell the two apart, because in both cases nobody measured
+    // anything and the alternative is a number that was made up.
+    var unmeasurable = budget;
+    unmeasurable.world = .{ .unmeasurable = true };
+    try agree.trapGiven(
+        \\import std.os
+        \\
+        \\func main():
+        \\    print(string(os.available_memory()))
+        \\
+    , unmeasurable, .host_unavailable);
+    try agree.trapGiven(
+        \\import std.os
+        \\
+        \\func main():
+        \\    print(string(os.cpu_count()))
+        \\
+    , unmeasurable, .host_unavailable);
+}

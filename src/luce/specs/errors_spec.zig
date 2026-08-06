@@ -2326,6 +2326,21 @@ test "luce.sema.host: host builtins are gated off by default" {
     // `exit` ends the process, which is the host's world exactly as
     // much as its console is.
     try expectRejected("func main():\n    exit(0)\n", "luce.sema.host");
+    // So is how big the machine is: a program compiled without a host
+    // has no machine to ask about, and asking is refused where it is
+    // written rather than where it would run.
+    try expectRejected(
+        "func main():\n    print(string(os_total_memory()))\n",
+        "luce.sema.host",
+    );
+    try expectRejected(
+        "func main():\n    print(string(os_available_memory()))\n",
+        "luce.sema.host",
+    );
+    try expectRejected(
+        "func main():\n    print(string(os_cpu_count()))\n",
+        "luce.sema.host",
+    );
 }
 
 test "luce.sema.type: exit takes a long status, said when it is not one" {

@@ -152,6 +152,9 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_rename", .kind = .file_rename, .parameters = &.{ .{ .name = "from" }, .{ .name = "to" } }, .host = true },
     .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
+    .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
+    .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
+    .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
 };
 
 /// Names the language spelled once and does not any more, and what to
@@ -7480,6 +7483,13 @@ pub const FunctionBuilder = struct {
                 result = .none;
             },
             .clock_ms => {
+                result = .long;
+            },
+            // Bytes, bytes and a count.  `long` and not `int` for the
+            // same reason `clock_ms` is: a machine with more than two
+            // gigabytes of memory overflows the narrow ladder, and a
+            // fact nobody can hold is not a fact (docs/TYPES.md).
+            .os_total_memory, .os_available_memory, .os_cpu_count => {
                 result = .long;
             },
             .sleep_ms => {

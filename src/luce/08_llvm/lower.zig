@@ -413,6 +413,12 @@ const Module = struct {
             .file_delete => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .dir_list => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
             .exited => builder.fnType(.void, &.{ .ptr, .i64 }, .normal),
+            // One shape for all three machine facts: nothing to ask
+            // with, a number in an out-parameter, an answer.
+            .os_total_memory,
+            .os_available_memory,
+            .os_cpu_count,
+            => builder.fnType(.i32, &.{ .ptr, .ptr }, .normal),
         };
     }
 
@@ -3066,6 +3072,29 @@ const Body = struct {
         return self.invokeHost(slot, &.{}, name);
     }
 
+    /// Call a host service that answers one fact about the machine:
+    /// nothing to ask with, a number in an out-parameter, and an
+    /// answer that may be `no`.
+    ///
+    /// `no` on these slots means *this host cannot tell*, so it
+    /// refuses exactly as a withheld service does — `host_unavailable`
+    /// at the call site, the same trap `requireSlot` raises one
+    /// instruction earlier.  That is the whole reason the shape is not
+    /// `callHostNumber`'s: the alternative is a host inventing a
+    /// number for a machine it could not measure.
+    fn callHostFact(self: *Body, slot: abi.Slot, name: []const u8) Error!Builder.Value {
+        const answer_box = try self.scratch(.i64, value_alignment, name);
+        const answer = try self.callHost(slot, &.{answer_box}, name);
+        const untold = try self.wip.icmp(
+            .ne,
+            answer,
+            try self.module.builder.intValue(.i32, @intFromEnum(abi.Answer.yes)),
+            "fact.untold",
+        );
+        try self.check(untold, .host_unavailable);
+        return self.wip.load(.normal, .i64, answer_box, value_alignment, name);
+    }
+
     fn invokeHost(
         self: *Body,
         slot: abi.Slot,
@@ -4867,6 +4896,16 @@ const Body = struct {
             },
             .clock_ms => {
                 self.produced[register].value = try self.callHostNumber(.clock_ms, "clock");
+            },
+            .os_total_memory => {
+                self.produced[register].value = try self.callHostFact(.os_total_memory, "total");
+            },
+            .os_available_memory => {
+                self.produced[register].value =
+                    try self.callHostFact(.os_available_memory, "available");
+            },
+            .os_cpu_count => {
+                self.produced[register].value = try self.callHostFact(.os_cpu_count, "cpus");
             },
             .sleep_ms => {
                 // A duration already elapsed is not a bug and not a

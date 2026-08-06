@@ -657,6 +657,15 @@ pub const Machine = struct {
         };
     }
 
+    /// One machine fact, once its host has been asked.  Null is the
+    /// host saying it cannot tell — `abi.MachineFactFn`'s `no` — and
+    /// it refuses exactly as a withheld service does, because the one
+    /// thing a program must never be handed is a number nobody
+    /// measured.
+    fn machineFact(self: *Machine, told: ?i64) EvalError!RuntimeValue {
+        return .ofLong(told orelse return self.runtime.fail(.host_unavailable));
+    }
+
     pub fn intrinsic(
         self: *Machine,
         operation: mir.Instruction.IntrinsicCall,
@@ -1001,6 +1010,24 @@ pub const Machine = struct {
                 const host = try self.service();
                 const callback = host.clock_ms orelse return self.runtime.fail(.host_unavailable);
                 return .ofLong(callback(host.context));
+            },
+            .os_total_memory => {
+                const host = try self.service();
+                const callback = host.os_total_memory orelse
+                    return self.runtime.fail(.host_unavailable);
+                return self.machineFact(callback(host.context));
+            },
+            .os_available_memory => {
+                const host = try self.service();
+                const callback = host.os_available_memory orelse
+                    return self.runtime.fail(.host_unavailable);
+                return self.machineFact(callback(host.context));
+            },
+            .os_cpu_count => {
+                const host = try self.service();
+                const callback = host.os_cpu_count orelse
+                    return self.runtime.fail(.host_unavailable);
+                return self.machineFact(callback(host.context));
             },
             .sleep_ms => {
                 const host = try self.service();

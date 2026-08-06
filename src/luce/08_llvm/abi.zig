@@ -121,7 +121,20 @@ const trace = @import("../runtime/trace.zig");
 /// unwind, so the host records the number while the program is still
 /// leaving — and fail-closed like every effect: a host without the
 /// slot traps `host_unavailable` at the call.  No field moved.
-pub const version: u32 = 10;
+///
+/// 11 — a program can ask what machine it is on.  Three optional slots
+/// arrive at the end of the table with one shape between them:
+/// `os_total_memory`, `os_available_memory` and `os_cpu_count`, each
+/// answering a number through an out-parameter under the usual
+/// `Answer` convention.  Three at once and not one at a time, because
+/// a version is a rebuild of every artifact there is and the machine's
+/// facts are one subject; asking for them a release apart would spend
+/// that three times over.  What is new is only what `no` *means* on
+/// these slots — this host cannot tell — and that is the same refusal
+/// a null slot gives, so the program traps `host_unavailable` at the
+/// call either way and no host has to invent a number.  No field
+/// moved.
+pub const version: u32 = 11;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -271,6 +284,28 @@ pub const ExitedFn = *const fn (
     context: ?*anyopaque,
     status: i64,
 ) callconv(.c) void;
+
+/// One fact about the machine the program is running on, as a number:
+/// bytes of physical memory, bytes of it still available, processors.
+/// One typedef for all three, because they are one question asked
+/// three ways and a reader who has learned one has learned them.
+///
+/// `yes` fills `answer`.  `no` means **this host cannot tell** — it is
+/// on a platform whose numbers it does not know how to ask for, or the
+/// ask failed — and the program then traps `host_unavailable`, exactly
+/// as it would against a null slot.  That is the whole reason the
+/// answer is not a bare `i64` like `clock_ms`: a host that does not
+/// know how much memory the machine has must be able to say so, and
+/// the alternative is inventing a number, which is a lie a program
+/// cannot see through.  `exhausted` keeps its usual meaning.
+///
+/// A fact may be read more than once and answer differently: available
+/// memory moves under the program's feet, which is what makes it worth
+/// asking for. Nothing here is cached on the program's behalf.
+pub const MachineFactFn = *const fn (
+    context: ?*anyopaque,
+    answer: *i64,
+) callconv(.c) Answer;
 
 /// Read a whole file.  `yes` fills `text`/`length` with bytes borrowed
 /// for the duration of the call; `no` means the read failed and the
@@ -519,6 +554,11 @@ pub const Host = extern struct {
     /// Version 10: the program's chosen end, appended like everything
     /// before it so no field moves.
     exited: ?ExitedFn = null,
+    /// Version 11: the machine's own facts, behind `std.os`.  Bytes,
+    /// bytes, and a count — appended in one run, for one subject.
+    os_total_memory: ?MachineFactFn = null,
+    os_available_memory: ?MachineFactFn = null,
+    os_cpu_count: ?MachineFactFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -554,6 +594,9 @@ pub const Slot = enum(u32) {
     file_rename = 26,
     dir_list = 27,
     exited = 28,
+    os_total_memory = 29,
+    os_available_memory = 30,
+    os_cpu_count = 31,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

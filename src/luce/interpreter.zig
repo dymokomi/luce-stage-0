@@ -207,6 +207,16 @@ pub const Host = struct {
     /// still leaving — the same moment `abi.Host.exited` is called on
     /// the compiled path.
     exited: ?*const fn (context: *anyopaque, status: i64) void = null,
+    /// The machine's own facts, behind `std.os`: bytes of physical
+    /// memory, bytes still available, processors.  Null *from* one of
+    /// these — as distinct from the slot itself being null — means
+    /// this host cannot tell, which the program meets as
+    /// `host_unavailable` exactly as a withheld service would.  It is
+    /// the `no` on `abi.MachineFactFn`, and no host is ever made to
+    /// invent a number.
+    os_total_memory: ?*const fn (context: *anyopaque) ?i64 = null,
+    os_available_memory: ?*const fn (context: *anyopaque) ?i64 = null,
+    os_cpu_count: ?*const fn (context: *anyopaque) ?i64 = null,
     /// The interactive screen for the `term_*` and `key_*` builtins.
     terminal: ?Terminal = null,
 };

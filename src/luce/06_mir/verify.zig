@@ -954,6 +954,11 @@ fn verifyIntrinsic(
             try exactly(arguments, 0);
             try expectType(result, .long);
         },
+        // The machine's facts: nothing to ask with, a number back.
+        .os_total_memory, .os_available_memory, .os_cpu_count => {
+            try exactly(arguments, 0);
+            try expectType(result, .long);
+        },
         .sleep_ms => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .long);

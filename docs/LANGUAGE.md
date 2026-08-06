@@ -819,6 +819,10 @@ term_style(fg, bg, bold)   term_write(text)   term_flush()
 key_read()   key_text()          # key_read is string?
 
 exit(status)                 # never returns; the run ends `exited`
+
+os_total_memory()            # long — bytes the machine has
+os_available_memory()        # long — bytes it could still hand out
+os_cpu_count()               # long — logical processors
 ```
 
 Three shapes and one rule behind them (docs/FAILURE.md).  A file
@@ -827,6 +831,16 @@ stands in for the result.  `read_line`, `env` and `key_read` are `?`
 because "there is nothing there" is the whole of what they have to
 say — end of input, and a variable nobody set, carry no reason worth a
 message.  Everything else either cannot fail or is an effect.
+
+The three `os_*` facts are none of the three shapes, and deliberately:
+a fact the host knows is a plain number, and a fact it does not know
+is a **refusal** — `host_unavailable`, the same trap a withheld
+service gives.  There is no `?` because "this host cannot tell you how
+much memory the machine has" is not the ordinary case a program plans
+around, and no `!` because nothing failed; what happened is that the
+program asked the wrong host.  The one thing the boundary will not do
+is invent a number, which is why the service answers whether it could
+tell rather than answering zero.
 
 **`exit(status)` is the fourth way a run ends**, beside finishing,
 trapping, and an uncaught error: the program chose to stop, and chose

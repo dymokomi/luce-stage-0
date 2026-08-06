@@ -236,6 +236,61 @@ bare name's directory is `"."` rather than `""` — and
 
 ---
 
+## os
+
+What machine is this?  Three numbers, over the three host builtins
+that ask for them.  Hosted: the machine's size is the world's business
+and not the program's, so every function here is behind the host gate
+like `print` and `file_read`.
+
+```
+import std.os
+
+os.total_memory()           # long — bytes of physical memory
+os.available_memory()       # long — bytes it could still hand out
+os.cpu_count()              # long — logical processors
+os.used_memory()            # long — total minus available, both read
+                            # here: it does not equal a difference you
+                            # computed from readings taken elsewhere
+```
+
+Nothing here answers `?` or `!`.  A fact the host knows is a number; a
+fact it does not know is a **refusal** — `host_unavailable`, the same
+trap a withheld service gives — because the alternative is a host
+inventing a number the program cannot tell from a measurement.  That
+is why the ABI's three slots answer through an out-parameter with the
+usual `Answer` rather than returning a bare `i64` the way `clock_ms`
+does: `no` on those slots means *this host cannot tell*.
+
+**`available_memory()` moves, and what the word means is the host's.**
+Ask it twice and expect two answers; that is the reason to ask it at
+all.  Per platform, and said in `src/apps/machine.zig` beside the code:
+
+| Host | "available" is |
+|---|---|
+| macOS | free + inactive + purgeable pages.  Not `free` alone, which on macOS is close to meaningless — a 64 GiB machine reports about 3.7 GiB free and 38 GiB available, because almost nothing is kept idle |
+| Linux | the kernel's own `MemAvailable`; where `/proc` is not mounted, `sysinfo`'s free + buffers, which understates by the whole reclaimable page cache |
+| anywhere else | nothing — the host answers `no` and the program traps |
+
+`total_memory()` and `cpu_count()` are `std.process.totalSystemMemory`
+and `std.Thread.getCpuCount`, which already know how to ask on every
+platform Zig targets.  Only "available" needed platform code of its
+own, because there is no portable question for it.
+
+These numbers are for **reporting and sizing, not deciding**: memory
+moves between the reading and the use of it, so `available_memory()`
+is a gauge and never a guarantee.  Luce allocates through the runtime,
+which traps on exhaustion with a code of its own; that is what a
+program is actually held up by, and this module is what a program
+prints.
+
+`cpu_count()` is here although Luce has no threads — a fact to report
+rather than one to act on.  It is in because the machine's facts are
+one subject and one ABI version: asking for it a release later would
+have cost every artifact in the world a rebuild to learn one number.
+
+---
+
 ## Adding a module
 
 1. Write `src/luce/std/NAME.luc` — ordinary Luce, documented with

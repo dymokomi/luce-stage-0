@@ -23,6 +23,7 @@
 const std = @import("std");
 const luce = @import("luce");
 const key_mod = @import("key.zig");
+const machine = @import("machine.zig");
 const report = @import("report");
 const sanitize = @import("sanitize");
 
@@ -218,6 +219,9 @@ pub const Host = struct {
             .file_rename = cFileRename,
             .dir_list = cDirList,
             .exited = cExited,
+            .os_total_memory = cTotalMemory,
+            .os_available_memory = cAvailableMemory,
+            .os_cpu_count = cCpuCount,
         };
     }
 
@@ -885,6 +889,29 @@ pub const Host = struct {
         return of(context).clockMilliseconds();
     }
 
+    /// The machine's own facts (`machine.zig`), which need nothing of
+    /// this Host — but the slot is offered anyway, always, because
+    /// loom withholds nothing.  A platform whose numbers we cannot ask
+    /// for answers `no`, which the program meets as
+    /// `host_unavailable`: the refusal travels, and no number is
+    /// invented on the way.
+    fn cTotalMemory(_: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(machine.totalMemory(), answer);
+    }
+
+    fn cAvailableMemory(_: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(machine.availableMemory(), answer);
+    }
+
+    fn cCpuCount(_: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(machine.cpuCount(), answer);
+    }
+
+    fn told(fact: ?i64, answer: *i64) abi.Answer {
+        answer.* = fact orelse return .no;
+        return .yes;
+    }
+
     fn cSleep(context: ?*anyopaque, milliseconds: i64) callconv(.c) abi.Answer {
         of(context).sleepMilliseconds(milliseconds);
         return .yes;
@@ -1518,6 +1545,31 @@ test "the C table offers every service, over the same implementation" {
     ));
 
     try testing.expectEqual(@as(i64, call_depth), table.call_depth.?(table.context));
+
+    // The machine's facts, held to what can be true of any machine
+    // rather than to this one's numbers.  `available <= total` is the
+    // relation `std.os` promises and the only one that survives being
+    // measured a moment apart.
+    var total: i64 = undefined;
+    var available: i64 = undefined;
+    var processors: i64 = undefined;
+    try testing.expectEqual(abi.Answer.yes, table.os_total_memory.?(table.context, &total));
+    try testing.expect(total > 0);
+    try testing.expectEqual(abi.Answer.yes, table.os_cpu_count.?(table.context, &processors));
+    try testing.expect(processors >= 1);
+    // Available memory is the one fact with platform code of its own:
+    // required where that code exists, and permitted to answer `no`
+    // where it does not — which is the refusal travelling rather than
+    // a number being made up.
+    const answered = table.os_available_memory.?(table.context, &available);
+    switch (@import("builtin").os.tag) {
+        .macos, .linux => {
+            try testing.expectEqual(abi.Answer.yes, answered);
+            try testing.expect(available > 0);
+            try testing.expect(available <= total);
+        },
+        else => try testing.expect(answered == .yes or answered == .no),
+    }
 
     // What a compiled artifact reports comes back through the Host:
     // the trap, and the call trace that came with it.
