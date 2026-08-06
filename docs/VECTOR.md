@@ -43,7 +43,7 @@ The seeded framing of this problem — and the sentence in
 over `int` elements cannot overflow, so prove the check away".  That
 is true, and it is **not what `bench/arrays32` is**.  The row reads:
 
-```luce
+```luce historical
 var dot: long = 0
 for r in range(0, reps):
     var sum: int = 0

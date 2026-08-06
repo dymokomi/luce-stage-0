@@ -103,6 +103,8 @@ pub const documents = [_][]const u8{
     "docs/MEMORY.md",
     "docs/V2.md",
     "docs/TYPES.md",
+    "docs/VECTOR.md",
+    "docs/ARGS.md",
 };
 
 /// How a fence's body becomes a file.
@@ -475,7 +477,7 @@ test "every Luce sample in every living document compiles" {
     // Written down rather than derived: a document list that empties
     // itself passes vacuously, which is exactly the failure this guard
     // exists to prevent.
-    try testing.expectEqual(@as(usize, 18), documents.len);
+    try testing.expectEqual(@as(usize, 20), documents.len);
     try testing.expect(census.found >= 90);
     // And the exemption stays a decision record's: a living document
     // that reaches for `historical` is a living document that has
