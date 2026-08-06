@@ -840,6 +840,20 @@ export fn luce_rt_map_get(
     return survived;
 }
 
+/// The key and the zero are both borrows the map copies for itself
+/// when it defines the entry — see `containers.mapPlace`.
+export fn luce_rt_map_place(
+    runtime: *Runtime,
+    target: *const Value,
+    key: *const Value,
+    zero: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = containers.mapPlace(runtime, target.*, key.*, zero.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
 export fn luce_rt_array_fill(
     runtime: *Runtime,
     target: *const Value,

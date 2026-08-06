@@ -978,6 +978,261 @@ test "compound assignment on struct fields and container elements" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Zero values: define on write, never on read
+// ---------------------------------------------------------------------------
+
+test "a compound store into a missing map key begins from the value type's zero" {
+    // The ruling: `m[k] += 1` works because every type has a zero and
+    // a compound store says on its left that it is writing.  Every
+    // rung of the ladder, and `string` beside them, because the zero
+    // is the *value* — not an identity element chosen per operator.
+    try agreeOk(
+        \\func main():
+        \\    var ints = new map(string, int)
+        \\    ints["k"] += 1
+        \\    assert(ints["k"] == 1)
+        \\    var longs = new map(string, long)
+        \\    longs["k"] += 2
+        \\    assert(longs["k"] == 2)
+        \\    var floats = new map(string, float)
+        \\    floats["k"] += 0.5
+        \\    assert(floats["k"] == 0.5)
+        \\    var doubles = new map(string, double)
+        \\    doubles["k"] += 0.25
+        \\    assert(doubles["k"] == 0.25)
+        \\    var words = new map(string, string)
+        \\    words["k"] += "text"
+        \\    assert(words["k"] == "text")
+        \\    var bytes = new map(string, byte)
+        \\    bytes["k"] += 7
+        \\    assert(bytes["k"] == 7)
+        \\    var shorts = new map(string, short)
+        \\    shorts["k"] += 300
+        \\    assert(shorts["k"] == 300)
+        \\    var halves = new map(string, half)
+        \\    halves["k"] += 1.5
+        \\    assert(halves["k"] == 1.5)
+        \\
+    );
+}
+
+test "the zero a missing key begins from is the value, not an identity element" {
+    // `m[k] *= 2` on a key that is not there is 0, because the entry
+    // is defined at zero and *then* multiplied.  An identity element
+    // per operator would make it 2, which would be a different rule
+    // wearing the same syntax.
+    try agreeOk(
+        \\func main():
+        \\    var m = new map(string, long)
+        \\    m["times"] *= 2
+        \\    assert(m["times"] == 0)
+        \\    m["minus"] -= 5
+        \\    assert(m["minus"] == -5)
+        \\    m["quotient"] //= 3
+        \\    assert(m["quotient"] == 0)
+        \\    m["remainder"] %= 3
+        \\    assert(m["remainder"] == 0)
+        \\    assert(len(m) == 4)
+        \\
+    );
+}
+
+test "a compound store defines exactly one entry and evaluates its key once" {
+    try agreeOk(
+        \\func main():
+        \\    var calls: list(long) = [0]
+        \\    var m = new map(string, long)
+        \\    m[bump(calls)] += 5
+        \\    assert(calls[0] == 1)
+        \\    assert(len(m) == 1)
+        \\    assert(m["k"] == 5)
+        \\    m[bump(calls)] += 5
+        \\    assert(calls[0] == 2)
+        \\    assert(len(m) == 1)
+        \\    assert(m["k"] == 10)
+        \\
+        \\func bump(counter: list(long)) -> string:
+        \\    counter[0] = counter[0] + 1
+        \\    return "k"
+        \\
+    );
+}
+
+test "a defined string value is owned: it grows from empty and frees once" {
+    // The entry inserted at "" is the map's, and the concatenation
+    // that replaces it frees it.  Two hundred rounds past the
+    // small-string bound is what makes a missed free a census entry
+    // rather than a rounding error.
+    try agreeOk(
+        \\func main():
+        \\    var m = new map(string, string)
+        \\    var at = 0
+        \\    while at < 200:
+        \\        m["a-key-far-past-the-small-string-bound-so-it-allocates"] += "chunk-"
+        \\        at = at + 1
+        \\    assert(len(m["a-key-far-past-the-small-string-bound-so-it-allocates"]) == 1200)
+        \\    assert(len(m) == 1)
+        \\
+    );
+}
+
+test "the counter idiom, and the map it leaves behind" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let text = "the cat sat on the mat the end"
+        \\    var counts = new map(string, long)
+        \\    for word in text.split(" "):
+        \\        counts[word] += 1
+        \\    assert(counts["the"] == 3)
+        \\    assert(counts["cat"] == 1)
+        \\    assert(len(counts) == 6)
+        \\
+    );
+}
+
+test "a compound store through a nested place defines its leaf too" {
+    // `s.counts[w] += 1` reaches the same place `counts[w] += 1`
+    // does, so it has to mean the same thing.
+    try agreeOk(
+        \\struct Tally:
+        \\    counts: map(string, long)
+        \\
+        \\func main():
+        \\    var t = Tally(counts = new map(string, long))
+        \\    t.counts["w"] += 1
+        \\    t.counts["w"] += 1
+        \\    assert(t.counts["w"] == 2)
+        \\    assert(len(t.counts) == 1)
+        \\
+    );
+}
+
+test "trap: a plain read of a missing key is untouched by the compound rule" {
+    // The deliberate divergence.  `counts[word] = counts[word] + 1`
+    // reads before it writes and says nothing on its left about a
+    // key being created, so it still stops on the first occurrence —
+    // and it must, or every typo in a key would answer zero.
+    try agreeTrap(
+        \\func main():
+        \\    var counts = new map(string, long)
+        \\    counts["word"] = counts["word"] + 1
+        \\    assert(counts["word"] == 1)
+        \\
+    , .key_missing);
+}
+
+test "trap: a compound store that defines an entry and then traps frees cleanly" {
+    // The define stands in front of the arithmetic, so a `byte` place
+    // that goes out of range leaves the entry behind at zero and the
+    // trap unwinds over a map with one more key in it than the
+    // program ever managed to write.  Both engines have to agree on
+    // that map, and on giving it back.
+    try agreeTrap(
+        \\func main():
+        \\    var m = new map(string, byte)
+        \\    m["a"] = 1
+        \\    m["b"] -= 1
+        \\    assert(len(m) == 2)
+        \\
+    , .conversion_range);
+}
+
+test "trap: descending through a map key to reach a field is still a read" {
+    // The boundary of the rule, and the place it is easiest to get
+    // wrong.  `m["b"].value += 5` writes a *field*; the map index in
+    // front of it is a step on the way down, and a step on the way
+    // down is asking.  Defining it would have to invent a whole
+    // `Cell` nobody wrote, which is exactly the "default values on
+    // read" the ruling refused.  Only a map index that is itself the
+    // place defines.
+    try agreeTrap(
+        \\struct Cell:
+        \\    value: long
+        \\
+        \\func main():
+        \\    var m = new map(string, Cell)
+        \\    m["a"] = Cell(value = 1)
+        \\    m["b"].value += 5
+        \\    assert(m["b"].value == 5)
+        \\
+    , .key_missing);
+}
+
+test "trap: a compound store into a list index keeps its bounds trap" {
+    // Maps only.  An index is a position in something that already
+    // has a shape, not a name that can be called into being; `append`
+    // is the verb that grows a list.
+    try agreeTrap(
+        \\func main():
+        \\    var xs = new list(long)
+        \\    xs[0] += 1
+        \\    assert(xs[0] == 1)
+        \\
+    , .index_bounds);
+}
+
+test "trap: a compound store into an array cell keeps its bounds trap" {
+    try agreeTrap(
+        \\func main():
+        \\    var cells = new array(long, 2)
+        \\    cells[5] += 1
+        \\    assert(cells[5] == 1)
+        \\
+    , .index_bounds);
+}
+
+test "compound assignment on a storage width combines at its arithmetic type" {
+    // D5: no operator computes at a storage width, so `b += 1` on a
+    // `byte` is `b = byte(b + 1)` — promote to `int`, combine, narrow
+    // back.  Every place form, because the promotion is stated once
+    // in `compoundCombine` and all four of them go through it.
+    try agreeOk(
+        \\struct Pixel:
+        \\    level: byte
+        \\
+        \\func main():
+        \\    var b: byte = 250
+        \\    b += 5
+        \\    assert(b == 255)
+        \\    b -= 255
+        \\    assert(b == 0)
+        \\    var s: short = 32000
+        \\    s += 767
+        \\    assert(s == 32767)
+        \\    var h: half = 1.0
+        \\    h += 0.5
+        \\    assert(h == 1.5)
+        \\    var p = Pixel(level = 100)
+        \\    p.level += 55
+        \\    assert(p.level == 155)
+        \\    var shades = new array(byte, 2)
+        \\    shades[0] += 200
+        \\    assert(shades[0] == 200)
+        \\    var counts = new map(string, byte)
+        \\    counts["k"] = 12
+        \\    counts["k"] *= 20
+        \\    assert(counts["k"] == 240)
+        \\
+    );
+}
+
+test "trap: a storage-width compound assignment narrows back with the range check" {
+    // The half of D5 that makes the promotion honest.  `b += 1` at 255
+    // is not 0: the narrowing back into the place is the same checked
+    // conversion `byte(b + 1)` pays for, so it stops the program
+    // rather than wrapping.
+    try agreeTrap(
+        \\func main():
+        \\    var b: byte = 255
+        \\    b += 1
+        \\    assert(b == 0)
+        \\
+    , .conversion_range);
+}
+
 test "a compound index target evaluates its index expression once" {
     // If `xs[next()]` were evaluated twice the counter would land on
     // 2 and the wrong slot would change; once, it lands on 1.

@@ -827,6 +827,23 @@ fn verifyIntrinsic(
                 else => return error.BadIntrinsic,
             }
         },
+        // The same shape as `map_get` and the same refusal, and the
+        // refusal is the point: **a list or an array can never reach
+        // this instruction**, so "an index into a sized thing keeps
+        // its bounds trap" is a property of the IR rather than of
+        // stage 4 remembering to emit the other one.  It is also what
+        // makes `mapPlace`'s three non-map arms unreachable.
+        .map_place => {
+            try exactly(arguments, 3);
+            switch (try heapShape(program, arguments[0])) {
+                .map => |pair| {
+                    try expectType(arguments[1], pair.key);
+                    try expectType(arguments[2], pair.value);
+                    try expectType(result, pair.value);
+                },
+                else => return error.BadIntrinsic,
+            }
+        },
         .array_fill => {
             try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {

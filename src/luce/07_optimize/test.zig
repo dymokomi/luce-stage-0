@@ -635,3 +635,49 @@ fn countOwningStores(program: *const Program) usize {
     }
     return total;
 }
+
+test "a read that writes is never pure, whatever a later pass would like to believe" {
+    // `map_place` is the one intrinsic that reads a place and defines
+    // it in the same breath (`counts[word] += 1`), so folding two of
+    // them together would make the second read what the first *found*
+    // rather than what the first left, and deleting an unread one
+    // would drop the entry it existed to create.
+    //
+    // Neither is reachable from source today: `dead` is the only
+    // consumer of `classify`, it deletes only what nothing reads, and
+    // stage 4 feeds this result straight into the combine every time.
+    // A mutation sweep proved exactly that — classifying `map_place`
+    // `.pure` survives the whole suite.  The classification is still
+    // load-bearing, because the folding of heap reads that
+    // `effects.zig`'s header calls "unwritten, not off by choice" is
+    // what it is waiting for.  So it is pinned here, where a table
+    // can be checked without a program having to run.
+    var program = try compileRaw(
+        \\func main():
+        \\    var counts = new map(string, long)
+        \\    counts["fig"] += 1
+        \\    print(string(counts["fig"]))
+        \\
+    );
+    defer program.deinit();
+
+    var found = false;
+    for (program.functions) |function| {
+        for (function.blocks) |block| {
+            for (block.items) |item| {
+                const instruction = function.instructions[item];
+                if (instruction != .intrinsic) continue;
+                if (instruction.intrinsic.kind != .map_place) continue;
+                found = true;
+                try testing.expectEqual(
+                    optimize.effects.Effect.impure,
+                    optimize.effects.classify(&function, item),
+                );
+                try testing.expect(!optimize.effects.viewStable(instruction));
+            }
+        }
+    }
+    // The counter has to have lowered to one, or the loop above
+    // checked nothing at all.
+    try testing.expect(found);
+}

@@ -1631,3 +1631,113 @@ test "top-level var is refused with directions" {
         \\
     , "luce.parse.top");
 }
+
+test "a plain map store reads nothing; only the compound one defines" {
+    // The two spellings side by side, because the difference between
+    // them *is* the rule (docs/LANGUAGE.md, "Zero values").
+    //
+    //   `counts["a"] = 7`   one `index_set`, and no read at all.  A
+    //                       store into a map has never needed to know
+    //                       what was there, and routing it through the
+    //                       defining read would cost a hash lookup and
+    //                       buy nothing — the two orders reach the
+    //                       same map, which is why no behavioural test
+    //                       can tell them apart and why this one is
+    //                       written against the instructions instead.
+    //   `counts["b"] += 1`  `map_place` with the zero as its third
+    //                       operand, then the same `index_set`.
+    //
+    // The key is loaded once for both halves of the compound form
+    // (r8 feeds the read and the store), which is the "evaluated
+    // once" guarantee in instruction form.
+    var program = try expectCompilesOptions(
+        \\func main():
+        \\    var counts = new map(string, long)
+        \\    counts["a"] = 7
+        \\    counts["b"] += 1
+        \\
+    , .{});
+    defer program.deinit();
+    const dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(dump);
+    try testing.expectEqualStrings(
+        \\func main() -> None
+        \\    local %0 (temporary): map(string, long)
+        \\    local %1 counts: map(string, long)
+        \\  b0:
+        \\    r0 = heap_new map(string, long)
+        \\    local_set %1, r0
+        \\    object_bind %1, r0
+        \\    r3 = local_get %1
+        \\    r4 = const data#0
+        \\    r5 = const 7
+        \\    intrinsic index_set, r3, r4, r5
+        \\    r7 = local_get %1
+        \\    r8 = const data#1
+        \\    r9 = const 1
+        \\    r10 = const 0
+        \\    r11 = intrinsic map_place, r7, r8, r10
+        \\    r12 = add.long r11, r9
+        \\    intrinsic index_set, r7, r8, r12
+        \\    r14 = local_get %1
+        \\    object_unbind %1, r14
+        \\    ret
+        \\
+    , dump);
+}
+
+test "a plain store through a nested place reads nothing either" {
+    // The same rule one step down.  `t.counts["a"] = 7` descends
+    // through the field and stores; only `t.counts["b"] += 1` reads,
+    // and it is the *leaf* of the chain that reads — every step above
+    // it is an ordinary descent and keeps its trap.  Counting the
+    // `map_place`s is what says so: exactly one, for the one statement
+    // that is a compound store.
+    var program = try expectCompilesOptions(
+        \\struct Tally:
+        \\    counts: map(string, long)
+        \\
+        \\func main():
+        \\    var t = Tally(counts = new map(string, long))
+        \\    t.counts["a"] = 7
+        \\    t.counts["b"] += 1
+        \\
+    , .{});
+    defer program.deinit();
+    const dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(dump);
+    var defines: usize = 0;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, dump, at, "intrinsic map_place")) |found| {
+        defines += 1;
+        at = found + 1;
+    }
+    try testing.expectEqual(@as(usize, 1), defines);
+}
+
+test "a compound store into a list or an array still reads through index_get" {
+    // The non-change, pinned.  `map_place` is a map instruction and
+    // the verifier refuses it anywhere else, but stage 4 must not emit
+    // it anywhere else either — so the instruction a list compound
+    // lowers to is written down here rather than inferred from the
+    // absence of a failure.
+    var program = try expectCompilesOptions(
+        \\func main():
+        \\    var xs = [1, 2]
+        \\    xs[0] += 1
+        \\    var grid = new array(long, 2, 2)
+        \\    grid[1, 1] += 1
+        \\
+    , .{});
+    defer program.deinit();
+    const dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(dump);
+    try testing.expect(std.mem.indexOf(u8, dump, "intrinsic map_place") == null);
+    var reads: usize = 0;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, dump, at, "intrinsic index_get")) |found| {
+        reads += 1;
+        at = found + 1;
+    }
+    try testing.expectEqual(@as(usize, 2), reads);
+}

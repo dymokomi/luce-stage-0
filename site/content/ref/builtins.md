@@ -208,7 +208,8 @@ new list the receiver owns, deeply when the elements are objects.
 | `clear()` | |
 
 Plus `len`, `m[k]` — which traps `key_missing` when the key is
-absent — and `m[k] = v`, which inserts or updates.
+absent — `m[k] = v`, which inserts or updates, and `m[k] OP= v`, which
+defines a missing key at `V`'s zero value and then applies.
 
 ## array(T, ...)
 

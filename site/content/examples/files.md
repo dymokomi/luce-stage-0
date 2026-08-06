@@ -92,7 +92,7 @@ func main(args: list(string)) -> !:
     var counts = new map(string, long)
     for line in text.split("\n"):
         for word in line.split(""):
-            counts[word] = counts.get(word, 0) + 1
+            counts[word] += 1
 
     print(f"{len(counts)} distinct words in {path}")
     for word, seen in counts:

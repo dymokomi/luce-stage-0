@@ -121,6 +121,11 @@ latter is two hash lookups where one would do. (`m.get(k) -> V?` does
 not exist yet and is on the [status page](/status/) as the better
 answer.)
 
+**Count with `counts[key] += 1`.** A compound store defines a missing
+key at the value type's zero, so the first-sighting arm and the
+`get(key, 0)` that used to stand in for it are both gone, and the hit
+path is two hash lookups rather than three.
+
 **Remember that slicing a list copies.** `xs[a:b]` allocates a new
 list — deeply, when the elements are objects, because two containers
 can never own one object.

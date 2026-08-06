@@ -2384,6 +2384,19 @@ pub const FunctionBuilder = struct {
                     const subscripts = try self.arena().alloc(Register, lowered.len);
                     for (lowered, subscripts) |value_operand, *slot| slot.* = value_operand.register;
                     accessor.* = .{ .index = .{ .object = current, .subscripts = subscripts } };
+                    // **Always an ordinary read, never a defining
+                    // one**, and the parser is what guarantees it: a
+                    // target ending in `[...]` becomes an `.index`
+                    // target whatever its base, so a chain's last step
+                    // is always a field (`targetFrom`).  Every index
+                    // here is therefore a step on the way *down* — and
+                    // `m["k"].value += 5` reads `m["k"]` to reach a
+                    // field of it, which is asking, not writing.  It
+                    // keeps `key_missing`.
+                    //
+                    // `t.counts["w"] += 1` is not this case: it is an
+                    // `.index` target with `t.counts` for a base, and
+                    // it defines like any other (`lowerAssignIndex`).
                     const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
                     read_arguments[0] = current;
                     @memcpy(read_arguments[1..], subscripts);
@@ -2430,12 +2443,61 @@ pub const FunctionBuilder = struct {
         }));
     }
 
+    /// The read at the head of a compound store into `object[...]`,
+    /// and the one place in the language where a read may **define**
+    /// what it reads.
+    ///
+    /// A **map** defines a missing key at the value type's zero and
+    /// answers that, rather than trapping `key_missing`: the operator
+    /// standing to the left says this read is half of a write, and a
+    /// write into a map is how a map grows.  `counts[word] += 1` is
+    /// therefore a complete counter, while `counts[word] =
+    /// counts[word] + 1` still traps on the first occurrence — the two
+    /// spellings diverge on purpose, because only one of them says on
+    /// the left that a key is being written (docs/LANGUAGE.md, "Zero
+    /// values").
+    ///
+    /// **Everything else keeps its bounds trap.**  A list or an array
+    /// reads through `index_get` exactly as before: an index is a
+    /// position in something that already has a shape, not a name that
+    /// can be called into being, and `append` is the verb that grows a
+    /// list.  The verifier refuses `map_place` on either of them, so
+    /// this is not a rule stage 4 has to remember.
+    fn compoundPlaceRead(
+        self: *FunctionBuilder,
+        object: Typed,
+        subscripts: []const Register,
+        element_type: Type,
+    ) Error!Register {
+        // `checkIndex` has already answered for this object, so it has
+        // a heap shape and the map arm has exactly one subscript.
+        if (self.analyzer.heapOf(object.value_type).? == .map) {
+            const arguments = try self.arena().alloc(Register, 3);
+            arguments[0] = object.register;
+            arguments[1] = subscripts[0];
+            arguments[2] = try self.code.zeroOf(element_type);
+            return self.code.emit(
+                .{ .intrinsic = .{ .kind = .map_place, .arguments = arguments } },
+                element_type,
+            );
+        }
+        const arguments = try self.arena().alloc(Register, subscripts.len + 1);
+        arguments[0] = object.register;
+        @memcpy(arguments[1..], subscripts);
+        return self.code.emit(
+            .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
+            element_type,
+        );
+    }
+
     /// Combine the current value of a compound-assignment place with
     /// the right-hand side under OP — `place OP= value` reads the
     /// place once (the caller supplies `current`) and stores this.
     /// Type rules are a binary expression's exactly: numeric
-    /// arithmetic, plus string concat for `+=`.  Returns the register
-    /// holding the combined value, or null after reporting.
+    /// arithmetic, plus string concat for `+=`.  A storage-width place
+    /// combines at its arithmetic type and narrows back with the range
+    /// check, so the answer is always at `place_type`.  Returns the
+    /// register holding the combined value, or null after reporting.
     fn compoundCombine(
         self: *FunctionBuilder,
         op: ast.BinaryOp,
@@ -2486,20 +2548,44 @@ pub const FunctionBuilder = struct {
             .modulo => .modulo,
             else => unreachable, // the parser only builds these five
         };
+        // **The combine happens at the type the operator computes at,
+        // and the answer comes back to the place's own width** (D5).
+        // No operator computes at a storage width, so `b += 1` on a
+        // `byte` place is `b = byte(b + 1)` exactly: promote to `int`,
+        // add there, and narrow back through the same checked
+        // conversion that spelling already pays for.
+        //
+        // Nothing is narrowed silently, which is what lets this stand
+        // beside "narrowing is implicit in no direction and no
+        // context" rather than against it: 255 + 1 traps
+        // `conversion_range` where a C `unsigned char` would wrap to
+        // zero.  The place's declared type is where the narrowing is
+        // written down — a plain `b = b + 1` has no place to say it
+        // and is still refused.
+        //
+        // `string` has no arithmetic type and needs none: `+=`
+        // concatenates at `string` and comes back at `string`.
+        const at = place_type.arithmeticType() orelse place_type;
+        const left = try self.promoted(.{ .register = current, .value_type = place_type });
+        const right = try self.promoted(value);
         const combined = try self.code.emit(.{ .binary = .{
             .op = operation,
-            .operand_type = place_type,
-            .left = current,
-            .right = value.register,
-        } }, place_type);
+            .operand_type = at,
+            .left = left.register,
+            .right = right.register,
+        } }, at);
+        const answer = if (at.eql(place_type))
+            combined
+        else
+            try self.code.emit(.{ .convert = combined }, place_type);
         // `s += t` concatenates into fresh storage that no expression
         // parked, so a place that keeps a copy would leave the join
         // behind (docs/STRINGS.md).  Parking it makes the statement's
         // end reclaim it either way.
         if (string_concat) {
-            try self.parkFreshStorage(.{ .register = combined, .value_type = place_type });
+            try self.parkFreshStorage(.{ .register = answer, .value_type = place_type });
         }
-        return combined;
+        return answer;
     }
 
     fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
@@ -2748,13 +2834,9 @@ pub const FunctionBuilder = struct {
         if (assign.compound) |op| {
             // Read the element once (the base and indices were lowered
             // once, above), combine, and store back.
-            const read_arguments = try self.arena().alloc(Register, indices.len + 1);
-            read_arguments[0] = object.register;
-            for (indices, read_arguments[1..]) |index_value, *slot| slot.* = index_value.register;
-            const current = try self.code.emit(
-                .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
-                element_type,
-            );
+            const subscripts = try self.arena().alloc(Register, indices.len);
+            for (indices, subscripts) |index_value, *slot| slot.* = index_value.register;
+            const current = try self.compoundPlaceRead(object, subscripts, element_type);
             store = (try self.compoundCombine(op, current, element_type, value.*, assign.span)) orelse return;
         }
         const arguments = try self.arena().alloc(Register, values.len);
@@ -6585,6 +6667,7 @@ pub const FunctionBuilder = struct {
             .map_keys,
             .map_values,
             .map_get,
+            .map_place,
             .array_fill,
             => unreachable,
 

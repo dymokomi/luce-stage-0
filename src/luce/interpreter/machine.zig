@@ -812,6 +812,12 @@ pub const Machine = struct {
                 registers[arguments[1]],
                 registers[arguments[2]],
             ),
+            .map_place => return containers.mapPlace(
+                &self.runtime,
+                registers[arguments[0]],
+                registers[arguments[1]],
+                registers[arguments[2]],
+            ),
             .array_fill => {
                 try containers.arrayFill(
                     &self.runtime,

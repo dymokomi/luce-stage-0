@@ -114,6 +114,13 @@ Indexing a key that is not there is a trap, deliberately: it is a bug
 in the program, not news from the world. Use `has` before the index,
 or `get(key, default)` which cannot trap.
 
+A **compound** store is the exception, and it is not one: `stock[k] +=
+1` on a key that is not there defines the entry at the value type's
+zero and then applies, because the operator says the statement is a
+write. `counts[word] += 1` is the whole of the counting idiom.
+`stock[k] = stock[k] + 1` still traps — the read is on the right of
+the `=` and declares nothing.
+
 ## array
 
 An `array` has a fixed shape given at `new`, and its elements start at

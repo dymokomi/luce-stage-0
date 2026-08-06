@@ -351,8 +351,11 @@ to exist.
    real users on day one.~~ **Done.**  *(This list was written while
    the interpreter was still an engine and the LLVM path was reached
    by falling forward to it; it is neither now — docs/ENGINE.md.)*
-2. `m.get(k) -> V?`, and rewrite `wordcount.luc`. The narrowing
-   acceptance test in anger.
+2. `m.get(k) -> V?`. The narrowing acceptance test in anger.
+   ~~Rewrite `wordcount.luc`~~ — **done**, and by a different route:
+   a compound store defines its key at the value type's zero, so the
+   counter needed no optional at all (docs/LANGUAGE.md, "Zero
+   values").
 3. `?.` — gated on whether step 2 made anyone want it.
 4. ~~LLVM lowering for optionals.~~ **Done**, as `{T, i1}` — see the
    correction above. Steps 2 and 3 were overtaken: leaving `T?` on the

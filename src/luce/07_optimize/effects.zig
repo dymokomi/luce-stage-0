@@ -221,6 +221,9 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .clear_object,
         .map_keys,
         .map_values,
+        // Reads a place and may define it: a store, and one that can
+        // grow the map's buffer.
+        .map_place,
         .array_fill,
         .assert_true,
         .trap_message,
@@ -381,7 +384,7 @@ pub fn viewStable(instruction: Instruction) bool {
             // Grow a container's own buffer.  That buffer is not the
             // table and not an array's, but a list's elements are
             // read through the same row, so this stays conservative.
-            .append_value, .append_ascii, .insert_value => false,
+            .append_value, .append_ascii, .insert_value, .map_place => false,
 
             // Effects.  A host service reaches the outside world and
             // the run's arena; it has no way to touch the object
