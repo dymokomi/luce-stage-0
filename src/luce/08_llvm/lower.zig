@@ -257,6 +257,20 @@ const Module = struct {
     /// `runtime/value.zig`.
     value_type: Builder.Type = .none,
 
+    /// The two alias scopes generated code distinguishes, built on
+    /// first use (task #45): **rows** — the object table's rows, an
+    /// array's `dims`, and the table base pointer in the runtime —
+    /// and **elements** — the storage element loads and stores reach.
+    /// The two never overlap by construction: rows live in the object
+    /// table's allocation, dims in their own written only at creation,
+    /// elements in theirs — and a Luce program has no way to make one
+    /// name the other.  Each access carries its own scope in
+    /// `!alias.scope` and the *other* in `!noalias`, which is exactly
+    /// what lets LICM hoist a row's facts out of a loop that stores
+    /// elements.  Runtime calls carry neither and stay conservative.
+    alias_rows_list: Builder.Metadata.Optional = .none,
+    alias_elements_list: Builder.Metadata.Optional = .none,
+
     /// One LLVM function per Luce function, parallel to
     /// `program.functions`.
     functions: []Builder.Function.Index = &.{},
@@ -612,6 +626,35 @@ const Module = struct {
 
     /// The retired row a lifted resolution reads for a null handle:
     /// `{ generation = runtime.retired, everything else zero }`.
+    /// The two scope lists, built once (the field doc has the whole
+    /// argument).  A domain, two scopes uniqued by their name strings,
+    /// and one single-scope list each.
+    fn aliasScopes(self: *Module) Error!struct {
+        rows: Builder.Metadata,
+        elements: Builder.Metadata,
+    } {
+        if (self.alias_rows_list.unwrap()) |rows| {
+            return .{ .rows = rows, .elements = self.alias_elements_list.unwrap().? };
+        }
+        const builder = self.builder;
+        const domain = try builder.metadataTuple(&.{
+            (try builder.metadataString("luce.alias")).toMetadata(),
+        });
+        const rows_scope = try builder.metadataTuple(&.{
+            (try builder.metadataString("luce.rows")).toMetadata(),
+            domain,
+        });
+        const elements_scope = try builder.metadataTuple(&.{
+            (try builder.metadataString("luce.elements")).toMetadata(),
+            domain,
+        });
+        const rows = try builder.metadataTuple(&.{rows_scope});
+        const elements = try builder.metadataTuple(&.{elements_scope});
+        self.alias_rows_list = rows.toOptional();
+        self.alias_elements_list = elements.toOptional();
+        return .{ .rows = rows, .elements = elements };
+    }
+
     fn deadRow(self: *Module) Error!Builder.Constant {
         if (self.dead_row) |found| return found;
         // Zeroes, the generation where `runtime.layout` says it sits,
@@ -2444,12 +2487,63 @@ const Body = struct {
         ), .use_after_free);
     }
 
+    /// A load of a row's facts — the table base, a generation, a
+    /// `dims` pointer or entry, an elements pointer, a count —
+    /// carrying the rows scope (`Module.aliasScopes` has the whole
+    /// argument).  The same shape as `wip.load`, so a call site
+    /// changes one name and nothing else.
+    fn rowLoad(
+        self: *Body,
+        access_kind: Builder.MemoryAccessKind,
+        ty: Builder.Type,
+        address: Builder.Value,
+        alignment: Builder.Alignment,
+        name: []const u8,
+    ) Error!Builder.Value {
+        const value = try self.wip.load(access_kind, ty, address, alignment, name);
+        const scopes = try self.module.aliasScopes();
+        try self.wip.attachMetadata(value, .@"alias.scope", scopes.rows);
+        try self.wip.attachMetadata(value, .@"noalias", scopes.elements);
+        return value;
+    }
+
+    /// The element-side twin: a cell load carries the elements scope
+    /// and disclaims the rows one, which is what lets a loop that
+    /// stores elements keep its row facts in registers.
+    fn cellLoad(
+        self: *Body,
+        ty: Builder.Type,
+        address: Builder.Value,
+        alignment: Builder.Alignment,
+        name: []const u8,
+    ) Error!Builder.Value {
+        const value = try self.wip.load(.normal, ty, address, alignment, name);
+        const scopes = try self.module.aliasScopes();
+        try self.wip.attachMetadata(value, .@"alias.scope", scopes.elements);
+        try self.wip.attachMetadata(value, .@"noalias", scopes.rows);
+        return value;
+    }
+
+    /// And the cell store, the instruction the rows scope exists to
+    /// be hoisted over.
+    fn cellStore(
+        self: *Body,
+        held: Builder.Value,
+        address: Builder.Value,
+        alignment: Builder.Alignment,
+    ) Error!void {
+        const stored = try self.wip.store(.normal, held, address, alignment);
+        const scopes = try self.module.aliasScopes();
+        try self.wip.attachMetadata(stored.toValue(), .@"alias.scope", scopes.elements);
+        try self.wip.attachMetadata(stored.toValue(), .@"noalias", scopes.rows);
+    }
+
     fn resolveRow(self: *Body, register: mir.Register) Error!Builder.Value {
         const builder = self.module.builder;
         const parts = try self.handleParts(self.produced[register].value);
         try self.checkHandle(parts.index);
 
-        const table = try self.wip.load(
+        const table = try self.rowLoad(
             .normal,
             .ptr,
             try self.byteOffset(self.runtime, runtime.layout.table_pointer, "table.at"),
@@ -2463,7 +2557,7 @@ const Body = struct {
             "row.at",
         )}, "row");
 
-        try self.checkOccupant(try self.wip.load(
+        try self.checkOccupant(try self.rowLoad(
             .normal,
             .i32,
             try self.byteOffset(row, runtime.layout.generation, "generation.at"),
@@ -2588,7 +2682,7 @@ const Body = struct {
                 "hoist.handle",
             );
             const parts = try self.handleParts(handle);
-            const table = try self.wip.load(
+            const table = try self.rowLoad(
                 .normal,
                 .ptr,
                 try self.byteOffset(self.runtime, runtime.layout.table_pointer, "table.at"),
@@ -2616,14 +2710,14 @@ const Body = struct {
             var made: Hoisted = .{
                 .made = true,
                 .bounds_at = @intCast(self.hoist_bounds.items.len),
-                .generation = try self.wip.load(
+                .generation = try self.rowLoad(
                     .normal,
                     .i32,
                     try self.byteOffset(row, runtime.layout.generation, "generation.at"),
                     Builder.Alignment.fromByteUnits(4),
                     "generation",
                 ),
-                .elements = try self.wip.load(
+                .elements = try self.rowLoad(
                     .normal,
                     .ptr,
                     try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
@@ -2632,7 +2726,7 @@ const Body = struct {
                 ),
             };
             if (hoist.rank == 1) {
-                try self.hoist_bounds.append(gpa, try self.wip.load(
+                try self.hoist_bounds.append(gpa, try self.rowLoad(
                     .normal,
                     .i64,
                     try self.byteOffset(row, runtime.layout.array_count, "count.at"),
@@ -2640,7 +2734,7 @@ const Body = struct {
                     "count",
                 ));
             } else {
-                made.dims = try self.wip.load(
+                made.dims = try self.rowLoad(
                     .normal,
                     .ptr,
                     try self.byteOffset(row, runtime.layout.array_dims, "dims.at"),
@@ -2648,7 +2742,7 @@ const Body = struct {
                     "dims",
                 );
                 for (0..hoist.rank) |axis| {
-                    try self.hoist_bounds.append(gpa, try self.wip.load(
+                    try self.hoist_bounds.append(gpa, try self.rowLoad(
                         .normal,
                         .i64,
                         try self.wip.gep(
@@ -2713,7 +2807,7 @@ const Body = struct {
         if (shape.rank == 1) {
             // `count` is the product of the axes, so for one axis it
             // *is* that axis — one load nearer than `dims[0]`.
-            try self.view_bounds.append(gpa, try self.wip.load(
+            try self.view_bounds.append(gpa, try self.rowLoad(
                 .normal,
                 .i64,
                 try self.byteOffset(row, runtime.layout.array_count, "count.at"),
@@ -2721,7 +2815,7 @@ const Body = struct {
                 "count",
             ));
         } else {
-            dims = try self.wip.load(
+            dims = try self.rowLoad(
                 .normal,
                 .ptr,
                 try self.byteOffset(row, runtime.layout.array_dims, "dims.at"),
@@ -2729,7 +2823,7 @@ const Body = struct {
                 "dims",
             );
             for (0..shape.rank) |axis| {
-                try self.view_bounds.append(gpa, try self.wip.load(
+                try self.view_bounds.append(gpa, try self.rowLoad(
                     .normal,
                     .i64,
                     try self.wip.gep(
@@ -2747,7 +2841,7 @@ const Body = struct {
         const made: ArrayView = .{
             .register = register,
             .dims = dims,
-            .elements = try self.wip.load(
+            .elements = try self.rowLoad(
                 .normal,
                 .ptr,
                 try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
@@ -2798,8 +2892,7 @@ const Body = struct {
     /// Read one cell as the Luce value it holds.
     fn loadCell(self: *Body, element: types.Type, address: Builder.Value) Error!Builder.Value {
         return switch (element) {
-            .double, .long, .float, .int, .half, .short, .byte => try self.wip.load(
-                .normal,
+            .double, .long, .float, .int, .half, .short, .byte => try self.cellLoad(
                 self.cellType(element),
                 address,
                 cellAlignment(element),
@@ -2807,7 +2900,7 @@ const Body = struct {
             ),
             .boolean => try self.wip.icmp(
                 .ne,
-                try self.wip.load(.normal, .i8, address, cellAlignment(element), "cell"),
+                try self.cellLoad(.i8, address, cellAlignment(element), "cell"),
                 try self.module.builder.intValue(.i8, 0),
                 "element",
             ),
@@ -2831,14 +2924,12 @@ const Body = struct {
         held: Builder.Value,
     ) Error!void {
         switch (element) {
-            .double, .long, .float, .int, .half, .short, .byte => _ = try self.wip.store(
-                .normal,
+            .double, .long, .float, .int, .half, .short, .byte => try self.cellStore(
                 held,
                 address,
                 cellAlignment(element),
             ),
-            .boolean => _ = try self.wip.store(
-                .normal,
+            .boolean => try self.cellStore(
                 try self.wip.cast(.zext, held, .i8, "cell"),
                 address,
                 cellAlignment(element),

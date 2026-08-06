@@ -2256,3 +2256,44 @@ test "a trap agrees while every frame is still holding String bytes" {
         \\
     );
 }
+
+test "array loops carry the two alias scopes, and runtime calls carry neither" {
+    // Task #45's payoff, pinned at the IR: element accesses disclaim
+    // the rows scope and row facts disclaim the elements one, so LICM
+    // may hoist a row's facts over a loop of element stores.  The
+    // scopes' shape (domain, named scopes) is proven at the Builder
+    // (08_llvm/builder.zig); what this pins is that the lowering
+    // actually says it.
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\func main():
+        \\    var grid = new array(long, 64)
+        \\    var i = 0
+        \\    while i < 64:
+        \\        grid[i] = i * 2
+        \\        i += 1
+        \\    print(string(grid[63]))
+        \\
+    )).?;
+    defer gpa.free(rendered);
+    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "!alias.scope !") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "!noalias !") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "!\"luce.rows\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "!\"luce.elements\"") != null);
+    // The store of an element wears both scopes on its line, and no
+    // runtime call wears either — calls stay conservative.
+    var lines = std.mem.splitScalar(u8, rendered, '\n');
+    var element_store_scoped = false;
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "call ") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, line, "!alias.scope") == null);
+            continue;
+        }
+        if (std.mem.indexOf(u8, line, "store i64 ") == null) continue;
+        if (std.mem.indexOf(u8, line, "!alias.scope") != null and
+            std.mem.indexOf(u8, line, "!noalias") != null) element_store_scoped = true;
+    }
+    try std.testing.expect(element_store_scoped);
+}

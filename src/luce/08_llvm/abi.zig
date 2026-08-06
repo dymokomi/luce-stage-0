@@ -187,6 +187,14 @@ pub const Answer = enum(i32) {
 /// service does not exist, and the program traps `host_unavailable`
 /// rather than touching anything (`docs/V2.md`'s fail-closed rule).
 /// Every service below is optional on the same terms.
+///
+/// **A host service must not unwind.**  Every callback in this table
+/// returns normally or does not return at all (a host is free to
+/// `exit`); throwing an exception or `longjmp`ing across `luce_main`
+/// is undefined behavior.  Stated because generated Luce functions
+/// are marked `nounwind`, and that claim is only honest if the hosts
+/// they ultimately call into keep this rule — both hosts in this
+/// tree do, being Zig with no exceptions (task #45's audit).
 pub const PrintFn = *const fn (
     context: ?*anyopaque,
     text: [*]const u8,

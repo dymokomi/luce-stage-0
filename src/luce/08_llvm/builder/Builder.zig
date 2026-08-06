@@ -10401,7 +10401,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                     var kind_buffer: [40]u8 = undefined;
                     const prefix = std.fmt.bufPrint(
                         &kind_buffer,
-                        ", !{s} ",
+                        "!{s} ",
                         .{@tagName(attachment.kind)},
                     ) catch unreachable;
                     try w.print("{f}", .{
