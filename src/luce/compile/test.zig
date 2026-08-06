@@ -1184,8 +1184,14 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\    private func stamp(self) -> long:
     \\        return self.id
     \\
+    \\    private func widest() -> long:
+    \\        return 64
+    \\
     \\func open(name: string) -> Session:
     \\    return Session(name = name, id = 7)
+    \\
+    \\struct Box:
+    \\    held: Handle
     \\
 };
 
@@ -1332,6 +1338,123 @@ test "luce.sema.private: a private method is withheld from the value spelling to
         \\    print(string(s.stamp()))
         \\
     , &.{vault_module}, "stamp is private to vault");
+}
+
+test "every spelling of touching a private member gets the same useful sentence" {
+    // The §1 funnel has more than one door, and a reader will try all
+    // of them: the static method spelling, the namespace function of a
+    // public struct, the nested place, the compound assignment.  One
+    // declaration, one sentence, whichever door (VISIBILITY.md D2).
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let s = vault.open("dy")
+        \\    print(string(vault.Session.stamp(s)))
+        \\
+    , &.{vault_module}, "stamp is private to vault");
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.Session.widest()))
+        \\
+    , &.{vault_module}, "widest is private to vault");
+    // A nested place: the write walks the chain, and the gate stands
+    // at the field it finally names.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    var boxed = vault.Box(held = vault.fresh())
+        \\    boxed.held.slot = 9
+        \\
+    , &.{vault_module}, "slot of Handle is private to vault");
+    // A compound assignment reads and writes the same private field;
+    // one refusal, at the place.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    var h = vault.fresh()
+        \\    h.slot += 1
+        \\
+    , &.{vault_module}, "slot of Handle is private to vault");
+    // Reading a private field of a nested place refuses the same way
+    // writing it does.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    var boxed = vault.Box(held = vault.fresh())
+        \\    print(string(boxed.held.slot))
+        \\
+    , &.{vault_module}, "slot of Handle is private to vault");
+    // Importing a module and touching only public things is just the
+    // import working — nothing about the six markers taxes a caller
+    // who never crosses the line.
+    try expectProjectCompiles(
+        \\import vault
+        \\
+        \\func main():
+        \\    var boxed = vault.Box(held = vault.fresh())
+        \\    print(string(boxed.held.label))
+        \\
+    , &.{vault_module});
+}
+
+test "member typos beside private members suggest visible members only" {
+    // `vault.sed` sits one edit from the private `seed`; the namespace
+    // answers "no member" without leaking the name it withheld.
+    var files: TestLoader = .{ .modules = &.{vault_module} };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.sed))
+        \\
+    , files.loader(), .{ .allow_host = true });
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    errdefer printDiagnostics(&result);
+    try testing.expectEqual(@as(usize, 1), result.failure.count());
+    const found = result.failure.at(0).?;
+    try testing.expect(std.mem.indexOf(u8, found.message, "no member") != null);
+    try testing.expect(std.mem.indexOf(u8, found.message, "seed") == null);
+}
+
+test "the std leak is closed through both spellings, with the same sentence" {
+    // Item 10's warrant, held as a compile fact rather than only as a
+    // site fence: the qualified call and the method sugar route to the
+    // same declaration and the same refusal.
+    var direct = try compile_mod.compile(testing.allocator,
+        \\import std.strings
+        \\
+        \\func main():
+        \\    print(strings.fold_case("MIXED", 65, 90, 32))
+        \\
+    , .{ .allow_host = true });
+    defer direct.deinit();
+    try testing.expect(direct == .failure);
+    var sugar = try compile_mod.compile(testing.allocator,
+        \\import std.strings
+        \\
+        \\func main():
+        \\    print("MIXED".fold_case(65, 90, 32))
+        \\
+    , .{ .allow_host = true });
+    defer sugar.deinit();
+    try testing.expect(sugar == .failure);
+    for ([_]*compile_mod.CompileResult{ &direct, &sugar }) |result| {
+        var found = false;
+        for (0..result.failure.count()) |index| {
+            const item = result.failure.at(index).?;
+            if (!std.mem.eql(u8, item.code, "luce.sema.private")) continue;
+            try testing.expectEqualStrings("fold_case is private to strings", item.message);
+            found = true;
+        }
+        try testing.expect(found);
+    }
 }
 
 test "a typo near a private name is unknown, and the private name is never suggested" {
