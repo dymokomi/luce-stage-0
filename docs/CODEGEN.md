@@ -444,6 +444,25 @@ Three things make it pay, and all three are needed together:
   that attaches an object, frees one, or replaces an array's storage
   (`optimize.effects.viewStable`).
 
+  **The metadata exists now, and the honest number is: it moved
+  nothing this suite measures** (task #45, ruled and executed
+  2026-08-06).  The Builder is vendored (`08_llvm/builder/`, three
+  files, `LUCE:`-marked deviations only) and attaches `!alias.scope`
+  and `!noalias` on every row-fact load and every scalar cell access
+  — two scopes, rows and elements, that never overlap by
+  construction.  An interleaved A/B against the commit before the
+  attachment landed reads within noise on every row, matmul and
+  arrays included, because the hand-hoisting above had already banked
+  the win the scopes describe: a value in a register cannot be
+  invalidated by a store, metadata or no metadata.  The scopes are
+  kept anyway, and not sentimentally — they cover what the manual
+  hoist cannot reach (views die at every call and every block edge;
+  the scopes survive both), they are what a future pass that *stops*
+  hand-hoisting would stand on, and they cost nothing measured.
+  `!range`/`!nonnull` remain unattached until the runtime's
+  never-null cases are proven rather than assumed — a wrong
+  attachment is a miscompile, not a slowdown.
+
 **The loads move; the checks stay.**  A lifted resolution reads a row
 without deciding anything about it — a null handle reads an all-zero
 dead row, so the loads are safe unconditionally — and every access
