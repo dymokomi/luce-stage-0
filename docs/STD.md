@@ -200,6 +200,42 @@ would be inventing it.
 
 ---
 
+## paths
+
+Pure text over path names — nothing here touches the host, so the
+module works even in a program compiled without host access, no
+function can fail or trap on any input, and every answer is a plain
+`string` or `bool`.  The separator is `/`, the one the hosts loom
+runs on use; there are no drive letters, no backslashes and no
+`.`/`..` cleaning — a path is taken as written, and only the seams
+the module itself creates are kept tidy.  The shapes follow Go's
+`path` package where Go and Python agree, and Python where they
+differ on taste: a leading dot is a hidden file's name, not an
+extension.
+
+```text
+import std.paths
+
+paths.is_absolute(path)     # bool — starts at the root
+paths.join(head, tail)      # one separator at the seam; an empty side
+                            # answers the other, an absolute tail
+                            # answers itself
+paths.base(path)            # the last element; trailing separators do
+                            # not count; base("/") is "/"
+paths.dir(path)             # everything but the last element; a bare
+                            # name answers ".", the root is its own
+                            # directory
+paths.extension(path)       # the base's extension, dot included, or ""
+paths.stem(path)            # the base without its extension
+```
+
+Two invariants hold on every input, and the spec suite walks them:
+`join(dir(p), base(p))` names the same file `p` does — which is why a
+bare name's directory is `"."` rather than `""` — and
+`stem(p) + extension(p)` is always `base(p)`.
+
+---
+
 ## Adding a module
 
 1. Write `src/luce/std/NAME.luc` — ordinary Luce, documented with

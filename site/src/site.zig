@@ -111,6 +111,7 @@ pub const sections = [_]Section{
             .{ .slug = "math", .title = "std.math", .blurb = "Transcendentals, integer powers, whole-array reductions, and a seeded generator." },
             .{ .slug = "strings", .title = "std.strings", .blurb = "Everything built on the String primitives: find, split, join, trim, case, padding." },
             .{ .slug = "files", .title = "std.files", .blurb = "A thin, fallible layer over the host's file services." },
+            .{ .slug = "paths", .title = "std.paths", .blurb = "Pure text over path names: join, base, dir, extension, stem." },
         },
     },
     .{

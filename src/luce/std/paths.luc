@@ -1,0 +1,102 @@
+# paths — the Luce standard path module.
+#
+# Pure text: nothing here touches the host, so the module works even
+# where files do not exist, and no function can fail or trap on any
+# input.  A path is just a string with a convention in it, and this
+# module is that convention said once.
+#
+# The separator is "/", the one the hosts loom runs on use.  There
+# are no drive letters, no backslashes and no "." / ".." cleaning —
+# a path is taken as written, and only the seams this module itself
+# creates are kept tidy.  Empty strings answer the empty-ish thing
+# each function documents rather than trapping: a path routine that
+# traps on "" turns every caller into a guard.
+#
+# The shapes follow Go's path package where Go and Python agree, and
+# Python where they differ on taste: a leading dot is a hidden file's
+# name, not an extension (".bashrc" has no extension here, as in
+# Python and unlike Go).
+
+# True when the path starts at the root.
+func is_absolute(path: string) -> bool:
+    return len(path) > 0 and path.byte_at(0) == 47
+
+# head joined to tail with one separator at the seam.  An empty side
+# answers the other side alone; an absolute tail answers itself, the
+# way Python's join resets at an absolute part.  Separators already
+# piled at the seam collapse to one, and the root keeps its slash:
+# join("/", "etc") is "/etc".
+func join(head: string, tail: string) -> string:
+    if len(head) == 0:
+        return tail
+    if len(tail) == 0:
+        return head
+    if is_absolute(tail):
+        return tail
+    var end = len(head)
+    while end > 1 and head.byte_at(end - 1) == 47:
+        end -= 1
+    let trimmed = head[0:end]
+    if trimmed.byte_at(len(trimmed) - 1) == 47:
+        return trimmed + tail
+    return trimmed + "/" + tail
+
+# The last element: base("a/b.luc") is "b.luc".  Trailing separators
+# do not count — base("a/b/") is still "b" — the root's name is "/",
+# and the empty path's is "".
+func base(path: string) -> string:
+    if len(path) == 0:
+        return ""
+    var end = len(path)
+    while end > 1 and path.byte_at(end - 1) == 47:
+        end -= 1
+    if end == 1 and path.byte_at(0) == 47:
+        return "/"
+    var start = end
+    while start > 0 and path.byte_at(start - 1) != 47:
+        start -= 1
+    return path[start:end]
+
+# Everything but the last element: dir("a/b.luc") is "a".  A bare
+# name has no directory written down, and the honest answer that is
+# still a usable path is "." — join(dir(p), base(p)) names the same
+# file p does.  The root is its own directory.
+func dir(path: string) -> string:
+    if len(path) == 0:
+        return "."
+    var end = len(path)
+    while end > 1 and path.byte_at(end - 1) == 47:
+        end -= 1
+    if end == 1 and path.byte_at(0) == 47:
+        return "/"
+    var start = end
+    while start > 0 and path.byte_at(start - 1) != 47:
+        start -= 1
+    if start == 0:
+        return "."
+    var stop = start
+    while stop > 1 and path.byte_at(stop - 1) == 47:
+        stop -= 1
+    if stop == 1 and path.byte_at(0) == 47:
+        return "/"
+    return path[0:stop]
+
+# The extension of the last element, dot included: ".luc" for
+# "main.luc", "" when there is none.  A leading dot is a hidden
+# file's name, not an extension — extension(".bashrc") is "".
+func extension(path: string) -> string:
+    let name = base(path)
+    var at = len(name)
+    while at > 0 and name.byte_at(at - 1) != 46:
+        at -= 1
+    if at <= 1:
+        return ""
+    return name[at - 1:len(name)]
+
+# The last element without its extension: stem("a/main.luc") is
+# "main".  The pair puts a name back together: stem(p) +
+# extension(p) is always base(p).
+func stem(path: string) -> string:
+    let name = base(path)
+    let suffix = extension(path)
+    return name[0:len(name) - len(suffix)]

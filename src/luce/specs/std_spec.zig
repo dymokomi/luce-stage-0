@@ -442,6 +442,89 @@ test "strings: a format spec is that function, and the import is what it needs" 
 }
 
 // ---------------------------------------------------------------------------
+// paths
+// ---------------------------------------------------------------------------
+//
+// Pure text, so every row runs hostless on both engines.  The shapes
+// are the module's promises verbatim: docs/STD.md quotes these.
+
+test "paths: is_absolute and join keep one separator at the seam" {
+    try agreeOk(
+        \\import std.paths
+        \\
+        \\func main():
+        \\    assert(paths.is_absolute("/etc"))
+        \\    assert(paths.is_absolute("/"))
+        \\    assert(not paths.is_absolute("etc"))
+        \\    assert(not paths.is_absolute(""))
+        \\
+        \\    assert(paths.join("a", "b") == "a/b")
+        \\    assert(paths.join("a/", "b") == "a/b")
+        \\    assert(paths.join("a//", "b") == "a/b")
+        \\    assert(paths.join("/", "etc") == "/etc")
+        \\    assert(paths.join("", "b") == "b")
+        \\    assert(paths.join("a", "") == "a")
+        \\    assert(paths.join("a", "/etc") == "/etc")
+        \\    assert(paths.join(paths.join("/usr", "local"), "bin") == "/usr/local/bin")
+        \\
+    );
+}
+
+test "paths: base and dir take a path apart, and join puts it back" {
+    try agreeOk(
+        \\import std.paths
+        \\
+        \\func main():
+        \\    assert(paths.base("a/b.luc") == "b.luc")
+        \\    assert(paths.base("a/b/") == "b")
+        \\    assert(paths.base("b") == "b")
+        \\    assert(paths.base("a//b") == "b")
+        \\    assert(paths.base("/") == "/")
+        \\    assert(paths.base("//") == "/")
+        \\    assert(paths.base("") == "")
+        \\
+        \\    assert(paths.dir("a/b.luc") == "a")
+        \\    assert(paths.dir("/usr/local/bin") == "/usr/local")
+        \\    assert(paths.dir("b") == ".")
+        \\    assert(paths.dir("/b") == "/")
+        \\    assert(paths.dir("/") == "/")
+        \\    assert(paths.dir("a//b") == "a")
+        \\    assert(paths.dir("a/b/") == "a")
+        \\    assert(paths.dir("") == ".")
+        \\
+        \\    # dir and base name the same file the path did.
+        \\    let p = "src/luce/std/paths.luc"
+        \\    assert(paths.join(paths.dir(p), paths.base(p)) == p)
+        \\
+    );
+}
+
+test "paths: extension and stem split the base, and rejoin to it" {
+    try agreeOk(
+        \\import std.paths
+        \\
+        \\func main():
+        \\    assert(paths.extension("main.luc") == ".luc")
+        \\    assert(paths.extension("a/b.tar.gz") == ".gz")
+        \\    assert(paths.extension("a.b/c") == "")
+        \\    assert(paths.extension(".bashrc") == "")
+        \\    assert(paths.extension("plain") == "")
+        \\    assert(paths.extension("/") == "")
+        \\
+        \\    assert(paths.stem("a/main.luc") == "main")
+        \\    assert(paths.stem("a/b.tar.gz") == "b.tar")
+        \\    assert(paths.stem(".bashrc") == ".bashrc")
+        \\    assert(paths.stem("plain") == "plain")
+        \\
+        \\    # The pair is a partition of the base, on every shape here.
+        \\    var shapes = ["main.luc", "a/b.tar.gz", ".bashrc", "plain", "/", "a/b/", ""]
+        \\    for shape in shapes:
+        \\        assert(paths.stem(shape) + paths.extension(shape) == paths.base(shape))
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The mechanism
 // ---------------------------------------------------------------------------
 
