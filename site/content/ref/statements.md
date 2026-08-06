@@ -6,6 +6,9 @@ A file holds, in any order: `import` lines, top-level `let`
 constants, `struct` declarations, and `func` declarations. There is no
 top-level executable code and no top-level `var`.
 
+Each of the three declaration forms may carry a
+[visibility](#visibility) word. Without one it is public.
+
 ## Entry
 
 A program requires exactly one `func main():`, and that is the whole
@@ -45,14 +48,22 @@ variadics and no first-class functions.
 ```
 struct Name:
     field: Type
+    private field: Type
     ...
+
+    private:
+        field: Type
+        func member(...):
+            ...
 
     func member(...):
         ...
 ```
 
 Fields and namespaced functions, in one indented block. Construction
-names every field.
+names every field. A member may carry a [visibility](#visibility) word
+of its own, or sit in a region that carries one for the group; without
+either it is public.
 
 ## Methods {#methods}
 
@@ -82,6 +93,71 @@ that does mutates through its fields from a plain `self`.
 A `var self` method may answer values of its own, and then its
 receiver is result zero: `let roll = rng.next()` writes `rng` back and
 binds `roll`, and the declared arity is what the call site sees.
+
+## Visibility {#visibility}
+
+A declaration is **public** unless it says `private`. Both words are
+keywords, both are written in full, and `public` where public is
+already the default is legal and inert.
+
+```
+private func name(...)        public func name(...)
+private let name = expr       public let name = expr
+private struct Name:          public struct Name:
+private field: Type           public field: Type
+```
+
+Inside a `struct`, and nowhere else, a **region** label opens an
+indented block of members — fields and functions alike — and every
+member of the block takes the label's visibility.
+
+```
+struct Name:
+    private:
+        field: Type
+
+        func member(...):
+            ...
+```
+
+Labels may repeat and appear in any order, and a member outside every
+region takes the default. The parser resolves each label onto its
+members, so a region and a per-declaration word produce exactly the
+same program.
+
+Exactly one word per declaration, and the word stands only where a
+declaration does.
+
+| Written | Refusal |
+|---|---|
+| `public private func f()` | `one visibility word per declaration` |
+| A word on a local `let`, `var` or parameter | `visibility applies to file-scope declarations and struct members` |
+| `private:` at file scope | `a visibility region belongs inside a struct; at file scope mark each declaration` |
+| A word on a member already inside a region | `NAME is inside a private region, which already says it` |
+| A region label with no member under it | the refusal every empty block gets |
+
+All five are parse rules, under `luce.parse.*`.
+
+```luce fail
+struct Box:
+    private:
+        private value: long
+
+func main():
+    var b = Box(value = 1)
+    print(string(b.value))
+```
+
+```output
+luce: compile failed
+main.luc:3:9: value is inside a private region, which already says it [luce.parse.expected]
+            private value: long
+            ^~~~~~~
+```
+
+What a marker *means* across a module boundary — reference sites,
+construction, fields, public surfaces, and `main` — is
+[modules](../modules/#visibility).
 
 ## let and var
 

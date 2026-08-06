@@ -156,6 +156,14 @@ The receiver must be a `var`: `var rng = math.rng(42)`. The state
 itself is a `private` field — reaching through it was never the API,
 and `Rng(state = 42)` no longer compiles outside the module.
 
+`math.rng` is the [factory pattern](/tour/visibility/) the language's
+own library lives on, and it exists because of a rule: an idiom that
+only works by naming a struct's internals is evidence of a missing
+constructor, never grounds for opening the internal. `state` is
+required and private, so `Rng` is constructible inside `math.luc` and
+nowhere else, and the one function that does it is the one every
+caller wanted anyway.
+
 Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
 
 ```luce run

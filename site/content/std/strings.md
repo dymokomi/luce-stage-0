@@ -189,6 +189,14 @@ That is why searching is a language primitive at all: not because it
 is hard, but because it is the seam where a vectorized implementation
 enters.
 
+`fold_case` and `is_space_byte` are the module's only two internals,
+and they are marked [`private`](/tour/visibility/): reaching either
+one — as `strings.fold_case(...)` or through the method spelling
+`s.fold_case(...)`, which routes to the same declaration — is
+`luce.sema.private`. They used to be reachable, which made an internal
+helper look like a blessed string method; the marker is what closed
+that door, and the roster above is the module's whole surface.
+
 ## The one sentinel
 
 `find` answers `-1` for "not found". `long?` exists now, so the

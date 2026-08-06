@@ -69,6 +69,12 @@ construction site that says nothing gets the declaration's value.
 There is no partial initialization: a slot is written by the site or
 by the declaration, always.
 
+Within one file every field is reachable, which is what the samples
+above rely on. A field may also be marked `private`, and then it is
+the module's own — that is [visibility](../visibility/), later in the
+tour, and it is what makes a struct opaque to the files that import
+it.
+
 ## Functions inside a struct
 
 A struct may hold functions, and they come in two kinds — told apart

@@ -38,7 +38,8 @@ language question, and one benchmark row.**
 | f-strings, compound assignment, nested place assignment | shipped |
 | File-scope constants, folded and inlined | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
-| Three standard modules: `math`, `strings`, `files` | shipped |
+| Four standard modules: `math`, `strings`, `files`, `paths` | shipped |
+| Visibility: public until a declaration says `private` | shipped |
 | LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
 | Trap locations and call traces in debug builds | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
@@ -177,7 +178,8 @@ workaround-dense and the proof that the language moved.
     *unknown*. The two leaked string helpers are marked, `Rng.state`
     is too, and `math.rng(seed)` is the constructor the idiom that
     reached through it always wanted
-    ([the rules](/ref/modules/#visibility)).
+    ([the chapter](/tour/visibility/),
+    [the rules](/ref/modules/#visibility)).
 11. **No bitwise operators, no hex literals, no digit separators.**
     Refused by name rather than misread, which is right — but it caps
     what userland can reach.
