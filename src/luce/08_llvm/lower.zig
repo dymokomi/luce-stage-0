@@ -1378,6 +1378,48 @@ const Module = struct {
 // One function body
 // ---------------------------------------------------------------------------
 
+/// What one IR register produced.  Three facts about the same register,
+/// written at the same sites — a runtime call that answers a String into
+/// a slot sets all three in three consecutive lines — so they are three
+/// columns of one row and not three arrays that happen to share a key.
+/// Go's register allocator keeps the same shape (`ssa/regalloc.go`'s
+/// `valState`, seven per-value facts in one `values []valState`).
+///
+/// A field a register has nothing to say about stays `.none`, and the
+/// states coexist: `box` does not replace `value`, because `boxOf` falls
+/// back to re-boxing the value when there is no box to reuse.
+const Produced = struct {
+    /// The SSA value.  A register whose result type is `.none` keeps
+    /// `.none` here.
+    value: Builder.Value = .none,
+    /// The `runtime.Value` the register was read out of, where there was
+    /// one: a runtime call's answer slot, an array cell, a struct's field
+    /// run, a local's own slot.  `.none` for a register built any other
+    /// way.
+    ///
+    /// It exists because unboxing a String throws away which form its
+    /// text was in, and three places need that back: a store into a slot
+    /// that owns its storage, which must keep short text short;
+    /// `drop_storage`, which must not free a pointer into a frame; and
+    /// `export_storage`, which must not transfer one out of the frame
+    /// (docs/STRINGS.md).
+    ///
+    /// The three are reachable only from a register that *has* a box.  A
+    /// store into an owning slot is preceded by `own_storage` or by a
+    /// fresh producer, and both answer into one; the two intrinsics take
+    /// their argument from the same place.  What is left without one — a
+    /// constant, a parameter, a slice — reaches none of them without an
+    /// `own_storage` in between, and `dropped` refuses text that arrives
+    /// at the freeing one anyway.
+    box: Builder.Value = .none,
+    /// The *outcome* a fallible call or intrinsic answered, kept beside
+    /// its value: `2` where it came back errored.  Only the `errored`
+    /// that stands beside it ever reads one, and only in the same block,
+    /// so this is the whole of the error channel on the compiled path —
+    /// no load, no runtime call (docs/CODEGEN.md).
+    outcome: Builder.Value = .none,
+};
+
 const Body = struct {
     module: *Module,
     wip: *Builder.WipFunction,
@@ -1410,37 +1452,9 @@ const Body = struct {
     /// that owns nothing never asks for one.
     serial: Builder.Value = .none,
 
-    /// Value produced by each IR register.  A register whose result
-    /// type is `.none` keeps `.none` here.  Registers never cross
-    /// blocks (the verifier enforces it), so one array per function is
-    /// enough.
-    values: []Builder.Value = &.{},
-    /// The `runtime.Value` each register was read out of, where there
-    /// was one: a runtime call's answer slot, an array cell, a struct's
-    /// field run, a local's own slot.  `.none` for a register built any
-    /// other way.
-    ///
-    /// It exists because unboxing a String throws away which form its
-    /// text was in, and three places need that back: a store into a
-    /// slot that owns its storage, which must keep short text short;
-    /// `drop_storage`, which must not free a pointer into a frame; and
-    /// `export_storage`, which must not transfer one out of the frame
-    /// (docs/STRINGS.md).
-    ///
-    /// The three are reachable only from a register that *has* a box.
-    /// A store into an owning slot is preceded by `own_storage` or by
-    /// a fresh producer, and both answer into one; the two intrinsics
-    /// take their argument from the same place.  What is left without
-    /// one — a constant, a parameter, a slice — reaches none of them
-    /// without an `own_storage` in between, and `dropped` refuses text
-    /// that arrives at the freeing one anyway.
-    boxes: []Builder.Value = &.{},
-    /// The *outcome* each fallible call or intrinsic answered, kept
-    /// beside its value: `2` where it came back errored.  Only the
-    /// `errored` that stands beside it ever reads one, and only in the
-    /// same block, so this is the whole of the error channel on the
-    /// compiled path — no load, no runtime call (docs/CODEGEN.md).
-    outcomes: []Builder.Value = &.{},
+    /// What each IR register produced.  Registers never cross blocks
+    /// (the verifier enforces it), so one array per function is enough.
+    produced: []Produced = &.{},
     /// One entry-block `alloca` per Luce local.
     local_slots: []Builder.Value = &.{},
     /// The first LLVM block of each IR block.  An IR block that
@@ -1468,9 +1482,7 @@ const Body = struct {
 
     fn deinit(self: *Body) void {
         const gpa = self.module.gpa;
-        gpa.free(self.values);
-        gpa.free(self.boxes);
-        gpa.free(self.outcomes);
+        gpa.free(self.produced);
         gpa.free(self.local_slots);
         gpa.free(self.blocks);
         self.views.deinit(gpa);
@@ -1498,12 +1510,8 @@ const Body = struct {
         const gpa = self.module.gpa;
         const function = self.function;
 
-        self.values = try gpa.alloc(Builder.Value, function.instructions.len);
-        @memset(self.values, .none);
-        self.boxes = try gpa.alloc(Builder.Value, function.instructions.len);
-        @memset(self.boxes, .none);
-        self.outcomes = try gpa.alloc(Builder.Value, function.instructions.len);
-        @memset(self.outcomes, .none);
+        self.produced = try gpa.alloc(Produced, function.instructions.len);
+        @memset(self.produced, .{});
         self.local_slots = try gpa.alloc(Builder.Value, function.locals.len);
         @memset(self.local_slots, .none);
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
@@ -1810,7 +1818,7 @@ const Body = struct {
 
     /// The value in `register`, boxed.
     fn boxedRegister(self: *Body, register: mir.Register, name: []const u8) Error!Builder.Value {
-        return self.boxed(self.function.result_types[register], self.values[register], name);
+        return self.boxed(self.function.result_types[register], self.produced[register].value, name);
     }
 
     /// Element `index` of a run of boxes — a subscript list, a struct's
@@ -1850,8 +1858,8 @@ const Body = struct {
     /// and boxes the ordinary way (docs/STRINGS.md).
     fn storedAt(self: *Body, run: Builder.Value, index: usize, register: mir.Register) Error!void {
         const of = self.function.result_types[register];
-        if (self.boxes[register] == .none) {
-            return self.boxAt(run, index, of, self.values[register]);
+        if (self.produced[register].box == .none) {
+            return self.boxAt(run, index, of, self.produced[register].value);
         }
         const address = address: {
             const resume_at = self.enterEntry();
@@ -1867,7 +1875,7 @@ const Body = struct {
         _ = try self.wip.callMemCpy(
             address,
             value_alignment,
-            self.boxes[register],
+            self.produced[register].box,
             value_alignment,
             try self.module.builder.intValue(.i64, @sizeOf(runtime.Value)),
             .normal,
@@ -2262,7 +2270,7 @@ const Body = struct {
         const out = try self.scratch(self.module.value_type, value_alignment, "rt.out");
         try all.append(gpa, out);
         try self.callChecked(which, all.items);
-        self.values[register] = try self.unboxed(
+        self.produced[register].value = try self.unboxed(
             self.function.result_types[register],
             out,
             "rt.value",
@@ -2270,7 +2278,7 @@ const Body = struct {
         // This slot belongs to this call site alone and nothing writes
         // it again before the register dies, so it is the box the
         // register was read from.
-        self.boxes[register] = out;
+        self.produced[register].box = out;
     }
 
     /// The subscripts of one indexing operation, as a run of boxed
@@ -2287,7 +2295,7 @@ const Body = struct {
                 run,
                 index,
                 self.function.result_types[register],
-                self.values[register],
+                self.produced[register].value,
             );
         }
         return .{ run, try self.module.builder.intValue(.i64, of.len) };
@@ -2420,7 +2428,7 @@ const Body = struct {
 
     fn resolveRow(self: *Body, register: mir.Register) Error!Builder.Value {
         const builder = self.module.builder;
-        const parts = try self.handleParts(self.values[register]);
+        const parts = try self.handleParts(self.produced[register].value);
         try self.checkHandle(parts.index);
 
         const table = try self.wip.load(
@@ -2664,7 +2672,7 @@ const Body = struct {
         if (self.liftedView(register)) |index| {
             // The loads happened in the preheader; the checks happen
             // here, which is what keeps the trap where it belongs.
-            const parts = try self.handleParts(self.values[register]);
+            const parts = try self.handleParts(self.produced[register].value);
             try self.checkHandle(parts.index);
             try self.checkOccupant(self.hoisted[index].generation, parts.generation);
             const made: ArrayView = .{
@@ -2746,7 +2754,7 @@ const Body = struct {
         const builder = self.module.builder;
         var flat = try builder.intValue(.i64, 0);
         for (indices, view.bounds(self)) |register, size| {
-            const index = self.values[register];
+            const index = self.produced[register].value;
             const below = try self.wip.icmp(.slt, index, try builder.intValue(.i64, 0), "below");
             const above = try self.wip.icmp(.sge, index, size, "above");
             try self.check(
@@ -2833,11 +2841,11 @@ const Body = struct {
         shape: ArrayShape,
     ) Error!void {
         if (shape.rank == 0) {
-            self.values[register] = try self.module.builder.intValue(.i64, 0);
+            self.produced[register].value = try self.module.builder.intValue(.i64, 0);
             return;
         }
         const view = try self.arrayView(target, shape);
-        self.values[register] = view.bounds(self)[0];
+        self.produced[register].value = view.bounds(self)[0];
     }
 
     /// `a.dim(k)` on an Array.  The rank is a compile-time fact, so the
@@ -2851,7 +2859,7 @@ const Body = struct {
     ) Error!void {
         const builder = self.module.builder;
         const view = try self.arrayView(target, shape);
-        const wanted = self.values[axis];
+        const wanted = self.produced[axis].value;
         const below = try self.wip.icmp(.slt, wanted, try builder.intValue(.i64, 0), "below");
         const above = try self.wip.icmp(
             .sge,
@@ -2863,10 +2871,10 @@ const Body = struct {
         // A rank-1 array has one axis, and the check above has already
         // said the wanted one is it.
         if (shape.rank == 1) {
-            self.values[register] = view.bounds(self)[0];
+            self.produced[register].value = view.bounds(self)[0];
             return;
         }
-        self.values[register] = try self.wip.load(
+        self.produced[register].value = try self.wip.load(
             .normal,
             .i64,
             try self.wip.gep(.inbounds, .i64, view.dims, &.{wanted}, "dim.at"),
@@ -2936,7 +2944,7 @@ const Body = struct {
     ) Error!void {
         const builder = self.module.builder;
         const text, const length = try self.textParts(text_register, "text");
-        const index = self.values[index_register];
+        const index = self.produced[index_register].value;
         const below = try self.wip.icmp(.slt, index, try builder.intValue(.i64, 0), "below");
         const above = try self.wip.icmp(.sge, index, length, "above");
         try self.check(
@@ -2947,7 +2955,7 @@ const Body = struct {
         // so the widening that used to happen here happens at whatever
         // the caller does with it — a `zext`, because a byte's bits
         // are a magnitude (D4).
-        self.values[register] = try self.wip.load(
+        self.produced[register].value = try self.wip.load(
             .normal,
             .i8,
             try self.wip.gep(.inbounds, .i8, text, &.{index}, "byte.at"),
@@ -2967,8 +2975,8 @@ const Body = struct {
     ) Error!void {
         const builder = self.module.builder;
         const text, const length = try self.textParts(text_register, "text");
-        const first = self.values[from];
-        const end = self.values[to];
+        const first = self.produced[from].value;
+        const end = self.produced[to].value;
         const below = try self.wip.icmp(.slt, first, try builder.intValue(.i64, 0), "below");
         const inverted = try self.wip.icmp(.slt, end, first, "inverted");
         const past = try self.wip.icmp(.sgt, end, length, "past.end");
@@ -2980,7 +2988,7 @@ const Body = struct {
         ), .string_bounds);
         try self.checkBoundary(text, length, first);
         try self.checkBoundary(text, length, end);
-        self.values[register] = try self.wip.buildAggregate(self.module.string_type, &.{
+        self.produced[register].value = try self.wip.buildAggregate(self.module.string_type, &.{
             try self.wip.gep(.inbounds, .i8, text, &.{first}, "slice.at"),
             try self.wip.bin(.@"sub nsw", end, first, "slice.length"),
         }, "slice");
@@ -3128,9 +3136,9 @@ const Body = struct {
         _ = try self.wip.br(done);
 
         self.seek(done);
-        self.values[register] = try self.unboxed(.string, box, "read.value");
-        self.boxes[register] = box;
-        self.outcomes[register] = try self.wip.load(.normal, .i32, outcome_slot, flag, "read.outcome");
+        self.produced[register].value = try self.unboxed(.string, box, "read.value");
+        self.produced[register].box = box;
+        self.produced[register].outcome = try self.wip.load(.normal, .i32, outcome_slot, flag, "read.outcome");
     }
 
     /// A host file service said no: raise the error and answer the
@@ -3259,9 +3267,9 @@ const Body = struct {
         _ = try self.wip.br(done);
 
         self.seek(done);
-        self.values[register] = try self.unboxed(listed, box, "list.value");
-        self.boxes[register] = box;
-        self.outcomes[register] = try self.wip.load(.normal, .i32, outcome_slot, flag, "list.outcome");
+        self.produced[register].value = try self.unboxed(listed, box, "list.value");
+        self.produced[register].box = box;
+        self.produced[register].outcome = try self.wip.load(.normal, .i32, outcome_slot, flag, "list.outcome");
     }
 
     fn saidNo(self: *Body, answer: Builder.Value) Error!Builder.Value {
@@ -3289,7 +3297,7 @@ const Body = struct {
         register: mir.Register,
         name: []const u8,
     ) Error!struct { Builder.Value, Builder.Value } {
-        const held = self.values[register];
+        const held = self.produced[register].value;
         return .{
             try self.wip.extractValue(held, &.{0}, name),
             try self.wip.extractValue(held, &.{1}, name),
@@ -3425,20 +3433,20 @@ const Body = struct {
         self.current = register;
         switch (instruction) {
             .const_boolean => |value| {
-                self.values[register] = if (value) .true else .false;
+                self.produced[register].value = if (value) .true else .false;
             },
             // A numeric constant travels at the widest member of its
             // family and lands at the register's own width; the
             // verifier has already checked the value is exact there
             // (docs/TYPES.md §1).
             .const_long => |value| {
-                self.values[register] = try self.module.builder.intValue(
+                self.produced[register].value = try self.module.builder.intValue(
                     try self.module.valueType(self.function.result_types[register]),
                     value,
                 );
             },
             .const_double => |value| {
-                self.values[register] = switch (self.function.result_types[register]) {
+                self.produced[register].value = switch (self.function.result_types[register]) {
                     .half => try self.module.builder.halfValue(@floatCast(value)),
                     .float => try self.module.builder.floatValue(@floatCast(value)),
                     else => try self.module.builder.doubleValue(value),
@@ -3446,21 +3454,21 @@ const Body = struct {
             },
             .const_string => |constant| {
                 const text = self.module.program.constants[constant];
-                self.values[register] = (try self.module.textConstant(text)).toValue();
+                self.produced[register].value = (try self.module.textConstant(text)).toValue();
             },
             .local_get => |local| {
                 const held = self.function.locals[local];
                 const slot = self.local_slots[local];
                 if (held.owns_storage) {
-                    self.values[register] = try self.unboxed(
+                    self.produced[register].value = try self.unboxed(
                         held.local_type,
                         slot,
                         "local.get",
                     );
-                    self.boxes[register] = slot;
+                    self.produced[register].box = slot;
                     return;
                 }
-                self.values[register] = try self.wip.load(
+                self.produced[register].value = try self.wip.load(
                     .normal,
                     try self.module.valueType(held.local_type),
                     slot,
@@ -3478,16 +3486,16 @@ const Body = struct {
                 const address = try self.wip.gep(
                     .inbounds,
                     self.module.value_type,
-                    self.values[get.target],
+                    self.produced[get.target].value,
                     &.{try self.module.builder.intValue(.i64, get.field)},
                     "field.at",
                 );
-                self.values[register] = try self.unboxed(
+                self.produced[register].value = try self.unboxed(
                     layout.fields[get.field].field_type,
                     address,
                     "field",
                 );
-                self.boxes[register] = address;
+                self.produced[register].box = address;
             },
             .struct_set => |set| try self.callAnswering(register, .luce_rt_struct_set, &.{
                 self.runtime,
@@ -3509,7 +3517,7 @@ const Body = struct {
             },
             .branch => |taken| {
                 _ = try self.wip.brCond(
-                    self.values[taken.condition],
+                    self.produced[taken.condition].value,
                     self.blocks[taken.then_block],
                     self.blocks[taken.else_block],
                     .none,
@@ -3532,7 +3540,7 @@ const Body = struct {
                     }
                     _ = try self.wip.store(
                         .normal,
-                        self.values[returned],
+                        self.produced[returned].value,
                         self.result_slot,
                         Module.valueAlignment(self.function.return_type),
                     );
@@ -3559,17 +3567,17 @@ const Body = struct {
         if (!held.owns_storage) {
             _ = try self.wip.store(
                 .normal,
-                self.values[value],
+                self.produced[value].value,
                 slot,
                 Module.valueAlignment(held.local_type),
             );
             return;
         }
-        if (self.boxes[value] != .none) {
+        if (self.produced[value].box != .none) {
             _ = try self.wip.callMemCpy(
                 slot,
                 value_alignment,
-                self.boxes[value],
+                self.produced[value].box,
                 value_alignment,
                 try self.module.builder.intValue(.i64, @sizeOf(runtime.Value)),
                 .normal,
@@ -3581,7 +3589,7 @@ const Body = struct {
         // may have left this slot holding inline text, and the form
         // byte has to say otherwise before the words are written.
         try self.fillBoxShape(slot, held.local_type);
-        try self.fillBoxValue(slot, held.local_type, self.values[value]);
+        try self.fillBoxValue(slot, held.local_type, self.produced[value].value);
     }
 
     // -- conversion and struct values ----------------------------------
@@ -3617,11 +3625,11 @@ const Body = struct {
     ) Error!void {
         const from = self.function.result_types[operand];
         const to = self.function.result_types[register];
-        const held = self.values[operand];
+        const held = self.produced[operand].value;
         const target = try self.module.valueType(to);
 
         if (to.isFloating()) {
-            self.values[register] = if (from.isInteger())
+            self.produced[register].value = if (from.isInteger())
                 // A `byte`'s bits are a magnitude and every other
                 // integer's carry a sign (D4), which is the whole of
                 // what "unsigned" decides here.
@@ -3650,7 +3658,7 @@ const Body = struct {
             if (target_range.low <= source_range.low and
                 target_range.high >= source_range.high)
             {
-                self.values[register] = try self.wip.cast(
+                self.produced[register].value = try self.wip.cast(
                     if (from.isUnsigned()) .zext else .sext,
                     held,
                     target,
@@ -3659,7 +3667,7 @@ const Body = struct {
                 return;
             }
             try self.checkIntegerRange(held, from, to);
-            self.values[register] = try self.wip.cast(.trunc, held, target, "int");
+            self.produced[register].value = try self.wip.cast(.trunc, held, target, "int");
             return;
         }
 
@@ -3673,7 +3681,7 @@ const Body = struct {
             "rounded",
         );
         try self.checkFloatRange(rounded, from, to);
-        self.values[register] = try self.wip.cast(
+        self.produced[register].value = try self.wip.cast(
             if (to.isUnsigned()) .fptoui else .fptosi,
             rounded,
             target,
@@ -3796,20 +3804,20 @@ const Body = struct {
     // -- arithmetic and comparison -------------------------------------
 
     fn emitBinary(self: *Body, register: mir.Register, operation: mir.Instruction.Binary) Error!void {
-        const left = self.values[operation.left];
-        const right = self.values[operation.right];
+        const left = self.produced[operation.left].value;
+        const right = self.produced[operation.right].value;
         if (operation.op.isComparison()) {
-            self.values[register] = try self.emitCompare(operation, left, right);
+            self.produced[register].value = try self.emitCompare(operation, left, right);
             return;
         }
         switch (operation.operand_type) {
-            .int, .long => self.values[register] = try self.emitIntArithmetic(
+            .int, .long => self.produced[register].value = try self.emitIntArithmetic(
                 operation.op,
                 operation.operand_type,
                 left,
                 right,
             ),
-            .float, .double => self.values[register] = try self.emitFloatArithmetic(
+            .float, .double => self.produced[register].value = try self.emitFloatArithmetic(
                 operation.op,
                 operation.operand_type,
                 left,
@@ -4136,17 +4144,17 @@ const Body = struct {
     }
 
     fn emitUnary(self: *Body, register: mir.Register, operation: mir.Instruction.Unary) Error!void {
-        const operand = self.values[operation.operand];
+        const operand = self.produced[operation.operand].value;
         switch (operation.op) {
             .logic_not => {
-                self.values[register] = try self.wip.bin(.xor, operand, .true, "not");
+                self.produced[register].value = try self.wip.bin(.xor, operand, .true, "not");
             },
             .negate => switch (self.function.result_types[operation.operand]) {
                 .int, .long => {
                     const of = self.function.result_types[operation.operand];
                     const width = try self.module.valueType(of);
                     const zero = try self.module.builder.intValue(width, 0);
-                    self.values[register] = try self.emitChecked(
+                    self.produced[register].value = try self.emitChecked(
                         .@"ssub.with.overflow",
                         width,
                         zero,
@@ -4156,7 +4164,7 @@ const Body = struct {
                 // A true sign-bit flip, not `0.0 - x`: the two differ
                 // for +0.0, and the deleted x86 backend got it wrong.
                 .float, .double => {
-                    self.values[register] = try self.wip.un(.fneg, operand, "neg");
+                    self.produced[register].value = try self.wip.un(.fneg, operand, "neg");
                 },
                 // Negating a storage width promotes first (D5), so
                 // no `neg` ever arrives wearing one.
@@ -4203,7 +4211,7 @@ const Body = struct {
         try arguments.append(gpa, self.runtime);
         try arguments.append(gpa, callee_depth);
         for (called.arguments) |argument| {
-            try arguments.append(gpa, self.values[argument]);
+            try arguments.append(gpa, self.produced[argument].value);
         }
         var result_slot: Builder.Value = .none;
         if (result != .none) {
@@ -4226,7 +4234,7 @@ const Body = struct {
         );
         if (self.module.program.functions[called.function].fallible) {
             try self.propagateTrapOnly(outcome);
-            self.outcomes[register] = outcome;
+            self.produced[register].outcome = outcome;
         } else {
             try self.propagate(try self.wip.icmp(
                 .ne,
@@ -4237,7 +4245,7 @@ const Body = struct {
         }
 
         if (result != .none) {
-            self.values[register] = try self.wip.load(
+            self.produced[register].value = try self.wip.load(
                 .normal,
                 try self.module.valueType(result),
                 result_slot,
@@ -4288,7 +4296,7 @@ const Body = struct {
     /// run, which survives the round trip whole; text without a place
     /// is refused rather than silently freed.
     fn dropped(self: *Body, register: mir.Register) Error!Builder.Value {
-        if (self.boxes[register] == .none and
+        if (self.produced[register].box == .none and
             carriesText(self.function.result_types[register]))
         {
             return self.fail("drop_storage of text that was not read out of a place");
@@ -4310,7 +4318,7 @@ const Body = struct {
     /// constant, a parameter or a slice, and a store only ever sees one
     /// of those with an `own_storage` in between (docs/STRINGS.md).
     fn storageOf(self: *Body, register: mir.Register) Error!Builder.Value {
-        if (self.boxes[register] != .none) return self.boxes[register];
+        if (self.produced[register].box != .none) return self.produced[register].box;
         return self.boxedRegister(register, "held");
     }
 
@@ -4363,12 +4371,12 @@ const Body = struct {
                     try self.dropped(of[0]),
                     out,
                 }, "");
-                self.values[register] = try self.unboxed(
+                self.produced[register].value = try self.unboxed(
                     self.function.result_types[register],
                     out,
                     "rt.value",
                 );
-                self.boxes[register] = out;
+                self.produced[register].box = out;
             },
             .export_storage => try self.callAnswering(register, .luce_rt_export_storage, &.{
                 rt,
@@ -4380,9 +4388,9 @@ const Body = struct {
             // The channel is the outcome word the call beside it
             // answered, so asking costs a compare and nothing else.
             .errored => {
-                const outcome = self.outcomes[of[0]];
+                const outcome = self.produced[of[0]].outcome;
                 if (outcome == .none) return self.fail("errored without a fallible call in its block");
-                self.values[register] = try self.wip.icmp(
+                self.produced[register].value = try self.wip.icmp(
                     .eq,
                     outcome,
                     try self.module.builder.intValue(.i32, outcome_errored),
@@ -4418,7 +4426,7 @@ const Body = struct {
                     // representable result at either width, so `abs`
                     // traps where the interpreter does and the
                     // intrinsic never sees the poison case.
-                    const held = self.values[of[0]];
+                    const held = self.produced[of[0]].value;
                     const smallest = try self.module.builder.intValue(
                         width,
                         @as(i64, if (kind == .int) std.math.minInt(i32) else std.math.minInt(i64)),
@@ -4427,7 +4435,7 @@ const Body = struct {
                         try self.wip.icmp(.eq, held, smallest, "is.smallest"),
                         .integer_overflow,
                     );
-                    self.values[register] = try self.wip.callIntrinsic(
+                    self.produced[register].value = try self.wip.callIntrinsic(
                         .normal,
                         .none,
                         .abs,
@@ -4435,19 +4443,19 @@ const Body = struct {
                         &.{ held, .true },
                         "abs",
                     );
-                } else self.values[register] = try self.wip.callIntrinsic(
+                } else self.produced[register].value = try self.wip.callIntrinsic(
                     .normal,
                     .none,
                     .fabs,
                     &.{width},
-                    &.{self.values[of[0]]},
+                    &.{self.produced[of[0]].value},
                     "abs",
                 );
             },
-            .min, .max => self.values[register] = try self.emitExtremum(
+            .min, .max => self.produced[register].value = try self.emitExtremum(
                 called.kind == .min,
-                self.values[of[0]],
-                self.values[of[1]],
+                self.produced[of[0]].value,
+                self.produced[of[1]].value,
                 try self.numeric(of[0]),
             ),
             // `@min(@max(middle, low), high)`, in that order: the
@@ -4459,21 +4467,21 @@ const Body = struct {
                 const kind = try self.numeric(of[0]);
                 const lifted = try self.emitExtremum(
                     false,
-                    self.values[of[0]],
-                    self.values[of[1]],
+                    self.produced[of[0]].value,
+                    self.produced[of[1]].value,
                     kind,
                 );
-                self.values[register] = try self.emitExtremum(
+                self.produced[register].value = try self.emitExtremum(
                     true,
                     lifted,
-                    self.values[of[2]],
+                    self.produced[of[2]].value,
                     kind,
                 );
             },
-            .sqrt => self.values[register] = try self.emitFloatCall(.sqrt, of[0]),
-            .floor => self.values[register] = try self.emitFloatCall(.floor, of[0]),
-            .ceil => self.values[register] = try self.emitFloatCall(.ceil, of[0]),
-            .trunc => self.values[register] = try self.emitFloatCall(.trunc, of[0]),
+            .sqrt => self.produced[register].value = try self.emitFloatCall(.sqrt, of[0]),
+            .floor => self.produced[register].value = try self.emitFloatCall(.floor, of[0]),
+            .ceil => self.produced[register].value = try self.emitFloatCall(.ceil, of[0]),
+            .trunc => self.produced[register].value = try self.emitFloatCall(.trunc, of[0]),
 
             // Comparison across the long/double line is exact, so it is
             // a call and not a widening (docs/NUMERICS.md).  The
@@ -4481,11 +4489,11 @@ const Body = struct {
             // time — and narrows to the `i32` the C surface takes.
             .compare_long_double => {
                 const answer = try self.callRuntime(.luce_rt_compare_long_double, .i32, &.{
-                    try self.wip.cast(.trunc, self.values[of[0]], .i32, "op"),
-                    self.values[of[1]],
-                    self.values[of[2]],
+                    try self.wip.cast(.trunc, self.produced[of[0]].value, .i32, "op"),
+                    self.produced[of[1]].value,
+                    self.produced[of[2]].value,
                 }, "compared");
-                self.values[register] = try self.wip.icmp(
+                self.produced[register].value = try self.wip.icmp(
                     .ne,
                     answer,
                     try self.module.builder.intValue(.i32, 0),
@@ -4499,7 +4507,7 @@ const Body = struct {
                 _ = try self.callHost(.print, &.{ text, length }, "printed");
             },
             .assert_true => {
-                const held = self.values[of[0]];
+                const held = self.produced[of[0]].value;
                 const broken = try self.wip.bin(.xor, held, .true, "assert.failed");
                 try self.check(broken, .assertion_failed);
             },
@@ -4507,7 +4515,7 @@ const Body = struct {
 
             // -- the runtime library, one call each -------------------
             .null_object => {
-                self.values[register] = try self.module.builder.intValue(.i64, runtime.null_index);
+                self.produced[register].value = try self.module.builder.intValue(.i64, runtime.null_index);
             },
 
             // -- absence, as four moves on `{T, i1}` ------------------
@@ -4518,15 +4526,15 @@ const Body = struct {
             // which is what makes `parse_int(s) else 0` cost what the
             // parse costs and nothing more.
             .none_value => {
-                self.values[register] = try self.zeroValue(
+                self.produced[register].value = try self.zeroValue(
                     self.function.result_types[register],
                 );
             },
             .is_none => {
-                self.values[register] = try self.wip.bin(
+                self.produced[register].value = try self.wip.bin(
                     .xor,
                     try self.wip.extractValue(
-                        self.values[of[0]],
+                        self.produced[of[0]].value,
                         &.{Module.optional_present},
                         "present",
                     ),
@@ -4536,17 +4544,17 @@ const Body = struct {
             },
             // `T <: T?`: the same payload, now known to be there.
             .optional_wrap => {
-                self.values[register] = try self.wip.buildAggregate(
+                self.produced[register].value = try self.wip.buildAggregate(
                     try self.module.valueType(self.function.result_types[register]),
-                    &.{ self.values[of[0]], .true },
+                    &.{ self.produced[of[0]].value, .true },
                     "wrap",
                 );
             },
             // What narrowing licensed.  The analyzer has already proved
             // the bit is set, so nothing is checked here.
             .optional_unwrap => {
-                self.values[register] = try self.wip.extractValue(
-                    self.values[of[0]],
+                self.produced[register].value = try self.wip.extractValue(
+                    self.produced[of[0]].value,
                     &.{Module.optional_payload},
                     "unwrap",
                 );
@@ -4555,8 +4563,8 @@ const Body = struct {
                 // A String is `{ ptr, i64 }` in a register already, so
                 // its length is the second word and nothing else.
                 if (self.function.result_types[of[0]] == .string) {
-                    self.values[register] = try self.wip.extractValue(
-                        self.values[of[0]],
+                    self.produced[register].value = try self.wip.extractValue(
+                        self.produced[of[0]].value,
                         &.{1},
                         "length",
                     );
@@ -4574,8 +4582,8 @@ const Body = struct {
                 if (self.arrayShape(of[0])) |shape| {
                     const view = try self.arrayView(of[0], shape);
                     const address = try self.arrayElement(view, shape.element, of[1..]);
-                    self.values[register] = try self.loadCell(shape.element, address);
-                    if (!ownsNothing(shape.element)) self.boxes[register] = address;
+                    self.produced[register].value = try self.loadCell(shape.element, address);
+                    if (!ownsNothing(shape.element)) self.produced[register].box = address;
                     return;
                 }
                 const run, const rank = try self.subscripts(of[1..]);
@@ -4598,7 +4606,7 @@ const Body = struct {
                         try self.storeCell(
                             shape.element,
                             address,
-                            self.values[of[of.len - 1]],
+                            self.produced[of[of.len - 1]].value,
                         );
                         return;
                     }
@@ -4616,8 +4624,8 @@ const Body = struct {
             .list_slice => try self.callAnswering(register, .luce_rt_list_slice, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                self.values[of[1]],
-                self.values[of[2]],
+                self.produced[of[1]].value,
+                self.produced[of[2]].value,
             }),
             .append_value => try self.callChecked(.luce_rt_append, &.{
                 rt,
@@ -4627,7 +4635,7 @@ const Body = struct {
             .append_ascii => try self.callChecked(.luce_rt_append_ascii, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                self.values[of[1]],
+                self.produced[of[1]].value,
             }),
             .pop_value => try self.callAnswering(register, .luce_rt_pop, &.{
                 rt,
@@ -4636,7 +4644,7 @@ const Body = struct {
             .insert_value => try self.callChecked(.luce_rt_insert, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                self.values[of[1]],
+                self.produced[of[1]].value,
                 try self.storageOf(of[2]),
             }),
             .remove_entry => try self.callChecked(.luce_rt_remove, &.{
@@ -4652,12 +4660,12 @@ const Body = struct {
             .key_at => try self.callAnswering(register, .luce_rt_key_at, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                self.values[of[1]],
+                self.produced[of[1]].value,
             }),
             .value_at => try self.callAnswering(register, .luce_rt_value_at, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                self.values[of[1]],
+                self.produced[of[1]].value,
             }),
             .dim_size => {
                 if (self.arrayShape(of[0])) |shape| {
@@ -4666,7 +4674,7 @@ const Body = struct {
                 try self.callAnswering(register, .luce_rt_dim_size, &.{
                     rt,
                     try self.boxedRegister(of[0], "target"),
-                    self.values[of[1]],
+                    self.produced[of[1]].value,
                 });
             },
             .list_sort => try self.callChecked(.luce_rt_sort, &.{
@@ -4754,7 +4762,7 @@ const Body = struct {
             }),
             .chr_code => try self.callAnswering(register, .luce_rt_chr, &.{
                 rt,
-                self.values[of[0]],
+                self.produced[of[0]].value,
             }),
             .ord_text => try self.callAnswering(register, .luce_rt_ord, &.{
                 rt,
@@ -4767,8 +4775,8 @@ const Body = struct {
                 try self.boxedRegister(of[0], "text"),
                 // The service takes a plain `i64`; the byte reaches it
                 // as the magnitude its bits are.
-                try self.wip.cast(.zext, self.values[of[1]], .i64, "byte.wanted"),
-                self.values[of[2]],
+                try self.wip.cast(.zext, self.produced[of[1]].value, .i64, "byte.wanted"),
+                self.produced[of[2]].value,
             }),
 
             // -- the rest of the host services ------------------------
@@ -4786,7 +4794,7 @@ const Body = struct {
                     &.{ path, path_length, content, content_length },
                     "wrote",
                 );
-                self.outcomes[register] = try self.raiseIo(.write, answer, path, path_length);
+                self.produced[register].outcome = try self.raiseIo(.write, answer, path, path_length);
             },
             .file_append => {
                 const path, const path_length = try self.textParts(of[0], "path");
@@ -4796,7 +4804,7 @@ const Body = struct {
                     &.{ path, path_length, content, content_length },
                     "appended",
                 );
-                self.outcomes[register] = try self.raiseIo(.append, answer, path, path_length);
+                self.produced[register].outcome = try self.raiseIo(.append, answer, path, path_length);
             },
             .file_delete => {
                 const path, const path_length = try self.textParts(of[0], "path");
@@ -4805,7 +4813,7 @@ const Body = struct {
                     &.{ path, path_length },
                     "deleted",
                 );
-                self.outcomes[register] = try self.raiseIo(.delete, answer, path, path_length);
+                self.produced[register].outcome = try self.raiseIo(.delete, answer, path, path_length);
             },
             .file_rename => {
                 const from, const from_length = try self.textParts(of[0], "from");
@@ -4817,7 +4825,7 @@ const Body = struct {
                 );
                 // The words name the file that was to move, which is
                 // the one the program asked about.
-                self.outcomes[register] = try self.raiseIo(.rename, answer, from, from_length);
+                self.produced[register].outcome = try self.raiseIo(.rename, answer, from, from_length);
             },
             .dir_list => try self.emitDirList(register, of[0]),
             .read_line => try self.emitMaybeText(
@@ -4832,33 +4840,33 @@ const Body = struct {
                 _ = try self.callHost(.print_error, &.{ text, length }, "reported");
             },
             .clock_ms => {
-                self.values[register] = try self.callHostNumber(.clock_ms, "clock");
+                self.produced[register].value = try self.callHostNumber(.clock_ms, "clock");
             },
             .sleep_ms => {
                 // A duration already elapsed is not a bug and not a
                 // failure: the host waits no time and answers yes.
-                _ = try self.callHost(.sleep_ms, &.{self.values[of[0]]}, "slept");
+                _ = try self.callHost(.sleep_ms, &.{self.produced[of[0]].value}, "slept");
             },
             .file_exists => {
                 const path, const path_length = try self.textParts(of[0], "path");
                 const answer = try self.callHost(.file_exists, &.{ path, path_length }, "exists");
-                self.values[register] = try self.saidYes(answer);
+                self.produced[register].value = try self.saidYes(answer);
             },
             .term_rows => {
-                self.values[register] = try self.callHostNumber(.term_rows, "rows");
+                self.produced[register].value = try self.callHostNumber(.term_rows, "rows");
             },
             .term_cols => {
-                self.values[register] = try self.callHostNumber(.term_cols, "cols");
+                self.produced[register].value = try self.callHostNumber(.term_cols, "cols");
             },
             .term_clear => _ = try self.callHost(.term_clear, &.{}, "cleared"),
             .term_move => _ = try self.callHost(.term_move, &.{
-                self.values[of[0]],
-                self.values[of[1]],
+                self.produced[of[0]].value,
+                self.produced[of[1]].value,
             }, "moved"),
             .term_style => _ = try self.callHost(.term_style, &.{
-                self.values[of[0]],
-                self.values[of[1]],
-                try self.wip.cast(.zext, self.values[of[2]], .i32, "bold"),
+                self.produced[of[0]].value,
+                self.produced[of[1]].value,
+                try self.wip.cast(.zext, self.produced[of[2]].value, .i32, "bold"),
             }, "styled"),
             .term_write => {
                 const text, const length = try self.textParts(of[0], "term");
@@ -4905,7 +4913,7 @@ const Body = struct {
                 // program that never read a key simply gets "".
                 const out = try self.scratch(self.module.value_type, value_alignment, "key.text");
                 _ = try self.callRuntime(.luce_rt_key_text, .void, &.{ rt, out }, "");
-                self.values[register] = try self.unboxed(.string, out, "key.text");
+                self.produced[register].value = try self.unboxed(.string, out, "key.text");
             },
         }
     }
@@ -5007,7 +5015,7 @@ const Body = struct {
             .none,
             intrinsic,
             &.{try self.module.valueType(of)},
-            &.{self.values[operand]},
+            &.{self.produced[operand].value},
             "float",
         );
     }
@@ -5039,7 +5047,7 @@ const Body = struct {
                     );
                     _ = try self.wip.store(
                         .normal,
-                        self.values[axis],
+                        self.produced[axis].value,
                         address,
                         Builder.Alignment.fromByteUnits(8),
                     );
@@ -5093,7 +5101,7 @@ const Body = struct {
         return .{
             .owned = try builder.intValue(.i32, 1),
             .serial = try self.frameSerial(),
-            .local = try self.wip.cast(.trunc, self.values[arguments[1]], .i32, "local"),
+            .local = try self.wip.cast(.trunc, self.produced[arguments[1]].value, .i32, "local"),
         };
     }
 
@@ -5101,7 +5109,7 @@ const Body = struct {
     /// the rest of the IR block lowers into a fresh block that nothing
     /// branches to.
     fn emitTrapMessage(self: *Body, called: mir.Instruction.IntrinsicCall) Error!void {
-        try self.emitTrap(.explicit_trap, self.values[called.arguments[0]]);
+        try self.emitTrap(.explicit_trap, self.produced[called.arguments[0]].value);
         self.seek(try self.wip.block(0, "after.trap"));
     }
 };
