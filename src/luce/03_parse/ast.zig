@@ -303,6 +303,14 @@ pub const Block = struct {
 // Declarations
 // ---------------------------------------------------------------------------
 
+/// The visibility a declaration wrote, three states so inert
+/// explicitness survives to be reasoned about (docs/VISIBILITY.md
+/// D13): `none` is an unmarked declaration — public by default —
+/// `public` a restated default, `private` the marked case.  A struct
+/// region label dissolves onto its members' markers here in stage 3;
+/// stage 4 never knows a region existed (D15).
+pub const Visibility = enum { none, public, private };
+
 pub const Field = struct {
     name: []const u8,
     name_span: Span,
@@ -311,6 +319,7 @@ pub const Field = struct {
     /// clause a parameter takes and the same folder behind it
     /// (docs/ARGS.md D8).  Null for a required field.
     default: ?*Expression = null,
+    visibility: Visibility = .none,
     span: Span,
 };
 
@@ -319,6 +328,7 @@ pub const StructDecl = struct {
     name_span: Span,
     fields: []Field,
     functions: []FuncDecl,
+    visibility: Visibility = .none,
     span: Span,
 };
 
@@ -369,6 +379,7 @@ pub const FuncDecl = struct {
     /// (docs/FAILURE.md).
     fallible: bool = false,
     body: Block,
+    visibility: Visibility = .none,
     span: Span,
 
     /// The span of everything after `->`, for a diagnostic about the
@@ -400,6 +411,7 @@ pub const ConstDecl = struct {
     name_span: Span,
     annotation: ?TypeName,
     value: *Expression,
+    visibility: Visibility = .none,
     span: Span,
 };
 

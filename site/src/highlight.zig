@@ -36,7 +36,8 @@ pub const keywords = [_][]const u8{
     "func",     "struct", "let", "var",   "if",     "elif",
     "else",     "while",  "for", "in",    "return", "break",
     "continue", "and",    "or",  "not",   "true",   "false",
-    "import",   "none",   "try", "catch", "self",
+    "import",   "none",   "try", "catch", "self",   "public",
+    "private",
 };
 
 /// The words that move ownership.  They get a class of their own

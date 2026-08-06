@@ -122,7 +122,13 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
 
         .keyword_and, .keyword_or, .keyword_not => .word_operator,
 
-        .keyword_func, .keyword_struct, .keyword_let, .keyword_var => .storage,
+        .keyword_func,
+        .keyword_struct,
+        .keyword_let,
+        .keyword_var,
+        .keyword_public,
+        .keyword_private,
+        => .storage,
 
         .keyword_import => .import,
 

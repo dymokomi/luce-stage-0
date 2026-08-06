@@ -165,6 +165,8 @@ struct Words:
             return true
         if word == "struct" or word == "and" or word == "or" or word == "not":
             return true
+        if word == "public" or word == "private":
+            return true
         return word == "true" or word == "false"
 
     func is_builtin(word: string) -> bool:

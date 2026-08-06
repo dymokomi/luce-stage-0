@@ -545,6 +545,9 @@ pub const Parser = struct {
                     );
                     self.recover();
                 },
+                .keyword_public, .keyword_private => {
+                    try self.markedDeclaration(&constants, &structs, &functions);
+                },
                 else => {
                     // A file-scope name is never valid, so a word that
                     // opens a declaration in some *other* language is
@@ -584,6 +587,79 @@ pub const Parser = struct {
             .structs = try structs.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
         };
+    }
+
+    /// A visibility marker at file scope: `public` or `private` before
+    /// func, let, or struct, and nowhere else (docs/VISIBILITY.md §5).
+    /// The marker parses onto the declaration it fronts; the refusals —
+    /// a region label at module level, a second visibility word, a
+    /// marker fronting anything unmarkable — are §8's, wordings and all.
+    fn markedDeclaration(
+        self: *Parser,
+        constants: *std.ArrayList(ast.ConstDecl),
+        structs: *std.ArrayList(ast.StructDecl),
+        functions: *std.ArrayList(ast.FuncDecl),
+    ) Error!void {
+        const marker = self.advance();
+        const visibility: ast.Visibility =
+            if (marker.kind == .keyword_private) .private else .public;
+        switch (self.peekKind()) {
+            .colon => {
+                try self.report(
+                    "luce.parse.top",
+                    .{ .start = marker.span.start, .end = self.peek().span.end },
+                    "a visibility region belongs inside a struct; at file scope mark each declaration",
+                    .{},
+                );
+                _ = self.advance(); // the colon
+                self.recover();
+            },
+            .keyword_public, .keyword_private => {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "one visibility word per declaration",
+                    .{},
+                );
+                self.recover();
+            },
+            .keyword_func => {
+                if (try self.funcDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try functions.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
+            .keyword_let => {
+                if (try self.constDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try constants.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
+            .keyword_struct => {
+                if (try self.structDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try structs.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
+            else => {
+                try self.report(
+                    "luce.parse.top",
+                    marker.span,
+                    "'{s}' marks a declaration: expected func, let, or struct after it, found {s}",
+                    .{ keywordWord(marker.kind).?, try self.found() },
+                );
+                self.recover();
+            },
+        }
     }
 
     /// import name — the sibling module `name.luc`; import std.name —
@@ -785,48 +861,29 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
-            if (self.peekKind() == .keyword_func) {
-                if (try self.funcDecl()) |declaration| {
-                    try functions.append(self.arena, declaration);
-                } else {
-                    self.recover();
+            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                // `private:` opens a region; `private` fronts one member.
+                if (self.peekAhead(1) == .colon) {
+                    try self.structRegion(&fields, &functions);
+                    continue;
                 }
-                continue;
-            }
-            const field_name = (try self.expect(.identifier, "a field name")) orelse {
-                self.recover();
-                continue;
-            };
-            try self.refuseWildcardName(field_name);
-            if ((try self.expect(.colon, "':' after the field name")) == null) {
-                self.recover();
-                continue;
-            }
-            const field_type = (try self.typeName()) orelse {
-                self.recover();
-                continue;
-            };
-            // `= EXPRESSION` — the field's default, the same clause a
-            // parameter takes (docs/ARGS.md D8); stage 4's folder
-            // decides what it may be.
-            var default_value: ?*ast.Expression = null;
-            var written_end = field_type.span.end;
-            if (self.accept(.assign) != null) {
-                const written = (try self.expression()) orelse {
+                const marker = self.advance();
+                if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                    try self.report(
+                        "luce.parse.expected",
+                        self.peek().span,
+                        "one visibility word per declaration",
+                        .{},
+                    );
                     self.recover();
                     continue;
-                };
-                default_value = written;
-                written_end = written.span().end;
+                }
+                const visibility: ast.Visibility =
+                    if (marker.kind == .keyword_private) .private else .public;
+                try self.structMember(&fields, &functions, visibility);
+                continue;
             }
-            try self.endOfStatement("end of line after the field");
-            try fields.append(self.arena, .{
-                .name = self.text(field_name),
-                .name_span = field_name.span,
-                .type_name = field_type,
-                .default = default_value,
-                .span = .{ .start = field_name.span.start, .end = written_end },
-            });
+            try self.structMember(&fields, &functions, .none);
         }
         _ = self.accept(.dedent);
         return .{
@@ -836,6 +893,150 @@ pub const Parser = struct {
             .functions = try functions.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
+    }
+
+    /// One struct member — a function or a field — carrying
+    /// `visibility`: its own marker's, its region's, or `.none` for the
+    /// unmarked default (docs/VISIBILITY.md §5).
+    fn structMember(
+        self: *Parser,
+        fields: *std.ArrayList(ast.Field),
+        functions: *std.ArrayList(ast.FuncDecl),
+        visibility: ast.Visibility,
+    ) Error!void {
+        if (self.peekKind() == .keyword_func) {
+            if (try self.funcDecl()) |declaration| {
+                var marked = declaration;
+                marked.visibility = visibility;
+                try functions.append(self.arena, marked);
+            } else {
+                self.recover();
+            }
+            return;
+        }
+        const field_name = (try self.expect(.identifier, "a field name")) orelse {
+            self.recover();
+            return;
+        };
+        try self.refuseWildcardName(field_name);
+        if ((try self.expect(.colon, "':' after the field name")) == null) {
+            self.recover();
+            return;
+        }
+        const field_type = (try self.typeName()) orelse {
+            self.recover();
+            return;
+        };
+        // `= EXPRESSION` — the field's default, the same clause a
+        // parameter takes (docs/ARGS.md D8); stage 4's folder
+        // decides what it may be.
+        var default_value: ?*ast.Expression = null;
+        var written_end = field_type.span.end;
+        if (self.accept(.assign) != null) {
+            const written = (try self.expression()) orelse {
+                self.recover();
+                return;
+            };
+            default_value = written;
+            written_end = written.span().end;
+        }
+        try self.endOfStatement("end of line after the field");
+        try fields.append(self.arena, .{
+            .name = self.text(field_name),
+            .name_span = field_name.span,
+            .type_name = field_type,
+            .default = default_value,
+            .visibility = visibility,
+            .span = .{ .start = field_name.span.start, .end = written_end },
+        });
+    }
+
+    /// `private:` or `public:` at member position — an indented block
+    /// of members that all take the label's visibility, the way every
+    /// colon in the language opens an indented block (docs/VISIBILITY.md
+    /// D14).  Labels may repeat and appear in any order; a marker on a
+    /// declaration inside is refused, because the block already said it;
+    /// and the region dissolves here, onto its members' markers — stage
+    /// 4 never knows a region existed (D15).
+    fn structRegion(
+        self: *Parser,
+        fields: *std.ArrayList(ast.Field),
+        functions: *std.ArrayList(ast.FuncDecl),
+    ) Error!void {
+        const label = self.advance(); // public or private
+        _ = self.advance(); // the colon
+        const word = keywordWord(label.kind).?;
+        const visibility: ast.Visibility =
+            if (label.kind == .keyword_private) .private else .public;
+        var opener_buffer: [16]u8 = undefined;
+        const opener = std.fmt.bufPrint(&opener_buffer, "{s}:", .{word}) catch unreachable;
+        if ((try self.expect(.newline, "end of line after ':'")) == null) {
+            self.recover();
+            return;
+        }
+        if ((try self.blockBody(opener)) == null) {
+            self.recover();
+            return;
+        }
+        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
+            if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .indent) {
+                try self.unexpectedIndent();
+                continue;
+            }
+            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                try self.markerInRegion(word);
+                if (self.peekKind() == .keyword_func or self.peekKind() == .identifier) {
+                    try self.structMember(fields, functions, visibility);
+                }
+                continue;
+            }
+            try self.structMember(fields, functions, visibility);
+        }
+        _ = self.accept(.dedent);
+    }
+
+    /// A visibility word standing inside a region: one way to say a
+    /// thing, and the block already said it (docs/VISIBILITY.md D15).
+    /// The marker is consumed and reported; the member it fronted still
+    /// parses, under the region's visibility, so one mistake is one
+    /// message.  A nested label is the same refusal wearing a colon,
+    /// and takes the block it would have opened with it.
+    fn markerInRegion(self: *Parser, region_word: []const u8) Error!void {
+        const marker = self.advance();
+        if (self.peekKind() == .colon) {
+            try self.report(
+                "luce.parse.expected",
+                .{ .start = marker.span.start, .end = self.peek().span.end },
+                "'{s}:' is inside a {s} region, which already says it",
+                .{ keywordWord(marker.kind).?, region_word },
+            );
+            _ = self.advance(); // the colon
+            self.recover();
+            return;
+        }
+        // The member's name, for the sentence: past `func` for a
+        // method, at hand for a field.
+        const named: ?Token = switch (self.peekKind()) {
+            .keyword_func => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
+            .identifier => self.peek(),
+            else => null,
+        };
+        if (named) |item| {
+            try self.report(
+                "luce.parse.expected",
+                marker.span,
+                "{s} is inside a {s} region, which already says it",
+                .{ self.text(item), region_word },
+            );
+        } else {
+            try self.report(
+                "luce.parse.expected",
+                marker.span,
+                "this declaration is inside a {s} region, which already says it",
+                .{region_word},
+            );
+        }
     }
 
     /// `self` or `var self` in a parameter list.  `already` is how many
@@ -915,6 +1116,17 @@ pub const Parser = struct {
                 previous_end = receiver.span.end;
                 if (self.accept(.comma) == null) break;
                 continue;
+            }
+            // A marker on a parameter is the locals' mistake in a
+            // parameter list (docs/VISIBILITY.md §5).
+            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "visibility applies to file-scope declarations and struct members",
+                    .{},
+                );
+                return null;
             }
             const parameter_name = (try self.expect(.identifier, "a parameter name")) orelse
                 return null;
@@ -1124,6 +1336,19 @@ pub const Parser = struct {
                     self.peek().span,
                     "'{s}' declarations belong at file scope, not inside a function",
                     .{word},
+                );
+                return null;
+            },
+            // A marker on a local is a category mistake, not a typo:
+            // visibility is about the module boundary, and there is no
+            // smaller boundary for it to mean anything at
+            // (docs/VISIBILITY.md §5).
+            .keyword_public, .keyword_private => {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "visibility applies to file-scope declarations and struct members",
+                    .{},
                 );
                 return null;
             },
@@ -1766,6 +1991,8 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_none => "'none'",
         .keyword_try => "the keyword 'try'",
         .keyword_catch => "the keyword 'catch'",
+        .keyword_public => "the keyword 'public'",
+        .keyword_private => "the keyword 'private'",
 
         .int_literal => "a number",
         .float_literal => "a number",

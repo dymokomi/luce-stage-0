@@ -67,6 +67,12 @@ pub const Kind = enum {
     /// `catch` says "it failed, and I am deliberately discarding a
     /// reason".
     keyword_catch,
+    /// The visibility markers, written in full and fully reserved
+    /// (docs/VISIBILITY.md D13): a contextual `private` would let
+    /// `private = 1` mean a binding in one position and a marker in
+    /// another, and the language does not do context-dependent words.
+    keyword_public,
+    keyword_private,
 
     // Literals
     /// A decimal digit run.  Its value is stage 4's business: the
@@ -158,6 +164,8 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "try", .kind = .keyword_try },
     .{ .word = "catch", .kind = .keyword_catch },
     .{ .word = "self", .kind = .keyword_self },
+    .{ .word = "public", .kind = .keyword_public },
+    .{ .word = "private", .kind = .keyword_private },
 };
 
 /// The same table, arranged for lookup.  `keywords` stays the

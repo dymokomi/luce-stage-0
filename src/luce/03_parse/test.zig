@@ -248,6 +248,170 @@ test "top-level let constants parse; top-level var is refused" {
     });
 }
 
+test "visibility markers parse onto every declaration form, and unmarked stays none" {
+    var parsed = try expectClean(
+        \\private let seed = 41
+        \\public let answer = seed + 1
+        \\let quiet = 0
+        \\
+        \\private struct Inner:
+        \\    n: long
+        \\
+        \\struct Session:
+        \\    name: string
+        \\    private token: long = 0
+        \\    public func label(self) -> string:
+        \\        return self.name
+        \\    private func stamp(self) -> long:
+        \\        return self.token
+        \\
+        \\private func helper() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    print(string(helper()))
+        \\
+    );
+    defer parsed.deinit();
+    const program = parsed.program;
+    try testing.expectEqual(ast.Visibility.private, program.constants[0].visibility);
+    try testing.expectEqual(ast.Visibility.public, program.constants[1].visibility);
+    try testing.expectEqual(ast.Visibility.none, program.constants[2].visibility);
+    try testing.expectEqual(ast.Visibility.private, program.structs[0].visibility);
+    try testing.expectEqual(ast.Visibility.none, program.structs[1].visibility);
+    const session = program.structs[1];
+    try testing.expectEqual(ast.Visibility.none, session.fields[0].visibility);
+    try testing.expectEqual(ast.Visibility.private, session.fields[1].visibility);
+    try testing.expectEqual(ast.Visibility.public, session.functions[0].visibility);
+    try testing.expectEqual(ast.Visibility.private, session.functions[1].visibility);
+    try testing.expectEqual(ast.Visibility.private, program.functions[0].visibility);
+    try testing.expectEqual(ast.Visibility.none, program.functions[1].visibility);
+}
+
+test "a region dissolves onto its members, and equals the per-declaration marker" {
+    // The memo's own Rng shape: one private region over the field,
+    // members after the region back at the default (VISIBILITY.md §5).
+    var parsed = try expectClean(
+        \\struct Rng:
+        \\    private:
+        \\        state: long
+        \\
+        \\    func next(var self) -> long:
+        \\        return self.state
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    const rng = parsed.program.structs[0];
+    try testing.expectEqual(ast.Visibility.private, rng.fields[0].visibility);
+    try testing.expectEqual(ast.Visibility.none, rng.functions[0].visibility);
+
+    // Labels repeat and appear in any order; funcs sit in regions too.
+    var mixed = try expectClean(
+        \\struct Handle:
+        \\    private:
+        \\        slot: long
+        \\    public:
+        \\        label: string
+        \\    private:
+        \\        generation: long
+        \\        func raw(self) -> long:
+        \\            return self.slot
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer mixed.deinit();
+    const handle = mixed.program.structs[0];
+    try testing.expectEqual(ast.Visibility.private, handle.fields[0].visibility);
+    try testing.expectEqual(ast.Visibility.public, handle.fields[1].visibility);
+    try testing.expectEqual(ast.Visibility.private, handle.fields[2].visibility);
+    try testing.expectEqual(ast.Visibility.private, handle.functions[0].visibility);
+}
+
+test "the visibility refusals land where the memo puts them" {
+    // A marker on a local, a parameter, or any statement (§5).
+    const rule = "visibility applies to file-scope declarations and struct members";
+    try expectDiagnostics("func main():\n    public let x = 1\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = rule },
+    });
+    try expectDiagnostics("func f(private x: long):\n    return\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = rule },
+    });
+    // One visibility word per declaration — file scope and struct alike.
+    try expectDiagnostics("public private func f():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = "one visibility word" },
+    });
+    try expectDiagnostics("struct P:\n    public public n: long\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 12, .contains = "one visibility word" },
+    });
+    // A region label at module level points at per-declaration markers.
+    try expectDiagnostics("private:\n    func f():\n        return\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "a visibility region belongs inside a struct" },
+    });
+    // A marker inside a region: the block already said it.
+    try expectDiagnostics(
+        "struct Rng:\n    private:\n        private state: long\n\nfunc main():\n    return\n",
+        &.{.{
+            .code = "luce.parse.expected",
+            .line = 3,
+            .column = 9,
+            .contains = "state is inside a private region, which already says it",
+        }},
+    );
+    try expectDiagnostics(
+        "struct Rng:\n    private:\n        public func raw(self) -> long:\n            return 1\n\nfunc main():\n    return\n",
+        &.{.{
+            .code = "luce.parse.expected",
+            .line = 3,
+            .column = 9,
+            .contains = "raw is inside a private region, which already says it",
+        }},
+    );
+    // An empty region is refused the way every empty block is; a
+    // region whose "members" sit at region level gets the block shape
+    // sentence every unindented block gets.
+    try expectDiagnostics(
+        "struct Rng:\n    private:\n\nfunc main():\n    return\n",
+        &.{.{
+            .code = "luce.parse.expected",
+            .line = 4,
+            .column = 1,
+            .contains = "this 'private:' block is empty",
+        }},
+    );
+    try expectDiagnostics(
+        "struct Rng:\n    private:\n    n: long\n\nfunc main():\n    return\n",
+        &.{.{
+            .code = "luce.parse.expected",
+            .line = 3,
+            .column = 5,
+            .contains = "expected an indented block under 'private:'",
+        }},
+    );
+    // A marker fronting something unmarkable names what it expected.
+    try expectDiagnostics("private import math\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, let, or struct" },
+    });
+}
+
+test "a marked member inside a region still parses, carrying the region's word" {
+    // One mistake, one message — and the member is not lost: it lands
+    // with the region's visibility, so recovery reads the struct the
+    // author meant.
+    var parsed = try parseText(
+        "struct Rng:\n    private:\n        private state: long\n\nfunc main():\n    return\n",
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.diagnostics.count());
+    const rng = parsed.program.structs[0];
+    try testing.expectEqual(@as(usize, 1), rng.fields.len);
+    try testing.expectEqual(ast.Visibility.private, rng.fields[0].visibility);
+}
+
 test "array shape wildcards parse in annotations" {
     var parsed = try expectClean(
         \\func total(grid: array(long, _, _)) -> long:
