@@ -117,6 +117,23 @@ pub fn expression(self: *Parser) Error!?*ast.Expression {
     return binaryExpression(self, @intFromEnum(Precedence.logic_or));
 }
 
+/// Which spelling of `catch` the cursor is looking at: the statement's
+/// handler block, or the operator whose right side is a fallback value.
+///
+/// `catch:` needs one token, because a fallback is an expression and no
+/// expression starts with a colon.  `catch NAME:` needs three, and the
+/// third is the newline: a slice takes a whole expression on each side
+/// of its colon, so `xs[first() catch fallback : 10]` is the operator
+/// form with a name for a fallback — and the lexer emits no newline
+/// inside brackets, so a newline behind the colon can only be the end
+/// of a statement line.
+pub fn opensHandler(self: *const Parser) bool {
+    if (self.peekAhead(1) == .colon) return true;
+    return self.peekAhead(1) == .identifier and
+        self.peekAhead(2) == .colon and
+        self.peekAhead(3) == .newline;
+}
+
 fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
     var left = (try unaryExpression(self)) orelse return null;
     // The comparison operators do not associate (docs/LANGUAGE.md):
@@ -128,11 +145,9 @@ fn binaryExpression(self: *Parser, minimum: u8) Error!?*ast.Expression {
     // Bools stays legal.
     var first_comparison: ?Token = null;
     while (true) {
-        // `call catch:` opens a handler block and belongs to the
-        // statement, not to this expression.  One token of lookahead
-        // separates the two spellings of `catch`, and nothing else
-        // can follow the operator form with a colon.
-        if (self.peekKind() == .keyword_catch and self.peekAhead(1) == .colon) return left;
+        // `call catch:` and `call catch reason:` open a handler block
+        // and belong to the statement, not to this expression.
+        if (self.peekKind() == .keyword_catch and opensHandler(self)) return left;
         // A `!` never joins two expressions.  Saying so here rather
         // than letting the statement end and complain about a stray
         // token keeps the answer the one the reader needs, in both

@@ -4004,7 +4004,8 @@ pub const FunctionBuilder = struct {
     }
 
     /// `CALL catch:` and an indented handler — the statement form, for
-    /// a recovery that is more than one expression.
+    /// a recovery that is more than one expression — and `CALL catch
+    /// NAME:`, which hands that handler the error's own words.
     fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
         // The permission reaches the *value* of the statement, which
         // is the first expression either shape lowers: the call
@@ -4014,12 +4015,25 @@ pub const FunctionBuilder = struct {
         try self.lowerStatement(guarded.attempt.*);
         self.allow_fallible = false;
         const opened = self.opened orelse {
-            try self.fail(
-                "luce.sema.fallible",
-                guarded.span,
-                "catch guards a call that can fail, and this statement has none; drop the catch",
-                .{},
-            );
+            // The binding is named in the refusal when there is one:
+            // "drop the catch" is advice a reader has to translate into
+            // "and the name with it", and the name is half of what they
+            // wrote.
+            if (guarded.binding) |binding| {
+                try self.fail(
+                    "luce.sema.fallible",
+                    guarded.span,
+                    "catch guards a call that can fail, and this statement has none; drop the catch, and {s} with it — there is no error for it to name",
+                    .{binding.text},
+                );
+            } else {
+                try self.fail(
+                    "luce.sema.fallible",
+                    guarded.span,
+                    "catch guards a call that can fail, and this statement has none; drop the catch",
+                    .{},
+                );
+            }
             return;
         };
         self.opened = null;
@@ -4027,8 +4041,35 @@ pub const FunctionBuilder = struct {
         const merge = try self.code.reserveBlock();
         try self.code.jump(merge);
         self.code.switchTo(opened.handler);
+
+        // The binding lives in a scope of its own, wrapped around the
+        // handler's: it is not one of the handler's statements, and a
+        // `return` or a `break` out of the handler has to release it on
+        // the way past like any other local (S1).
+        //
+        // **The whole read stands in front of `forget`**, copy
+        // included.  `error_message` hands back a borrow of the words
+        // and the store is what copies them (docs/STRINGS.md), and
+        // while those words would in fact survive the clear — `forget`
+        // nulls a pointer and the arena holding them goes with the run
+        // — writing it this way means nothing here depends on that.
+        // The channel is read, copied, and only then emptied.
+        const binding = guarded.binding orelse {
+            try self.code.forget();
+            try self.lowerBlock(guarded.handler);
+            try self.code.jump(merge);
+            self.code.switchTo(merge);
+            return;
+        };
+        try self.pushScope();
+        const words = try self.code.errorMessage();
+        if (try self.declareLocal(binding.text, .string, false, .alias, binding.span)) |local| {
+            try self.storeOwned(local, .{ .register = words, .value_type = .string });
+        }
         try self.code.forget();
         try self.lowerBlock(guarded.handler);
+        try self.emitScopeEnd();
+        self.popScope();
         try self.code.jump(merge);
         self.code.switchTo(merge);
     }
@@ -6672,7 +6713,7 @@ pub const FunctionBuilder = struct {
                 result = .none;
             },
             // Emitted by `try` and `catch`; never written by a reader.
-            .errored, .forget => unreachable,
+            .errored, .error_message, .forget => unreachable,
             .print, .term_write => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "this builtin takes a string");

@@ -300,6 +300,148 @@ test "error() raises the program's own words, and catch discards them" {
 }
 
 // ---------------------------------------------------------------------------
+// Errors somebody caught, and could read
+// ---------------------------------------------------------------------------
+
+test "catch NAME: binds the words the error carried, whichever code it was" {
+    // Both codes in one program, because the binding does not care
+    // which: `error(...)` raises the program's own words and a refused
+    // write raises the library's, and the handler reads a `string`
+    // either way (docs/FAILURE.md).
+    var session = try agree.compare(
+        \\func check(n: long) -> long!:
+        \\    if n < 0:
+        \\        error("negative: " + string(n))
+        \\    return n
+        \\
+        \\func main():
+        \\    check(-4) catch reason:
+        \\        print("user: " + reason)
+        \\    file_write("out.txt", "body") catch reason:
+        \\        print("io: " + reason)
+        \\
+    , .{ .world = .{ .refuse_writes = true } });
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "user: negative: -4\n" ++
+            "io: cannot write out.txt\n",
+        session.printed(),
+    );
+}
+
+test "the assignment form takes a binding too, and the place keeps its old value" {
+    // `place = call() catch NAME:` is the second statement shape the
+    // handler attaches to, and the handler runs where the call raised
+    // — so the assignment never happened and `text` still holds what
+    // it held (docs/FAILURE.md).
+    var session = try agree.compare(
+        \\func main():
+        \\    var text = "unchanged"
+        \\    var note = ""
+        \\    text = file_read("missing.txt") catch reason:
+        \\        note = reason
+        \\    print(text)
+        \\    print(note)
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "unchanged\n" ++
+            "cannot read missing.txt\n",
+        session.printed(),
+    );
+}
+
+test "the caught error is consumed: the binding reads it, forget still clears it" {
+    // A `catch` that read the words must still leave the channel empty
+    // — the run finishes rather than ending errored, and the caller
+    // above it sees nothing pending.
+    var session = try agree.compare(
+        \\func check(n: long) -> long!:
+        \\    if n < 0:
+        \\        error("negative")
+        \\    return n
+        \\
+        \\func guard(n: long) -> long:
+        \\    check(n) catch reason:
+        \\        print("handled " + reason)
+        \\        return 0
+        \\    return n
+        \\
+        \\func main() -> !:
+        \\    print(string(guard(-1)))
+        \\    print(string(try check(3)))
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqual(@as(u32, 0), session.end.finished);
+    try testing.expectEqualStrings("handled negative\n0\n3\n", session.printed());
+}
+
+test "a handler's binding is a local: it owns a copy, and gives it back" {
+    // Long enough on purpose that the words cannot live in the value
+    // (`inline_capacity` is 22 bytes), so the binding really allocates
+    // and really has to release — at the end of the block, and on the
+    // `return` that leaves it early (S1).  A leak fails the run under
+    // the testing allocator; the census fails it too.
+    try agree.ok(
+        \\func check(n: long) -> long!:
+        \\    if n < 0:
+        \\        error("a message far too long to live inside a value: " + string(n))
+        \\    return n
+        \\
+        \\func early() -> long:
+        \\    check(-1) catch reason:
+        \\        assert(len(reason) > 22)
+        \\        return len(reason)
+        \\    return 0
+        \\
+        \\func main():
+        \\    var seen: long = 0
+        \\    var index = 0
+        \\    while index < 100:
+        \\        check(0 - index - 1) catch reason:
+        \\            seen = seen + len(reason)
+        \\        index = index + 1
+        \\    assert(seen > 2200)
+        \\    assert(early() > 22)
+        \\    # And out of a loop from inside a handler: `break` unwinds
+        \\    # scopes innermost first, and the binding's is one of them.
+        \\    var stopped: long = 0
+        \\    while true:
+        \\        check(-7) catch reason:
+        \\            stopped = len(reason)
+        \\            break
+        \\    assert(stopped > 22)
+        \\
+    );
+}
+
+test "catches nest: each handler reads the error its own call raised" {
+    try agree.ok(
+        \\func inner() -> !:
+        \\    error("from inner")
+        \\
+        \\func outer() -> !:
+        \\    error("from outer")
+        \\
+        \\func main():
+        \\    var seen = ""
+        \\    outer() catch out_reason:
+        \\        inner() catch in_reason:
+        \\            seen = seen + in_reason + "/"
+        \\        # The inner catch cleared the channel; the outer name
+        \\        # is a local that still holds what it read.
+        \\        seen = seen + out_reason
+        \\    assert(seen == "from inner/from outer")
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The terminal
 // ---------------------------------------------------------------------------
 

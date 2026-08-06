@@ -256,7 +256,11 @@ pub const Destructure = struct {
 /// `try:`/`except:` block docs/FAILURE.md refuses.  A `let` is not
 /// among them: the handler would have to supply the value the name
 /// binds, and only `catch EXPR` can say that.
-pub const Guarded = struct { attempt: *Statement, handler: Block, span: Span };
+///
+/// `binding` is the name `catch reason:` gives the handler to read the
+/// error's words through — null for the plain `catch:` (`docs/FAILURE
+/// .md`).  It is scoped to the handler and nowhere else.
+pub const Guarded = struct { attempt: *Statement, binding: ?Name, handler: Block, span: Span };
 pub const Marker = struct { span: Span };
 pub const ExpressionStatement = struct { value: *Expression, span: Span };
 

@@ -133,6 +133,51 @@ plain assignment, and to nothing else — a `let` would need the handler
 to supply the value the name binds, and only `catch EXPR` can say
 that.
 
+## catch NAME: reads the reason
+
+A handler that only knows *that* something failed usually ends up
+guessing at why, in words of its own that go stale. Name the error and
+it can say what actually happened.
+
+```luce run
+import std.files
+
+func parse_port(text: string) -> long!:
+    let port = parse_int(text) else error(f"not a number: {text}")
+    if port < 1 or port > 65535:
+        error(f"out of range: {port}")
+    return port
+
+func main():
+    parse_port("nope") catch reason:
+        print(f"bad port — {reason}")
+
+    files.read("/nowhere/at/all") catch reason:
+        print(f"no config — {reason}")
+
+    # The handler's own message, unchanged, is what the runtime wrote.
+    parse_port("99999") catch reason:
+        print(reason)
+```
+
+```output
+bad port — not a number: nope
+no config — cannot read /nowhere/at/all
+out of range: 99999
+```
+
+The name binds the error's **message** and nothing else: an immutable
+`string`, scoped to the handler block, released with it, and subject
+to the no-shadowing rule. Reading it below the block is
+`luce.sema.name`.
+
+It is not the code, because a `catch` guards one call and one call
+raises with one code — there is nothing to branch on. It is not the
+raise position either; that belongs to the report an *uncaught* error
+gets, which the next section shows. And the expression form takes no
+binding: a fallback that reads the reason is a message being built,
+which is a statement, and that is the block form.
+
 ## An error's report is one line
 
 An uncaught error out of `main() -> !` ends the run and prints the

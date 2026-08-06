@@ -138,6 +138,7 @@ door into them:
 | 17 | host text in (`file_read`, `arg`) | `luce_rt_intern_text` | copies into the arena | copies into an owned temporary |
 | 18 | trap message | `Runtime.failMessage` | arena | at most one per run; a run ends on a trap |
 | 19 | `Array(String)` zero fill | `Runtime.newArray` | the static `""` | static, no owner |
+| 20 | `catch NAME:` binding | `Runtime.raise` already copied the words into the arena; `error_message` borrows them out | arena | copies into the binding's owned slot, which its scope frees |
 
 Rows 11–14 are the ones easiest to miss: `deepCopy`'s `else => return
 held` arm passes a String through by pointer, so `copy` of a

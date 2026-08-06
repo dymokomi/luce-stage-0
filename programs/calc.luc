@@ -128,12 +128,16 @@ func evaluate(text: string) -> !:
 # session; an empty line ends it too, because a person pressing return
 # at a prompt has said "nothing more".
 #
-# A bad expression must not end the loop: `evaluate(...) catch:` says
-# so on stderr and asks again, which is the whole difference between a
-# calculator and a program that exits when you mistype.  What it
-# cannot yet do is repeat the reason — `catch` has no binding form, so
-# the words the parser raised are discarded here and only the one-shot
-# path below ever prints them.
+# A bad expression must not end the loop: `evaluate(...) catch reason:`
+# says so on stderr and asks again, which is the whole difference
+# between a calculator and a program that exits when you mistype.
+#
+# `reason` is the binding form, and it is what makes the handler worth
+# reading: the words the parser raised four frames down — "expected a
+# number at position 4" — arrive here instead of being discarded, so
+# the loop says the same thing the one-shot path below says.  Before
+# it existed this printed "cannot compute:" and the line back, which
+# told the user only what they had already typed (docs/FAILURE.md).
 func repl():
     print("calc — an expression a line, blank line to quit")
     var running = true
@@ -142,8 +146,8 @@ func repl():
         if typed == none or typed == "":
             running = false
         else:
-            evaluate(typed) catch:
-                print_error("cannot compute: " + typed)
+            evaluate(typed) catch reason:
+                print_error("cannot compute: " + reason)
 
 func main(args: list(string)) -> !:
     if len(args) == 0:

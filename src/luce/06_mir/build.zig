@@ -492,6 +492,16 @@ pub const Lowering = struct {
         );
     }
 
+    /// The words the pending error carries — what `catch NAME:` binds.
+    /// A borrow of run-lifetime storage, so it must be emitted before
+    /// the `forget` that clears the channel.
+    pub fn errorMessage(self: *Lowering) Error!Register {
+        return self.emit(
+            .{ .intrinsic = .{ .kind = .error_message, .arguments = &.{} } },
+            .string,
+        );
+    }
+
     /// `catch` handled it: the error and its words are discarded.
     pub fn forget(self: *Lowering) Error!void {
         _ = try self.emit(

@@ -267,6 +267,24 @@ pub export fn luce_rt_raise_io(
     );
 }
 
+/// The words the pending error carries — what `catch NAME:` binds.
+///
+/// A **borrow**, exactly as `key_text` is: the message lives in the
+/// run's arena, which nothing releases, so handing back a view costs no
+/// allocation and the place that keeps it copies in the ordinary way
+/// (docs/STRINGS.md).  Stage 4 emits this — and the copy — in front of
+/// the `forget` beside it, so the channel it reads is never the empty
+/// one; an empty channel would mean damaged IR, and answering `""`
+/// keeps a damaged module from reading whatever the last error left
+/// behind.
+export fn luce_rt_error_message(runtime: *const Runtime, out: *Value) callconv(.c) void {
+    const raised = runtime.raised orelse {
+        out.* = Value.ofString("");
+        return;
+    };
+    out.* = Value.ofString(raised.message);
+}
+
 /// `catch` handled it: forget the error and its words.
 pub export fn luce_rt_forget_error(runtime: *Runtime) callconv(.c) void {
     runtime.forget();

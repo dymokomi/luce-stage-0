@@ -167,6 +167,63 @@ inventing those codes would be a lie.
 > One token of lookahead separates the two spellings, because nothing
 > else can follow the operator form with a colon.
 
+> **Corrected once built: `catch` grew the binding, and it binds the
+> message.**
+>
+> This memo chose `catch` over reusing `else` partly because it
+> "grows a binding form later that `else` never could", and then the
+> block form shipped without one — so a handler could not see what it
+> had caught. `calc.luc` carried the evidence in a comment for two
+> releases: its REPL printed `cannot compute:` and the line the user
+> had just typed, while the parser's own words — *expected a number at
+> position 4* — sat unreachable in the error. The spelling is
+> `CALL catch NAME:`.
+>
+> **`reason` is a `string`, and the code and the origin are not in
+> it.** An error carries three things and only one of them is a
+> handler's business. The corpus said so with no dissent: every
+> `catch` in the tree guards exactly one call — `evaluate` in calc,
+> `file_write` in the editor's save, `files.read` in its open — and a
+> call raises with one code, so branching on `io_failed` versus
+> `user_error` asks a question the call already answered. That is the
+> same argument the section above makes for there being two codes at
+> all, applied one level down. The origin stays in the host's report,
+> where an error nobody caught is announced; a handler that caught one
+> is *not* reporting it and has no use for a `file:line`. So the
+> feature costs no struct, no closed enum, and nothing in the type
+> table — and the memo's own refusal of "error payloads beyond the
+> message" still stands, because this is not a payload, it is the
+> message.
+>
+> **The operator form does not take one.** `f() catch(reason) fallback`
+> would need a parenthesized binder, which appears nowhere else in the
+> grammar, to open a scope inside an expression, which nothing else in
+> Luce does. And what such a fallback would be is almost always a
+> message being *built* — which is a statement, and the block form.
+> Zero corpus sites wanted it.
+>
+> Two things did need building. One intrinsic, `error_message`, which
+> answers a **borrow** of the words rather than a copy — the arena
+> holding them outlives the run, so this is exactly the shape
+> `key_text` already had, and the binding's own store is what takes the
+> copy it owns. It stands in front of the `forget` beside it, and so
+> does the copy: the words would in fact survive the clear, because
+> `forget` only nulls a pointer, but reading, copying and *then*
+> emptying means nothing has to know that. And a scope of its own
+> wrapped around the handler's, so the binding is not one of the
+> handler's statements and a `return` or `break` out of the handler
+> releases it like any other local (S1).
+>
+> The one thing that cost more than expected was the lookahead. The
+> line above says one token separates the two spellings; `catch NAME:`
+> needs three, and the third is the newline. A slice takes a whole
+> expression either side of its colon, so `xs[first(xs) catch base :
+> 10]` is the operator form with a name for a fallback — and the lexer
+> emits no newline inside brackets, so a newline behind the colon can
+> only be the end of a statement line. The one-line
+> `f() catch reason: print(reason)` that falls out of that gets a
+> message of its own rather than "expected end of line, found ':'".
+
 > **Corrected once built: `file_write` is fallible too.** The memo
 > named only `file_read_failed`, and named `dice.luc:41` — `if
 > files.write_lines(...)` with no else — as a live bug "caused directly

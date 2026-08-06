@@ -229,9 +229,13 @@ struct State:
     # Early return on failure is the shape errors are for: the handler
     # says what went wrong and leaves, and the success lines below it
     # run only where the write landed (docs/FAILURE.md).
+    #
+    # The status line used to say "cannot write " and the path, which
+    # was the program *guessing* the sentence the runtime had already
+    # written and happening to agree.  `catch reason:` reads it instead.
     func save(var self):
-        file_write(self.path, self.content) catch:
-            self.message = "cannot write " + self.path
+        file_write(self.path, self.content) catch reason:
+            self.message = reason
             return
         self.dirty = false
         self.message = "saved " + self.path

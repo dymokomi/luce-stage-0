@@ -50,8 +50,8 @@ main.luc:4:5: files.write can fail: write 'try files.write(…)' to pass the err
 `!`, and it releases what this frame owns on the way out — the same
 three lines `return` ends with, with one terminator changed.
 
-`catch` handles it here, and deliberately discards the reason. It
-has two forms, for the two shapes recovery takes.
+`catch` handles it here. It has two forms, for the two shapes recovery
+takes — a fallback value, or a block.
 
 ```luce run
 import std.files
@@ -71,6 +71,10 @@ func main() -> !:
 
     files.write("/nowhere/at/all", "x") catch:
         print("could not write to /nowhere/at/all")
+
+    # Name the error and the handler can say what actually happened.
+    files.write("/nowhere/at/all", "x") catch reason:
+        print(reason)
 ```
 
 ```output
@@ -78,12 +82,15 @@ wrote notes.txt
 read back: hello, disk
 missing: (nothing)
 could not write to /nowhere/at/all
+cannot write /nowhere/at/all
 ```
 
 The block form guards exactly **one** call, which is what separates it
 from an exception block: there is never a question about which
 statement failed. It attaches to a call written as a statement and to
-a plain assignment, and to nothing else.
+a plain assignment, and to nothing else. `catch NAME:` binds the
+error's message — a `string`, scoped to the handler — which is how a
+handler stops guessing at a reason it was handed.
 
 `catch` binds like `else`, between the comparisons and `+`, and
 associates right. Both sides must agree on ownership: if the call

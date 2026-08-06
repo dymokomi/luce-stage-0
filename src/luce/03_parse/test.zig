@@ -596,6 +596,39 @@ test "every adjacent pair of precedence levels binds the tighter one first" {
     try testing.expectEqual(ast.BinaryOp.coalesce, i.right.binary.op);
 }
 
+test "the three spellings of catch are told apart by what follows the word" {
+    // `catch:` opens a handler, `catch NAME:` opens one with a
+    // binding, and `catch NAME` anywhere else is the operator with a
+    // name for a fallback.  The third is what makes the second need
+    // three tokens of lookahead rather than one, and the third token
+    // is the newline: a slice takes a whole expression either side of
+    // its colon, and the lexer emits no newline inside brackets
+    // (docs/FAILURE.md).
+    var parsed = try expectClean(
+        \\func main():
+        \\    risky() catch:
+        \\        print("plain")
+        \\    risky() catch reason:
+        \\        print(reason)
+        \\    let a = risky() catch fallback
+        \\    let b = xs[risky() catch base : 3]
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+
+    try testing.expect(body.statements[0].guarded.binding == null);
+    try testing.expectEqualStrings("reason", body.statements[1].guarded.binding.?.text);
+
+    const fallback = body.statements[2].let.value.binary;
+    try testing.expectEqual(ast.BinaryOp.catch_error, fallback.op);
+    try testing.expectEqualStrings("fallback", fallback.right.name.text);
+
+    const sliced = body.statements[3].let.value.slice_range;
+    try testing.expectEqual(ast.BinaryOp.catch_error, sliced.start.?.binary.op);
+    try testing.expectEqualStrings("base", sliced.start.?.binary.right.name.text);
+}
+
 test "'not' in front of a comparison is refused, naming both readings" {
     // docs/LANGUAGE.md: `not` is a prefix operator, so `not a == b` is
     // `(not a) == b` here and `not (a == b)` in Python.  With bool

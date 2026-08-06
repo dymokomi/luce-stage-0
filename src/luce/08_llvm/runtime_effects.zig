@@ -121,6 +121,7 @@ pub const Service = enum {
     // -- errors, and the one position they carry ----------------------
     luce_rt_raise_error,
     luce_rt_raise_io,
+    luce_rt_error_message,
     luce_rt_forget_error,
     luce_rt_report_error,
 
@@ -414,6 +415,13 @@ pub fn describe(service: Service) Effect {
         .luce_rt_raise_io => .{
             .memory = touches_text,
             .parameters = &.{ .run, .plain, .bytes_in, .plain, .plain, .plain },
+        },
+        // One load: the words already in the channel, borrowed.  It
+        // allocates nothing — the arena holding them outlives the run —
+        // so this is a read of the runtime and a write of the box.
+        .luce_rt_error_message => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .value_out },
         },
         // One store: the channel is empty again.
         .luce_rt_forget_error => .{

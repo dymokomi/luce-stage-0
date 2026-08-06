@@ -759,6 +759,15 @@ and never the way a trap does.  The leak census is what proves it —
 `agree` compares it after a caught error, and a frame that forgot
 something would show up there as a number.
 
+`catch NAME:` adds nothing to this rule and is deliberately governed
+by S1 instead: the name is an ordinary immutable local holding a copy
+of the error's message, in a scope of its own wrapped around the
+handler block, so the block's end releases it and so does a `return`
+or a `break` out of the handler.  The words it copies from are the
+run's, not the failing frame's — that is what `Runtime.raise` copying
+them buys — so nothing about the unwind has to keep anything alive for
+it (docs/FAILURE.md).
+
 **S35. File scope owns nothing, so a constant is a value.**  The three
 owner kinds in S33 are a binding, a container, and the statement
 temporary — every one of them lives inside a function.  A top-level
