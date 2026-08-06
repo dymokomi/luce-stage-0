@@ -6,17 +6,53 @@
 <title>LuciaOS — Good for humans. Good for computers.</title>
 <meta name="description" content="LuciaOS is a new operating system, built from first principles — language-first. At its core is Luce.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%231e1b16' stroke-width='2.5'/><circle cx='16' cy='16' r='4.5' fill='%23a34e21'/></svg>">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <style>
   :root {
+    color-scheme: light;
     --paper: #faf8f4;
     --ink: #1e1b16;
     --quiet: #8a8275;
     --accent: #a34e21;
     --hairline: rgba(30, 27, 22, 0.12);
     --panel: #fffefb;
+    --shadow: rgba(30, 27, 22, 0.25);
+    --code-str: #6a7a3f;
+    --code-bi: #7d6b52;
     --serif: "Didot", "Bodoni 72", "Playfair Display", Georgia, "Times New Roman", serif;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --paper: #17140f;
+      --ink: #ece5d8;
+      --quiet: #948b7d;
+      --accent: #d97c45;
+      --hairline: rgba(236, 229, 216, 0.14);
+      --panel: #1f1b14;
+      --shadow: rgba(0, 0, 0, 0.6);
+      --code-str: #abbe7d;
+      --code-bi: #b7a586;
+    }
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --paper: #faf8f4; --ink: #1e1b16; --quiet: #8a8275; --accent: #a34e21;
+    --hairline: rgba(30, 27, 22, 0.12); --panel: #fffefb;
+    --shadow: rgba(30, 27, 22, 0.25);
+    --code-str: #6a7a3f; --code-bi: #7d6b52;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #17140f; --ink: #ece5d8; --quiet: #948b7d; --accent: #d97c45;
+    --hairline: rgba(236, 229, 216, 0.14); --panel: #1f1b14;
+    --shadow: rgba(0, 0, 0, 0.6);
+    --code-str: #abbe7d; --code-bi: #b7a586;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -63,6 +99,22 @@
   }
 
   header nav a:hover { color: var(--ink); }
+
+  header nav { display: flex; align-items: center; }
+
+  #theme {
+    margin-left: 1.75rem;
+    width: 2rem; height: 2rem; padding: 0;
+    font-size: 1.05rem; line-height: 1;
+    color: var(--quiet);
+    background: none; border: 0; border-radius: 50%;
+    cursor: pointer;
+    transition: color 0.3s ease;
+  }
+
+  #theme:hover { color: var(--ink); }
+
+  #theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* ---- sections -------------------------------------------------------- */
 
@@ -143,7 +195,7 @@
     background: var(--panel);
     border: 1px solid var(--hairline);
     border-radius: 12px;
-    box-shadow: 0 24px 60px -32px rgba(30, 27, 22, 0.25);
+    box-shadow: 0 24px 60px -32px var(--shadow);
     text-align: left;
     overflow-x: auto;
   }
@@ -166,8 +218,8 @@
 
   .kw { color: var(--accent); }
   .fn { color: var(--ink); }
-  .str { color: #6a7a3f; }
-  .bi { color: #7d6b52; }
+  .str { color: var(--code-str); }
+  .bi { color: var(--code-bi); }
 
   /* ---- footer ---------------------------------------------------------- */
 
@@ -222,6 +274,7 @@
   <a class="wordmark" href="/">LuciaOS</a>
   <nav>
     <a href="https://luce.luciaos.com">Luce</a>
+    <button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
   </nav>
 </header>
 
@@ -267,6 +320,19 @@
 
 <script>
   (function () {
+    var root = document.documentElement;
+    var button = document.getElementById("theme");
+    if (button) {
+      button.addEventListener("click", function () {
+        var dark = root.dataset.theme
+          ? root.dataset.theme === "dark"
+          : window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var next = dark ? "light" : "dark";
+        root.dataset.theme = next;
+        try { localStorage.setItem("luce-theme", next); } catch (e) {}
+      });
+    }
+
     var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     var targets = document.querySelectorAll(".reveal");
     if (reduced || !("IntersectionObserver" in window)) {

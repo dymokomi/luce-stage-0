@@ -129,7 +129,7 @@ pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !vo
 fn header(out: *Buffer, where: Where) !void {
     try out.add("<header class=\"top\">\n<a class=\"mark\" href=\"");
     try prefix(out, where.url);
-    try out.add("\"><span class=\"glyph\">L</span>Luce</a>\n<nav class=\"tabs\">\n");
+    try out.add("\"><span class=\"glyph\" aria-hidden=\"true\"></span>Luce</a>\n<nav class=\"tabs\">\n");
     for (&site.sections) |*section| {
         const current = where.section != null and where.section.? == section;
         try out.add(if (current) "<a class=\"here\" href=\"" else "<a href=\"");
