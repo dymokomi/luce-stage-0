@@ -315,16 +315,19 @@ there is no force-unwrap sigil.
 `try CALL` propagates a failure to the caller, releasing what this
 frame owns. It requires the enclosing function to declare `!`.
 
-`catch` has two forms:
+`catch` has three spellings:
 
 ```
 EXPR catch FALLBACK        an expression; both sides must agree on ownership
 CALL catch:                a handler block, guarding exactly one call
     ...
+CALL catch NAME:           the same block, with the error's message bound
+    ...
 ```
 
 The block form attaches to a call written as a statement and to a
-plain assignment, and to nothing else.
+plain assignment, and to nothing else. `NAME` is an immutable `string`
+scoped to the handler; the expression form takes no binding.
 
 A fallible call whose outcome is neither tried nor caught is
 `luce.sema.fallible`.

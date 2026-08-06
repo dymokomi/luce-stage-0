@@ -281,8 +281,8 @@ first, and leaves — the same three lines `return` ends with, with one
 terminator changed. It needs a caller that said `!`, or it is
 `luce.sema.fallible`.
 
-`catch` handles, and deliberately discards the reason. It has two
-forms, for the two shapes recovery takes:
+`catch` handles. It has three spellings, for the shapes recovery
+takes:
 
 ```luce
 import std.files
@@ -292,6 +292,9 @@ func handle_both(path: string):
 
     files.write(path, text) catch:              # a handler block
         print("cannot write " + path)
+
+    files.write(path, text) catch reason:       # …reading the error
+        print(reason)
 
     var greeting = "old file"
     var opening = ""
@@ -306,6 +309,15 @@ statement failed. It attaches to a call written as a statement and to
 a plain assignment, and to nothing else — a `let` would need the
 handler to supply the value the name binds, and only `catch EXPR` can
 say that.
+
+`catch NAME:` binds the error's **message** — a `string`, immutable,
+scoped to the handler block and released with it like any other local.
+It is not the code and not the raise position: a `catch` guards one
+call, and one call raises with one code, so there is nothing to branch
+on; the position belongs to the report an *uncaught* error gets. The
+name obeys the no-shadowing rule, and reading it outside the block is
+`luce.sema.name`. The expression form takes no binding — a fallback
+that reads the reason is a message being built, which is a statement.
 
 `catch` binds like `else`, between the comparisons and `+`, and
 associates right. Both sides must agree on ownership: if the call

@@ -135,7 +135,10 @@ untouched — fallibility is a bool on `mir.Function`, and not one
 made about the cost that survived contact whole.  What it got wrong is
 recorded there: ABI 6 rather than 5, `catch` needing a statement form
 as well as an expression one, and `file_write` having to become
-fallible too, without which the live bug below stayed writable.
+fallible too, without which the live bug below stayed writable.  The
+binding form that memo promised "later" has since landed as `catch
+NAME:`, which is the one thing on this page that closed by being
+built rather than by being argued away.
 
 The corpus that argued for it, item by item:
 
@@ -293,11 +296,10 @@ the proof the language moved.
    Two things this work found, both recorded rather than papered
    over:
 
-   - **`catch` cannot see the reason.**  `calc.luc`'s REPL loop
-     handles a bad expression with `evaluate(line) catch:` and can
-     only say *that* it failed, never *what* the parser raised — the
-     words exist and are unreachable.  `docs/FAILURE.md` predicted a
-     binding form "later"; the corpus now has a site that wants one.
+   - ~~**`catch` cannot see the reason.**~~  **Closed** by
+     `catch NAME:` (docs/FAILURE.md).  `calc.luc`'s REPL prints the
+     parser's own words now, and `editor.luc`'s save reads the
+     runtime's rather than writing them a second time.
    - **`files.append` is unwritable.**  `append` is a reserved name
      (it is `xs.append(v)`), and the reservation applies to a
      module-qualified declaration too, so the module reads
@@ -325,14 +327,17 @@ the proof the language moved.
     UTF-8 walk is hand-written, and `editor.luc:53`
     (`Text.continuation`) and `:156` (`Words.continuation_byte`) are
     the same function copied across two namespaces.
-13. **`catch` cannot see the reason.**  `EXPR catch FALLBACK` supplies
-    a value and `CALL catch:` opens a handler, and neither can name
-    what was raised — `catch e:` is `luce.parse.expected`.  The words
-    exist and are unreachable, and `calc.luc`'s REPL is the site that
-    wants them: it can say *that* an expression failed and never
-    *why*.  `docs/FAILURE.md` predicted a binding form "later"; the
-    corpus now has a caller for one.  (Also noted under item 6, which
-    is where it was found.)
+13. ~~**`catch` cannot see the reason.**~~  **Closed.**  `CALL catch
+    NAME:` binds the error's message to an immutable `string` scoped
+    to the handler block, and both callers the item named took it:
+    `calc.luc`'s REPL prints what the parser raised instead of the
+    line the user typed, and `editor.luc`'s save shows the runtime's
+    sentence instead of building its own copy of it.  The binding is
+    the message and not the code — a `catch` guards one call and one
+    call raises with one code — and not the raise position, which is
+    what the report for an error nobody caught is for
+    (docs/FAILURE.md's As-shipped note).  The expression form still
+    takes no binding, with reasons.
 14. **Nothing pins the site's copies of `reserved_names`.**  The
     language's list lives in `04_semantics/context.zig`; the site
     carries it twice, in `site/src/highlight.zig`'s word tables and

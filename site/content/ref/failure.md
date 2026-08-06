@@ -104,10 +104,15 @@ value belongs.
 ([S4](../ownership/#s4)). It requires the enclosing function to
 declare `!`.
 
-`catch` handles, discarding the reason. `EXPR catch FALLBACK` supplies
-a value; `CALL catch:` opens a handler block guarding exactly one
-call, attached to a call written as a statement or to a plain
-assignment.
+`catch` handles. `EXPR catch FALLBACK` supplies a value; `CALL catch:`
+opens a handler block guarding exactly one call, attached to a call
+written as a statement or to a plain assignment; `CALL catch NAME:` is
+the same block with the error's message bound to `NAME`.
+
+`NAME` is an immutable `string` scoped to the handler block, released
+with it, and subject to the no-shadowing rule. It carries the message
+only — not the code, and not the raise position. The expression form
+takes no binding.
 
 A fallible call whose outcome is neither tried nor caught is
 `luce.sema.fallible`.
