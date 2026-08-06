@@ -304,6 +304,11 @@ pub const ConstantValue = union(enum) {
     boolean: bool,
     string: []const u8, // arena-owned
     strukt: struct { layout: u32, fields: []ConstantValue },
+    /// `none`, folded where something said what it is absent *of* — a
+    /// `T?` annotation on the declaration is such a place, so
+    /// `let x: long? = none` folds (docs/ARGS.md D9).  It carries
+    /// nothing; the constant's type says all there is.
+    absent,
 };
 
 pub const TypedConstant = struct {

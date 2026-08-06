@@ -1129,10 +1129,19 @@ pub const Analyzer = struct {
                 return .{ .value = .{ .string = literal.decoded }, .value_type = .string };
             },
             // `none` has no type of its own — the place it is written
-            // into supplies one — and a file-scope constant is folded
-            // before anything can supply it.
+            // into supplies one.  An annotation is such a place, so
+            // `let x: long? = none` folds to the typed absence
+            // (docs/ARGS.md D9); with nothing saying what is absent,
+            // the refusal stands.
             .none_literal => |literal| {
-                return self.constantError(literal.span, "none is not a constant; a constant is a value that is there", .{});
+                if (wanted) |place| {
+                    if (place == .optional) return .{ .value = .absent, .value_type = place };
+                    return self.constantError(literal.span, "{s} is always there; only {s}? is ever none", .{
+                        try self.typeName(place),
+                        try self.typeName(place),
+                    });
+                }
+                return self.constantError(literal.span, "none needs a place that says what it is absent of; annotate it: let name: T? = none", .{});
             },
             .name => |name| {
                 const qualified = try self.qualify(self.modules[module].prefix, name.text);
@@ -1591,6 +1600,11 @@ pub const Analyzer = struct {
                         break :blk if (binary.op == .equal) same else !same;
                     },
                     .strukt => return self.constantError(binary.span, "struct constants have no comparison", .{}),
+                    // An absent constant reaches an operator only through
+                    // another constant's name; the test for absence is a
+                    // function's `!= none`, and a fold has no narrowing
+                    // to make of the answer.
+                    .absent => return self.constantError(binary.span, "an absent constant has no operators; test it in a function", .{}),
                 };
                 return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
             },

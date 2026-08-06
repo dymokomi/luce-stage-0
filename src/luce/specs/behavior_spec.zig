@@ -4482,6 +4482,25 @@ test "file-scope constants fold every value kind" {
     );
 }
 
+test "file-scope constants: an annotated none folds to the typed absence" {
+    // D9 of docs/ARGS.md: `none` is a constant when something says
+    // what it is absent *of*, and an annotation says.  The gap it
+    // closes: `T?` shipped without file-scope absences, for no reason
+    // beyond the folder predating it.
+    try agreeOk(
+        \\let missing: long? = none
+        \\let fallback = 4
+        \\
+        \\func main():
+        \\    assert((missing else fallback) == 4)
+        \\    assert(missing == none)
+        \\    var slot: long? = missing
+        \\    assert((slot else 0) == 0)
+        \\    assert(slot == none)
+        \\
+    );
+}
+
 test "struct constants: the Theme case" {
     try agreeOk(
         \\struct Theme:

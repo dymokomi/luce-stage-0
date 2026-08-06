@@ -3070,6 +3070,25 @@ test "luce.sema.const: a list literal is an object, not a constant" {
     try expectRejected("let bad = [1, 2]\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
+test "luce.sema.const: a bare none is still refused — nothing says what is absent" {
+    // `let x: long? = none` folds (docs/ARGS.md D9); without the
+    // annotation there is no type to be absent at, and the refusal
+    // stands.
+    try expectSaying(
+        "let bad = none\n\nfunc main():\n    return\n",
+        "luce.sema.const",
+        "none needs a place that says what it is absent of",
+    );
+}
+
+test "luce.sema.const: none refuses a place that is always there" {
+    try expectSaying(
+        "let bad: long = none\n\nfunc main():\n    return\n",
+        "luce.sema.const",
+        "long is always there; only long? is ever none",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // luce.sema.literal — expression-position literal overflow
 // ---------------------------------------------------------------------------

@@ -4233,6 +4233,10 @@ pub const FunctionBuilder = struct {
                     value_type,
                 );
             },
+            // The typed absence a `T?` place gives a bare `none`: the
+            // constant's type is the whole of its value (docs/ARGS.md
+            // D9), and it inlines as the same zero `lowerTyped` emits.
+            .absent => try self.code.zeroOf(value_type),
         };
     }
 
