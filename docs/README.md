@@ -43,6 +43,11 @@ and each says so in its own preamble.
 |---|---|
 | [ENGINE.md](ENGINE.md) | Why there is one engine. Written before the nine steps that retired the interpreter; its seven "Hat" sections describe the world it measured, not this one. |
 | [MEMORY.md](MEMORY.md) | Why scope ownership won over reference counting, tracing GC, arenas and borrow checking. |
+| [TYPES.md](TYPES.md) | The seven-number ladder: Java sizing, lowercase names, `byte` as bits, storage-only narrow types. D1–D8 ratified and built. |
+| [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, `int(x)`-style conversions. Ratified and built. |
+| [METHODS.md](METHODS.md) | `main(args)`, `self`, `var self` as copy-in/copy-out. Ratified and built. |
+| [RETURNS.md](RETURNS.md) | Multiple returns without first-class tuples. Ratified and built. |
+| [VECTOR.md](VECTOR.md) | Vectorizing checked reductions without weakening a single trap: prove, or speculate-and-replay. All three layers ratified. |
 | [STRINGS.md](STRINGS.md) | Why string bytes have an owner, phase by phase, with the timing after each step. |
 
 ## History
