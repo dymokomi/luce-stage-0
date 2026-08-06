@@ -2384,24 +2384,26 @@ pub const FunctionBuilder = struct {
                     const subscripts = try self.arena().alloc(Register, lowered.len);
                     for (lowered, subscripts) |value_operand, *slot| slot.* = value_operand.register;
                     accessor.* = .{ .index = .{ .object = current, .subscripts = subscripts } };
-                    // Only the **last** step is the place the compound
-                    // operator reads; every step above it is an
-                    // ordinary read on the way down and keeps its
-                    // trap.  `s.counts[word] += 1` defines the key
-                    // exactly as `counts[word] += 1` does, because the
-                    // leaf is the same place either way.
-                    const leaf = accessor == &accessors[accessors.len - 1];
-                    current = if (leaf and assign.compound != null)
-                        try self.compoundPlaceRead(object_value, subscripts, element_type)
-                    else read: {
-                        const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
-                        read_arguments[0] = current;
-                        @memcpy(read_arguments[1..], subscripts);
-                        break :read try self.code.emit(
-                            .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
-                            element_type,
-                        );
-                    };
+                    // **Always an ordinary read, never a defining
+                    // one**, and the parser is what guarantees it: a
+                    // target ending in `[...]` becomes an `.index`
+                    // target whatever its base, so a chain's last step
+                    // is always a field (`targetFrom`).  Every index
+                    // here is therefore a step on the way *down* — and
+                    // `m["k"].value += 5` reads `m["k"]` to reach a
+                    // field of it, which is asking, not writing.  It
+                    // keeps `key_missing`.
+                    //
+                    // `t.counts["w"] += 1` is not this case: it is an
+                    // `.index` target with `t.counts` for a base, and
+                    // it defines like any other (`lowerAssignIndex`).
+                    const read_arguments = try self.arena().alloc(Register, lowered.len + 1);
+                    read_arguments[0] = current;
+                    @memcpy(read_arguments[1..], subscripts);
+                    current = try self.code.emit(
+                        .{ .intrinsic = .{ .kind = .index_get, .arguments = read_arguments } },
+                        element_type,
+                    );
                     current_type = element_type;
                 },
                 else => unreachable, // only field/index steps are collected

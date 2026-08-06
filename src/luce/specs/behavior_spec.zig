@@ -1124,6 +1124,43 @@ test "trap: a plain read of a missing key is untouched by the compound rule" {
     , .key_missing);
 }
 
+test "trap: a compound store that defines an entry and then traps frees cleanly" {
+    // The define stands in front of the arithmetic, so a `byte` place
+    // that goes out of range leaves the entry behind at zero and the
+    // trap unwinds over a map with one more key in it than the
+    // program ever managed to write.  Both engines have to agree on
+    // that map, and on giving it back.
+    try agreeTrap(
+        \\func main():
+        \\    var m = new map(string, byte)
+        \\    m["a"] = 1
+        \\    m["b"] -= 1
+        \\    assert(len(m) == 2)
+        \\
+    , .conversion_range);
+}
+
+test "trap: descending through a map key to reach a field is still a read" {
+    // The boundary of the rule, and the place it is easiest to get
+    // wrong.  `m["b"].value += 5` writes a *field*; the map index in
+    // front of it is a step on the way down, and a step on the way
+    // down is asking.  Defining it would have to invent a whole
+    // `Cell` nobody wrote, which is exactly the "default values on
+    // read" the ruling refused.  Only a map index that is itself the
+    // place defines.
+    try agreeTrap(
+        \\struct Cell:
+        \\    value: long
+        \\
+        \\func main():
+        \\    var m = new map(string, Cell)
+        \\    m["a"] = Cell(value = 1)
+        \\    m["b"].value += 5
+        \\    assert(m["b"].value == 5)
+        \\
+    , .key_missing);
+}
+
 test "trap: a compound store into a list index keeps its bounds trap" {
     // Maps only.  An index is a position in something that already
     // has a shape, not a name that can be called into being; `append`
