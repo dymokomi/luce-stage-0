@@ -688,14 +688,11 @@ test "each std page names every function and constant its module exports" {
     {
         var names = try standardModule(repository, "strings");
         defer names.deinit();
-        // `is_space_byte` and `fold_case` are the two internal helpers
-        // the language has no `private` to hide, and the status page
-        // says so by name.  Giving them table rows would advertise a
-        // leak as an API; the fix is visibility, not documentation.
-        try expectDocumented(repository, "std/strings.md", names, &.{
-            "is_space_byte",
-            "fold_case",
-        });
+        // No exemptions: `is_space_byte` and `fold_case` are marked
+        // `private` now, so they are not surface and the roster above
+        // never sees them — the fix item 10 promised, delivered by
+        // visibility rather than by documentation.
+        try expectDocumented(repository, "std/strings.md", names, &.{});
     }
 }
 

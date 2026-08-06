@@ -19,7 +19,7 @@ func extremes(values: list(double)) -> (double, double):
         largest = max(largest, value)
     return smallest, largest
 
-func sorted(values: list(double)) -> list(double):
+private func sorted(values: list(double)) -> list(double):
     var copied = values[0:]
     copied.sort()
     return copied

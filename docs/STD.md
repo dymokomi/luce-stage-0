@@ -83,16 +83,16 @@ math.fill(xs, value)    math.scale(xs, factor)
 math.axpy(xs, factor, ys)                  # xs[i] += factor * ys[i]
 ```
 
-**Randomness** is a Lehmer/MINSTD generator whose state lives in a
-`list(long)` the caller owns — mutation through a borrow is ordinary
-Luce, so there are no hidden globals and every stream is
-deterministic from its seed:
+**Randomness** is a Lehmer/MINSTD generator in a struct the caller
+owns — the state is a private field written back by each draw, so
+there are no hidden globals and every stream is deterministic from
+its seed:
 
 ```luce
 import std.math
 
 func main():
-    var rng = math.Rng(state = 42)   # any long seed
+    var rng = math.rng(42)           # any long seed
     let f = rng.real()               # double in (0, 1)
     let roll = rng.in_range(1, 7)    # long in [low, high)
     print(string(f) + " " + string(roll))

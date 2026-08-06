@@ -11,8 +11,8 @@
 # a revolution before calling if magnitudes run large.
 #
 # Randomness is a Lehmer generator in a struct: `var rng =
-# math.Rng(state = 42)` then `rng.next()`.  The state is a value that
-# is written back, not an object that is mutated through a borrow; no
+# math.rng(42)` then `rng.next()`.  The state is a value that is
+# written back, not an object that is mutated through a borrow; no
 # hidden globals.
 
 # These five are annotated `double` on purpose, and it is the one
@@ -28,8 +28,8 @@ let pi: double = 3.14159265358979323846
 let tau: double = 6.28318530717958647692
 let e: double = 2.71828182845904523536
 
-let ln2: double = 0.69314718055994530942
-let ln10: double = 2.30258509299404568402
+private let ln2: double = 0.69314718055994530942
+private let ln10: double = 2.30258509299404568402
 
 # Round half away from zero: round(2.5) == 3.0, round(-2.5) == -3.0.
 # The same rounding long(x) does, which is the point — a language with
@@ -263,7 +263,7 @@ func axpy(xs: array(double, _), factor: double, ys: array(double, _)):
 #
 # The state is one `long` in a struct, and every draw writes it back:
 #
-#     var rng = math.Rng(state = 42)
+#     var rng = math.rng(42)
 #     let roll = rng.in_range(1, 7)
 #
 # This was a one-element `list(long)`, allocated by a `seed` function
@@ -274,8 +274,10 @@ func axpy(xs: array(double, _), factor: double, ys: array(double, _)):
 # return position between them delete all three (docs/RETURNS.md).
 struct Rng:
     # The generator's whole state.  Any seed works: one out of range
-    # is brought into range on first use.
-    state: long
+    # is brought into range on first use.  Marked, because reaching
+    # through it was never the API — the factory below is
+    # (docs/VISIBILITY.md §6).
+    private state: long
 
     # The next raw state value in [1, 2^31 - 2].
     func next(var self) -> long:
@@ -303,4 +305,9 @@ struct Rng:
         if high <= low:
             trap("in_range needs low < high")
         return low + self.next() % (high - low)
+
+# The constructor the module owes its callers: any seed works, and the
+# state stays the module's own (docs/VISIBILITY.md §6).
+func rng(seed: long) -> Rng:
+    return Rng(state = seed)
 

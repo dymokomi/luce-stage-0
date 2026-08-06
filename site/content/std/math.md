@@ -159,7 +159,7 @@ Period 2³¹ − 2. Good for games and shuffles; **never for secrets**.
 import std.math
 
 func main():
-    var rng = math.Rng(state = 2026)
+    var rng = math.rng(2026)
     var rolls: list(long) = []
     for i in range(0, 8):
         rolls.append(rng.in_range(1, 7))
@@ -171,7 +171,7 @@ func main():
     print(text.build())
 
     # The same seed gives the same stream, always.
-    var again = math.Rng(state = 2026)
+    var again = math.rng(2026)
     print(f"first roll again: {again.in_range(1, 7)}")
 ```
 

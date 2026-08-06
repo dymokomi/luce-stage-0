@@ -22,7 +22,7 @@ func main(args: list(string)) -> !:
     if len(args) > 1:
         count = parse_int(args[1]) else count
 
-    var rng = math.Rng(state = seed)
+    var rng = math.rng(seed)
     var rolls: list(string) = []
     var histogram = new array(long, 7)
     var total: long = 0

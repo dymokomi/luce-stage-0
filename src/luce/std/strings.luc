@@ -68,7 +68,7 @@ func count(s: string, needle: string) -> long:
         at = find(s, needle, at + len(needle))
     return found
 
-func is_space_byte(byte: byte) -> bool:
+private func is_space_byte(byte: byte) -> bool:
     return byte == 32 or byte == 9 or byte == 13 or byte == 10
 
 # ASCII whitespace off both ends.
@@ -89,7 +89,7 @@ func lower(s: string) -> string:
 func upper(s: string) -> string:
     return fold_case(s, first = 97, last = 122, shift = -32)
 
-func fold_case(s: string, first: long, last: long, shift: long) -> string:
+private func fold_case(s: string, first: long, last: long, shift: long) -> string:
     var out = new builder()
     var run = 0
     var at = 0

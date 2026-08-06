@@ -63,7 +63,7 @@ func main():
     print(string(math.ipow(2, 10)))
     print(strings.format_float(math.ln(math.e), 1))
 
-    var rng = math.Rng(state = 42)
+    var rng = math.rng(42)
     print(f"three rolls: {rng.in_range(1, 7)} {rng.in_range(1, 7)} {rng.in_range(1, 7)}")
 ```
 
