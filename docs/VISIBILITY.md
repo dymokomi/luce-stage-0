@@ -89,7 +89,7 @@ One read, twelve answers.  Each argued at the section named.
 | **D9** | **R3 lands in two small checks**: stage 2 refuses an identifier that begins `_` and is longer than the `_` (`luce.lex.name`), everywhere and for every use; stage 3 refuses the bare `_` as a declared name, because the lone `_` stays what it is — the array-shape wildcard, which is not a name. | §7 |
 | **D10** | **Two new diagnostic codes and no more**: `luce.sema.private` and `luce.lex.name`.  The first is a genuinely new refusal class; the second is a genuinely new lexical rule.  Everything else reuses sentences that exist. | §8 |
 | **D11** | **Nothing below stage 4 moves.**  `format_version` stays 24, `abi.version` stays 9, MIR, the verifier, the optimizer, `libluce_rt` and the interpreter are untouched.  Stage 2 gains one keyword and one refusal; stage 3 carries one flag. | §9 |
-| **D12** | **std's public surface is this memo's roster** (§6): 87 declarations audited, 3 go private (`strings.is_space_byte`, `strings.fold_case`, `mathx.sorted`), and one field goes public by name — `Rng.state`, because `math.Rng(state = 42)` is the documented seeding idiom at 14 sites. | §6 |
+| **D12** | **std's public surface is this memo's roster** (§6): 87 declarations audited, 6 go private (`strings.is_space_byte`, `strings.fold_case`, `mathx.sorted`, `math.ln2`, `math.ln10`, `Rng.state`), and math gains one declaration — the public factory `math.rng(seed)`, which replaces the `Rng(state = 42)` idiom at its 14 sites.  Owner's ruling: **no internal member goes public to save an idiom**; a library whose idiom needs internals has a design bug, and the fix is the library's. | §6 |
 
 ---
 
@@ -147,11 +147,16 @@ var rng = math.Rng(state = 42)
 Fourteen sites across `programs/`, `site/content/` and `specs/` write
 it; `docs/STD.md`, `site/content/std/math.md` and `docs/LANGUAGE.md`'s
 own examples teach it.  Under R4, `state` is private and every one of
-those sites stops compiling.  §6 resolves it the honest way — `state`
-is marked `public`, because the seed *is* the API (`math.luc:276`:
-*"Any seed works: one out of range is brought into range on first
-use"* — there is no invariant for privacy to protect) — and §3 is
-what would happen if it were not.
+those sites stops compiling.  **Ratified resolution (owner, 2026-08-06):
+`state` stays private and the idiom was the bug** — an idiom that only
+works by touching a struct's internals is evidence of a missing
+constructor, not grounds for opening the field.  math gains the public
+factory `math.rng(seed)`, the fourteen sites and three documentation
+pages migrate to `var rng = math.rng(42)`, and §3's construction rule
+applies to `Rng` exactly as to any other struct.  (The memo as drafted
+recommended `public state`; the owner overruled it, and the general
+principle is recorded: **no internal member goes public to save an
+idiom — the library gets fixed instead.**)
 
 ### The honest size of the sweep
 
@@ -161,17 +166,18 @@ tables):
 
 | where | `public` markers needed | stays private |
 |---|---:|---:|
-| `src/luce/std/` (strings 15, math 32, files 10) | **57** | 2 |
+| `src/luce/std/` (strings 15, math 30 incl. the new `rng` factory, files 10) | **55** | 5 |
 | `programs/mathx.luc` | **4** | 1 |
 | every other `programs/` and `bench/` file | **0** | — |
 | site samples (`geometry.luc` 5, `shapes.luc` 6) | **11** | 0 |
 | spec and driver fixtures (`modules_spec`, `compile/test.zig`, `errors_spec`) | **~30** | 0 |
 
-Roughly **a hundred `public` keywords**, three declarations actually
-hidden, and zero behaviour changes anywhere.  That ratio — 100 markers
-to hide 3 names — is the cost of private-by-default in a tree whose
-modules were written to be imported, and it is paid once, in daylight,
-by the run that ships the feature.  What it buys is every module
+Roughly **a hundred `public` keywords**, six declarations actually
+hidden, and one idiom rewritten (the fourteen `Rng(state = 42)` sites
+move to `math.rng(42)` — same behavior, honest constructor).  That
+ratio is the cost of private-by-default in a tree whose modules were
+written to be imported, and it is paid once, in daylight, by the run
+that ships the feature.  What it buys is every module
 anyone writes afterwards: the default that makes the *next* thousand
 declarations private until their author decides otherwise.
 
@@ -487,11 +493,13 @@ about opacity.  A module whose invariant cannot survive the zero
 value documents its factory; that was true before this memo and stays
 true, and Go lives the same way.
 
-The `Rng` resolution (§6) is the corpus applying clause 1: `state`
-becomes `public` because the documented idiom writes it, there is no
-invariant to protect, and fourteen sites plus three documentation
-pages keep compiling unchanged.  The alternative — a `math.rng(seed)`
-factory — is recorded in *Refused*.
+The `Rng` resolution (§6) is the corpus applying this section as
+ratified: `state` stays private, and the diagnostic's factory pattern
+is not a consolation prize but the design — `math.rng(seed)` is the
+constructor the module always owed its callers, and the
+`Rng(state = 42)` idiom was fourteen sites writing through a wall that
+had not been built yet.  The overruled alternative — `public state` —
+is recorded in *Refused*.
 
 ---
 
@@ -622,36 +630,36 @@ it — a spec pins that the synthesized call still compiles (§8).
 `split` and `join` are additionally load-bearing for `files.luc`'s
 own `read_lines`/`write_lines`.
 
-### math — 32 declarations: all public
+### math — 33 declarations after the ratified fix: 30 public, 3 private
 
 | kind | names |
 |---|---|
-| constants (5) | `pi`, `tau`, `e`, `ln2`, `ln10` |
+| constants (3 public, 2 private) | `pi`, `tau`, `e` public; **`ln2`, `ln10` private** — internals of `log2`/`log10` |
 | scalar functions (10) | `round`, `exp`, `ln`, `log2`, `log10`, `pow`, `ipow`, `sin`, `cos`, `tan` |
 | vector functions (12) | `sum`, `mean`, `vmin`, `vmax`, `minmax`, `dot`, `norm`, `variance`, `stddev`, `fill`, `scale`, `axpy` |
-| the generator (5) | `struct Rng`, field `state`, methods `next`, `real`, `in_range` |
+| the generator (6) | `struct Rng` public, **field `state` private**, methods `next`, `real`, `in_range` public, and the new public factory `func rng(seed: long) -> Rng` |
 
-Three calls the audit had to make rather than assume:
+The calls, as ratified by the owner (2026-08-06):
 
-- **`ln2` and `ln10` stay public.**  They read like internals for
-  `log2`/`log10`, but `site/content/std/math.md:13` documents all
-  five constants as surface (*"All five are compile-time constants
-  and fold at their use sites"*).  Hiding them would be the one place
-  this memo *shrinks* a documented API, for no bug and no caller;
-  they are also genuinely useful (C's `M_LN2`).  If the owner wants
-  them private, the site page moves in the same commit — flagged as
-  **Q2** below.
+- **`ln2` and `ln10` go private.**  The memo drafted them public
+  because `site/content/std/math.md:13` documents all five constants;
+  the owner overruled: they are internals of `log2`/`log10`, and a
+  documented internal is a documentation bug, not a public surface.
+  The site page moves in the same run.
 - **`Rng.next` stays public.**  Documented on three site pages,
   exercised by `std_spec.zig:248` from a program's `main`, and it is
   the honest raw face the two friendly ones (`real`, `in_range`)
-  wrap.
-- **`Rng.state` goes public** — the §3 pressure point.  The struct
-  comment is explicit that any seed works and first use normalises
-  it, so there is no invariant privacy would protect, and
-  `math.Rng(state = 42)` is the taught idiom at 14 sites.  The
-  factory alternative (`math.rng(seed)`) would break every one of
-  them plus three documentation pages to protect nothing — recorded
-  in *Refused*, flagged as **Q1**.
+  wrap.  This is API, not internals: a caller who wants the raw
+  stream is doing something the module supports.
+- **`Rng.state` stays private, and math gains `rng(seed)`** — the §3
+  pressure point resolved the other way from the draft.  The taught
+  idiom `math.Rng(state = 42)` reached through the type's wall, and
+  the owner's ruling is that this evidences a missing constructor,
+  not a field that wants to be public: *no internal member goes
+  public to save an idiom.*  The factory is four lines in `math.luc`
+  (which, being the module itself, may still write
+  `Rng(state = seed)`); the fourteen call sites become
+  `math.rng(42)`.
 
 ### files — 10 declarations: all public
 
@@ -760,7 +768,7 @@ privates while B may not, in one compile); a case proving mutual
 recursion still crosses files when both `check`s are public and is
 refused by name when one is not; and the two **positive** pins —
 `{x:.2f}` still lowers and compiles against public `format_float`,
-and `rng.next()`/`math.Rng(state = 42)` compile from a program, on
+and `rng.next()`/`math.rng(42)` compile from a program, on
 both engines, so the std surface cannot silently over-shrink.  Site
 `fail` fences carry the user-facing rows onto the documentation as
 executable content, the way ARGS.md sequenced its refusals.
@@ -812,7 +820,7 @@ Counted, with the commands to re-derive:
 | where | edit | count |
 |---|---|---:|
 | `src/luce/std/strings.luc` | `public` on 15 of 17 | 15 |
-| `src/luce/std/math.luc` | `public` on all 32 (5 constants, 22 functions, `Rng` + `state` + 3 methods) | 32 |
+| `src/luce/std/math.luc` | `public` on 30 of 33 (3 constants, 22 functions + the new `rng` factory, `Rng` + 3 methods); `ln2`, `ln10`, `state` stay private; 14 corpus sites move to `math.rng(seed)` | 30 |
 | `src/luce/std/files.luc` | `public` on all 10 | 10 |
 | `programs/mathx.luc` | `public` on 4 of 5 — `sorted` stays | 4 |
 | every other `programs/`, `bench/` file | nothing — single-module programs export nothing | 0 |
@@ -824,12 +832,16 @@ Roughly **a hundred keywords and ten prose files**, all mechanical,
 all in daylight, each commit leaving the tree green because the
 `public` prefix is parsed before the checks are enforced (see
 *Order*).  Programs change meaning nowhere: every marker makes legal
-what was legal, and the three privatisations hide names with zero
-external callers (checked in §"What the corpus actually says").
+what was legal; five of the six privatisations hide names with zero
+external callers (checked in §"What the corpus actually says"), and
+the sixth — `Rng.state` — has exactly the fourteen seeding sites,
+which migrate to `math.rng(seed)` in the same run.
 
-The one *behavioral* deletion in the whole sweep: the two-spelling
-leak of `fold_case`/`is_space_byte` closes, and `mathx.sorted` stops
-being callable from `stats.luc` — which never called it.
+The behavioral deletions in the whole sweep: the two-spelling leak of
+`fold_case`/`is_space_byte` closes, `mathx.sorted` stops being
+callable from `stats.luc` — which never called it — and
+`Rng(state = 42)` stops compiling outside `math.luc`, replaced by the
+factory.
 
 ---
 
@@ -865,7 +877,7 @@ a compiler stricter than its own std.
    field access in `lowerField` and the place walk; suggestions
    filtered to public.  *Tests:* every §8 row; the per-module
    three-file case; the two positive pins (`{x:.2f}`,
-   `Rng(state = 42)`).  *~2 days.*
+   `math.rng(42)`).  *~2 days.*
 5. **Docs and site.**  §10's prose list; item 10 closed; the refusal
    fences land as `luce fail` site content; this memo's
    became-current fences drop `historical`; the status page.
@@ -925,11 +937,14 @@ module both import.
 module system (docs/LANGUAGE.md: no re-exports), and visibility does
 not reopen it: a name is reached through the module that declares it.
 
-**The factory-only resolution for `Rng`** (`math.rng(seed)` with
-`state` private).  Protects no invariant (any seed is normalised on
-first use), breaks fourteen documented sites and three doc pages,
-and demotes the language's own showcase of named-field construction.
-`public state` says the truth: the seed is the API.
+**`public state` on `Rng`** (the draft's own recommendation,
+overruled at ratification).  The draft argued the seed is the API and
+privacy protects no invariant; the owner's ruling is the stronger
+principle — an idiom that needs an internal made public is a design
+bug in the library, and the missing constructor (`math.rng(seed)`)
+was always the honest shape.  The fourteen sites and three doc pages
+migrate once; named-field construction keeps its showcase in the
+tour's own structs.
 
 **A "private and unused" diagnostic.**  One severity; an unused
 private function is accepted exactly as an unused local is, and
@@ -965,35 +980,36 @@ sentence is.
 
 ---
 
-## Open questions for the owner
+## Ratified (owner, 2026-08-06)
 
-Marked for ratification; everything else in this memo follows from
-R1–R4 plus the D-table.
+The six questions were put to the owner and every decision above now
+reads as ratified, with two overruled:
 
-- **Q1 — `Rng.state` goes `public`** (§6), keeping
-  `math.Rng(state = 42)` at all fourteen sites.  The alternative (a
-  factory, `state` private) is in *Refused* with its bill.
-  **Confirm.**
-- **Q2 — `math.ln2` and `math.ln10` stay public**, as the site
-  already documents.  Making them private is defensible (internals
-  of `log2`/`log10`) and costs one site-page edit; the memo
-  recommends keeping the documented surface.  **Confirm.**
-- **Q3 — the D3 construction rule** (public fields nameable; private
-  fields must default; factory named in the refusal) over the
-  blunter "any private field forbids outside construction".
-  **Confirm.**
-- **Q4 — D4, refusing private types in public surfaces** (Rust's
-  side) rather than allowing unnameable-but-usable values (Go's).
-  **Confirm.**
-- **Q5 — `public` is legal and inert** in the root module, on
-  members of private structs, and on `main` — never required, never
-  refused for being useless (§5).  The strict alternative (refuse
-  inert `public`) makes promoting a file to a module a two-step
-  edit.  **Confirm.**
-- **Q6 — the two new codes**, `luce.sema.private` and
-  `luce.lex.name` (§8).  **Confirm.**
+- **Q1 — OVERRULED: `Rng.state` stays private.**  The draft
+  recommended `public state`; the owner's ruling: *"no internal
+  members go public — it shows that the design of these libraries is
+  bad."*  The fix is the library's: math gains the public factory
+  `math.rng(seed)`, and the fourteen `Rng(state = 42)` sites plus
+  three doc pages migrate.  The draft's recommendation moved to
+  *Refused*.
+- **Q2 — OVERRULED: `ln2` and `ln10` go private.**  Internals of
+  `log2`/`log10`; the site page that documented them as surface is a
+  documentation bug and moves in the same run.
+- **Q3 — ratified as drafted**: defaults gate outside construction;
+  the diagnostic names the factory pattern.
+- **Q4 — ratified as drafted**: a public surface may name only
+  public types, refused at the declaration (Rust's side).
+- **Q5 — ratified as drafted**: inert `public` is accepted silently;
+  promoting a file to a module stays a zero-edit change.
+- **Q6 — noted** (not a decision): the two new codes are
+  `luce.sema.private` and `luce.lex.name`.
+
+The standing principle Q1/Q2 established, binding on every future
+surface audit: **an idiom that requires an internal member to be
+public is evidence of a missing public constructor or function, never
+grounds for opening the internal.**
 
 ---
 
-*When ratified, `Order` executes; the "As built" section lands here,
-step by step, the way ARGS.md's did.*
+*Ratified in full; `Order` executes.  The "As built" section lands
+here, step by step, the way ARGS.md's did.*
