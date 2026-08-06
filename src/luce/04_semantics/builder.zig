@@ -6722,6 +6722,21 @@ pub const FunctionBuilder = struct {
             // construction is a store like any other (docs/STRINGS.md).
             registers[field_index] = try self.ownedForStore(fitted);
         }
+        // A field nobody wrote takes its default (docs/ARGS.md D8):
+        // the constant register the written value would have produced,
+        // and the same store it would have taken — so only the
+        // required fields can be missing.
+        for (seen, 0..) |given, field_index| {
+            if (given) continue;
+            if (!self.analyzer.fieldHasDefault(layout_index, field_index)) continue;
+            const filled = (try self.analyzer.fieldDefault(layout_index, field_index)) orelse return null;
+            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            registers[field_index] = try self.ownedForStore(.{
+                .register = made,
+                .value_type = filled.value_type,
+            });
+            seen[field_index] = true;
+        }
         for (seen) |given| {
             if (given) continue;
             var missing: std.ArrayList(u8) = .empty;

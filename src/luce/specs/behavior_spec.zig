@@ -2070,6 +2070,65 @@ test "defaults: both method spellings fill the same slots" {
     );
 }
 
+test "struct field defaults: the declaration absorbs the invariant" {
+    // The State case of docs/ARGS.md: fields at the zero of their
+    // type move from the construction site to the declaration, where
+    // a second construction site cannot get them wrong (D8).
+    try agreeOk(
+        \\struct State:
+        \\    path: string
+        \\    cursor: long = 0
+        \\    dirty: bool = false
+        \\    message: string = ""
+        \\
+        \\func main():
+        \\    let fresh = State(path = "notes.txt")
+        \\    assert(fresh.cursor == 0)
+        \\    assert(not fresh.dirty)
+        \\    assert(fresh.message == "")
+        \\    let seen = State(path = "notes.txt", dirty = true)
+        \\    assert(seen.dirty and seen.cursor == 0)
+        \\
+    );
+}
+
+test "struct field defaults: a struct of nothing but defaults constructs bare" {
+    try agreeOk(
+        \\struct Options:
+        \\    depth: long = 3
+        \\    wide: bool = false
+        \\
+        \\func main():
+        \\    let plain = Options()
+        \\    assert(plain.depth == 3 and not plain.wide)
+        \\    let tuned = Options(depth = 9)
+        \\    assert(tuned.depth == 9 and not tuned.wide)
+        \\
+    );
+}
+
+test "struct field defaults: constants and parameter defaults reach them" {
+    // One folder behind all three clauses (docs/ARGS.md D2, D8): a
+    // file-scope constant may construct a struct leaning on its
+    // defaults, and a parameter default may too.
+    try agreeOk(
+        \\struct Corner:
+        \\    x: long = 1
+        \\    y: long = 2
+        \\
+        \\let origin = Corner()
+        \\
+        \\func shifted(by: Corner = Corner(y = 5)) -> long:
+        \\    return by.x + by.y
+        \\
+        \\func main():
+        \\    assert(origin.x == 1 and origin.y == 2)
+        \\    assert(shifted() == 6)
+        \\    assert(shifted(Corner(x = 3, y = 3)) == 6)
+        \\
+    );
+}
+
 test "methods: a method can fail, and try and catch reach it through the receiver" {
     try agreeOk(
         \\struct Reader:

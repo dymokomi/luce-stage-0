@@ -288,6 +288,22 @@ pub const FunctionDeclInfo = struct {
 pub const StructDeclInfo = struct {
     declaration: *const ast.StructDecl,
     module: usize,
+    /// One entry per *collected* field, in layout order (docs/ARGS.md
+    /// D8).  Folded lazily through `Analyzer.fieldDefault`, because a
+    /// default may construct another struct and lean on its defaults
+    /// in turn — the same lazy, cycle-checked shape a file-scope
+    /// constant has.
+    field_defaults: []FieldDefault = &.{},
+};
+
+/// One struct field's default: the written expression and, once
+/// folded, its value.  `expression` is null for a required field, and
+/// the state machine is `ConstantInfo`'s.
+pub const FieldDefault = struct {
+    expression: ?*const ast.Expression = null,
+    state: enum { pending, evaluating, ready, failed } = .pending,
+    value: ConstantValue = .{ .long = 0 },
+    value_type: Type = .long,
 };
 
 /// What a struct layout costs and carries, computed once for all.

@@ -307,6 +307,10 @@ pub const Field = struct {
     name: []const u8,
     name_span: Span,
     type_name: TypeName,
+    /// `= EXPRESSION` after the type: the field's default, the same
+    /// clause a parameter takes and the same folder behind it
+    /// (docs/ARGS.md D8).  Null for a required field.
+    default: ?*Expression = null,
     span: Span,
 };
 

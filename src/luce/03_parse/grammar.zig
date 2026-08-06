@@ -788,12 +788,26 @@ pub const Parser = struct {
                 self.recover();
                 continue;
             };
+            // `= EXPRESSION` — the field's default, the same clause a
+            // parameter takes (docs/ARGS.md D8); stage 4's folder
+            // decides what it may be.
+            var default_value: ?*ast.Expression = null;
+            var written_end = field_type.span.end;
+            if (self.accept(.assign) != null) {
+                const written = (try self.expression()) orelse {
+                    self.recover();
+                    continue;
+                };
+                default_value = written;
+                written_end = written.span().end;
+            }
             try self.endOfStatement("end of line after the field");
             try fields.append(self.arena, .{
                 .name = self.text(field_name),
                 .name_span = field_name.span,
                 .type_name = field_type,
-                .span = .{ .start = field_name.span.start, .end = field_type.span.end },
+                .default = default_value,
+                .span = .{ .start = field_name.span.start, .end = written_end },
             });
         }
         _ = self.accept(.dedent);

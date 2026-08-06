@@ -3018,6 +3018,72 @@ test "luce.sema.call: only the required slots are ever missing" {
     , "luce.sema.call", "f is missing a and b");
 }
 
+// Struct field defaults (docs/ARGS.md D8, Order step 5).
+
+test "luce.sema.struct: field defaults are trailing" {
+    try expectSaying(
+        \\struct State:
+        \\    cursor: long = 0
+        \\    path: string
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.struct", "cursor has a default, so path needs one too — the fields with defaults come last");
+}
+
+test "luce.sema.own: an object-carrying field has no default" {
+    try expectSaying(
+        \\struct Bag:
+        \\    items: list(long) = [1]
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "Bag.items keeps its object, and an object is never a default [OWNERSHIP.md S21, S24]");
+}
+
+test "luce.sema.const: a field default is a constant, called or not" {
+    // Nothing constructs Config, and the refusal fires anyway: a
+    // default is evaluated at the declaration (docs/ARGS.md D2).
+    try expectSaying(
+        \\func cost() -> long:
+        \\    return 1
+        \\
+        \\struct Config:
+        \\    budget: long = cost()
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "a default is a constant: cost(…) is a call");
+}
+
+test "luce.sema.type: a field default lands at the field's type or is refused" {
+    try expectSaying(
+        \\struct Config:
+        \\    budget: long = "much"
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.type", "Config.budget is long and its default is string");
+}
+
+test "luce.sema.const: field defaults cannot lean on each other in a loop" {
+    try expectSaying(
+        \\struct A:
+        \\    x: long = B().y
+        \\
+        \\struct B:
+        \\    y: long = A().x
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.const", "depends on itself");
+}
+
 test "luce.sema.type: a named argument's type mistake names the parameter" {
     try expectSaying(
         \\func size(width: long, height: long) -> long:

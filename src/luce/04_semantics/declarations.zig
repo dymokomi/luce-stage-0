@@ -175,6 +175,7 @@ pub const Analyzer = struct {
     fn run(self: *Analyzer) Error!?Analyzed {
         try self.collectStructs();
         try self.collectConstants();
+        try self.settleFieldDefaults();
         try self.collectFunctions();
         try self.synthesizeShapes();
         if (self.diagnostics.hasErrors()) return null;
@@ -561,7 +562,26 @@ pub const Analyzer = struct {
             const index = self.struct_names.get(qualified) orelse continue;
             var fields: std.ArrayList(types.StructField) = .empty;
             defer fields.deinit(self.arena);
+            var field_defaults: std.ArrayList(context.FieldDefault) = .empty;
+            defer field_defaults.deinit(self.arena);
+            // The first field that declared a default, for D3's
+            // sentence when a required one follows it — the same
+            // trailing rule a parameter list keeps (docs/ARGS.md D8).
+            var first_defaulted: ?[]const u8 = null;
             for (declaration.fields) |field| {
+                if (field.default == null) {
+                    if (first_defaulted) |earlier| {
+                        try self.fail(
+                            "luce.sema.struct",
+                            field.span,
+                            "{s} has a default, so {s} needs one too — the fields with defaults come last",
+                            .{ earlier, field.name },
+                        );
+                        continue;
+                    }
+                } else if (first_defaulted == null) {
+                    first_defaulted = field.name;
+                }
                 var duplicate = false;
                 for (fields.items) |existing| {
                     if (std.mem.eql(u8, existing.name, field.name)) duplicate = true;
@@ -578,6 +598,7 @@ pub const Analyzer = struct {
                     .name = try self.arena.dupe(u8, field.name),
                     .field_type = field_type,
                 });
+                try field_defaults.append(self.arena, .{ .expression = field.default });
             }
             for (declaration.functions) |function| {
                 for (declaration.fields) |field| {
@@ -595,6 +616,7 @@ pub const Analyzer = struct {
                 try self.fail("luce.sema.struct", declaration.span, "struct {s} has an empty body", .{declaration.name});
             }
             self.structs.items[index].fields = try fields.toOwnedSlice(self.arena);
+            self.struct_decls.items[index].field_defaults = try field_defaults.toOwnedSlice(self.arena);
         }
 
         // A struct containing itself (directly or through another
@@ -1004,7 +1026,13 @@ pub const Analyzer = struct {
                 return null;
             };
         }
+        // A constant reached from inside a default's fold is still a
+        // constant: its own refusals speak of constants, not of the
+        // default that happened to read it.
+        const previous_subject = self.fold_subject;
+        self.fold_subject = null;
         const folded = try self.foldConstant(module, declaration.value, annotated);
+        self.fold_subject = previous_subject;
         // The map may have grown while folding dependencies; re-find.
         const settled = &self.constant_infos.items[index];
         const result = folded orelse {
@@ -1405,6 +1433,15 @@ pub const Analyzer = struct {
             }
             seen[field_index] = true;
             fields[field_index] = value.value;
+        }
+        // A field nobody wrote takes its default (docs/ARGS.md D8), so
+        // only the required ones can be missing.
+        for (seen, 0..) |given, field_index| {
+            if (given) continue;
+            if (!self.fieldHasDefault(layout_index, field_index)) continue;
+            const filled = (try self.fieldDefault(layout_index, field_index)) orelse return null;
+            fields[field_index] = filled.value;
+            seen[field_index] = true;
         }
         for (seen) |given| {
             if (given) continue;
@@ -1865,14 +1902,140 @@ pub const Analyzer = struct {
             );
             return null;
         }
+        const previous_subject = self.fold_subject;
         self.fold_subject = "a default";
-        defer self.fold_subject = null;
+        defer self.fold_subject = previous_subject;
         var folded = (try self.foldConstant(module, written, resolved)) orelse return null;
         if (folded.value_type.widensTo(resolved)) folded = widenConstant(folded, resolved);
         if (!folded.value_type.eql(resolved)) {
             try self.fail("luce.sema.type", parameter.span, "{s} is {s} and its default is {s}", .{
                 parameter.name,
                 try self.typeName(resolved),
+                try self.typeName(folded.value_type),
+            });
+            return null;
+        }
+        return folded;
+    }
+
+    /// Fold every field default, eagerly (docs/ARGS.md D2): a default
+    /// is evaluated at the declaration, so a bad one is a compile
+    /// error whether or not anything ever constructs the struct —
+    /// the same promise a parameter default keeps.  Lazy underneath
+    /// (`fieldDefault`), because one default may construct a struct
+    /// whose own defaults are still pending.
+    fn settleFieldDefaults(self: *Analyzer) Error!void {
+        for (0..self.struct_decls.items.len) |index| {
+            const count = self.struct_decls.items[index].field_defaults.len;
+            for (0..count) |field_index| {
+                _ = try self.fieldDefault(@intCast(index), field_index);
+            }
+        }
+    }
+
+    /// Whether one collected field declared a default at all — asked
+    /// separately from `fieldDefault`, whose null also means "it
+    /// failed, and the failure is already reported".
+    pub fn fieldHasDefault(self: *const Analyzer, layout_index: u32, field_index: usize) bool {
+        if (layout_index >= self.struct_decls.items.len) return false; // a synthesized shape has no declaration
+        const info = self.struct_decls.items[layout_index];
+        if (field_index >= info.field_defaults.len) return false;
+        return info.field_defaults[field_index].expression != null;
+    }
+
+    /// The folded default of one field (docs/ARGS.md D8), or null when
+    /// there is none or it failed (already reported).  Lazy and
+    /// cycle-checked like a file-scope constant, because a default may
+    /// construct another struct and lean on *its* defaults in turn.
+    pub fn fieldDefault(self: *Analyzer, layout_index: u32, field_index: usize) Error!?TypedConstant {
+        if (layout_index >= self.struct_decls.items.len) return null;
+        {
+            const info = self.struct_decls.items[layout_index];
+            if (field_index >= info.field_defaults.len) return null;
+        }
+        const slot = &self.struct_decls.items[layout_index].field_defaults[field_index];
+        const written = slot.expression orelse return null;
+        switch (slot.state) {
+            .ready => return .{ .value = slot.value, .value_type = slot.value_type },
+            .failed => return null,
+            .evaluating => {
+                const layout = self.structs.items[layout_index];
+                try self.fail("luce.sema.const", written.span(), "the default of {s}.{s} depends on itself", .{
+                    layout.name,
+                    layout.fields[field_index].name,
+                });
+                slot.state = .failed;
+                return null;
+            },
+            .pending => {},
+        }
+        slot.state = .evaluating;
+        const info = self.struct_decls.items[layout_index];
+        // The diagnostic points into the file the struct lives in,
+        // whichever module's fold walked into it.
+        const previous_scope = self.diagnostics.scope;
+        self.diagnostics.scope = self.modules[info.module].file;
+        defer self.diagnostics.scope = previous_scope;
+        const folded = try self.foldFieldDefault(info.module, layout_index, field_index, written);
+        // The list may not move while a fold is in flight (it is
+        // temporary-allocated and only appended before folding), but
+        // re-find the slot the way `evaluateConstant` does rather than
+        // lean on that.
+        const settled = &self.struct_decls.items[layout_index].field_defaults[field_index];
+        const result = folded orelse {
+            settled.state = .failed;
+            return null;
+        };
+        settled.value = result.value;
+        settled.value_type = result.value_type;
+        settled.state = .ready;
+        return result;
+    }
+
+    /// The checking half of `fieldDefault`: ownership, depth, the
+    /// fold at the field's type, and the landing check.  Null after
+    /// reporting.
+    fn foldFieldDefault(
+        self: *Analyzer,
+        module: usize,
+        layout_index: u32,
+        field_index: usize,
+        written: *const ast.Expression,
+    ) Error!?TypedConstant {
+        const layout = self.structs.items[layout_index];
+        const field = layout.fields[field_index];
+        // S24: the binding that receives the struct owns its object
+        // fields, and a defaulted field is one nobody wrote at the
+        // construction site — there is no owner a constant could
+        // stand in for (docs/ARGS.md §5).
+        if (self.carriesObjects(field.field_type)) {
+            try self.fail(
+                "luce.sema.own",
+                written.span(),
+                "{s}.{s} keeps its object, and an object is never a default [OWNERSHIP.md S21, S24]",
+                .{ layout.name, field.name },
+            );
+            return null;
+        }
+        if (helpers.deeperThan(written, helpers.max_expression_depth)) {
+            try self.fail(
+                "luce.sema.nesting",
+                written.span(),
+                "expression nested too deeply (limit {d})",
+                .{helpers.max_expression_depth},
+            );
+            return null;
+        }
+        const previous_subject = self.fold_subject;
+        self.fold_subject = "a default";
+        defer self.fold_subject = previous_subject;
+        var folded = (try self.foldConstant(module, written, field.field_type)) orelse return null;
+        if (folded.value_type.widensTo(field.field_type)) folded = widenConstant(folded, field.field_type);
+        if (!folded.value_type.eql(field.field_type)) {
+            try self.fail("luce.sema.type", written.span(), "{s}.{s} is {s} and its default is {s}", .{
+                layout.name,
+                field.name,
+                try self.typeName(field.field_type),
                 try self.typeName(folded.value_type),
             });
             return null;
