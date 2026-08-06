@@ -263,6 +263,41 @@ test "array shape wildcards parse in annotations" {
     try testing.expectEqual(@as(u8, 2), parameter.type_name.wildcards);
 }
 
+test "the bare underscore is refused as a declared name, everywhere one declares" {
+    // The wildcard keeps its one home — type-argument position, the
+    // test above — and every declaring production answers with the
+    // same sentence [VISIBILITY.md D9].  The declaration still parses,
+    // so each program yields exactly the one diagnostic.
+    const wildcard = "_ is the array-shape wildcard";
+    try expectDiagnostics("let _ = 1\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 5, .contains = wildcard },
+    });
+    try expectDiagnostics("func _():\n    return\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 6, .contains = wildcard },
+    });
+    try expectDiagnostics("struct _:\n    x: long\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = wildcard },
+    });
+    try expectDiagnostics("struct P:\n    _: long\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = wildcard },
+    });
+    try expectDiagnostics("func f(_: long):\n    return\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 8, .contains = wildcard },
+    });
+    try expectDiagnostics("func main():\n    let _ = 1\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = "a binding needs a name" },
+    });
+    try expectDiagnostics("func main():\n    let a, _ = f()\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 12, .contains = wildcard },
+    });
+    try expectDiagnostics("func main():\n    for _ in [1]:\n        print(1)\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 9, .contains = wildcard },
+    });
+    try expectDiagnostics("func main():\n    print(1) catch _:\n        return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 20, .contains = wildcard },
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Statements
 // ---------------------------------------------------------------------------

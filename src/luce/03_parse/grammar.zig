@@ -638,10 +638,26 @@ pub const Parser = struct {
         });
     }
 
+    /// A declared name may not be the bare `_` [VISIBILITY.md D9].  The
+    /// wildcard has exactly one home — array-shape position, where the
+    /// type parser recognises it — and the sentence teaches that one
+    /// place.  The declaration still parses under the refused name, so
+    /// the rest of the line gets its say and one mistake is one message.
+    fn refuseWildcardName(self: *Parser, item: Token) Error!void {
+        if (!std.mem.eql(u8, self.text(item), "_")) return;
+        try self.report(
+            "luce.parse.expected",
+            item.span,
+            "_ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name",
+            .{},
+        );
+    }
+
     /// let name = value at file scope — a constant declaration.
     pub fn constDecl(self: *Parser) Error!?ast.ConstDecl {
         const start = self.advance(); // let
         const name = (try self.expect(.identifier, "a constant name")) orelse return null;
+        try self.refuseWildcardName(name);
         var annotation: ?ast.TypeName = null;
         if (self.accept(.colon) != null) {
             annotation = (try self.typeName()) orelse return null;
@@ -754,6 +770,7 @@ pub const Parser = struct {
     pub fn structDecl(self: *Parser) Error!?ast.StructDecl {
         const start = self.advance(); // struct
         const name = (try self.expect(.identifier, "a struct name")) orelse return null;
+        try self.refuseWildcardName(name);
         if (!try self.colonOrLayout("':' after the struct name")) return null;
         if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
         if ((try self.blockBody("struct")) == null) return null;
@@ -780,6 +797,7 @@ pub const Parser = struct {
                 self.recover();
                 continue;
             };
+            try self.refuseWildcardName(field_name);
             if ((try self.expect(.colon, "':' after the field name")) == null) {
                 self.recover();
                 continue;
@@ -877,6 +895,7 @@ pub const Parser = struct {
     pub fn funcDecl(self: *Parser) Error!?ast.FuncDecl {
         const start = self.advance(); // func
         const name = (try self.expect(.identifier, "a function name")) orelse return null;
+        try self.refuseWildcardName(name);
         const opener = (try self.expect(.left_paren, "'(' opening the parameter list")) orelse
             return null;
 
@@ -899,6 +918,7 @@ pub const Parser = struct {
             }
             const parameter_name = (try self.expect(.identifier, "a parameter name")) orelse
                 return null;
+            try self.refuseWildcardName(parameter_name);
             if ((try self.expect(.colon, "':' after the parameter name")) == null) return null;
             const mode: ast.ParameterMode = if (self.accept(.keyword_give) != null) .give else .borrow;
             const parameter_type = (try self.typeName()) orelse return null;
@@ -1114,6 +1134,7 @@ pub const Parser = struct {
     pub fn binding(self: *Parser, mutable: bool) Error!?ast.Statement {
         const start = self.advance(); // let or var
         const name = (try self.expect(.identifier, "a binding name")) orelse return null;
+        try self.refuseWildcardName(name);
         // `let low, high = minmax(xs)` — a destructuring bind, and one
         // of exactly two places a multi-valued call may stand
         // (docs/RETURNS.md).
@@ -1231,6 +1252,7 @@ pub const Parser = struct {
                 return null;
             }
             const next = (try self.expect(.identifier, "a binding name")) orelse return null;
+            try self.refuseWildcardName(next);
             if (self.peekKind() == .colon) {
                 try self.report(
                     "luce.parse.type",
@@ -1354,12 +1376,14 @@ pub const Parser = struct {
     pub fn forLoop(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         const name = (try self.expect(.identifier, "a loop variable")) orelse return null;
+        try self.refuseWildcardName(name);
         // for key, value in ...: — an optional second binding.  A
         // two-name loop is never a range, so this precedes that check.
         var value_name: ?[]const u8 = null;
         var value_token: ?Token = null;
         if (self.accept(.comma) != null) {
             const second = (try self.expect(.identifier, "a second loop variable")) orelse return null;
+            try self.refuseWildcardName(second);
             value_name = self.text(second);
             value_token = second;
         }
@@ -1562,6 +1586,7 @@ pub const Parser = struct {
         var reason: ?ast.Name = null;
         if (self.peekKind() == .identifier) {
             const name = self.advance();
+            try self.refuseWildcardName(name);
             reason = .{ .text = self.text(name), .span = name.span };
         }
         const handler = (try self.block("catch")) orelse return null;

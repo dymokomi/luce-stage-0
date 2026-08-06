@@ -94,7 +94,7 @@
 //! The codes this stage can produce, in full: `luce.lex.tab`,
 //! `luce.lex.indent`, `luce.lex.number`, `luce.lex.string`,
 //! `luce.lex.escape`, `luce.lex.character`, `luce.lex.comment`,
-//! `luce.lex.bidi`, `luce.lex.limit`.
+//! `luce.lex.bidi`, `luce.lex.name`, `luce.lex.limit`.
 //!
 //! ## Deliberately not here
 //!
@@ -698,7 +698,24 @@ const Lexer = struct {
             try self.emit(.identifier, span);
             return;
         }
-        const kind = token_mod.keyword_map.get(span.slice(self.source)) orelse .identifier;
+        // A name starts with a letter [VISIBILITY.md R3].  The lone `_`
+        // passes through — it is the array-shape wildcard, contextually
+        // recognised by the type parser, and never a name.  Interior and
+        // trailing underscores are the house style and untouched.  The
+        // token is still emitted: a refused word is a reported word, and
+        // the parser should see the declaration the author wrote.
+        const text = span.slice(self.source);
+        if (text.len > 1 and text[0] == '_') {
+            try self.report(
+                "luce.lex.name",
+                span,
+                "a name starts with a letter: {s} is not a name",
+                .{text},
+            );
+            try self.emit(.identifier, span);
+            return;
+        }
+        const kind = token_mod.keyword_map.get(text) orelse .identifier;
         try self.emit(kind, span);
     }
 
@@ -1460,6 +1477,35 @@ test "every keyword lexes as itself, and a word containing one does not" {
     }
 }
 
+test "a name starts with a letter, and only the lone underscore passes" {
+    const allocator = testing.allocator;
+    // A leading underscore is refused by name, everywhere a word can
+    // stand — declarations and uses alike — and the token is still
+    // emitted so the parser sees the line the author wrote
+    // [VISIBILITY.md R3].
+    try lexWithDiagnostics(
+        allocator,
+        "let _total = 1\n",
+        &.{ .keyword_let, .identifier, .assign, .int_literal, .newline, .end_of_file },
+        &.{"luce.lex.name"},
+    );
+    try lexWithDiagnostics(
+        allocator,
+        "a = _x + __\n",
+        &.{ .identifier, .assign, .identifier, .plus, .identifier, .newline, .end_of_file },
+        &.{ "luce.lex.name", "luce.lex.name" },
+    );
+    // The lone `_` is the array-shape wildcard, not a name, and lexes
+    // clean; interior and trailing underscores are the house style.
+    try lexKinds(allocator, "array(long, _)\n", &.{
+        .identifier, .left_paren,  .identifier, .comma, .identifier, .right_paren,
+        .newline,    .end_of_file,
+    });
+    try lexKinds(allocator, "word_end_ = fold_case\n", &.{
+        .identifier, .assign, .identifier, .newline, .end_of_file,
+    });
+}
+
 // --- numbers ---------------------------------------------------------------
 
 test "every decimal literal shape lexes, and only a fraction makes a float" {
@@ -2212,6 +2258,7 @@ test "fuzz: the lexer upholds its invariants on any prepared bytes" {
         "a = 1 /* b */ // c\n",
         "let caf\u{00E9} = \u{201C}x\u{201D} \u{202E}\n",
         "if a:\n  b = 1\n      c = 2\n",
+        "let _total = _x + word_end_ + _\n",
     } });
 }
 
@@ -2252,6 +2299,7 @@ const fragments = [_][]const u8{
     "f\"x{y}\"", "{",        "}",        "\\n",         "\\q",
     "'",         "'x'",      "x",        "caf\u{00E9}", "\u{201C}",
     "\u{00A0}",  "\u{202E}", "\u{FEFF}", "\u{1F600}",   "\x01",
+    "_",         "_total",   "__",       "word_end_",
 };
 
 test "fuzz: the lexer upholds its invariants on random Luce fragments" {

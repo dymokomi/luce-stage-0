@@ -355,6 +355,42 @@ test "luce.lex.number: a second decimal point names itself, and advises nothing 
     );
 }
 
+test "luce.lex.name: a name starts with a letter, and the sentence names the word" {
+    // VISIBILITY.md R3: the underscore has nothing left to encode in a
+    // language with a real `private` keyword, so a leading one is a
+    // spelling mistake — at every use, not just declarations.
+    try expectOnlySayingAt(
+        "func main():\n    let _total = 1\n",
+        "luce.lex.name",
+        "a name starts with a letter: _total is not a name",
+        2,
+        9,
+    );
+    try expectRejected("func main():\n    print(_x)\n", "luce.lex.name");
+}
+
+test "the bare underscore declares nothing, and the wildcard keeps its one home" {
+    // VISIBILITY.md D9: the lone `_` stays what it is — the
+    // array-shape wildcard — so the refusal teaches that one place.
+    try expectOnlySayingAt(
+        "func main():\n    let _ = 1\n",
+        "luce.parse.expected",
+        "_ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name",
+        2,
+        9,
+    );
+    // The pin: wildcard shapes in annotations survive R3 untouched.
+    try expectCompiles(
+        \\func corner(grid: array(long, _, _)) -> long:
+        \\    return grid[grid.dim(0) - 1, grid.dim(1) - 1]
+        \\
+        \\func main():
+        \\    var grid = new array(long, 2, 2)
+        \\    print(string(corner(grid)))
+        \\
+    );
+}
+
 test "luce.lex.number: a trailing decimal point mirrors the leading one" {
     try expectOnlySayingAt(
         "func main():\n    let x = 1.\n",
