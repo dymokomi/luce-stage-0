@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LuciaOS — Good for humans. Good for computers.</title>
+<meta name="description" content="LuciaOS is a new operating system, built from first principles — language-first. At its core is Luce.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%231e1b16' stroke-width='2.5'/><circle cx='16' cy='16' r='4.5' fill='%23a34e21'/></svg>">
+<style>
+  :root {
+    --paper: #faf8f4;
+    --ink: #1e1b16;
+    --quiet: #8a8275;
+    --accent: #a34e21;
+    --hairline: rgba(30, 27, 22, 0.12);
+    --panel: #fffefb;
+    --serif: "Didot", "Bodoni 72", "Playfair Display", Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 1rem;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ---- header ---------------------------------------------------------- */
+
+  header {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 2rem clamp(1.5rem, 5vw, 4rem);
+  }
+
+  .wordmark {
+    font-family: var(--serif);
+    font-size: 1.35rem;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  header nav a {
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--quiet);
+    text-decoration: none;
+    margin-left: 2rem;
+    transition: color 0.3s ease;
+  }
+
+  header nav a:hover { color: var(--ink); }
+
+  /* ---- sections -------------------------------------------------------- */
+
+  main { overflow-x: hidden; }
+
+  section {
+    min-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 6rem clamp(1.5rem, 6vw, 5rem);
+  }
+
+  section.hero { min-height: 100vh; }
+
+  .label {
+    font-size: 0.72rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--quiet);
+    margin-bottom: 3rem;
+  }
+
+  h1, h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    line-height: 1.12;
+    max-width: 24ch;
+  }
+
+  h1 { font-size: clamp(2.6rem, 8vw, 6.5rem); }
+  h2 { font-size: clamp(2rem, 5.5vw, 4rem); }
+
+  .prose {
+    max-width: 34rem;
+    margin-top: 2.5rem;
+    font-size: clamp(1rem, 1.4vw, 1.15rem);
+    line-height: 1.85;
+    color: var(--ink);
+  }
+
+  .prose + .prose { margin-top: 1.25rem; }
+
+  .quiet { color: var(--quiet); }
+
+  /* ---- links ----------------------------------------------------------- */
+
+  a.lead {
+    display: inline-block;
+    margin-top: 3rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    text-decoration: none;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--accent);
+    transition: color 0.3s ease, border-color 0.3s ease;
+  }
+
+  a.lead:hover { color: var(--ink); border-color: var(--ink); }
+
+  a.lead .arrow {
+    display: inline-block;
+    margin-left: 0.5em;
+    transition: transform 0.3s ease;
+  }
+
+  a.lead:hover .arrow { transform: translateX(0.35em); }
+
+  /* ---- code panel ------------------------------------------------------ */
+
+  figure.code {
+    margin-top: 3.5rem;
+    width: min(30rem, 100%);
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px -32px rgba(30, 27, 22, 0.25);
+    text-align: left;
+    overflow-x: auto;
+  }
+
+  figure.code figcaption {
+    padding: 0.8rem 1.4rem;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--quiet);
+  }
+
+  figure.code pre {
+    padding: 1.4rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 2;
+    color: var(--ink);
+  }
+
+  .kw { color: var(--accent); }
+  .fn { color: var(--ink); }
+  .str { color: #6a7a3f; }
+  .bi { color: #7d6b52; }
+
+  /* ---- footer ---------------------------------------------------------- */
+
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 3rem clamp(1.5rem, 5vw, 4rem);
+    border-top: 1px solid var(--hairline);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--quiet);
+  }
+
+  footer a {
+    color: var(--quiet);
+    text-decoration: none;
+    transition: color 0.3s ease;
+  }
+
+  footer a:hover { color: var(--ink); }
+
+  footer nav a { margin-left: 2rem; }
+  footer nav a:first-child { margin-left: 0; }
+
+  /* ---- reveal on scroll ------------------------------------------------ */
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(26px);
+    transition: opacity 1s ease, transform 1s ease;
+  }
+
+  .reveal.visible { opacity: 1; transform: none; }
+
+  .reveal.d1 { transition-delay: 0.15s; }
+  .reveal.d2 { transition-delay: 0.3s; }
+  .reveal.d3 { transition-delay: 0.45s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="wordmark" href="/">LuciaOS</a>
+  <nav>
+    <a href="https://luce.luciaos.com">Luce</a>
+    <a href="https://github.com/dymokomi/luciaos">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+  <section class="hero">
+    <p class="label reveal">A new operating system &middot; in early development</p>
+    <h1 class="reveal d1">Good for humans.<br>Good for computers.</h1>
+  </section>
+
+  <section>
+    <p class="label reveal">First principles</p>
+    <h2 class="reveal d1">Built language&#8209;first.</h2>
+    <p class="prose reveal d2">LuciaOS begins where every system truly begins: with the
+    language it is written in, and the language it speaks to you. Everything else grows
+    from there, deliberately.</p>
+    <p class="prose quiet reveal d3">The aim is a personal computer that is actually
+    personal — one that keeps what matters and remembers the way you do.</p>
+  </section>
+
+  <section>
+    <p class="label reveal">At its core</p>
+    <h2 class="reveal d1">Luce</h2>
+    <p class="prose reveal d2">A small, statically typed language, compiled to machine
+    code — designed to be read by people and proven by machines.</p>
+    <figure class="code reveal d2">
+      <figcaption>hello.luc</figcaption>
+      <pre><span class="kw">func</span> <span class="fn">main</span>():
+    <span class="bi">print</span>(<span class="str">"Good for humans."</span>)
+    <span class="bi">print</span>(<span class="str">"Good for computers."</span>)</pre>
+    </figure>
+    <a class="lead reveal d3" href="https://luce.luciaos.com">Read the language<span class="arrow">&rarr;</span></a>
+  </section>
+
+</main>
+
+<footer>
+  <span>LuciaOS</span>
+  <nav>
+    <a href="https://luce.luciaos.com">luce.luciaos.com</a>
+    <a href="https://github.com/dymokomi/luciaos">GitHub</a>
+  </nav>
+</footer>
+
+<script>
+  (function () {
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var targets = document.querySelectorAll(".reveal");
+    if (reduced || !("IntersectionObserver" in window)) {
+      targets.forEach(function (el) { el.classList.add("visible"); });
+      return;
+    }
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("visible");
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.2 });
+    targets.forEach(function (el) { observer.observe(el); });
+  })();
+</script>
+
+</body>
+</html>
