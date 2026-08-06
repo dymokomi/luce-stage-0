@@ -215,7 +215,9 @@ variable is immutable inside the loop body.
 
 Compound assignment applies an operator in place — `n += 1`, `n *= 2`,
 `s += "!"` — and evaluates the place exactly once, so
-`counts[key] += 1` looks the key up a single time.
+`counts[key] += 1` looks the key up a single time. On a map, a key
+that is not there is defined at the value type's zero and then
+applied to.
 
 ## Booleans and comparison
 

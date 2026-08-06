@@ -13,7 +13,7 @@ func main(args: list(string)):
 
     var counts = new map(string, long)
     for word in ["fig", "pear", "fig"]:
-        counts[word] = counts.get(word, 0) + 1
+        counts[word] += 1
     for word, seen in counts:
         print(f"{word} appeared {seen} time(s)")
 ```

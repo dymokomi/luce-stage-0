@@ -133,11 +133,12 @@ struct). To restock an *object* field use the single-level form:
 Compound assignment is `+= -= *= /= //= %=`, value-only arithmetic —
 the place is a number, or a `string` for `+=` — and the place is
 evaluated once, so `counts[key] += 1` looks the key up a single time.
+A **map** key that is not there is defined at the value type's zero
+and then applied to; a list or array index out of range still traps.
 
 ```luce run
 func main():
     var counts = new map(string, long)
-    counts["a"] = 0
     counts["a"] += 5
     var text = "x"
     text += "y"
@@ -147,6 +148,10 @@ func main():
 ```output
 5 xy
 ```
+
+A storage-width place combines at its arithmetic type and narrows
+back: `b += 1` on a `byte` is `b = byte(b + 1)`, and it traps
+`conversion_range` at 255 rather than wrapping.
 
 ## if / elif / else
 

@@ -22,10 +22,11 @@ func count_words(content: string, counts: map(string, long)):
             while stop < len(content) and is_word_byte(content.byte_at(stop)):
                 stop = stop + 1
             let word = content[at:stop]
-            if counts.has(word):
-                counts[word] = counts[word] + 1
-            else:
-                counts[word] = 1
+            # A compound store defines the key it writes into, at the
+            # value type's zero, so the first sighting of a word needs
+            # no arm of its own.  The has-then-index this replaces was
+            # three hash lookups on the hit path; this is two.
+            counts[word] += 1
             at = stop
         else:
             at = at + 1

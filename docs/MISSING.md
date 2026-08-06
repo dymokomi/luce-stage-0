@@ -157,12 +157,16 @@ The corpus that argued for it, item by item:
 
 **Still open, and the honest remainder:**
 
-- `wordcount.luc:25` — `counts.has(word)` then index: three hash
-  lookups on the hit path.  **`m.get(key, default) -> V` is built**
-  and answers a plain value; what is missing is the `V?`-returning
-  overload, which is what a counter wants — a default of `0` is
-  indistinguishable from a stored `0`.
-- `wordcount.luc:35` — `var best = ""` as "no answer",
+- ~~`wordcount.luc:25` — `counts.has(word)` then index: three hash
+  lookups on the hit path.~~ — **settled, and not the way this entry
+  expected.**  The counter did not need a `V?`-returning `m.get` at
+  all: it needed the language to admit that `counts[word] += 1` is a
+  *write*.  A compound store now defines its key at the value type's
+  zero (docs/LANGUAGE.md, "Zero values"), the program says one line
+  where it said four, and the hit path is two hash lookups.  A plain
+  read of an absent key still traps, which is what keeps the `V?`
+  question a real one for the cases that are genuinely asking.
+- `wordcount.luc:38` — `var best = ""` as "no answer",
   indistinguishable from an empty key.
 - ~~11 `trap(...)` calls in `std/math.luc`~~ — **settled.**  The five
   reductions answer `double?`: an empty array has no mean, and that is
@@ -250,7 +254,7 @@ the proof the language moved.
    sentence: a heap object as a mutable cell, a second value dropped
    and guessed, a second value thrown away and fetched again, and two
    traversals for one pass.
-5. **No sort with a comparator.**  `wordcount.luc:61-70` produces a
+5. **No sort with a comparator.**  `wordcount.luc:64-73` produces a
    top-5 listing by **destroying the map** — `heaviest` scans, the
    caller prints, `counts.remove(word)`, repeat.  The one place
    no-first-class-functions draws blood.
@@ -657,10 +661,11 @@ multi-user — all deferred by design in `docs/V2.md`.
    stderr, directory listing~~ — **done**; see Tier 3
    item 6 for what shipped and what was deliberately left out.
 5. ~~**Cut `Bytes`**~~ — done; stage 10 is total.
-6. **A `V?`-returning `m.get`**, rewrite `wordcount.luc`, and sweep
-   the corpus for `ord("x")` and f-strings.  (`m.get(key, default)`
-   already exists; what is wanted is the overload that can tell a
-   stored `0` from an absent one.)
+6. **A `V?`-returning `m.get`**, and sweep the corpus for `ord("x")`
+   and f-strings.  (`m.get(key, default)` already exists; what is
+   wanted is the overload that can tell a stored `0` from an absent
+   one.  ~~Rewrite `wordcount.luc`~~ — **done**, by the zero-value
+   rule rather than by this item: docs/LANGUAGE.md, "Zero values".)
 7. ~~**Errors** — steps 5–7 of FAILURE.md.~~ **Done.**
 8. **Cross-compilation** — `--target`, and one `libluce_rt` per
    target.  Named in `docs/CODEGEN.md` and folded into Tier 0's tail

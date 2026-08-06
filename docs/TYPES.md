@@ -1671,3 +1671,40 @@ rounds up to 1.0009765625, while binary32 first drops the 2^-30, lands
 exactly on the midpoint, and ties to even down to 1.0.  A test named
 for a property it cannot distinguish is worse than no test, and the
 sweep is what found it.
+
+### Step 5's remainder — compound assignment, found later
+
+D5's collapse was complete in every expression and **absent from the
+one operator that reads its own place.**  `compoundCombine` emitted
+its `binary` at the *place* type, so `var b: byte = 0` followed by
+`b += 1` reached the verifier as 8-bit arithmetic and was refused —
+correctly, and by the guard Step 5 had just installed, which turned
+the whole of compound assignment on `byte`, `short` and `half` into
+`internal compiler error: generated IR failed verification
+(TypeMismatch)`.  At all four place forms: a local, a struct field, a
+container element, a nested chain.  The behavioural suite could not
+see it because no test wrote `+=` on a storage width, and the sweep
+could not see it because a mutation only removes behaviour that is
+there.
+
+The fix is D5 applied to the operator that was missed: promote to the
+arithmetic type, combine there, narrow back through the checked
+conversion.  `b += 1` is `b = byte(b + 1)` **exactly** — the two trap
+at the same value with the same code, which is the pin.  It is also
+the answer to the question D5 never had to ask out loud: a compound
+assignment on a storage type is not implicit narrowing, because the
+narrowing is *checked*.  255 + 1 is `conversion_range`, not 0.  The
+place's declared type is where the conversion is written down; a plain
+`b = b + 1` has nowhere to write it and is still refused.
+
+### Zero values become a named concept
+
+They existed throughout and had no name: `zeroOf` in `06_mir/build.zig`
+is the single statement of them, a fresh `array` cell holds one, and
+`var name: Type` starts at one.  `docs/LANGUAGE.md` now says so under
+"Zero values", because a language rule came to depend on it — **a
+compound store into a missing map key defines the entry at the value
+type's zero** — and a rule resting on an unnamed concept is a rule
+nobody can look up.  Seven numeric zeros, `false`, `""`, `none`, and a
+null object reference; the `map` rule reaches all of them through the
+same `zeroOf`, which is why it needed no arm per width.

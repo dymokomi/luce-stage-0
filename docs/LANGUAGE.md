@@ -944,9 +944,61 @@ total += 5          # total == 5
 var s = "a"
 s += "b"            # s == "ab"
 var counts = new map(string, long)
-counts["k"] = 0
-counts["k"] += 1    # the key is evaluated once
+counts["k"] += 1    # the key is evaluated once, and defined at 0
 ```
+
+A **storage-width place combines at its arithmetic type and narrows
+back** (docs/TYPES.md D5): no operator computes at 8 or 16 bits, so
+`b += 1` on a `byte` is `b = byte(b + 1)` exactly — promoted to `int`,
+added, and narrowed through the same checked conversion.  Nothing is
+narrowed silently: at 255 it traps `conversion_range` rather than
+wrapping to zero.  A plain `b = b + 1` has nowhere to write the
+narrowing down and is still refused.
+
+### Zero values
+
+**Every type has a zero value.**  It is what `var name: Type` with no
+initializer starts at, what every cell of a fresh `array` holds, and
+what a `struct` with no explicit field is built out of, field by
+field.  The numbers are `0`, `bool` is `false`, `string` is `""`, a
+`T?` is `none`, and an object reference is null and traps on use until
+something assigns over it.
+
+The third of those is the one with a rule attached: **a compound store
+into a map key that does not exist defines the entry at the value
+type's zero, and then applies.**
+
+```luce fragment
+var counts = new map(string, long)
+counts["fig"] += 1      # defined at 0, then incremented: 1
+var notes = new map(string, string)
+notes["fig"] += "ripe"  # defined at "", then concatenated
+```
+
+The zero is the *value*, not an identity element chosen per operator:
+`counts["pear"] *= 2` on a key that is not there is `0`, because the
+entry is brought into existence at zero and multiplied afterwards.
+
+**A plain read still traps.**  `counts[word]` on an absent key is
+`key_missing`, and so is `counts[word] = counts[word] + 1` — which
+reads before it writes.  The two spellings diverge on purpose.  What
+separates them is not how much they do but what they *say*: the
+operator in `+=` stands to the left of the read and declares a write,
+while a read on the right of an `=` declares nothing at all.  A map
+that invented values on being asked would answer zero for every
+mistyped key, which is the bug the trap exists to catch; a map that
+defines what it is plainly told to write is how a map has always
+grown.  It is the distinction an operating system draws when it maps a
+page of zeroes on the first *write* and faults on a wild read.
+
+Use `get(key, default)` for a read with an explicit fallback; it never
+traps and never defines.
+
+**Maps only.**  A list or an array index keeps its bounds trap under
+every operator — `xs[0] += 1` on an empty list is `index_bounds`.  An
+index is a position in something that already has a shape, not a name
+that can be called into being, and `append` is the verb that grows a
+list.
 
 Assignment targets a **place**: a name, a field, or an index, nested
 freely — `p.inner.n = 1`, `cells[0].value += 5`, `grid[r, c].tag =
