@@ -94,4 +94,5 @@ test {
     _ = artifact;
     _ = effects;
     _ = @import("08_llvm/loops.zig");
+    _ = @import("08_llvm/builder.zig");
 }

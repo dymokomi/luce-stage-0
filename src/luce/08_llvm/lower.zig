@@ -99,7 +99,7 @@ const effects = @import("runtime_effects.zig");
 const Service = effects.Service;
 
 const Allocator = std.mem.Allocator;
-const Builder = std.zig.llvm.Builder;
+const Builder = @import("builder.zig").Builder;
 const Tag = Builder.Function.Instruction.Tag;
 
 /// `Builder.WipFunction.Block.Index` is not exported by the standard

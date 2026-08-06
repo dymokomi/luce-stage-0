@@ -94,7 +94,7 @@
 const std = @import("std");
 const runtime = @import("../runtime.zig");
 
-const Builder = std.zig.llvm.Builder;
+const Builder = @import("builder.zig").Builder;
 const Memory = Builder.Attribute.Memory;
 
 /// Every `libluce_rt` entry point generated code calls.  The tag is the
