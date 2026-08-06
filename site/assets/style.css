@@ -244,12 +244,6 @@ a.cross:hover { color: var(--ink); text-decoration: none; }
   align-items: start;
 }
 
-.shell.wide {
-  grid-template-columns: minmax(0, 1fr) var(--rail);
-  max-width: 68rem;
-}
-.shell.wide .side { display: none; }
-
 .side {
   position: sticky; top: var(--bar); padding: 2.2rem 0;
   max-height: calc(100vh - var(--bar)); overflow-y: auto;
@@ -273,6 +267,7 @@ a.cross:hover { color: var(--ink); text-decoration: none; }
   font-size: .92rem; color: var(--ink-soft);
 }
 .side li a:hover { background: var(--paper-soft); color: var(--ink); text-decoration: none; }
+.side li.h3 a { padding-left: 1.4rem; font-size: .88rem; }
 .side li a.here {
   color: var(--ink); font-weight: 560;
   background: var(--accent-soft);
@@ -514,7 +509,6 @@ footer a:hover { color: var(--ink); }
 
 @media (max-width: 68rem) {
   .shell { grid-template-columns: var(--side) minmax(0, 1fr); gap: 2rem; }
-  .shell.wide { grid-template-columns: minmax(0, 1fr); }
   .rail { display: none; }
 }
 
@@ -535,7 +529,7 @@ footer a:hover { color: var(--ink); }
 
 @media (max-width: 52rem) {
   :root { --bar: 3.25rem; }
-  .shell, .shell.wide { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 1rem; }
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 1rem; }
   .side { position: static; padding: 1.25rem 0 0; max-height: none; overflow: visible; }
   .side details {
     border: 1px solid var(--line); border-radius: .5rem;

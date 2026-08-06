@@ -249,7 +249,7 @@ fn build(
         .page = target.entry,
         .previous = neighbours.previous,
         .next = neighbours.next,
-    });
+    }, document.headings);
     try out.add(document.html);
     gpa.free(document.html);
     document.html = &.{};

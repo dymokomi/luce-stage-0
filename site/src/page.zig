@@ -50,7 +50,7 @@ fn prefix(out: *Buffer, url: []const u8) !void {
     while (remaining > 0) : (remaining -= 1) try out.add("../");
 }
 
-pub fn open(out: *Buffer, where: Where) !void {
+pub fn open(out: *Buffer, where: Where, headings: []const markdown.Heading) !void {
     try out.add(
         \\<!doctype html>
         \\<html lang="en">
@@ -78,11 +78,12 @@ pub fn open(out: *Buffer, where: Where) !void {
     );
 
     try header(out, where);
-    // A page with no section list gets the space back rather than an
-    // empty column where the list would have been.
-    const bare = where.section == null or where.section.?.pages.len == 0;
-    try out.add(if (bare) "<div class=\"shell wide\">\n" else "<div class=\"shell\">\n");
-    try sidebar(out, where);
+    // Every page has the same shape: the list column on the left, the
+    // content beside it.  A page with no section list (the home page)
+    // fills that column with its own headings instead, in the same
+    // dress, so the left rail never jumps sides or changes style.
+    try out.add("<div class=\"shell\">\n");
+    try sidebar(out, where, headings);
     try out.add("<main id=\"content\">\n<article>\n<h1>");
     try out.addEscaped(where.title);
     try out.add("</h1>\n");
@@ -111,7 +112,13 @@ pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !vo
     }
 
     try out.add("</main>\n");
-    try onThisPage(out, headings);
+    // A bare page already carries its headings in the left column.
+    const bare = where.section == null or where.section.?.pages.len == 0;
+    if (bare) {
+        try out.add("<div class=\"rail\"></div>\n");
+    } else {
+        try onThisPage(out, headings);
+    }
     try out.add("</div>\n");
 
     try out.add(
@@ -149,13 +156,13 @@ fn header(out: *Buffer, where: Where) !void {
     );
 }
 
-fn sidebar(out: *Buffer, where: Where) !void {
+fn sidebar(out: *Buffer, where: Where, headings: []const markdown.Heading) !void {
     const section = where.section orelse {
-        try out.add("<div class=\"side\"></div>\n");
+        try headingsAside(out, headings);
         return;
     };
     if (section.pages.len == 0) {
-        try out.add("<div class=\"side\"></div>\n");
+        try headingsAside(out, headings);
         return;
     }
 
@@ -174,6 +181,28 @@ fn sidebar(out: *Buffer, where: Where) !void {
         try prefix(out, where.url);
         try out.print("{s}/{s}/\">", .{ section.slug, page.slug });
         try out.addEscaped(page.title);
+        try out.add("</a></li>\n");
+    }
+    try out.add("</ul>\n</details>\n</div>\n");
+}
+
+/// The left column of a page with no section list: its own headings,
+/// in exactly the sidebar's dress, so the column reads the same on
+/// every page of the site.
+fn headingsAside(out: *Buffer, headings: []const markdown.Heading) !void {
+    var shown: usize = 0;
+    for (headings) |heading| {
+        if (heading.level == 2 or heading.level == 3) shown += 1;
+    }
+    if (shown < 2) {
+        try out.add("<div class=\"side\"></div>\n");
+        return;
+    }
+    try out.add("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n");
+    for (headings) |heading| {
+        if (heading.level != 2 and heading.level != 3) continue;
+        try out.print("<li class=\"h{d}\"><a href=\"#{s}\">", .{ heading.level, heading.id });
+        try out.addEscaped(heading.title);
         try out.add("</a></li>\n");
     }
     try out.add("</ul>\n</details>\n</div>\n");
