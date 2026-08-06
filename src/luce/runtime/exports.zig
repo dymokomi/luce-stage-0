@@ -50,6 +50,17 @@
 //! Nothing here hands back memory a caller has to free by itself: the
 //! run owns every object and every byte of storage, and `luce_rt_close`
 //! ends all of it at once.
+//!
+//! ## Why the entry points are `pub`
+//!
+//! Nothing in Zig calls them — they exist for the linker.  They are
+//! `pub` so that `08_llvm/runtime_effects.zig` can name them: the
+//! backend keeps a second description of this surface, one arm per
+//! symbol, from which it builds the LLVM `declare`.  A C object file
+//! carries no signatures, so a `declare` with the wrong arity links
+//! cleanly and corrupts the stack at run time; the only thing that can
+//! catch it is a test that reads *this* signature.  One does
+//! (`runtime_effects.zig`, last test), and it needs a name to read.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -125,7 +136,7 @@ const value_pages = std.heap.page_allocator;
 /// instruction came from — which is what turns a recorded frame into a
 /// line of a call trace (trace.zig).  Null when there is no memory to
 /// start in.
-export fn luce_rt_open(
+pub export fn luce_rt_open(
     functions: ?[*]const trace.FunctionInfo,
     count: i64,
 ) callconv(.c) ?*Runtime {
@@ -141,7 +152,7 @@ export fn luce_rt_open(
 
 /// End a run: every object still alive, every string, and the object
 /// table go at once.  The runtime pointer is invalid afterwards.
-export fn luce_rt_close(runtime: *Runtime) callconv(.c) void {
+pub export fn luce_rt_close(runtime: *Runtime) callconv(.c) void {
     const owned: *Owned = @fieldParentPtr("runtime", runtime);
     owned.runtime.deinit();
     owned.arena.deinit();
@@ -151,12 +162,12 @@ export fn luce_rt_close(runtime: *Runtime) callconv(.c) void {
 /// Objects allocated and never freed — the leak census.  Memory is
 /// explicit in Luce, so this is part of what a run did, and every host
 /// (native, wasm, the specs) reads it from here.
-export fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64 {
+pub export fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64 {
     return runtime.live;
 }
 
 /// How the run ended, given the outcome the entry function answered.
-export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Status {
+pub export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Status {
     if (runtime.exhausted) return .exhausted;
     if (outcome == raised_error) return .errored;
     return if (outcome != survived) .trapped else .ok;
@@ -175,7 +186,7 @@ export fn luce_rt_status(runtime: *const Runtime, outcome: i32) callconv(.c) Sta
 /// the build that generated the code, which is this one — an artifact
 /// carrying anything else is corrupt, and the conversion says so
 /// loudly rather than inventing a trap.
-export fn luce_rt_raise(
+pub export fn luce_rt_raise(
     runtime: *Runtime,
     code: i32,
     message: [*]const u8,
@@ -188,7 +199,7 @@ export fn luce_rt_raise(
 /// One frame of the unwinding stack, recorded on the way out: the
 /// function it was in and the instruction it was at.  Called once per
 /// frame, innermost first, so what arrives is the trace in order.
-export fn luce_rt_unwound(
+pub export fn luce_rt_unwound(
     runtime: *Runtime,
     function: u32,
     instruction: u32,
@@ -201,7 +212,7 @@ export fn luce_rt_unwound(
 /// the program has stopped — nothing is reported for a run that ended
 /// any other way, and a run that ran out of memory reports nothing at
 /// all because nothing about the program was wrong.
-export fn luce_rt_report(
+pub export fn luce_rt_report(
     runtime: *const Runtime,
     context: ?*anyopaque,
     report: trace.ReportFn,
@@ -227,7 +238,7 @@ export fn luce_rt_report(
 /// are a Luce String, which outlives the run.  `function` and
 /// `instruction` say where it was written, and are resolved here and
 /// only here: an error records its raise site and nothing else.
-export fn luce_rt_raise_error(
+pub export fn luce_rt_raise_error(
     runtime: *Runtime,
     code: i32,
     message: [*]const u8,
@@ -241,7 +252,7 @@ export fn luce_rt_raise_error(
 
 /// A host file service answered `no`.  The words that names the path
 /// are built in the library, so both engines report the same sentence.
-export fn luce_rt_raise_io(
+pub export fn luce_rt_raise_io(
     runtime: *Runtime,
     act: i32,
     path: [*]const u8,
@@ -257,14 +268,14 @@ export fn luce_rt_raise_io(
 }
 
 /// `catch` handled it: forget the error and its words.
-export fn luce_rt_forget_error(runtime: *Runtime) callconv(.c) void {
+pub export fn luce_rt_forget_error(runtime: *Runtime) callconv(.c) void {
     runtime.forget();
 }
 
 /// Hand the host an uncaught error: its code, its words, and the one
 /// position it carries.  Called once, from `luce_main`, and only when
 /// the entry function came back errored.
-export fn luce_rt_report_error(
+pub export fn luce_rt_report_error(
     runtime: *const Runtime,
     context: ?*anyopaque,
     report: trace.ErrorReportFn,
@@ -282,14 +293,14 @@ export fn luce_rt_report_error(
 
 /// A serial no other live frame carries — one per call, so ownership
 /// bindings from two frames of the same function never collide.
-export fn luce_rt_serial(runtime: *Runtime) callconv(.c) u64 {
+pub export fn luce_rt_serial(runtime: *Runtime) callconv(.c) u64 {
     return runtime.takeSerial();
 }
 
 /// The host ran out of memory inside a service call.  Nothing about
 /// the program was wrong, so this is not a trap: the run ends
 /// `exhausted`, exactly as it does when the arena gives up.
-export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
+pub export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
     runtime.exhausted = true;
 }
 
@@ -298,7 +309,7 @@ export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
 /// of that call only; this is where it becomes a value the program can
 /// keep — owned by the statement that asked for it until something
 /// stores it (docs/STRINGS.md).
-export fn luce_rt_intern_text(
+pub export fn luce_rt_intern_text(
     runtime: *Runtime,
     bytes: [*]const u8,
     length: i64,
@@ -314,7 +325,7 @@ export fn luce_rt_intern_text(
 /// `present` zero answers `Value.none` — the very value the
 /// interpreter parks in the same slot, so a `T?` means one thing on
 /// both engines (docs/FAILURE.md).
-export fn luce_rt_maybe_text(
+pub export fn luce_rt_maybe_text(
     runtime: *Runtime,
     present: i32,
     bytes: [*]const u8,
@@ -337,7 +348,7 @@ export fn luce_rt_maybe_text(
 /// and a length, never a vector — and NUL is the one byte no file name
 /// on any supported system may contain, so the joining is lossless.
 /// An empty buffer is an empty directory and not one empty name.
-export fn luce_rt_names_list(
+pub export fn luce_rt_names_list(
     runtime: *Runtime,
     bytes: [*]const u8,
     length: i64,
@@ -358,7 +369,7 @@ export fn luce_rt_names_list(
 /// `count` or `get` yields an **empty** list — a program compiled
 /// without the host gate reads no arguments and touches nothing, which
 /// is strictly better than the trap `arg(0)` used to give it.
-export fn luce_rt_args_list(
+pub export fn luce_rt_args_list(
     runtime: *Runtime,
     context: ?*anyopaque,
     count: ?*const fn (context: ?*anyopaque) callconv(.c) i64,
@@ -373,7 +384,7 @@ export fn luce_rt_args_list(
 
 /// Remember the text payload of the key just read, for `key_text`.
 /// One owned slot: the previous payload goes back as this one arrives.
-export fn luce_rt_set_key_text(
+pub export fn luce_rt_set_key_text(
     runtime: *Runtime,
     bytes: [*]const u8,
     length: i64,
@@ -387,7 +398,7 @@ export fn luce_rt_set_key_text(
 /// store into a place that outlives the statement takes first
 /// (docs/STRINGS.md).  Scalars and object handles pass straight
 /// through.
-export fn luce_rt_own_storage(
+pub export fn luce_rt_own_storage(
     runtime: *Runtime,
     held: *const Value,
     out: *Value,
@@ -400,7 +411,7 @@ export fn luce_rt_own_storage(
 /// `ret` hands the caller.  Text that lives inside the value is copied
 /// out to an allocation; everything else moves untouched
 /// (docs/STRINGS.md).
-export fn luce_rt_export_storage(
+pub export fn luce_rt_export_storage(
     runtime: *Runtime,
     held: *const Value,
     out: *Value,
@@ -412,7 +423,7 @@ export fn luce_rt_export_storage(
 /// Give back the storage a value owns, and answer the emptied value
 /// the place should hold from here on.  Objects are untouched: they
 /// are freed by `luce_rt_unbind`, which is a different question.
-export fn luce_rt_drop_storage(
+pub export fn luce_rt_drop_storage(
     runtime: *Runtime,
     held: *const Value,
     out: *Value,
@@ -422,7 +433,7 @@ export fn luce_rt_drop_storage(
 }
 
 /// The text payload of the most recent `key_read`.
-export fn luce_rt_key_text(runtime: *const Runtime, out: *Value) callconv(.c) void {
+pub export fn luce_rt_key_text(runtime: *const Runtime, out: *Value) callconv(.c) void {
     out.* = Value.ofString(runtime.last_key_text);
 }
 
@@ -490,22 +501,22 @@ fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
 // three trap rather than proceed on a freed object, an unfilled slot
 // (S42), or an owner that is not the one named.
 
-export fn luce_rt_new_list(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_new_list(runtime: *Runtime, out: *Value) callconv(.c) i32 {
     out.* = runtime.newList() catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_new_map(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_new_map(runtime: *Runtime, out: *Value) callconv(.c) i32 {
     out.* = runtime.newMap() catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_new_builder(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_new_builder(runtime: *Runtime, out: *Value) callconv(.c) i32 {
     out.* = runtime.newBuilder() catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_new_array(
+pub export fn luce_rt_new_array(
     runtime: *Runtime,
     dims: [*]const i64,
     rank: i64,
@@ -517,7 +528,7 @@ export fn luce_rt_new_array(
     return survived;
 }
 
-export fn luce_rt_bind(
+pub export fn luce_rt_bind(
     runtime: *Runtime,
     held: *const Value,
     serial: u64,
@@ -526,7 +537,7 @@ export fn luce_rt_bind(
     runtime.bind(held.*, serial, local);
 }
 
-export fn luce_rt_unbind(
+pub export fn luce_rt_unbind(
     runtime: *Runtime,
     held: *const Value,
     serial: u64,
@@ -535,7 +546,7 @@ export fn luce_rt_unbind(
     runtime.unbind(held.*, serial, local);
 }
 
-export fn luce_rt_loosen_from_frame(
+pub export fn luce_rt_loosen_from_frame(
     runtime: *Runtime,
     held: *const Value,
     serial: u64,
@@ -543,7 +554,7 @@ export fn luce_rt_loosen_from_frame(
     runtime.loosenFromFrame(held.*, serial);
 }
 
-export fn luce_rt_free(
+pub export fn luce_rt_free(
     runtime: *Runtime,
     held: *const Value,
     owned: i32,
@@ -556,7 +567,7 @@ export fn luce_rt_free(
     return survived;
 }
 
-export fn luce_rt_give(
+pub export fn luce_rt_give(
     runtime: *Runtime,
     held: *const Value,
     owned: i32,
@@ -570,7 +581,7 @@ export fn luce_rt_give(
     return survived;
 }
 
-export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
     out.* = containers.copyVerb(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -591,7 +602,7 @@ export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callc
 // `luce_rt_struct_set` copies only the fields it did not replace,
 // which belong to the value it read them out of.
 
-export fn luce_rt_struct_make(
+pub export fn luce_rt_struct_make(
     runtime: *Runtime,
     fields: [*]const Value,
     count: i64,
@@ -602,7 +613,7 @@ export fn luce_rt_struct_make(
     return survived;
 }
 
-export fn luce_rt_struct_set(
+pub export fn luce_rt_struct_set(
     runtime: *Runtime,
     held: *const Value,
     field: i64,
@@ -631,13 +642,13 @@ export fn luce_rt_struct_set(
 // owned by the statement that asked for it, including the fresh Lists
 // `list_slice`, `map_keys` and `map_values` build.
 
-export fn luce_rt_len(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_len(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
     out.* = containers.length(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_index_get(
+pub export fn luce_rt_index_get(
     runtime: *Runtime,
     target: *const Value,
     indices: [*]const Value,
@@ -651,7 +662,7 @@ export fn luce_rt_index_get(
 
 /// Consumes `held` — see `containers.indexSet`.  The key stays a
 /// borrow the map copies for itself.
-export fn luce_rt_index_set(
+pub export fn luce_rt_index_set(
     runtime: *Runtime,
     target: *const Value,
     indices: [*]const Value,
@@ -663,7 +674,7 @@ export fn luce_rt_index_set(
     return survived;
 }
 
-export fn luce_rt_list_slice(
+pub export fn luce_rt_list_slice(
     runtime: *Runtime,
     target: *const Value,
     start: i64,
@@ -677,7 +688,7 @@ export fn luce_rt_list_slice(
 
 /// A list consumes `held`; a Builder copies its bytes and borrows —
 /// see `containers.append`.
-export fn luce_rt_append(
+pub export fn luce_rt_append(
     runtime: *Runtime,
     target: *const Value,
     held: *const Value,
@@ -687,7 +698,7 @@ export fn luce_rt_append(
     return survived;
 }
 
-export fn luce_rt_append_ascii(
+pub export fn luce_rt_append_ascii(
     runtime: *Runtime,
     target: *const Value,
     code: i64,
@@ -697,14 +708,14 @@ export fn luce_rt_append_ascii(
     return survived;
 }
 
-export fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
     out.* = containers.pop(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
 
 /// Consumes `held` — see `containers.insert`.
-export fn luce_rt_insert(
+pub export fn luce_rt_insert(
     runtime: *Runtime,
     target: *const Value,
     index: i64,
@@ -715,7 +726,7 @@ export fn luce_rt_insert(
     return survived;
 }
 
-export fn luce_rt_remove(
+pub export fn luce_rt_remove(
     runtime: *Runtime,
     target: *const Value,
     which: *const Value,
@@ -725,7 +736,7 @@ export fn luce_rt_remove(
     return survived;
 }
 
-export fn luce_rt_has_key(
+pub export fn luce_rt_has_key(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
@@ -736,7 +747,7 @@ export fn luce_rt_has_key(
     return survived;
 }
 
-export fn luce_rt_key_at(
+pub export fn luce_rt_key_at(
     runtime: *Runtime,
     target: *const Value,
     index: i64,
@@ -747,7 +758,7 @@ export fn luce_rt_key_at(
     return survived;
 }
 
-export fn luce_rt_value_at(
+pub export fn luce_rt_value_at(
     runtime: *Runtime,
     target: *const Value,
     index: i64,
@@ -758,7 +769,7 @@ export fn luce_rt_value_at(
     return survived;
 }
 
-export fn luce_rt_dim_size(
+pub export fn luce_rt_dim_size(
     runtime: *Runtime,
     target: *const Value,
     axis: i64,
@@ -769,17 +780,17 @@ export fn luce_rt_dim_size(
     return survived;
 }
 
-export fn luce_rt_sort(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
+pub export fn luce_rt_sort(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
     containers.sort(runtime, target.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_reverse(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
+pub export fn luce_rt_reverse(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
     containers.reverse(runtime, target.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_find(
+pub export fn luce_rt_find(
     runtime: *Runtime,
     target: *const Value,
     wanted: *const Value,
@@ -791,7 +802,7 @@ export fn luce_rt_find(
     return survived;
 }
 
-export fn luce_rt_contains(
+pub export fn luce_rt_contains(
     runtime: *Runtime,
     target: *const Value,
     wanted: *const Value,
@@ -803,12 +814,12 @@ export fn luce_rt_contains(
     return survived;
 }
 
-export fn luce_rt_clear(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
+pub export fn luce_rt_clear(runtime: *Runtime, target: *const Value) callconv(.c) i32 {
     containers.clear(runtime, target.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_map_keys(
+pub export fn luce_rt_map_keys(
     runtime: *Runtime,
     target: *const Value,
     out: *Value,
@@ -818,7 +829,7 @@ export fn luce_rt_map_keys(
     return survived;
 }
 
-export fn luce_rt_map_values(
+pub export fn luce_rt_map_values(
     runtime: *Runtime,
     target: *const Value,
     out: *Value,
@@ -828,7 +839,7 @@ export fn luce_rt_map_values(
     return survived;
 }
 
-export fn luce_rt_map_get(
+pub export fn luce_rt_map_get(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
@@ -842,7 +853,7 @@ export fn luce_rt_map_get(
 
 /// The key and the zero are both borrows the map copies for itself
 /// when it defines the entry — see `containers.mapPlace`.
-export fn luce_rt_map_place(
+pub export fn luce_rt_map_place(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
@@ -854,7 +865,7 @@ export fn luce_rt_map_place(
     return survived;
 }
 
-export fn luce_rt_array_fill(
+pub export fn luce_rt_array_fill(
     runtime: *Runtime,
     target: *const Value,
     held: *const Value,
@@ -879,7 +890,7 @@ export fn luce_rt_array_fill(
 // not: they answer `Value.none` for text that is not a number, because
 // parsing is a question and "no" is an answer.
 
-export fn luce_rt_concat(
+pub export fn luce_rt_concat(
     runtime: *Runtime,
     left: *const Value,
     right: *const Value,
@@ -890,7 +901,7 @@ export fn luce_rt_concat(
     return survived;
 }
 
-export fn luce_rt_string_slice(
+pub export fn luce_rt_string_slice(
     runtime: *Runtime,
     held: *const Value,
     start: i64,
@@ -902,7 +913,7 @@ export fn luce_rt_string_slice(
     return survived;
 }
 
-export fn luce_rt_string_byte(
+pub export fn luce_rt_string_byte(
     runtime: *Runtime,
     held: *const Value,
     index: i64,
@@ -913,7 +924,7 @@ export fn luce_rt_string_byte(
     return survived;
 }
 
-export fn luce_rt_string_find_byte(
+pub export fn luce_rt_string_find_byte(
     runtime: *Runtime,
     held: *const Value,
     byte: i64,
@@ -925,27 +936,27 @@ export fn luce_rt_string_find_byte(
     return survived;
 }
 
-export fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
     out.* = text.str(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_parse_int(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_parse_int(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
     out.* = text.parseInt(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_parse_float(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_parse_float(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
     out.* = text.parseFloat(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_chr(runtime: *Runtime, code: i64, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_chr(runtime: *Runtime, code: i64, out: *Value) callconv(.c) i32 {
     out.* = text.chr(runtime, code) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
     out.* = text.ord(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -958,7 +969,7 @@ export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callco
 /// String, structs.  The one export that answers its result
 /// directly rather than through an out-pointer, because comparison is
 /// the one operation here that cannot fail.  `op` is `vocabulary.BinaryOp`.
-export fn luce_rt_compare(
+pub export fn luce_rt_compare(
     op: i32,
     left: *const Value,
     right: *const Value,
@@ -976,7 +987,7 @@ export fn luce_rt_compare(
 /// on opposed signs.  Written twice it would be two chances to differ
 /// on `-0.0` and the infinities, and `frem` is already a libm call, so
 /// what the extra frame buys is that there is only one of it.
-export fn luce_rt_float_mod(left: f64, right: f64) callconv(.c) f64 {
+pub export fn luce_rt_float_mod(left: f64, right: f64) callconv(.c) f64 {
     return operators.floorMod(f64, left, right);
 }
 
@@ -984,7 +995,7 @@ export fn luce_rt_float_mod(left: f64, right: f64) callconv(.c) f64 {
 /// widening through `double`: `%` on floats must answer what a float
 /// `%` answers, and the round trip through binary64 disagrees exactly
 /// where the correction fires.
-export fn luce_rt_float32_mod(left: f32, right: f32) callconv(.c) f32 {
+pub export fn luce_rt_float32_mod(left: f32, right: f32) callconv(.c) f32 {
     return operators.floorMod(f32, left, right);
 }
 
@@ -992,7 +1003,7 @@ export fn luce_rt_float32_mod(left: f32, right: f32) callconv(.c) f32 {
 /// Two scalars and an operator: it reads no memory at all, cannot
 /// fail, and takes no runtime.  The long is always the left operand —
 /// stage 4 mirrors the operator when the double was written first.
-export fn luce_rt_compare_long_double(
+pub export fn luce_rt_compare_long_double(
     op: i32,
     left: i64,
     right: f64,

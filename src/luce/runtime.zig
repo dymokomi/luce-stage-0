@@ -83,14 +83,24 @@ pub const operators = @import("runtime/operators.zig");
 pub const text = @import("runtime/text.zig");
 pub const trace = @import("runtime/trace.zig");
 
-pub const Status = @import("runtime/exports.zig").Status;
+/// The C surface itself.  Published so `08_llvm/runtime_effects.zig`
+/// can read the real signatures back and hold its own description of
+/// them to account: a C object file carries no types, so nothing but a
+/// test comparing the two can catch a `declare` of the wrong shape.
+///
+pub const exports = @import("runtime/exports.zig");
+
+pub const Status = exports.Status;
 
 // Force the C surface to be analyzed even when nothing in Zig calls
-// it.  Without this the `luce_rt_*` symbols exist only in test builds
-// and `libluce_rt.a` links empty — which shows up as an undefined
-// symbol in a compiled artifact rather than as a compile error here.
+// it.  Naming the file above is not enough — a namespace's `pub`
+// declarations are analyzed when something reaches them, and the
+// linker is not something Zig can see reaching one.  Without this the
+// `luce_rt_*` symbols exist only in test builds and `libluce_rt.a`
+// links empty, which shows up as an undefined symbol in a compiled
+// artifact rather than as a compile error here.
 comptime {
-    _ = @import("runtime/exports.zig");
+    _ = exports;
 }
 
 test {

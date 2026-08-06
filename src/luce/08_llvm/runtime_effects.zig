@@ -1,7 +1,9 @@
 //! What a compiled artifact tells LLVM about `libluce_rt`.
 //!
-//! Generated code calls fifty-eight runtime entry points, and until
-//! this file existed it declared every one of them bare:
+//! Generated code calls a runtime entry point for every semantic in
+//! the language — one per tag of `Service` below, which is exactly the
+//! set `runtime/exports.zig` publishes, proved by the last test in this
+//! file.  Until this file existed it declared every one of them bare:
 //!
 //! ```llvm
 //! declare i32 @luce_rt_len(ptr, ptr, ptr)
@@ -787,4 +789,103 @@ test "only the host-calling export withholds nounwind and willreturn" {
         try std.testing.expectEqual(!opaque_to_us, effect.willreturn);
         try std.testing.expectEqual(opaque_to_us, effect.memory == null);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The description, against the thing described
+// ---------------------------------------------------------------------------
+
+/// The pointer `T` is, seeing through an optional, or null when `T` is
+/// not one.  A `?[*]const u8` and a `[*]const u8` promise the same
+/// thing about the memory; only nullability differs, and that is the
+/// caller's business rather than the shape's.
+fn pointerOf(comptime T: type) ?std.builtin.Type.Pointer {
+    return switch (@typeInfo(T)) {
+        .pointer => |shape| shape,
+        .optional => |option| switch (@typeInfo(option.child)) {
+            .pointer => |shape| shape,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Whether a Zig parameter type is what `shape` says it is.  Every
+/// shape promises pointer-or-not; the six that name a pointee promise
+/// that too, and the two that describe memory this compiler knows
+/// nothing about (`bytes_kept`, `unknown`) promise only the pointer.
+fn describes(comptime shape: Parameter, comptime T: type) bool {
+    const pointer = pointerOf(T);
+    if (shape.isPointer() != (pointer != null)) return false;
+    const at = pointer orelse return true;
+    return switch (shape) {
+        .plain => unreachable, // not a pointer, returned above
+        .run => at.size == .one and at.child == runtime.Runtime,
+        .value_in => at.size == .one and at.is_const and at.child == runtime.Value,
+        .value_out => at.size == .one and !at.is_const and at.child == runtime.Value,
+        .values_in => at.size == .many and at.is_const and at.child == runtime.Value,
+        .numbers_in => at.size == .many and at.is_const and at.child == i64,
+        .bytes_in => at.size == .many and at.is_const and at.child == u8,
+        .bytes_kept, .unknown => true,
+    };
+}
+
+test "every service's described shape is the export's real signature" {
+    // `Service` and `describe` are a second, hand-written statement of
+    // what `runtime/exports.zig` declares.  Names cannot drift — the
+    // symbol is `@tagName`, so a missing export is a link error — but
+    // **shapes can**, and nothing is standing behind them: a C object
+    // file carries no signatures, so a `declare` with the wrong arity
+    // or the wrong pointee links cleanly, runs, and corrupts the stack.
+    //
+    // So this reads the real thing.  One total over the enum, no
+    // `else`: a service whose description stops matching its export is
+    // a failed build here, at the commit that moved one of them.
+    inline for (comptime std.enums.values(Service)) |service| {
+        const effect = comptime describe(service);
+        const signature = @typeInfo(@TypeOf(@field(runtime.exports, @tagName(service)))).@"fn";
+
+        if (signature.params.len != effect.parameters.len) {
+            std.debug.print(
+                "{s}: described with {d} parameter(s), declared with {d}\n",
+                .{ @tagName(service), effect.parameters.len, signature.params.len },
+            );
+            return error.ArityDisagrees;
+        }
+        inline for (signature.params, effect.parameters, 0..) |declared, shape, at| {
+            const T = declared.type.?;
+            if (!describes(shape, T)) {
+                std.debug.print(
+                    "{s}: parameter {d} is described .{s} and declared {s}\n",
+                    .{ @tagName(service), at, @tagName(shape), @typeName(T) },
+                );
+                return error.ShapeDisagrees;
+            }
+        }
+        // `noalias` on the result is a promise about a pointer, and an
+        // integer cannot carry one.
+        if (effect.returns_noalias and pointerOf(signature.return_type.?) == null) {
+            std.debug.print(
+                "{s}: returns_noalias on a {s}\n",
+                .{ @tagName(service), @typeName(signature.return_type.?) },
+            );
+            return error.ShapeDisagrees;
+        }
+    }
+}
+
+test "every entry point the library exports is a service" {
+    // The other direction.  The test above cannot see an export with
+    // no `Service` tag, and an entry point generated code has no way
+    // to call is either a dead symbol or a missing declaration.
+    comptime var exported = 0;
+    inline for (@typeInfo(runtime.exports).@"struct".decls) |declaration| {
+        if (!comptime std.mem.startsWith(u8, declaration.name, "luce_rt_")) continue;
+        if (@typeInfo(@TypeOf(@field(runtime.exports, declaration.name))) != .@"fn") continue;
+        exported += 1;
+        if (@hasField(Service, declaration.name)) continue;
+        std.debug.print("{s} is exported and is not a Service\n", .{declaration.name});
+        return error.UndeclaredExport;
+    }
+    try std.testing.expectEqual(std.enums.values(Service).len, exported);
 }
