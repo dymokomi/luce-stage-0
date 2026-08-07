@@ -631,6 +631,20 @@ pub const Analyzer = struct {
                     });
                     continue;
                 }
+                // **Whichever was written first is the first.**  Enums
+                // are collected before structs — a struct field may name
+                // one — so a struct of the same name is still invisible
+                // here; the one this file *reads* first is decided by
+                // where the two stand, not by which table filled first.
+                // A struct above this enum reports here; a struct below
+                // it lets the enum register and reports there.
+                if (structDeclaredAbove(module.tree.*, declaration)) |first| {
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                        declaration.name,
+                        try self.declaredAt(module.file, first.name_span),
+                    });
+                    continue;
+                }
                 // The width, before the members: it is what says which
                 // of them fit, and the default is `int` (D2).
                 var backing: types.Type.EnumRef.Backing = .int;
@@ -706,6 +720,16 @@ pub const Analyzer = struct {
         self.diagnostics.scope = source_mod.root_file;
     }
 
+    /// The struct of this module that takes `declaration`'s name and
+    /// stands above it in the file, or null.
+    fn structDeclaredAbove(tree: ast.Program, declaration: *const ast.EnumDecl) ?*const ast.StructDecl {
+        for (tree.structs) |*strukt| {
+            if (!std.mem.eql(u8, strukt.name, declaration.name)) continue;
+            if (strukt.name_span.start < declaration.name_span.start) return strukt;
+        }
+        return null;
+    }
+
     /// Fold every member's value, in declaration order (D1): a written
     /// `= EXPRESSION` is folded by the constant folder, an unvalued
     /// member takes the one before it plus one, and an unvalued first
@@ -725,7 +749,13 @@ pub const Analyzer = struct {
                 const slot = self.enums.items[index].findMember(written.name) orelse continue;
                 var value: i128 = next;
                 if (written.value) |expression| {
-                    const folded = (try self.foldConstant(info.module, expression, backing)) orelse continue;
+                    // Folded at `long` rather than at the backing
+                    // width, so a value the width cannot hold is
+                    // refused by *this* stage's sentence — the one that
+                    // names the enum's width and the fix for it —
+                    // rather than by the literal's, which would talk
+                    // about a place the reader never wrote.
+                    const folded = (try self.foldConstant(info.module, expression, .long)) orelse continue;
                     if (folded.value != .long or !folded.value_type.isInteger()) {
                         try self.fail(
                             "luce.sema.enum",

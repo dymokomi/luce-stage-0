@@ -1012,3 +1012,80 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     try testing.expectEqual(@as(u32, 28), format_version);
     try testing.expectEqual(@as(u64, 13566901066460038847), hasher.final());
 }
+
+test "an enum round-trips with its members, and a foreign width is rejected" {
+    var program = try compileScript(
+        \\enum Method(byte):
+        \\    stored = 0
+        \\    deflated = 8
+        \\
+        \\func main():
+        \\    var m = Method.stored
+        \\    m = Method.deflated
+        \\    var seen = new list(Method)
+        \\    seen.append(m)
+        \\    assert(seen[0] == Method.deflated)
+        \\    assert(string(m) == "deflated")
+        \\    assert(int(m) == 8)
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "enum Method(byte):") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "deflated = 8") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "list(Method)") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+
+    // **The width in a type and the width in the table are one fact**
+    // (`types.Type.EnumRef`), so a module where they disagree is
+    // damaged and must be refused rather than read at whichever of the
+    // two an engine happens to consult.
+    var widened = try testing.allocator.dupe(u8, encoded);
+    defer testing.allocator.free(widened);
+    const table_at = std.mem.indexOf(u8, widened, "Method").? + "Method".len;
+    try testing.expectEqual(@intFromEnum(types.Type.EnumRef.Backing.byte), widened[table_at]);
+    widened[table_at] = @intFromEnum(types.Type.EnumRef.Backing.long);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, widened));
+}
+
+test "an enum register holding no member is refused" {
+    var program = try compileScript(
+        \\enum Method:
+        \\    stored = 0
+        \\    deflated = 8
+        \\
+        \\func main():
+        \\    var m = Method.stored
+        \\    m = Method.deflated
+        \\    assert(m == Method.deflated)
+        \\
+    );
+    defer program.deinit();
+
+    // The one promise an enum makes is that every value of it is a
+    // member (docs/ENUMS.md), and `match` spends it: with every member
+    // named, the last arm is the fallthrough and nothing traps.  A
+    // hand-made module that puts 3 in a `Method` register is what that
+    // promise has to be defended against.
+    for (program.functions[0].instructions, program.functions[0].result_types) |*instruction, of| {
+        if (of != .enumeration or instruction.* != .const_long) continue;
+        instruction.* = .{ .const_long = 3 };
+        break;
+    }
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+}

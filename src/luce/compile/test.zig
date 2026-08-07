@@ -1193,6 +1193,20 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\struct Box:
     \\    held: Handle
     \\
+    \\private enum Hidden:
+    \\    first
+    \\    second
+    \\
+    \\    func lead() -> Hidden:
+    \\        return Hidden.first
+    \\
+    \\enum Shown(byte):
+    \\    open = 0
+    \\    shut = 1
+    \\
+    \\func opened() -> Shown:
+    \\    return Shown.open
+    \\
 };
 
 test "luce.sema.private: a private function is withheld, and the call graph is not" {
@@ -1338,6 +1352,63 @@ test "luce.sema.private: a private method is withheld from the value spelling to
         \\    print(string(s.stamp()))
         \\
     , &.{vault_module}, "stamp is private to vault");
+}
+
+test "luce.sema.private: a private enum is withheld by name, and every door says so" {
+    // An enum is a declaration like any other (docs/ENUMS.md D7,
+    // VISIBILITY.md D1), and there are four doors to one: the type, a
+    // member, the constructor, and a namespace function of it.  Each
+    // answers *private*, never unknown.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func read(m: vault.Hidden) -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{vault_module}, "Hidden is private to vault");
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let m = vault.Hidden.first
+        \\
+    , &.{vault_module}, "Hidden is private to vault");
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let m = vault.Hidden(0)
+        \\
+    , &.{vault_module}, "Hidden is private to vault");
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    let m = vault.Hidden.lead()
+        \\
+    , &.{vault_module}, "Hidden is private to vault");
+    // The public one beside it crosses whole: the type in an
+    // annotation, a member by name, the constructor, and equality.
+    try expectProjectCompiles(
+        \\import vault
+        \\
+        \\func spell(s: vault.Shown) -> string:
+        \\    match s:
+        \\        open:
+        \\            return "open"
+        \\        shut:
+        \\            return "shut"
+        \\
+        \\func main():
+        \\    assert(vault.opened() == vault.Shown.open)
+        \\    assert(spell(vault.Shown.shut) == "shut")
+        \\    assert(vault.Shown(1) != none)
+        \\    assert(vault.Shown(2) == none)
+        \\
+    , &.{vault_module});
 }
 
 test "every spelling of touching a private member gets the same useful sentence" {

@@ -29,6 +29,9 @@ pub const agree = @import("specs/agree.zig");
 pub const behavior = @import("specs/behavior_spec.zig");
 /// Scope ownership, clause by ratified clause (docs/OWNERSHIP.md).
 pub const ownership = @import("specs/ownership_spec.zig");
+/// Enums and the match statement, decision by decision
+/// (docs/ENUMS.md).
+pub const enums = @import("specs/enums_spec.zig");
 /// What the compiler must refuse, by stable diagnostic code.  The one
 /// spec that runs nothing: a program that does not compile has no
 /// engine to disagree about.
@@ -57,6 +60,7 @@ test {
     _ = agree;
     _ = behavior;
     _ = ownership;
+    _ = enums;
     _ = errors;
     _ = standard;
     _ = zip;

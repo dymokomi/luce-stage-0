@@ -5495,3 +5495,382 @@ test "luce.sema.type: a byte reaches a double unbidden but never a float" {
         5,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enums, and the match statement (docs/ENUMS.md)
+// ---------------------------------------------------------------------------
+//
+// The refusals the memo names, each pinned by its sentence.  The rule
+// they are all one rule of: an enum is a *set of names*, so everything
+// that would quietly turn it back into a number, or leave a name
+// unaccounted for, is refused where it is written.
+
+test "luce.sema.enum: two members may not hold one number" {
+    try expectSaying(
+        \\enum Method:
+        \\    stored = 0
+        \\    also_stored = 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.enum",
+        "stored and also_stored are both 0; every member of an enum holds its own number",
+    );
+    // Sequential defaults collide the same way, and are caught the
+    // same way: `c` is written 1 and `b` was given it.
+    try expectSaying(
+        \\enum Step:
+        \\    a
+        \\    b = 1
+        \\    c = 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.enum",
+        "b and c are both 1",
+    );
+}
+
+test "luce.sema.enum: a member past the backing width is refused, naming the width" {
+    try expectSaying(
+        \\enum Method(byte):
+        \\    stored = 0
+        \\    deflated = 300
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.enum",
+        "deflated = 300 does not fit byte, which holds 0 to 255",
+    );
+    // The width one rung up holds it, which is what the sentence
+    // suggests and what this proves.
+    try expectCompiles(
+        \\enum Method(short):
+        \\    stored = 0
+        \\    deflated = 300
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+}
+
+test "luce.sema.enum: the backing type is one of the four integer widths" {
+    try expectSaying(
+        \\enum Method(double):
+        \\    stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.enum",
+        "an enum is stored at an integer width: byte, short, int, or long — not double",
+    );
+}
+
+test "luce.sema.enum: an enum with no members is not a set of anything" {
+    try expectRejected(
+        \\enum Method:
+        \\    func none_of_them() -> long:
+        \\        return 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.enum");
+}
+
+test "luce.sema.match: a missing member is named, and so are all of them" {
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\    blue
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red:
+        \\            return
+        \\        green:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "this match has no arm for member blue of Colour",
+    );
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\    blue
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "this match has no arm for members green and blue of Colour",
+    );
+}
+
+test "luce.sema.match: an arm may not be written twice" {
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red:
+        \\            return
+        \\        red:
+        \\            return
+        \\        green:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "red already has an arm in this match",
+    );
+}
+
+test "luce.sema.match: an arm that names no member says so, and offers one" {
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        redd:
+        \\            return
+        \\        green:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "redd is not a member of Colour; did you mean red?",
+    );
+}
+
+test "luce.sema.match: an else that can never run is refused, like every dead arm" {
+    try expectSaying(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red:
+        \\            return
+        \\        green:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "every member of Colour already has an arm, so this else can never run; drop it",
+    );
+}
+
+test "luce.sema.match: the scrutinee is an enum and nothing else" {
+    try expectSaying(
+        \\func main():
+        \\    let n = 3
+        \\    match n:
+        \\        one:
+        \\            return
+        \\
+    ,
+        "luce.sema.match",
+        "match dispatches over an enum, and int is not one",
+    );
+}
+
+test "luce.sema.type: an enum has no order, and the sentence says what does" {
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let a = Method.stored
+        \\    let b = Method.deflated
+        \\    assert(a < b)
+        \\
+    ,
+        "luce.sema.type",
+        "Method is a set of names and has no order; write int(a) < int(b)",
+    );
+}
+
+test "luce.sema.type: a member is not a number and a number is not a member" {
+    // Neither direction is implicit (D4): the number has to be asked
+    // for, and so does the member.
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let m = Method.deflated
+        \\    assert(m == 1)
+        \\
+    ,
+        "luce.sema.type",
+        "operands of == are Method and int, and there is no conversion between them",
+    );
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let m: Method = 1
+        \\
+    ,
+        "luce.sema.type",
+        "m declared Method but initialized with int",
+    );
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func want(n: long) -> long:
+        \\    return n
+        \\
+        \\func main():
+        \\    assert(want(Method.stored) == 0)
+        \\
+    ,
+        "luce.sema.type",
+        "argument 1 of want is long, got Method",
+    );
+}
+
+test "luce.sema.convert: Method(x) reads a whole number" {
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let m = Method(1.5)
+        \\
+    ,
+        "luce.sema.convert",
+        "Method(value) reads a whole number and answers Method?; float is not one",
+    );
+}
+
+test "luce.sema.match: a member that does not exist is not a value either" {
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let m = Method.stord
+        \\
+    ,
+        "luce.sema.match",
+        "stord is not a member of Method; did you mean stored?",
+    );
+}
+
+test "luce.sema.duplicate: an enum shares the type-name space, and its members the member space" {
+    try expectSaying(
+        \\struct Method:
+        \\    size: long
+        \\
+        \\enum Method:
+        \\    stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.duplicate",
+        "duplicate name Method; the first is on line 1",
+    );
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\
+        \\    func stored() -> long:
+        \\        return 0
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.duplicate",
+        "enum Method already has member stored",
+    );
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.duplicate",
+        "duplicate member stored of enum Method",
+    );
+}
+
+test "luce.sema.const: a member folds, and Method(n) does not" {
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\let chosen = Method(1)
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.const",
+        "Method(…) answers Method?, and a constant is always there; name the member: Method.stored",
+    );
+}
+
+test "private on an enum gates nothing inside its own file" {
+    // Visibility is about the module boundary and there is no smaller
+    // one (VISIBILITY.md D1), so the mark is inert here.  What it does
+    // across a boundary — the type, a member, the constructor and a
+    // namespace function all withheld by name — needs two files, and
+    // is proved in `compile/test.zig`.
+    try expectCompiles(
+        \\private enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\    func first() -> Method:
+        \\        return Method.stored
+        \\
+        \\func main():
+        \\    let m = Method.stored
+        \\    assert(m == Method.first())
+        \\
+    );
+}

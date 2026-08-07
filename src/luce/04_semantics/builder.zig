@@ -1406,41 +1406,95 @@ pub const FunctionBuilder = struct {
     /// True when lowering this expression may end in a different basic
     /// block than it started: short-circuit `and`/`or` anywhere inside
     /// it branches and merges.
-    fn splitsBlocks(expression: *const ast.Expression, budget: u32) bool {
+    fn splitsBlocks(self: *const FunctionBuilder, expression: *const ast.Expression, budget: u32) bool {
         if (budget == 0) return true;
         const left = budget - 1;
         return switch (expression.*) {
             .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
                 binary.op == .coalesce or binary.op == .catch_error or
-                splitsBlocks(binary.left, left) or splitsBlocks(binary.right, left),
-            .unary => |unary| splitsBlocks(unary.operand, left),
-            .field => |field| splitsBlocks(field.target, left),
-            .call => |call| anySplits(call.arguments, left),
+                self.splitsBlocks(binary.left, left) or self.splitsBlocks(binary.right, left),
+            .unary => |unary| self.splitsBlocks(unary.operand, left),
+            .field => |field| self.splitsBlocks(field.target, left),
+            .call => |call| self.callSplits(call.callee) or self.anySplits(call.arguments, left),
             .new_object => |new| for (new.dims) |dimension| {
-                if (splitsBlocks(dimension, left)) break true;
+                if (self.splitsBlocks(dimension, left)) break true;
             } else false,
             .list_literal => |literal| for (literal.elements) |element| {
-                if (splitsBlocks(element, left)) break true;
+                if (self.splitsBlocks(element, left)) break true;
             } else false,
-            .index => |index| splitsBlocks(index.target, left) or for (index.indices) |item| {
-                if (splitsBlocks(item, left)) break true;
+            .index => |index| self.splitsBlocks(index.target, left) or for (index.indices) |item| {
+                if (self.splitsBlocks(item, left)) break true;
             } else false,
-            .slice_range => |slice| splitsBlocks(slice.target, left) or
-                (slice.start != null and splitsBlocks(slice.start.?, left)) or
-                (slice.end != null and splitsBlocks(slice.end.?, left)),
-            .method => |method| splitsBlocks(method.target, left) or
-                anySplits(method.arguments, left),
-            .give => |give| splitsBlocks(give.operand, left),
-            .copy => |copied| splitsBlocks(copied.operand, left),
+            .slice_range => |slice| self.splitsBlocks(slice.target, left) or
+                (slice.start != null and self.splitsBlocks(slice.start.?, left)) or
+                (slice.end != null and self.splitsBlocks(slice.end.?, left)),
+            .method => |method| self.callSplits(method.name) or
+                self.splitsBlocks(method.target, left) or
+                self.anySplits(method.arguments, left),
+            .give => |give| self.splitsBlocks(give.operand, left),
+            .copy => |copied| self.splitsBlocks(copied.operand, left),
             // A fallible call branches on its outcome, always.
             .try_call => true,
             else => false,
         };
     }
 
-    fn anySplits(arguments: []const ast.Argument, budget: u32) bool {
+    /// Whether a call written with this name may end in a different
+    /// block than it started.
+    ///
+    /// The two enum forms do: `string(m)` picks a member's name and
+    /// `Method(n)` picks a member, and both are the compare-and-branch
+    /// tree `match` is (docs/ENUMS.md D5, R2).  It is asked by **name**,
+    /// because this walk runs before any operand has a type — so
+    /// `string(count)` answers yes as well, and pays the one spill a
+    /// safe wrong answer costs here.
+    fn callSplits(self: *const FunctionBuilder, callee: []const u8) bool {
+        if (conversionNamed(callee)) |produces| return produces == .string;
+        return self.namesEnum(callee);
+    }
+
+    /// Whether a dotted chain, written inner-to-outer as
+    /// `helpers.dottedChain` collects it, spells an enum member:
+    /// `Method.stored`, `zip.Method.stored`.  The last part is the
+    /// member and everything in front of it names the enum.
+    fn namesMember(self: *FunctionBuilder, parts: []const []const u8) bool {
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = parts.len;
+        while (at > 1) {
+            at -= 1;
+            written.appendSlice(self.temporary(), parts[at]) catch return false;
+            if (at > 1) written.append(self.temporary(), '.') catch return false;
+        }
+        const spelled = written.items;
+        const index = found: {
+            if (parts.len == 2) {
+                const local = self.analyzer.qualify(self.prefix, spelled) catch return false;
+                break :found self.analyzer.enum_names.get(local) orelse return false;
+            }
+            break :found self.analyzer.enum_names.get(spelled) orelse return false;
+        };
+        return self.analyzer.enums.items[index].findMember(parts[0]) != null;
+    }
+
+    /// Whether a written name is an enum's, in this module or an
+    /// imported one.  Matched on the last segment, which is what a
+    /// method-form call hands over (`zip.Method(8)` arrives here as
+    /// `Method`), and over-matching only costs a spill.
+    fn namesEnum(self: *const FunctionBuilder, written: []const u8) bool {
+        var names = self.analyzer.enum_names.keyIterator();
+        while (names.next()) |key| {
+            const declared = key.*;
+            if (std.mem.eql(u8, declared, written)) return true;
+            const dot = std.mem.lastIndexOfScalar(u8, declared, '.') orelse continue;
+            if (std.mem.eql(u8, declared[dot + 1 ..], written)) return true;
+        }
+        return false;
+    }
+
+    fn anySplits(self: *const FunctionBuilder, arguments: []const ast.Argument, budget: u32) bool {
         for (arguments) |argument| {
-            if (splitsBlocks(argument.value, budget)) return true;
+            if (self.splitsBlocks(argument.value, budget)) return true;
         }
         return false;
     }
@@ -2065,7 +2119,7 @@ pub const FunctionBuilder = struct {
         while (backwards > 0) {
             backwards -= 1;
             later_splits[backwards] = any_split;
-            if (splitsBlocks(expressions[backwards], split_search_depth)) any_split = true;
+            if (self.splitsBlocks(expressions[backwards], split_search_depth)) any_split = true;
         }
 
         // Which operands still have something that could mutate a
@@ -4913,9 +4967,9 @@ pub const FunctionBuilder = struct {
     /// and `module.name` already travel: a head that a local shadows is
     /// a value, a bare head is this module's, and one dotted level
     /// reaches an imported enum.
-    fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
-        const chain = helpers.dottedChain(field.target) orelse return null;
-        if (self.findLocal(chain.head()) != null) return null;
+    fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!MemberAccess {
+        const chain = helpers.dottedChain(field.target) orelse return .not_a_member;
+        if (self.findLocal(chain.head()) != null) return .not_a_member;
 
         var written: std.ArrayList(u8) = .empty;
         defer written.deinit(self.temporary());
@@ -4932,10 +4986,10 @@ pub const FunctionBuilder = struct {
         const index = found: {
             if (chain.count == 1) {
                 const local = try self.analyzer.qualify(self.prefix, spelled);
-                break :found self.analyzer.enum_names.get(local) orelse return null;
+                break :found self.analyzer.enum_names.get(local) orelse return .not_a_member;
             }
-            if (!self.analyzer.importsModule(self.module, chain.head())) return null;
-            break :found self.analyzer.enum_names.get(spelled) orelse return null;
+            if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
+            break :found self.analyzer.enum_names.get(spelled) orelse return .not_a_member;
         };
         const info = self.analyzer.enum_decls.items[index];
         if (info.declaration.visibility == .private and info.module != self.module) {
@@ -4943,7 +4997,7 @@ pub const FunctionBuilder = struct {
                 info.declaration.name,
                 self.analyzer.moduleName(info.module),
             });
-            return null;
+            return .reported;
         }
         const declared = self.analyzer.enums.items[index];
         const of = self.analyzer.enumType(index);
@@ -4953,15 +5007,26 @@ pub const FunctionBuilder = struct {
             // (docs/METHODS.md); the shared sentence says so.
             const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared.name, field.name });
             const spelling = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ spelled, field.name });
-            if (try self.failNotAValue(spelling, qualified, field.span)) return null;
+            if (try self.failNotAValue(spelling, qualified, field.span)) return .reported;
             try self.failUnknownMember(declared, field.name, field.span);
-            return null;
+            return .reported;
         };
-        return .{
+        return .{ .value = .{
             .register = try self.code.emit(.{ .const_long = declared.members[member].value }, of),
             .value_type = of,
-        };
+        } };
     }
+
+    /// What a dotted access turned out to be: not an enum member at
+    /// all, one that was refused and reported, or the member's value.
+    /// The middle case is why this is not an optional — a name that was
+    /// already answered must not be lowered a second time as something
+    /// else, which is how one mistake became two messages.
+    const MemberAccess = union(enum) {
+        not_a_member,
+        reported,
+        value: Typed,
+    };
 
     fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         // A dotted chain whose head is a bare declaration name is a
@@ -4976,7 +5041,11 @@ pub const FunctionBuilder = struct {
         // (docs/ENUMS.md D3, D8).  It is asked first because it is the
         // one dotted form whose head names a *type* and whose answer is
         // a value; everything below reads a field of one.
-        if (try self.enumMemberAccess(field)) |member| return member;
+        switch (try self.enumMemberAccess(field)) {
+            .not_a_member => {},
+            .reported => return null,
+            .value => |member| return member,
+        }
         if (field.target.* == .name and self.findLocal(field.target.name.text) == null) {
             const base = field.target.name.text;
             if (self.analyzer.importsModule(self.module, base)) {
@@ -6120,6 +6189,11 @@ pub const FunctionBuilder = struct {
         // value; a head that names one but whose member is missing is
         // a call error, not a method fallback.
         const joined = written.items;
+        // `Method.stored.compressed()` — the chain in front of the call
+        // names a *member*, which is a value, so this is a method on
+        // one and not a namespace path (docs/ENUMS.md D3).  The same
+        // shape as the imported-constant case below, one enum earlier.
+        if (chain.count >= 2 and self.namesMember(parts[0..chain.count])) return .value;
         const head_qualified = try self.analyzer.qualify(self.prefix, head);
         if (self.analyzer.struct_names.contains(head_qualified) or
             self.analyzer.enum_names.contains(head_qualified))
@@ -6248,7 +6322,11 @@ pub const FunctionBuilder = struct {
             // rather than by ordering: `types.StructLayout` has no
             // functions field and `heapOf` answers null for a struct,
             // so the two arms above are unreachable for one.
-            if (receiver.value_type == .strukt) {
+            // An enum answers here too, and by the same rule: its
+            // functions are declared inside it and named `Method.f`, so
+            // `m.compressed()` *is* `Method.compressed(m)`
+            // (docs/ENUMS.md D7).
+            if (self.declaredName(receiver.value_type) != null) {
                 return self.lowerReceiverCall(method, values, as_statement, fallible_allowed, shape_position);
             }
             try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
