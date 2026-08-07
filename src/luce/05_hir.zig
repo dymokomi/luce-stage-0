@@ -77,6 +77,90 @@
 //! directions permanently.  Desugar `+=`, `for x in xs`, methods and
 //! f-strings freely; leave whole-array operations whole.
 //!
+//! ## What stands between here and there
+//!
+//! The other thing this stage would buy is the seam stage 4 does not
+//! have: **check** (names, types, visibility, narrowing, folding, every
+//! diagnostic) producing a typed tree, and **lower** (typed tree →
+//! MIR, mechanical and diagnostic-free) consuming it.  That seam is
+//! real and worth having, and it is *not* a matter of moving lines.
+//! Six couplings hold the two halves together in
+//! `04_semantics/builder.zig` today; each is named here with what it
+//! becomes on the far side, because the list is the work.
+//!
+//! 1. **The walk's currency is a MIR register.**  A checked expression
+//!    is `Typed{ register, value_type }` — a *typed register*.  Every
+//!    question the checker asks about a value it asks of a register.
+//!    On the far side a checked expression is an HIR node, and the
+//!    questions are asked of the node.
+//!
+//! 2. **Three of those questions are answered by reading emitted code
+//!    back off the tape.**  `producesFreshStorage` and
+//!    `borrowsStoredValue` switch on `code.instructions.items[register]`,
+//!    and `sourceOf` follows a `carried` link to find the instruction
+//!    that really made the value.  All three are asking what *kind of
+//!    expression* produced it, through the instruction as a proxy —
+//!    `producesFreshStorage`'s own comment says so.  On HIR they are
+//!    properties of the node kind.  **This is the one part of the move
+//!    that is an improvement rather than a relocation**, and it is
+//!    self-contained enough to do first, on its own, with the MIR
+//!    unchanged.
+//!
+//! 3. **A park can be retracted after it is emitted.**  `takeStorage`
+//!    is move-instead-of-copy (docs/STRINGS.md): it reaches back into a
+//!    statement temporary that has already been recorded, stops its
+//!    slot owning storage, and hands the storage to the place being
+//!    stored into.  Surgery on emitted code.  On the far side the owner
+//!    is decided during check — the ledger of statement temporaries
+//!    becomes an HIR-level ledger — and lower emits the decided form
+//!    once.
+//!
+//! 4. **`splitsBlocks` asks a MIR question about an AST subtree.**
+//!    Before lowering an operand batch, the checker scans each operand
+//!    to guess whether lowering it will end in a different basic block,
+//!    and spills the earlier operands if so.  It is a guess: it runs
+//!    before anything has a type, `callSplits` over-matches on purpose,
+//!    and the comment records that a wrong answer costs one spill.  On
+//!    the far side lower computes it exactly, because lower is the only
+//!    half that knows what a block is — and `splitsBlocks`,
+//!    `callSplits`, `anySplits` and `namesEnum` all go.  **But that
+//!    changes the emitted MIR** (fewer spills), so it cannot happen in
+//!    the same commit as a move that has to be byte-identical.  Keep
+//!    the guess through the move; delete it afterwards, measured.
+//!
+//! 5. **Narrowing keys on `LocalId`, which is stage 6's local table.**
+//!    The flow analysis is a set of `LocalId`s saved and joined around
+//!    each branch.  HIR needs a local numbering of its own, and lower
+//!    has to reproduce the same ids in the same order — which it will,
+//!    walking the same tree in the same order, but it is a thing to
+//!    check rather than assume.
+//!
+//! 6. **The constant pool is filled during checking.**  A string
+//!    literal is interned the moment it type-checks and its slot number
+//!    is baked into the instruction, so HIR has to carry the interned
+//!    slot rather than the bytes, or the pool comes out in a different
+//!    order.
+//!
+//! One shape argues for the move rather than against it: a fallible
+//! call opens a basic block in the middle of an expression and leaves
+//! it for the `try` or `catch` written in front of it to fill, the two
+//! coordinating through a one-hop `opened` field on the walker.  As an
+//! HIR node that is just `Try{ call }` — the sugar-stays-a-node
+//! argument, in the one place the fused walk is hardest to read.
+//!
+//! **How far stage 4 got without this stage.**  As far as it honestly
+//! can.  What could leave `builder.zig` under the file-boundary rule
+//! (docs/CODING_GUIDE.md — a split that forces a declaration `pub` for
+//! a sibling is the wrong split) has left it: `builtins.zig` (the
+//! tables, which were already published to the grammar tool and the
+//! site) and `effects.zig` (the two predicates that need no checker
+//! state at all).  Everything else in that file is a method on the
+//! walker, reaching the walker's scopes, its tape, or both — so the
+//! next legitimate cut is this seam, and there is no smaller one
+//! hiding behind it.  `constants.zig` came out of `declarations.zig`
+//! the same way, and is the shape to aim at: it answers with a value
+//! and never emits, which is exactly what `lower`'s input has to be.
+//!
 //! Until that pass is written, this file stays empty and honest.
 
 test {}
