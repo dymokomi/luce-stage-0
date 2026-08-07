@@ -177,6 +177,13 @@ private func name_flags(name: string) -> long:
 
 # --- reading ---------------------------------------------------------
 
+# The compression methods this module has, by the numbers APPNOTE
+# 4.4.5 gives them.  Every other number in that field is a method zip
+# cannot read, which is what `Method(n)` answering `Method?` says.
+private enum Method(short):
+    stored = 0
+    deflated = 8
+
 # One entry of an archive, as its central directory describes it.
 # The fields are the module's own — a program reads an entry through
 # the methods below and builds one only by reading an archive
@@ -208,8 +215,12 @@ struct Entry:
         return self.checksum
 
     # True when the entry is deflated rather than stored whole.
+    #
+    # The field holds the archive's own number, because a method zip
+    # cannot read still has to be named in a message; the comparison
+    # says which number by name.
     func deflated(self) -> bool:
-        return self.method == 8
+        return self.method == int(Method.deflated)
 
 # The offset of the end-of-central-directory record (APPNOTE 4.3.16),
 # found the way every reader finds it: from the back, because the
@@ -304,16 +315,19 @@ func extract(archive: list(long), entry: Entry) -> list(long)!:
     let stop = start + entry.packed_size
     if stop > len(archive):
         error("zip: " + entry.path + " runs past the end of the archive")
-    if entry.method == 0:
-        let stored = archive[start:stop]
-        try verify(entry, stored)
-        return stored
-    if entry.method == 8:
-        let packed = archive[start:stop]
-        let plain = try inflate(packed)
-        try verify(entry, plain)
-        return plain
-    error("zip: " + entry.path + " uses compression method " + string(entry.method) + ", which zip cannot read")
+    let method = Method(entry.method)
+    if method == none:
+        error("zip: " + entry.path + " uses compression method " + string(entry.method) + ", which zip cannot read")
+    match method:
+        stored:
+            let whole = archive[start:stop]
+            try verify(entry, whole)
+            return whole
+        deflated:
+            let packed = archive[start:stop]
+            let plain = try inflate(packed)
+            try verify(entry, plain)
+            return plain
 
 private func verify(entry: Entry, plain: list(long)) -> !:
     if len(plain) != entry.plain_size:
@@ -345,17 +359,17 @@ struct Writer:
         if compress:
             let squeezed = deflate(data)
             if len(squeezed) < len(data):
-                self.put_entry(name, 8, checksum, len(data), squeezed)
+                self.put_entry(name, Method.deflated, checksum, len(data), squeezed)
                 return
-        self.put_entry(name, 0, checksum, len(data), data)
+        self.put_entry(name, Method.stored, checksum, len(data), data)
 
     # The local file header, APPNOTE 4.3.7, field for field.
-    private func put_entry(self, name: string, method: long, checksum: long, plain_size: long, packed: list(long)):
+    private func put_entry(self, name: string, method: Method, checksum: long, plain_size: long, packed: list(long)):
         let header = len(self.out)
         put_u32(self.out, 0x0403_4B50)
         put_u16(self.out, version_for(method))
         put_u16(self.out, name_flags(name))
-        put_u16(self.out, method)
+        put_u16(self.out, int(method))
         put_u16(self.out, 0)
         put_u16(self.out, 0x0021)
         put_u32(self.out, checksum)
@@ -366,7 +380,7 @@ struct Writer:
         put_text(self.out, name)
         for value in packed:
             self.out.append(value)
-        self.written.append(Entry(path = name, method = method, checksum = checksum, packed_size = len(packed), plain_size = plain_size, header_at = header))
+        self.written.append(Entry(path = name, method = int(method), checksum = checksum, packed_size = len(packed), plain_size = plain_size, header_at = header))
 
     # The whole archive: everything added, then the central directory
     # over it.  A fresh list every time, so the writer stays usable.
@@ -381,7 +395,10 @@ struct Writer:
         for entry in self.written:
             put_u32(archive, 0x0201_4B50)
             put_u16(archive, 20)
-            put_u16(archive, version_for(entry.method))
+            # Every entry in `written` was written by `put_entry`, so
+            # its method is one of the two this module has.
+            let method = Method(entry.method) else Method.stored
+            put_u16(archive, version_for(method))
             put_u16(archive, name_flags(entry.path))
             put_u16(archive, entry.method)
             put_u16(archive, 0)
@@ -418,10 +435,12 @@ func writer() -> Writer:
 # The lowest version that can read an entry, APPNOTE 4.4.3.2: 1.0 for
 # a stored file, 2.0 for a deflated one, spelled the way 4.4.2.3
 # spells a version — ten times the major plus the minor.
-private func version_for(method: long) -> long:
-    if method == 8:
-        return 20
-    return 10
+private func version_for(method: Method) -> long:
+    match method:
+        stored:
+            return 10
+        deflated:
+            return 20
 
 # --- the DEFLATE tables ----------------------------------------------
 #
@@ -500,6 +519,15 @@ private func huffman(lengths: list(long), counts: list(long), symbols: list(long
             offsets[length] += 1
 
 # --- inflate ---------------------------------------------------------
+
+# The three block types RFC 1951 §3.2.3 gives BTYPE, by their numbers.
+# The fourth value the two bits can hold is reserved, and a stream
+# that uses it is damaged — which is what `Block(n)` answering
+# `Block?` says, and what the arms below then need no `else` for.
+private enum Block(byte):
+    stored = 0
+    fixed = 1
+    dynamic = 2
 
 # The decoder's cursor: one bit position into the compressed bytes.
 # It carries no objects, which is what lets every method write the
@@ -701,15 +729,16 @@ func inflate(data: list(long)) -> list(long)!:
     var last: long = 0
     while last == 0:
         last = try reader.take(data, 1)
-        let kind = try reader.take(data, 2)
-        if kind == 0:
-            try reader.stored(data, out)
-        elif kind == 1:
-            try reader.fixed(data, out)
-        elif kind == 2:
-            try reader.dynamic(data, out)
-        else:
+        let kind = Block(try reader.take(data, 2))
+        if kind == none:
             error("zip: the compressed stream has a block of an unknown kind")
+        match kind:
+            stored:
+                try reader.stored(data, out)
+            fixed:
+                try reader.fixed(data, out)
+            dynamic:
+                try reader.dynamic(data, out)
     return out
 
 # --- deflate ---------------------------------------------------------
