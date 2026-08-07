@@ -148,7 +148,7 @@
       "patterns": [
         {
           "name": "keyword.control.luce",
-          "match": "\\b(?:if|elif|else|while|for|in|return|break|continue)\\b"
+          "match": "\\b(?:match|if|elif|else|while|for|in|return|break|continue)\\b"
         },
         {
           "name": "keyword.operator.word.luce",
@@ -156,7 +156,7 @@
         },
         {
           "name": "storage.type.luce",
-          "match": "\\b(?:func|struct|let|var)\\b"
+          "match": "\\b(?:func|struct|enum|let|var)\\b"
         },
         {
           "name": "storage.modifier.luce",

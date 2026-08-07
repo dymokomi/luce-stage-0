@@ -123,6 +123,13 @@ pub const Analyzer = struct {
     struct_shapes: std.ArrayList(StructShape) = .empty,
     heap_types: std.ArrayList(types.HeapType) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The declared enums, in declaration order (docs/ENUMS.md).  They
+    /// share the type-name space with structs — a program that declares
+    /// both `struct Method` and `enum Method` has declared one name
+    /// twice — so `firstDeclarationOf` reads both.
+    enums: std.ArrayList(types.EnumType) = .empty,
+    enum_decls: std.ArrayList(context.EnumDeclInfo) = .empty,
+    enum_names: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// The program's string constants.  A `Program` field, so the
@@ -144,6 +151,8 @@ pub const Analyzer = struct {
         self.struct_decls.deinit(self.temporary);
         self.struct_shapes.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
+        self.enum_decls.deinit(self.temporary);
+        self.enum_names.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
@@ -173,8 +182,16 @@ pub const Analyzer = struct {
     }
 
     fn run(self: *Analyzer) Error!?Analyzed {
+        // Enum *names* first: a struct field, a parameter or a
+        // constant's annotation may name one, and a name has to be
+        // resolvable before any type is (docs/ENUMS.md).  Their member
+        // *values* are folded after the constant names are registered,
+        // because `= base + 1` may name a constant.
+        try self.collectEnumNames();
         try self.collectStructs();
-        try self.collectConstants();
+        try self.registerConstants();
+        try self.settleEnumMembers();
+        try self.foldConstants();
         try self.settleFieldDefaults();
         try self.collectFunctions();
         try self.synthesizeShapes();
@@ -192,6 +209,7 @@ pub const Analyzer = struct {
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
+            .enums = try self.enums.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.pool.items.toOwnedSlice(self.arena),
             .entry_function = entry_index,
@@ -234,17 +252,25 @@ pub const Analyzer = struct {
         return if (prefix.len == 0) "this file" else prefix;
     }
 
-    /// The private struct `of` mentions, if any — transitively through
-    /// containers and optionals, because a `list(Inner)` in a public
-    /// signature publishes Inner exactly as a bare `Inner` would
-    /// (docs/VISIBILITY.md §2).  It does not look *into* a struct's
-    /// fields: mentioning a public struct that privately holds hidden
-    /// types publishes nothing, and those fields were checked at their
-    /// own declaration.
-    pub fn privateMentioned(self: *const Analyzer, of: Type) ?u32 {
+    /// The name of the private declaration `of` mentions, if any —
+    /// transitively through containers and optionals, because a
+    /// `list(Inner)` in a public signature publishes Inner exactly as a
+    /// bare `Inner` would (docs/VISIBILITY.md §2).  It does not look
+    /// *into* a struct's fields: mentioning a public struct that
+    /// privately holds hidden types publishes nothing, and those fields
+    /// were checked at their own declaration.
+    ///
+    /// The **name** rather than an index, because two kinds of
+    /// declaration can be the hidden one now — a struct and an enum —
+    /// and every caller wants the same one thing to put in a sentence.
+    pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
         return switch (of) {
             .strukt => |index| if (self.struct_decls.items[index].declaration.visibility == .private)
-                index
+                self.struct_decls.items[index].declaration.name
+            else
+                null,
+            .enumeration => |reference| if (self.enum_decls.items[reference.index].declaration.visibility == .private)
+                self.enum_decls.items[reference.index].declaration.name
             else
                 null,
             .heap => |index| switch (self.heap_types.items[index]) {
@@ -369,6 +395,21 @@ pub const Analyzer = struct {
                 }
                 const key = (try self.resolveType(module, written.arguments[0])) orelse return null;
                 if (key != .long and key != .string) {
+                    // An enum is a value at a width like any other, and
+                    // the width a map may key by is `long` — the same
+                    // rule that refuses `map(int, V)`, met by a type
+                    // that has a name for its number.  So the sentence
+                    // names the number rather than stopping at the
+                    // rule (docs/ENUMS.md, As built).
+                    if (key == .enumeration) {
+                        try self.fail(
+                            "luce.sema.type",
+                            written.arguments[0].span,
+                            "map keys are long or string; key by long(m) and keep {s} in the value, or use a list indexed by int(m)",
+                            .{try self.typeName(key)},
+                        );
+                        return null;
+                    }
                     try self.fail("luce.sema.type", written.arguments[0].span, "map keys are long or string", .{});
                     return null;
                 }
@@ -425,11 +466,25 @@ pub const Analyzer = struct {
                 }
                 return .{ .strukt = index };
             }
+            if (self.enum_names.get(written.name)) |index| {
+                const info = self.enum_decls.items[index];
+                if (!reachable(info.module, info.declaration.visibility, module)) {
+                    try self.fail(
+                        "luce.sema.private",
+                        written.span,
+                        "{s} is private to {s}",
+                        .{ info.declaration.name, self.moduleName(info.module) },
+                    );
+                    return null;
+                }
+                return self.enumType(index);
+            }
             try self.failUnknownType(module, written);
             return null;
         }
         const local = try self.qualify(self.modules[module].prefix, written.name);
         if (self.struct_names.get(local)) |index| return .{ .strukt = index };
+        if (self.enum_names.get(local)) |index| return self.enumType(index);
         try self.failUnknownType(module, written);
         return null;
     }
@@ -457,14 +512,16 @@ pub const Analyzer = struct {
         const prefix = self.modules[module].prefix;
         var suggestion = helpers.Suggestion.init(written.name);
         suggestion.offerAll(&builtin_types);
-        var keys = self.struct_names.keyIterator();
-        while (keys.next()) |key| {
-            if (prefix.len == 0) {
-                suggestion.offer(key.*);
-            } else if (key.len > prefix.len + 1 and
-                std.mem.startsWith(u8, key.*, prefix) and key.*[prefix.len] == '.')
-            {
-                suggestion.offer(key.*[prefix.len + 1 ..]);
+        for ([_]*const std.StringHashMapUnmanaged(u32){ &self.struct_names, &self.enum_names }) |declared| {
+            var keys = declared.keyIterator();
+            while (keys.next()) |key| {
+                if (prefix.len == 0) {
+                    suggestion.offer(key.*);
+                } else if (key.len > prefix.len + 1 and
+                    std.mem.startsWith(u8, key.*, prefix) and key.*[prefix.len] == '.')
+                {
+                    suggestion.offer(key.*[prefix.len + 1 ..]);
+                }
             }
         }
         if (suggestion.best()) |closest| {
@@ -557,6 +614,218 @@ pub const Analyzer = struct {
         };
     }
 
+    // -- pass one: enums, names then values -------------------------------
+
+    /// Register every declared enum's name and backing width
+    /// (docs/ENUMS.md D1, D2).  The members are collected here too,
+    /// with their names and their *positions*; the values are folded by
+    /// `settleEnumMembers` below, once every name in the program
+    /// exists.
+    fn collectEnumNames(self: *Analyzer) Error!void {
+        for (self.modules, 0..) |module, module_index| {
+            self.diagnostics.scope = module.file;
+            for (module.tree.enums) |*declaration| {
+                if (isReserved(declaration.name)) {
+                    try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
+                    continue;
+                }
+                if (types.builtinNamed(declaration.name) != null) {
+                    try self.fail(
+                        "luce.sema.reserved",
+                        declaration.name_span,
+                        "{s} is a builtin type; an enum of your own takes a name of its own",
+                        .{declaration.name},
+                    );
+                    continue;
+                }
+                const qualified = try self.qualify(module.prefix, declaration.name);
+                if (try self.firstDeclarationOf(qualified)) |where| {
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                        declaration.name,
+                        where,
+                    });
+                    continue;
+                }
+                // **Whichever was written first is the first.**  Enums
+                // are collected before structs — a struct field may name
+                // one — so a struct of the same name is still invisible
+                // here; the one this file *reads* first is decided by
+                // where the two stand, not by which table filled first.
+                // A struct above this enum reports here; a struct below
+                // it lets the enum register and reports there.
+                if (structDeclaredAbove(module.tree.*, declaration)) |first| {
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                        declaration.name,
+                        try self.declaredAt(module.file, first.name_span),
+                    });
+                    continue;
+                }
+                // The width, before the members: it is what says which
+                // of them fit, and the default is `int` (D2).
+                var backing: types.Type.EnumRef.Backing = .int;
+                if (declaration.backing) |written| {
+                    const resolved = (try self.resolveType(module_index, written)) orelse continue;
+                    backing = types.Type.EnumRef.Backing.of(resolved) orelse {
+                        try self.fail(
+                            "luce.sema.enum",
+                            written.span,
+                            "an enum is stored at an integer width: byte, short, int, or long — not {s}",
+                            .{try self.typeName(resolved)},
+                        );
+                        continue;
+                    };
+                }
+                if (declaration.members.len == 0) {
+                    try self.fail(
+                        "luce.sema.enum",
+                        declaration.span,
+                        "enum {s} names no members; an enum is the set of names it declares",
+                        .{declaration.name},
+                    );
+                    continue;
+                }
+                var members: std.ArrayList(types.EnumMember) = .empty;
+                defer members.deinit(self.arena);
+                for (declaration.members) |member| {
+                    if (isReserved(member.name)) {
+                        try self.fail("luce.sema.reserved", member.name_span, "{s} is a reserved name", .{member.name});
+                        continue;
+                    }
+                    var duplicate = false;
+                    for (members.items) |existing| {
+                        if (std.mem.eql(u8, existing.name, member.name)) duplicate = true;
+                    }
+                    if (duplicate) {
+                        try self.fail(
+                            "luce.sema.duplicate",
+                            member.name_span,
+                            "duplicate member {s} of enum {s}",
+                            .{ member.name, declaration.name },
+                        );
+                        continue;
+                    }
+                    // A function of the enum may not wear a member's
+                    // name: `Method.stored` would mean two things, and
+                    // the head-names-a-declaration path answers one.
+                    for (declaration.functions) |function| {
+                        if (!std.mem.eql(u8, function.name, member.name)) continue;
+                        try self.fail(
+                            "luce.sema.duplicate",
+                            function.span,
+                            "enum {s} already has member {s}",
+                            .{ declaration.name, function.name },
+                        );
+                    }
+                    try members.append(self.arena, .{ .name = try self.arena.dupe(u8, member.name), .value = 0 });
+                }
+                if (members.items.len == 0) continue; // every member was refused
+                const index: u32 = @intCast(self.enums.items.len);
+                try self.enum_names.put(self.temporary, qualified, index);
+                try self.enum_decls.append(self.temporary, .{
+                    .declaration = declaration,
+                    .module = module_index,
+                });
+                try self.enums.append(self.arena, .{
+                    .name = try self.arena.dupe(u8, qualified),
+                    .backing = backing,
+                    .members = try members.toOwnedSlice(self.arena),
+                });
+            }
+        }
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// The struct of this module that takes `declaration`'s name and
+    /// stands above it in the file, or null.
+    fn structDeclaredAbove(tree: ast.Program, declaration: *const ast.EnumDecl) ?*const ast.StructDecl {
+        for (tree.structs) |*strukt| {
+            if (!std.mem.eql(u8, strukt.name, declaration.name)) continue;
+            if (strukt.name_span.start < declaration.name_span.start) return strukt;
+        }
+        return null;
+    }
+
+    /// Fold every member's value, in declaration order (D1): a written
+    /// `= EXPRESSION` is folded by the constant folder, an unvalued
+    /// member takes the one before it plus one, and an unvalued first
+    /// member is 0 — the C rule, verbatim.  Two members with one value
+    /// are refused by name, and a value the backing width cannot hold
+    /// is refused by the sentence a literal already gets.
+    fn settleEnumMembers(self: *Analyzer) Error!void {
+        for (0..self.enum_decls.items.len) |index| {
+            const info = self.enum_decls.items[index];
+            self.diagnostics.scope = self.modules[info.module].file;
+            const backing = self.enums.items[index].backing.asType();
+            const bounds = backing.integerRange();
+            var next: i128 = 0;
+            // The declaration's members and the collected ones differ
+            // where one was refused, so they are walked by name.
+            for (info.declaration.members) |written| {
+                const slot = self.enums.items[index].findMember(written.name) orelse continue;
+                var value: i128 = next;
+                if (written.value) |expression| {
+                    // Folded at `long` rather than at the backing
+                    // width, so a value the width cannot hold is
+                    // refused by *this* stage's sentence — the one that
+                    // names the enum's width and the fix for it —
+                    // rather than by the literal's, which would talk
+                    // about a place the reader never wrote.
+                    const folded = (try self.foldConstant(info.module, expression, .long)) orelse continue;
+                    if (folded.value != .long or !folded.value_type.isInteger()) {
+                        try self.fail(
+                            "luce.sema.enum",
+                            expression.span(),
+                            "a member's value is a constant integer; {s} is {s}",
+                            .{ written.name, try self.typeName(folded.value_type) },
+                        );
+                        continue;
+                    }
+                    value = folded.value.long;
+                }
+                if (value < bounds.low or value > bounds.high) {
+                    try self.fail(
+                        "luce.sema.enum",
+                        written.span,
+                        "{s} = {d} does not fit {s}, which holds {d} to {d}; write the enum's width wider — enum {s}(long):",
+                        .{
+                            written.name,
+                            value,
+                            try self.typeName(backing),
+                            bounds.low,
+                            bounds.high,
+                            info.declaration.name,
+                        },
+                    );
+                    continue;
+                }
+                // An alias is a `let` if a program wants one: two names
+                // for one number make `string(m)` a coin toss and
+                // `match` a set of arms that cannot all be reached.
+                for (self.enums.items[index].members[0..slot]) |earlier| {
+                    if (earlier.value != @as(i64, @intCast(value))) continue;
+                    try self.fail(
+                        "luce.sema.enum",
+                        written.span,
+                        "{s} and {s} are both {d}; every member of an enum holds its own number, and a second name for one is a let",
+                        .{ earlier.name, written.name, value },
+                    );
+                    break;
+                }
+                self.enums.items[index].members[slot].value = @intCast(value);
+                next = value + 1;
+            }
+            self.enum_decls.items[index].settled = true;
+        }
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// The enum a written name resolves to, with its width — the one
+    /// place an `EnumRef` is built, so the width beside an index is
+    /// always the width that index declares.
+    pub fn enumType(self: *const Analyzer, index: u32) Type {
+        return .{ .enumeration = .{ .index = index, .backing = self.enums.items[index].backing } };
+    }
+
     // -- pass one: struct layouts -----------------------------------------
 
     fn collectStructs(self: *Analyzer) Error!void {
@@ -570,6 +839,11 @@ pub const Analyzer = struct {
                 for (module.tree.structs) |declaration| {
                     if (std.mem.eql(u8, declaration.name, imported.name)) {
                         try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a struct of the same name", .{imported.name});
+                    }
+                }
+                for (module.tree.enums) |declaration| {
+                    if (std.mem.eql(u8, declaration.name, imported.name)) {
+                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with an enum of the same name", .{imported.name});
                     }
                 }
             }
@@ -598,11 +872,12 @@ pub const Analyzer = struct {
                     continue;
                 }
                 const qualified = try self.qualify(module.prefix, declaration.name);
-                if (self.struct_names.get(qualified)) |first| {
-                    const info = self.struct_decls.items[first];
-                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate struct {s}; the first is{s}", .{
+                // Structs and enums share the type-name space: one
+                // name, one declaration, whichever keyword wrote it.
+                if (try self.firstDeclarationOf(qualified)) |where| {
+                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
                         declaration.name,
-                        try self.declaredAt(self.modules[info.module].file, info.declaration.name_span),
+                        where,
                     });
                     continue;
                 }
@@ -669,7 +944,6 @@ pub const Analyzer = struct {
                 // about the struct that holds it.
                 if (declaration.visibility != .private and field.visibility != .private) {
                     if (self.privateMentioned(field_type)) |hidden| {
-                        const target = self.struct_decls.items[hidden].declaration;
                         try self.fail(
                             "luce.sema.private",
                             field.type_name.span,
@@ -677,10 +951,10 @@ pub const Analyzer = struct {
                             .{
                                 field.name,
                                 declaration.name,
-                                target.name,
+                                hidden,
                                 self.markedIn(info.module),
                                 field.name,
-                                target.name,
+                                hidden,
                             },
                         );
                     }
@@ -1044,7 +1318,7 @@ pub const Analyzer = struct {
     /// each one so every error reports even when nothing uses it.
     // -- pass one: file-scope constants, folded ---------------------------
 
-    fn collectConstants(self: *Analyzer) Error!void {
+    fn registerConstants(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
             for (module.tree.constants) |*declaration| {
@@ -1068,6 +1342,15 @@ pub const Analyzer = struct {
                 });
             }
         }
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// Fold every registered constant, so an error in one reports even
+    /// when nothing uses it.  Separate from the registration above
+    /// because an enum member's value may name a constant and a
+    /// constant may name an enum member: the names all exist by the
+    /// time either fold runs (docs/ENUMS.md D8).
+    fn foldConstants(self: *Analyzer) Error!void {
         for (0..self.constant_infos.items.len) |index| {
             const module = self.constant_infos.items[index].module;
             self.diagnostics.scope = self.modules[module].file;
@@ -1079,17 +1362,16 @@ pub const Analyzer = struct {
                 const info = self.constant_infos.items[index];
                 if (info.declaration.visibility == .private) continue;
                 if (self.privateMentioned(value.value_type)) |hidden| {
-                    const target = self.struct_decls.items[hidden].declaration;
                     try self.fail(
                         "luce.sema.private",
                         info.declaration.name_span,
                         "{s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
                         .{
                             info.declaration.name,
-                            target.name,
+                            hidden,
                             self.markedIn(info.module),
                             info.declaration.name,
-                            target.name,
+                            hidden,
                         },
                     );
                 }
@@ -1302,6 +1584,9 @@ pub const Analyzer = struct {
                 return self.constantError(name.span, "unknown name {s} in a constant (constants may use literals and other constants)", .{name.text});
             },
             .field => |field| {
+                // `Method.stored` — a member *is* a constant, so it
+                // folds wherever constants fold (docs/ENUMS.md D8).
+                if (try self.foldEnumMember(module, field)) |member| return member;
                 // geo.pi — an imported module's constant...
                 if (field.target.* == .name) {
                     const head = field.target.name.text;
@@ -1414,6 +1699,22 @@ pub const Analyzer = struct {
                 if (self.struct_names.get(qualified)) |layout_index| {
                     return self.foldConstruct(module, call.arguments, call.span, layout_index);
                 }
+                // `Method(8)` answers `Method?` (docs/ENUMS.md R2), and
+                // a constant is a value that is *there* — the same
+                // reason `else` and `catch` have nothing to do in one.
+                // The member is the constant the reader wanted.
+                if (self.enum_names.get(qualified)) |enum_index| {
+                    return self.constantError(
+                        call.span,
+                        "{s}(…) answers {s}?, and a constant is always there; name the member: {s}.{s}",
+                        .{
+                            call.callee,
+                            self.enums.items[enum_index].name,
+                            call.callee,
+                            self.enums.items[enum_index].members[0].name,
+                        },
+                    );
+                }
                 if (self.fold_subject) |subject| {
                     return self.constantError(call.span, "{s} is a constant: {s}(…) is a call", .{ subject, call.callee });
                 }
@@ -1450,8 +1751,75 @@ pub const Analyzer = struct {
         }
     }
 
+    /// `Method.stored` in a constant position — the folder's twin of
+    /// `builder.enumMemberAccess`, and it has to be a twin: a file-scope
+    /// `let` is folded here and a local one is lowered there, and the
+    /// two must agree about what a member is (docs/ENUMS.md D8).
+    ///
+    /// Null when the dotted head names no enum this module can see,
+    /// which leaves every other reading of a `.` to the caller.
+    fn foldEnumMember(self: *Analyzer, module: usize, field: ast.FieldAccess) Error!?TypedConstant {
+        const chain = helpers.dottedChain(field.target) orelse return null;
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary);
+        var at = chain.count;
+        while (at > 0) {
+            at -= 1;
+            if (written.items.len != 0) try written.append(self.temporary, '.');
+            try written.appendSlice(self.temporary, chain.parts[at]);
+        }
+        const index = found: {
+            if (chain.count == 1) {
+                const local = try self.qualify(self.modules[module].prefix, written.items);
+                break :found self.enum_names.get(local) orelse return null;
+            }
+            if (!self.importsModule(module, chain.head())) return null;
+            break :found self.enum_names.get(written.items) orelse return null;
+        };
+        const info = self.enum_decls.items[index];
+        if (info.declaration.visibility == .private and info.module != module) {
+            try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
+                info.declaration.name,
+                self.moduleName(info.module),
+            });
+            return null;
+        }
+        // Member values are folded in declaration order, so an enum the
+        // fold has not reached yet has nothing to answer with.
+        if (!info.settled) {
+            return self.constantError(
+                field.span,
+                "{s} is not settled yet: an enum's members are folded in declaration order, so {s} has to be declared above this one",
+                .{ self.enums.items[index].name, self.enums.items[index].name },
+            );
+        }
+        const declared = self.enums.items[index];
+        const member = declared.findMember(field.name) orelse {
+            return self.constantError(field.span, "{s} is not a member of {s}", .{ field.name, declared.name });
+        };
+        return .{
+            .value = .{ .long = declared.members[member].value },
+            .value_type = self.enumType(index),
+        };
+    }
+
     fn foldConvert(self: *Analyzer, call: ast.Call, operand: TypedConstant) Error!?TypedConstant {
         const produces = types.conversionNamed(call.callee).?;
+        // An enum's two conversions fold like everything else here, and
+        // to the same answers a run gives: `string(m)` is the member's
+        // *name* and every numeric constructor is its number at that
+        // width (docs/ENUMS.md D4, D5).
+        if (operand.value_type == .enumeration) {
+            const declared = self.enums.items[operand.value_type.enumeration.index];
+            if (produces == .string) {
+                const member = declared.memberOfValue(operand.value.long).?;
+                return .{ .value = .{ .string = declared.members[member].name }, .value_type = .string };
+            }
+            return self.foldConvert(call, .{
+                .value = operand.value,
+                .value_type = declared.backing.asType(),
+            });
+        }
         if (produces == .string) {
             // The same text a run would print, spelled by the same
             // rules — but from a constant, so it is arena-owned here
@@ -1861,6 +2229,14 @@ pub const Analyzer = struct {
             },
             .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => {
                 const ordering = binary.op != .equal and binary.op != .not_equal;
+                // Equality only, folded or run (docs/ENUMS.md D6).
+                if (ordering and left.value_type == .enumeration) {
+                    return self.constantError(
+                        binary.span,
+                        "{s} is a set of names and has no order; write int(…) on both sides to compare the numbers behind them",
+                        .{try self.typeName(left.value_type)},
+                    );
+                }
                 const folded: bool = switch (left.value) {
                     .long => |a| helpers.compareOrder(binary.op, a, right.value.long),
                     .double => |a| helpers.compareOrder(binary.op, a, right.value.double),
@@ -1913,7 +2289,35 @@ pub const Analyzer = struct {
                         function.name,
                     });
                     const qualified = try self.qualify(module.prefix, member);
-                    try self.collectFunction(function, qualified, module_index, false, owner);
+                    try self.collectFunction(
+                        function,
+                        qualified,
+                        module_index,
+                        false,
+                        if (owner) |index| .{ .strukt = index } else null,
+                    );
+                }
+            }
+            // An enum's functions are collected exactly as a struct's
+            // are, and named the same way: `Method.name` is one lookup
+            // whichever keyword declared `Method` (docs/ENUMS.md D7).
+            for (module.tree.enums) |*declaration| {
+                const owner = self.enum_names.get(
+                    try self.qualify(module.prefix, declaration.name),
+                );
+                for (declaration.functions) |*function| {
+                    const member = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+                        declaration.name,
+                        function.name,
+                    });
+                    const qualified = try self.qualify(module.prefix, member);
+                    try self.collectFunction(
+                        function,
+                        qualified,
+                        module_index,
+                        false,
+                        if (owner) |index| .{ .enumeration = self.enumType(index).enumeration } else null,
+                    );
                 }
             }
         }
@@ -1927,10 +2331,10 @@ pub const Analyzer = struct {
         name: []const u8,
         module: usize,
         top_level: bool,
-        /// The struct this declaration sits inside, or null at file
-        /// scope.  It is what gives `self` its type, and what makes
-        /// `self` at file scope a diagnostic rather than a crash.
-        enclosing: ?u32,
+        /// The declaration this one sits inside, or null at file scope.
+        /// It is what gives `self` its type, and what makes `self` at
+        /// file scope a diagnostic rather than a crash.
+        enclosing: ?context.Enclosing,
     ) Error!void {
         const in_root = self.modules[module].prefix.len == 0;
         if (isReserved(declaration.name)) {
@@ -1939,7 +2343,7 @@ pub const Analyzer = struct {
         }
         if (self.function_names.contains(name) or
             self.constant_names.contains(name) or
-            (top_level and self.struct_names.contains(name)))
+            (top_level and (self.struct_names.contains(name) or self.enum_names.contains(name))))
         {
             try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
                 declaration.name,
@@ -1966,8 +2370,10 @@ pub const Analyzer = struct {
         // surface, for D4 below: a private function, or any member of
         // a private struct, publishes nothing.
         const surface = declaration.visibility != .private and
-            (enclosing == null or
-                self.struct_decls.items[enclosing.?].declaration.visibility != .private);
+            (enclosing == null or switch (enclosing.?) {
+                .strukt => |index| self.struct_decls.items[index].declaration.visibility != .private,
+                .enumeration => |reference| self.enum_decls.items[reference.index].declaration.visibility != .private,
+            });
         var parameter_types: std.ArrayList(Type) = .empty;
         defer parameter_types.deinit(self.arena);
         var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
@@ -1992,11 +2398,12 @@ pub const Analyzer = struct {
                     try self.fail(
                         "luce.sema.self",
                         parameter.span,
-                        "self is only a parameter of a function declared inside a struct",
+                        "self is only a parameter of a function declared inside a struct or an enum",
                         .{},
                     );
                     continue;
                 };
+                const receiver_type = owner.asType();
                 // A `var self` method writes its receiver back to
                 // the receiver's place, and that write is a pure value
                 // store — which it can only be if the struct carries
@@ -2005,17 +2412,17 @@ pub const Analyzer = struct {
                 // corpus, and a struct that *does* carry objects
                 // mutates through its fields from a plain `self` (S38),
                 // which needs no write-back at all (docs/METHODS.md).
-                if (parameter.receiver == .writes and self.carriesObjects(.{ .strukt = owner })) {
+                if (parameter.receiver == .writes and self.carriesObjects(receiver_type)) {
                     try self.fail(
                         "luce.sema.self",
                         parameter.span,
                         "{s} carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
-                        .{self.structs.items[owner].name},
+                        .{try self.typeName(receiver_type)},
                     );
                     continue;
                 }
                 receiver = parameter.receiver;
-                try parameter_types.append(self.arena, .{ .strukt = owner });
+                try parameter_types.append(self.arena, receiver_type);
                 try parameter_modes.append(self.arena, .borrow);
                 try parameter_defaults.append(self.arena, null);
                 continue;
@@ -2026,12 +2433,11 @@ pub const Analyzer = struct {
             // both edits that would restore honesty (VISIBILITY.md §2).
             if (surface) {
                 if (self.privateMentioned(resolved)) |hidden| {
-                    const target = self.struct_decls.items[hidden].declaration;
                     try self.fail(
                         "luce.sema.private",
                         parameter.type_name.span,
                         "{s} is public and takes {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
-                        .{ declaration.name, target.name, self.markedIn(module), declaration.name, target.name },
+                        .{ declaration.name, hidden, self.markedIn(module), declaration.name, hidden },
                     );
                     continue;
                 }
@@ -2078,12 +2484,11 @@ pub const Analyzer = struct {
             const resolved = (try self.resolveType(module, written)) orelse continue;
             if (surface) {
                 if (self.privateMentioned(resolved)) |hidden| {
-                    const target = self.struct_decls.items[hidden].declaration;
                     try self.fail(
                         "luce.sema.private",
                         written.span,
                         "{s} is public and answers {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
-                        .{ declaration.name, target.name, self.markedIn(module), declaration.name, target.name },
+                        .{ declaration.name, hidden, self.markedIn(module), declaration.name, hidden },
                     );
                     continue;
                 }
@@ -2096,7 +2501,7 @@ pub const Analyzer = struct {
         // separate from the return mechanism (docs/RETURNS.md §5).
         var channel: std.ArrayList(Type) = .empty;
         defer channel.deinit(self.arena);
-        if (receiver == .writes) try channel.append(self.arena, .{ .strukt = enclosing.? });
+        if (receiver == .writes) try channel.append(self.arena, enclosing.?.asType());
         try channel.appendSlice(self.arena, results.items);
         // The synthesized layout a return shape rides in is settled
         // after every signature is collected — `synthesizeShapes`
@@ -2572,7 +2977,13 @@ pub const Analyzer = struct {
     }
 
     pub fn typeName(self: *Analyzer, of: Type) Error![]const u8 {
-        return types.typeName(self.arena, self.structs.items, self.heap_types.items, of);
+        return types.typeName(
+            self.arena,
+            self.structs.items,
+            self.heap_types.items,
+            self.enums.items,
+            of,
+        );
     }
 
     /// Where a fully-qualified name is already declared, whichever of
@@ -2584,6 +2995,10 @@ pub const Analyzer = struct {
         }
         if (self.struct_names.get(qualified)) |index| {
             const info = self.struct_decls.items[index];
+            return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
+        }
+        if (self.enum_names.get(qualified)) |index| {
+            const info = self.enum_decls.items[index];
             return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
         }
         if (self.constant_names.get(qualified)) |index| {
@@ -2627,6 +3042,7 @@ pub const Analyzer = struct {
                 .arena = self.arena,
                 .pool = self.pool,
                 .structs = self.structs.items,
+                .enums = self.enums.items,
                 .name = info.name,
                 .parameter_count = @intCast(info.parameter_types.len),
                 .return_type = info.return_type,

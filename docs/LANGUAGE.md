@@ -16,8 +16,8 @@ the two ladders the answer is always `double` (docs/TYPES.md §2).
 Two kinds of data, with a deliberate line between them:
 
 - **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
-  and user `struct`s.  Values copy on assignment and call; nobody
-  frees a value.  The numbers are two ladders, and four of them do
+  and user `struct`s and `enum`s.  Values copy on assignment and call;
+  nobody frees a value.  The numbers are two ladders, and four of them do
   arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
   overflow and on division by zero; `float` (IEEE binary32) and
   `double` (IEEE binary64) follow IEEE without traps.  `int` and
@@ -500,9 +500,10 @@ double figures, the right answer is a struct, not another default.
 
 ## Methods
 
-A function declared inside a struct is a **method** exactly when its
-first parameter is `self`.  Everything else in a struct is the
-namespace function it has always been.
+A function declared inside a struct — or inside an enum, which takes
+the same functions under the same rules (docs/ENUMS.md D7) — is a
+**method** exactly when its first parameter is `self`.  Everything
+else in the declaration is the namespace function it has always been.
 
 ```luce
 struct Point:
@@ -556,6 +557,78 @@ receiver is result zero**: `let roll = rng.next()` means
 return shape.  There is no receiver mechanism separate from the return
 mechanism.  A method that raises leaves its receiver as it was — the
 write-back stands on the returning edge only.
+
+## Enums, and the match that checks them
+
+Some numbers are secretly a set: a compression method, a block type, a
+key.  `enum` gives every value in the set a name, and `match` makes
+the compiler check that the code covered them (docs/ENUMS.md).
+
+```luce
+enum Method(byte):        # the width is int unless one is written
+    stored                # 0, the C rule for an unvalued first member
+    shrunk                # 1, the one before it plus one
+    deflated = 8          # a constant integer expression, folded
+
+    func compressed(self) -> bool:
+        return self != Method.stored
+
+func main():
+    print(f"{Method.deflated} is {int(Method.deflated)}")
+```
+
+Members are **namespaced always** — `Method.stored`, never a bare
+`stored` — and each is a compile-time constant, so a member stands in
+a top-level `let`, a parameter default and a field default.  An enum
+is a value: it copies, it takes no ownership word, and a `list(Method)`
+or an `array(Method, n)` holds it at the backing width.
+
+**No implicit conversion in either direction.**  `int(m)` (and every
+other numeric constructor) answers the member's number, trapping
+exactly where the same constructor would on the number itself;
+`string(m)` answers the member's **name**, and an f-string hole is a
+`string(...)` nobody wrote.  The other direction is fallible, because
+the number comes from a file or a wire: `Method(n)` answers `Method?`,
+with `none` where no member holds `n`.  That is the only way to make
+an enum value out of a number, which is what makes *every* value of an
+enum one of its members.
+
+Members compare with `==` and `!=`.  Ordering is refused, naming
+`int(…)`: an enum is a set of names, not a number line.
+
+```luce
+enum Method:
+    stored
+    deflated
+
+func read_stored(entry: long) -> long:
+    return entry
+
+func read_deflated(entry: long) -> long:
+    return entry * 2
+
+func read(method: Method, entry: long) -> long:
+    match method:
+        stored:
+            return read_stored(entry)
+        deflated:
+            return read_deflated(entry)
+
+func main():
+    print(string(read(Method.deflated, 3)))
+```
+
+Arms are bare member names — the scrutinee's type is known and the arm
+namespace is closed — and each opens a block like every other colon in
+the language.  **Without an `else`, every member must have an arm**,
+so the day somebody adds a member every match that does not name it
+stops compiling.  An `else` stands for the members the arms above did
+not name, and one that covers nothing is refused for the same reason
+`a else b` is when `a` is never absent.
+
+A member carries no payload: that is a tagged union, it is ratified,
+and it will extend `match` with payload arms rather than introduce a
+second statement.
 
 ## Collections
 
@@ -1338,7 +1411,8 @@ decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
 beyond the message, garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
-enums/unions, and **positional-only and keyword-only parameter
+**tagged unions** (enums shipped and carry no payload — docs/ENUMS.md),
+and **positional-only and keyword-only parameter
 markers** (Python's `/` and `*`, Dart's `{}` section): one kind of
 parameter, and the trailing-defaults rule is what keeps a
 must-be-named parameter from arriving by accident (docs/ARGS.md D6).

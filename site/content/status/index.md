@@ -41,6 +41,7 @@ language question, and one benchmark row.**
 | Six standard modules: `math`, `strings`, `files`, `paths`, `os`, `zip` | shipped |
 | The bit set: `&` `\|` `^` `~` `<<` `>>` at Go's precedence, hex and binary literals, `_` digit separators | shipped |
 | Visibility: public until a declaration says `private` | shipped |
+| Enums at a chosen integer width, and `match` with every member named | shipped |
 | LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
 | Trap locations and call traces in debug builds | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
@@ -107,26 +108,29 @@ These are decisions with reasons written down, not gaps.
 
 ## Absent and not decided
 
-**Sum types — no enums, no tagged unions, no `match`.** This is the
-open language question, and it is a second-order blocker: a
-`Result`-style error type was refused *because* there are no tagged
-unions, which is what forced `T!` to be a function attribute instead.
-That answer turned out better than "probably right", but it is still
-the third design bent around the same hole.
+**Tagged unions — a member with a payload.** Enums shipped, and with
+them [`match`](/tour/enums/): a set of names at one integer width,
+dispatch that refuses to compile when a member has no arm, and
+`Method(n)` answering `Method?` for the number that arrived from a
+file. What a member still cannot carry is a *value*, which is the
+tagged union — ratified, not built, and the reason a `Result`-style
+error type was refused in favour of `T!` as a function attribute.
 
-The corpus pays for it constantly, and the counts are real:
+The half that shipped was decided on the corpus, and the corpus has
+started spending it: `std.zip` reads a compression method and a
+DEFLATE block type through enums rather than through `== 8` and an
+`elif` chain whose last arm existed to say "unknown".
 
-- `editor.luc` handles keys with **15 string comparisons in one
-  `elif` chain and no final `else`**. A misspelled `"page_dwon"`
-  compiles and silently does nothing.
-- `editor.luc` writes `# 1 keyword, 2 type name, 3 builtin, 0 plain` —
-  an enum written as a `long` with a comment.
-- `editor.luc` implements `is_keyword` and `is_builtin` as **46
-  `word == "…"` comparisons**: a hash set written as a truth table.
+What is left of the same hole is still visible in `editor.luc`, which
+predates all of it:
 
-Now that optionals have shipped, this is decidable on evidence rather
-than on argument. What the corpus does with `T?` from here is what
-should settle it.
+- keys handled with **15 string comparisons in one `elif` chain and
+  no final `else`** — a misspelled `"page_dwon"` compiles and
+  silently does nothing.
+- `# 1 keyword, 2 type name, 3 builtin, 0 plain` — an enum written as
+  a `long` with a comment.
+- `is_keyword` and `is_builtin` as **46 `word == "…"` comparisons**: a
+  hash set written as a truth table.
 
 ## The short list of what a real program hits
 
@@ -225,8 +229,9 @@ than shipping a highlighter that disagrees with the compiler.
 2. `m.get(k) -> V?`, and a corpus sweep.
 3. ~~Decide receivers and multiple returns~~ — shipped; the
    integer-division spelling is decided too.
-4. Sum types, if the experience with `T?` says the hole is still
-   there.
+4. ~~Enums and `match`~~ — shipped. Tagged unions are the half that
+   is left, and they extend `match` rather than introducing a second
+   statement.
 5. The faithful syntax tree, which a formatter and a language server
    both need.
 

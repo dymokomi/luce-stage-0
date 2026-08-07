@@ -378,6 +378,7 @@ pub fn returnsOnAllPaths(block: ast.Block) bool {
                         returnsOnAllPaths(else_block)) return true;
                 }
             },
+            .match => |matched| if (everyArm(matched, returnsOnAllPaths)) return true,
             else => {},
         }
     }
@@ -402,6 +403,7 @@ pub fn alwaysExits(block: ast.Block) bool {
                         alwaysExits(else_block)) return true;
                 }
             },
+            .match => |matched| if (everyArm(matched, alwaysExits)) return true,
             else => {},
         }
     }
@@ -431,8 +433,28 @@ pub fn exitingStatement(statement: ast.Statement) ?[]const u8 {
             if (!alwaysExits(otherwise)) break :blk null;
             break :blk "if";
         },
+        .match => |matched| if (everyArm(matched, alwaysExits)) "match" else null,
         else => null,
     };
+}
+
+/// Whether every way through a `match` satisfies `answers` — every arm,
+/// and the `else` when there is one.
+///
+/// **A match with no `else` has an arm for every member**, which stage
+/// 4 has already checked (docs/ENUMS.md R1), so the arms are all the
+/// ways through: a dispatch whose arms all return is a dispatch that
+/// returns, and the function around it needs no return after it.  When
+/// the check failed the program is refused anyway, so being generous
+/// here can only cost a second diagnostic on a program that already has
+/// one.
+fn everyArm(matched: ast.Match, comptime answers: fn (ast.Block) bool) bool {
+    if (matched.arms.len == 0) return false;
+    for (matched.arms) |arm| {
+        if (!answers(arm.body)) return false;
+    }
+    if (matched.else_block) |otherwise| return answers(otherwise);
+    return true;
 }
 
 // ---------------------------------------------------------------------------

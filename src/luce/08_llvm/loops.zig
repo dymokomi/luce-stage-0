@@ -229,7 +229,9 @@ fn writesPlainElement(
     if (instruction.intrinsic.kind != .index_set) return false;
     const target = instruction.intrinsic.arguments[0];
     const shape = arrayShape(program, function.result_types[target]) orelse return false;
-    return switch (shape.element) {
+    // An enum element is a number in a cell and owns nothing to free
+    // (docs/ENUMS.md D9), so it joins the plain kinds by being one.
+    return switch (shape.element.storage()) {
         // The storage widths join the plain kinds: a `byte`, a `short`
         // and a `half` own nothing to free, so writing one cannot
         // disturb the row a hoist resolved — which is what puts
@@ -246,6 +248,7 @@ fn writesPlainElement(
         .string,
         => true,
         .none, .strukt, .heap, .optional => false,
+        .enumeration => unreachable, // answered by storage() above
     };
 }
 

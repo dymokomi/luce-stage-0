@@ -64,7 +64,7 @@ and each says so in its own preamble.
 | [VISIBILITY.md](VISIBILITY.md) | Public until it says `private`: the file as the trust unit, `private:`/`public:` regions in structs, visibility dying in stage 4. Ratified and built. |
 | [FAILURE.md](FAILURE.md) | The rule that decides trap versus error versus `T?`, and the `T!`/`try`/`catch` design it produced. Ratified and built. |
 | [BITWISE.md](BITWISE.md) | `& \| ^ ~ << >>` at Go's precedence, shifts as checked bit transport, hex/binary/underscore literals. R1–R3 ratified and built. |
-| [ENUMS.md](ENUMS.md) | Enums leaning C: explicit member values when written, sequential defaults when not, and the machinery a tagged union will hang off. Ratified; being built. |
+| [ENUMS.md](ENUMS.md) | A name for every number that is secretly a set: C-shaped member values, a chosen backing width, `Method(n) -> Method?`, and the `match` that refuses to compile with a member unaccounted for. R1–R3 ratified and built. |
 | [BYTES.md](BYTES.md) | The binary half of the host boundary: why a `string` cannot carry a JPEG, the C-shaped byte primitive, and a file handle as an owned object. Ratified. |
 | [CONCURRENCY_RESEARCH.md](CONCURRENCY_RESEARCH.md) | **Not a decision.** The survey behind one not yet taken: nine concurrency models, cited, priced against S8, the no-collector rule and the differential oracle — and the questions the ruling turns on. |
 | [UNION_RESEARCH.md](UNION_RESEARCH.md) | **Not a decision.** Sum types across seven languages, priced against scope ownership: why Luce already boxes without a collector, why payload bindings alias, and the zero-value question that killed Go's sum types twice. |

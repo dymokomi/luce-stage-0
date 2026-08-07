@@ -394,7 +394,7 @@ test "the visibility refusals land where the memo puts them" {
     );
     // A marker fronting something unmarkable names what it expected.
     try expectDiagnostics("private import math\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, let, or struct" },
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, let, struct, or enum" },
     });
 }
 
@@ -1997,4 +1997,205 @@ test "every token kind has a name a diagnostic can print" {
             try testing.expect(std.mem.indexOf(u8, grammar.describe(kind), word) != null);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Enums and match (docs/ENUMS.md)
+// ---------------------------------------------------------------------------
+
+test "an enum declares members, a width, and the functions a struct declares" {
+    var parsed = try expectClean(
+        \\enum Method(byte):
+        \\    stored
+        \\    deflated = 8
+        \\
+        \\    func compressed(self) -> bool:
+        \\        return self != Method.stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 1), parsed.program.enums.len);
+    const declared = parsed.program.enums[0];
+    try testing.expectEqualStrings("Method", declared.name);
+    try testing.expectEqualStrings("byte", declared.backing.?.name);
+    try testing.expectEqual(@as(usize, 2), declared.members.len);
+    try testing.expectEqualStrings("stored", declared.members[0].name);
+    try testing.expect(declared.members[0].value == null);
+    try testing.expectEqualStrings("deflated", declared.members[1].name);
+    try testing.expect(declared.members[1].value != null);
+    try testing.expectEqual(@as(usize, 1), declared.functions.len);
+    try testing.expectEqualStrings("compressed", declared.functions[0].name);
+}
+
+test "an enum takes a visibility marker, and its members do not" {
+    var parsed = try expectClean(
+        \\private enum Method:
+        \\    stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(ast.Visibility.private, parsed.program.enums[0].visibility);
+
+    // A member is what the type *is*, and a match arm cannot name one
+    // the file it stands in cannot see.
+    try expectDiagnostics(
+        \\enum Method:
+        \\    private stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "an enum member is part of the type and is always visible",
+    }});
+    try expectDiagnostics(
+        \\enum Method:
+        \\    private:
+        \\        stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "an enum's members are the type and are always visible",
+    }});
+}
+
+test "a member takes a value, not a type" {
+    try expectDiagnostics(
+        \\enum Method:
+        \\    stored: long
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 11,
+        .contains = "an enum member takes a value, not a type",
+    }});
+}
+
+test "match parses arms, an else, and the two shapes a reader arrives with" {
+    var parsed = try expectClean(
+        \\enum Colour:
+        \\    red
+        \\    green
+        \\
+        \\func main():
+        \\    let c = Colour.red
+        \\    match c:
+        \\        red:
+        \\            print("red")
+        \\        else:
+        \\            print("other")
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    const matched = body.statements[body.statements.len - 1].match;
+    try testing.expectEqual(@as(usize, 1), matched.arms.len);
+    try testing.expectEqualStrings("red", matched.arms[0].name);
+    try testing.expect(matched.else_block != null);
+
+    // `case stored:` — Python's second keyword, carrying nothing the
+    // colon does not (docs/ENUMS.md Q3).
+    try expectDiagnostics(
+        \\func main():
+        \\    match c:
+        \\        case red:
+        \\            return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 3,
+        .column = 9,
+        .contains = "a match arm is a bare member name: write 'red:'",
+    }});
+    // And the qualified form, which says every line what the scrutinee
+    // already said once (R3).
+    try expectDiagnostics(
+        \\func main():
+        \\    match c:
+        \\        Colour.red:
+        \\            return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 3,
+        .column = 9,
+        .contains = "write 'red:', not 'Colour.red:'",
+    }});
+}
+
+test "else is the last arm of a match, and there is one of it" {
+    try expectDiagnostics(
+        \\func main():
+        \\    match c:
+        \\        else:
+        \\            return
+        \\        red:
+        \\            return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 5,
+        .column = 9,
+        .contains = "else catches everything the arms above it did not",
+    }});
+    try expectDiagnostics(
+        \\func main():
+        \\    match c:
+        \\        else:
+        \\            return
+        \\        else:
+        \\            return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 5,
+        .column = 9,
+        .contains = "one else per match",
+    }});
+}
+
+test "enum declares at file scope, and match is a statement" {
+    try expectDiagnostics(
+        \\func main():
+        \\    enum Method:
+        \\        stored
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "'enum' declarations belong at file scope",
+    }});
+    // The habit from every other language, answered with the word Luce
+    // uses now that it has one.
+    try expectDiagnostics(
+        \\func main():
+        \\    switch c:
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "write 'match' over an enum",
+    }});
 }

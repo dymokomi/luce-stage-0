@@ -104,6 +104,11 @@ pub const Lowering = struct {
     pool: *ConstantPool,
     /// The program's struct layouts, settled before any lowering runs.
     structs: []const StructLayout,
+    /// The program's enums, settled with them.  Read for one thing:
+    /// the zero of an enum-typed slot is its **first declared member**
+    /// (docs/ENUMS.md), which is a fact about the declaration and not
+    /// about the width.
+    enums: []const types.EnumType = &.{},
 
     name: []const u8,
     parameter_count: u32 = 0,
@@ -360,6 +365,17 @@ pub const Lowering = struct {
             .boolean => try self.emit(.{ .const_boolean = false }, .boolean),
             .byte, .short, .int, .long => try self.emit(.{ .const_long = 0 }, of),
             .half, .float, .double => try self.emit(.{ .const_double = 0.0 }, of),
+            // **An enum's zero is its first declared member.**  Zero
+            // itself would be a value no member holds — the one thing
+            // an enum promises is that every value of it is a member,
+            // and `match` leans on that promise to let its last arm be
+            // the fallthrough (docs/ENUMS.md).  So the first member is
+            // what `var m: Method` starts at and what an
+            // `array(Method, n)` is filled with.
+            .enumeration => |reference| try self.emit(
+                .{ .const_long = self.enums[reference.index].members[0].value },
+                of,
+            ),
             .string => try self.emit(.{ .const_string = try self.pool.intern("") }, .string),
             .heap => try self.emit(
                 .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
@@ -810,6 +826,7 @@ pub const Lowering = struct {
 pub const Lowered = struct {
     structs: []StructLayout,
     heap_types: []types.HeapType,
+    enums: []types.EnumType = &.{},
     /// The constant pool, in the order the checker interned it.
     constants: []const []const u8,
     entry_function: u32,
@@ -854,6 +871,7 @@ pub fn build(
 
     program.structs = lowered.structs;
     program.heap_types = lowered.heap_types;
+    program.enums = lowered.enums;
     program.functions = functions;
     program.constants = lowered.constants;
     program.entry_function = lowered.entry_function;

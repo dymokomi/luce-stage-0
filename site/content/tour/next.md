@@ -6,8 +6,9 @@ async, because those are not in it.
 
 ## What you have seen
 
-Scalars and structs that copy; four heap objects that do not. Static
-types with inference, and one widening: `long` into `double`. Checked
+Scalars, structs and enums that copy; four heap objects that do not.
+Static types with inference, and one widening: `long` into `double`.
+Dispatch that checks you covered every member. Checked
 arithmetic and bounds checks that no build mode turns off. Scope
 ownership with `give`, `copy` and `free`. `T?` for absence with
 narrowing and `else`. `T!` for failure with `try`, `catch` and
@@ -18,9 +19,9 @@ compile time.
 ## What you have not
 
 There are no first-class functions or closures, no generics for user
-code, no enums or tagged unions or `match`, no tuples, no
-operator overloading, no exceptions, no shadowing, no
-mutable file-scope `var`, and no `defer`. Some of those are permanent
+code, no tagged unions — an [enum](/tour/enums/) has names and numbers
+and no payloads — no tuples, no operator overloading, no exceptions,
+no shadowing, no mutable file-scope `var`, and no `defer`. Some of those are permanent
 decisions with reasons written down; some are simply not built. The
 [status page](/status/) says which is which, and it does not round up.
 

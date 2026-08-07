@@ -275,6 +275,37 @@ pub const Destructure = struct {
 /// error's words through — null for the plain `catch:` (`docs/FAILURE
 /// .md`).  It is scoped to the handler and nowhere else.
 pub const Guarded = struct { attempt: *Statement, binding: ?Name, handler: Block, span: Span };
+
+/// One arm of a `match`: a bare member name and the block it opens
+/// (docs/ENUMS.md R3).  The scrutinee's type is known and the arm
+/// namespace is closed, so the name needs no qualification.
+///
+/// **Where union extends this.**  A payload arm is written
+/// `circle(r):` — the same name, followed by the names it binds — so
+/// the extension is a `bindings: []Name` field here and a loop in the
+/// arm's scope, not a second statement.  It is left unwritten rather
+/// than declared empty: a field nothing fills is a field nothing
+/// checks (docs/ENUMS.md R1).
+pub const MatchArm = struct {
+    name: []const u8,
+    name_span: Span,
+    body: Block,
+    span: Span,
+};
+
+/// `match expr:` — dispatch over an enum (docs/ENUMS.md R1).  Arms are
+/// member names in the order they were written; `else_block` is the
+/// optional `else:`, and without one stage 4 requires every member.
+pub const Match = struct {
+    scrutinee: *Expression,
+    arms: []MatchArm,
+    else_block: ?Block,
+    /// The span of `else`, for a diagnostic about the arm that catches
+    /// everything.  Null when there is none.
+    else_span: ?Span = null,
+    span: Span,
+};
+
 pub const Marker = struct { span: Span };
 pub const ExpressionStatement = struct { value: *Expression, span: Span };
 
@@ -298,6 +329,8 @@ pub const Statement = union(enum) {
     expression: ExpressionStatement,
     /// call catch: — the handler runs only where the call raised.
     guarded: Guarded,
+    /// match m: — one arm per member of the scrutinee's enum.
+    match: Match,
 
     pub fn span(self: *const Statement) Span {
         return switch (self.*) {
@@ -339,6 +372,35 @@ pub const StructDecl = struct {
     name: []const u8,
     name_span: Span,
     fields: []Field,
+    functions: []FuncDecl,
+    visibility: Visibility = .none,
+    span: Span,
+};
+
+/// One member of an enum: a snake_case name and, where the
+/// declaration wrote one, the constant integer expression that gives
+/// it its value (docs/ENUMS.md D1).  An unvalued member takes the
+/// previous member's value plus one; an unvalued first member is 0.
+pub const EnumMember = struct {
+    name: []const u8,
+    name_span: Span,
+    value: ?*Expression = null,
+    span: Span,
+};
+
+/// `enum Method:` / `enum Method(byte):` — a set of named constants at
+/// one integer width, with the methods and namespace functions a
+/// struct has (docs/ENUMS.md D1, D2, D7).
+///
+/// `backing` is the width written in parentheses after the name, null
+/// for the default `int`.  It is a `TypeName` rather than a resolved
+/// width because stage 3 resolves nothing: `enum Method(Point):` is a
+/// stage-4 diagnostic about a width, not a parse error about a token.
+pub const EnumDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    backing: ?TypeName = null,
+    members: []EnumMember,
     functions: []FuncDecl,
     visibility: Visibility = .none,
     span: Span,
@@ -431,5 +493,6 @@ pub const Program = struct {
     imports: []Import,
     constants: []ConstDecl,
     structs: []StructDecl,
+    enums: []EnumDecl = &.{},
     functions: []FuncDecl,
 };

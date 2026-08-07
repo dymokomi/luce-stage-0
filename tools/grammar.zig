@@ -133,12 +133,17 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_return,
         .keyword_break,
         .keyword_continue,
+        // `match` is a dispatch statement, so it is control flow — the
+        // class every editor already colours `switch` with.
+        .keyword_match,
         => .control,
 
         .keyword_and, .keyword_or, .keyword_not => .word_operator,
 
         .keyword_func,
         .keyword_struct,
+        // `enum` declares a type beside `struct`, and wears its class.
+        .keyword_enum,
         .keyword_let,
         .keyword_var,
         => .storage,

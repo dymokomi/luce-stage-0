@@ -516,6 +516,10 @@ pub const FunctionBuilder = struct {
                 .while_loop => |loop| self.widenAssignedIn(loop.body),
                 .for_range => |loop| self.widenAssignedIn(loop.body),
                 .for_each => |loop| self.widenAssignedIn(loop.body),
+                .match => |matched| {
+                    for (matched.arms) |arm| self.widenAssignedIn(arm.body);
+                    if (matched.else_block) |arm| self.widenAssignedIn(arm);
+                },
                 else => {},
             }
         }
@@ -606,13 +610,20 @@ pub const FunctionBuilder = struct {
     fn functionReachable(self: *FunctionBuilder, function_index: u32, span: Span) Error!bool {
         const info = self.analyzer.functions.items[function_index];
         if (info.module == self.module) return true;
-        // A namespace function of a private struct is reached through
-        // the struct's name, and it is the struct that is withheld.
+        // A namespace function of a private struct — or of a private
+        // enum — is reached through that name, and it is the name that
+        // is withheld.
         if (info.enclosing) |owner| {
-            const strukt = self.analyzer.struct_decls.items[owner].declaration;
-            if (strukt.visibility == .private) {
+            const declaration = switch (owner) {
+                .strukt => |index| self.analyzer.struct_decls.items[index].declaration.visibility,
+                .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.visibility,
+            };
+            if (declaration == .private) {
                 try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
-                    strukt.name,
+                    switch (owner) {
+                        .strukt => |index| self.analyzer.struct_decls.items[index].declaration.name,
+                        .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.name,
+                    },
                     self.analyzer.moduleName(info.module),
                 });
                 return false;
@@ -1319,6 +1330,13 @@ pub const FunctionBuilder = struct {
         return false;
     }
 
+    fn blockAnyMutates(arms: []const ast.MatchArm) bool {
+        for (arms) |arm| {
+            if (blockMayMutateContainers(arm.body)) return true;
+        }
+        return false;
+    }
+
     fn statementMayMutateContainers(statement: ast.Statement) bool {
         return switch (statement) {
             // A write through a place is exactly a container or field
@@ -1344,6 +1362,10 @@ pub const FunctionBuilder = struct {
                 blockMayMutateContainers(loop.body),
             .for_each => |loop| mayMutateContainers(loop.iterable) or
                 blockMayMutateContainers(loop.body),
+            .match => |matched| mayMutateContainers(matched.scrutinee) or
+                blockAnyMutates(matched.arms) or
+                (matched.else_block != null and
+                    blockMayMutateContainers(matched.else_block.?)),
             .break_statement, .continue_statement => false,
         };
     }
@@ -1384,41 +1406,95 @@ pub const FunctionBuilder = struct {
     /// True when lowering this expression may end in a different basic
     /// block than it started: short-circuit `and`/`or` anywhere inside
     /// it branches and merges.
-    fn splitsBlocks(expression: *const ast.Expression, budget: u32) bool {
+    fn splitsBlocks(self: *const FunctionBuilder, expression: *const ast.Expression, budget: u32) bool {
         if (budget == 0) return true;
         const left = budget - 1;
         return switch (expression.*) {
             .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
                 binary.op == .coalesce or binary.op == .catch_error or
-                splitsBlocks(binary.left, left) or splitsBlocks(binary.right, left),
-            .unary => |unary| splitsBlocks(unary.operand, left),
-            .field => |field| splitsBlocks(field.target, left),
-            .call => |call| anySplits(call.arguments, left),
+                self.splitsBlocks(binary.left, left) or self.splitsBlocks(binary.right, left),
+            .unary => |unary| self.splitsBlocks(unary.operand, left),
+            .field => |field| self.splitsBlocks(field.target, left),
+            .call => |call| self.callSplits(call.callee) or self.anySplits(call.arguments, left),
             .new_object => |new| for (new.dims) |dimension| {
-                if (splitsBlocks(dimension, left)) break true;
+                if (self.splitsBlocks(dimension, left)) break true;
             } else false,
             .list_literal => |literal| for (literal.elements) |element| {
-                if (splitsBlocks(element, left)) break true;
+                if (self.splitsBlocks(element, left)) break true;
             } else false,
-            .index => |index| splitsBlocks(index.target, left) or for (index.indices) |item| {
-                if (splitsBlocks(item, left)) break true;
+            .index => |index| self.splitsBlocks(index.target, left) or for (index.indices) |item| {
+                if (self.splitsBlocks(item, left)) break true;
             } else false,
-            .slice_range => |slice| splitsBlocks(slice.target, left) or
-                (slice.start != null and splitsBlocks(slice.start.?, left)) or
-                (slice.end != null and splitsBlocks(slice.end.?, left)),
-            .method => |method| splitsBlocks(method.target, left) or
-                anySplits(method.arguments, left),
-            .give => |give| splitsBlocks(give.operand, left),
-            .copy => |copied| splitsBlocks(copied.operand, left),
+            .slice_range => |slice| self.splitsBlocks(slice.target, left) or
+                (slice.start != null and self.splitsBlocks(slice.start.?, left)) or
+                (slice.end != null and self.splitsBlocks(slice.end.?, left)),
+            .method => |method| self.callSplits(method.name) or
+                self.splitsBlocks(method.target, left) or
+                self.anySplits(method.arguments, left),
+            .give => |give| self.splitsBlocks(give.operand, left),
+            .copy => |copied| self.splitsBlocks(copied.operand, left),
             // A fallible call branches on its outcome, always.
             .try_call => true,
             else => false,
         };
     }
 
-    fn anySplits(arguments: []const ast.Argument, budget: u32) bool {
+    /// Whether a call written with this name may end in a different
+    /// block than it started.
+    ///
+    /// The two enum forms do: `string(m)` picks a member's name and
+    /// `Method(n)` picks a member, and both are the compare-and-branch
+    /// tree `match` is (docs/ENUMS.md D5, R2).  It is asked by **name**,
+    /// because this walk runs before any operand has a type — so
+    /// `string(count)` answers yes as well, and pays the one spill a
+    /// safe wrong answer costs here.
+    fn callSplits(self: *const FunctionBuilder, callee: []const u8) bool {
+        if (conversionNamed(callee)) |produces| return produces == .string;
+        return self.namesEnum(callee);
+    }
+
+    /// Whether a dotted chain, written inner-to-outer as
+    /// `helpers.dottedChain` collects it, spells an enum member:
+    /// `Method.stored`, `zip.Method.stored`.  The last part is the
+    /// member and everything in front of it names the enum.
+    fn namesMember(self: *FunctionBuilder, parts: []const []const u8) bool {
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = parts.len;
+        while (at > 1) {
+            at -= 1;
+            written.appendSlice(self.temporary(), parts[at]) catch return false;
+            if (at > 1) written.append(self.temporary(), '.') catch return false;
+        }
+        const spelled = written.items;
+        const index = found: {
+            if (parts.len == 2) {
+                const local = self.analyzer.qualify(self.prefix, spelled) catch return false;
+                break :found self.analyzer.enum_names.get(local) orelse return false;
+            }
+            break :found self.analyzer.enum_names.get(spelled) orelse return false;
+        };
+        return self.analyzer.enums.items[index].findMember(parts[0]) != null;
+    }
+
+    /// Whether a written name is an enum's, in this module or an
+    /// imported one.  Matched on the last segment, which is what a
+    /// method-form call hands over (`zip.Method(8)` arrives here as
+    /// `Method`), and over-matching only costs a spill.
+    fn namesEnum(self: *const FunctionBuilder, written: []const u8) bool {
+        var names = self.analyzer.enum_names.keyIterator();
+        while (names.next()) |key| {
+            const declared = key.*;
+            if (std.mem.eql(u8, declared, written)) return true;
+            const dot = std.mem.lastIndexOfScalar(u8, declared, '.') orelse continue;
+            if (std.mem.eql(u8, declared[dot + 1 ..], written)) return true;
+        }
+        return false;
+    }
+
+    fn anySplits(self: *const FunctionBuilder, arguments: []const ast.Argument, budget: u32) bool {
         for (arguments) |argument| {
-            if (splitsBlocks(argument.value, budget)) return true;
+            if (self.splitsBlocks(argument.value, budget)) return true;
         }
         return false;
     }
@@ -1775,9 +1851,11 @@ pub const FunctionBuilder = struct {
                 .half => .half,
                 .float => .float,
                 .double => .double,
-                .boolean, .string, .strukt, .heap => null,
+                // A number never lands on an enum: `Method` is a set of
+                // names and `Method(8)` is the only way in (D4, R2).
+                .boolean, .string, .strukt, .heap, .enumeration => null,
             },
-            .none, .boolean, .string, .strukt, .heap => null,
+            .none, .boolean, .string, .strukt, .heap, .enumeration => null,
         };
     }
 
@@ -1930,8 +2008,8 @@ pub const FunctionBuilder = struct {
                 // (docs/ARGS.md D5), so the slot is answered silently
                 // by the same rule the checker applies after the
                 // batch, through the one `argumentSlot`.
-                if (values[0].value_type == .strukt) {
-                    const function_index = (try self.structMethod(values[0].value_type.strukt, method.name)) orelse
+                if (self.declaredName(values[0].value_type) != null) {
+                    const function_index = (try self.structMethod(values[0].value_type, method.name)) orelse
                         return null;
                     const info = self.analyzer.functions.items[function_index];
                     if (info.declaration.parameters.len != info.parameter_types.len) return null;
@@ -2041,7 +2119,7 @@ pub const FunctionBuilder = struct {
         while (backwards > 0) {
             backwards -= 1;
             later_splits[backwards] = any_split;
-            if (splitsBlocks(expressions[backwards], split_search_depth)) any_split = true;
+            if (self.splitsBlocks(expressions[backwards], split_search_depth)) any_split = true;
         }
 
         // Which operands still have something that could mutate a
@@ -2233,7 +2311,201 @@ pub const FunctionBuilder = struct {
                 _ = try self.lowerExpression(expression.value, true);
             },
             .guarded => |guarded| try self.lowerGuarded(guarded),
+            .match => |matched| try self.lowerMatch(matched),
         }
+    }
+
+    /// `match m:` — dispatch over an enum (docs/ENUMS.md R1).
+    ///
+    /// **The lowering is the compare-and-branch tree an `elif` chain
+    /// would have been**, which is the point: the statement buys the
+    /// *checking* — every member named, none named twice, nothing named
+    /// that is not a member — and pays nothing for it at run time,
+    /// because LLVM turns a chain of equalities on one value into the
+    /// switch it already knows how to make.
+    ///
+    /// **With every member named, the last arm is the fallthrough.**  An
+    /// enum's one promise is that every value of it is a member: the
+    /// only ways to make one are a member name and `Method(n)`, which
+    /// answers `Method?`.  So the final comparison would be a test that
+    /// can only succeed, and nothing traps here — there is no case left
+    /// for a trap to be about.
+    fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
+        const temps_floor = self.temps.items.len;
+        const scrutinee = (try self.lowerExpression(matched.scrutinee, false)) orelse return;
+        if (scrutinee.value_type != .enumeration) {
+            try self.fail(
+                "luce.sema.match",
+                matched.scrutinee.span(),
+                "match dispatches over an enum, and {s} is not one; chain if and elif for a value whose cases have no names{s}",
+                .{
+                    try self.analyzer.typeName(scrutinee.value_type),
+                    try self.absenceAdvice(scrutinee.value_type, matched.scrutinee),
+                },
+            );
+            return;
+        }
+        const reference = scrutinee.value_type.enumeration;
+        const declared = self.analyzer.enums.items[reference.index];
+
+        // Which member each arm names, and which members were named:
+        // both are needed before anything is lowered, because whether
+        // the *last* arm is a comparison or the fallthrough depends on
+        // the whole set.
+        const chosen = try self.temporary().alloc(u32, matched.arms.len);
+        defer self.temporary().free(chosen);
+        const covered = try self.temporary().alloc(bool, declared.members.len);
+        defer self.temporary().free(covered);
+        @memset(covered, false);
+        var usable = true;
+        for (matched.arms, chosen) |arm, *slot| {
+            const member = declared.findMember(arm.name) orelse {
+                try self.failUnknownMember(declared, arm.name, arm.name_span);
+                usable = false;
+                continue;
+            };
+            if (covered[member]) {
+                try self.fail(
+                    "luce.sema.match",
+                    arm.name_span,
+                    "{s} already has an arm in this match",
+                    .{arm.name},
+                );
+                usable = false;
+                continue;
+            }
+            covered[member] = true;
+            slot.* = member;
+        }
+        if (!usable) return;
+
+        var missing: usize = 0;
+        for (covered) |named| {
+            if (!named) missing += 1;
+        }
+        if (matched.else_span) |span| {
+            // An else that can never run is the coalesce's own refusal,
+            // and it is refused for the reason exhaustiveness exists:
+            // an arm that covers nothing today would quietly cover the
+            // member somebody adds tomorrow, which is exactly the
+            // mistake a checked match is here to make impossible.
+            if (missing == 0) {
+                try self.fail(
+                    "luce.sema.match",
+                    span,
+                    "every member of {s} already has an arm, so this else can never run; drop it",
+                    .{declared.name},
+                );
+                return;
+            }
+        } else if (missing != 0) {
+            try self.failMissingArms(declared, covered, missing, matched.span);
+            return;
+        }
+
+        // The scrutinee is read once and carried in a slot: a register
+        // never crosses a block, and every arm's test is a block.
+        const held = try self.code.spill(scrutinee.register, scrutinee.value_type);
+        try self.flushTemps(temps_floor);
+
+        // Facts an arm proves are the arm's own, and one that assigns
+        // over a narrowed name unproves it for everybody after
+        // (`lowerWhile` widens the same way, for the same reason).
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
+
+        // With no else and every member named, the last arm needs no
+        // test: it is where a value that matched nothing above must be.
+        const fallthrough = matched.else_block == null;
+        const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
+
+        var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
+        defer frames.deinit(self.temporary());
+        for (matched.arms[0..tested], chosen[0..tested]) |arm, member| {
+            const value = try self.code.emit(
+                .{ .const_long = declared.members[member].value },
+                scrutinee.value_type,
+            );
+            const same = try self.code.emit(.{ .binary = .{
+                .op = .equal,
+                .operand_type = scrutinee.value_type,
+                .left = try self.code.load(held),
+                .right = value,
+            } }, .boolean);
+            const arms = try self.code.openIf(same, true);
+            try self.narrowRestore(entry);
+            try self.lowerBlock(arm.body);
+            try self.code.elseArm(arms);
+            try frames.append(self.temporary(), arms);
+        }
+        try self.narrowRestore(entry);
+        if (matched.else_block) |otherwise| {
+            try self.lowerBlock(otherwise);
+        } else {
+            try self.lowerBlock(matched.arms[matched.arms.len - 1].body);
+        }
+        while (frames.pop()) |arms| try self.code.closeIf(arms);
+
+        try self.narrowRestore(entry);
+        for (matched.arms) |arm| self.widenAssignedIn(arm.body);
+        if (matched.else_block) |otherwise| self.widenAssignedIn(otherwise);
+    }
+
+    /// A match arm, or a `Method.x`, naming something the enum has not.
+    fn failUnknownMember(
+        self: *FunctionBuilder,
+        declared: types.EnumType,
+        written: []const u8,
+        span: Span,
+    ) Error!void {
+        var suggestion = helpers.Suggestion.init(written);
+        for (declared.members) |member| suggestion.offer(member.name);
+        if (suggestion.best()) |closest| {
+            try self.fail("luce.sema.match", span, "{s} is not a member of {s}; did you mean {s}?", .{
+                written,
+                declared.name,
+                closest,
+            });
+            return;
+        }
+        try self.fail("luce.sema.match", span, "{s} is not a member of {s}", .{ written, declared.name });
+    }
+
+    /// The members a match with no `else` left out, named — all of
+    /// them, in declaration order, because a reader who has to compile
+    /// again to learn the next one is doing the compiler's work
+    /// (`context.writeMissingFields` is the same sentence for a struct).
+    fn failMissingArms(
+        self: *FunctionBuilder,
+        declared: types.EnumType,
+        covered: []const bool,
+        missing: usize,
+        span: Span,
+    ) Error!void {
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var written_so_far: usize = 0;
+        for (covered, 0..) |named, index| {
+            if (named) continue;
+            if (written_so_far != 0) {
+                if (missing > 2) try written.appendSlice(self.temporary(), ",");
+                try written.appendSlice(self.temporary(), " ");
+                if (written_so_far + 1 == missing) try written.appendSlice(self.temporary(), "and ");
+            }
+            try written.appendSlice(self.temporary(), declared.members[index].name);
+            written_so_far += 1;
+        }
+        try self.fail(
+            "luce.sema.match",
+            span,
+            "this match has no arm for {s} {s} of {s}; write {s}, or an else for everything the arms above do not name",
+            .{
+                if (missing == 1) "member" else "members",
+                written.items,
+                declared.name,
+                if (missing == 1) "one" else "them",
+            },
+        );
     }
 
     /// `name_span` is the name alone and `span` the whole statement:
@@ -4687,6 +4959,75 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// `Method.stored` — an enum member, as the constant it is
+    /// (docs/ENUMS.md D3, D8).  Null when the dotted head names no
+    /// enum, which leaves every other reading of a `.` to the caller.
+    ///
+    /// The lookup is the head-names-a-declaration path `Struct.func`
+    /// and `module.name` already travel: a head that a local shadows is
+    /// a value, a bare head is this module's, and one dotted level
+    /// reaches an imported enum.
+    fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!MemberAccess {
+        const chain = helpers.dottedChain(field.target) orelse return .not_a_member;
+        if (self.findLocal(chain.head()) != null) return .not_a_member;
+
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = chain.count;
+        while (at > 0) {
+            at -= 1;
+            if (written.items.len != 0) try written.append(self.temporary(), '.');
+            try written.appendSlice(self.temporary(), chain.parts[at]);
+        }
+        const spelled = written.items;
+
+        // A bare name is this module's; a dotted one is an import's,
+        // and only an imported module may be the head.
+        const index = found: {
+            if (chain.count == 1) {
+                const local = try self.analyzer.qualify(self.prefix, spelled);
+                break :found self.analyzer.enum_names.get(local) orelse return .not_a_member;
+            }
+            if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
+            break :found self.analyzer.enum_names.get(spelled) orelse return .not_a_member;
+        };
+        const info = self.analyzer.enum_decls.items[index];
+        if (info.declaration.visibility == .private and info.module != self.module) {
+            try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
+                info.declaration.name,
+                self.analyzer.moduleName(info.module),
+            });
+            return .reported;
+        }
+        const declared = self.analyzer.enums.items[index];
+        const of = self.analyzer.enumType(index);
+        const member = declared.findMember(field.name) orelse {
+            // `Method.deflated()` written without its parentheses is a
+            // function of the enum, and it is not a value either
+            // (docs/METHODS.md); the shared sentence says so.
+            const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared.name, field.name });
+            const spelling = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ spelled, field.name });
+            if (try self.failNotAValue(spelling, qualified, field.span)) return .reported;
+            try self.failUnknownMember(declared, field.name, field.span);
+            return .reported;
+        };
+        return .{ .value = .{
+            .register = try self.code.emit(.{ .const_long = declared.members[member].value }, of),
+            .value_type = of,
+        } };
+    }
+
+    /// What a dotted access turned out to be: not an enum member at
+    /// all, one that was refused and reported, or the member's value.
+    /// The middle case is why this is not an optional — a name that was
+    /// already answered must not be lowered a second time as something
+    /// else, which is how one mistake became two messages.
+    const MemberAccess = union(enum) {
+        not_a_member,
+        reported,
+        value: Typed,
+    };
+
     fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         // A dotted chain whose head is a bare declaration name is a
         // namespace, exactly as it is in front of a call
@@ -4695,6 +5036,16 @@ pub const FunctionBuilder = struct {
         // "unknown name math" about an import the compiler just
         // checked.  Locals shadow nothing, so a head that names a
         // local is always a value.
+        // `Method.stored`, `zip.Method.stored` — a member, which is a
+        // constant of the enum's own type and namespaced always
+        // (docs/ENUMS.md D3, D8).  It is asked first because it is the
+        // one dotted form whose head names a *type* and whose answer is
+        // a value; everything below reads a field of one.
+        switch (try self.enumMemberAccess(field)) {
+            .not_a_member => {},
+            .reported => return null,
+            .value => |member| return member,
+        }
         if (field.target.* == .name and self.findLocal(field.target.name.text) == null) {
             const base = field.target.name.text;
             if (self.analyzer.importsModule(self.module, base)) {
@@ -4978,6 +5329,24 @@ pub const FunctionBuilder = struct {
         // and string.
         const ordering = operation != .equal and operation != .not_equal;
         if (ordering and !(operand_type.isNumeric() or operand_type == .string)) {
+            // **An enum is a set of names, not a number line**
+            // (docs/ENUMS.md D6), and the reader who wanted the numbers
+            // is one word away from having them — so the sentence says
+            // the word rather than stopping at "has no ordering".
+            if (operand_type == .enumeration) {
+                try self.fail(
+                    "luce.sema.type",
+                    binary.span,
+                    "{s} is a set of names and has no order; write int({s}) {s} int({s}) to compare the numbers behind them",
+                    .{
+                        try self.analyzer.typeName(operand_type),
+                        try self.writtenTarget(binary.left),
+                        context.operatorText(binary.op),
+                        try self.writtenTarget(binary.right),
+                    },
+                );
+                return null;
+            }
             try self.fail("luce.sema.type", binary.span, "{s} has no ordering", .{
                 try self.analyzer.typeName(operand_type),
             });
@@ -5550,6 +5919,9 @@ pub const FunctionBuilder = struct {
         if (self.analyzer.struct_names.get(resolved)) |layout_index| {
             return self.lowerConstruct(call.arguments, call.span, layout_index);
         }
+        if (self.analyzer.enum_names.get(resolved)) |enum_index| {
+            return self.lowerEnumOfNumber(call.callee, call.arguments, call.span, enum_index);
+        }
         const function_index = self.analyzer.function_names.get(resolved) orelse {
             try self.failUnknownFunction(call.callee, call.span);
             return null;
@@ -5762,6 +6134,9 @@ pub const FunctionBuilder = struct {
                 if (self.analyzer.struct_names.get(resolved)) |layout_index| {
                     return self.lowerConstruct(method.arguments, method.span, layout_index);
                 }
+                if (self.analyzer.enum_names.get(resolved)) |enum_index| {
+                    return self.lowerEnumOfNumber(method.name, method.arguments, method.span, enum_index);
+                }
                 const function_index = self.analyzer.function_names.get(resolved).?;
                 return self.lowerUserCall(
                     function_index,
@@ -5814,17 +6189,30 @@ pub const FunctionBuilder = struct {
         // value; a head that names one but whose member is missing is
         // a call error, not a method fallback.
         const joined = written.items;
+        // `Method.stored.compressed()` — the chain in front of the call
+        // names a *member*, which is a value, so this is a method on
+        // one and not a namespace path (docs/ENUMS.md D3).  The same
+        // shape as the imported-constant case below, one enum earlier.
+        if (chain.count >= 2 and self.namesMember(parts[0..chain.count])) return .value;
         const head_qualified = try self.analyzer.qualify(self.prefix, head);
-        if (self.analyzer.struct_names.contains(head_qualified)) {
+        if (self.analyzer.struct_names.contains(head_qualified) or
+            self.analyzer.enum_names.contains(head_qualified))
+        {
             const local = try self.analyzer.qualify(self.prefix, joined);
-            if (self.analyzer.struct_names.contains(local) or self.analyzer.function_names.contains(local)) {
+            if (self.analyzer.struct_names.contains(local) or
+                self.analyzer.enum_names.contains(local) or
+                self.analyzer.function_names.contains(local))
+            {
                 return .{ .resolved = try self.arena().dupe(u8, local) };
             }
             try self.failUnknownFunction(joined, method.span);
             return .reported;
         }
         if (self.analyzer.importsModule(self.module, head)) {
-            if (self.analyzer.struct_names.contains(joined) or self.analyzer.function_names.contains(joined)) {
+            if (self.analyzer.struct_names.contains(joined) or
+                self.analyzer.enum_names.contains(joined) or
+                self.analyzer.function_names.contains(joined))
+            {
                 return .{ .resolved = try self.arena().dupe(u8, joined) };
             }
             // geo.pi.method() — a value method on an imported constant.
@@ -5934,7 +6322,11 @@ pub const FunctionBuilder = struct {
             // rather than by ordering: `types.StructLayout` has no
             // functions field and `heapOf` answers null for a struct,
             // so the two arms above are unreachable for one.
-            if (receiver.value_type == .strukt) {
+            // An enum answers here too, and by the same rule: its
+            // functions are declared inside it and named `Method.f`, so
+            // `m.compressed()` *is* `Method.compressed(m)`
+            // (docs/ENUMS.md D7).
+            if (self.declaredName(receiver.value_type) != null) {
                 return self.lowerReceiverCall(method, values, as_statement, fallible_allowed, shape_position);
             }
             try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
@@ -6015,19 +6407,36 @@ pub const FunctionBuilder = struct {
     /// `Point.f(p, none)` compiled, and a `0.1` read its text at
     /// binary32 on one spelling and binary64 on the other
     /// (docs/ARGS.md §4).
-    fn structMethod(self: *FunctionBuilder, layout_index: u32, name: []const u8) Error!?u32 {
-        const layout = self.analyzer.structs.items[layout_index];
-        const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ layout.name, name });
+    fn structMethod(self: *FunctionBuilder, receiver: Type, name: []const u8) Error!?u32 {
+        const declared = self.declaredName(receiver) orelse return null;
+        const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ declared, name });
         defer self.temporary().free(qualified);
         const function_index = self.analyzer.function_names.get(qualified) orelse return null;
         if (self.analyzer.functions.items[function_index].receiver == .not) return null;
         return function_index;
     }
 
-    /// `x.f(a, b)` where `x` is a struct value.  `values` is the whole
-    /// operand run with the receiver at zero, already lowered by
-    /// `lowerValueMethod` — a method's arguments take their types from
-    /// the values, exactly as every other method's do.
+    /// The qualified name of the declaration a value's type came from —
+    /// `Point`, `geo.Method` — or null for a type nobody declared.
+    ///
+    /// **The two declaration keywords answer here alike.**  A struct and
+    /// an enum both spell their functions `Name.func`, so the whole of
+    /// the method machinery needs the name and nothing else
+    /// (docs/METHODS.md, docs/ENUMS.md D7); only a sentence that has to
+    /// say which word was written looks further.
+    fn declaredName(self: *const FunctionBuilder, of: Type) ?[]const u8 {
+        return switch (of) {
+            .strukt => |index| self.analyzer.structs.items[index].name,
+            .enumeration => |reference| self.analyzer.enums.items[reference.index].name,
+            else => null,
+        };
+    }
+
+    /// `x.f(a, b)` where `x` is a value of a declared type — a struct
+    /// or an enum.  `values` is the whole operand run with the receiver
+    /// at zero, already lowered by `lowerValueMethod`; a method's
+    /// arguments take their types from the values, exactly as every
+    /// other method's do.
     fn lowerReceiverCall(
         self: *FunctionBuilder,
         method: ast.Method,
@@ -6036,11 +6445,11 @@ pub const FunctionBuilder = struct {
         fallible_allowed: bool,
         shape_position: ShapePosition,
     ) Error!?Typed {
-        const layout_index = values[0].value_type.strukt;
-        const layout = self.analyzer.structs.items[layout_index];
-        const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, method.name });
+        const receiver_type = values[0].value_type;
+        const declared = self.declaredName(receiver_type).?;
+        const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared, method.name });
         const function_index = self.analyzer.function_names.get(qualified) orelse {
-            try self.failUnknownMethod(layout_index, layout, method);
+            try self.failUnknownMethod(receiver_type, declared, method);
             return null;
         };
         if (!try self.functionReachable(function_index, method.span)) return null;
@@ -6054,7 +6463,7 @@ pub const FunctionBuilder = struct {
                 "luce.sema.self",
                 method.span,
                 "{s}.{s} is a namespace function, not a method; it takes no self — call it as {s}({s}, …)",
-                .{ layout.name, method.name, qualified, try self.writtenReceiver(method) },
+                .{ declared, method.name, qualified, try self.writtenReceiver(method) },
             );
             return null;
         }
@@ -6337,13 +6746,14 @@ pub const FunctionBuilder = struct {
     /// and builder families already do.
     fn failUnknownMethod(
         self: *FunctionBuilder,
-        layout_index: u32,
-        layout: StructLayout,
+        receiver: Type,
+        written_name: []const u8,
         method: ast.Method,
     ) Error!void {
         var suggestion = helpers.Suggestion.init(method.name);
         for (self.analyzer.functions.items) |candidate| {
-            if (candidate.enclosing != layout_index) continue;
+            const owner = candidate.enclosing orelse continue;
+            if (!owner.asType().eql(receiver)) continue;
             if (candidate.receiver == .not) continue;
             // Never a method this module cannot call (VISIBILITY.md D2).
             if (candidate.declaration.visibility == .private and candidate.module != self.module) continue;
@@ -6352,11 +6762,11 @@ pub const FunctionBuilder = struct {
         }
         if (suggestion.best()) |closest| {
             try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{
-                layout.name, method.name, closest,
+                written_name, method.name, closest,
             });
             return;
         }
-        try self.fail("luce.sema.method", method.span, "{s} has no method {s}", .{ layout.name, method.name });
+        try self.fail("luce.sema.method", method.span, "{s} has no method {s}", .{ written_name, method.name });
     }
 
     /// Which argument of a method is a *store* into the receiver —
@@ -7079,6 +7489,101 @@ pub const FunctionBuilder = struct {
     /// `string(x)` takes the scalars and nothing else: a `builder` is
     /// a heap object and its text comes out through `b.build()`, which
     /// is the method it should always have had.
+    /// `Method(n)` — the number→enum direction, which answers
+    /// `Method?` (docs/ENUMS.md R2).
+    ///
+    /// **It is the parse case, not the arithmetic case.**  The number
+    /// arrives from a file, a wire or a spec field, and *unknown
+    /// member* is precisely what the caller has to branch on — so this
+    /// answers absence rather than trapping, and the caller writes
+    /// `else` or narrows, like every other absence.
+    ///
+    /// The lowering is the same compare-and-branch tree `match` is: one
+    /// equality per member against the number widened to `long`, each
+    /// answering the member it matched, and absence where none did.
+    /// Nothing is narrowed and nothing traps, which is what lets a
+    /// `byte`-backed enum be asked about a number no `byte` could hold.
+    fn lowerEnumOfNumber(
+        self: *FunctionBuilder,
+        written_name: []const u8,
+        arguments: []const ast.Argument,
+        span: Span,
+        enum_index: u32,
+    ) Error!?Typed {
+        const info = self.analyzer.enum_decls.items[enum_index];
+        if (info.declaration.visibility == .private and info.module != self.module) {
+            try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
+                info.declaration.name,
+                self.analyzer.moduleName(info.module),
+            });
+            return null;
+        }
+        if (arguments.len != 1 or !helpers.argumentMayName(arguments[0], "value")) {
+            try self.fail("luce.sema.convert", span, "{s}(value) takes one number", .{written_name});
+            return null;
+        }
+        const declared = self.analyzer.enums.items[enum_index];
+        const of = self.analyzer.enumType(enum_index);
+        const answer = Type.optionalOf(of).?;
+
+        // The number lands on `long`: every member's value fits one
+        // whatever the backing width is, so the comparison is exact and
+        // a number past the width simply matches nothing.
+        self.wanted = .long;
+        const number = (try self.lowerExpression(arguments[0].value, false)) orelse return null;
+        if (!number.value_type.isInteger()) {
+            try self.fail(
+                "luce.sema.convert",
+                span,
+                "{s}(value) reads a whole number and answers {s}?; {s} is not one{s}",
+                .{
+                    written_name,
+                    declared.name,
+                    try self.analyzer.typeName(number.value_type),
+                    try self.absenceAdvice(number.value_type, arguments[0].value),
+                },
+            );
+            return null;
+        }
+        const widened = if (number.value_type.eql(.long))
+            number
+        else
+            try self.widenNumeric(number, .long);
+        const held = try self.code.spill(widened.register, .long);
+
+        // Absence first, so the slot has a value on every path; each
+        // arm that matches overwrites it.
+        const absent = try self.code.emit(
+            .{ .intrinsic = .{ .kind = .none_value, .arguments = &.{} } },
+            answer,
+        );
+        const result = try self.code.spill(absent, answer);
+
+        var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
+        defer frames.deinit(self.temporary());
+        for (declared.members) |member| {
+            const value = try self.code.emit(.{ .const_long = member.value }, .long);
+            const same = try self.code.emit(.{ .binary = .{
+                .op = .equal,
+                .operand_type = .long,
+                .left = try self.code.load(held),
+                .right = value,
+            } }, .boolean);
+            const arms = try self.code.openIf(same, true);
+            const found = try self.code.emit(.{ .const_long = member.value }, of);
+            const wrapped = try self.arena().alloc(Register, 1);
+            wrapped[0] = found;
+            try self.code.store(result, try self.code.emit(
+                .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = wrapped } },
+                answer,
+            ));
+            try self.code.elseArm(arms);
+            try frames.append(self.temporary(), arms);
+        }
+        while (frames.pop()) |arms| try self.code.closeIf(arms);
+        return .{ .register = try self.code.load(result), .value_type = answer };
+    }
+
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
         // One slot, named `value` like the reference spells it
         // (docs/ARGS.md D1: names are optional everywhere, so the
@@ -7106,6 +7611,15 @@ pub const FunctionBuilder = struct {
             .boolean, .string, .list, .map, .array, .builder => null,
         };
         const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
+        // **A conversion accepts an enum exactly because it is named
+        // for what it produces** (docs/ENUMS.md D4): `int(m)` is the
+        // member's number, and `string(m)` is the member's *name* —
+        // which is a different act from printing a number, and the one
+        // an f-string hole performs for a reader who wrote none.
+        if (value.value_type == .enumeration) {
+            if (produces == .string) return self.lowerEnumName(value);
+            return self.lowerEnumToNumber(call, value, produces);
+        }
         if (produces == .string) {
             switch (value.value_type) {
                 .string => return value,
@@ -7159,6 +7673,88 @@ pub const FunctionBuilder = struct {
             .register = try self.code.emit(.{ .convert = value.register }, target),
             .value_type = target,
         };
+    }
+
+    /// `int(m)`, `long(m)`, `byte(m)` — the member's number, at the
+    /// width the constructor names (docs/ENUMS.md D4).
+    ///
+    /// **Every numeric constructor takes an enum, and each behaves
+    /// exactly as if the backing width had been written.**  `byte(m)`
+    /// traps `conversion_range` where `byte(300)` would; `double(m)`
+    /// answers the member's number as a double.  One rule, no table of
+    /// pairs — which is the same shape `lowerConvert` already gives the
+    /// seven numeric types (docs/TYPES.md §3).
+    fn lowerEnumToNumber(
+        self: *FunctionBuilder,
+        call: ast.Call,
+        value: Typed,
+        produces: types.Builtin,
+    ) Error!?Typed {
+        const target: Type = switch (produces) {
+            .byte => .byte,
+            .short => .short,
+            .int => .int,
+            .long => .long,
+            .half => .half,
+            .float => .float,
+            .double => .double,
+            .boolean, .string, .list, .map, .array, .builder => unreachable, // answered by the caller
+        };
+        _ = call;
+        return .{
+            .register = try self.code.emit(.{ .convert = value.register }, target),
+            .value_type = target,
+        };
+    }
+
+    /// `string(m)` — the member's name (docs/ENUMS.md D5).
+    ///
+    /// **The name table is the constant pool.**  Every member's name is
+    /// interned there once, like every other string a program spells,
+    /// and this is the tree that picks the row: one equality per member
+    /// on a value that is already the compare-and-branch shape `match`
+    /// uses, answering a constant.  So there is nothing new in
+    /// `libluce_rt` — the two engines agree because they run the same
+    /// MIR, which is the whole of D10's promise — and no table of
+    /// pointers has to be emitted into an artifact and kept honest by
+    /// something other than the program itself.
+    fn lowerEnumName(self: *FunctionBuilder, value: Typed) Error!?Typed {
+        const declared = self.analyzer.enums.items[value.value_type.enumeration.index];
+        const result = try self.code.spill(
+            try self.code.emit(
+                .{ .const_string = try self.analyzer.pool.intern(declared.members[0].name) },
+                .string,
+            ),
+            .string,
+        );
+        if (declared.members.len == 1) {
+            return .{ .register = try self.code.load(result), .value_type = .string };
+        }
+        const held = try self.code.spill(value.register, value.value_type);
+
+        var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
+        defer frames.deinit(self.temporary());
+        // The first member is what the slot already holds, so the tree
+        // tests the others — the same "every value is a member" promise
+        // `match` leans on, spent here to save a comparison.
+        for (declared.members[1..]) |member| {
+            const number = try self.code.emit(.{ .const_long = member.value }, value.value_type);
+            const same = try self.code.emit(.{ .binary = .{
+                .op = .equal,
+                .operand_type = value.value_type,
+                .left = try self.code.load(held),
+                .right = number,
+            } }, .boolean);
+            const arms = try self.code.openIf(same, true);
+            try self.code.store(result, try self.code.emit(
+                .{ .const_string = try self.analyzer.pool.intern(member.name) },
+                .string,
+            ));
+            try self.code.elseArm(arms);
+            try frames.append(self.temporary(), arms);
+        }
+        while (frames.pop()) |arms| try self.code.closeIf(arms);
+        return .{ .register = try self.code.load(result), .value_type = .string };
     }
 
     /// One sentence for all three constructors, naming what each takes.

@@ -14,8 +14,8 @@ no value.
 The line between them decides everything about memory.
 
 **Values** copy on assignment and on call, and nobody frees them: the
-seven numbers, `bool`, `string`, and `struct`s. A value never takes an
-ownership word.
+seven numbers, `bool`, `string`, `struct`s and `enum`s. A value never
+takes an ownership word.
 
 **Heap objects** are referenced, created with `new` or a literal, and
 freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
@@ -228,6 +228,41 @@ absent and arrives only when a program builds one. So `?` answers both
 refusals, and so does a container: a `list`, `map` or `array` is one
 reference however much it holds.
 
+## enum {#enum}
+
+A set of named constants at one integer width, declared with
+[`enum`](../statements/#enum). It is a value type: it copies, it takes
+no ownership word, and a container holds it at its backing width.
+
+- **No implicit conversion in either direction.** `int(m)` and every
+  other numeric constructor answer the member's number at that width,
+  trapping exactly where the same constructor would on the number
+  itself; `string(m)` answers the member's **name**, and an f-string
+  hole is a `string(...)` nobody wrote.
+- `Method(n)` is the other direction and is fallible: it answers
+  `Method?`, with `none` where no member holds `n`. Nothing else
+  produces an enum value, which is why every value of an enum is one
+  of its members.
+- **Equality only.** `==` and `!=` compare members; `<` and its
+  relatives are refused, naming `int(…)`.
+- Members fold: a member is a constant, so it stands in a top-level
+  `let`, a parameter default and a field default.
+
+```luce run
+enum Method(byte):
+    stored = 0
+    deflated = 8
+
+func main():
+    var seen = new list(Method)
+    seen.append(Method.deflated)
+    print(f"{seen[0]} is {int(seen[0])}, and 3 is {string(Method(3) != none)}")
+```
+
+```output
+deflated is 8, and 3 is false
+```
+
 ## list(T)
 
 A growable sequence. Created with a literal or `new list(T)`. An empty
@@ -341,7 +376,9 @@ main.luc:2:16: expected end of line after the field, found '!' [luce.parse.expec
 `var name: Type` with no initializer declares the binding, its type
 and its scope. The slot holds the type's zero value until it is
 assigned. For an object type that is the null object, and using it
-traps `null_object`.
+traps `null_object`. For an enum it is the **first declared member**:
+zero is a number no member need hold, and every value of an enum is a
+member.
 
 `let` always requires an initializer: a name that can never be
 reassigned and holds nothing is a contradiction.

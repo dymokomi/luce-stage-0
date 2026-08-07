@@ -79,7 +79,7 @@ pub fn rangeMessage(landed: Type) []const u8 {
         .half => half_range_message,
         .float => float_range_message,
         .double => double_range_message,
-        .none, .boolean, .string, .strukt, .heap, .optional => long_range_message,
+        .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => long_range_message,
     };
 }
 
@@ -234,6 +234,23 @@ pub const Analyzed = mir.build.Lowered;
 // Collected declarations
 // ---------------------------------------------------------------------------
 
+/// What a function was declared inside: a struct, or an enum
+/// (docs/ENUMS.md D7 — an enum takes the methods and namespace
+/// functions a struct has, under the same rules).  It is what gives
+/// `self` its type, and what makes `self` at file scope a diagnostic
+/// rather than a crash.
+pub const Enclosing = union(enum) {
+    strukt: u32,
+    enumeration: Type.EnumRef,
+
+    pub fn asType(self: Enclosing) Type {
+        return switch (self) {
+            .strukt => |index| .{ .strukt = index },
+            .enumeration => |reference| .{ .enumeration = reference },
+        };
+    }
+};
+
 /// A collected function signature: everything a call site has to know
 /// before the body it belongs to has been walked.
 pub const FunctionDeclInfo = struct {
@@ -259,10 +276,10 @@ pub const FunctionDeclInfo = struct {
     /// parameter's; this field is what says the call site may spell it
     /// `x.f(…)`.
     receiver: ast.Receiver = .not,
-    /// The struct this function was declared inside, or null at top
-    /// level.  Set for namespace functions too — `self` outside a
-    /// struct is refused by asking this, not by asking the receiver.
-    enclosing: ?u32 = null,
+    /// The declaration this function was written inside, or null at top
+    /// level.  Set for namespace functions too — `self` outside one is
+    /// refused by asking this, not by asking the receiver.
+    enclosing: ?Enclosing = null,
     /// What the function answers, in order: empty for a function that
     /// answers nothing, one entry for `-> T`, two or more for a return
     /// shape (docs/RETURNS.md).  This is the arity a call site sees.
@@ -286,6 +303,19 @@ pub const FunctionDeclInfo = struct {
     /// (docs/FAILURE.md).
     fallible: bool,
     is_entry: bool,
+};
+
+/// A collected enum declaration with its module (docs/ENUMS.md).  The
+/// members themselves live in the program's `types.EnumType` beside
+/// it, the way a struct's fields live in its layout.
+pub const EnumDeclInfo = struct {
+    declaration: *const ast.EnumDecl,
+    module: usize,
+    /// Whether this enum's member values have been folded yet.  They
+    /// are folded in declaration order, so a member expression naming a
+    /// member of an enum still pending is refused rather than read at
+    /// whatever its slot happens to hold.
+    settled: bool = false,
 };
 
 /// A collected struct declaration with its module, for cycle spans

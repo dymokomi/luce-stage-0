@@ -3,10 +3,11 @@
 ## File structure
 
 A file holds, in any order: `import` lines, top-level `let`
-constants, `struct` declarations, and `func` declarations. There is no
-top-level executable code and no top-level `var`.
+constants, `struct` declarations, `enum` declarations, and `func`
+declarations. There is no top-level executable code and no top-level
+`var`.
 
-Each of the three declaration forms may carry a
+Each of the four declaration forms may carry a
 [visibility](#visibility) word. Without one it is public.
 
 ## Entry
@@ -65,10 +66,69 @@ names every field. A member may carry a [visibility](#visibility) word
 of its own, or sit in a region that carries one for the group; without
 either it is public.
 
+## enum {#enum}
+
+```
+enum Name:
+    member
+    member = constant
+    ...
+
+    func member(...):
+        ...
+
+enum Name(byte):
+    ...
+```
+
+A set of named constants at one integer width. Members are
+snake_case, one per line; a member with no value takes the previous
+member's plus one, and an unvalued first member is 0. A written value
+is a constant integer expression, folded like every other constant.
+
+- Two members may not hold one number.
+- The backing width is `int` unless the declaration names one of
+  `byte`, `short`, `int`, `long`; a member the width cannot hold is
+  refused (`luce.sema.enum`).
+- Members are reached only through the type: `Method.stored`, and
+  `module.Method.stored` across an import.
+- An enum takes the same methods and namespace functions a `struct`
+  takes, under the [same rules](#methods), `var self` included. A
+  function may not wear a member's name.
+- The declaration may carry a [visibility](#visibility) word; a member
+  may not — an enum's members are what the type is.
+- The zero value of an enum-typed slot is its **first declared
+  member**, which is what `var m: Method` starts at and what
+  `new array(Method, n)` fills with.
+
+## match {#match}
+
+```
+match expression:
+    member:
+        ...
+    member:
+        ...
+    else:
+        ...
+```
+
+Dispatch over an enum. The scrutinee must be one; every arm is a bare
+member name of that enum, and each opens a block. `else` is optional
+and comes last.
+
+- Without an `else`, **every member must have an arm**, and one that
+  is missing is `luce.sema.match`, by name.
+- An arm may not be written twice, and an `else` that covers nothing
+  is refused.
+- Arms are ordinary statement blocks: they declare, assign, loop,
+  `break`, `continue` and `return`. A match all of whose arms return
+  is a return.
+
 ## Methods {#methods}
 
-A function declared inside a `struct` is a **method** exactly when its
-first parameter is the keyword `self`.
+A function declared inside a `struct` or an `enum` is a **method**
+exactly when its first parameter is the keyword `self`.
 
 ```
 func name(self) -> Type:              # reads the receiver
@@ -244,7 +304,8 @@ else:
     ...
 ```
 
-The condition is `bool`. There is no ternary operator and no `switch`.
+The condition is `bool`. There is no ternary operator; dispatch over a
+value whose cases have names is [`match`](#match).
 
 ## while
 
