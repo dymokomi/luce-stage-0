@@ -395,6 +395,21 @@ pub const Analyzer = struct {
                 }
                 const key = (try self.resolveType(module, written.arguments[0])) orelse return null;
                 if (key != .long and key != .string) {
+                    // An enum is a value at a width like any other, and
+                    // the width a map may key by is `long` — the same
+                    // rule that refuses `map(int, V)`, met by a type
+                    // that has a name for its number.  So the sentence
+                    // names the number rather than stopping at the
+                    // rule (docs/ENUMS.md, As built).
+                    if (key == .enumeration) {
+                        try self.fail(
+                            "luce.sema.type",
+                            written.arguments[0].span,
+                            "map keys are long or string; key by long(m) and keep {s} in the value, or use a list indexed by int(m)",
+                            .{try self.typeName(key)},
+                        );
+                        return null;
+                    }
                     try self.fail("luce.sema.type", written.arguments[0].span, "map keys are long or string", .{});
                     return null;
                 }

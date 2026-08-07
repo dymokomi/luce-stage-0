@@ -151,6 +151,17 @@ with the reason, and each has a spec.
 | **A5** | **Every numeric constructor takes an enum**, not only `int` and `long`: `byte(m)` traps `conversion_range` exactly where `byte(300)` would, and `double(m)` answers the member's number.  One rule instead of a table of pairs, which is the shape `lowerConvert` already gives the seven numeric types.  The MIR is one `convert` whose operand is enum-typed; the verifier admits same-width only from an enum, where the conversion's whole content is the type it lands in. |
 | **A6** | **An `else` that covers nothing is refused** — the sentence `a else b` already gets when `a` is never absent.  An arm that catches nothing today would quietly catch the member somebody adds tomorrow, which is the exact mistake a checked `match` exists to make impossible. |
 
+**One place D9's letter did not survive contact**: a map may not be
+*keyed* by an enum.  Map keys are `long` or `string` and always have
+been — `map(int, V)` is refused the same way — because `hashOf` and
+`keyEquals` in `libluce_rt` read exactly those two payloads, and
+teaching them a third is the new runtime semantic D10 rules out.  A
+`list(Method)`, a `map(K, Method)`, an `array(Method, n)` and a struct
+field all hold members as D9 says; the key position refuses one by
+name, and the sentence offers `long(m)` and a list indexed by `int(m)`.
+It is the narrower reading of "like any scalar" — no scalar but `long`
+and `string` may be a key either.
+
 Two smaller calls: an enum member takes no visibility marker (a member
 is what the type *is*, and a match arm cannot name one the file it
 stands in cannot see — the marker on the *declaration* withholds the

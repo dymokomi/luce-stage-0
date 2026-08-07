@@ -5874,3 +5874,33 @@ test "private on an enum gates nothing inside its own file" {
         \\
     );
 }
+
+test "luce.sema.type: a map may hold enums but not be keyed by one" {
+    // Map keys are `long` or `string` and always have been —
+    // `map(int, V)` is refused the same way — so an enum key is
+    // refused by the rule that predates it, with the number named
+    // (docs/ENUMS.md, As built).
+    try expectSaying(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    var counts = new map(Method, long)
+        \\
+    ,
+        "luce.sema.type",
+        "map keys are long or string; key by long(m) and keep Method in the value",
+    );
+    try expectCompiles(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    var chosen = new map(string, Method)
+        \\    chosen["a"] = Method.deflated
+        \\    assert(chosen["a"] == Method.deflated)
+        \\
+    );
+}
