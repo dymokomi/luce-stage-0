@@ -168,6 +168,41 @@ test "an option written twice, or one nobody has, is refused rather than resolve
     try testing.expect(dumped.saysErr("ir takes one file"));
 }
 
+test "an option in the file's slot is answered with the rule, not the wrong word" {
+    // `luce build --emit=object sums.luc` once answered "sums.luc is
+    // not an option build takes": true of the word it names, and
+    // useless, because sums.luc is exactly what the caller meant to
+    // build.  The rule broken is that the file comes first, so that
+    // is the sentence — with the fix written out.
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+    try tree.write("sums.luc", greeting);
+    const program = try tree.at(gpa, "sums.luc");
+    defer gpa.free(program);
+
+    const misordered = [_][]const []const u8{
+        &.{ "build", "--emit=object", program },
+        &.{ "build", "--release", program },
+        &.{ "build", "--emit=exe" },
+    };
+    for (misordered) |arguments| {
+        var ran = try runLuce(gpa, &tree, arguments, null);
+        defer ran.deinit(gpa);
+        try testing.expectEqual(@as(u8, 1), ran.status);
+        try testing.expectEqualStrings("", ran.out);
+        const expected = try std.fmt.allocPrint(
+            gpa,
+            "build takes its file first: luce build FILE {s}",
+            .{arguments[1]},
+        );
+        defer gpa.free(expected);
+        try testing.expect(ran.saysErr(expected));
+        try testing.expect(!tree.exists("sums.lc"));
+        try testing.expect(!tree.exists("sums.o"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // check and ir
 // ---------------------------------------------------------------------------

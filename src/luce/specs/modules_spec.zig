@@ -118,6 +118,10 @@ test "an import cycle is allowed: a three-file ring loads, compiles, and runs" {
 }
 
 test "constants reach across modules through imports" {
+    // The importable half of S35: file scope owns nothing, so a
+    // constant is a value — and a value crosses a module boundary as
+    // `module.name` with no owner to hand over.  ownership_spec proves
+    // the rest of the situation within one file.
     const config: agree.File = .{ .name = "config", .source =
         \\struct Size:
         \\    rows: long

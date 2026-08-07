@@ -1287,7 +1287,7 @@ test "S39: let freezes the binding, not the object" {
 }
 
 // ---------------------------------------------------------------------------
-// H. Program edges (S33-S34) and mechanics the model relies on
+// H. Program edges (S33-S35) and mechanics the model relies on
 // ---------------------------------------------------------------------------
 
 test "S33: a busy program ends with zero live objects" {
@@ -1321,6 +1321,97 @@ test "S34: a trap mid-run aborts cleanly with objects in flight" {
         \\    let bad = xs[9]
         \\
     , .index_bounds);
+}
+
+test "S35: file scope owns nothing, so a constant is a value" {
+    // The three owner kinds S33 names — a binding, a container, the
+    // statement temporary — all live inside a function, and a
+    // top-level `let` has no scope to die at.  So what a constant may
+    // say is exactly what needs no owner: scalars, string, and a
+    // struct whose layout carries none.  Each folds at compile time
+    // and is inlined at its use sites, which is why the census this
+    // run ends on is zero without a single name having released
+    // anything.  The other half of the situation — that such a
+    // constant is importable as `module.name`, still owning nothing —
+    // is proven across files by modules_spec's "constants reach
+    // across modules through imports".
+    try agreeClean(
+        \\struct Size:
+        \\    rows: long
+        \\    cols: long
+        \\
+        \\let rows = 24
+        \\let name = "loom"
+        \\let screen = Size(rows = rows, cols = 80)
+        \\let area = rows * screen.cols
+        \\
+        \\func main():
+        \\    assert(rows == 24)
+        \\    assert(name + "!" == "loom!")
+        \\    assert(screen.cols == 80)
+        \\    assert(area == 1920)
+        \\
+    );
+}
+
+test "S35: an object cannot be file-scope, in any of the forms that make one" {
+    // The refusal is ownership's — there is no owner for the object to
+    // have — and the analyzer says so, quoting the situation.  It
+    // arrives under `luce.sema.const` rather than `luce.sema.own`
+    // because file scope is the constant folder's ground, so the
+    // sentence is checked here as well as the code: a reader who is
+    // sent to S35 must be told *why* the line cannot stand, not only
+    // that a constant was expected.
+    const objects = [_][]const u8{
+        "let bad = new list(long)",
+        "let bad = [1, 2]",
+        "let bad = new map(string, long)",
+        "let bad = new builder()",
+        "let bad = new array(long, 2, 2)",
+        "let bad = \"hello\"[0:2]",
+    };
+    for (objects) |declaration| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "{s}\n\nfunc main():\n    return\n",
+            .{declaration},
+        );
+        defer testing.allocator.free(source);
+        var result = try luce.compile.compile(testing.allocator, source, script);
+        defer result.deinit();
+        if (result == .success) {
+            std.debug.print("expected a refusal, but this compiled:\n{s}", .{source});
+            return error.TestUnexpectedResult;
+        }
+        const first = result.failure.at(0) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings("luce.sema.const", first.code);
+        try testing.expectEqualStrings(
+            "constants are values; objects cannot be file-scope [OWNERSHIP.md S35]",
+            first.message,
+        );
+    }
+
+    // A struct is refused by its layout, not by what the initializer
+    // happens to be written as, so it gets its own sentence naming the
+    // struct the reader has to look at.
+    var carrier = try luce.compile.compile(testing.allocator,
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\let bad = Bag(items = [1])
+        \\
+        \\func main():
+        \\    return
+        \\
+    , script);
+    defer carrier.deinit();
+    try testing.expect(carrier == .failure);
+    const said = carrier.failure.at(0) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("luce.sema.const", said.code);
+    try testing.expectEqualStrings(
+        "Bag carries objects; constants are values only [OWNERSHIP.md S35]",
+        said.message,
+    );
 }
 
 test "mechanics: a bare give with no receiver dies at the statement end" {

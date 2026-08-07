@@ -67,6 +67,16 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     const path = arguments[2];
 
     if (std.mem.eql(u8, command, "build")) {
+        // The file comes first and the options follow it.  An option
+        // written in the file's slot pushes the file into the option
+        // list, where the loop below meets it and reports the file —
+        // "sums.luc is not an option build takes", a true sentence
+        // about the wrong word, which sends the reader to look at a
+        // file that is fine.  The mistake is the order, so the order
+        // is what is said.  A bare `-` is standard input, a file.
+        if (path.len > 1 and path[0] == '-') {
+            return refuse(err, "build takes its file first: luce build FILE {s}", .{path});
+        }
         var output_path: []const u8 = "";
         var release = false;
         var emit: Emit = .library;

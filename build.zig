@@ -493,8 +493,19 @@ pub fn build(b: *std.Build) void {
     }
 
     // The benchmark programs compile under test too, so bench/*.luc
-    // cannot rot; timing them stays manual (bench/run.sh).
-    const benches = [_][]const u8{ "loops", "math", "strings", "arrays", "matmul", "stats" };
+    // cannot rot; timing them stays manual (bench/run.sh).  Every name
+    // bench/run.sh times is here, the 32-bit rows included — a guard
+    // that covers six of eight leaves two that can rot in silence.
+    const benches = [_][]const u8{
+        "loops",
+        "math",
+        "strings",
+        "arrays",
+        "arrays32",
+        "matmul",
+        "matmul32",
+        "stats",
+    };
     for (benches) |name| {
         const compile_bench = b.addRunArtifact(compiler);
         compile_bench.addArg("build");
