@@ -68,6 +68,7 @@ and each says so in its own preamble.
 | [BYTES.md](BYTES.md) | The binary half of the host boundary: why a `string` cannot carry a JPEG, the C-shaped byte primitive, and a file handle as an owned object. Ratified. |
 | [CONCURRENCY_RESEARCH.md](CONCURRENCY_RESEARCH.md) | **Not a decision.** The survey behind one not yet taken: nine concurrency models, cited, priced against S8, the no-collector rule and the differential oracle — and the questions the ruling turns on. |
 | [UNION_RESEARCH.md](UNION_RESEARCH.md) | **Not a decision.** Sum types across seven languages, priced against scope ownership: why Luce already boxes without a collector, why payload bindings alias, and the zero-value question that killed Go's sum types twice. |
+| [UNION.md](UNION.md) | **Drafted, not scheduled.** The tagged-union design distilled from the research — eighteen decisions, three questions held — written so union's own moment finds the thinking done. `std.json` proceeds without it (a closed six-kind domain is a struct with an enum tag). |
 
 ## History
 
