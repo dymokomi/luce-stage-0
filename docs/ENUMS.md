@@ -62,7 +62,18 @@ Python-indented language wants dispatch to look like.
 | **D9** | **Containers hold enums like any scalar**: `list(Method)`, `map(Method, T)`, `array(Method, n)` work by construction, at the backing width, unboxed where scalars are unboxed. |
 | **D10** | **In MIR an enum value is its backing integer** and the type table gains an enum row beside the struct layouts; `format_version` bumps.  No new runtime semantic — `libluce_rt` learns only the name table for D5 — so the two engines agree by sharing what they already share.  Exhaustiveness, conversion checking and member resolution are all stage 4. |
 
-## Questions for ratification
+## Ratified (owner, 2026-08-06)
+
+All three questions were put to the owner; all three answered with
+the memo's recommendation:
+
+| | ruling |
+|---|---|
+| **R1** | **`match` arrives with enums**, in the restricted form below — bare member arms, optional `else:`, and without `else` every member must appear, so a member added later turns every non-`else` match that misses it into a compile error naming the member.  Union extends this statement with payload bindings rather than introducing a second one. |
+| **R2** | **`Method(n)` answers `Method?`.**  Number→enum is the parse case, not the arithmetic case: the value arrives from a file or a wire, and *unknown member* is precisely what the caller must branch on.  The caller writes `else` or narrows, like every other absence. |
+| **R3** | **Arms are bare member names** — `stored:`, not `Method.stored:` and not `case stored:`.  The scrutinee's type is known and the arm namespace is closed, so bare names are unambiguous, and union's payload arms will read `circle(r):` under the same form. |
+
+## The questions, as they were argued
 
 **Q1 — does `match` arrive with enums, or wait for union?**  Without
 a dispatch statement an enum is `==` chains — better-named numbers,
