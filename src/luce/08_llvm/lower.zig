@@ -5118,10 +5118,12 @@ const Body = struct {
             .map_keys => try self.callAnswering(register, .luce_rt_map_keys, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
+                try self.answeredZero(register),
             }),
             .map_values => try self.callAnswering(register, .luce_rt_map_values, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
+                try self.answeredZero(register),
             }),
             .map_get => try self.callAnswering(register, .luce_rt_map_get, &.{
                 rt,
@@ -5512,6 +5514,27 @@ const Body = struct {
     /// Builder`.  The shape is a compile-time fact, so the kind picks
     /// the entry point and only an array's sizes travel at runtime.
     // -- objects, ownership, and the words a trap carries -----------------
+
+    /// The element zero of the List an intrinsic answers, boxed.
+    ///
+    /// `m.keys()` and `m.values()` build a list out of values the
+    /// runtime is holding, and which *kind* its cells are is a fact of
+    /// the program's element type rather than of the code that built
+    /// it (`runtime/containers.zig`'s `emptyList`).  So the zero
+    /// travels with the call, exactly as it does for `new list(T)`,
+    /// and the lowering below may read a list's cells knowing their
+    /// width.
+    fn answeredZero(self: *Body, register: mir.Register) Error!Builder.Value {
+        const of = self.function.result_types[register];
+        if (of != .heap) return self.fail("keys or values answering no object");
+        const element = switch (self.module.program.heap_types[of.heap]) {
+            .list => |written| written,
+            .map, .array, .builder, .file => return self.fail(
+                "keys or values answering something other than a list",
+            ),
+        };
+        return self.boxed(element, try self.zeroValue(element), "element.zero");
+    }
 
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
