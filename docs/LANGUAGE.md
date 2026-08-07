@@ -558,7 +558,7 @@ write-back stands on the returning edge only.
 ## Collections
 
 ```luce fragment
-var xs = [1, 2, 3]                 # list(long), inferred from elements
+var xs = [1, 2, 3]                 # list(int), inferred from elements
 var ys: list(string) = []          # empty literal needs an annotation
 var m = new map(string, long)       # insertion-ordered dictionary
 var grid = new array(long, 5, 5)    # fixed 5x5, zero-initialized
@@ -724,11 +724,12 @@ a slice and `f"{m[k]}"` a lookup.
 
 ## Conversions and generic builtins
 
-**Three conversion constructors, each named for the type it
-produces**: `long(x)`, `double(x)`, `string(x)` (docs/NUMERICS.md §7).
-They are the only ones, and none of them is a builtin — the compiler
-matches the three names before it resolves anything, which is why all
-three are reserved.
+**Eight conversion constructors, each named for the type it
+produces**: one per numeric type — `byte(x)`, `short(x)`, `int(x)`,
+`long(x)`, `half(x)`, `float(x)`, `double(x)` — and `string(x)`
+(docs/NUMERICS.md §7, docs/TYPES.md §3).  They are the only ones, and
+none of them is a builtin — the compiler matches the names before it
+resolves anything, which is why all eight are reserved.
 
 `long(x)` **rounds half away from zero** — `long(2.5)` is `3` and
 `long(-2.5)` is `-3`, the same rounding `math.round` does — and traps
@@ -949,12 +950,13 @@ land on, `12` is an `int` and `1.5` is a `float`; a literal past the
 width it landed on is refused at compile time by a message naming the
 width that would hold it.
 
-Number literals are decimal, and a fraction or an exponent makes a
-float (`1.5`, `1e10`, `1.5e-3`).  A `.` only starts
-a fraction when a digit follows it.  There are no hexadecimal,
-binary or octal literals and no `_` digit separators — writing one
-is a `luce.lex.number` error naming the reason, not a silent
-misreading (docs/MISSING.md tier 3, item 11).
+Number literals are decimal, hexadecimal (`0xFF`) or binary
+(`0b1010`), with `_` digit separators between digits (`1_000_000`,
+`0xFF_FF`); a fraction or an exponent makes a float (`1.5`, `1e10`,
+`1.5e-3`), and a `.` only starts a fraction when a digit follows it
+(docs/BITWISE.md R3, D7–D8).  There are no octal literals and no hex
+floats — writing one is a `luce.lex.number` error naming the reason,
+not a silent misreading.
 
 Binary operators are `+ - * / // %`, the comparisons
 `== != < <= > >=` (ordering on long, double, string), and `and or not`
@@ -1015,7 +1017,7 @@ refused at the first place it did not fit, by a message naming the
 constructor that would do it.
 
 Promotion needs a place that expects a `double`.  `let xs = [1, 2, 3]`
-is still a `list(long)`; `let xs: list(double) = [1, 2, 3]` is a
+is still a `list(int)`; `let xs: list(double) = [1, 2, 3]` is a
 `list(double)`, and `[1, 2.5]` is one too, because one `double` among
 numbers makes them all `double`s wherever it stands.
 

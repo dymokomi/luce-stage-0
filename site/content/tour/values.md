@@ -37,11 +37,12 @@ text at the width of the place it reaches, so `let x: double = 0.1` is
 binary64's 0.1 and not binary32's widened. With nothing to land on,
 `12` is an `int` and `1.5` is a `float`.
 
-Number literals are decimal, and a fraction or an exponent makes a
-float: `1.5`, `1e10`, `1.5e-3`. There are no hexadecimal, binary or
-octal literals and no `_` digit separators — writing one is a
-`luce.lex.number` error naming the reason, rather than a silent
-misreading.
+Number literals are decimal, hexadecimal (`0xFF`) or binary
+(`0b1010`), with `_` digit separators welcome between digits
+(`1_000_000`, `0xFF_FF`); a fraction or an exponent makes a float:
+`1.5`, `1e10`, `1.5e-3`. There are no octal literals and no hex
+floats — writing one is a `luce.lex.number` error naming the reason,
+rather than a silent misreading.
 
 ## Three of them are storage, not arithmetic
 
@@ -271,9 +272,9 @@ loom v2
 
 Constants may reference each other in any order, but never in a cycle.
 What may be folded is literals, other constants, arithmetic,
-comparisons, `and`/`or`, string concatenation, the three conversion
-constructors `long()`, `double()` and `string()`, and value-struct
-construction. **Calls are not constant**, and neither are heap
+comparisons, `and`/`or`, string concatenation, the conversion
+constructors (`byte()` through `double()`, and `string()`), and
+value-struct construction. **Calls are not constant**, and neither are heap
 objects, because a top-level binding has no scope to die at and
 therefore cannot own one:
 

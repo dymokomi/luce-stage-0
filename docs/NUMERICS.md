@@ -497,6 +497,12 @@ mitigation is the type system, not a check, and that is §9.
 
 ## 7. Conversions: `Int`, `Float`, `String`
 
+> **Superseded in count, not in principle** (docs/TYPES.md §3): the
+> numeric ladder gave every numeric type its constructor, so there are
+> now eight — `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`,
+> `float(x)`, `double(x)`, `string(x)`.  The rounding and range rules
+> decided below carry over unchanged.
+
 Three constructors, each named for the type it produces, each taking
 one argument.
 

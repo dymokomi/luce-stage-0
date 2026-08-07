@@ -22,7 +22,7 @@ cross-type builtins stay free functions: `len`, `str`, `print`.
 
 ```luce run
 func main():
-    var xs = [3, 1, 2]           # list(long), inferred from the elements
+    var xs = [3, 1, 2]           # list(int), inferred from the elements
     var names: list(string) = [] # an empty literal needs its type
 
     xs.append(4)
