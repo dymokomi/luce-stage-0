@@ -103,9 +103,14 @@ cannot be re-declared in an inner one.
 and      break    catch    continue copy     elif     else
 enum     false    for      func     give     if       import
 in       let      match    new      none     not      or
-private  public   return   self     struct   true     try
-var      while
+private  public   return   self     spawn    struct   true
+try      var      while
 ```
+
+`spawn` runs a call on a [worker](/tour/threads/) instead of making
+it here.  A keyword rather than a builtin because its operand is a
+call that must *not* be made at the site — which is not something a
+builtin's arguments can say.
 
 `private` and `public` mark a declaration's
 [visibility](../statements/#visibility), and inside a struct they also

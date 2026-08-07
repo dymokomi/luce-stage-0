@@ -329,6 +329,52 @@ methods are `f.read(buffer)`, `f.write(buffer, count)` and `f.flush()`,
 all three fallible; [`std.files`](/std/files/) is where the loops over
 them live.
 
+## task
+
+A running worker (see the [Workers](/tour/threads/) chapter). The
+`file` precedent exactly: a resource rather than a container, with no
+`new task` — `spawn` is the only door in — and a scope-owned death
+point. What "release" *is* differs: for a file it is a close, for a
+task it is a **join**.
+
+What stands inside the parentheses is a **return shape**, written the
+way it would be written after a function's `->`:
+
+| written | the worker's function answers |
+|---|---|
+| `task` | nothing, and cannot fail |
+| `task(!)` | nothing, or a failure |
+| `task(double)` | a `double` |
+| `task(double!)` | a `double`, or a failure |
+
+The `!` is the spawned function's own attribute travelling with the
+call the task carries — the same fact `-> T!` states, one level out —
+and it decides whether `t.wait()` is a site that has to say `try` or
+`catch`.
+
+```luce run
+func square(n: long) -> long:
+    return n * n
+
+func main():
+    var tasks = new list(task(long))
+    for i in range(1, 4):
+        tasks.append(spawn square(i))
+    var total: long = 0
+    for t in tasks:
+        total = total + t.wait()
+    print(string(total))
+```
+
+```output
+14
+```
+
+A task cannot be copied: there is one worker behind it, and a second
+handle would be two joiners of one thread. Its one method is
+`t.wait()`, which consumes it; `free(t)` joins early and the end of
+the owning scope joins automatically.
+
 ## Return shapes {#return-shapes}
 
 `(long, long)` after a function's `->` says it answers two values.

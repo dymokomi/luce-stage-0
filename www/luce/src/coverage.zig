@@ -813,6 +813,10 @@ test "the reference names every conversion constructor" {
         "map",
         "array",
         "builder",
+        // `file` and `task` are resources rather than conversions, and
+        // neither is a function at all: one is opened and the other is
+        // spawned.  `ref/types.md` is where a reader looks for them.
+        "task",
     });
 }
 
