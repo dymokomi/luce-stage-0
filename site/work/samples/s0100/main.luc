@@ -1,0 +1,6 @@
+func main():
+    var xs = [10, 20, 30, 40, 50]
+    var head = xs[0:2]
+    let tail = xs[3:]
+    head.append(999)
+    print(f"head {len(head)}, tail {len(tail)}, source {len(xs)}")

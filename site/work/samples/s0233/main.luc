@@ -1,0 +1,12 @@
+import std.math
+import std.strings
+
+func main():
+    print(strings.format_float(math.pi, 6))
+    print(string(math.round(2.5)) + " " + string(math.round(-2.5)))
+    print(strings.format_float(math.exp(1.0), 6))
+    print(strings.format_float(math.ln(math.e), 6))
+    print(strings.format_float(math.log2(1024.0), 1))
+    print(string(math.ipow(2, 20)))
+    print(strings.format_float(math.pow(2.0, 0.5), 6))
+    print(strings.format_float(math.sin(math.pi / 2.0), 6))

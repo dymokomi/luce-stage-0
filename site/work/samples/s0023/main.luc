@@ -1,0 +1,16 @@
+struct Point:
+    x: double
+    y: double
+
+    func length(p: Point) -> double:
+        return sqrt(p.x * p.x + p.y * p.y)
+
+    func plus(a: Point, b: Point) -> Point:
+        return Point(x = a.x + b.x, y = a.y + b.y)
+
+func main():
+    let a = Point(x = 3.0, y = 4.0)
+    let b = Point(x = 1.0, y = 2.0)
+    print(string(Point.length(a)))
+    let sum = Point.plus(a, b)
+    print(f"({sum.x}, {sum.y}) has length {Point.length(sum)}")

@@ -1,0 +1,12 @@
+import std.files
+
+func main() -> !:
+    var status = "unknown"
+
+    files.write("/nowhere/at/all", "x") catch:
+        status = "write refused"
+    print(status)
+
+    # The expression form supplies a value instead.
+    let text = files.read("/nowhere/at/all") catch "(default)"
+    print(text)

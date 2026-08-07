@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Source text and lexical elements &middot; Luce</title>
+<meta name="description" content="Encoding, indentation, comments, literals, keywords, operators.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a class="here" href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The Luce reference</summary>
+<ul>
+<li><a href="../../ref/">Overview</a></li>
+<li><a class="here" href="../../ref/lexical/">Source text and lexical elements</a></li>
+<li><a href="../../ref/types/">Types</a></li>
+<li><a href="../../ref/expressions/">Expressions</a></li>
+<li><a href="../../ref/statements/">Statements and declarations</a></li>
+<li><a href="../../ref/ownership/">Ownership</a></li>
+<li><a href="../../ref/failure/">Traps and errors</a></li>
+<li><a href="../../ref/modules/">Modules</a></li>
+<li><a href="../../ref/builtins/">Builtins</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Source text and lexical elements</h1>
+<h2 id="encoding">Encoding<a class="anchor" href="#encoding" aria-label="link to this section">#</a></h2>
+<p>A source file is UTF-8 text of at most 64 MiB. Lines end with LF or CRLF; a leading byte-order mark is ignored.</p>
+<p>What is not text is refused before parsing begins, once, naming the file and the position inside it.</p>
+<div class="table"><table>
+<thead><tr><th>Condition</th><th>Code</th></tr></thead>
+<tbody>
+<tr><td>Invalid UTF-8 (the offending byte is printed)</td><td><code>luce.source.utf8</code></td></tr>
+<tr><td>A NUL byte</td><td><code>luce.source.binary</code></td></tr>
+<tr><td>A carriage return that does not end a line</td><td><code>luce.source.line_ending</code></td></tr>
+<tr><td>A UTF-16 or UTF-32 byte-order mark</td><td><code>luce.source.encoding</code></td></tr>
+<tr><td>Larger than 64 MiB</td><td><code>luce.source.too_large</code></td></tr>
+</tbody></table></div>
+<p>Bidirectional control characters are refused everywhere.</p>
+<p>The program may come from standard input (<code>luce check -</code>, or any pipe). Diagnostics then name it <code>&lt;stdin&gt;</code>, and imports resolve beside the current directory.</p>
+<h2 id="indentation">Indentation<a class="anchor" href="#indentation" aria-label="link to this section">#</a></h2>
+<p>Blocks are introduced by <code>:</code> at the end of a line and delimited by indentation. One level is <strong>four spaces</strong>, exactly. Tabs are not indentation and neither is any other width.</p>
+<p>Both are refused by name rather than misread, because a file that looks one way and runs another is the failure this rule exists to prevent.</p>
+<div class="table"><table>
+<thead><tr><th>Written</th><th>Code</th></tr></thead>
+<tbody>
+<tr><td>A tab where indentation belongs</td><td><code>luce.lex.tab</code></td></tr>
+<tr><td>Any step that is not four spaces</td><td><code>luce.lex.indent</code></td></tr>
+</tbody></table></div>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+  <span class="b">print</span>(<span class="s">&quot;two spaces&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:2:1: a block is indented exactly 4 spaces past the one containing it, not 2 [luce.lex.indent]
+      print(&quot;two spaces&quot;)
+    ^~</samp></pre></div>
+</figure>
+<h2 id="comments">Comments<a class="anchor" href="#comments" aria-label="link to this section">#</a></h2>
+<p><code>#</code> to the end of the line. There is no block comment form.</p>
+<h2 id="identifiers">Identifiers<a class="anchor" href="#identifiers" aria-label="link to this section">#</a></h2>
+<p><code>[A-Za-z][A-Za-z0-9_]*</code>. Case is significant. Convention, which the compiler relies on for type names, is TitleCase for types and snake_case for everything else.</p>
+<p><strong>A name starts with a letter.</strong> A leading underscore is refused everywhere a word can stand — <code>luce.lex.name</code> — because the language has a real <code>private</code> keyword, so a sigil has nothing left to encode and would only grow folklore meanings the compiler does not enforce. Interior and trailing underscores are the house style (<code>word_end</code>, <code>append_text</code>), and the lone <code>_</code> stays what it is: the array-shape wildcard, which is not a name.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> _total = <span class="n">1</span></code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:2:9: a name starts with a letter: _total is not a name [luce.lex.name]
+        let _total = 1
+            ^~~~~~</samp></pre></div>
+</figure>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> _ = read_count()
+
+<span class="k">func</span> <span class="d">read_count</span>() -&gt; <span class="t">long</span>:
+    <span class="k">return</span> <span class="n">3</span></code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:2:9: _ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name [luce.parse.expected]
+        let _ = read_count()
+            ^</samp></pre></div>
+</figure>
+<p>There is <strong>no shadowing</strong>: a name declared in an enclosing scope cannot be re-declared in an inner one.</p>
+<h2 id="keywords">Keywords<a class="anchor" href="#keywords" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>and      break    catch    continue copy     elif     else
+enum     false    for      func     give     if       import
+in       let      match    new      none     not      or
+private  public   return   self     struct   true     try
+var      while
+</code></pre></div>
+<p><code>private</code> and <code>public</code> mark a declaration&#39;s <a href="../statements/#visibility">visibility</a>, and inside a struct they also stand as the region labels <code>private:</code> and <code>public:</code>.</p>
+<p><code>self</code> is the receiver of a <a href="../statements/#methods">method</a>. It is a keyword rather than a convention so that nothing can shadow it and no declaration can call something else by that name — which is what makes <code>p.length()</code> readable as a call on <code>p</code> and nothing else.</p>
+<h2 id="reserved-names">Reserved names<a class="anchor" href="#reserved-names" aria-label="link to this section">#</a></h2>
+<p>The language reserves these; nothing user-declared may take them, and one that does is <code>luce.sema.reserved</code>.</p>
+<div class="code"><pre><code>range       long         double       bool        string
+list        map         array       builder     None
+abs         min         max         clamp       sqrt
+floor       ceil        len         slice       byte_at
+assert      trap        str         parse_int   parse_float
+chr         ord         append      pop         insert
+remove      has         dim         free        print
+file_read   file_write  file_exists key_read    key_text
+error       read_line   print_error clock_ms    sleep_ms
+env         file_append file_delete file_rename dir_list
+term_rows   term_cols   term_clear  term_move   term_style
+term_write  term_flush  exit        trunc
+
+os_total_memory          os_available_memory     os_cpu_count
+</code></pre></div>
+<p>The <strong>methods</strong> are not on that list. <code>sort</code>, <code>has</code>, <code>get</code> and the rest are resolved by the type of the receiver they are called on, so a function of the same name collides with nothing and a program may declare one.</p>
+<h2 id="number-literals">Number literals<a class="anchor" href="#number-literals" aria-label="link to this section">#</a></h2>
+<p>Decimal only. An integer literal is a sequence of digits and yields an <code>long</code>; a fraction or an exponent yields a <code>double</code>.</p>
+<div class="code"><pre><code>12        long
+1.5       double
+1e10      double
+1.5e-3    double
+</code></pre></div>
+<p>A <code>.</code> starts a fraction only when a digit follows it. A non-finite float literal such as <code>1e400</code> is refused.</p>
+<p><strong>Hexadecimal and binary integers</strong> are written <code>0xFF</code> and <code>0b1010</code> (case-insensitive digits and prefix), and <code>_</code> <strong>digit separators</strong> sit between digits of any literal: <code>1_000_000</code>, <code>0xFF_FF</code>, <code>0b1010_1010</code>. A separator anywhere else — leading, trailing, doubled, or beside the prefix or the point — is <code>luce.lex.number</code> naming the rule. There are <strong>no octal literals</strong>: <code>0o17</code> is refused by name, and a decimal integer may not start with a zero, so C&#39;s silent <code>0755</code> cannot be written at all.</p>
+<h2 id="string-literals">string literals<a class="anchor" href="#string-literals" aria-label="link to this section">#</a></h2>
+<p><code>&quot;...&quot;</code>, on one line. The escapes are exactly four:</p>
+<div class="table"><table>
+<thead><tr><th>Escape</th><th>Means</th></tr></thead>
+<tbody>
+<tr><td><code>\n</code></td><td>line feed</td></tr>
+<tr><td><code>\t</code></td><td>tab</td></tr>
+<tr><td><code>\\</code></td><td>backslash</td></tr>
+<tr><td><code>\&quot;</code></td><td>double quote</td></tr>
+</tbody></table></div>
+<p>Every other escape is rejected by name — <code>\r</code>, <code>\0</code>, and hex and unicode escapes included. A codepoint goes in with <code>chr(...)</code>.</p>
+<p>An <code>f&quot;...&quot;</code> literal is an interpolated string: <code>{expression}</code> holes are converted with <code>string(...)</code> and concatenated. <code>{{</code> and <code>}}</code> are literal braces. A hole holds one expression, and <code>&quot;...&quot;</code> strings nested inside a hole are permitted.</p>
+<p>A hole may end with a format spec, and <code>:.Nf</code> is the only one there is — a <code>double</code> to N decimal places, rounded half away from zero. It lowers to <code>strings.format_float(value, N)</code>, so a program using one needs <code>import std.strings</code> exactly as any other string service does. A colon inside brackets belongs to the brackets: <code>f&quot;{s[1:3]}&quot;</code> is a slice, not a spec. <a href="/tour/strings/#format-specs">Format specs</a> has the worked examples.</p>
+<h2 id="operators-and-punctuation">Operators and punctuation<a class="anchor" href="#operators-and-punctuation" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>+  -  *  /  %  //          arithmetic
+&amp;  |  ^  ~  &lt;&lt; &gt;&gt;          bitwise (int and long only)
+== != &lt;  &lt;= &gt;  &gt;=          comparison (non-associative)
+=  += -= *= /= //= %=      assignment
+&amp;= |= ^= &lt;&lt;= &gt;&gt;=           assignment, the bit set&#39;s five
+:  ,  .  -&gt;  ?  !          declaration and type syntax
+(  )  [  ]  _              grouping, indexing, array shape
+</code></pre></div>
+<p>The bitwise precedence is Go&#39;s, not C&#39;s: <code>&amp;</code>, <code>&lt;&lt;</code> and <code>&gt;&gt;</code> bind at the multiply level, <code>|</code> and <code>^</code> at the add level — so <code>flags &amp; mask != 0</code> means <code>(flags &amp; mask) != 0</code>, the reading C famously gets wrong. Shifts move bits rather than multiply: <code>&lt;&lt;</code> discards high bits without trapping, <code>&gt;&gt;</code> sign-extends (the operands are signed), and the one thing that traps is a <strong>count</strong> below zero or at the operand&#39;s width — <code>shift_out_of_range</code>, where C leaves undefined behavior and Go silently masks.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> flags = <span class="n">0</span>b1010
+    <span class="b">print</span>(<span class="t">string</span>(flags &amp; <span class="n">0</span>b0010 != <span class="n">0</span>))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="n">0</span>xF0 | <span class="n">0</span>x0F))
+    <span class="b">print</span>(<span class="t">string</span>(~<span class="n">0</span>))
+    <span class="b">print</span>(<span class="t">string</span>(-<span class="n">8</span> &gt;&gt; <span class="n">1</span>))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="n">1</span>_000_000 &gt;&gt; <span class="n">3</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>true
+255
+-1
+-4
+125000</samp></pre></div>
+</figure>
+<h2 id="diagnostics">Diagnostics<a class="anchor" href="#diagnostics" aria-label="link to this section">#</a></h2>
+<p>Every diagnostic carries a stable code and a byte span, and renders as <code>file:line:column</code> in both build modes. Codes are namespaced by the stage that raised them: <code>luce.source.*</code>, <code>luce.lex.*</code>, <code>luce.parse.*</code>, <code>luce.sema.*</code>, <code>luce.import.*</code>.</p>
+<p>At most 100 diagnostics are reported for one compilation.</p>
+<p>There are 59 codes and this site names about 26 of them. That is deliberate rather than partial: most of the rest are ordinary &quot;expected <code>X</code>, found <code>Y</code>&quot; parse errors whose message <em>is</em> the documentation, and a page repeating it would add nothing to search for. What is named is every code a reader might want to look up because the message alone does not say why the rule exists — the four above, the import rules on <a href="/ref/modules/">modules</a>, the ownership codes, and the two entry-point rules below.</p>
+<h2 id="the-entry-point">The entry point<a class="anchor" href="#the-entry-point" aria-label="link to this section">#</a></h2>
+<p>A program is exactly <code>func main():</code>, or <code>func main() -&gt; !:</code> when the world can stop it. Anything else — no <code>main</code> at all, or a <code>main</code> that takes parameters or returns a value — is <code>luce.sema.main</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">start</span>():
+    <span class="b">print</span>(<span class="s">&quot;x&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:1:1: missing func main(): [luce.sema.main]
+    func start():
+    ^</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../"><span>Previous</span>The Luce reference</a>
+<a class="on" href="../types/"><span>Next</span>Types</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#encoding">Encoding</a></li>
+<li class="h2"><a href="#indentation">Indentation</a></li>
+<li class="h2"><a href="#comments">Comments</a></li>
+<li class="h2"><a href="#identifiers">Identifiers</a></li>
+<li class="h2"><a href="#keywords">Keywords</a></li>
+<li class="h2"><a href="#reserved-names">Reserved names</a></li>
+<li class="h2"><a href="#number-literals">Number literals</a></li>
+<li class="h2"><a href="#string-literals">string literals</a></li>
+<li class="h2"><a href="#operators-and-punctuation">Operators and punctuation</a></li>
+<li class="h2"><a href="#diagnostics">Diagnostics</a></li>
+<li class="h2"><a href="#the-entry-point">The entry point</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

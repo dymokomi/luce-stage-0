@@ -1,0 +1,13 @@
+import std.files
+
+func main():
+    print(f"before: {files.exists("report.txt")}")
+
+    let missing = files.read("report.txt") catch "(nothing yet)"
+    print(missing)
+
+    files.write("report.txt", "written\n") catch:
+        print("could not write")
+
+    print(f"after: {files.exists("report.txt")}")
+    print(files.read("report.txt") catch "(still nothing)")

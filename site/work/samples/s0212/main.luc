@@ -1,0 +1,8 @@
+struct Bag:
+    label: string
+    items: list(long)
+
+func main():
+    var bags = new list(Bag)
+    var bag = Bag(label = "x", items = [1])
+    bags.append(bag)

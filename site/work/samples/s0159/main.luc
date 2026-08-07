@@ -1,0 +1,20 @@
+import std.files
+import std.strings
+
+func main(args: list(string)) -> !:
+    if len(args) == 0:
+        print("usage: wc FILE")
+        return
+
+    let path = args[0]
+    let text = try files.read(path)
+
+    var counts = new map(string, long)
+    for line in text.split("\n"):
+        for word in line.split(""):
+            counts[word] += 1
+
+    print(f"{len(counts)} distinct words in {path}")
+    for word, seen in counts:
+        if seen > 1:
+            print(f"  {seen}  {word}")

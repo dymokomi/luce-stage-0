@@ -1,0 +1,26 @@
+struct Rect:
+    width: double
+    height: double
+
+    func area(self) -> double:
+        return self.width * self.height
+
+    func scaled(self, factor: double) -> Rect:
+        return Rect(width = self.width * factor, height = self.height * factor)
+
+    func grow(var self, factor: double):
+        self.width = self.width * factor
+        self.height = self.height * factor
+
+func main():
+    let unit = Rect(width = 2.0, height = 3.0)
+    var copy_of = unit
+    copy_of.width = 10.0
+
+    print(f"unit {unit.area()}, copy {copy_of.area()}")
+    let big = unit.scaled(3.0)
+    print(f"scaled {big.width}x{big.height} area {big.area()}")
+
+    var growing = Rect(width = 1.0, height = 1.0)
+    growing.grow(4.0)
+    print(f"grown {growing.width}x{growing.height}")

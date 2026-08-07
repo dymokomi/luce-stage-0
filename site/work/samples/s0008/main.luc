@@ -1,0 +1,7 @@
+func main():
+    let steps = 7
+    let seconds = 2.5
+    print(string(steps * seconds))
+    let elapsed: double = steps
+    print(string(elapsed))
+    print(string(long(seconds)))       # asked for, and it rounds

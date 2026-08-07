@@ -1,0 +1,4 @@
+func main(args: list(string)):
+    let count = parse_int(args[0]) else 10
+    let pair = parse_int("x") else parse_int("41") else 0
+    print(f"count {count}, pair {pair}")

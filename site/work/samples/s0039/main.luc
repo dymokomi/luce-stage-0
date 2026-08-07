@@ -1,0 +1,18 @@
+func total(grid: array(long, _, _)) -> long:
+    var sum: long = 0
+    for row in range(0, grid.dim(0)):
+        for column in range(0, grid.dim(1)):
+            sum += grid[row, column]
+    return sum
+
+func main():
+    var grid = new array(long, 3, 4)
+    for row in range(0, 3):
+        for column in range(0, 4):
+            grid[row, column] = row * 10 + column
+    print(f"{grid.dim(0)} by {grid.dim(1)}, corner {grid[2, 3]}")
+    print(f"total {total(grid)}")
+
+    var line = new array(double, 4)
+    line.fill(1.5)
+    print(f"rank-1 arrays sort and fill: {line[0]} {len(line)}")

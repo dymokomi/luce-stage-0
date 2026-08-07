@@ -1,0 +1,4 @@
+func main():
+    let n: long = 1
+    let s: string = "two"
+    print(string(n + s))

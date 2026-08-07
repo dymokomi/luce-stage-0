@@ -1,0 +1,27 @@
+import std.files
+import std.strings
+
+func main() -> !:
+    try files.write("notes.txt", "first\n")
+    try files.append_text("notes.txt", "second\n")
+    try files.append_lines("notes.txt", ["third", "fourth"])
+    print(f"{len(try files.read_lines("notes.txt"))} lines")
+
+    # write-then-rename: the replacement is one all-or-nothing step
+    try files.write("notes.new", "replaced\n")
+    try files.rename("notes.new", "notes.txt")
+    print(try files.read("notes.txt"))
+    print(f"the temporary is gone: {files.exists("notes.new")}")
+
+    # Written out of order; listed in order, and as plain names.
+    for name in ["part-c", "part-a", "part-b"]:
+        try files.write(name + ".txt", "")
+    var parts: list(string) = []
+    for name in try files.list("."):
+        if name.starts_with("part-"):
+            parts.append(name)
+    print(parts.join(" "))
+
+    try files.delete("part-a.txt")
+    files.delete("part-a.txt") catch:
+        print("deleting what is not there is an error, not a no-op")

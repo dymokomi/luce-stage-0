@@ -1,0 +1,19 @@
+import std.files
+
+func main() -> !:
+    try files.write("notes.txt", "fig\npear\nplum\n")
+
+    let whole = try files.read("notes.txt")
+    print(f"{len(whole)} bytes")
+
+    let lines = try files.read_lines("notes.txt")
+    print(f"{len(lines)} lines")
+    for index, line in lines:
+        print(f"  {index}: {line}")
+
+    var kept: list(string) = []
+    for line in lines:
+        if line != "pear":
+            kept.append(line)
+    try files.write_lines("kept.txt", kept)
+    print(f"kept {len(try files.read_lines("kept.txt"))} lines")

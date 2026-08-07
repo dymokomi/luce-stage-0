@@ -1,0 +1,2 @@
+func main() -> !:
+    error("the disk is on fire")

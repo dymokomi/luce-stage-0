@@ -1,0 +1,8 @@
+func describe(value: long?) -> string:
+    if value == none:
+        return "nothing"
+    return f"the number {value * 2}"   # value is long here, not long?
+
+func main():
+    print(describe(21))
+    print(describe(none))

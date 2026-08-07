@@ -1,0 +1,6 @@
+func keep(store: list(list(long)), values: list(long)):
+    store.append(values)
+
+func main():
+    var store = new list(list(long))
+    keep(store, [1])

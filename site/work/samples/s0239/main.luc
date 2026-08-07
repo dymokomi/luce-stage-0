@@ -1,0 +1,10 @@
+import std.strings
+
+func main():
+    let csv = "a,,b,c"
+    let pieces = csv.split(",")
+    print(f"{len(pieces)} pieces: [{pieces.join("|")}]")
+
+    let messy = "  one   two  three "
+    print(f"{len(messy.split(""))} words")
+    print(f"{len(messy.split(" "))} space-separated pieces")

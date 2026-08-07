@@ -1,0 +1,13 @@
+func main():
+    let x = parse_int("7")
+
+    if x != none:
+        print(f"then arm: {x + 1}")
+
+    if x != none and x > 3:
+        print(f"the rest of the condition: {x}")
+
+    if x == none:
+        print("guard")
+        return
+    print(f"below an early-exit guard: {x * 10}")

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traps and errors &middot; Luce</title>
+<meta name="description" content="Every trap code, both error codes, and what each one means.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a class="here" href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The Luce reference</summary>
+<ul>
+<li><a href="../../ref/">Overview</a></li>
+<li><a href="../../ref/lexical/">Source text and lexical elements</a></li>
+<li><a href="../../ref/types/">Types</a></li>
+<li><a href="../../ref/expressions/">Expressions</a></li>
+<li><a href="../../ref/statements/">Statements and declarations</a></li>
+<li><a href="../../ref/ownership/">Ownership</a></li>
+<li><a class="here" href="../../ref/failure/">Traps and errors</a></li>
+<li><a href="../../ref/modules/">Modules</a></li>
+<li><a href="../../ref/builtins/">Builtins</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Traps and errors</h1>
+<p>Three shapes, and one rule that decides between them.</p>
+<blockquote><p>A failure is an <strong>error</strong> if and only if a correct program, given correct input, can still meet it — because the world decided, not the program. Everything else is a trap. And if the answer is simply &quot;there is nothing there&quot;, with no reason worth carrying, it is neither: it is a <code>T?</code>.  <strong>Traps are bugs. Errors are news.</strong></p></blockquote>
+<p><a href="/guide/failure/">Traps are bugs, errors are news</a> is the working guide to applying it.</p>
+<h2 id="traps">Traps<a class="anchor" href="#traps" aria-label="link to this section">#</a></h2>
+<p>A trap is deterministic, carries a stable code, and ends the program without publishing anything. Every check that raises one is part of the language and cannot be disabled: there is no build mode in which <code>long</code> arithmetic wraps or an index goes unchecked.</p>
+<p>A debug build reports <code>code</code>, message, <code>file:line:column</code> and the call trace. <code>--release</code> keeps the code, the message and the function names and drops the lines. A trace keeps the innermost 64 frames and counts the rest.</p>
+<h3 id="the-codes">The codes<a class="anchor" href="#the-codes" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Code</th><th>Message</th><th>Raised when</th></tr></thead>
+<tbody>
+<tr><td><code>integer_overflow</code></td><td>integer overflow</td><td>a checked <code>long</code> operation leaves 64 bits</td></tr>
+<tr><td><code>divide_by_zero</code></td><td>division by zero</td><td><code>/</code> or <code>%</code> with a zero <code>long</code> divisor</td></tr>
+<tr><td><code>conversion_range</code></td><td>conversion out of range</td><td><code>long(f)</code> outside the <code>long</code> range</td></tr>
+<tr><td><code>assertion_failed</code></td><td>assertion failed</td><td><code>assert(false)</code></td></tr>
+<tr><td><code>explicit_trap</code></td><td>explicit trap</td><td><code>trap(message)</code></td></tr>
+<tr><td><code>missing_return</code></td><td>function ended without returning a value</td><td>a value-returning function fell off its end</td></tr>
+<tr><td><code>call_depth_exceeded</code></td><td>call depth exceeded</td><td>the call-depth budget ran out</td></tr>
+<tr><td><code>string_bounds</code></td><td>string index out of bounds</td><td>a <code>string</code> index or slice past the end</td></tr>
+<tr><td><code>string_boundary</code></td><td>string slice splits a UTF-8 sequence</td><td>a <code>string</code> slice cutting a character</td></tr>
+<tr><td><code>host_unavailable</code></td><td>host service unavailable</td><td>an effect the host does not implement</td></tr>
+<tr><td><code>index_bounds</code></td><td>index out of bounds</td><td>a list or array index past the end</td></tr>
+<tr><td><code>key_missing</code></td><td>key not found in map</td><td>indexing a map with an absent key</td></tr>
+<tr><td><code>empty_collection</code></td><td>pop from an empty list</td><td><code>pop()</code> on an empty list</td></tr>
+<tr><td><code>use_after_free</code></td><td>object used after free</td><td>an alias outliving its owner (<a href="../ownership/#s9">S9</a>)</td></tr>
+<tr><td><code>null_object</code></td><td>null object reference</td><td>using an unfilled object slot (<a href="../ownership/#s41">S41</a>)</td></tr>
+<tr><td><code>bad_codepoint</code></td><td>invalid character code</td><td><code>chr</code> outside Unicode, or <code>append_ascii</code> outside 0..127</td></tr>
+<tr><td><code>shift_out_of_range</code></td><td>shift count out of range</td><td><code>x &lt;&lt; n</code> or <code>x &gt;&gt; n</code> with <code>n &lt; 0</code> or <code>n</code> at or past the operand&#39;s width — C leaves this undefined and Go silently masks; Luce says it</td></tr>
+<tr><td><code>not_owned</code></td><td>object is owned by a container</td><td>never, from source — see below (<a href="../ownership/#s23">S23</a>)</td></tr>
+</tbody></table></div>
+<p>Every code above is reachable from a program you can write, with one exception. <strong><code>not_owned</code> is defense, not a language rule.</strong> It was S23&#39;s dynamic check — <code>give</code> through an alias — until 2026-08-04, when that became a compile error instead, because the compiler already knows an alias is one where it stands. The check stayed in the runtime because the IR verifier trusts instruction types and a <code>.lc</code> is an executable: a damaged or forged module can still present a <code>give</code> that names a binding owning nothing. A correct compiler cannot emit one, so a correct program cannot meet the trap.</p>
+<p>Call depth is a <strong>policy</strong> limit, not a native-stack accident: compiled code carries its remaining depth as a hidden argument and refuses the call that would exhaust it. Runaway recursion is a trap with a message and a call stack, never a segmentation fault.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="b">print</span>(<span class="s">&quot;before&quot;</span>)
+    <span class="b">print</span>(<span class="t">string</span>(xs[<span class="n">7</span>]))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>before
+loom: trap: index out of bounds [index_bounds]
+    at main (main.luc:4:5)</samp></pre></div>
+</figure>
+<h2 id="errors">Errors<a class="anchor" href="#errors" aria-label="link to this section">#</a></h2>
+<p>An error carries a stable code and a message. There are exactly two codes.</p>
+<div class="table"><table>
+<thead><tr><th>Code</th><th>Raised by</th></tr></thead>
+<tbody>
+<tr><td><code>io_failed</code></td><td>the host&#39;s file services</td></tr>
+<tr><td><code>user_error</code></td><td><code>error(message)</code></td></tr>
+</tbody></table></div>
+<p>Not <code>not_found</code> and not <code>permission_denied</code> — a host service answers yes, no, or out of memory, and cannot tell those two apart, so inventing the codes would be inventing the distinction.</p>
+<p>There are no typed error sets and no error payload beyond the message.</p>
+<h3 id="declaring-raising-propagating-handling">Declaring, raising, propagating, handling<a class="anchor" href="#declaring-raising-propagating-handling" aria-label="link to this section">#</a></h3>
+<p><code>-&gt; T!</code> on a function says it may raise. <code>-&gt; !</code> says it returns nothing or an error. <code>T!</code> is not a type: fallibility is an attribute of the function.</p>
+<p><code>error(message)</code> raises. It never returns, so it may stand where a value belongs.</p>
+<p><code>try CALL</code> propagates, releasing what this frame owns (<a href="../ownership/#s4">S4</a>). It requires the enclosing function to declare <code>!</code>.</p>
+<p><code>catch</code> handles. <code>EXPR catch FALLBACK</code> supplies a value; <code>CALL catch:</code> opens a handler block guarding exactly one call, attached to a call written as a statement or to a plain assignment; <code>CALL catch NAME:</code> is the same block with the error&#39;s message bound to <code>NAME</code>.</p>
+<p><code>NAME</code> is an immutable <code>string</code> scoped to the handler block, released with it, and subject to the no-shadowing rule. It carries the message only — not the code, and not the raise position. The expression form takes no binding.</p>
+<p>A fallible call whose outcome is neither tried nor caught is <code>luce.sema.fallible</code>.</p>
+<h3 id="the-report">The report<a class="anchor" href="#the-report" aria-label="link to this section">#</a></h3>
+<p>An uncaught error out of <code>main() -&gt; !</code> ends the run. The host prints the words and the <strong>one</strong> place it was raised — one line, not a stack.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">check</span>(n: <span class="t">long</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">if</span> n &lt; <span class="n">0</span>:
+        <span class="b">error</span>(<span class="s">f&quot;negative: {n}&quot;</span>)
+    <span class="k">return</span> n
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> check(<span class="n">1</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> check(-<span class="n">5</span>)))</code></pre></div>
+<figcaption class="cap bad">Output — the error reaches the top</figcaption>
+<div class="code result bad"><pre><samp>1
+loom: error: negative: -5 [user_error]
+    raised in check (main.luc:3:9)</samp></pre></div>
+</figure>
+<p>A debug build names the position; <code>--release</code> keeps the function name and drops the line. An error records that position <strong>once</strong>, where it was raised, and never assembles a trace — which is what keeps the success path of a <code>try</code> free of anything to save and restore.</p>
+<h3 id="no-errdefer">No errdefer<a class="anchor" href="#no-errdefer" aria-label="link to this section">#</a></h3>
+<p>There is none, and there will not be. Cleanup is scope ownership, which already knows that <code>return</code> moves what it hands back and <code>try</code> moves nothing. The one bit <code>errdefer</code> encodes is already a parameter of the unwinder.</p>
+<h2 id="absence">Absence<a class="anchor" href="#absence" aria-label="link to this section">#</a></h2>
+<p>Neither a trap nor an error. <code>T?</code> is the shape when the only fact is that there is nothing there.</p>
+<p>In the language: <code>parse_int</code> and <code>parse_float</code> answer <code>long?</code> and <code>double?</code>.</p>
+<p>In the standard library: <code>math.mean</code>, <code>math.vmin</code>, <code>math.vmax</code>, <code>math.variance</code> and <code>math.stddev</code> answer <code>double?</code>, because an empty array has no mean.</p>
+<p>The seven traps that remain in <code>std.math</code> are domains the caller was handed and could have checked: <code>ln</code> of a non-positive number, <code>pow</code> and <code>ipow</code> outside theirs, a shape mismatch in <code>dot</code> or <code>axpy</code>, and <code>in_range</code> with an empty range.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../ownership/"><span>Previous</span>Ownership</a>
+<a class="on" href="../modules/"><span>Next</span>Modules</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#traps">Traps</a></li>
+<li class="h3"><a href="#the-codes">The codes</a></li>
+<li class="h2"><a href="#errors">Errors</a></li>
+<li class="h3"><a href="#declaring-raising-propagating-handling">Declaring, raising, propagating, handling</a></li>
+<li class="h3"><a href="#the-report">The report</a></li>
+<li class="h3"><a href="#no-errdefer">No errdefer</a></li>
+<li class="h2"><a href="#absence">Absence</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

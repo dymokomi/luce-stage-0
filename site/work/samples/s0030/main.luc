@@ -1,0 +1,17 @@
+enum Colour:
+    red
+    green
+    blue
+
+func describe(c: Colour) -> string:
+    match c:
+        red:
+            return "stop"
+        green:
+            return "go"
+        blue:
+            return "neither"
+
+func main():
+    print(describe(Colour.red))
+    print(describe(Colour.blue))

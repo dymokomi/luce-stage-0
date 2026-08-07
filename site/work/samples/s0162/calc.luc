@@ -1,0 +1,156 @@
+# A recursive-descent expression calculator: structs as parser state,
+# recursion, real arithmetic — and the worked example for errors
+# (docs/FAILURE.md).
+#
+#   loom run calc.lc "2 + 3 * (10 - 4)"     one expression, then exit
+#   loom run calc.lc                        a REPL: type, blank line to quit
+#
+# **It computes in double**, which is what a calculator is: `7 / 2` is
+# `3.5` here and was `3` while `/` meant the integer quotient
+# (docs/NUMERICS.md).  A pocket calculator that answers 3 to that is
+# broken, and this one no longer has to choose — `//` is still
+# available for the quotient, and `%` still pairs with it.  The parser
+# reads whole numbers and lets promotion make them Floats, so nothing
+# in the scanner had to learn about decimal points to get this.
+#
+# Every way this parser can be defeated is a way the *user* defeated
+# it, not a way the program is wrong: a correct calculator given
+# "2 + )" still has nothing to compute.  So the parser says `-> Step!`
+# and raises with `error(...)`; `try` carries the failure up through
+# four frames of recursion without a single `if` written for it, and
+# `main() -> !` hands what is left to loom, which prints the words and
+# the line they were raised on.
+#
+# Compare what this file said before: `trap(...)`, four times, for
+# conditions no caller could handle and every one of which ended the
+# program with "trap:" in front of a message about the user's typing.
+
+# `struct Step { value: double, at: long }` used to stand here, with no
+# methods, no invariant and no meaning outside a signature: a scanner
+# hands back *what it read* and *where it stopped*.  It was constructed
+# at eight sites and taken apart by twenty-five field reads over
+# fourteen lines, binding seven names that existed only to be
+# dismantled on the next.
+#
+# It qualified as a return shape on the one rule that decides it —
+# **it was never an input**.  No function here took a `Step`;
+# `Parse.term(text: string, at: long)` takes the halves separately, and
+# every read was `left.value` or `right.at`, never a whole one handed
+# on.  Being held across a loop is not disqualifying: `expression`'s
+# accumulator is two `var`s now and the body is shorter, because only
+# the value differed between the arms (docs/RETURNS.md §6).
+
+struct Scan:
+    func skip_spaces(text: string, at: long) -> long:
+        var here = at
+        while here < len(text) and text.byte_at(here) == 32:
+            here = here + 1
+        return here
+
+    func number(text: string, at: long) -> (double, long)!:
+        var stop = at
+        while stop < len(text) and text.byte_at(stop) >= 48 and text.byte_at(stop) <= 57:
+            stop = stop + 1
+        if stop == at:
+            error("expected a number at position " + string(at))
+        let digits = text[at:stop]
+        return parse_int(digits) else error("not a number: " + digits), stop
+
+struct Parse:
+    # expression = term (("+" | "-") term)*
+    func expression(text: string, at: long) -> (double, long)!:
+        var value, stopped = try Parse.term(text, at)
+        var here = Scan.skip_spaces(text, stopped)
+        while here < len(text) and (text.byte_at(here) == 43 or text.byte_at(here) == 45):
+            let operator = text.byte_at(here)
+            let right_value, right_at = try Parse.term(text, here + 1)
+            if operator == 43:
+                value = value + right_value
+            else:
+                value = value - right_value
+            stopped = right_at
+            here = Scan.skip_spaces(text, stopped)
+        return value, stopped
+
+    # term = factor (("*" | "/" | "%") factor)*
+    #
+    # `/` is real division and `%` is the modulus that pairs with `//`,
+    # so both work on Floats and both mean here what they mean in the
+    # language (docs/NUMERICS.md).  `%` by zero is a NaN rather than a
+    # trap, because these are Floats — which is the right answer for a
+    # calculator: a user who divides by zero has asked a question, not
+    # broken the program.
+    func term(text: string, at: long) -> (double, long)!:
+        var value, stopped = try Parse.factor(text, at)
+        var here = Scan.skip_spaces(text, stopped)
+        while here < len(text) and (text.byte_at(here) == 42 or text.byte_at(here) == 47 or text.byte_at(here) == 37):
+            let operator = text.byte_at(here)
+            let right_value, right_at = try Parse.factor(text, here + 1)
+            if operator == 42:
+                value = value * right_value
+            elif operator == 47:
+                value = value / right_value
+            else:
+                value = value % right_value
+            stopped = right_at
+            here = Scan.skip_spaces(text, stopped)
+        return value, stopped
+
+    # factor = number | "(" expression ")" | "-" factor
+    func factor(text: string, at: long) -> (double, long)!:
+        let here = Scan.skip_spaces(text, at)
+        if here < len(text) and text.byte_at(here) == 45:
+            let inner_value, inner_at = try Parse.factor(text, here + 1)
+            return 0.0 - inner_value, inner_at
+        if here < len(text) and text.byte_at(here) == 40:
+            let inner_value, inner_at = try Parse.expression(text, here + 1)
+            let close = Scan.skip_spaces(text, inner_at)
+            if close >= len(text) or text.byte_at(close) != 41:
+                error("expected ) at position " + string(close))
+            return inner_value, close + 1
+        # The pass-through `return Scan.number(text, here)` is refused
+        # on purpose, and this is what it costs: one line
+        # (docs/RETURNS.md §1).
+        let scanned, stopped = try Scan.number(text, here)
+        return scanned, stopped
+
+# Evaluate one line and print what it came to.  Fallible, so every
+# `error(...)` four frames down arrives here whole.
+func evaluate(text: string) -> !:
+    let value, stopped = try Parse.expression(text, 0)
+    let rest = Scan.skip_spaces(text, stopped)
+    if rest != len(text):
+        error("unexpected character at position " + string(rest))
+    print(text + " = " + string(value))
+
+# The interactive loop.  `read_line` answers `string?`, so end of input
+# — a pipe running dry, Ctrl-D at a terminal — is `none` and ends the
+# session; an empty line ends it too, because a person pressing return
+# at a prompt has said "nothing more".
+#
+# A bad expression must not end the loop: `evaluate(...) catch reason:`
+# says so on stderr and asks again, which is the whole difference
+# between a calculator and a program that exits when you mistype.
+#
+# `reason` is the binding form, and it is what makes the handler worth
+# reading: the words the parser raised four frames down — "expected a
+# number at position 4" — arrive here instead of being discarded, so
+# the loop says the same thing the one-shot path below says.  Before
+# it existed this printed "cannot compute:" and the line back, which
+# told the user only what they had already typed (docs/FAILURE.md).
+func repl():
+    print("calc — an expression a line, blank line to quit")
+    var running = true
+    while running:
+        let typed = read_line("calc> ")
+        if typed == none or typed == "":
+            running = false
+        else:
+            evaluate(typed) catch reason:
+                print_error("cannot compute: " + reason)
+
+func main(args: list(string)) -> !:
+    if len(args) == 0:
+        repl()
+        return
+    try evaluate(args[0])

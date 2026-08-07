@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where Luce stands &middot; Luce</title>
+<meta name="description" content="What works, what is measured, and what is missing. Written from the repository&#39;s own inventory rather than from hope.">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../">Luce</a>
+<nav class="tabs">
+<a href="../tour/">Tour</a>
+<a href="../examples/">Examples</a>
+<a href="../guide/">Guides</a>
+<a href="../ref/">Reference</a>
+<a href="../std/">Library</a>
+<a class="here" href="../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>On this page</summary>
+<ul>
+<li class="h2"><a href="#the-short-version">The short version</a></li>
+<li class="h2"><a href="#what-works">What works</a></li>
+<li class="h2"><a href="#what-is-measured">What is measured</a></li>
+<li class="h2"><a href="#deliberately-absent-permanently">Deliberately absent, permanently</a></li>
+<li class="h2"><a href="#absent-and-not-decided">Absent and not decided</a></li>
+<li class="h2"><a href="#the-short-list-of-what-a-real-program-hits">The short list of what a real program hits</a></li>
+<li class="h2"><a href="#tooling">Tooling</a></li>
+<li class="h2"><a href="#the-order-the-work-goes-in">The order the work goes in</a></li>
+<li class="h2"><a href="#the-honest-summary">The honest summary</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Where Luce stands</h1>
+<p>Luce is a real language with a real compiler, a real runtime, a real terminal and a real editor written in itself. It is also early, and this page is what that means, written from the repository&#39;s own inventory rather than from hope.</p>
+<p>Nothing here is rounded up. Where the repository&#39;s own notes say a prediction was too optimistic, this page says so too.</p>
+<h2 id="the-short-version">The short version<a class="anchor" href="#the-short-version" aria-label="link to this section">#</a></h2>
+<p><strong>The language surface is done as designed.</strong> Ten conceptual pipeline stages, eleven executable specifications, and a front end whose diagnostics name the fix rather than the parser&#39;s predicament. Optionals closed the absence half of the last semantic hole and errors closed the failure half; nothing that was designed is now unbuilt.</p>
+<p><strong>The runtime is not done, but the wall is down.</strong> The two items that blocked real programs are both closed: a <code>.lc</code> <strong>is</strong> machine code at C parity, whether <code>loom run</code> opens it or a shell runs an <code>--emit=exe</code> binary, and memory is genuinely given back — object identity first, then string bytes and struct field runs. A Luce program can run all day.</p>
+<p><strong>What is left is a short list of library and host builtins, one open language question, and one benchmark row.</strong></p>
+<h2 id="what-works">What works<a class="anchor" href="#what-works" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th></th><th></th></tr></thead>
+<tbody>
+<tr><td>Static typing with inference; <code>long</code> widens to <code>double</code>, nothing narrows</td><td>shipped</td></tr>
+<tr><td>Checked arithmetic, bounds checks, UTF-8 boundary checks, in every mode</td><td>shipped</td></tr>
+<tr><td>Scope ownership: <code>give</code>, <code>copy</code>, <code>free</code>, 45 ratified situations</td><td>shipped</td></tr>
+<tr><td><code>T?</code>, <code>none</code>, narrowing, <code>else</code></td><td>shipped</td></tr>
+<tr><td><code>T!</code>, <code>try</code>, <code>catch</code>, <code>error</code></td><td>shipped</td></tr>
+<tr><td>f-strings, compound assignment, nested place assignment</td><td>shipped</td></tr>
+<tr><td>File-scope constants, folded and inlined</td><td>shipped</td></tr>
+<tr><td>Modules, and a reserved <code>std.</code> namespace</td><td>shipped</td></tr>
+<tr><td>Six standard modules: <code>math</code>, <code>strings</code>, <code>files</code>, <code>paths</code>, <code>os</code>, <code>zip</code></td><td>shipped</td></tr>
+<tr><td>The bit set: <code>&amp;</code> `\</td><td><code> </code>^<code> </code>~<code> </code>&lt;&lt;<code> </code>&gt;&gt;<code> at Go&#39;s precedence, hex and binary literals, </code>_` digit separators</td><td>shipped</td></tr>
+<tr><td>Visibility: public until a declaration says <code>private</code></td><td>shipped</td></tr>
+<tr><td>Enums at a chosen integer width, and <code>match</code> with every member named</td><td>shipped</td></tr>
+<tr><td>LLVM backend: a <code>.lc</code> <strong>is</strong> machine code, <code>--emit=exe</code> standalone binaries</td><td>shipped</td></tr>
+<tr><td>Trap locations and call traces in debug builds</td><td>shipped</td></tr>
+<tr><td>Two build modes that differ only in what a trap can say</td><td>shipped</td></tr>
+<tr><td>map lookups O(1); sort O(n log n) and stable by guarantee</td><td>shipped</td></tr>
+</tbody></table></div>
+<h2 id="what-is-measured">What is measured<a class="anchor" href="#what-is-measured" aria-label="link to this section">#</a></h2>
+<p>Against C twins at <code>-O3 -march=native</code>, on one host, on the floor-subtracted <code>compute</code> column: <strong>0.78× to 1.06× on six of the nine benchmarks</strong> — loops, math, arrays, both matrix multiplies and statistics. Three are behind, for three different reasons: <strong>2.67× on strings</strong>, which is allocation-bound rather than code-generation-bound; <strong>2.60× on lists</strong>, which is <code>append</code> and nothing else, a list&#39;s length living in the object&#39;s row where C&#39;s count lives in a register; and <strong>8.66× on the 32-bit array reduction</strong>, which is the price of checking every integer add — the loop cannot be reassociated, so it cannot be vectorized. <a href="/guide/performance/">The table and its caveats</a>.</p>
+<p>Memory, on a churn loop that retains nothing: <strong>flat</strong>, where it used to grow linearly to 121 MB. What is left on the compiled path is 20.4 MB of allocator working set for a hot allocate-and-free loop, and it does not move with the iteration count. The editor simulation: <strong>1204 MB to 3.3 MB</strong> peak. <a href="/guide/memory/">How, and what it cost</a>.</p>
+<p>Small-string optimisation was predicted to remove &quot;essentially all&quot; of the cost of giving string bytes an owner. It removed roughly three quarters. The repository records that the prediction was too strong.</p>
+<h2 id="deliberately-absent-permanently">Deliberately absent, permanently<a class="anchor" href="#deliberately-absent-permanently" aria-label="link to this section">#</a></h2>
+<p>These are decisions with reasons written down, not gaps.</p>
+<ul>
+<li><strong>Tuples.</strong> A function may answer more than one value, but the shape it answers them in is not a type: it cannot annotate anything, nest, or be written as an expression. An anonymous structural product type would be the first structural type in a language with no generics and no sum types, and every one of those asks whether it nests, whether a container holds it, and whether it compares. A pair that travels together is a struct.</li>
+<li><strong>Garbage collection and reference counting</strong>, at every layer, in the language and in the runtime alike. Also copy-on-write and automatic reference counting. Scope ownership is the model.</li>
+<li><strong>Shared ownership</strong> (<code>share</code>) and <strong>weak references</strong>. A program that needs genuinely shared ownership restructures, or uses indices into a container it owns.</li>
+<li><strong>Static borrow checking.</strong> Lifetimes and aliasing rules are the opposite of what Luce is aiming at; two dynamic checks cover what the static rules cannot see.</li>
+<li><strong><code>errdefer</code> and error return traces.</strong> Both refused, with reasons — the one bit <code>errdefer</code> encodes is already a parameter of the unwinder, and a trace would charge the success path.</li>
+<li><strong>Exceptions.</strong> Traps are final.</li>
+<li><strong>Implicit narrowing, shadowing, truthiness, a ternary operator.</strong></li>
+<li><strong>Interfaces, inheritance, operator overloading, async, reflection.</strong></li>
+<li><strong><code>defer</code></strong> for memory. It may return for host cleanup, as a separate decision.</li>
+<li><strong>Generics for user code.</strong> The type union is closed with twenty exhaustive switches over it, and <code>list(T)</code> is a monomorphic heap object rather than a generic. <code>T?</code> became a variant and opened no door at all: nothing about it generalises. What would pay is monomorphised generic <em>functions</em>, and that needs first-class functions first.</li>
+<li><strong>Closures.</strong> The one place their absence draws blood is comparators, and the cheap answer is a <code>sort_by</code> taking a top-level function name — no capture, no lifetime story, no interaction with ownership. That, not closures.</li>
+</ul>
+<h2 id="absent-and-not-decided">Absent and not decided<a class="anchor" href="#absent-and-not-decided" aria-label="link to this section">#</a></h2>
+<p><strong>Tagged unions — a member with a payload.</strong> Enums shipped, and with them <a href="/tour/enums/"><code>match</code></a>: a set of names at one integer width, dispatch that refuses to compile when a member has no arm, and <code>Method(n)</code> answering <code>Method?</code> for the number that arrived from a file. What a member still cannot carry is a <em>value</em>, which is the tagged union — ratified, not built, and the reason a <code>Result</code>-style error type was refused in favour of <code>T!</code> as a function attribute.</p>
+<p>The half that shipped was decided on the corpus, and the corpus has started spending it: <code>std.zip</code> reads a compression method and a DEFLATE block type through enums rather than through <code>== 8</code> and an <code>elif</code> chain whose last arm existed to say &quot;unknown&quot;.</p>
+<p>What is left of the same hole is still visible in <code>editor.luc</code>, which predates all of it:</p>
+<ul>
+<li>keys handled with <strong>15 string comparisons in one <code>elif</code> chain and no final <code>else</code></strong> — a misspelled <code>&quot;page_dwon&quot;</code> compiles and silently does nothing.</li>
+<li><code># 1 keyword, 2 type name, 3 builtin, 0 plain</code> — an enum written as a <code>long</code> with a comment.</li>
+<li><code>is_keyword</code> and <code>is_builtin</code> as <strong>46 <code>word == &quot;…&quot;</code> comparisons</strong>: a hash set written as a truth table.</li>
+</ul>
+<h2 id="the-short-list-of-what-a-real-program-hits">The short list of what a real program hits<a class="anchor" href="#the-short-list-of-what-a-real-program-hits" aria-label="link to this section">#</a></h2>
+<p>Read out of <code>programs/</code> for awkwardness rather than for features. <code>editor.luc</code> is the oldest file in the corpus — it predates the standard library, f-strings and constants — so it is both the most workaround-dense and the proof that the language moved.</p>
+<ol>
+<li><strong>No sets and no constant containers.</strong> Drives the 46-comparison truth tables.</li>
+<li><strong>No character classes in the library.</strong> <code>is_digit</code>/<code>is_alpha</code> re-derived by hand three times. Five functions would fix it.</li>
+<li>~~<strong>No receivers on user structs.</strong>~~ <strong>Shipped.</strong> A function is a method exactly when its first parameter is <code>self</code>; <code>var self</code> writes the receiver back. The 88 namespaced calls turned out <strong>not</strong> to be 88 waiting method calls — they are calls on folders, and not one function in the corpus took its own struct first. What the feature bought was the restructuring it permits.</li>
+<li>~~<strong>No multiple returns.</strong>~~ <strong>Shipped.</strong> <code>-&gt; (A, B)</code>, <code>return a, b</code>, <code>let low, high = f()</code>. The struct that existed solely to carry a return — constructed at 8 sites and taken apart by 25 field reads, not the 15 this page used to claim — is deleted.</li>
+<li><strong>No sort with a comparator.</strong> <code>wordcount.luc</code> produces a top-five listing by <strong>destroying the map</strong>. The one place the absence of first-class functions draws blood.</li>
+<li><strong>Host surface gaps.</strong> Mostly closed: the clock, <code>sleep</code>, environment access, stderr, reading a line, directory listing, delete/rename and append mode all shipped with host ABI version 8, and <code>exit</code> and path manipulation have since shipped too — the latter as <a href="/std/paths/"><code>std.paths</code></a>, which is where it always belonged. What is still absent is a wall clock and a calendar, setting an environment variable, and reading the whole environment.</li>
+<li>~~<strong>No default or named arguments.</strong>~~ Closed: every parameter has a name a call site may write, defaults are trailing compile-time constants, struct fields take the same clause, and the builtin table carries <code>term_style(fg, bg = -1, bold = false)</code> — the calls that ended in the same noise word <code>false</code> now write the argument that varies and nothing else.</li>
+<li>~~<strong><code>Bytes</code> is unconstructible.</strong>~~ Cut. Nothing produced one and nothing consumed one, and it was one of the two things keeping the backend from lowering everything a program can say. The backend is now total. A real <code>Bytes</code> would be designed fresh.</li>
+<li>~~<strong>No integer-division spelling.</strong>~~ <strong>Shipped.</strong> <code>//</code> is floor division, <code>%</code> is the modulus that pairs with it, and <code>/</code> is real division; the decrement that was written <code>(tape[pointer] + 255) % 256</code> is <code>(tape[pointer] - 1) % 256</code>, the spelling its author meant.</li>
+<li>~~<strong>No visibility.</strong>~~ <strong>Shipped.</strong> A declaration is public unless it says <code>private</code> — per declaration, or as an indented region inside a struct — and touching a marked name from outside its file is <code>luce.sema.private</code>, answered as <em>private</em>, never as <em>unknown</em>. The two leaked string helpers are marked, <code>Rng.state</code> is too, and <code>math.rng(seed)</code> is the constructor the idiom that reached through it always wanted (<a href="/tour/visibility/">the chapter</a>, <a href="/ref/modules/#visibility">the rules</a>).</li>
+<li>~~<strong>No bitwise operators, no hex literals, no digit separators.</strong>~~ <strong>Shipped.</strong> <code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code> on the integers at Go&#39;s precedence (so <code>flags &amp; mask != 0</code> reads correctly), shifts that move bits with the count as the one thing that traps, the five compound forms, and the literals: <code>0xFF</code>, <code>0b1010</code>, <code>1_000_000</code>. Octal stays refused by name (<a href="/ref/lexical/#operators-and-punctuation">the operator rules</a>).</li>
+<li><strong>No codepoint iteration.</strong> <code>for c in &quot;abc&quot;</code> is refused; every UTF-8 walk is hand-written, and the same function is copied across two namespaces in one file.</li>
+<li><strong><code>m.get(k) -&gt; V?</code> does not exist</strong>, so <code>has</code> then index is three hash lookups on the hit path. The counting case no longer needs it — <code>counts[word] += 1</code> defines a missing key at the value type&#39;s zero — but a lookup that must tell a stored <code>0</code> from an absent one still has nothing better than <code>has</code>.</li>
+<li><strong><code>strings.find</code> returns <code>-1</code></strong> because <code>long?</code> did not exist when it was written. It does now, so the sentinel is a wart with nothing holding it up — and it also returns <code>-1</code> for an <em>argument</em> error, which is not the same fact as &quot;absent&quot;.</li>
+</ol>
+<h2 id="tooling">Tooling<a class="anchor" href="#tooling" aria-label="link to this section">#</a></h2>
+<p>There is no <code>luce fmt</code>, no <code>luce test</code>, no language server and no debugger. A <code>luce test</code> that discovered <code>func test_*():</code> would be cheap and very Zig; a formatter and a language server both want a faithful syntax tree that is not written yet.</p>
+<p>There <strong>is</strong> a VS Code syntax definition in the repository, and it cannot go stale: it is <em>generated</em> from the compiler&#39;s own keyword, symbol, builtin and method tables and pinned byte-for-byte by a test, so a language change that forgot the grammar fails the build rather than shipping a highlighter that disagrees with the compiler.</p>
+<h2 id="the-order-the-work-goes-in">The order the work goes in<a class="anchor" href="#the-order-the-work-goes-in" aria-label="link to this section">#</a></h2>
+<ol>
+<li>The cheap slice: character classes, and a frozen container or a <code>Set</code>. <code>exit</code> and path manipulation were on this list and have shipped.</li>
+<li><code>m.get(k) -&gt; V?</code>, and a corpus sweep.</li>
+<li>~~Decide receivers and multiple returns~~ — shipped; the integer-division spelling is decided too.</li>
+<li>~~Enums and <code>match</code>~~ — shipped. Tagged unions are the half that is left, and they extend <code>match</code> rather than introducing a second statement.</li>
+<li>The faithful syntax tree, which a formatter and a language server both need.</li>
+</ol>
+<h2 id="the-honest-summary">The honest summary<a class="anchor" href="#the-honest-summary" aria-label="link to this section">#</a></h2>
+<p>The language is complete as designed. The front end is in genuinely good shape, and the remaining language work is one open question and a short list of library and host builtins. The runtime&#39;s outstanding item is not correctness but speed, in one benchmark row.</p>
+<p>If you are looking for a language to build production systems on today, this is not that. If you are interested in a small, fast, statically typed language that reclaims memory without a collector and without reference counting, and that says out loud what it cannot yet do — it is right here, and every claim on this site was checked against the compiler when the page was built.</p>
+</article>
+</main>
+<div class="rail"></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../assets/site.js" defer></script>
+<script src="../search-index.js" defer></script>
+</body>
+</html>

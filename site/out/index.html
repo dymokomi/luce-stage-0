@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luce</title>
+<meta name="description" content="Luce is a small, statically typed language with no garbage collector and no reference counting.">
+<link rel="stylesheet" href="./assets/style.css">
+<link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="./">Luce</a>
+<nav class="tabs">
+<a href="./tour/">Tour</a>
+<a href="./examples/">Examples</a>
+<a href="./guide/">Guides</a>
+<a href="./ref/">Reference</a>
+<a href="./std/">Library</a>
+<a href="./status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>On this page</summary>
+<ul>
+<li class="h2"><a href="#three-things-that-are-unusual">Three things that are unusual</a></li>
+<li class="h2"><a href="#what-luce-is-not">What Luce is not</a></li>
+<li class="h2"><a href="#start-here">Start here</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Luce</h1>
+<p><strong>Good for humans. Good for computers.</strong></p>
+<p>Luce is a small statically typed language that looks like Python, runs at the speed of C, and gives memory back without a garbage collector and without reference counting anywhere.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>(args: <span class="t">list</span>(<span class="t">string</span>)):
+    <span class="k">var</span> greeting = <span class="s">&quot;hello&quot;</span>
+    <span class="k">if</span> <span class="b">len</span>(args) &gt; <span class="n">0</span>:
+        greeting = greeting + <span class="s">&quot;, &quot;</span> + args[<span class="n">0</span>]
+    <span class="b">print</span>(greeting)
+
+    <span class="k">var</span> counts = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">long</span>)
+    <span class="k">for</span> word <span class="k">in</span> [<span class="s">&quot;fig&quot;</span>, <span class="s">&quot;pear&quot;</span>, <span class="s">&quot;fig&quot;</span>]:
+        counts[word] += <span class="n">1</span>
+    <span class="k">for</span> word, seen <span class="k">in</span> counts:
+        <span class="b">print</span>(<span class="s">f&quot;{word} appeared {seen} time(s)&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>hello, world
+fig appeared 2 time(s)
+pear appeared 1 time(s)</samp></pre></div>
+</figure>
+<p>That program was compiled and run to produce the output above it when this page was built. So was every other sample on this site — see <a href="/guide/toolchain/#how-this-site-is-built">how that works</a>.</p>
+<h2 id="three-things-that-are-unusual">Three things that are unusual<a class="anchor" href="#three-things-that-are-unusual" aria-label="link to this section">#</a></h2>
+<p><strong>Memory is scope-owned.</strong> The binding that received a fresh object owns it, and the owning scope frees it. There is no collector, no reference counting at any layer, and no <code>malloc</code>/<code>free</code> bookkeeping in ordinary code. Four words — <code>give</code>, <code>copy</code>, <code>free</code>, <code>new</code> — cover everything the compiler cannot see for itself, and a string-churn loop that used to grow without bound now sits flat at about 1.8 MB. <a href="/guide/memory/">The memory model</a>.</p>
+<p><strong>Compiled code is at C&#39;s speed.</strong> Against C twins built with <code>-O3 -march=native</code>, the same algorithms measure 0.78× to 1.06× on six of the nine benchmarks — loops, math, arrays, both matrix multiplies and statistics. Three are not there, and each says why: string processing at 2.67× is allocation-bound, lists at 2.60× is <code>append</code> alone, and a 32-bit integer reduction at 8.66× is the price of checking every add. <a href="/guide/performance/">The numbers, and what they do not say</a>.</p>
+<p><strong>Failure has three shapes, and they do not overlap.</strong> A <code>T?</code> says something might not be there. A <code>T!</code> says a call might not succeed, handled with <code>try</code> or <code>catch</code>. Everything else is a trap, which is a bug: it reports a stable code, <code>file:line:column</code>, and a call trace, and it does that from the machine code you ship. The rule that decides between them is one sentence — <em>traps are bugs, errors are news</em>. <a href="/guide/failure/">Absence and failure</a>.</p>
+<h2 id="what-luce-is-not">What Luce is not<a class="anchor" href="#what-luce-is-not" aria-label="link to this section">#</a></h2>
+<p>It is a real language with a real compiler, a real runtime, a real terminal and a real editor written in itself — and it is early. There are no first-class functions, no closures, no generics for user code, no tagged unions, no tuples, no package manager and no language server. Some of those are deliberate and permanent; some are simply not built yet. The <a href="/status/">status page</a> says which is which, without rounding up.</p>
+<h2 id="start-here">Start here<a class="anchor" href="#start-here" aria-label="link to this section">#</a></h2>
+<div class="cards doors">
+<a class="card" href="tour/"><strong>A tour of Luce</strong><span>Start here. Fourteen short chapters, in order, from installing the compiler to writing a program that reads a file.</span></a>
+<a class="card" href="examples/"><strong>Luce by example</strong><span>Complete programs, each one compiled and run to produce the output printed beneath it. Read them in any order.</span></a>
+<a class="card" href="guide/"><strong>Effective Luce</strong><span>Longer pieces on the parts of the language that are unusual, and on what the measurements actually say.</span></a>
+<a class="card" href="ref/"><strong>The Luce reference</strong><span>Normative. What the compiler in this repository accepts and what it means. Terse on purpose; the tour is where the explanations are.</span></a>
+<a class="card" href="std/"><strong>The standard library</strong><span>Seven modules, written in ordinary Luce and embedded in the compiler. There is no install path and there is no package manager.</span></a>
+<a class="card" href="status/"><strong>Where Luce stands</strong><span>What works, what is measured, and what is missing. Written from the repository&#39;s own inventory rather than from hope.</span></a>
+</div>
+</article>
+</main>
+<div class="rail"></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="./assets/site.js" defer></script>
+<script src="./search-index.js" defer></script>
+</body>
+</html>

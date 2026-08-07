@@ -1,0 +1,18 @@
+struct Node:
+    value: string
+    next: Node?
+
+func length(head: Node?) -> long:
+    var here = head
+    var count = 0
+    while here != none:
+        count += 1
+        here = here.next
+    return count
+
+func main():
+    let c = Node(value = "c", next = none)
+    let b = Node(value = "b", next = c)
+    let a = Node(value = "a", next = b)
+    print(f"{length(a)} nodes starting {a.value}")
+    print(f"empty list: {length(none)}")

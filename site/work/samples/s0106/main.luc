@@ -1,0 +1,9 @@
+func main():
+    var stock = new map(long, string)
+    stock[3] = "fig"
+    stock[1] = "pear"
+
+    let ids = stock.keys()
+    let names = stock.values()
+    print(f"{len(ids)} keys, first {ids[0]}")
+    print(f"{len(names)} values, first {names[0]}")

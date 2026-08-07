@@ -1,0 +1,8 @@
+func check(value: long) -> long!:
+    if value > 100:
+        error(f"{value} is too large")
+    return value
+
+func main() -> !:
+    print(string(try check(50)))
+    print(string(try check(500)))

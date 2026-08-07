@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statements and declarations &middot; Luce</title>
+<meta name="description" content="let, var, assignment, control flow, func, struct, and file-scope constants.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a class="here" href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The Luce reference</summary>
+<ul>
+<li><a href="../../ref/">Overview</a></li>
+<li><a href="../../ref/lexical/">Source text and lexical elements</a></li>
+<li><a href="../../ref/types/">Types</a></li>
+<li><a href="../../ref/expressions/">Expressions</a></li>
+<li><a class="here" href="../../ref/statements/">Statements and declarations</a></li>
+<li><a href="../../ref/ownership/">Ownership</a></li>
+<li><a href="../../ref/failure/">Traps and errors</a></li>
+<li><a href="../../ref/modules/">Modules</a></li>
+<li><a href="../../ref/builtins/">Builtins</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Statements and declarations</h1>
+<h2 id="file-structure">File structure<a class="anchor" href="#file-structure" aria-label="link to this section">#</a></h2>
+<p>A file holds, in any order: <code>import</code> lines, top-level <code>let</code> constants, <code>struct</code> declarations, <code>enum</code> declarations, and <code>func</code> declarations. There is no top-level executable code and no top-level <code>var</code>.</p>
+<p>Each of the four declaration forms may carry a <a href="#visibility">visibility</a> word. Without one it is public.</p>
+<h2 id="entry">Entry<a class="anchor" href="#entry" aria-label="link to this section">#</a></h2>
+<p>A program requires exactly one <code>func main():</code>, and that is the whole of it — no parameters, no return type. It may declare <code>-&gt; !</code>, in which case an uncaught error ends the run and is reported by the host.</p>
+<p>There is no second entry mode.</p>
+<h2 id="func">func<a class="anchor" href="#func" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>func name(param: Type, ...) -&gt; Type:
+func name(param: Type, ...) -&gt; Type!:
+func name(param: Type, ...) -&gt; (Type, Type, ...):
+func name(param: Type, ...) -&gt; (Type, Type, ...)!:
+func name(param: Type, ...) -&gt; !:
+func name(param: Type, ...):
+</code></pre></div>
+<p>A parenthesised list of <strong>two or more</strong> types is a <a href="../types/#return-shapes">return shape</a>: the function answers that many values. It is not a type, and it may be written nowhere but here.</p>
+<p>A parameter may be prefixed <code>give</code> to take ownership of an object, and may declare a trailing default — <code>start: long = 0</code>, a compile-time constant a call site may omit; call sites may also name arguments (see <a href="../expressions/#calls">calls</a>). Every path through a function that declares a value return type must return; the compiler checks it.</p>
+<p>A function declared inside a struct whose first parameter is the word <code>self</code> is a <a href="#methods">method</a>, called on a receiver. There are no variadics and no first-class functions.</p>
+<h2 id="struct">struct<a class="anchor" href="#struct" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>struct Name:
+    field: Type
+    private field: Type
+    ...
+
+    private:
+        field: Type
+        func member(...):
+            ...
+
+    func member(...):
+        ...
+</code></pre></div>
+<p>Fields and namespaced functions, in one indented block. Construction names every field. A member may carry a <a href="#visibility">visibility</a> word of its own, or sit in a region that carries one for the group; without either it is public.</p>
+<h2 id="enum">enum<a class="anchor" href="#enum" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>enum Name:
+    member
+    member = constant
+    ...
+
+    func member(...):
+        ...
+
+enum Name(byte):
+    ...
+</code></pre></div>
+<p>A set of named constants at one integer width. Members are snake_case, one per line; a member with no value takes the previous member&#39;s plus one, and an unvalued first member is 0. A written value is a constant integer expression, folded like every other constant.</p>
+<ul>
+<li>Two members may not hold one number.</li>
+<li>The backing width is <code>int</code> unless the declaration names one of <code>byte</code>, <code>short</code>, <code>int</code>, <code>long</code>; a member the width cannot hold is refused (<code>luce.sema.enum</code>).</li>
+<li>Members are reached only through the type: <code>Method.stored</code>, and <code>module.Method.stored</code> across an import.</li>
+<li>An enum takes the same methods and namespace functions a <code>struct</code> takes, under the <a href="#methods">same rules</a>, <code>var self</code> included. A function may not wear a member&#39;s name.</li>
+<li>The declaration may carry a <a href="#visibility">visibility</a> word; a member may not — an enum&#39;s members are what the type is.</li>
+<li>The zero value of an enum-typed slot is its <strong>first declared member</strong>, which is what <code>var m: Method</code> starts at and what <code>new array(Method, n)</code> fills with.</li>
+</ul>
+<h2 id="match">match<a class="anchor" href="#match" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>match expression:
+    member:
+        ...
+    member:
+        ...
+    else:
+        ...
+</code></pre></div>
+<p>Dispatch over an enum. The scrutinee must be one; every arm is a bare member name of that enum, and each opens a block. <code>else</code> is optional and comes last.</p>
+<ul>
+<li>Without an <code>else</code>, <strong>every member must have an arm</strong>, and one that is missing is <code>luce.sema.match</code>, by name.</li>
+<li>An arm may not be written twice, and an <code>else</code> that covers nothing is refused.</li>
+<li>Arms are ordinary statement blocks: they declare, assign, loop, <code>break</code>, <code>continue</code> and <code>return</code>. A match all of whose arms return is a return.</li>
+</ul>
+<h2 id="methods">Methods<a class="anchor" href="#methods" aria-label="link to this section">#</a></h2>
+<p>A function declared inside a <code>struct</code> or an <code>enum</code> is a <strong>method</strong> exactly when its first parameter is the keyword <code>self</code>.</p>
+<div class="code"><pre><code>func name(self) -&gt; Type:              # reads the receiver
+func name(var self, param: Type):     # writes it back
+func name(param: Type):               # a namespace function
+</code></pre></div>
+<p><code>self</code> is bare and untyped — inside <code>struct Point</code> it can be nothing but a <code>Point</code>, so <code>self: Point</code> is refused, and it must come first.</p>
+<p><code>p.length()</code> <strong>means</strong> <code>Point.length(p)</code>: the same call, resolved at compile time. There is no dispatch and no bound method value. <code>Point.length(p)</code> stays callable and means the same thing.</p>
+<p><code>var self</code> writes the receiver back — <code>p.scale(2.0)</code> means <code>p = Point.scale(p, 2.0)</code>. Its receiver must be a place whose root is a mutable local, so a <code>let</code> receiver and a call result are both refused, and the static form <code>Point.scale(p, 2.0)</code> is refused because it has no place to write to. The struct must carry no objects; one that does mutates through its fields from a plain <code>self</code>.</p>
+<p>A <code>var self</code> method may answer values of its own, and then its receiver is result zero: <code>let roll = rng.next()</code> writes <code>rng</code> back and binds <code>roll</code>, and the declared arity is what the call site sees.</p>
+<h2 id="visibility">Visibility<a class="anchor" href="#visibility" aria-label="link to this section">#</a></h2>
+<p>A declaration is <strong>public</strong> unless it says <code>private</code>. Both words are keywords, both are written in full, and <code>public</code> where public is already the default is legal and inert.</p>
+<div class="code"><pre><code>private func name(...)        public func name(...)
+private let name = expr       public let name = expr
+private struct Name:          public struct Name:
+private field: Type           public field: Type
+</code></pre></div>
+<p>Inside a <code>struct</code>, and nowhere else, a <strong>region</strong> label opens an indented block of members — fields and functions alike — and every member of the block takes the label&#39;s visibility.</p>
+<div class="code"><pre><code>struct Name:
+    private:
+        field: Type
+
+        func member(...):
+            ...
+</code></pre></div>
+<p>Labels may repeat and appear in any order, and a member outside every region takes the default. The parser resolves each label onto its members, so a region and a per-declaration word produce exactly the same program.</p>
+<p>Exactly one word per declaration, and the word stands only where a declaration does.</p>
+<div class="table"><table>
+<thead><tr><th>Written</th><th>Refusal</th></tr></thead>
+<tbody>
+<tr><td><code>public private func f()</code></td><td><code>one visibility word per declaration</code></td></tr>
+<tr><td>A word on a local <code>let</code>, <code>var</code> or parameter</td><td><code>visibility applies to file-scope declarations and struct members</code></td></tr>
+<tr><td><code>private:</code> at file scope</td><td><code>a visibility region belongs inside a struct; at file scope mark each declaration</code></td></tr>
+<tr><td>A word on a member already inside a region</td><td><code>NAME is inside a private region, which already says it</code></td></tr>
+<tr><td>A region label with no member under it</td><td>the refusal every empty block gets</td></tr>
+</tbody></table></div>
+<p>All five are parse rules, under <code>luce.parse.*</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">struct</span> <span class="t">Box</span>:
+    <span class="k">private</span>:
+        <span class="k">private</span> value: <span class="t">long</span>
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> b = <span class="t">Box</span>(value = <span class="n">1</span>)
+    <span class="b">print</span>(<span class="t">string</span>(b.value))</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:3:9: value is inside a private region, which already says it [luce.parse.expected]
+            private value: long
+            ^~~~~~~</samp></pre></div>
+</figure>
+<p>What a marker <em>means</em> across a module boundary — reference sites, construction, fields, public surfaces, and <code>main</code> — is <a href="../modules/#visibility">modules</a>.</p>
+<h2 id="let-and-var">let and var<a class="anchor" href="#let-and-var" aria-label="link to this section">#</a></h2>
+<p><code>let name = expr</code> and <code>let name: Type = expr</code> bind once. <code>var</code> allows reassignment. <code>var name: Type</code> with no initializer declares the binding and leaves the slot at its type&#39;s zero value.</p>
+<div class="code"><pre><code>let low, high = minmax(xs)
+var row, column = grid.find(target)
+</code></pre></div>
+<p>Two or more names is a <strong>destructuring bind</strong>, and the only place a call answering a <a href="../types/#return-shapes">return shape</a> may hand its values to names. One keyword governs the whole bind — <code>let a, var b</code> is refused — and the names take their types from the call, so they carry no annotations. There is no <code>_</code>: an unused name costs nothing and says what was ignored.</p>
+<p>Neither freezes what the name points at: <code>let xs = [1, 2]</code> still permits <code>xs.append(3)</code>, and refuses <code>xs = [9]</code>. This is JavaScript&#39;s <code>const</code>, not Swift&#39;s <code>let</code>.</p>
+<p>The rule reaches every spelling of a store, not only the method call. <code>xs[0] = 9</code>, <code>bag.counts[0] = 9</code> and <code>cells[0].value += 1</code> are all legal through an immutable name, because the store lands in the heap object rather than in the name — which is what lets a function fill a container it was handed, since a parameter is a <code>let</code>-bound name. What <code>let</code> refuses is a store that lands in the binding&#39;s own storage: <code>p.x = 3</code> and <code>p.inner.y = 3</code> on a struct <strong>value</strong>, at any depth, because a value lives in the name.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">struct</span> <span class="t">Cell</span>:
+    value: <span class="t">long</span>
+
+<span class="k">func</span> <span class="d">bump</span>(cells: <span class="t">list</span>(<span class="t">Cell</span>)):
+    cells[<span class="n">0</span>].value += <span class="n">1</span>
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> cells: <span class="t">list</span>(<span class="t">Cell</span>) = [<span class="t">Cell</span>(value = <span class="n">1</span>)]
+    cells[<span class="n">0</span>].value = <span class="n">10</span>
+    bump(cells)
+    <span class="b">print</span>(<span class="t">string</span>(cells[<span class="n">0</span>].value))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>11</samp></pre></div>
+</figure>
+<p>No name may shadow one from an enclosing scope. A loop variable is immutable inside its body.</p>
+<h2 id="assignment">Assignment<a class="anchor" href="#assignment" aria-label="link to this section">#</a></h2>
+<p>Plain multi-assignment is <strong>not</strong> a statement: <code>low, high = f()</code> is refused, because a destructuring bind declares its names. What Go needs multi-assignment for is <code>v, err = f()</code>, and Luce has no <code>err</code>.</p>
+<p>The target is a <strong>place</strong>: a name, a field, or an index, nested freely.</p>
+<div class="code"><pre><code>name = expr
+name.field = expr
+name.inner.field = expr
+xs[i] = expr
+grid[r, c] = expr
+cells[0].value = expr
+</code></pre></div>
+<p>The place is read once — every subscript evaluated exactly once — and then rebuilt: value structs update functionally up to their root binding, and the innermost container element is written in place.</p>
+<p>A <strong>nested</strong> place assigns a value (a number, a <code>string</code>, or a plain struct). To restock an <em>object</em> field use the single-level form: <code>bag.items = [1, 2]</code>.</p>
+<p>Compound assignment is <code>+= -= *= /= //= %=</code>, value-only arithmetic — the place is a number, or a <code>string</code> for <code>+=</code> — and the place is evaluated once, so <code>counts[key] += 1</code> looks the key up a single time. A <strong>map</strong> key that is not there is defined at the value type&#39;s zero and then applied to; a list or array index out of range still traps.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> counts = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">long</span>)
+    counts[<span class="s">&quot;a&quot;</span>] += <span class="n">5</span>
+    <span class="k">var</span> text = <span class="s">&quot;x&quot;</span>
+    text += <span class="s">&quot;y&quot;</span>
+    <span class="b">print</span>(<span class="s">f&quot;{counts[&quot;</span>a<span class="s">&quot;]} {text}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>5 xy</samp></pre></div>
+</figure>
+<p>A storage-width place combines at its arithmetic type and narrows back: <code>b += 1</code> on a <code>byte</code> is <code>b = byte(b + 1)</code>, and it traps <code>conversion_range</code> at 255 rather than wrapping.</p>
+<h2 id="if-elif-else">if / elif / else<a class="anchor" href="#if-elif-else" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>if condition:
+    ...
+elif condition:
+    ...
+else:
+    ...
+</code></pre></div>
+<p>The condition is <code>bool</code>. There is no ternary operator; dispatch over a value whose cases have names is <a href="#match"><code>match</code></a>.</p>
+<h2 id="while">while<a class="anchor" href="#while" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>while condition:
+    ...
+</code></pre></div>
+<h2 id="for">for<a class="anchor" href="#for" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>for name in range(low, high):     long, excluding high
+for name in sequence:             list or rank-1 array elements, in order
+for name in map:                  map keys, in insertion order
+for index, name in sequence:      position and element
+for key, value in map:            key and value
+</code></pre></div>
+<p>The loop variable is immutable inside the body. Do not grow, shrink or free a collection while iterating it: bounds stay checked per step, but which elements are visited is the program&#39;s problem.</p>
+<h2 id="break-continue-return-try">break, continue, return, try<a class="anchor" href="#break-continue-return-try" aria-label="link to this section">#</a></h2>
+<p>All four leave one or more scopes, and all four free whatever those scopes still own. <code>return</code> additionally moves the returned binding to the caller.</p>
+<h2 id="expression-statements">Expression statements<a class="anchor" href="#expression-statements" aria-label="link to this section">#</a></h2>
+<p>A call may stand alone as a statement. A <strong>fallible</strong> call standing alone must be <code>try</code>ed or <code>catch</code>ed; ignoring it is <code>luce.sema.fallible</code>.</p>
+<p>An ignored returned object is a statement temporary and is freed at the end of the statement.</p>
+<h2 id="guarded-statements">Guarded statements<a class="anchor" href="#guarded-statements" aria-label="link to this section">#</a></h2>
+<p>Two statement shapes take an indented <code>catch</code> handler, and no others: a call written as a statement, and a plain assignment whose value is a call.</p>
+<div class="code"><pre><code>CALL catch:                       CALL catch NAME:
+    ...                               ...
+
+PLACE = CALL catch:               PLACE = CALL catch NAME:
+    ...                               ...
+</code></pre></div>
+<p>The handler guards exactly one call, so which statement failed has one answer. <code>NAME</code> binds the error&#39;s message — an immutable <code>string</code> scoped to the handler block. A <code>let</code> takes no handler (the handler supplies no value) and neither does a compound assignment (it reads its place before the call, so two things stand in front of the word and only one can fail). Both are <code>luce.parse.expected</code>. A handler behind a call that cannot fail is <code>luce.sema.fallible</code>. See <a href="../failure/">failure</a>.</p>
+<h2 id="file-scope-constants">File-scope constants<a class="anchor" href="#file-scope-constants" aria-label="link to this section">#</a></h2>
+<p>A top-level <code>let</code> declares a compile-time constant.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">let</span> width = <span class="n">80</span>
+<span class="k">let</span> margin = <span class="n">4</span>
+<span class="k">let</span> usable = width - margin * <span class="n">2</span>
+<span class="k">let</span> title = <span class="s">&quot;loom&quot;</span>
+<span class="k">let</span> banner = title + <span class="s">&quot; console&quot;</span>
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="s">f&quot;{banner}: {usable} columns&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>loom console: 72 columns</samp></pre></div>
+</figure>
+<p>Initializers fold at compile time. What may be folded is: literals, other constants (including <code>module.constant</code> through an import), arithmetic, comparisons, <code>and</code>/<code>or</code>, string concatenation, <code>long()</code>/<code>double()</code>, and value-struct construction.</p>
+<p>Calls are <strong>not</strong> constant. Heap objects are not constant either, and the reason is ownership rather than an arbitrary limit: a top-level binding has no scope to die at, so it cannot own an object, so <code>new</code>, list literals, slices and indexing are all refused there, as is a struct whose layout carries objects.</p>
+<p>Constants may reference each other in any order but never in a cycle. Every use site inlines the folded value, so an unused constant costs nothing to ship, decode or compile.</p>
+<h2 id="scope">Scope<a class="anchor" href="#scope" aria-label="link to this section">#</a></h2>
+<p>One scope per <strong>file</strong> (constants, structs, functions), per <strong>struct</strong> (its namespaced functions), and per <strong>function</strong> — where parameters and every indented block get one, so <code>if</code>, <code>while</code> and <code>for</code> bodies open nested scopes.</p>
+<p>Nothing is visible without an import. There is no shadowing anywhere.</p>
+<h2 id="dead-code">Dead code<a class="anchor" href="#dead-code" aria-label="link to this section">#</a></h2>
+<p>A statement below one that never comes back — <code>return</code>, <code>break</code>, <code>continue</code>, <code>trap(...)</code>, <code>error(...)</code>, or an <code>if</code> whose arms all leave — is refused, naming the terminator and its line.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> a = <span class="n">1</span>
+    <span class="k">return</span>
+    <span class="k">let</span> b = a</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:4:5: this cannot run: the return on line 3 leaves the block first; delete it, or move it above the return [luce.sema.unreachable]
+        let b = a
+        ^~~~~~~~~</samp></pre></div>
+</figure>
+<p>The compiler has one severity, so this is a refusal or nothing. It is a refusal for the reason <code>a &lt; b &lt; c</code> is: the way the code reads and the way it runs disagree. An unused local is <em>not</em> refused — that is redundant rather than misleading.</p>
+<p>An <code>if</code> counts only when <strong>every</strong> arm leaves, so an early-return guard with no <code>else</code> is untouched, and one terminator is one report however many lines it stranded.</p>
+<p>Functions unreachable from the entry point never reach the compiled module, so an unused <code>import std.math</code> costs nothing to ship, decode or compile.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../expressions/"><span>Previous</span>Expressions</a>
+<a class="on" href="../ownership/"><span>Next</span>Ownership</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#file-structure">File structure</a></li>
+<li class="h2"><a href="#entry">Entry</a></li>
+<li class="h2"><a href="#func">func</a></li>
+<li class="h2"><a href="#struct">struct</a></li>
+<li class="h2"><a href="#enum">enum</a></li>
+<li class="h2"><a href="#match">match</a></li>
+<li class="h2"><a href="#methods">Methods</a></li>
+<li class="h2"><a href="#visibility">Visibility</a></li>
+<li class="h2"><a href="#let-and-var">let and var</a></li>
+<li class="h2"><a href="#assignment">Assignment</a></li>
+<li class="h2"><a href="#if-elif-else">if / elif / else</a></li>
+<li class="h2"><a href="#while">while</a></li>
+<li class="h2"><a href="#for">for</a></li>
+<li class="h2"><a href="#break-continue-return-try">break, continue, return, try</a></li>
+<li class="h2"><a href="#expression-statements">Expression statements</a></li>
+<li class="h2"><a href="#guarded-statements">Guarded statements</a></li>
+<li class="h2"><a href="#file-scope-constants">File-scope constants</a></li>
+<li class="h2"><a href="#scope">Scope</a></li>
+<li class="h2"><a href="#dead-code">Dead code</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

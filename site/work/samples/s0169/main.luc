@@ -1,0 +1,18 @@
+import std.files
+
+func parse_port(text: string) -> long!:
+    let port = parse_int(text) else error(f"not a number: {text}")
+    if port < 1 or port > 65535:
+        error(f"out of range: {port}")
+    return port
+
+func main():
+    parse_port("nope") catch reason:
+        print(f"bad port — {reason}")
+
+    files.read("/nowhere/at/all") catch reason:
+        print(f"no config — {reason}")
+
+    # The handler's own message, unchanged, is what the runtime wrote.
+    parse_port("99999") catch reason:
+        print(reason)

@@ -8,7 +8,7 @@ mutation sweep found.
 
 So this directory is a miniature repository laid out with the same
 shape the guard scans — `programs/`, `bench/`, `src/luce/std/`,
-`site/content/`, `src/luce/specs/` — with one violation in each, of
+`www/luce/content/`, `src/luce/specs/` — with one violation in each, of
 the kind that scope is meant to catch.  The guard's tests point it
 here and require it to find every one.
 

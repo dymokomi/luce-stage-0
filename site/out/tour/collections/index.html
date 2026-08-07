@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lists, maps and arrays &middot; Luce</title>
+<meta name="description" content="The four heap objects, their methods, and how you walk them.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a class="here" href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>A tour of Luce</summary>
+<ul>
+<li><a href="../../tour/">Overview</a></li>
+<li><a href="../../tour/hello/">Hello, Luce</a></li>
+<li><a href="../../tour/values/">Values and types</a></li>
+<li><a href="../../tour/control/">Control flow</a></li>
+<li><a href="../../tour/functions/">Functions and structs</a></li>
+<li><a href="../../tour/enums/">Enums</a></li>
+<li><a class="here" href="../../tour/collections/">Lists, maps and arrays</a></li>
+<li><a href="../../tour/strings/">Strings</a></li>
+<li><a href="../../tour/ownership/">Memory</a></li>
+<li><a href="../../tour/absence/">Absence</a></li>
+<li><a href="../../tour/failure/">Failure</a></li>
+<li><a href="../../tour/modules/">Modules</a></li>
+<li><a href="../../tour/visibility/">Visibility</a></li>
+<li><a href="../../tour/host/">The outside world</a></li>
+<li><a href="../../tour/next/">Where to go next</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Lists, maps and arrays</h1>
+<p>Everything so far has been a <strong>value</strong>: it copies on assignment and nobody frees it. The four collection types are <strong>heap objects</strong>. A variable holds a reference to one, they are created with <code>new</code> or a literal, and the scope that owns one frees it — which is <a href="../ownership/">the next chapter</a>. This one is about what they do.</p>
+<div class="table"><table>
+<thead><tr><th>Type</th><th>Shape</th></tr></thead>
+<tbody>
+<tr><td><code>list(T)</code></td><td>A growable sequence.</td></tr>
+<tr><td><code>map(K, V)</code></td><td>An insertion-ordered dictionary; <code>K</code> is <code>long</code> or <code>string</code>.</td></tr>
+<tr><td><code>array(T, ...)</code></td><td>Fixed shape, up to four dimensions, zero-initialized.</td></tr>
+<tr><td><code>builder</code></td><td>Accumulates text and hands back a <code>string</code>.</td></tr>
+</tbody></table></div>
+<p>Operations that belong to one type are written as methods — <code>xs.append(v)</code>, <code>m.has(k)</code> — which is sugar for a plain function with the receiver first, in the way Zig&#39;s <code>x.f()</code> is. The generic cross-type builtins stay free functions: <code>len</code>, <code>str</code>, <code>print</code>.</p>
+<h2 id="list">list<a class="anchor" href="#list" aria-label="link to this section">#</a></h2>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = [<span class="n">3</span>, <span class="n">1</span>, <span class="n">2</span>]           <span class="c"># list(int), inferred from the elements</span>
+    <span class="k">var</span> names: <span class="t">list</span>(<span class="t">string</span>) = [] <span class="c"># an empty literal needs its type</span>
+
+    xs.<span class="b">append</span>(<span class="n">4</span>)
+    xs.<span class="b">insert</span>(<span class="n">0</span>, <span class="n">99</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(xs)} elements, first {xs[0]}, last {xs[len(xs) - 1]}&quot;</span>)
+
+    xs.<span class="b">sort</span>()                    <span class="c"># in place, stable, O(n log n)</span>
+    <span class="b">print</span>(<span class="s">f&quot;sorted first {xs[0]} then {xs[1]}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;find(3) = {xs.find(3)}, contains(42) = {xs.contains(42)}&quot;</span>)
+
+    <span class="k">let</span> taken = xs.<span class="b">pop</span>()
+    <span class="b">print</span>(<span class="s">f&quot;popped {taken}, {len(xs)} left&quot;</span>)
+
+    names.<span class="b">append</span>(<span class="s">&quot;ada&quot;</span>)
+    names.<span class="b">append</span>(<span class="s">&quot;grace&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{names[0]} and {names[1]}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>5 elements, first 99, last 4
+sorted first 1 then 2
+find(3) = 2, contains(42) = false
+popped 99, 4 left
+ada and grace</samp></pre></div>
+</figure>
+<p><code>find</code> answers <code>-1</code> when the value is absent. The full set is <code>append</code>, <code>insert</code>, <code>remove</code>, <code>pop</code>, <code>sort</code>, <code>reverse</code>, <code>find</code>, <code>contains</code>, <code>clear</code>, plus <code>len</code>, indexing and slicing.</p>
+<h2 id="slices">Slices<a class="anchor" href="#slices" aria-label="link to this section">#</a></h2>
+<p><code>xs[a:b]</code> is a <strong>new list</strong>, owned by whoever receives it — never a view. Open ends default to the beginning and the end.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>, <span class="n">40</span>, <span class="n">50</span>]
+    <span class="k">let</span> middle = xs[<span class="n">1</span>:<span class="n">4</span>]
+    <span class="k">let</span> tail = xs[<span class="n">3</span>:]
+    middle[<span class="n">0</span>] = <span class="n">999</span>               <span class="c"># the copy changes; xs does not</span>
+    <span class="b">print</span>(<span class="s">f&quot;middle {middle[0]} {middle[1]} {middle[2]}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;tail   {tail[0]} {tail[1]}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;source {xs[1]}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>middle 999 30 40
+tail   40 50
+source 20</samp></pre></div>
+</figure>
+<p>Indexing is bounds-checked, always, in both build modes. Reading past the end is a trap.</p>
+<h2 id="map">map<a class="anchor" href="#map" aria-label="link to this section">#</a></h2>
+<p>Keys are <code>long</code> or <code>string</code>. Iteration is in insertion order, and the lookups — index, <code>has</code>, <code>get</code>, index-set — are O(1) over a dense array of entries with a hash index above it.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> stock = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">long</span>)
+    stock[<span class="s">&quot;fig&quot;</span>] = <span class="n">3</span>
+    stock[<span class="s">&quot;pear&quot;</span>] = <span class="n">12</span>
+    stock[<span class="s">&quot;plum&quot;</span>] = <span class="n">0</span>
+    stock[<span class="s">&quot;fig&quot;</span>] += <span class="n">1</span>
+
+    <span class="k">for</span> name, count <span class="k">in</span> stock:
+        <span class="b">print</span>(<span class="s">f&quot;{name}: {count}&quot;</span>)
+
+    <span class="b">print</span>(<span class="s">f&quot;has apple: {stock.has(&quot;</span>apple<span class="s">&quot;)}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;get apple: {stock.get(&quot;</span>apple<span class="s">&quot;, -1)}&quot;</span>)
+    stock.<span class="b">remove</span>(<span class="s">&quot;plum&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(stock)} kinds left&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>fig: 4
+pear: 12
+plum: 0
+has apple: false
+get apple: -1
+2 kinds left</samp></pre></div>
+</figure>
+<p>Indexing a key that is not there is a trap, deliberately: it is a bug in the program, not news from the world. Use <code>has</code> before the index, or <code>get(key, default)</code> which cannot trap.</p>
+<p>A <strong>compound</strong> store is the exception, and it is not one: <code>stock[k] += 1</code> on a key that is not there defines the entry at the value type&#39;s zero and then applies, because the operator says the statement is a write. <code>counts[word] += 1</code> is the whole of the counting idiom. <code>stock[k] = stock[k] + 1</code> still traps — the read is on the right of the <code>=</code> and declares nothing.</p>
+<h2 id="array">array<a class="anchor" href="#array" aria-label="link to this section">#</a></h2>
+<p>An <code>array</code> has a fixed shape given at <code>new</code>, and its elements start at the type&#39;s zero value. Up to four dimensions; in a type annotation the shape is spelled with <code>_</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">total</span>(grid: <span class="t">array</span>(<span class="t">long</span>, _, _)) -&gt; <span class="t">long</span>:
+    <span class="k">var</span> sum: <span class="t">long</span> = <span class="n">0</span>
+    <span class="k">for</span> row <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, grid.<span class="b">dim</span>(<span class="n">0</span>)):
+        <span class="k">for</span> column <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, grid.<span class="b">dim</span>(<span class="n">1</span>)):
+            sum += grid[row, column]
+    <span class="k">return</span> sum
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> grid = <span class="v">new</span> <span class="t">array</span>(<span class="t">long</span>, <span class="n">3</span>, <span class="n">4</span>)
+    <span class="k">for</span> row <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">3</span>):
+        <span class="k">for</span> column <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">4</span>):
+            grid[row, column] = row * <span class="n">10</span> + column
+    <span class="b">print</span>(<span class="s">f&quot;{grid.dim(0)} by {grid.dim(1)}, corner {grid[2, 3]}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;total {total(grid)}&quot;</span>)
+
+    <span class="k">var</span> line = <span class="v">new</span> <span class="t">array</span>(<span class="t">double</span>, <span class="n">4</span>)
+    line.<span class="b">fill</span>(<span class="n">1.5</span>)
+    <span class="b">print</span>(<span class="s">f&quot;rank-1 arrays sort and fill: {line[0]} {len(line)}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3 by 4, corner 23
+total 138
+rank-1 arrays sort and fill: 1.5 4</samp></pre></div>
+</figure>
+<p>A rank-1 <code>array</code> also has <code>sort</code>, <code>reverse</code>, <code>find</code>, <code>contains</code> and <code>fill</code>. <code>len(a)</code> is the size of dimension 0, and <code>a.dim(axis)</code> gives any of them.</p>
+<h2 id="builder">builder<a class="anchor" href="#builder" aria-label="link to this section">#</a></h2>
+<p>Repeated <code>+</code> on strings allocates every time. A <code>builder</code> does not.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> out = <span class="v">new</span> <span class="t">builder</span>()
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">5</span>):
+        out.<span class="b">append</span>(<span class="t">string</span>(i))
+        out.<span class="b">append</span>(<span class="s">&quot;,&quot;</span>)
+    out.<span class="b">append_ascii</span>(<span class="n">33</span>)          <span class="c"># one ASCII byte, no string allocated</span>
+    <span class="b">print</span>(out.<span class="b">build</span>())
+    <span class="b">print</span>(<span class="s">f&quot;{len(out)} bytes&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>0,1,2,3,4,!
+11 bytes</samp></pre></div>
+</figure>
+<p><code>append_ascii</code> traps outside 0..127, because a builder&#39;s bytes become a <code>string</code> and a <code>string</code> is valid UTF-8. Wider characters go in with <code>append(chr(code))</code>.</p>
+<h2 id="identity-not-contents">Identity, not contents<a class="anchor" href="#identity-not-contents" aria-label="link to this section">#</a></h2>
+<p><code>==</code> and <code>!=</code> on objects compare <em>identity</em> — whether two names are the same object — and never their contents.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> a = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="k">var</span> b = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="k">let</span> same = a
+    <span class="b">print</span>(<span class="s">f&quot;a == b: {a == b}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;a == same: {a == same}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>a == b: false
+a == same: true</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../enums/"><span>Previous</span>Enums</a>
+<a class="on" href="../strings/"><span>Next</span>Strings</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#list">list</a></li>
+<li class="h2"><a href="#slices">Slices</a></li>
+<li class="h2"><a href="#map">map</a></li>
+<li class="h2"><a href="#array">array</a></li>
+<li class="h2"><a href="#builder">builder</a></li>
+<li class="h2"><a href="#identity-not-contents">Identity, not contents</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

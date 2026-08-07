@@ -1,0 +1,4 @@
+func main():
+    var index = new map(string, list(long))
+    var hits = [12, 40]
+    index["a.luc"] = hits

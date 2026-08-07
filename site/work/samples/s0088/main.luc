@@ -1,0 +1,17 @@
+import std.files
+
+func main() -> !:
+    try files.write("stock.txt", "fig\npear\nplum\n")
+
+    let lines = try files.read_lines("stock.txt")
+    print(f"{len(lines)} lines")
+    for index, line in lines:
+        print(f"  {index}: {line}")
+
+    let whole = try files.read("stock.txt")
+    print(f"{len(whole)} bytes on disk")
+
+    print(f"exists: {files.exists("stock.txt")}, missing: {files.exists("nope.txt")}")
+
+    let text = files.read("nope.txt") catch "(could not read)"
+    print(text)

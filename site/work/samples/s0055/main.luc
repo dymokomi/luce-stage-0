@@ -1,0 +1,13 @@
+func main():
+    var index = new map(string, list(long))
+
+    var hits: list(long) = [12, 40]
+    index["a.luc"] = give hits      # transfer: the map owns it now
+
+    var template: list(long) = [0, 0]
+    index["b.luc"] = copy template  # a duplicate; template stays mine
+    template.append(1)
+
+    index["c.luc"] = [7, 8]         # fresh: nobody owned it, no word
+
+    print(f"{len(index)} entries, template still has {len(template)}")

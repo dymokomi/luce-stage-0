@@ -1,0 +1,7 @@
+func main():
+    let started = clock_ms()
+    print(f"PATH is set: {env("PATH") != none}")
+    print(f"nonsense: {env("LUCE_NOT_A_REAL_VARIABLE") else "(unset)"}")
+    print(f"typed: {read_line("") else "(end of input)"}")
+    sleep_ms(started - clock_ms())
+    print_error("this line went to standard error")

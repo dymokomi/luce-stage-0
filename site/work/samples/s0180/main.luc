@@ -1,0 +1,6 @@
+func main():
+    var a: byte = 255
+    var b: byte = 1
+    print(string(a + b))
+    var h: half = 0.5
+    print(string(h + h))

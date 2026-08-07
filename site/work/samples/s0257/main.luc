@@ -1,0 +1,14 @@
+import std.json
+
+func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
+    let found = doc.get(node, name)
+    if found != none:
+        return found
+    trap("no member named " + name)
+
+func main() -> !:
+    let doc = try json.parse("{\"host\": \"localhost\", \"port\": 8080, \"debug\": false}")
+    let root = doc.root()
+    print(child(doc, root, "host").as_text() else "?")
+    print(string(child(doc, root, "port").as_long() else 0))
+    print(string(child(doc, root, "debug").as_bool() else true))

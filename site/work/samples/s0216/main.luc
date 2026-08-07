@@ -1,0 +1,10 @@
+func halves(n: long) -> (list(long), list(long)):
+    var head = [n]
+    var tail = [n + 1]
+    return head, tail        # both move; the caller's two names own them
+
+func main():
+    let head, tail = halves(7)
+    print(f"{head[0]} {tail[0]}")
+    free(head)
+    free(tail)

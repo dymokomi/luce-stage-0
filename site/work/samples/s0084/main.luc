@@ -1,0 +1,3 @@
+func main():
+    private let limit = 10
+    print(string(limit))

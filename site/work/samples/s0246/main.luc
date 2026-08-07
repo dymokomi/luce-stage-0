@@ -1,0 +1,14 @@
+import std.files
+
+func load_or_default(path: string) -> string:
+    return files.read(path) catch "default contents\n"
+
+func load_or_fail(path: string) -> string!:
+    return try files.read(path)
+
+func main() -> !:
+    try files.write("present.txt", "real contents\n")
+    print(load_or_default("present.txt"))
+    print(load_or_default("absent.txt"))
+    print(try load_or_fail("present.txt"))
+    print(load_or_fail("absent.txt") catch "(handled at the top)")

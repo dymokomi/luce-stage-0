@@ -1,0 +1,14 @@
+func main():
+    var rows = new list(list(long))
+    rows.append([1, 2])              # fresh: no word needed
+
+    var loose: list(long) = [3, 4]
+    rows.append(give loose)          # transfer
+
+    var template: list(long) = [0]
+    rows.append(copy template)       # duplicate; template stays mine
+    template.append(1)
+
+    for index, row in rows:
+        print(f"row {index} has {len(row)}")
+    print(f"template still has {len(template)}")

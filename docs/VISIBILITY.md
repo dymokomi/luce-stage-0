@@ -7,7 +7,7 @@
 > and the tag survives only where it stays the honest one — the
 > multi-file demonstrations, which the doc guard cannot load siblings
 > for and which run executably as the site's own fences instead
-> (`site/content/ref/modules.md` §Visibility, compiled and compared on
+> (`www/luce/content/ref/modules.md` §Visibility, compiled and compared on
 > every build), and the quotations of idioms that no longer exist.
 > The "As built" section at the bottom is the run's record.
 
@@ -205,7 +205,7 @@ func main():
 ```
 
 Nothing in the tree calls either from outside — checked, not assumed:
-`grep -rn 'fold_case(\|is_space_byte(' programs/ bench/ site/content
+`grep -rn 'fold_case(\|is_space_byte(' programs/ bench/ www/luce/content
 src/luce/specs/` finds prose mentions and zero calls.  The leak has no
 victims yet, which is precisely `docs/MISSING.md`'s point: *"matters
 before userland libraries exist."*  Under public-by-default the leak
@@ -237,12 +237,12 @@ reversal verbatim: **no internal member goes public to save an
 idiom — the library gets fixed instead.**)
 
 Counted at head rather than remembered: the tree writes `Rng(state`
-fourteen times across `programs/`, `site/content/` and `specs/`, and
+fourteen times across `programs/`, `www/luce/content/` and `specs/`, and
 the honest split matters now — **ten** are cross-module
 `math.Rng(state = …)` construction sites that must migrate
 (`programs/dice.luc:25`; the compiled site fences at
-`site/content/std/math.md:162`, `:174` and
-`site/content/tour/modules.md:66`; six `std_spec.zig` rows at 245,
+`www/luce/content/std/math.md:162`, `:174` and
+`www/luce/content/tour/modules.md:66`; six `std_spec.zig` rows at 245,
 246, 249, 251, 258, 268), **two** are spec fixtures whose `Rng` is a
 struct *declared in the same program* (`behavior_spec.zig:2232`,
 `errors_spec.zig:1035` — same-module construction, never gated, and
@@ -844,7 +844,7 @@ additionally load-bearing for `files.luc`'s own
 The calls, as ratified in round two and restated in markers:
 
 - **`ln2` and `ln10` are marked `private`.**  The memo drafted them
-  public because `site/content/std/math.md:13` documents all five
+  public because `www/luce/content/std/math.md:13` documents all five
   constants; the owner overruled: they are internals of
   `log2`/`log10`, and a documented internal is a documentation bug,
   not a public surface.  The site page moves in the same run and stops
@@ -1028,7 +1028,7 @@ What **does** move above stage 4, named so the claim is checkable:
   position and a marker in another, and the language does not do
   context-dependent words.  The keyword rows flow into
   `tools/grammar.zig`'s generated editor grammar and
-  `site/src/highlight.zig` automatically; the committed-grammar
+  `www/luce/src/highlight.zig` automatically; the committed-grammar
   agreement test catches the regeneration.
 - **Stage 3** parses the marker onto `ast.FuncDecl`, `ast.ConstDecl`,
   `ast.StructDecl` and the field record — one three-state field each
@@ -1066,7 +1066,7 @@ is public and the corpus's meaning is the default's.
 | `src/luce/std/files.luc`, every `programs/` and `bench/` file besides mathx and dice | nothing | 0 |
 | site samples (`geometry.luc`, `shapes.luc`) and spec fixtures (`modules_spec`, `compile/test.zig`, `errors_spec`) | nothing — they compile unchanged under the default | 0 |
 | the `Rng` idiom, compiled sites | `math.Rng(state = …)` → `math.rng(…)`: `programs/dice.luc:25`; site fences `std/math.md:162`, `:174`, `tour/modules.md:66`; `std_spec.zig:245`, `:246`, `:249`, `:251`, `:258`, `:268` | 10 |
-| prose | `site/content/std/math.md` (the five-constants line 13 becomes three; the `Rng(state:)` table row and prose at 149/154 teach `math.rng`), `docs/STD.md:95`, `docs/RETURNS.md:976`'s table mention, `docs/MISSING.md` (item 10 closed; the Tier 5 "reachable anyway" sentence resolved), `docs/LANGUAGE.md` §Modules gains the rule, `site/content/tour/modules.md` + `ref/modules.md` ("an import reaches the imported file's top level — all of it, unless a declaration is marked `private`"), the status page | ~8 files |
+| prose | `www/luce/content/std/math.md` (the five-constants line 13 becomes three; the `Rng(state:)` table row and prose at 149/154 teach `math.rng`), `docs/STD.md:95`, `docs/RETURNS.md:976`'s table mention, `docs/MISSING.md` (item 10 closed; the Tier 5 "reachable anyway" sentence resolved), `docs/LANGUAGE.md` §Modules gains the rule, `www/luce/content/tour/modules.md` + `ref/modules.md` ("an import reaches the imported file's top level — all of it, unless a declaration is marked `private`"), the status page | ~8 files |
 
 **Six `private` markers, one four-line factory, ten call-site
 migrations, and roughly eight prose files** — against the reversed
@@ -1381,7 +1381,7 @@ landing green on the full suite:
    that run on both engines.
 5. **Docs and site** — this memo's checkable fences dropped
    `historical` (`luce` / `luce refused`; the multi-file
-   demonstrations run instead as `site/content/ref/modules.md`
+   demonstrations run instead as `www/luce/content/ref/modules.md`
    §Visibility's compiled fences, refusals and all), LANGUAGE.md
    §Modules carries the rule, MISSING.md item 10 is closed and its
    Tier 5 sentence resolved, the math page documents three constants

@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Errors &middot; Luce</title>
+<meta name="description" content="A fallible function, try, catch, and an uncaught error&#39;s one-line report.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a class="here" href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>Luce by example</summary>
+<ul>
+<li><a href="../../examples/">Overview</a></li>
+<li><a href="../../examples/hello/">Hello and arguments</a></li>
+<li><a href="../../examples/loops/">Loops and ranges</a></li>
+<li><a href="../../examples/lists/">Lists</a></li>
+<li><a href="../../examples/maps/">Maps</a></li>
+<li><a href="../../examples/arrays/">Arrays and grids</a></li>
+<li><a href="../../examples/text/">Text processing</a></li>
+<li><a href="../../examples/structs/">Structs</a></li>
+<li><a href="../../examples/ownership/">give, copy and free</a></li>
+<li><a href="../../examples/optionals/">Optionals</a></li>
+<li><a class="here" href="../../examples/errors/">Errors</a></li>
+<li><a href="../../examples/traps/">Traps</a></li>
+<li><a href="../../examples/files/">Files</a></li>
+<li><a href="../../examples/programs/">The bundled programs</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Errors</h1>
+<p>An error is a failure a correct program can meet anyway, because the world decided. A <code>-&gt; T!</code> says a call may raise one; <code>try</code> passes it up and <code>catch</code> handles it here.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">parse_port</span>(text: <span class="t">string</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">let</span> n = <span class="b">parse_int</span>(text) <span class="k">else</span> <span class="b">error</span>(<span class="s">f&quot;not a number: {text}&quot;</span>)
+    <span class="k">if</span> n &lt; <span class="n">1</span> <span class="k">or</span> n &gt; <span class="n">65535</span>:
+        <span class="b">error</span>(<span class="s">f&quot;port out of range: {n}&quot;</span>)
+    <span class="k">return</span> n
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> parse_port(<span class="s">&quot;8080&quot;</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(parse_port(<span class="s">&quot;nope&quot;</span>) <span class="k">catch</span> -<span class="n">1</span>))
+    <span class="b">print</span>(<span class="t">string</span>(parse_port(<span class="s">&quot;99999&quot;</span>) <span class="k">catch</span> -<span class="n">1</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>8080
+-1
+-1</samp></pre></div>
+</figure>
+<h2 id="try-propagates">try propagates<a class="anchor" href="#try-propagates" aria-label="link to this section">#</a></h2>
+<p><code>try</code> releases what this frame owns and leaves — exactly what <code>return</code> does, with one terminator changed. It needs a caller that said <code>!</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">inner</span>(n: <span class="t">long</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">if</span> n == <span class="n">0</span>:
+        <span class="b">error</span>(<span class="s">&quot;inner refuses zero&quot;</span>)
+    <span class="k">return</span> <span class="n">100</span> // n
+
+<span class="k">func</span> <span class="d">middle</span>(n: <span class="t">long</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">return</span> <span class="k">try</span> inner(n) + <span class="n">1</span>
+
+<span class="k">func</span> <span class="d">outer</span>(n: <span class="t">long</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">return</span> <span class="k">try</span> middle(n) * <span class="n">2</span>
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> outer(<span class="n">5</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(outer(<span class="n">0</span>) <span class="k">catch</span> -<span class="n">1</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>42
+-1</samp></pre></div>
+</figure>
+<p>Forgetting to say which you meant is a compile error. There is no spelling that ignores the outcome.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">risky</span>() -&gt; <span class="t">long</span>!:
+    <span class="b">error</span>(<span class="s">&quot;no&quot;</span>)
+
+<span class="k">func</span> <span class="d">main</span>():
+    risky()</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:5:5: risky can fail: write &#39;try risky(…)&#39; to pass the error on, or &#39;risky(…) catch …&#39; to handle it [luce.sema.fallible]
+        risky()
+        ^~~~~~~</samp></pre></div>
+</figure>
+<h2 id="catch-has-two-forms">catch has two forms<a class="anchor" href="#catch-has-two-forms" aria-label="link to this section">#</a></h2>
+<p><code>catch EXPR</code> supplies a value. <code>catch:</code> opens a handler block, and it guards exactly one call — there is never a question about which statement failed.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">let</span> text = files.<span class="b">read</span>(<span class="s">&quot;absent.txt&quot;</span>) <span class="k">catch</span> <span class="s">&quot;(default contents)&quot;</span>
+    <span class="b">print</span>(text)
+
+    files.<span class="b">write</span>(<span class="s">&quot;/nowhere/x&quot;</span>, <span class="s">&quot;data&quot;</span>) <span class="k">catch</span>:
+        <span class="b">print</span>(<span class="s">&quot;the write did not land&quot;</span>)
+
+    <span class="k">var</span> greeting = <span class="s">&quot;unset&quot;</span>
+    greeting = files.<span class="b">read</span>(<span class="s">&quot;absent.txt&quot;</span>) <span class="k">catch</span>:
+        greeting = <span class="s">&quot;(new file)&quot;</span>
+    <span class="b">print</span>(greeting)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>(default contents)
+the write did not land
+(new file)</samp></pre></div>
+</figure>
+<h2 id="an-uncaught-error">An uncaught error<a class="anchor" href="#an-uncaught-error" aria-label="link to this section">#</a></h2>
+<p>Out of <code>main() -&gt; !</code> it ends the run, and loom prints the words and the one place it was raised. One line, not a stack: a trap is a bug and the stack is its diagnosis, but an error is news and where it came from is the news.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">check</span>(value: <span class="t">long</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">if</span> value &gt; <span class="n">100</span>:
+        <span class="b">error</span>(<span class="s">f&quot;{value} is too large&quot;</span>)
+    <span class="k">return</span> value
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> check(<span class="n">50</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> check(<span class="n">500</span>)))</code></pre></div>
+<figcaption class="cap bad">Output — the error reaches the top</figcaption>
+<div class="code result bad"><pre><samp>50
+loom: error: 500 is too large [user_error]
+    raised in check (main.luc:3:9)</samp></pre></div>
+</figure>
+<h2 id="the-worked-example">The worked example<a class="anchor" href="#the-worked-example" aria-label="link to this section">#</a></h2>
+<p><code>programs/calc.luc</code> in the repository is a recursive-descent calculator — a <code>double</code> one, because <code>/</code> is real division and a pocket calculator that answers <code>3</code> to <code>7 / 2</code> is broken. Every way it can be defeated is a way the <em>user</em> defeated it, so the parser says <code>-&gt; Step!</code> and raises with <code>error(...)</code>; <code>try</code> carries the failure up through four frames of recursion without a single <code>if</code> written for it.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>calc.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="c"># A recursive-descent expression calculator: structs as parser state,</span>
+<span class="c"># recursion, real arithmetic — and the worked example for errors</span>
+<span class="c"># (docs/FAILURE.md).</span>
+<span class="c">#</span>
+<span class="c">#   loom run calc.lc &quot;2 + 3 * (10 - 4)&quot;     one expression, then exit</span>
+<span class="c">#   loom run calc.lc                        a REPL: type, blank line to quit</span>
+<span class="c">#</span>
+<span class="c"># **It computes in double**, which is what a calculator is: `7 / 2` is</span>
+<span class="c"># `3.5` here and was `3` while `/` meant the integer quotient</span>
+<span class="c"># (docs/NUMERICS.md).  A pocket calculator that answers 3 to that is</span>
+<span class="c"># broken, and this one no longer has to choose — `//` is still</span>
+<span class="c"># available for the quotient, and `%` still pairs with it.  The parser</span>
+<span class="c"># reads whole numbers and lets promotion make them Floats, so nothing</span>
+<span class="c"># in the scanner had to learn about decimal points to get this.</span>
+<span class="c">#</span>
+<span class="c"># Every way this parser can be defeated is a way the *user* defeated</span>
+<span class="c"># it, not a way the program is wrong: a correct calculator given</span>
+<span class="c"># &quot;2 + )&quot; still has nothing to compute.  So the parser says `-&gt; Step!`</span>
+<span class="c"># and raises with `error(...)`; `try` carries the failure up through</span>
+<span class="c"># four frames of recursion without a single `if` written for it, and</span>
+<span class="c"># `main() -&gt; !` hands what is left to loom, which prints the words and</span>
+<span class="c"># the line they were raised on.</span>
+<span class="c">#</span>
+<span class="c"># Compare what this file said before: `trap(...)`, four times, for</span>
+<span class="c"># conditions no caller could handle and every one of which ended the</span>
+<span class="c"># program with &quot;trap:&quot; in front of a message about the user&#39;s typing.</span>
+
+<span class="c"># `struct Step { value: double, at: long }` used to stand here, with no</span>
+<span class="c"># methods, no invariant and no meaning outside a signature: a scanner</span>
+<span class="c"># hands back *what it read* and *where it stopped*.  It was constructed</span>
+<span class="c"># at eight sites and taken apart by twenty-five field reads over</span>
+<span class="c"># fourteen lines, binding seven names that existed only to be</span>
+<span class="c"># dismantled on the next.</span>
+<span class="c">#</span>
+<span class="c"># It qualified as a return shape on the one rule that decides it —</span>
+<span class="c"># **it was never an input**.  No function here took a `Step`;</span>
+<span class="c"># `Parse.term(text: string, at: long)` takes the halves separately, and</span>
+<span class="c"># every read was `left.value` or `right.at`, never a whole one handed</span>
+<span class="c"># on.  Being held across a loop is not disqualifying: `expression`&#39;s</span>
+<span class="c"># accumulator is two `var`s now and the body is shorter, because only</span>
+<span class="c"># the value differed between the arms (docs/RETURNS.md §6).</span>
+
+<span class="k">struct</span> <span class="t">Scan</span>:
+    <span class="k">func</span> <span class="d">skip_spaces</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; <span class="t">long</span>:
+        <span class="k">var</span> here = at
+        <span class="k">while</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(here) == <span class="n">32</span>:
+            here = here + <span class="n">1</span>
+        <span class="k">return</span> here
+
+    <span class="k">func</span> <span class="d">number</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">var</span> stop = at
+        <span class="k">while</span> stop &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(stop) &gt;= <span class="n">48</span> <span class="k">and</span> text.<span class="b">byte_at</span>(stop) &lt;= <span class="n">57</span>:
+            stop = stop + <span class="n">1</span>
+        <span class="k">if</span> stop == at:
+            <span class="b">error</span>(<span class="s">&quot;expected a number at position &quot;</span> + <span class="t">string</span>(at))
+        <span class="k">let</span> digits = text[at:stop]
+        <span class="k">return</span> <span class="b">parse_int</span>(digits) <span class="k">else</span> <span class="b">error</span>(<span class="s">&quot;not a number: &quot;</span> + digits), stop
+
+<span class="k">struct</span> <span class="t">Parse</span>:
+    <span class="c"># expression = term ((&quot;+&quot; | &quot;-&quot;) term)*</span>
+    <span class="k">func</span> <span class="d">expression</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">var</span> value, stopped = <span class="k">try</span> <span class="t">Parse</span>.term(text, at)
+        <span class="k">var</span> here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">while</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> (text.<span class="b">byte_at</span>(here) == <span class="n">43</span> <span class="k">or</span> text.<span class="b">byte_at</span>(here) == <span class="n">45</span>):
+            <span class="k">let</span> operator = text.<span class="b">byte_at</span>(here)
+            <span class="k">let</span> right_value, right_at = <span class="k">try</span> <span class="t">Parse</span>.term(text, here + <span class="n">1</span>)
+            <span class="k">if</span> operator == <span class="n">43</span>:
+                value = value + right_value
+            <span class="k">else</span>:
+                value = value - right_value
+            stopped = right_at
+            here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">return</span> value, stopped
+
+    <span class="c"># term = factor ((&quot;*&quot; | &quot;/&quot; | &quot;%&quot;) factor)*</span>
+    <span class="c">#</span>
+    <span class="c"># `/` is real division and `%` is the modulus that pairs with `//`,</span>
+    <span class="c"># so both work on Floats and both mean here what they mean in the</span>
+    <span class="c"># language (docs/NUMERICS.md).  `%` by zero is a NaN rather than a</span>
+    <span class="c"># trap, because these are Floats — which is the right answer for a</span>
+    <span class="c"># calculator: a user who divides by zero has asked a question, not</span>
+    <span class="c"># broken the program.</span>
+    <span class="k">func</span> <span class="d">term</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">var</span> value, stopped = <span class="k">try</span> <span class="t">Parse</span>.factor(text, at)
+        <span class="k">var</span> here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">while</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> (text.<span class="b">byte_at</span>(here) == <span class="n">42</span> <span class="k">or</span> text.<span class="b">byte_at</span>(here) == <span class="n">47</span> <span class="k">or</span> text.<span class="b">byte_at</span>(here) == <span class="n">37</span>):
+            <span class="k">let</span> operator = text.<span class="b">byte_at</span>(here)
+            <span class="k">let</span> right_value, right_at = <span class="k">try</span> <span class="t">Parse</span>.factor(text, here + <span class="n">1</span>)
+            <span class="k">if</span> operator == <span class="n">42</span>:
+                value = value * right_value
+            <span class="k">elif</span> operator == <span class="n">47</span>:
+                value = value / right_value
+            <span class="k">else</span>:
+                value = value % right_value
+            stopped = right_at
+            here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">return</span> value, stopped
+
+    <span class="c"># factor = number | &quot;(&quot; expression &quot;)&quot; | &quot;-&quot; factor</span>
+    <span class="k">func</span> <span class="d">factor</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">let</span> here = <span class="t">Scan</span>.skip_spaces(text, at)
+        <span class="k">if</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(here) == <span class="n">45</span>:
+            <span class="k">let</span> inner_value, inner_at = <span class="k">try</span> <span class="t">Parse</span>.factor(text, here + <span class="n">1</span>)
+            <span class="k">return</span> <span class="n">0.0</span> - inner_value, inner_at
+        <span class="k">if</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(here) == <span class="n">40</span>:
+            <span class="k">let</span> inner_value, inner_at = <span class="k">try</span> <span class="t">Parse</span>.expression(text, here + <span class="n">1</span>)
+            <span class="k">let</span> close = <span class="t">Scan</span>.skip_spaces(text, inner_at)
+            <span class="k">if</span> close &gt;= <span class="b">len</span>(text) <span class="k">or</span> text.<span class="b">byte_at</span>(close) != <span class="n">41</span>:
+                <span class="b">error</span>(<span class="s">&quot;expected ) at position &quot;</span> + <span class="t">string</span>(close))
+            <span class="k">return</span> inner_value, close + <span class="n">1</span>
+        <span class="c"># The pass-through `return Scan.number(text, here)` is refused</span>
+        <span class="c"># on purpose, and this is what it costs: one line</span>
+        <span class="c"># (docs/RETURNS.md §1).</span>
+        <span class="k">let</span> scanned, stopped = <span class="k">try</span> <span class="t">Scan</span>.number(text, here)
+        <span class="k">return</span> scanned, stopped
+
+<span class="c"># Evaluate one line and print what it came to.  Fallible, so every</span>
+<span class="c"># `error(...)` four frames down arrives here whole.</span>
+<span class="k">func</span> <span class="d">evaluate</span>(text: <span class="t">string</span>) -&gt; !:
+    <span class="k">let</span> value, stopped = <span class="k">try</span> <span class="t">Parse</span>.expression(text, <span class="n">0</span>)
+    <span class="k">let</span> rest = <span class="t">Scan</span>.skip_spaces(text, stopped)
+    <span class="k">if</span> rest != <span class="b">len</span>(text):
+        <span class="b">error</span>(<span class="s">&quot;unexpected character at position &quot;</span> + <span class="t">string</span>(rest))
+    <span class="b">print</span>(text + <span class="s">&quot; = &quot;</span> + <span class="t">string</span>(value))
+
+<span class="c"># The interactive loop.  `read_line` answers `string?`, so end of input</span>
+<span class="c"># — a pipe running dry, Ctrl-D at a terminal — is `none` and ends the</span>
+<span class="c"># session; an empty line ends it too, because a person pressing return</span>
+<span class="c"># at a prompt has said &quot;nothing more&quot;.</span>
+<span class="c">#</span>
+<span class="c"># A bad expression must not end the loop: `evaluate(...) catch reason:`</span>
+<span class="c"># says so on stderr and asks again, which is the whole difference</span>
+<span class="c"># between a calculator and a program that exits when you mistype.</span>
+<span class="c">#</span>
+<span class="c"># `reason` is the binding form, and it is what makes the handler worth</span>
+<span class="c"># reading: the words the parser raised four frames down — &quot;expected a</span>
+<span class="c"># number at position 4&quot; — arrive here instead of being discarded, so</span>
+<span class="c"># the loop says the same thing the one-shot path below says.  Before</span>
+<span class="c"># it existed this printed &quot;cannot compute:&quot; and the line back, which</span>
+<span class="c"># told the user only what they had already typed (docs/FAILURE.md).</span>
+<span class="k">func</span> <span class="d">repl</span>():
+    <span class="b">print</span>(<span class="s">&quot;calc — an expression a line, blank line to quit&quot;</span>)
+    <span class="k">var</span> running = <span class="k">true</span>
+    <span class="k">while</span> running:
+        <span class="k">let</span> typed = <span class="b">read_line</span>(<span class="s">&quot;calc&gt; &quot;</span>)
+        <span class="k">if</span> typed == <span class="k">none</span> <span class="k">or</span> typed == <span class="s">&quot;&quot;</span>:
+            running = <span class="k">false</span>
+        <span class="k">else</span>:
+            evaluate(typed) <span class="k">catch</span> reason:
+                <span class="b">print_error</span>(<span class="s">&quot;cannot compute: &quot;</span> + reason)
+
+<span class="k">func</span> <span class="d">main</span>(args: <span class="t">list</span>(<span class="t">string</span>)) -&gt; !:
+    <span class="k">if</span> <span class="b">len</span>(args) == <span class="n">0</span>:
+        repl()
+        <span class="k">return</span>
+    <span class="k">try</span> evaluate(args[<span class="n">0</span>])</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>2 + 3 * (10 - 4) = 20</samp></pre></div>
+</figure>
+<p>Give it something it cannot parse and the same program says so, at the position it gave up:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>calc.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="c"># A recursive-descent expression calculator: structs as parser state,</span>
+<span class="c"># recursion, real arithmetic — and the worked example for errors</span>
+<span class="c"># (docs/FAILURE.md).</span>
+<span class="c">#</span>
+<span class="c">#   loom run calc.lc &quot;2 + 3 * (10 - 4)&quot;     one expression, then exit</span>
+<span class="c">#   loom run calc.lc                        a REPL: type, blank line to quit</span>
+<span class="c">#</span>
+<span class="c"># **It computes in double**, which is what a calculator is: `7 / 2` is</span>
+<span class="c"># `3.5` here and was `3` while `/` meant the integer quotient</span>
+<span class="c"># (docs/NUMERICS.md).  A pocket calculator that answers 3 to that is</span>
+<span class="c"># broken, and this one no longer has to choose — `//` is still</span>
+<span class="c"># available for the quotient, and `%` still pairs with it.  The parser</span>
+<span class="c"># reads whole numbers and lets promotion make them Floats, so nothing</span>
+<span class="c"># in the scanner had to learn about decimal points to get this.</span>
+<span class="c">#</span>
+<span class="c"># Every way this parser can be defeated is a way the *user* defeated</span>
+<span class="c"># it, not a way the program is wrong: a correct calculator given</span>
+<span class="c"># &quot;2 + )&quot; still has nothing to compute.  So the parser says `-&gt; Step!`</span>
+<span class="c"># and raises with `error(...)`; `try` carries the failure up through</span>
+<span class="c"># four frames of recursion without a single `if` written for it, and</span>
+<span class="c"># `main() -&gt; !` hands what is left to loom, which prints the words and</span>
+<span class="c"># the line they were raised on.</span>
+<span class="c">#</span>
+<span class="c"># Compare what this file said before: `trap(...)`, four times, for</span>
+<span class="c"># conditions no caller could handle and every one of which ended the</span>
+<span class="c"># program with &quot;trap:&quot; in front of a message about the user&#39;s typing.</span>
+
+<span class="c"># `struct Step { value: double, at: long }` used to stand here, with no</span>
+<span class="c"># methods, no invariant and no meaning outside a signature: a scanner</span>
+<span class="c"># hands back *what it read* and *where it stopped*.  It was constructed</span>
+<span class="c"># at eight sites and taken apart by twenty-five field reads over</span>
+<span class="c"># fourteen lines, binding seven names that existed only to be</span>
+<span class="c"># dismantled on the next.</span>
+<span class="c">#</span>
+<span class="c"># It qualified as a return shape on the one rule that decides it —</span>
+<span class="c"># **it was never an input**.  No function here took a `Step`;</span>
+<span class="c"># `Parse.term(text: string, at: long)` takes the halves separately, and</span>
+<span class="c"># every read was `left.value` or `right.at`, never a whole one handed</span>
+<span class="c"># on.  Being held across a loop is not disqualifying: `expression`&#39;s</span>
+<span class="c"># accumulator is two `var`s now and the body is shorter, because only</span>
+<span class="c"># the value differed between the arms (docs/RETURNS.md §6).</span>
+
+<span class="k">struct</span> <span class="t">Scan</span>:
+    <span class="k">func</span> <span class="d">skip_spaces</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; <span class="t">long</span>:
+        <span class="k">var</span> here = at
+        <span class="k">while</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(here) == <span class="n">32</span>:
+            here = here + <span class="n">1</span>
+        <span class="k">return</span> here
+
+    <span class="k">func</span> <span class="d">number</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">var</span> stop = at
+        <span class="k">while</span> stop &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(stop) &gt;= <span class="n">48</span> <span class="k">and</span> text.<span class="b">byte_at</span>(stop) &lt;= <span class="n">57</span>:
+            stop = stop + <span class="n">1</span>
+        <span class="k">if</span> stop == at:
+            <span class="b">error</span>(<span class="s">&quot;expected a number at position &quot;</span> + <span class="t">string</span>(at))
+        <span class="k">let</span> digits = text[at:stop]
+        <span class="k">return</span> <span class="b">parse_int</span>(digits) <span class="k">else</span> <span class="b">error</span>(<span class="s">&quot;not a number: &quot;</span> + digits), stop
+
+<span class="k">struct</span> <span class="t">Parse</span>:
+    <span class="c"># expression = term ((&quot;+&quot; | &quot;-&quot;) term)*</span>
+    <span class="k">func</span> <span class="d">expression</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">var</span> value, stopped = <span class="k">try</span> <span class="t">Parse</span>.term(text, at)
+        <span class="k">var</span> here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">while</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> (text.<span class="b">byte_at</span>(here) == <span class="n">43</span> <span class="k">or</span> text.<span class="b">byte_at</span>(here) == <span class="n">45</span>):
+            <span class="k">let</span> operator = text.<span class="b">byte_at</span>(here)
+            <span class="k">let</span> right_value, right_at = <span class="k">try</span> <span class="t">Parse</span>.term(text, here + <span class="n">1</span>)
+            <span class="k">if</span> operator == <span class="n">43</span>:
+                value = value + right_value
+            <span class="k">else</span>:
+                value = value - right_value
+            stopped = right_at
+            here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">return</span> value, stopped
+
+    <span class="c"># term = factor ((&quot;*&quot; | &quot;/&quot; | &quot;%&quot;) factor)*</span>
+    <span class="c">#</span>
+    <span class="c"># `/` is real division and `%` is the modulus that pairs with `//`,</span>
+    <span class="c"># so both work on Floats and both mean here what they mean in the</span>
+    <span class="c"># language (docs/NUMERICS.md).  `%` by zero is a NaN rather than a</span>
+    <span class="c"># trap, because these are Floats — which is the right answer for a</span>
+    <span class="c"># calculator: a user who divides by zero has asked a question, not</span>
+    <span class="c"># broken the program.</span>
+    <span class="k">func</span> <span class="d">term</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">var</span> value, stopped = <span class="k">try</span> <span class="t">Parse</span>.factor(text, at)
+        <span class="k">var</span> here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">while</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> (text.<span class="b">byte_at</span>(here) == <span class="n">42</span> <span class="k">or</span> text.<span class="b">byte_at</span>(here) == <span class="n">47</span> <span class="k">or</span> text.<span class="b">byte_at</span>(here) == <span class="n">37</span>):
+            <span class="k">let</span> operator = text.<span class="b">byte_at</span>(here)
+            <span class="k">let</span> right_value, right_at = <span class="k">try</span> <span class="t">Parse</span>.factor(text, here + <span class="n">1</span>)
+            <span class="k">if</span> operator == <span class="n">42</span>:
+                value = value * right_value
+            <span class="k">elif</span> operator == <span class="n">47</span>:
+                value = value / right_value
+            <span class="k">else</span>:
+                value = value % right_value
+            stopped = right_at
+            here = <span class="t">Scan</span>.skip_spaces(text, stopped)
+        <span class="k">return</span> value, stopped
+
+    <span class="c"># factor = number | &quot;(&quot; expression &quot;)&quot; | &quot;-&quot; factor</span>
+    <span class="k">func</span> <span class="d">factor</span>(text: <span class="t">string</span>, at: <span class="t">long</span>) -&gt; (<span class="t">double</span>, <span class="t">long</span>)!:
+        <span class="k">let</span> here = <span class="t">Scan</span>.skip_spaces(text, at)
+        <span class="k">if</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(here) == <span class="n">45</span>:
+            <span class="k">let</span> inner_value, inner_at = <span class="k">try</span> <span class="t">Parse</span>.factor(text, here + <span class="n">1</span>)
+            <span class="k">return</span> <span class="n">0.0</span> - inner_value, inner_at
+        <span class="k">if</span> here &lt; <span class="b">len</span>(text) <span class="k">and</span> text.<span class="b">byte_at</span>(here) == <span class="n">40</span>:
+            <span class="k">let</span> inner_value, inner_at = <span class="k">try</span> <span class="t">Parse</span>.expression(text, here + <span class="n">1</span>)
+            <span class="k">let</span> close = <span class="t">Scan</span>.skip_spaces(text, inner_at)
+            <span class="k">if</span> close &gt;= <span class="b">len</span>(text) <span class="k">or</span> text.<span class="b">byte_at</span>(close) != <span class="n">41</span>:
+                <span class="b">error</span>(<span class="s">&quot;expected ) at position &quot;</span> + <span class="t">string</span>(close))
+            <span class="k">return</span> inner_value, close + <span class="n">1</span>
+        <span class="c"># The pass-through `return Scan.number(text, here)` is refused</span>
+        <span class="c"># on purpose, and this is what it costs: one line</span>
+        <span class="c"># (docs/RETURNS.md §1).</span>
+        <span class="k">let</span> scanned, stopped = <span class="k">try</span> <span class="t">Scan</span>.number(text, here)
+        <span class="k">return</span> scanned, stopped
+
+<span class="c"># Evaluate one line and print what it came to.  Fallible, so every</span>
+<span class="c"># `error(...)` four frames down arrives here whole.</span>
+<span class="k">func</span> <span class="d">evaluate</span>(text: <span class="t">string</span>) -&gt; !:
+    <span class="k">let</span> value, stopped = <span class="k">try</span> <span class="t">Parse</span>.expression(text, <span class="n">0</span>)
+    <span class="k">let</span> rest = <span class="t">Scan</span>.skip_spaces(text, stopped)
+    <span class="k">if</span> rest != <span class="b">len</span>(text):
+        <span class="b">error</span>(<span class="s">&quot;unexpected character at position &quot;</span> + <span class="t">string</span>(rest))
+    <span class="b">print</span>(text + <span class="s">&quot; = &quot;</span> + <span class="t">string</span>(value))
+
+<span class="c"># The interactive loop.  `read_line` answers `string?`, so end of input</span>
+<span class="c"># — a pipe running dry, Ctrl-D at a terminal — is `none` and ends the</span>
+<span class="c"># session; an empty line ends it too, because a person pressing return</span>
+<span class="c"># at a prompt has said &quot;nothing more&quot;.</span>
+<span class="c">#</span>
+<span class="c"># A bad expression must not end the loop: `evaluate(...) catch reason:`</span>
+<span class="c"># says so on stderr and asks again, which is the whole difference</span>
+<span class="c"># between a calculator and a program that exits when you mistype.</span>
+<span class="c">#</span>
+<span class="c"># `reason` is the binding form, and it is what makes the handler worth</span>
+<span class="c"># reading: the words the parser raised four frames down — &quot;expected a</span>
+<span class="c"># number at position 4&quot; — arrive here instead of being discarded, so</span>
+<span class="c"># the loop says the same thing the one-shot path below says.  Before</span>
+<span class="c"># it existed this printed &quot;cannot compute:&quot; and the line back, which</span>
+<span class="c"># told the user only what they had already typed (docs/FAILURE.md).</span>
+<span class="k">func</span> <span class="d">repl</span>():
+    <span class="b">print</span>(<span class="s">&quot;calc — an expression a line, blank line to quit&quot;</span>)
+    <span class="k">var</span> running = <span class="k">true</span>
+    <span class="k">while</span> running:
+        <span class="k">let</span> typed = <span class="b">read_line</span>(<span class="s">&quot;calc&gt; &quot;</span>)
+        <span class="k">if</span> typed == <span class="k">none</span> <span class="k">or</span> typed == <span class="s">&quot;&quot;</span>:
+            running = <span class="k">false</span>
+        <span class="k">else</span>:
+            evaluate(typed) <span class="k">catch</span> reason:
+                <span class="b">print_error</span>(<span class="s">&quot;cannot compute: &quot;</span> + reason)
+
+<span class="k">func</span> <span class="d">main</span>(args: <span class="t">list</span>(<span class="t">string</span>)) -&gt; !:
+    <span class="k">if</span> <span class="b">len</span>(args) == <span class="n">0</span>:
+        repl()
+        <span class="k">return</span>
+    <span class="k">try</span> evaluate(args[<span class="n">0</span>])</code></pre></div>
+<figcaption class="cap bad">Output — the error reaches the top</figcaption>
+<div class="code result bad"><pre><samp>loom: error: expected a number at position 4 [user_error]
+    raised in Scan.number (calc.luc:55:13)</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../optionals/"><span>Previous</span>Optionals</a>
+<a class="on" href="../traps/"><span>Next</span>Traps</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#try-propagates">try propagates</a></li>
+<li class="h2"><a href="#catch-has-two-forms">catch has two forms</a></li>
+<li class="h2"><a href="#an-uncaught-error">An uncaught error</a></li>
+<li class="h2"><a href="#the-worked-example">The worked example</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+import account
+
+func main():
+    var a = account.open("dy")
+    a.deposit(12.50)
+    a.deposit(0.75)
+    print(f"{a.owner} has {a.balance()}")

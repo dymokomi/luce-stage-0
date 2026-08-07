@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>std.math &middot; Luce</title>
+<meta name="description" content="Transcendentals, integer powers, whole-array reductions, and a seeded generator.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a class="here" href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The standard library</summary>
+<ul>
+<li><a href="../../std/">Overview</a></li>
+<li><a class="here" href="../../std/math/">std.math</a></li>
+<li><a href="../../std/strings/">std.strings</a></li>
+<li><a href="../../std/files/">std.files</a></li>
+<li><a href="../../std/paths/">std.paths</a></li>
+<li><a href="../../std/os/">std.os</a></li>
+<li><a href="../../std/zip/">std.zip</a></li>
+<li><a href="../../std/json/">std.json</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>std.math</h1>
+<p>Pure Luce over the checked builtins. <code>sqrt</code>, <code>floor</code>, <code>ceil</code>, <code>trunc</code>, <code>abs</code>, <code>min</code>, <code>max</code> and <code>clamp</code> stay <a href="/ref/builtins/">builtins</a>; <code>math</code> adds what they lack.</p>
+<div class="code"><pre><code>import std.math
+</code></pre></div>
+<h2 id="constants">Constants<a class="anchor" href="#constants" aria-label="link to this section">#</a></h2>
+<p><code>math.pi</code>, <code>math.tau</code>, <code>math.e</code>. All three are compile-time constants and fold at their use sites. (The module also keeps <code>ln2</code> and <code>ln10</code> for <code>log2</code> and <code>log10</code>, marked <code>private</code> — internals, not surface.)</p>
+<h2 id="scalar-functions">Scalar functions<a class="anchor" href="#scalar-functions" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>math.round(x: double) -&gt; double</code></td><td>half <strong>away from zero</strong>: <code>round(-2.5)</code> is <code>-3.0</code>; the same rounding <code>long(x)</code> does</td></tr>
+<tr><td><code>math.exp(x: double) -&gt; double</code></td><td>overflow yields infinity, underflow yields <code>0.0</code></td></tr>
+<tr><td><code>math.ln(x: double) -&gt; double</code></td><td>traps for <code>x &lt;= 0</code></td></tr>
+<tr><td><code>math.log2(x)</code>, <code>math.log10(x)</code></td><td></td></tr>
+<tr><td><code>math.pow(x: double, y: double) -&gt; double</code></td><td>negative <code>x</code> needs a whole <code>y</code> or it traps; <code>0^negative</code> traps; <code>0^0</code> is <code>1</code></td></tr>
+<tr><td><code>math.ipow(base: long, n: long) -&gt; long</code></td><td>integer power by squaring; checked, so overflow traps; negative <code>n</code> traps</td></tr>
+<tr><td><code>math.sin(x)</code>, <code>math.cos(x)</code>, <code>math.tan(x)</code></td><td>radians; every <code>double</code> is in the domain, but see the accuracy note below</td></tr>
+</tbody></table></div>
+<p>Series are range-reduced, and <code>exp</code> and <code>ln</code> hold to about 1e-14 relative.</p>
+<p><strong>The trigonometric accuracy depends on the magnitude.</strong> Range reduction is <code>x - floor(x / tau) * tau</code> in ordinary double precision, so the error in the reduced angle grows with the size of <code>x</code> and the result loses digits with it. Measured against the system libm on one host:</p>
+<div class="table"><table>
+<thead><tr><th>magnitude of <code>x</code></th><th>absolute error of <code>sin</code></th></tr></thead>
+<tbody>
+<tr><td>1</td><td>exact</td></tr>
+<tr><td>1e3</td><td>1e-14</td></tr>
+<tr><td>1e4</td><td>1.4e-12</td></tr>
+<tr><td>1e6</td><td>6.8e-11</td></tr>
+<tr><td>1e9</td><td>1.3e-8</td></tr>
+<tr><td>1e15</td><td>8.0e-3</td></tr>
+</tbody></table></div>
+<p>So &quot;about 1e-12 absolute&quot; is a promise for arguments up to roughly 1e4, and nothing bigger. There is no domain error and nothing traps — a huge argument returns a plausible number that is simply wrong, which is the usual shape of this problem and the reason it is written down here. Reduce large angles yourself if you need them.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.math
+<span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(strings.format_float(math.pi, <span class="n">6</span>))
+    <span class="b">print</span>(<span class="t">string</span>(math.round(<span class="n">2.5</span>)) + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(math.round(-<span class="n">2.5</span>)))
+    <span class="b">print</span>(strings.format_float(math.exp(<span class="n">1.0</span>), <span class="n">6</span>))
+    <span class="b">print</span>(strings.format_float(math.ln(math.e), <span class="n">6</span>))
+    <span class="b">print</span>(strings.format_float(math.log2(<span class="n">1024.0</span>), <span class="n">1</span>))
+    <span class="b">print</span>(<span class="t">string</span>(math.ipow(<span class="n">2</span>, <span class="n">20</span>)))
+    <span class="b">print</span>(strings.format_float(math.pow(<span class="n">2.0</span>, <span class="n">0.5</span>), <span class="n">6</span>))
+    <span class="b">print</span>(strings.format_float(math.sin(math.pi / <span class="n">2.0</span>), <span class="n">6</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3.141593
+3 -3
+2.718282
+1.000000
+10.0
+1048576
+1.414214
+1.000000</samp></pre></div>
+</figure>
+<h2 id="vectors-and-statistics">Vectors and statistics<a class="anchor" href="#vectors-and-statistics" aria-label="link to this section">#</a></h2>
+<p>Whole-array operations over <code>array(double, _)</code>, the numeric vector type — the numpy-shaped tranche. Reductions accumulate left to right, so they are bit-reproducible, including against the benchmark&#39;s C twins.</p>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>math.sum(xs) -&gt; double</code></td><td></td></tr>
+<tr><td><code>math.mean(xs) -&gt; double?</code></td><td><code>none</code> for an empty array</td></tr>
+<tr><td><code>math.vmin(xs) -&gt; double?</code>, <code>math.vmax(xs) -&gt; double?</code></td><td>extrema; <code>min</code>/<code>max</code> are the scalar builtins</td></tr>
+<tr><td><code>math.minmax(xs) -&gt; (double?, double?)</code></td><td>both, in <strong>one</strong> traversal. There could not have been one before multiple returns: writing it would have meant inventing a bag struct in the standard library</td></tr>
+<tr><td><code>math.dot(xs, ys) -&gt; double</code></td><td>a shape mismatch traps</td></tr>
+<tr><td><code>math.norm(xs) -&gt; double</code></td><td>Euclidean</td></tr>
+<tr><td><code>math.variance(xs) -&gt; double?</code>, <code>math.stddev(xs) -&gt; double?</code></td><td>population</td></tr>
+<tr><td><code>math.fill(xs, value)</code></td><td>in place</td></tr>
+<tr><td><code>math.scale(xs, factor)</code></td><td>in place</td></tr>
+<tr><td><code>math.axpy(xs, factor, ys)</code></td><td>in place: <code>xs[i] += factor * ys[i]</code>; a shape mismatch traps</td></tr>
+</tbody></table></div>
+<p>The five that answer <code>double?</code> do so because an empty array has no mean, and &quot;there is nothing there&quot; is the same fact every time with no reason worth carrying.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.math
+<span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = <span class="v">new</span> <span class="t">array</span>(<span class="t">double</span>, <span class="n">5</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">5</span>):
+        xs[i] = <span class="t">double</span>(i) * <span class="n">2.0</span> + <span class="n">1.0</span>
+
+    <span class="b">print</span>(<span class="s">f&quot;sum {math.sum(xs)}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;mean {math.mean(xs) else 0.0}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;min {math.vmin(xs) else 0.0} max {math.vmax(xs) else 0.0}&quot;</span>)
+    <span class="b">print</span>(strings.format_float(math.stddev(xs) <span class="k">else</span> <span class="n">0.0</span>, <span class="n">4</span>))
+    <span class="b">print</span>(strings.format_float(math.norm(xs), <span class="n">4</span>))
+
+    <span class="k">var</span> ys = <span class="v">new</span> <span class="t">array</span>(<span class="t">double</span>, <span class="n">5</span>)
+    math.<span class="b">fill</span>(ys, <span class="n">2.0</span>)
+    <span class="b">print</span>(<span class="s">f&quot;dot {math.dot(xs, ys)}&quot;</span>)
+    math.scale(ys, <span class="n">0.5</span>)
+    math.axpy(ys, <span class="n">10.0</span>, xs)
+    <span class="b">print</span>(<span class="s">f&quot;ys[0] {ys[0]}, ys[4] {ys[4]}&quot;</span>)
+
+    <span class="k">var</span> empty = <span class="v">new</span> <span class="t">array</span>(<span class="t">double</span>, <span class="n">0</span>)
+    <span class="b">print</span>(<span class="s">f&quot;mean of nothing: {math.mean(empty) else -1.0}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>sum 25
+mean 5
+min 1 max 9
+2.8284
+12.8452
+dot 50
+ys[0] 11, ys[4] 91
+mean of nothing: -1</samp></pre></div>
+</figure>
+<h2 id="randomness">Randomness<a class="anchor" href="#randomness" aria-label="link to this section">#</a></h2>
+<p>A Lehmer/MINSTD generator whose state is one <code>long</code> in a struct. Every draw is a <code>var self</code> method, so the state is <em>written back</em> rather than mutated through a reference: there are no hidden globals, no allocation, and every stream is deterministic from its seed.</p>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>math.rng(seed: long) -&gt; Rng</code></td><td>the constructor. Any seed works — an out-of-range one is brought into <code>[1, 2³¹ − 2]</code> on first use</td></tr>
+<tr><td><code>rng.next() -&gt; long</code></td><td>the raw next state in <code>[1, 2³¹ − 2]</code>; the two below are the friendly faces over it</td></tr>
+<tr><td><code>rng.real() -&gt; double</code></td><td>in the open interval (0, 1)</td></tr>
+<tr><td><code>rng.in_range(low, high) -&gt; long</code></td><td>in <code>[low, high)</code>, <code>high</code> exclusive like <code>range</code>; an empty range traps. Slightly modulo-biased, which is meaningless at the spans a game uses</td></tr>
+</tbody></table></div>
+<p>The receiver must be a <code>var</code>: <code>var rng = math.rng(42)</code>. The state itself is a <code>private</code> field — reaching through it was never the API, and <code>Rng(state = 42)</code> no longer compiles outside the module.</p>
+<p><code>math.rng</code> is the <a href="/tour/visibility/">factory pattern</a> the language&#39;s own library lives on, and it exists because of a rule: an idiom that only works by naming a struct&#39;s internals is evidence of a missing constructor, never grounds for opening the internal. <code>state</code> is required and private, so <code>Rng</code> is constructible inside <code>math.luc</code> and nowhere else, and the one function that does it is the one every caller wanted anyway.</p>
+<p>Period 2³¹ − 2. Good for games and shuffles; <strong>never for secrets</strong>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.math
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> rng = math.rng(<span class="n">2026</span>)
+    <span class="k">var</span> rolls: <span class="t">list</span>(<span class="t">long</span>) = []
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">8</span>):
+        rolls.<span class="b">append</span>(rng.in_range(<span class="n">1</span>, <span class="n">7</span>))
+
+    <span class="k">var</span> text = <span class="v">new</span> <span class="t">builder</span>()
+    <span class="k">for</span> roll <span class="k">in</span> rolls:
+        text.<span class="b">append</span>(<span class="t">string</span>(roll))
+        text.<span class="b">append</span>(<span class="s">&quot; &quot;</span>)
+    <span class="b">print</span>(text.<span class="b">build</span>())
+
+    <span class="c"># The same seed gives the same stream, always.</span>
+    <span class="k">var</span> again = math.rng(<span class="n">2026</span>)
+    <span class="b">print</span>(<span class="s">f&quot;first roll again: {again.in_range(1, 7)}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>5 3 1 5 6 3 4 1 
+first roll again: 5</samp></pre></div>
+</figure>
+<h2 id="the-traps-that-remain">The traps that remain<a class="anchor" href="#the-traps-that-remain" aria-label="link to this section">#</a></h2>
+<p>Seven, and each is a domain the caller was handed and could have checked: <code>ln</code> of a non-positive number, <code>pow</code> and <code>ipow</code> outside theirs, a shape mismatch in <code>dot</code> or <code>axpy</code>, and <code>in_range</code> with an empty range. Those are bugs, and <a href="/guide/failure/">bugs trap</a>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.math
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="s">&quot;about to take a logarithm&quot;</span>)
+    <span class="b">print</span>(<span class="t">string</span>(math.ln(<span class="n">0.0</span>)))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>about to take a logarithm
+loom: trap: ln of a non-positive number [explicit_trap]
+    at math.ln (std/math.luc:76:9)
+    at main (main.luc:5:5)</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../"><span>Previous</span>The standard library</a>
+<a class="on" href="../strings/"><span>Next</span>std.strings</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#constants">Constants</a></li>
+<li class="h2"><a href="#scalar-functions">Scalar functions</a></li>
+<li class="h2"><a href="#vectors-and-statistics">Vectors and statistics</a></li>
+<li class="h2"><a href="#randomness">Randomness</a></li>
+<li class="h2"><a href="#the-traps-that-remain">The traps that remain</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

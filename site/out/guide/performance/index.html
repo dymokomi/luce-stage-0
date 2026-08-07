@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Performance &middot; Luce</title>
+<meta name="description" content="The benchmark table against C twins, what it measures, and what it does not.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a class="here" href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>Effective Luce</summary>
+<ul>
+<li><a href="../../guide/">Overview</a></li>
+<li><a href="../../guide/memory/">Memory without a collector</a></li>
+<li><a href="../../guide/failure/">Traps are bugs, errors are news</a></li>
+<li><a href="../../guide/strings/">Strings and copies</a></li>
+<li><a class="here" href="../../guide/performance/">Performance</a></li>
+<li><a href="../../guide/toolchain/">The compiler and the terminal</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Performance</h1>
+<p>Luce compiles through LLVM to native code, and on six of nine benchmarks it lands within a few percent of C doing the same thing. This page is the table, what it measures, and what it does not.</p>
+<h2 id="the-table">The table<a class="anchor" href="#the-table" aria-label="link to this section">#</a></h2>
+<p><code>bench/run.sh</code>, Apple M4 Max, best of five, C at <code>-O3 -march=native</code> against Luce <code>--release</code> under <code>loom run</code> from a warm artifact. Both sides include process startup; the <code>compute</code> column is the same numbers with the do-nothing floor taken off each, which is the ratio a code-generation change moves.</p>
+<div class="table"><table>
+<thead><tr><th>benchmark</th><th>C</th><th>Luce</th><th>Luce/C</th><th>compute</th></tr></thead>
+<tbody>
+<tr><td>loops</td><td>82.2 ms</td><td>87.2 ms</td><td>1.06×</td><td>1.06×</td></tr>
+<tr><td>math</td><td>139.1 ms</td><td>110.2 ms</td><td>0.79×</td><td><strong>0.78×</strong></td></tr>
+<tr><td>strings</td><td>21.7 ms</td><td>52.6 ms</td><td>2.43×</td><td><strong>2.67×</strong></td></tr>
+<tr><td>arrays</td><td>44.3 ms</td><td>47.6 ms</td><td>1.07×</td><td>1.06×</td></tr>
+<tr><td>arrays32</td><td>8.1 ms</td><td>43.4 ms</td><td>5.38×</td><td><strong>8.66×</strong></td></tr>
+<tr><td>matmul</td><td>10.9 ms</td><td>12.0 ms</td><td>1.10×</td><td>1.05×</td></tr>
+<tr><td>matmul32</td><td>7.0 ms</td><td>7.8 ms</td><td>1.12×</td><td>1.05×</td></tr>
+<tr><td>stats</td><td>32.8 ms</td><td>35.0 ms</td><td>1.07×</td><td>1.05×</td></tr>
+<tr><td>lists</td><td>8.7 ms</td><td>17.5 ms</td><td>2.03×</td><td><strong>2.60×</strong></td></tr>
+<tr><td><em>(do-nothing floor)</em></td><td>3.5 ms</td><td>4.2 ms</td><td>—</td><td>—</td></tr>
+</tbody></table></div>
+<p><strong><code>compute</code> is the column to quote.</strong> Where anything else in the repository names a benchmark ratio it names that column and says so, because the two differ by as much as 0.2× on the row that matters and picking silently between them is how one row ends up with four numbers.</p>
+<p><code>math</code> is ahead of C because Luce&#39;s transcendental calls land in the same libm C&#39;s do while the surrounding loop vectorizes.</p>
+<p>Three rows are behind, and they are behind for three different reasons.</p>
+<p><code>strings</code> is <strong>allocation-bound rather than code-generation-bound</strong>: the cost is copying <code>string</code> bytes so that text has an owner and memory comes back. <a href="../strings/">Strings and copies</a> is that whole story, with the phase timings that locate the remaining cost.</p>
+<p><code>arrays32</code> is the price of <strong>checked integer arithmetic in a reduction</strong>. Every <code>+</code> carries an overflow test, so the sum cannot be reassociated and the loop stays one element per iteration; C&#39;s <code>int32_t</code> addition is free to wrap, so it fills four lanes. The ratio is worse than the <code>double</code> twin&#39;s precisely because C got faster, not because Luce got slower — 41.8 ms against 41.1 ms at the two widths.</p>
+<p><code>lists</code> is <code>append</code>, and only <code>append</code>. Reading a list is the bounds check and the load it is, so a sequential read, a strided walk and an in-place transform all measure at C&#39;s speed; appending has to keep the list&#39;s length in the object&#39;s row, because the row is what every other name for that list reads, where C keeps its count in a register.</p>
+<h2 id="what-the-numbers-are-not">What the numbers are not<a class="anchor" href="#what-the-numbers-are-not" aria-label="link to this section">#</a></h2>
+<p><strong>They are not portable.</strong> Absolute times mean nothing off that host. For a before-and-after, the repository has <code>bench/compare.sh GIT-REF</code>, which interleaves two builds on the machine in front of you — that is the authoritative regression check, not this table.</p>
+<p><strong>They are not a benchmark suite in the marketing sense.</strong> Nine paired programs, each written twice with the same algorithm and cross-checked for identical output before either is timed. A different nine programs would give different ratios.</p>
+<p><strong>They are not the interpreter.</strong> There is one engine that runs your programs, and it is this one. Luce keeps a second implementation — an IR interpreter — purely as the differential oracle in its own test suite; it ships in nothing, and it was 30–60× slower than compiled code when it did run programs.</p>
+<p><strong>They are not measured against a debug build of anything.</strong> A Zig debug build of the toolchain is 4–5× slower and its numbers would be meaningless. Only optimised builds are timed.</p>
+<h2 id="what-makes-it-fast">What makes it fast<a class="anchor" href="#what-makes-it-fast" aria-label="link to this section">#</a></h2>
+<p><strong>One code generator, one runtime.</strong> Every semantic — the object heap, scope ownership, the four containers, string storage, checked arithmetic, the trap channel — lives in <code>libluce_rt</code>, a real static library behind a C ABI. Compiled code calls it, and so does the interpreter that acts as the test suite&#39;s oracle, so there is exactly one implementation of every rule and no second one to be slower or subtly different.</p>
+<p><strong>Effects travel in a vtable, not as undefined symbols.</strong> Generated code indexes a <code>LuceHost</code> table with <code>getelementptr</code>. Every service is optional and fails closed, so a program&#39;s behaviour does not depend on who started it.</p>
+<p><strong>Safety checks are cheap where it counts.</strong> Bounds checks and the use-after-free check were measured free once container access is inlined; what costs is the control dependence they create, not the branch. That is why they are never turned off — see <a href="../toolchain/#the-two-build-modes">build modes</a>.</p>
+<p><strong>Debug information is inert.</strong> Per-instruction source origins are constant data that nothing on the execution path addresses, so a debug build and a release build run at identical speed. All the cost of a trap&#39;s location sits on the far side of &quot;the program already failed&quot;.</p>
+<h2 id="compilation-is-not-on-the-run-path-at-all">Compilation is not on the run path at all<a class="anchor" href="#compilation-is-not-on-the-run-path-at-all" aria-label="link to this section">#</a></h2>
+<p>A <code>.lc</code> <strong>is</strong> machine code, so <code>loom run FILE.lc</code> compiles nothing: one <code>dlopen</code>, one symbol lookup, one call. Measured on <code>bench/matmul</code>, that whole startup is 3 ms, and the program itself then runs at C&#39;s speed.</p>
+<p>Compiling is <code>luce build</code>&#39;s job and happens once, when you ask for it. <code>loom luce FILE.luc</code> still compiles — that is what it is for — and caches the result as <code>FILE.lc</code> beside the source, keyed on <strong>content</strong> rather than on a modification time, so an unchanged program is warm and a changed one is rebuilt.</p>
+<p>Every artifact also records the code generator that produced it. Upgrading <code>luce</code> rebuilds rather than silently running the old compiler&#39;s code, and a stale or foreign artifact is refused by name instead of crashing.</p>
+<h2 id="writing-luce-that-is-fast">Writing Luce that is fast<a class="anchor" href="#writing-luce-that-is-fast" aria-label="link to this section">#</a></h2>
+<p>Little of this is unusual, and none of it is about the language being new.</p>
+<p><strong>Use <code>array</code> for numeric bulk.</strong> Fixed shape, zero-initialized, contiguous. <code>std.math</code>&#39;s whole-array reductions accumulate left to right and are bit-reproducible, including against the C twins.</p>
+<p><strong>Use a <code>builder</code> to accumulate text.</strong> Repeated <code>+</code> allocates per step.</p>
+<p><strong>Prefer <code>get(key, default)</code> to <code>has</code> then index</strong> where you can — the latter is two hash lookups where one would do. (<code>m.get(k) -&gt; V?</code> does not exist yet and is on the <a href="/status/">status page</a> as the better answer.)</p>
+<p><strong>Count with <code>counts[key] += 1</code>.</strong> A compound store defines a missing key at the value type&#39;s zero, so the first-sighting arm and the <code>get(key, 0)</code> that used to stand in for it are both gone, and the hit path is two hash lookups rather than three.</p>
+<p><strong>Remember that slicing a list copies.</strong> <code>xs[a:b]</code> allocates a new list — deeply, when the elements are objects, because two containers can never own one object.</p>
+<p><strong>Do not reach for <code>copy</code> by reflex.</strong> <code>copy</code> is a deep copy and its cost is deliberately visible at the call site; a borrow is free.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.math
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> n = <span class="n">100000</span>
+    <span class="k">var</span> values = <span class="v">new</span> <span class="t">array</span>(<span class="t">double</span>, n)
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, n):
+        values[i] = <span class="t">double</span>(i % <span class="n">97</span>) * <span class="n">0.5</span>
+
+    <span class="b">print</span>(<span class="s">f&quot;sum {math.sum(values)}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;mean {math.mean(values) else 0.0}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;norm {long(trunc(math.norm(values)))}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>sum 2399842.5
+mean 23.998425
+norm 8785</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../strings/"><span>Previous</span>Strings and copies</a>
+<a class="on" href="../toolchain/"><span>Next</span>The compiler and the terminal</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#the-table">The table</a></li>
+<li class="h2"><a href="#what-the-numbers-are-not">What the numbers are not</a></li>
+<li class="h2"><a href="#what-makes-it-fast">What makes it fast</a></li>
+<li class="h2"><a href="#compilation-is-not-on-the-run-path-at-all">Compilation is not on the run path at all</a></li>
+<li class="h2"><a href="#writing-luce-that-is-fast">Writing Luce that is fast</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

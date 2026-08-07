@@ -1,0 +1,9 @@
+struct Point:
+    x: double
+    y: double
+
+func main():
+    let p = Point(x = 1.5, y = 2.5)
+    var q = p                       # a copy
+    q.x = 9.0
+    print(f"{p.x} {q.x}")

@@ -1,0 +1,21 @@
+func main():
+    var xs = [3, 1, 4, 1, 5]
+    var empty: list(string) = []
+
+    xs.append(9)
+    xs.insert(0, 2)
+    xs.remove(1)                 # by index
+    print(f"{len(xs)} elements starting {xs[0]}")
+
+    xs.sort()                    # in place, stable, O(n log n)
+    xs.reverse()
+    print(f"largest {xs[0]}, smallest {xs[len(xs) - 1]}")
+
+    print(f"find(4) = {xs.find(4)}, find(77) = {xs.find(77)}")
+    print(f"contains(5) = {xs.contains(5)}")
+
+    let last = xs.pop()
+    print(f"popped {last}, {len(xs)} left")
+
+    empty.append("only")
+    print(f"{empty[0]} / {len(empty)}")

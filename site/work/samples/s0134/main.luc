@@ -1,0 +1,7 @@
+func main():
+    var first = new list(list(long))
+    var second = new list(list(long))
+    var item: list(long) = [1]
+    let alias = item
+    first.append(give item)        # first owns it now
+    second.append(give alias)      # …and alias never owned anything

@@ -1,0 +1,13 @@
+func depth_three(values: list(long)) -> long:
+    return values[10]
+
+func depth_two(values: list(long)) -> long:
+    return depth_three(values)
+
+func depth_one(values: list(long)) -> long:
+    return depth_two(values)
+
+func main():
+    var values: list(long) = [1, 2, 3]
+    print("before")
+    print(string(depth_one(values)))

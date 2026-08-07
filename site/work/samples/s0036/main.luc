@@ -1,0 +1,18 @@
+func main():
+    var xs = [3, 1, 2]           # list(int), inferred from the elements
+    var names: list(string) = [] # an empty literal needs its type
+
+    xs.append(4)
+    xs.insert(0, 99)
+    print(f"{len(xs)} elements, first {xs[0]}, last {xs[len(xs) - 1]}")
+
+    xs.sort()                    # in place, stable, O(n log n)
+    print(f"sorted first {xs[0]} then {xs[1]}")
+    print(f"find(3) = {xs.find(3)}, contains(42) = {xs.contains(42)}")
+
+    let taken = xs.pop()
+    print(f"popped {taken}, {len(xs)} left")
+
+    names.append("ada")
+    names.append("grace")
+    print(f"{names[0]} and {names[1]}")

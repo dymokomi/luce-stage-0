@@ -1,0 +1,7 @@
+import std.strings
+
+func main():
+    for word in "a b c".split(""):   # the list is never named
+        print(word)
+    # the split list is freed when the for statement completes
+    print(string(len("xy".split(""))))  # freed at the end of this line

@@ -1,0 +1,9 @@
+import std.strings
+
+func main():
+    let bytes = strings.to_bytes("héllo")
+    print(string(len(bytes)))
+    print(strings.from_bytes(bytes) else "(not text)")
+    var broken = new list(byte)
+    broken.append(byte(0xFF))
+    print(strings.from_bytes(broken) else "(not text)")

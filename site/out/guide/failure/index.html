@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traps are bugs, errors are news &middot; Luce</title>
+<meta name="description" content="The one rule that decides whether a failure is a trap, an error, or an absence.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a class="here" href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>Effective Luce</summary>
+<ul>
+<li><a href="../../guide/">Overview</a></li>
+<li><a href="../../guide/memory/">Memory without a collector</a></li>
+<li><a class="here" href="../../guide/failure/">Traps are bugs, errors are news</a></li>
+<li><a href="../../guide/strings/">Strings and copies</a></li>
+<li><a href="../../guide/performance/">Performance</a></li>
+<li><a href="../../guide/toolchain/">The compiler and the terminal</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Traps are bugs, errors are news</h1>
+<p>Most languages have one mechanism for everything that can go wrong and then a culture around when to use it. Luce has three, and one sentence that decides between them.</p>
+<blockquote><p>A failure is an <strong>error</strong> if and only if a correct program, given correct input, can still meet it — because the world decided, not the program. Everything else is a trap. And if the answer is simply &quot;there is nothing there&quot;, with no reason worth carrying, it is neither: it is a <code>T?</code>.</p></blockquote>
+<p>Operationally, ask one question: <strong>could the caller have prevented this with a check that is not racy?</strong></p>
+<p>If yes, it is a <strong>trap</strong>. The check is the program&#39;s job, and reaching the failure means the program did not do its job. Index out of bounds, a missing map key, integer overflow, popping an empty list — every one of those is preventable by a check the caller could have written, so every one of them is a bug.</p>
+<p>If the check is inherently racy or impossible, it is an <strong>error</strong>. Reading a file is the canonical case: <code>file_exists</code> before <code>file_read</code> is a race no program can close, and the answer could change between the two calls. So the read is fallible and says <code>!</code>.</p>
+<p>If there is no reason worth carrying — just absence — it is a <code>T?</code>. <code>parse_int(&quot;hello&quot;)</code> fails the same way every time, and the function name already says what it wanted, so absence carries all the information there is.</p>
+<h2 id="what-the-rule-moved">What the rule moved<a class="anchor" href="#what-the-rule-moved" aria-label="link to this section">#</a></h2>
+<p>Applying that rule to the trap codes Luce had then moved exactly one of them. What it moved was the host&#39;s file boundary — reads and writes became fallible — and the five whole-array reductions in <code>std.math</code>, which took <code>?</code> rather than <code>!</code> because an empty array has no mean and that is absence rather than failure.</p>
+<p>The seven traps left in <code>std.math</code> are domains the caller was handed and could have checked: <code>ln</code> of a non-positive number, <code>pow</code> and <code>ipow</code> outside theirs, a shape mismatch in <code>dot</code> or <code>axpy</code>, and <code>in_range</code> with an empty range. Those are bugs, and bugs trap.</p>
+<h2 id="why-not-a-result-type">Why not a <code>Result</code> type<a class="anchor" href="#why-not-a-result-type" aria-label="link to this section">#</a></h2>
+<p>Because Luce has no tagged unions. <code>Result&lt;T, E&gt;</code> needs one, and adding tagged unions to get error handling would have been the tail wagging the dog.</p>
+<p>What Luce did instead is make fallibility an <strong>attribute of the function</strong> rather than a type. <code>T!</code> is not a type: there is no <code>T!</code> to declare a variable of, to put in a <code>list</code>, or to write in a struct field, and <code>return x</code> in a <code>-&gt; T!</code> function just returns <code>x</code>, with nothing to wrap it in.</p>
+<p>That turned out better than &quot;probably right&quot;. The attribute is what gave Luce Ok-wrapping for free — you never write the wrapper — and it kept the type system entirely out of the feature: not one exhaustive switch over the type union grew an arm. It is, however, the third design in the language bent around the same missing hole, and the <a href="/status/">status page</a> says so.</p>
+<h2 id="try-is-return-with-one-terminator-changed">try is return with one terminator changed<a class="anchor" href="#try-is-return-with-one-terminator-changed" aria-label="link to this section">#</a></h2>
+<p><code>try</code> releases what this frame owns, innermost scope first, and leaves. That is the same three lines <code>return</code> emits, with the last one different. The one difference is what it <em>keeps</em>: <code>return</code> passes the returned binding as moved and skips freeing it, and <code>try</code> passes nothing, because it hands back no value.</p>
+<p>That single bit is the whole of what Zig spells <code>errdefer</code>, and it was already a parameter of Luce&#39;s unwinder before errors existed. Which is why there is no <code>errdefer</code> and never will be.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+<span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">load</span>(path: <span class="t">string</span>) -&gt; <span class="t">list</span>(<span class="t">string</span>)!:
+    <span class="k">var</span> found: <span class="t">list</span>(<span class="t">string</span>) = []
+    <span class="k">let</span> text = <span class="k">try</span> files.<span class="b">read</span>(path)       <span class="c"># `found` is released if this leaves</span>
+    <span class="k">for</span> line <span class="k">in</span> text.split(<span class="s">&quot;\n&quot;</span>):
+        <span class="k">if</span> line != <span class="s">&quot;&quot;</span>:
+            found.<span class="b">append</span>(line)
+    <span class="k">return</span> found                          <span class="c"># …and moved out if it does not</span>
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">try</span> files.<span class="b">write</span>(<span class="s">&quot;data.txt&quot;</span>, <span class="s">&quot;alpha\nbeta\n\ngamma\n&quot;</span>)
+    <span class="k">let</span> lines = <span class="k">try</span> load(<span class="s">&quot;data.txt&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(lines)} non-empty lines, first {lines[0]}&quot;</span>)
+
+    <span class="k">let</span> missing = load(<span class="s">&quot;nothing.txt&quot;</span>) <span class="k">catch</span> <span class="v">new</span> <span class="t">list</span>(<span class="t">string</span>)
+    <span class="b">print</span>(<span class="s">f&quot;missing: {len(missing)}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3 non-empty lines, first alpha
+missing: 0</samp></pre></div>
+</figure>
+<p>Note the last line: <code>catch</code> and the call must agree on ownership. The call hands over a fresh list, so the fallback does too.</p>
+<h2 id="catch-guards-one-call">catch guards one call<a class="anchor" href="#catch-guards-one-call" aria-label="link to this section">#</a></h2>
+<p>The block form of <code>catch</code> attaches to exactly one call. That is what separates it from an exception block, where a handler covers a region and you have to work out which statement inside it failed.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">var</span> status = <span class="s">&quot;unknown&quot;</span>
+
+    files.<span class="b">write</span>(<span class="s">&quot;/nowhere/at/all&quot;</span>, <span class="s">&quot;x&quot;</span>) <span class="k">catch</span>:
+        status = <span class="s">&quot;write refused&quot;</span>
+    <span class="b">print</span>(status)
+
+    <span class="c"># The expression form supplies a value instead.</span>
+    <span class="k">let</span> text = files.<span class="b">read</span>(<span class="s">&quot;/nowhere/at/all&quot;</span>) <span class="k">catch</span> <span class="s">&quot;(default)&quot;</span>
+    <span class="b">print</span>(text)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>write refused
+(default)</samp></pre></div>
+</figure>
+<p>The block form attaches to a call written as a statement and to a plain assignment, and to nothing else — a <code>let</code> would need the handler to supply the value the name binds, and only <code>catch EXPR</code> can say that.</p>
+<h2 id="catch-name-reads-the-reason">catch NAME: reads the reason<a class="anchor" href="#catch-name-reads-the-reason" aria-label="link to this section">#</a></h2>
+<p>A handler that only knows <em>that</em> something failed usually ends up guessing at why, in words of its own that go stale. Name the error and it can say what actually happened.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">parse_port</span>(text: <span class="t">string</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">let</span> port = <span class="b">parse_int</span>(text) <span class="k">else</span> <span class="b">error</span>(<span class="s">f&quot;not a number: {text}&quot;</span>)
+    <span class="k">if</span> port &lt; <span class="n">1</span> <span class="k">or</span> port &gt; <span class="n">65535</span>:
+        <span class="b">error</span>(<span class="s">f&quot;out of range: {port}&quot;</span>)
+    <span class="k">return</span> port
+
+<span class="k">func</span> <span class="d">main</span>():
+    parse_port(<span class="s">&quot;nope&quot;</span>) <span class="k">catch</span> reason:
+        <span class="b">print</span>(<span class="s">f&quot;bad port — {reason}&quot;</span>)
+
+    files.<span class="b">read</span>(<span class="s">&quot;/nowhere/at/all&quot;</span>) <span class="k">catch</span> reason:
+        <span class="b">print</span>(<span class="s">f&quot;no config — {reason}&quot;</span>)
+
+    <span class="c"># The handler&#39;s own message, unchanged, is what the runtime wrote.</span>
+    parse_port(<span class="s">&quot;99999&quot;</span>) <span class="k">catch</span> reason:
+        <span class="b">print</span>(reason)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>bad port — not a number: nope
+no config — cannot read /nowhere/at/all
+out of range: 99999</samp></pre></div>
+</figure>
+<p>The name binds the error&#39;s <strong>message</strong> and nothing else: an immutable <code>string</code>, scoped to the handler block, released with it, and subject to the no-shadowing rule. Reading it below the block is <code>luce.sema.name</code>.</p>
+<p>It is not the code, because a <code>catch</code> guards one call and one call raises with one code — there is nothing to branch on. It is not the raise position either; that belongs to the report an <em>uncaught</em> error gets, which the next section shows. And the expression form takes no binding: a fallback that reads the reason is a message being built, which is a statement, and that is the block form.</p>
+<h2 id="an-error-s-report-is-one-line">An error&#39;s report is one line<a class="anchor" href="#an-error-s-report-is-one-line" aria-label="link to this section">#</a></h2>
+<p>An uncaught error out of <code>main() -&gt; !</code> ends the run and prints the words and the <strong>one</strong> place it was raised.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">read_setting</span>(text: <span class="t">string</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">return</span> <span class="b">parse_int</span>(text) <span class="k">else</span> <span class="b">error</span>(<span class="s">f&quot;not a number: {text}&quot;</span>)
+
+<span class="k">func</span> <span class="d">configure</span>(text: <span class="t">string</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">return</span> <span class="k">try</span> read_setting(text) * <span class="n">2</span>
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> configure(<span class="s">&quot;21&quot;</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> configure(<span class="s">&quot;x&quot;</span>)))</code></pre></div>
+<figcaption class="cap bad">Output — the error reaches the top</figcaption>
+<div class="code result bad"><pre><samp>42
+loom: error: not a number: x [user_error]
+    raised in read_setting (main.luc:2:5)</samp></pre></div>
+</figure>
+<p>A trap is a bug and the stack is its diagnosis. An error is news, and where it came from is the news — so an error records its position once and never assembles a trace. That is not only tidiness: carrying a full trace would charge the <strong>success</strong> path of every <code>try</code> for something to save and restore, and Luce&#39;s mode rules forbid making the working path pay for the failing one.</p>
+<h2 id="two-error-codes-and-no-more">Two error codes, and no more<a class="anchor" href="#two-error-codes-and-no-more" aria-label="link to this section">#</a></h2>
+<p><code>io_failed</code>, raised by the host&#39;s file services, and <code>user_error</code>, raised by <code>error(...)</code>. Not <code>not_found</code>, not <code>permission_denied</code> — a host service answers yes, no, or out of memory, and genuinely cannot tell those two apart. Inventing the codes would be inventing the distinction.</p>
+<p>There are no typed error sets and no error payloads beyond the message. If your program needs to <em>branch</em> on why something failed, that is a design conversation, not a <code>catch</code>.</p>
+<h2 id="choosing-in-practice">Choosing, in practice<a class="anchor" href="#choosing-in-practice" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Situation</th><th>Shape</th></tr></thead>
+<tbody>
+<tr><td>The caller indexed past the end</td><td>trap</td></tr>
+<tr><td>The caller asked for a key it never inserted</td><td>trap</td></tr>
+<tr><td>A sum overflowed 64 bits</td><td>trap</td></tr>
+<tr><td>A function was handed a value outside its domain</td><td>trap</td></tr>
+<tr><td>The disk refused a read or a write</td><td>error (<code>!</code>)</td></tr>
+<tr><td>The program itself decided the input is unusable</td><td>error (<code>error(...)</code>)</td></tr>
+<tr><td>The text was not a number</td><td>absence (<code>T?</code>)</td></tr>
+<tr><td>The array was empty and there is no mean</td><td>absence (<code>T?</code>)</td></tr>
+</tbody></table></div>
+<p>When you are unsure between an error and a trap, the tell is whether a <em>reason</em> is worth carrying to the caller. If there is exactly one reason and the function&#39;s name already implies it, you wanted <code>T?</code>.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../memory/"><span>Previous</span>Memory without a collector</a>
+<a class="on" href="../strings/"><span>Next</span>Strings and copies</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#what-the-rule-moved">What the rule moved</a></li>
+<li class="h2"><a href="#why-not-a-result-type">Why not a `Result` type</a></li>
+<li class="h2"><a href="#try-is-return-with-one-terminator-changed">try is return with one terminator changed</a></li>
+<li class="h2"><a href="#catch-guards-one-call">catch guards one call</a></li>
+<li class="h2"><a href="#catch-name-reads-the-reason">catch NAME: reads the reason</a></li>
+<li class="h2"><a href="#an-error-s-report-is-one-line">An error&#39;s report is one line</a></li>
+<li class="h2"><a href="#two-error-codes-and-no-more">Two error codes, and no more</a></li>
+<li class="h2"><a href="#choosing-in-practice">Choosing, in practice</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

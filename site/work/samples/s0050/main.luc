@@ -1,0 +1,6 @@
+func main():
+    var xs = [1, 2, 3]        # xs owns this list
+    xs.append(4)
+    xs = [5, 6]               # the old list is freed right here
+    print(f"{len(xs)} elements")
+    # the scope ends: everything owned here is freed

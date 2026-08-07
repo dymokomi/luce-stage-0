@@ -1,0 +1,10 @@
+import std.strings
+
+func main():
+    let raw = "\t  Mixed CASE text  \n"
+    print(f"[{raw.trim()}]")
+    print(raw.trim().lower())
+    print(raw.trim().upper())
+    print(raw.trim().replace("text", "words"))
+    print(f"[{"ab".repeat(3)}]")
+    print(f"[{"7".pad_left(5)}][{"7".pad_right(5)}]")

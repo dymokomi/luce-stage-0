@@ -650,7 +650,7 @@ called without them.
 
 **Luce has no function types.** `docs/LANGUAGE.md`'s *"Deliberately
 absent"* list opens with *"First-class functions, closures"*, and
-`site/content/ref/expressions.md:136` says *"Functions are not values
+`www/luce/content/ref/expressions.md:136` says *"Functions are not values
 — a name in call position denotes a function, statically."* There is
 nowhere in Luce to write a function type, so there is nowhere for a
 default to fail to appear. The question that forced Dart into `{}` and
@@ -1186,7 +1186,7 @@ checking they agreed."* Adding names to the one table is in the
 direction that comment points.
 
 **And it should be pinned to the documentation rather than merely
-written.** `site/src/coverage.zig` already fails the build when the
+written.** `www/luce/src/coverage.zig` already fails the build when the
 compiler has a builtin the reference does not name; extending it to
 parameter names is the same check one level down, and it is what stops
 the table and the prose drifting the way the old grammar drifted.
@@ -1543,19 +1543,19 @@ half, and the memo would rather say so than be quoted later.
   that; fixing `VECTOR.md` is not this memo's business, but naming it
   is.
 
-### `site/`
+### `www/luce/`
 
 Two pages carry the claim this memo falsifies, and one of them carries
 a second claim that is *already* false:
 
 | page | why |
 |---|---|
-| `site/content/ref/expressions.md:135-136` | *"Arguments are positional […] There are no default values, no named arguments, and no variadics."* — the first two clauses go, variadics stays |
-| `site/content/ref/statements.md:36-37` | *"There are no default values, no named arguments, no variadics, no receivers and no first-class functions."* — **"no receivers" has been wrong since `docs/METHODS.md` shipped** and must be corrected in the same commit, exactly as `docs/RETURNS.md` corrected the status page's stale "15" |
-| `site/content/ref/builtins.md` | `term_style`'s signature gains its defaults; every builtin gains its parameter names, and `coverage.zig` is extended to require them (§3) |
-| `site/content/ref/types.md` | struct field defaults |
-| `site/content/tour/functions.md` | the tutorial half |
-| `site/content/status/index.md` | item 7 closes; its copy of the `term_style` count goes with it |
+| `www/luce/content/ref/expressions.md:135-136` | *"Arguments are positional […] There are no default values, no named arguments, and no variadics."* — the first two clauses go, variadics stays |
+| `www/luce/content/ref/statements.md:36-37` | *"There are no default values, no named arguments, no variadics, no receivers and no first-class functions."* — **"no receivers" has been wrong since `docs/METHODS.md` shipped** and must be corrected in the same commit, exactly as `docs/RETURNS.md` corrected the status page's stale "15" |
+| `www/luce/content/ref/builtins.md` | `term_style`'s signature gains its defaults; every builtin gains its parameter names, and `coverage.zig` is extended to require them (§3) |
+| `www/luce/content/ref/types.md` | struct field defaults |
+| `www/luce/content/tour/functions.md` | the tutorial half |
+| `www/luce/content/status/index.md` | item 7 closes; its copy of the `term_style` count goes with it |
 
 **Write the refusal samples first.** ` ```luce fail ` asserts that
 `luce check` rejects a sample, so §8's table can land as executable
@@ -1571,7 +1571,7 @@ and nothing else, so it should compile unchanged — and
 `test "the committed grammar is what the generator emits"` is what
 catches it if that turns out to be wrong. Let it.
 
-**`site/src/highlight.zig` needs nothing** and **`programs/editor.luc`'s
+**`www/luce/src/highlight.zig` needs nothing** and **`programs/editor.luc`'s
 own highlighter needs nothing**: `=`, `(`, `)` and `,` already fall to
 the punctuation arm, and this feature introduces **no new word**. The
 guard that could fire —

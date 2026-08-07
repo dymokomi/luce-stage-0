@@ -1,0 +1,7 @@
+enum Method:
+    stored
+    deflated
+
+func main():
+    let m = Method.deflated
+    print(string(m))

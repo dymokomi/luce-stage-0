@@ -1,0 +1,21 @@
+import std.files
+
+func save(path: string, text: string) -> !:
+    try files.write(path, text)
+    print(f"wrote {path}")
+
+func main() -> !:
+    try save("notes.txt", "hello, disk")
+
+    let read_back = files.read("notes.txt") catch "(nothing)"
+    print(f"read back: {read_back}")
+
+    let missing = files.read("no-such-file") catch "(nothing)"
+    print(f"missing: {missing}")
+
+    files.write("/nowhere/at/all", "x") catch:
+        print("could not write to /nowhere/at/all")
+
+    # Name the error and the handler can say what actually happened.
+    files.write("/nowhere/at/all", "x") catch reason:
+        print(reason)

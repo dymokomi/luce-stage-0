@@ -1,0 +1,13 @@
+enum Colour:
+    red
+    green
+    blue
+
+func main():
+    for raw in range(0, 3):
+        let c = Colour(raw) else trap("0, 1 and 2 are all members")
+        match c:
+            green:
+                print("green")
+            else:
+                print("not green")

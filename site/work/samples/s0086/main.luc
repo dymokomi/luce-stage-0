@@ -1,0 +1,4 @@
+import std.strings
+
+func main():
+    print(strings.fold_case("MIXED", 65, 90, 32))

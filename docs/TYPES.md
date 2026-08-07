@@ -92,7 +92,7 @@ over-specified so each rounds to the nearest binary64, and
 `math.luc:5-11` promises *"exp/ln hold ~1e-14 relative"*. Binary32's
 epsilon is 1.19e-7. Eight tolerance assertions in
 `src/luce/specs/std_spec.zig` become unsatisfiable, and the accuracy
-table on `site/content/std/math.md:40-46` becomes fiction.
+table on `www/luce/content/std/math.md:40-46` becomes fiction.
 
 **Every one of those is a blocker only if the corpus is forced down to
 32 bits. It is not. It is renamed.**
@@ -668,7 +668,7 @@ mantissa.
 one row of two.** The ~20 places that name 2^53 — `docs/NUMERICS.md`
 §2/§5/§6, `docs/LANGUAGE.md:676`, `runtime/operators.zig:274-275`,
 `specs/behavior_spec.zig:564-573,632-634`,
-`site/content/ref/types.md:41`, `site/content/tour/values.md:63,71` —
+`www/luce/content/ref/types.md:41`, `www/luce/content/tour/values.md:63,71` —
 are statements about `Long` and `Double` and stay true verbatim once
 renamed. What is *added* is the 2^24 row for `Int` and `Float`, and it
 deserves its own spec program beside the existing one, because 16.7
@@ -876,7 +876,7 @@ rather than discovered:
 - **`append_ascii` is 0..0x7F, not 0..0xFF** (`runtime/containers.zig:152-159`),
   because a `Builder` must yield valid UTF-8. A `Byte` argument would
   still need its run-time check. The docs already misdescribe it as
-  taking *"a byte"* (`docs/STD.md:116`, `site/content/guide/strings.md:94`);
+  taking *"a byte"* (`docs/STD.md:116`, `www/luce/content/guide/strings.md:94`);
   a real `Byte` type makes that gap more visible, not less.
 - **`chr` and `ord` stay codepoint functions** over 0..0x10FFFF, so
   `chr(255)` is two bytes and not one. `programs/bf.luc:44`'s
@@ -919,7 +919,7 @@ applied while both names still mean what they mean today.
 | where | `Int`/`Float` lines | what happens |
 |---|---:|---|
 | `.luc` corpus — 19 files (10 `programs/`, 6 `bench/`, 3 `std/`) | 94 / 63 | rename; **no program changes meaning** |
-| `site/content/**` — 42 files | 269 | rename; the 194 fenced samples re-verify byte-for-byte |
+| `www/luce/content/**` — 42 files | 269 | rename; the 194 fenced samples re-verify byte-for-byte |
 | `docs/**` | 363 (132 in `NUMERICS.md`) | rename; every claim stays true |
 | `src/**/*.zig` — Luce inside specs | 775 `func main` programs | rename; the oracle re-runs both engines |
 | `bench/*.c` twins | 0 | **not touched** (D7) |
@@ -946,7 +946,7 @@ nothing in *Order* depends on any of it happening.
 | `programs/wordcount.luc`, `sort.luc`, `calc.luc`, `stats.luc` | no | yes |
 
 **The site.** 194 fenced Luce blocks, all compiled and run by the
-freshly built toolchain, with `site/src/verify.zig:229-249` requiring an
+freshly built toolchain, with `www/luce/src/verify.zig:229-249` requiring an
 `output` block on every runnable fence and `:311` comparing it with
 `std.mem.eql`. 114 `run`, 32 `fail`, 23 `trap`, plus the `include`,
 `args`, `raise` and `module` variants. **Under the rename every one of
@@ -1314,7 +1314,7 @@ carries a documented precision claim.
 | `src/apps/loom/product.zig` | `total` in the installed-pair program | `long` | prints `total 30` and is compared |
 
 **Step 4 is complete.**  `zig build test` is 1152/1152, `bench/run.sh`
-is byte-identical, `./site/build.sh` verifies all 200 samples.
+is byte-identical, `./www/luce/build.sh` verifies all 200 samples.
 
 **The migration, and the rule that decided every edit.**  123 tests
 failed — the memo scoped the audit to the 19 `.luc` files and it also
@@ -1341,7 +1341,7 @@ comes from and why it is coverage rather than a rename.
 | `specs/optimize_spec.zig`, `modules_spec.zig`, `std_spec.zig` | 8 | 0 |
 | in-module tests (`06_mir`, `07_optimize`, `08_llvm`, `compile`, `interpreter`) | 20 | 0 |
 | `src/apps/luce/product.zig` | 1 | 0 |
-| `site/content/**` | 26 | 0 |
+| `www/luce/content/**` | 26 | 0 |
 
 The six forks are the ones whose subject is the width: `//` by −1 at
 `minInt`, the range of each integer type, each one's minimum written
@@ -1619,7 +1619,7 @@ The 32-bit rows earned their place by finding it.
 
 **The coverage machinery did not cover the types, and now does.**  The
 memo assumed adding `byte`, `short` and `half` would fail the site
-build until they were documented.  It did not: `site/src/coverage.zig`
+build until they were documented.  It did not: `www/luce/src/coverage.zig`
 read `builder.zig`'s `builtins` table, and the conversion constructors
 are not in it — they are resolved through `types.zig`'s
 `builtin_table` by `conversionNamed`.  So the type surface was never

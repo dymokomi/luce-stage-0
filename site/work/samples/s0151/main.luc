@@ -1,0 +1,6 @@
+func ratio(a: long, b: long) -> long:
+    return a // b
+
+func main():
+    print(string(ratio(10, 2)))
+    print(string(ratio(10, 0)))

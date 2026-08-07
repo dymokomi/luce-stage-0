@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strings &middot; Luce</title>
+<meta name="description" content="Immutable UTF-8, f-strings, slicing, and where the rest of the string library lives.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a class="here" href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>A tour of Luce</summary>
+<ul>
+<li><a href="../../tour/">Overview</a></li>
+<li><a href="../../tour/hello/">Hello, Luce</a></li>
+<li><a href="../../tour/values/">Values and types</a></li>
+<li><a href="../../tour/control/">Control flow</a></li>
+<li><a href="../../tour/functions/">Functions and structs</a></li>
+<li><a href="../../tour/enums/">Enums</a></li>
+<li><a href="../../tour/collections/">Lists, maps and arrays</a></li>
+<li><a class="here" href="../../tour/strings/">Strings</a></li>
+<li><a href="../../tour/ownership/">Memory</a></li>
+<li><a href="../../tour/absence/">Absence</a></li>
+<li><a href="../../tour/failure/">Failure</a></li>
+<li><a href="../../tour/modules/">Modules</a></li>
+<li><a href="../../tour/visibility/">Visibility</a></li>
+<li><a href="../../tour/host/">The outside world</a></li>
+<li><a href="../../tour/next/">Where to go next</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Strings</h1>
+<p>A <code>string</code> is immutable UTF-8 text, and it is a <strong>value</strong>: it copies on assignment, it goes into a list without ceremony, and nobody frees it.</p>
+<p>The <em>language</em> keeps only the primitives. Everything built on top of them lives in the standard library&#39;s <code>strings</code> module, written in ordinary Luce.</p>
+<h2 id="the-primitives">The primitives<a class="anchor" href="#the-primitives" aria-label="link to this section">#</a></h2>
+<p>Literals, <code>+</code>, comparison, boundary-checked slices, <code>len</code> in bytes, and two raw-byte operations.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> greeting = <span class="s">&quot;hello, loom&quot;</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(greeting)} bytes&quot;</span>)
+    <span class="b">print</span>(greeting[<span class="n">0</span>:<span class="n">5</span>])                <span class="c"># a slice; still a value</span>
+    <span class="b">print</span>(<span class="t">string</span>(greeting.<span class="b">byte_at</span>(<span class="n">0</span>)))     <span class="c"># &#39;h&#39;</span>
+    <span class="b">print</span>(<span class="t">string</span>(greeting.<span class="b">find_byte</span>(<span class="n">44</span>, <span class="n">0</span>)))  <span class="c"># first comma</span>
+    <span class="b">print</span>(<span class="t">string</span>(<span class="s">&quot;apple&quot;</span> &lt; <span class="s">&quot;banana&quot;</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>11 bytes
+hello
+104
+5
+true</samp></pre></div>
+</figure>
+<p>A literal is written <code>&quot;...&quot;</code> and stays on one line. The escapes are <code>\n</code>, <code>\t</code>, <code>\\</code> and <code>\&quot;</code> — and there are no others. <code>\r</code>, <code>\0</code>, hex and unicode escapes are all rejected by name; a codepoint goes in with <code>chr(...)</code>.</p>
+<p>Slicing checks UTF-8 boundaries, so you cannot cut a character in half. Trying is a trap, not silent corruption.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> text = <span class="s">&quot;λx&quot;</span>          <span class="c"># the lambda is two bytes</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(text)} bytes&quot;</span>)
+    <span class="b">print</span>(text[<span class="n">0</span>:<span class="n">1</span>])</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>3 bytes
+loom: trap: string slice splits a UTF-8 sequence [string_boundary]
+    at main (main.luc:4:5)</samp></pre></div>
+</figure>
+<p><code>find_byte(byte, start)</code> is a primitive for the same reason <code>byte_at</code> is: the library builds substring search on it, and the runtime is free to vectorize it.</p>
+<h2 id="interpolation">Interpolation<a class="anchor" href="#interpolation" aria-label="link to this section">#</a></h2>
+<p>An <code>f&quot;...&quot;</code> string splices expressions written in <code>{...}</code>, each one converted with <code>string(...)</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">struct</span> <span class="t">User</span>:
+    name: <span class="t">string</span>
+    age: <span class="t">long</span>
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> user = <span class="t">User</span>(name = <span class="s">&quot;ada&quot;</span>, age = <span class="n">36</span>)
+    <span class="k">let</span> x = <span class="n">7</span>
+    <span class="k">let</span> y = <span class="n">3</span>
+    <span class="b">print</span>(<span class="s">f&quot;x = {x}, y = {y}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;sum = {x + y}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;name is {user.name}, next year {user.age + 1}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{{literal braces}}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>x = 7, y = 3
+sum = 10
+name is ada, next year 37
+{literal braces}</samp></pre></div>
+</figure>
+<p>A hole is one expression, and <code>&quot;...&quot;</code> strings nested inside a hole are fine. <code>f&quot;...&quot;</code> desugars to plain <code>+</code> concatenation of <code>string(...)</code> pieces, so the result is a <code>string</code> like any other. A <code>list</code> in a hole is a type error — <code>string(x)</code> takes a scalar.</p>
+<h3 id="format-specs">Format specs<a class="anchor" href="#format-specs" aria-label="link to this section">#</a></h3>
+<p>A hole may end <code>:.Nf</code> — a <code>double</code> to N decimal places, rounded half away from zero. That is the whole spec language: no width, no fill, no alignment, no <code>%</code>, no <code>e</code>. Anything else names the one form that exists.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> mean = <span class="n">23.998425</span>
+    <span class="b">print</span>(<span class="s">f&quot;mean = {mean:.2f}&quot;</span>)
+    <span class="k">let</span> total = <span class="n">74</span>
+    <span class="k">let</span> count = <span class="n">20</span>
+    <span class="b">print</span>(<span class="s">f&quot;{count} rolls, mean {total / count:.2f}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{2.5:.0f} and {-2.5:.0f}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>mean = 24.00
+20 rolls, mean 3.70
+3 and -3</samp></pre></div>
+</figure>
+<p>The <code>f</code> is redundant — the compiler knows the operand is a <code>double</code> — and is required anyway, because <code>{x:.2}</code> means <em>two significant digits</em> in Python and letting it mean two decimal places here would be a quiet disagreement with the language Luce is shaped after.</p>
+<p>A spec lowers to <code>strings.format_float(value, N)</code>, so it needs the import like any other string service. Leave the import out and the compiler says which syntax needs it, rather than naming a module you never wrote:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> mean = <span class="n">23.998425</span>
+    <span class="b">print</span>(<span class="s">f&quot;mean = {mean:.2f}&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:3:21: a format spec like {x:.2f} formats through std.strings; add import std.strings [luce.sema.import]
+        print(f&quot;mean = {mean:.2f}&quot;)
+                        ^~~~</samp></pre></div>
+</figure>
+<p>A colon <em>inside</em> brackets belongs to the brackets, so <code>f&quot;{s[1:3]}&quot;</code> is still a slice.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> x = <span class="n">1.5</span>
+    <span class="b">print</span>(<span class="s">f&quot;{x:.2}&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:5:15: unknown format spec &#39;:.2&#39;; the one form is &#39;:.Nf&#39; — N decimal places of a double [luce.parse.fstring]
+        print(f&quot;{x:.2}&quot;)
+                  ^~~</samp></pre></div>
+</figure>
+<h2 id="the-strings-module">The strings module<a class="anchor" href="#the-strings-module" aria-label="link to this section">#</a></h2>
+<p><code>import std.strings</code> brings in everything else. The familiar method spelling is sugar for it: with the import in scope, <code>s.find(x)</code> <em>is</em> <code>strings.find(s, x)</code>. Without the import, using a string method is a compile error that says so.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> line = <span class="s">&quot;  the quick brown fox  &quot;</span>
+    <span class="k">let</span> trimmed = line.trim()
+    <span class="b">print</span>(<span class="s">f&quot;[{trimmed}]&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;upper: {trimmed.upper()}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;contains &#39;quick&#39;: {trimmed.contains(&quot;</span>quick<span class="s">&quot;)}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;find &#39;brown&#39;: {trimmed.find(&quot;</span>brown<span class="s">&quot;)}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;replace: {trimmed.replace(&quot;</span>quick<span class="s">&quot;, &quot;</span>slow<span class="s">&quot;)}&quot;</span>)
+
+    <span class="k">let</span> words = trimmed.split(<span class="s">&quot; &quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(words)} words, joined with dashes: {words.join(&quot;</span>-<span class="s">&quot;)}&quot;</span>)
+
+    <span class="b">print</span>(<span class="s">f&quot;[{&quot;</span>x<span class="s">&quot;.repeat(3)}] [{&quot;</span><span class="n">7</span><span class="s">&quot;.pad_left(4)}]&quot;</span>)
+    <span class="b">print</span>(strings.format_float(<span class="n">2.5</span>, <span class="n">2</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>[the quick brown fox]
+upper: THE QUICK BROWN FOX
+contains &#39;quick&#39;: true
+find &#39;brown&#39;: 10
+replace: the slow brown fox
+4 words, joined with dashes: the-quick-brown-fox
+[xxx] [   7]
+2.50</samp></pre></div>
+</figure>
+<p>All offsets are byte offsets, like the primitives, and the module never splits a UTF-8 character: it slices at ASCII positions or at match positions of valid UTF-8 needles.</p>
+<p><code>split</code> with an empty separator splits on runs of whitespace and drops the empty pieces, which is Python&#39;s <code>split()</code>; with a real separator it keeps them.</p>
+<h2 id="conversions">Conversions<a class="anchor" href="#conversions" aria-label="link to this section">#</a></h2>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(<span class="n">42</span>))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="n">2.5</span>))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">true</span>))
+    <span class="b">print</span>(<span class="b">chr</span>(<span class="n">955</span>))              <span class="c"># a codepoint becomes a string</span>
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">ord</span>(<span class="s">&quot;λ&quot;</span>)))         <span class="c"># and back</span></code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>42
+2.5
+true
+λ
+955</samp></pre></div>
+</figure>
+<p><code>parse_int</code> and <code>parse_float</code> are different: they may find no number at all, so they answer an <em>optional</em>. That is the <a href="../absence/">next chapter but one</a>.</p>
+<h2 id="why-strings-work-this-way">Why strings work this way<a class="anchor" href="#why-strings-work-this-way" aria-label="link to this section">#</a></h2>
+<p>Strings being values rather than objects is the reason a Luce program can loop forever building text without growing: a <code>string</code>&#39;s bytes have exactly one owner, and any store into something that outlives the current statement copies them. Strings of 22 bytes or fewer live inside the value that carries them and allocate nothing at all. <a href="/guide/strings/">Strings and copies</a> is the long version, including the one benchmark this costs.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../collections/"><span>Previous</span>Lists, maps and arrays</a>
+<a class="on" href="../ownership/"><span>Next</span>Memory</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#the-primitives">The primitives</a></li>
+<li class="h2"><a href="#interpolation">Interpolation</a></li>
+<li class="h3"><a href="#format-specs">Format specs</a></li>
+<li class="h2"><a href="#the-strings-module">The strings module</a></li>
+<li class="h2"><a href="#conversions">Conversions</a></li>
+<li class="h2"><a href="#why-strings-work-this-way">Why strings work this way</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

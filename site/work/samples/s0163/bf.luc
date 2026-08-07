@@ -1,0 +1,65 @@
+# A Brainfuck interpreter in Luce: the byte tape is a real array,
+# output accumulates in a builder, and chr() maps cell values to text.
+#
+#   loom luce programs/bf.luc
+
+func matching_forward(code: string, pc: long) -> long:
+    var depth = 1
+    var at = pc
+    while depth > 0:
+        at = at + 1
+        if code.byte_at(at) == 91:
+            depth = depth + 1
+        elif code.byte_at(at) == 93:
+            depth = depth - 1
+    return at
+
+func matching_backward(code: string, pc: long) -> long:
+    var depth = 1
+    var at = pc
+    while depth > 0:
+        at = at - 1
+        if code.byte_at(at) == 93:
+            depth = depth + 1
+        elif code.byte_at(at) == 91:
+            depth = depth - 1
+    return at
+
+func interpret(code: string, cells: long) -> string:
+    # A Brainfuck cell *is* a byte, so the tape says so: one byte an
+    # element instead of eight, and the type now carries the range the
+    # `% 256` below used to be the only evidence of.
+    var tape = new array(byte, cells)
+    var pointer = 0
+    var pc: long = 0
+    var out = new builder()
+    while pc < len(code):
+        let op = code.byte_at(pc)
+        if op == 62:
+            pointer = pointer + 1
+        elif op == 60:
+            pointer = pointer - 1
+        elif op == 43:
+            # `%` floors, so a cell stepping below zero wraps to 255
+            # rather than going negative — which is what leaves the
+            # arithmetic (an `int`, because a `byte` never does any)
+            # inside the range `byte()` will accept.
+            tape[pointer] = byte((tape[pointer] + 1) % 256)
+        elif op == 45:
+            tape[pointer] = byte((tape[pointer] - 1) % 256)
+        elif op == 46:
+            out.append(chr(tape[pointer]))
+        elif op == 91:
+            if tape[pointer] == 0:
+                pc = matching_forward(code, pc)
+        elif op == 93:
+            if tape[pointer] != 0:
+                pc = matching_backward(code, pc)
+        pc = pc + 1
+    return out.build()
+
+func main():
+    let hello = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+    let out = interpret(hello, 30)
+    print(out)
+    assert(out == "Hello World!\n")

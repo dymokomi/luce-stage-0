@@ -1,0 +1,8 @@
+func main():
+    var out = new builder()
+    for i in range(0, 5):
+        out.append(string(i))
+        out.append(",")
+    out.append_ascii(33)          # one ASCII byte, no string allocated
+    print(out.build())
+    print(f"{len(out)} bytes")

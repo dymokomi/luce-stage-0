@@ -1,0 +1,19 @@
+enum Light:
+    red
+    green
+
+    func go(self) -> bool:
+        return self == Light.green
+
+    func flip(var self):
+        match self:
+            red:
+                self = Light.green
+            green:
+                self = Light.red
+
+func main():
+    var light = Light.red
+    print(string(light.go()))
+    light.flip()
+    print(f"{light}, and go is {light.go()}")

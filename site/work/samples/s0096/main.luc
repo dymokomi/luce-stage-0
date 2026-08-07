@@ -1,0 +1,14 @@
+func main():
+    let colours = ["red", "green", "blue"]
+    for colour in colours:
+        print(colour)
+    for index, colour in colours:
+        print(f"{index}: {colour}")
+
+    var counts = new map(string, long)
+    counts["a"] = 1
+    counts["b"] = 2
+    for key in counts:
+        print(f"key {key}")
+    for key, value in counts:
+        print(f"{key} = {value}")

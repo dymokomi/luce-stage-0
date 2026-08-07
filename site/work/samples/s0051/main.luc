@@ -1,0 +1,10 @@
+import std.strings
+
+func main():
+    for round in range(0, 3):
+        var row = new array(long, 4)   # fresh every iteration
+        row.fill(round)
+        print(f"round {round} first {row[0]}")
+        # row is freed here, every time around — memory stays flat
+    for word in "a b c".split(""):    # never named: freed when the
+        print(word)                   #   for statement completes

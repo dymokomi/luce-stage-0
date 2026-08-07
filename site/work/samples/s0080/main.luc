@@ -1,0 +1,8 @@
+import gauge
+
+func main():
+    var g = gauge.open("power", 10)
+    g.add(3)
+    g.add(4)
+    print(g.show())
+    print(g.label)

@@ -1,0 +1,3 @@
+func main():
+    var report: builder
+    report.append("x")

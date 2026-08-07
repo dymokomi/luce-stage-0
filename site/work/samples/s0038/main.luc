@@ -1,0 +1,14 @@
+func main():
+    var stock = new map(string, long)
+    stock["fig"] = 3
+    stock["pear"] = 12
+    stock["plum"] = 0
+    stock["fig"] += 1
+
+    for name, count in stock:
+        print(f"{name}: {count}")
+
+    print(f"has apple: {stock.has("apple")}")
+    print(f"get apple: {stock.get("apple", -1)}")
+    stock.remove("plum")
+    print(f"{len(stock)} kinds left")

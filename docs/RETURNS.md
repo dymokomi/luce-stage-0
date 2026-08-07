@@ -102,7 +102,7 @@ apart by **twenty-five field reads over fourteen lines**, binding seven
 names that exist only to be dismantled on the next line.
 
 > **The public number is wrong and should be corrected either way.**
-> `site/content/status/index.md:140` says *"constructed at 8 sites and
+> `www/luce/content/status/index.md:140` says *"constructed at 8 sites and
 > destructured at 15."* `docs/MISSING.md:229` says 25 field reads and
 > is right; the site is stale, as `docs/audit/DOCS.md:810` predicted of
 > *"essentially every line reference and corpus count."* Eight
@@ -610,7 +610,7 @@ check; there is no separate pass.
 
 Proposed for `docs/OWNERSHIP.md`, on `docs/METHODS.md` S44's model —
 a clarifying clause that changes no rule, appended so no anchor moves
-(`site/content/ref/ownership.md` fixes `{#s44}`-style anchors and the
+(`www/luce/content/ref/ownership.md` fixes `{#s44}`-style anchors and the
 compiler quotes the numbers):
 
 > **S45. A multiple return moves each value, left to right, and no
@@ -1156,23 +1156,23 @@ rather than assuming.
   propagating it.
 - **`docs/PIPELINE.md`** — no stage changes status; nothing to do.
 
-### `site/`
+### `www/luce/`
 
-The table of contents is hand-written (`site/src/site.zig`), so a new
+The table of contents is hand-written (`www/luce/src/site.zig`), so a new
 page is a file plus one row. Pages that need editing:
 
 | page | why |
 |---|---|
-| `site/content/ref/statements.md` | `## func` (L17) gains the return list; `## let and var` (L47) gains the destructuring bind; `## Assignment` (L60) says that multi-assignment is not one |
-| `site/content/ref/types.md` | the load-bearing one: a return shape is **not** a type, and this is the page that says so |
-| `site/content/ref/expressions.md` | `## Calls` (L123) gains the two allowed positions; `## Operators Luce does not have` (L88) gains the tuple |
-| `site/content/ref/ownership.md` | S45, with a `{#s45}` anchor — appended, never renumbered, because `main.zig`'s `checkLinks` fails the build on a dead anchor and the compiler quotes the numbers in diagnostics |
-| `site/content/ref/failure.md` | `catch` cannot supply a shape; `try` composes |
-| `site/content/tour/functions.md` | the tutorial half of the declaration |
-| `site/content/tour/values.md` | the tutorial half of the bind |
-| `site/content/status/index.md` | item 4 (L139) closes — **and its "destructured at 15" is wrong today and must be corrected in the same commit**; the work list's item 3 (L188) loses a third; the "Deliberately absent, permanently" list (L67) gains tuples |
+| `www/luce/content/ref/statements.md` | `## func` (L17) gains the return list; `## let and var` (L47) gains the destructuring bind; `## Assignment` (L60) says that multi-assignment is not one |
+| `www/luce/content/ref/types.md` | the load-bearing one: a return shape is **not** a type, and this is the page that says so |
+| `www/luce/content/ref/expressions.md` | `## Calls` (L123) gains the two allowed positions; `## Operators Luce does not have` (L88) gains the tuple |
+| `www/luce/content/ref/ownership.md` | S45, with a `{#s45}` anchor — appended, never renumbered, because `main.zig`'s `checkLinks` fails the build on a dead anchor and the compiler quotes the numbers in diagnostics |
+| `www/luce/content/ref/failure.md` | `catch` cannot supply a shape; `try` composes |
+| `www/luce/content/tour/functions.md` | the tutorial half of the declaration |
+| `www/luce/content/tour/values.md` | the tutorial half of the bind |
+| `www/luce/content/status/index.md` | item 4 (L139) closes — **and its "destructured at 15" is wrong today and must be corrected in the same commit**; the work list's item 3 (L188) loses a third; the "Deliberately absent, permanently" list (L67) gains tuples |
 
-**Every sample must run.** `site/src/verify.zig` compiles and executes
+**Every sample must run.** `www/luce/src/verify.zig` compiles and executes
 each fenced `luce run` block with the freshly built toolchain and
 compares the claimed output byte for byte, and a fence that declares no
 mode is a build error. So the site cannot document this ahead of the
@@ -1182,7 +1182,7 @@ fence for the refusals in §1 and §7. **Write the refusal samples
 first**: they are executable specification of the tuple rule and they
 can land with step 1.
 
-**Nothing forces the prose.** `site/src/coverage.zig` checks named
+**Nothing forces the prose.** `www/luce/src/coverage.zig` checks named
 surfaces — builtins, methods, trap and error codes, std exports, CLI
 options — and has no check that a *syntax* rule is documented. A new
 language form slips past it entirely. That is a known gap, not one this
@@ -1192,7 +1192,7 @@ as the feature.
 
 ### The grammar, for highlighters
 
-**The site's highlighter needs nothing.** `site/src/highlight.zig` is a
+**The site's highlighter needs nothing.** `www/luce/src/highlight.zig` is a
 deliberately forgiving byte scanner with eight token classes; `(`, `)`
 and `,` fall through its final arm and are emitted escaped and
 unclassified, which is already how `List(Int)` renders. `let` is a
@@ -1256,7 +1256,7 @@ without both. Each step leaves the tree green.
    of step 1; the tests are the deliverable, and they belong in
    `specs/errors_spec.zig` beside the existing `catch` cases.
 3. **Ownership.** S45 in `docs/OWNERSHIP.md` and
-   `site/content/ref/ownership.md`; `lowerReturn`'s `moved` becoming a
+   `www/luce/content/ref/ownership.md`; `lowerReturn`'s `moved` becoming a
    list, which is both what the unwinder needs and where the
    double-move check lives (§3); the two existing diagnostics reached
    per position; the discarded-statement temporary. *Tests:*

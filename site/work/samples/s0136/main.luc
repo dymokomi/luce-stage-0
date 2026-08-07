@@ -1,0 +1,4 @@
+func main():
+    print(f"{parse_int("42") else -1}")
+    print(f"{parse_int("nonsense") else -1}")
+    print(f"{parse_float("2.5") else 0.0}")

@@ -1,0 +1,6 @@
+func main():
+    var sink = new list(list(long))
+    var xs: list(long) = [1]
+    if len(xs) > 0:
+        sink.append(give xs)
+    print(string(len(xs)))

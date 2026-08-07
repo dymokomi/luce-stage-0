@@ -1,0 +1,14 @@
+func main():
+    # The shape that allocates per step.
+    var slow = ""
+    for i in range(0, 5):
+        slow += string(i) + ","
+
+    # The shape that does not.
+    var fast = new builder()
+    for i in range(0, 5):
+        fast.append(string(i))
+        fast.append_ascii(44)
+
+    print(slow)
+    print(fast.build())

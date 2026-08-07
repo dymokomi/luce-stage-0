@@ -1,0 +1,22 @@
+import std.json
+
+func size(text: string) -> long!:
+    let doc = try json.parse(text)
+    return doc.root().count()
+
+func report(text: string):
+    let count = size(text) catch -1
+    if count < 0:
+        print("refused  " + text)
+    else:
+        print("accepted " + text)
+
+func main():
+    report("{\"a\": 1}")
+    report("{\"a\": 1,}")
+    report("[.5]")
+    report("[01]")
+    report("[1, 2")
+    report("{} {}")
+    report("[\"\\ud834\"]")
+    report("['single']")

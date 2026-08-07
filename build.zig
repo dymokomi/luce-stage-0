@@ -135,10 +135,10 @@ pub fn build(b: *std.Build) void {
     specs.addOptions("build_options", runtime_path);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
 
-    // The documentation site's generator (`site/src/`).  Its tests are
-    // what keep the word tables it highlights with, its link resolver
-    // and its Markdown honest, and they belong in `zig build test`
-    // rather than only in `site/build.sh`: a change to the language
+    // The documentation site's generator (`www/luce/src/`).  Its tests
+    // are what keep the word tables it highlights with, its link
+    // resolver and its Markdown honest, and they belong in `zig build
+    // test` rather than only in `www/luce/build.sh`: a change to the language
     // that the site has to follow should fail here, on the commit that
     // made it, not on whoever next builds the site.
     //
@@ -147,7 +147,7 @@ pub fn build(b: *std.Build) void {
     // linking the language in, which is what lets it verify what the
     // toolchain actually does rather than what a linked copy would.
     const site_generator = b.createModule(.{
-        .root_source_file = b.path("site/src/main.zig"),
+        .root_source_file = b.path("www/luce/src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -181,7 +181,8 @@ pub fn build(b: *std.Build) void {
     // the grammar generator does — it asks the front end a question
     // rather than watching a program run, so linking the language in is
     // both simpler and the point.  A document that shows code which
-    // does not compile fails `zig build test`, not only `site/build.sh`.
+    // does not compile fails `zig build test`, not only
+    // `www/luce/build.sh`.
     const documentation_guard = b.createModule(.{
         .root_source_file = b.path("tools/doccheck.zig"),
         .target = target,

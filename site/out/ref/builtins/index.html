@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builtins &middot; Luce</title>
+<meta name="description" content="Every free function and every method, with its signature.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a class="here" href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The Luce reference</summary>
+<ul>
+<li><a href="../../ref/">Overview</a></li>
+<li><a href="../../ref/lexical/">Source text and lexical elements</a></li>
+<li><a href="../../ref/types/">Types</a></li>
+<li><a href="../../ref/expressions/">Expressions</a></li>
+<li><a href="../../ref/statements/">Statements and declarations</a></li>
+<li><a href="../../ref/ownership/">Ownership</a></li>
+<li><a href="../../ref/failure/">Traps and errors</a></li>
+<li><a href="../../ref/modules/">Modules</a></li>
+<li><a class="here" href="../../ref/builtins/">Builtins</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Builtins</h1>
+<p>Two kinds. <strong>Free functions</strong> are the generic, cross-type set — the split Python makes. <strong>Methods</strong> belong to one type and are called on it; the method spelling is sugar for a plain function with the receiver first, resolved by the receiver&#39;s type, not dispatched.</p>
+<h2 id="free-functions">Free functions<a class="anchor" href="#free-functions" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>len(value) -&gt; long</code></td><td><code>string</code> bytes; list, map, builder or rank-1 array length; an <code>array</code>&#39;s dimension 0</td></tr>
+<tr><td><code>print(text: string)</code></td><td>host-gated</td></tr>
+<tr><td><code>range(low: long, high: long)</code></td><td><code>for</code> only; excludes <code>high</code></td></tr>
+<tr><td><code>assert(condition: bool)</code></td><td>traps <code>assertion_failed</code></td></tr>
+<tr><td><code>trap(message: string)</code></td><td>never returns; traps <code>explicit_trap</code></td></tr>
+<tr><td><code>error(message: string)</code></td><td>never returns; raises <code>user_error</code></td></tr>
+<tr><td><code>free(object)</code></td><td>early release of an owned object; poisons the name</td></tr>
+<tr><td><code>abs(value)</code></td><td>any number; answers its operand&#39;s type</td></tr>
+<tr><td><code>min(a, b)</code>, <code>max(a, b)</code></td><td>any two numbers of the same type</td></tr>
+<tr><td><code>clamp(value, low, high)</code></td><td>any three numbers of the same type</td></tr>
+<tr><td><code>sqrt(value)</code></td><td>a <code>float</code> or a <code>double</code>, and <strong>the same width back</strong></td></tr>
+<tr><td><code>floor(value)</code>, <code>ceil(value)</code></td><td>″</td></tr>
+<tr><td><code>trunc(value)</code></td><td>″; toward zero, and <code>math.round</code> is the fourth</td></tr>
+<tr><td><code>chr(code: long) -&gt; string</code></td><td>traps <code>bad_codepoint</code> on an invalid codepoint</td></tr>
+<tr><td><code>ord(text: string) -&gt; long</code></td><td>first codepoint; traps on empty</td></tr>
+<tr><td><code>parse_int(text: string) -&gt; long?</code></td><td><code>none</code> when the text is not an integer</td></tr>
+<tr><td><code>parse_float(text: string) -&gt; double?</code></td><td><code>none</code> when the text is not a number</td></tr>
+<tr><td><code>byte(x)</code>, <code>short(x)</code>, <code>int(x)</code>, <code>long(x)</code>, <code>half(x)</code>, <code>float(x)</code>, <code>double(x)</code>, <code>string(x)</code></td><td>the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target&#39;s range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches <code>inf</code> rather than trapping; <code>string(x)</code> takes a scalar and prints it at its own width</td></tr>
+</tbody></table></div>
+<p>The four numeric builtins that answer their operand&#39;s own type land their arguments where the whole call lands, so <code>let x: double = sqrt(2.0)</code> reads <code>2.0</code> at binary64 rather than widening binary32&#39;s answer into it. Unannotated, a float literal is a <code>float</code>, which is what the fourth line below prints.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">abs</span>(-<span class="n">7</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">min</span>(<span class="n">3</span>, <span class="n">9</span>)) + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(<span class="b">max</span>(<span class="n">3</span>, <span class="n">9</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">clamp</span>(<span class="n">42</span>, <span class="n">0</span>, <span class="n">10</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">sqrt</span>(<span class="n">2.0</span>)))
+    <span class="k">let</span> two: <span class="t">double</span> = <span class="n">2.0</span>
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">sqrt</span>(two)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">floor</span>(-<span class="n">2.5</span>)) + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(<span class="b">ceil</span>(-<span class="n">2.5</span>)) + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(<span class="b">trunc</span>(-<span class="n">2.5</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="t">long</span>(<span class="n">2.5</span>)) + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(<span class="t">long</span>(-<span class="n">2.5</span>)) + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(<span class="t">long</span>(<span class="n">2.4</span>)))
+    <span class="b">print</span>(<span class="b">chr</span>(<span class="n">9731</span>))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">ord</span>(<span class="s">&quot;A&quot;</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">parse_int</span>(<span class="s">&quot;17&quot;</span>) <span class="k">else</span> -<span class="n">1</span>))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">parse_float</span>(<span class="s">&quot;nope&quot;</span>) <span class="k">else</span> -<span class="n">1.0</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>7
+3 9
+10
+1.4142135
+1.4142135623730951
+-3 -2 -2
+3 -3 2
+☃
+65
+17
+-1</samp></pre></div>
+</figure>
+<h2 id="host-builtins">Host builtins<a class="anchor" href="#host-builtins" aria-label="link to this section">#</a></h2>
+<p>Every one of these is gated. In a program compiled without host access, naming one is <code>luce.sema.host</code>. At run time a service the host does not implement traps <code>host_unavailable</code> rather than doing nothing.</p>
+<p>Each one&#39;s shape is a decision about what kind of fact it reports. A service the world can say no to answers <code>!</code>; a service that can only report &quot;there is nothing there&quot; answers <code>T?</code>; a service that cannot fail answers a plain value. See <a href="../failure/">traps and errors</a>.</p>
+<h3 id="console">Console<a class="anchor" href="#console" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>print(text: string)</code></td><td>a line to standard output, unsanitized — it is the program&#39;s own channel and may be a pipe</td></tr>
+<tr><td><code>print_error(text: string)</code></td><td>a line to standard error, <strong>always sanitized</strong>: that channel is shared with the runner, so a program may not scribble on a frame it does not own</td></tr>
+<tr><td><code>read_line(prompt: string) -&gt; string?</code></td><td>writes the prompt, reads one line without its newline; <code>none</code> at end of input. Hands the terminal back its line discipline first, so a line read and a raw key loop never fight over standard input</td></tr>
+</tbody></table></div>
+<p>End of input is absence, not failure — nothing went wrong, there is just nothing more — so <code>read_line</code> answers <code>T?</code> and <code>read_line(&quot;&gt; &quot;) else &quot;&quot;</code> is the whole handling.</p>
+<h3 id="the-environment">The environment<a class="anchor" href="#the-environment" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>env(name: string) -&gt; string?</code></td><td>one environment variable; <code>none</code> when it is unset. There is no setter and no way to read the whole environment</td></tr>
+</tbody></table></div>
+<p><strong>The command line is not a builtin.</strong> It is <code>main</code>&#39;s parameter — write <code>func main(args: list(string)):</code> and read <code>args</code> like any other list (<a href="../ownership/#s44">S44</a>).</p>
+<h3 id="the-clock">The clock<a class="anchor" href="#the-clock" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>clock_ms() -&gt; long</code></td><td>a <strong>monotonic</strong> reading in milliseconds; only differences mean anything, and it is not a wall clock or a calendar</td></tr>
+<tr><td><code>sleep_ms(milliseconds: long)</code></td><td>waits at least that long; presents the pending frame first, as <code>key_read</code> does</td></tr>
+</tbody></table></div>
+<p>Neither can fail, and that is deliberate for <code>sleep_ms</code>: a duration that has <strong>already elapsed</strong> — zero, or the negative left by <code>deadline - clock_ms()</code> when a frame overran — is not a bug and not a failure. There is no time left to wait, so it returns at once. An animation loop can subtract without guarding.</p>
+<h3 id="the-exit">The exit<a class="anchor" href="#the-exit" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>exit(status: long)</code></td><td>the program&#39;s chosen end — the fourth way a run stops, beside finishing, trapping, and an uncaught error. It never returns: the run unwinds, nothing after the call executes, and the host carries the status — on POSIX, the low eight bits of the process&#39;s exit code</td></tr>
+</tbody></table></div>
+<p>Not a trap (nothing is wrong) and not an error (nothing failed): <code>exit(0)</code> from the middle of <code>main</code> is an ordinary way for a program that has said everything it came to say to stop saying it. Host-gated like every effect — a host that cannot carry a status refuses the call (<code>host_unavailable</code>) rather than losing the number.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> started = <span class="b">clock_ms</span>()
+    <span class="b">sleep_ms</span>(<span class="n">0</span>)
+    <span class="b">sleep_ms</span>(-<span class="n">40</span>)
+    <span class="b">print</span>(<span class="s">f&quot;an overrun frame waits {clock_ms() - started} ms&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>an overrun frame waits 0 ms</samp></pre></div>
+</figure>
+<h3 id="the-machine">The machine<a class="anchor" href="#the-machine" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>os_total_memory() -&gt; long</code></td><td>bytes of physical memory the machine has; fixed for the life of the run</td></tr>
+<tr><td><code>os_available_memory() -&gt; long</code></td><td>bytes it could still hand out. This one <strong>moves</strong>: ask twice and expect two answers</td></tr>
+<tr><td><code>os_cpu_count() -&gt; long</code></td><td>how many processors the host would schedule work onto — logical ones, so simultaneous multithreading counts threads</td></tr>
+</tbody></table></div>
+<p>Read them through <a href="/std/os/"><code>std.os</code></a>, which is where they are documented and where the word &quot;available&quot; is pinned down per platform. None of them can fail in the <code>!</code> sense and none answers <code>none</code>: a fact the host knows is a number, and a fact it does not know is a <strong>refusal</strong> — <code>host_unavailable</code>, the same trap a withheld service gives. A host is never made to invent a number for a machine it could not measure.</p>
+<h3 id="files">Files<a class="anchor" href="#files" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>file_read(path: string) -&gt; string!</code></td><td>the whole file; 64 MiB ceiling</td></tr>
+<tr><td><code>file_write(path: string, content: string) -&gt; !</code></td><td>truncates or creates</td></tr>
+<tr><td><code>file_append(path: string, content: string) -&gt; !</code></td><td>adds to the end, creating the file if it is not there</td></tr>
+<tr><td><code>file_delete(path: string) -&gt; !</code></td><td>an absent path is <code>io_failed</code>, not a quiet success</td></tr>
+<tr><td><code>file_rename(from: string, to: string) -&gt; !</code></td><td>moves a file, <strong>replacing</strong> an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk</td></tr>
+<tr><td><code>file_exists(path: string) -&gt; bool</code></td><td>a question about the past, not a guard</td></tr>
+<tr><td><code>dir_list(path: string) -&gt; list(string)!</code></td><td>the names in a directory — plain names, not paths, without <code>.</code> and <code>..</code>, in whatever order the file system gave them. A fresh list the caller owns</td></tr>
+<tr><td><code>file_open(path: string, mode: long) -&gt; file!</code></td><td>a handle your scope owns. <code>mode</code> is 0 read, 1 write, 2 append — and you write <a href="/std/files/"><code>files.open</code></a>, <a href="/std/files/"><code>files.create</code></a> or <a href="/std/files/"><code>files.append_to</code></a> rather than a number</td></tr>
+</tbody></table></div>
+<p>Every one that changes a file is fallible, because the world decides whether it lands. <code>file_exists</code> is the exception and answers a plain <code>bool</code> — but it is a question about the past, never a guard for the call after it.</p>
+<p><code>file_read</code> and <code>file_write</code> are <strong>defined over the handle</strong>: each is an open, a loop of reads or writes, a close, and — for the reading direction — the runtime&#39;s own UTF-8 check. They are conveniences with a ceiling, not a second channel.</p>
+<h3 id="bytes">Bytes<a class="anchor" href="#bytes" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>parse_string(bytes: list(byte)) -&gt; string?</code></td><td>those bytes as text, or absent when they are not valid UTF-8</td></tr>
+</tbody></table></div>
+<p>The third member of the parse family, and it answers absence for the reason <code>parse_int</code> does: &quot;not UTF-8&quot; is the same reason every time, so there is nothing a carried message would add. Write it as <a href="/std/strings/"><code>strings.from_bytes</code></a>, which is where the other direction — <code>strings.to_bytes</code>, total, because a string always has bytes — lives beside it.</p>
+<h3 id="the-terminal">The terminal<a class="anchor" href="#the-terminal" aria-label="link to this section">#</a></h3>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>term_rows() -&gt; long</code>, <code>term_cols() -&gt; long</code></td><td></td></tr>
+<tr><td><code>term_clear()</code>, <code>term_move(row, column)</code></td><td></td></tr>
+<tr><td><code>term_style(fg, bg = -1, bold = false)</code></td><td>256-color SGR; <code>-1</code>, the default, is the terminal&#39;s own color</td></tr>
+<tr><td><code>term_write(text: string)</code></td><td>sanitized; a program cannot emit a control sequence</td></tr>
+<tr><td><code>term_flush()</code></td><td></td></tr>
+<tr><td><code>key_read() -&gt; string?</code></td><td>presents the pending frame, then blocks; a stable name, or <code>none</code> at end of input</td></tr>
+<tr><td><code>key_text() -&gt; string</code></td><td>the payload when the last <code>key_read</code> returned <code>&quot;text&quot;</code></td></tr>
+</tbody></table></div>
+<p><code>key_read</code> answers <code>string?</code> because a keyboard can run dry — the pipe driving the program ends, the terminal closes — and then there is nothing there and no reason worth carrying, exactly as for <code>read_line</code> off the same input. <code>none</code> is not one more name in the set: a name would be a value a loop can fall past, and a loop that falls past it asks for the next key forever. End of input empties <code>key_text</code> too, so the payload of a key that never came is <code>&quot;&quot;</code>.</p>
+<div class="code"><pre><code>let name = key_read()
+if name == none:
+    break
+</code></pre></div>
+<p><code>std.files</code> is the layer you should normally use over the file builtins.</p>
+<p><strong>Paths are not confined.</strong> A program may name any path the process itself can — relative paths resolve against the working directory it was started in, and <code>../</code> and absolute paths mean what they mean everywhere else. That is deliberate: loom runs programs the way a shell runs processes, the gate above decides whether a program may reach the world at all, and the operating system decides which files. A path prefix enforced in the host would be a third mechanism that looks like security and is not. <code>file_read</code> does have a size ceiling — 64 MiB, a host policy so one call cannot ask for the machine&#39;s memory — and a larger file answers the same failure as an unreadable one.</p>
+<h2 id="list-t">list(T)<a class="anchor" href="#list-t" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Method</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>append(value)</code></td><td></td></tr>
+<tr><td><code>insert(index, value)</code></td><td></td></tr>
+<tr><td><code>remove(index)</code></td><td>frees an owned element</td></tr>
+<tr><td><code>pop() -&gt; T</code></td><td>ownership moves out; traps <code>empty_collection</code> when empty</td></tr>
+<tr><td><code>sort()</code></td><td>in place, <strong>stable</strong>, O(n log n); <code>long</code>, <code>double</code> or <code>string</code> elements</td></tr>
+<tr><td><code>reverse()</code></td><td>in place</td></tr>
+<tr><td><code>find(value) -&gt; long</code></td><td><code>-1</code> when absent</td></tr>
+<tr><td><code>contains(value) -&gt; bool</code></td><td></td></tr>
+<tr><td><code>clear()</code></td><td>frees all owned elements</td></tr>
+</tbody></table></div>
+<p>Plus <code>len</code>, <code>xs[i]</code>, <code>xs[i] = v</code>, and <code>xs[a:b]</code> — which allocates a new list the receiver owns, deeply when the elements are objects.</p>
+<h2 id="map-k-v">map(K, V)<a class="anchor" href="#map-k-v" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Method</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>has(key) -&gt; bool</code></td><td></td></tr>
+<tr><td><code>get(key, default) -&gt; V</code></td><td>never traps</td></tr>
+<tr><td><code>remove(key)</code></td><td>a no-op when absent</td></tr>
+<tr><td><code>keys() -&gt; list(K)</code></td><td>a fresh list the receiver owns</td></tr>
+<tr><td><code>values() -&gt; list(V)</code></td><td>a fresh list the receiver owns</td></tr>
+<tr><td><code>clear()</code></td><td></td></tr>
+</tbody></table></div>
+<p>Plus <code>len</code>, <code>m[k]</code> — which traps <code>key_missing</code> when the key is absent — <code>m[k] = v</code>, which inserts or updates, and <code>m[k] OP= v</code>, which defines a missing key at <code>V</code>&#39;s zero value and then applies.</p>
+<h2 id="array-t">array(T, ...)<a class="anchor" href="#array-t" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Method</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>dim(axis) -&gt; long</code></td><td>the size of one axis</td></tr>
+<tr><td><code>fill(value)</code></td><td>every element at any rank; <strong>value elements only</strong></td></tr>
+<tr><td><code>sort()</code>, <code>reverse()</code>, <code>find(v)</code>, <code>contains(v)</code></td><td>rank-1 only</td></tr>
+</tbody></table></div>
+<p>Plus <code>len</code> (dimension 0), <code>a[i]</code>, <code>grid[r, c]</code> up to four indices, and index assignment.</p>
+<p><code>dim</code> and <code>fill</code> are the two that work at every rank; the rest need a single axis to mean anything.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> grid = <span class="v">new</span> <span class="t">array</span>(<span class="t">long</span>, <span class="n">2</span>, <span class="n">3</span>)
+    grid.<span class="b">fill</span>(<span class="n">7</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{grid.dim(0)} by {grid.dim(1)}, corner {grid[1, 2]}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>2 by 3, corner 7</samp></pre></div>
+</figure>
+<h2 id="builder">builder<a class="anchor" href="#builder" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Method</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>append(text: string)</code></td><td></td></tr>
+<tr><td><code>append_ascii(code: long)</code></td><td>one ASCII byte; traps <code>bad_codepoint</code> outside 0..127</td></tr>
+<tr><td><code>build() -&gt; string</code></td><td>the bytes so far, as a string; the builder stays usable</td></tr>
+<tr><td><code>clear()</code></td><td></td></tr>
+</tbody></table></div>
+<p>Plus <code>len</code>.  A <code>builder</code> is a heap object, so its text comes out through <code>build()</code> rather than through <code>string(...)</code>, which takes a scalar.</p>
+<h2 id="file">file<a class="anchor" href="#file" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Method</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>read(into: array(byte, _)) -&gt; long!</code></td><td>fill the buffer and answer how many bytes landed; <strong>zero is the end of the file</strong>, not a refusal</td></tr>
+<tr><td><code>write(from: array(byte, _), count: long) -&gt; long!</code></td><td>write the first <code>count</code> bytes and answer how many landed, which may be fewer than you offered</td></tr>
+<tr><td><code>flush() -&gt; !</code></td><td>everything written so far is on the device</td></tr>
+</tbody></table></div>
+<p>All three are fallible: the world decides. There is deliberately no <code>close</code> — a <a href="/ref/types/#file"><code>file</code></a> is scope-owned, so the end of the owning scope closes it and <code>free(f)</code> closes it early.</p>
+<p>The buffer is the caller&#39;s, which is the C shape and is what makes the same three methods serve a socket later. <a href="/std/files/"><code>std.files</code></a> is where the loops over them live.</p>
+<h2 id="string">string<a class="anchor" href="#string" aria-label="link to this section">#</a></h2>
+<p>The language keeps only these:</p>
+<div class="table"><table>
+<thead><tr><th>Operation</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>&quot;...&quot;</code>, <code>f&quot;...&quot;</code></td><td>literals</td></tr>
+<tr><td><code>+</code></td><td>concatenation</td></tr>
+<tr><td><code>== != &lt; &lt;= &gt; &gt;=</code></td><td>comparison and ordering</td></tr>
+<tr><td><code>s[a:b]</code></td><td>slice; checks UTF-8 boundaries</td></tr>
+<tr><td><code>len(s)</code></td><td>in bytes</td></tr>
+<tr><td><code>s.byte_at(index) -&gt; byte</code></td><td>raw byte. The one builtin that answers a <code>byte</code>, because its result is definitionally one; it reaches a <code>long</code> parameter or a comparison with nothing written down</td></tr>
+<tr><td><code>s.find_byte(byte, start) -&gt; long</code></td><td>offset of the first <code>byte</code> at or after <code>start</code>, or <code>-1</code>; the byte looked for is a <code>byte</code>, so &quot;outside 0..255&quot; is refused where it is written rather than trapping where it is read. Traps if <code>start</code> is outside the string</td></tr>
+</tbody></table></div>
+<p>Every other string method routes to <a href="/std/strings/"><code>std.strings</code></a> and needs <code>import std.strings</code> in scope.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> s = <span class="s">&quot;hello, loom&quot;</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(s)} bytes&quot;</span>)
+    <span class="b">print</span>(s[<span class="n">7</span>:<span class="n">11</span>])
+    <span class="b">print</span>(<span class="t">string</span>(s.<span class="b">byte_at</span>(<span class="n">0</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(s.<span class="b">find_byte</span>(<span class="n">44</span>, <span class="n">0</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(s.<span class="b">find_byte</span>(<span class="n">122</span>, <span class="n">0</span>)))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>11 bytes
+loom
+104
+5
+-1</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../modules/"><span>Previous</span>Modules</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#free-functions">Free functions</a></li>
+<li class="h2"><a href="#host-builtins">Host builtins</a></li>
+<li class="h3"><a href="#console">Console</a></li>
+<li class="h3"><a href="#the-environment">The environment</a></li>
+<li class="h3"><a href="#the-clock">The clock</a></li>
+<li class="h3"><a href="#the-exit">The exit</a></li>
+<li class="h3"><a href="#the-machine">The machine</a></li>
+<li class="h3"><a href="#files">Files</a></li>
+<li class="h3"><a href="#bytes">Bytes</a></li>
+<li class="h3"><a href="#the-terminal">The terminal</a></li>
+<li class="h2"><a href="#list-t">list(T)</a></li>
+<li class="h2"><a href="#map-k-v">map(K, V)</a></li>
+<li class="h2"><a href="#array-t">array(T, ...)</a></li>
+<li class="h2"><a href="#builder">builder</a></li>
+<li class="h2"><a href="#file">file</a></li>
+<li class="h2"><a href="#string">string</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

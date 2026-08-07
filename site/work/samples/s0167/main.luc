@@ -1,0 +1,18 @@
+import std.files
+import std.strings
+
+func load(path: string) -> list(string)!:
+    var found: list(string) = []
+    let text = try files.read(path)       # `found` is released if this leaves
+    for line in text.split("\n"):
+        if line != "":
+            found.append(line)
+    return found                          # …and moved out if it does not
+
+func main() -> !:
+    try files.write("data.txt", "alpha\nbeta\n\ngamma\n")
+    let lines = try load("data.txt")
+    print(f"{len(lines)} non-empty lines, first {lines[0]}")
+
+    let missing = load("nothing.txt") catch new list(string)
+    print(f"missing: {len(missing)}")

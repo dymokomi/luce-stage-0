@@ -13,7 +13,7 @@
 //! the suite the moment the two disagree.
 //!
 //! **It imports `luce` rather than copying its tables.**  That is the
-//! difference between this and `site/src/highlight.zig`, which copies
+//! difference between this and `www/luce/src/highlight.zig`, which copies
 //! deliberately: the site generator drives the *built binaries* as
 //! subprocesses so it can verify what the toolchain really does, and
 //! linking the language in would undercut that.  This generator

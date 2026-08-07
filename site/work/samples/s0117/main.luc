@@ -1,0 +1,9 @@
+import std.strings
+
+func main():
+    print(string(1.0 / 3.0))
+    let wide: double = 1.0 / 3.0
+    print(string(wide))
+    print(strings.format_float(1.0 / 3.0, 4))
+    print(strings.format_float(2.5, 0))
+    print(strings.format_float(-2.345, 2))

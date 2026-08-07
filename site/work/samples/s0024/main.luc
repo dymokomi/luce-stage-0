@@ -1,0 +1,12 @@
+struct Inner:
+    n: long
+
+struct Outer:
+    label: string
+    inner: Inner
+
+func main():
+    var box = Outer(label = "b", inner = Inner(n = 1))
+    box.inner.n = 41
+    box.inner.n += 1
+    print(f"{box.label} {box.inner.n}")

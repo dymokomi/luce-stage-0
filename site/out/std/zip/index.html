@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>std.zip &middot; Luce</title>
+<meta name="description" content="ZIP archives and DEFLATE, in pure Luce: read a real archive, write one, and check it.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a class="here" href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The standard library</summary>
+<ul>
+<li><a href="../../std/">Overview</a></li>
+<li><a href="../../std/math/">std.math</a></li>
+<li><a href="../../std/strings/">std.strings</a></li>
+<li><a href="../../std/files/">std.files</a></li>
+<li><a href="../../std/paths/">std.paths</a></li>
+<li><a href="../../std/os/">std.os</a></li>
+<li><a class="here" href="../../std/zip/">std.zip</a></li>
+<li><a href="../../std/json/">std.json</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>std.zip</h1>
+<p>ZIP archives and DEFLATE, in pure Luce. Read a real archive&#39;s central directory, pull an entry&#39;s contents out of it, and write an archive of your own. Nothing here is a builtin and nothing here touches the host: every function takes bytes and answers bytes, and where the bytes came from is the caller&#39;s business.</p>
+<div class="code"><pre><code>import std.zip
+</code></pre></div>
+<p>Written against the normative documents, and every structure in the source names its clause. The container is PKWARE&#39;s <strong>APPNOTE.TXT 6.3.10</strong> — 4.3.7 the local header, 4.3.12 the central directory, 4.3.16 the end record, 4.4.4 the flags. The compression is <strong>RFC 1951</strong> — §3.2.2 canonical Huffman, §3.2.4 stored blocks, §3.2.5 the length and distance tables, §3.2.6 the fixed codes, §3.2.7 the dynamic ones. A ZIP member&#39;s method-8 data is a <em>raw</em> deflate stream: no zlib header and no Adler-32 trailer.</p>
+<h2 id="bytes-are-a-list-byte">Bytes are a <code>list(byte)</code><a class="anchor" href="#bytes-are-a-list-byte" aria-label="link to this section">#</a></h2>
+<p>One byte to an element, and one byte of memory — a <code>list</code> stores its elements at their real width. This page used to say the opposite, and this module is where the cost was measured: a boxed slot is 24 bytes, so a byte buffer was 24 times its payload and <code>list(long)</code> was the honest least-bad choice. The buffers here are a quarter of what they were, and nothing above them changed to make it so.</p>
+<p>One thing the narrower element made explicit rather than changed: a <code>byte</code> widens to <code>int</code> in an operator, so a 32-bit field&#39;s top byte would shift into a sign bit. <code>read_u32</code> lifts its four bytes to <code>long</code> before shifting; everything else fits.</p>
+<h2 id="an-archive-on-disk">An archive on disk<a class="anchor" href="#an-archive-on-disk" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>zip.read(path: string) -&gt; list(byte)!</code></td><td>an archive&#39;s bytes, straight off the disk</td></tr>
+<tr><td><code>zip.write(path: string, archive: list(byte)) -&gt; !</code></td><td>write what <code>writer.finish()</code> answered</td></tr>
+</tbody></table></div>
+<p>These two are the only things in the module that touch the world, and they are the reason it was written. Until a Luce program could read a file that was not text, &quot;takes bytes&quot; meant &quot;takes bytes somebody computed&quot;, and no real archive could reach any of it. Everything between still takes bytes and answers bytes: a container format has no business deciding where its bytes live, which is why the two doors are one line each.</p>
+<h2 id="bytes-and-text">Bytes and text<a class="anchor" href="#bytes-and-text" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>zip.bytes(content: string) -&gt; list(byte)</code></td><td>the UTF-8 bytes a string is made of</td></tr>
+<tr><td><code>zip.text(data: list(byte)) -&gt; string?</code></td><td>the string those bytes spell, or absent when they spell none</td></tr>
+</tbody></table></div>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.zip
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">let</span> raw = zip.bytes(<span class="s">&quot;héllo&quot;</span>)
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">len</span>(raw)))
+    <span class="b">print</span>(zip.text(raw) <span class="k">else</span> <span class="s">&quot;(not text)&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>6
+héllo</samp></pre></div>
+</figure>
+<h2 id="the-checksum">The checksum<a class="anchor" href="#the-checksum" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>zip.crc32(data: list(byte)) -&gt; long</code></td><td>the reflected CRC-32 every entry carries (APPNOTE 4.4.7)</td></tr>
+</tbody></table></div>
+<p>The table is built per call, because a top-level <code>let</code> is a value constant and a table is a list: 256 rows of eight steps in front of one pass over the data.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.zip
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(zip.crc32(zip.bytes(<span class="s">&quot;123456789&quot;</span>))))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3421780262</samp></pre></div>
+</figure>
+<p>That is <code>0xCBF43926</code>, the published check value.</p>
+<h2 id="reading">Reading<a class="anchor" href="#reading" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>zip.entries(archive: list(byte)) -&gt; list(Entry)!</code></td><td>every entry the central directory lists, in the order it lists them</td></tr>
+<tr><td><code>zip.extract(archive: list(byte), entry: Entry) -&gt; list(byte)!</code></td><td>the entry&#39;s contents, checked against the size and the CRC the directory recorded</td></tr>
+</tbody></table></div>
+<p>An <code>Entry</code> describes one member and is made only by reading an archive — its fields are the module&#39;s own, and these are how a program asks:</p>
+<div class="table"><table>
+<thead><tr><th>Method</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>entry.name() -&gt; string</code></td><td>the name inside the archive, as it is stored</td></tr>
+<tr><td><code>entry.size() -&gt; long</code></td><td>how many bytes the contents are</td></tr>
+<tr><td><code>entry.packed() -&gt; long</code></td><td>how many bytes it takes up in the archive</td></tr>
+<tr><td><code>entry.crc() -&gt; long</code></td><td>the CRC-32 the archive records</td></tr>
+<tr><td><code>entry.deflated() -&gt; bool</code></td><td>true when it is deflated rather than stored whole</td></tr>
+</tbody></table></div>
+<p>Two things a conforming reader has to tolerate are tolerated. An entry written by a program that could not seek has zeros where its local header&#39;s CRC and sizes belong (APPNOTE 4.4.4 bit 3); this reads the central directory, which 4.4.7 requires to hold the right values. And an archive with a program in front of it — a self-extracting one — has every offset shifted by however far its directory really begins from where it says it does.</p>
+<p>Anything else is refused by name rather than half-read: an encrypted entry, a compression method the module does not have, a name that is not text, contents that fail their checksum.</p>
+<h2 id="writing">Writing<a class="anchor" href="#writing" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>zip.writer() -&gt; Writer</code></td><td>a new, empty archive, owned by the binding that received it</td></tr>
+<tr><td><code>writer.add(name: string, data: list(byte), compress: bool = false) -&gt; !</code></td><td>store one entry; <code>compress</code> deflates it and keeps whichever is smaller</td></tr>
+<tr><td><code>writer.finish() -&gt; list(byte)</code></td><td>the whole archive: everything added, then the central directory over it</td></tr>
+</tbody></table></div>
+<p><code>finish</code> builds a fresh list every time, so the writer stays usable.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.zip
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">var</span> writer = zip.writer()
+    <span class="k">try</span> writer.add(<span class="s">&quot;greeting.txt&quot;</span>, zip.bytes(<span class="s">&quot;hello, world\n&quot;</span>))
+    <span class="k">var</span> raw: <span class="t">list</span>(<span class="t">byte</span>) = [<span class="n">0</span>, <span class="n">255</span>, <span class="n">128</span>, <span class="n">1</span>]
+    <span class="k">try</span> writer.add(<span class="s">&quot;every.bin&quot;</span>, raw)
+    <span class="k">let</span> archive = writer.finish()
+
+    <span class="k">let</span> found = <span class="k">try</span> zip.entries(archive)
+    <span class="k">for</span> entry <span class="k">in</span> found:
+        <span class="b">print</span>(entry.name() + <span class="s">&quot; &quot;</span> + <span class="t">string</span>(entry.size()))
+    <span class="k">let</span> first = <span class="k">try</span> zip.extract(archive, found[<span class="n">0</span>])
+    <span class="b">print</span>(zip.text(first) <span class="k">else</span> <span class="s">&quot;(not text)&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>greeting.txt 13
+every.bin 4
+hello, world</samp></pre></div>
+</figure>
+<h2 id="deflate-on-its-own">DEFLATE on its own<a class="anchor" href="#deflate-on-its-own" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>zip.inflate(data: list(byte)) -&gt; list(byte)!</code></td><td>the bytes a raw DEFLATE stream stands for — stored, fixed and dynamic Huffman blocks alike</td></tr>
+<tr><td><code>zip.deflate(data: list(byte)) -&gt; list(byte)</code></td><td>a raw DEFLATE stream those bytes stand for; compression cannot fail, so it answers bytes rather than an error</td></tr>
+</tbody></table></div>
+<p><code>inflate</code> reads everything RFC 1951 defines. <code>deflate</code> writes one final block on the fixed tables of §3.2.6, with LZ77 matches found through a hash of three bytes and a chain of the positions that hashed the same — §3.3 lets a compressor use less than the format&#39;s full range and stay compliant, which is what a fixed-code encoder with a bounded search is doing.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.zip
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">var</span> text = <span class="s">&quot;&quot;</span>
+    <span class="k">for</span> step <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">40</span>):
+        text += <span class="s">&quot;the quick brown fox jumps over the lazy dog. &quot;</span>
+    <span class="k">let</span> plain = zip.bytes(text)
+    <span class="k">let</span> squeezed = zip.deflate(plain)
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">len</span>(plain)) + <span class="s">&quot; -&gt; &quot;</span> + <span class="t">string</span>(<span class="b">len</span>(squeezed)))
+    <span class="k">let</span> back = <span class="k">try</span> zip.inflate(squeezed)
+    <span class="b">print</span>(<span class="t">string</span>((zip.text(back) <span class="k">else</span> <span class="s">&quot;&quot;</span>) == text))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>1800 -&gt; 61
+true</samp></pre></div>
+</figure>
+<h2 id="limits">Limits<a class="anchor" href="#limits" aria-label="link to this section">#</a></h2>
+<p>The sizes are the ZIP32 ones: at most 65535 entries, each at most 4 GB, and there is no Zip64. Encryption, multi-disk archives and compression methods other than stored and deflated are refused rather than half-read. Damaged input is an <strong>error</strong>, never a trap — the bytes are the world&#39;s, not the program&#39;s — so a reader writes <code>try</code> or <code>catch</code>:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.zip
+
+<span class="k">func</span> <span class="d">count</span>(archive: <span class="t">list</span>(<span class="t">byte</span>)) -&gt; !:
+    <span class="k">let</span> found = <span class="k">try</span> zip.entries(archive)
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">len</span>(found)) + <span class="s">&quot; entries&quot;</span>)
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> scraps: <span class="t">list</span>(<span class="t">byte</span>) = [<span class="n">80</span>, <span class="n">75</span>, <span class="n">3</span>]
+    count(scraps) <span class="k">catch</span> reason:
+        <span class="b">print</span>(reason)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>zip: not an archive (only 3 bytes)</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../os/"><span>Previous</span>std.os</a>
+<a class="on" href="../json/"><span>Next</span>std.json</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#bytes-are-a-list-byte">Bytes are a `list(byte)`</a></li>
+<li class="h2"><a href="#an-archive-on-disk">An archive on disk</a></li>
+<li class="h2"><a href="#bytes-and-text">Bytes and text</a></li>
+<li class="h2"><a href="#the-checksum">The checksum</a></li>
+<li class="h2"><a href="#reading">Reading</a></li>
+<li class="h2"><a href="#writing">Writing</a></li>
+<li class="h2"><a href="#deflate-on-its-own">DEFLATE on its own</a></li>
+<li class="h2"><a href="#limits">Limits</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Failure &middot; Luce</title>
+<meta name="description" content="T!, try, catch and error — and the rule that decides between a trap and an error.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a class="here" href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>A tour of Luce</summary>
+<ul>
+<li><a href="../../tour/">Overview</a></li>
+<li><a href="../../tour/hello/">Hello, Luce</a></li>
+<li><a href="../../tour/values/">Values and types</a></li>
+<li><a href="../../tour/control/">Control flow</a></li>
+<li><a href="../../tour/functions/">Functions and structs</a></li>
+<li><a href="../../tour/enums/">Enums</a></li>
+<li><a href="../../tour/collections/">Lists, maps and arrays</a></li>
+<li><a href="../../tour/strings/">Strings</a></li>
+<li><a href="../../tour/ownership/">Memory</a></li>
+<li><a href="../../tour/absence/">Absence</a></li>
+<li><a class="here" href="../../tour/failure/">Failure</a></li>
+<li><a href="../../tour/modules/">Modules</a></li>
+<li><a href="../../tour/visibility/">Visibility</a></li>
+<li><a href="../../tour/host/">The outside world</a></li>
+<li><a href="../../tour/next/">Where to go next</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Failure</h1>
+<p>A trailing <code>!</code> on a return type says the call may not succeed. <code>string!</code> hands back a <code>string</code> <strong>or</strong> an error, and a bare <code>-&gt; !</code> hands back nothing or an error.</p>
+<p><code>!</code> means failure and only failure. It is never spent on absence, which is <a href="../absence/"><code>?</code>&#39;s job</a>.</p>
+<h2 id="the-rule-that-decides">The rule that decides<a class="anchor" href="#the-rule-that-decides" aria-label="link to this section">#</a></h2>
+<blockquote><p>A failure is an <strong>error</strong> if and only if a correct program, given correct input, can still meet it — because the world decided, not the program. Everything else is a trap.  <strong>Traps are bugs. Errors are news.</strong></p></blockquote>
+<p>Operationally: could the caller have prevented it with a check that is not racy? If yes, it is a trap, and the check is the program&#39;s job. If the check is inherently racy or impossible, it is an error. And if the answer is simply &quot;there is nothing there&quot;, with no reason worth carrying, it is neither — it is a <code>T?</code>.</p>
+<p>That rule left all but one of Luce&#39;s trap codes exactly where they were. What it moves is the host&#39;s file boundary: a read or a write the world refuses is an error, because <code>file_exists</code> before <code>file_read</code> is a race no program can close. There are <a href="/ref/failure/#the-codes">18 trap codes</a> and two error codes.</p>
+<h2 id="try-and-catch">try and catch<a class="anchor" href="#try-and-catch" aria-label="link to this section">#</a></h2>
+<p>A call that can fail must say which it means. Ignoring the outcome is not a spelling the grammar has.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">main</span>():
+    files.<span class="b">write</span>(<span class="s">&quot;notes.txt&quot;</span>, <span class="s">&quot;hello&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:4:5: files.write can fail: write &#39;try files.write(…)&#39; to pass the error on, or &#39;files.write(…) catch …&#39; to handle it [luce.sema.fallible]
+        files.write(&quot;notes.txt&quot;, &quot;hello&quot;)
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~</samp></pre></div>
+</figure>
+<p><code>try</code> passes the failure to your caller. It needs a caller that said <code>!</code>, and it releases what this frame owns on the way out — the same three lines <code>return</code> ends with, with one terminator changed.</p>
+<p><code>catch</code> handles it here. It has two forms, for the two shapes recovery takes — a fallback value, or a block.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">save</span>(path: <span class="t">string</span>, text: <span class="t">string</span>) -&gt; !:
+    <span class="k">try</span> files.<span class="b">write</span>(path, text)
+    <span class="b">print</span>(<span class="s">f&quot;wrote {path}&quot;</span>)
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">try</span> save(<span class="s">&quot;notes.txt&quot;</span>, <span class="s">&quot;hello, disk&quot;</span>)
+
+    <span class="k">let</span> read_back = files.<span class="b">read</span>(<span class="s">&quot;notes.txt&quot;</span>) <span class="k">catch</span> <span class="s">&quot;(nothing)&quot;</span>
+    <span class="b">print</span>(<span class="s">f&quot;read back: {read_back}&quot;</span>)
+
+    <span class="k">let</span> missing = files.<span class="b">read</span>(<span class="s">&quot;no-such-file&quot;</span>) <span class="k">catch</span> <span class="s">&quot;(nothing)&quot;</span>
+    <span class="b">print</span>(<span class="s">f&quot;missing: {missing}&quot;</span>)
+
+    files.<span class="b">write</span>(<span class="s">&quot;/nowhere/at/all&quot;</span>, <span class="s">&quot;x&quot;</span>) <span class="k">catch</span>:
+        <span class="b">print</span>(<span class="s">&quot;could not write to /nowhere/at/all&quot;</span>)
+
+    <span class="c"># Name the error and the handler can say what actually happened.</span>
+    files.<span class="b">write</span>(<span class="s">&quot;/nowhere/at/all&quot;</span>, <span class="s">&quot;x&quot;</span>) <span class="k">catch</span> reason:
+        <span class="b">print</span>(reason)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>wrote notes.txt
+read back: hello, disk
+missing: (nothing)
+could not write to /nowhere/at/all
+cannot write /nowhere/at/all</samp></pre></div>
+</figure>
+<p>The block form guards exactly <strong>one</strong> call, which is what separates it from an exception block: there is never a question about which statement failed. It attaches to a call written as a statement and to a plain assignment, and to nothing else. <code>catch NAME:</code> binds the error&#39;s message — a <code>string</code>, scoped to the handler — which is how a handler stops guessing at a reason it was handed.</p>
+<p><code>catch</code> binds like <code>else</code>, between the comparisons and <code>+</code>, and associates right. Both sides must agree on ownership: if the call hands over a fresh object, the fallback must too.</p>
+<h2 id="error-raises-with-your-own-words">error raises, with your own words<a class="anchor" href="#error-raises-with-your-own-words" aria-label="link to this section">#</a></h2>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">check</span>(n: <span class="t">long</span>) -&gt; <span class="t">long</span>!:
+    <span class="k">if</span> n &lt; <span class="n">0</span>:
+        <span class="b">error</span>(<span class="s">f&quot;negative: {n}&quot;</span>)
+    <span class="k">return</span> n
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> check(<span class="n">5</span>)))
+    <span class="k">let</span> fallback = check(-<span class="n">1</span>) <span class="k">catch</span> <span class="n">0</span>
+    <span class="b">print</span>(<span class="s">f&quot;fallback {fallback}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>5
+fallback 0</samp></pre></div>
+</figure>
+<p><code>error(...)</code> never comes back, so — like <code>trap(...)</code> — it may stand where a value belongs: <code>parse_int(digits) else error(&quot;not a number&quot;)</code>.</p>
+<h2 id="t-is-not-a-type">T! is not a type<a class="anchor" href="#t-is-not-a-type" aria-label="link to this section">#</a></h2>
+<p>Fallibility is an attribute of the <em>function</em>. There is no <code>T!</code> to declare a variable of, put in a <code>list</code>, or write in a struct field — and <code>return x</code> in a <code>-&gt; T!</code> function just returns <code>x</code>, with nothing to wrap it in.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> results: <span class="t">list</span>(<span class="t">long</span>!) = []
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">len</span>(results)))</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:2:27: expected &#39;)&#39; to close &#39;(&#39;, found &#39;!&#39; [luce.parse.expected]
+        var results: list(long!) = []
+                              ^</samp></pre></div>
+</figure>
+<h2 id="what-an-uncaught-error-looks-like">What an uncaught error looks like<a class="anchor" href="#what-an-uncaught-error-looks-like" aria-label="link to this section">#</a></h2>
+<p>An error out of <code>main() -&gt; !</code> ends the run. loom prints the words and the <strong>one</strong> place the error was raised.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="b">error</span>(<span class="s">&quot;the disk is on fire&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">Output — the error reaches the top</figcaption>
+<div class="code result bad"><pre><samp>loom: error: the disk is on fire [user_error]
+    raised in main (main.luc:2:5)</samp></pre></div>
+</figure>
+<p>One line, not a stack. A trap is a bug and the stack is its diagnosis; an error is news, and where it came from is the news. Carrying a full trace would also charge the <em>success</em> path for it.</p>
+<p>Compare a trap, which does print the stack:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">inner</span>(values: <span class="t">list</span>(<span class="t">long</span>)) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> values[<span class="n">9</span>]
+
+<span class="k">func</span> <span class="d">outer</span>(values: <span class="t">list</span>(<span class="t">long</span>)) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> inner(values)
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> values: <span class="t">list</span>(<span class="t">long</span>) = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="b">print</span>(<span class="t">string</span>(outer(values)))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>loom: trap: index out of bounds [index_bounds]
+    at inner (main.luc:2:5)
+    at outer (main.luc:5:5)
+    at main (main.luc:9:5)</samp></pre></div>
+</figure>
+<h2 id="there-are-exactly-two-error-codes">There are exactly two error codes<a class="anchor" href="#there-are-exactly-two-error-codes" aria-label="link to this section">#</a></h2>
+<p><code>io_failed</code>, which the host&#39;s file services raise, and <code>user_error</code>, which <code>error(...)</code> raises. Not <code>not_found</code> and <code>permission_denied</code> — a host service answers yes, no, or out of memory, and cannot tell those two apart, so inventing the codes would be inventing the distinction.</p>
+<h2 id="there-is-no-errdefer">There is no errdefer<a class="anchor" href="#there-is-no-errdefer" aria-label="link to this section">#</a></h2>
+<p>And there never will be. Luce&#39;s cleanup is scope ownership, which already knows that <code>return</code> moves what it hands back and <code>try</code> moves nothing. The one bit <code>errdefer</code> encodes is already a parameter of the unwinder.</p>
+<p><a href="/guide/failure/">Traps are bugs, errors are news</a> is the long version, including why <code>Result&lt;T, E&gt;</code> is not the shape Luce took.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../absence/"><span>Previous</span>Absence</a>
+<a class="on" href="../modules/"><span>Next</span>Modules</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#the-rule-that-decides">The rule that decides</a></li>
+<li class="h2"><a href="#try-and-catch">try and catch</a></li>
+<li class="h2"><a href="#error-raises-with-your-own-words">error raises, with your own words</a></li>
+<li class="h2"><a href="#t-is-not-a-type">T! is not a type</a></li>
+<li class="h2"><a href="#what-an-uncaught-error-looks-like">What an uncaught error looks like</a></li>
+<li class="h2"><a href="#there-are-exactly-two-error-codes">There are exactly two error codes</a></li>
+<li class="h2"><a href="#there-is-no-errdefer">There is no errdefer</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+import gauge
+
+func main():
+    var g = gauge.Gauge(label = "power")
+    print(g.show())

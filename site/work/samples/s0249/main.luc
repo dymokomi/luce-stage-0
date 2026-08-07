@@ -1,0 +1,8 @@
+import std.paths
+
+func main():
+    let p = paths.join("/usr/local", "bin/luce")
+    print(p)
+    print(paths.dir(p))
+    print(paths.base(p))
+    print(paths.join("src", "main.luc"))

@@ -1,0 +1,13 @@
+struct Setting:
+    name: string
+    limit: long?
+
+func describe(setting: Setting) -> string:
+    let limit = setting.limit
+    if limit == none:
+        return f"{setting.name}: unlimited"
+    return f"{setting.name}: {limit}"
+
+func main():
+    print(describe(Setting(name = "retries", limit = 3)))
+    print(describe(Setting(name = "size", limit = none)))

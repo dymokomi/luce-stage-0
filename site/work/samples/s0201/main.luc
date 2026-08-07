@@ -1,0 +1,8 @@
+let width = 80
+let margin = 4
+let usable = width - margin * 2
+let title = "loom"
+let banner = title + " console"
+
+func main():
+    print(f"{banner}: {usable} columns")

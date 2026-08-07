@@ -1,0 +1,10 @@
+struct Node:
+    value: long
+    next: Node?
+
+func main():
+    let tail = Node(value = 2, next = none)
+    let head = Node(value = 1, next = tail)
+    let second = head.next            # bind the field, then test the name
+    if second != none:
+        print(f"{head.value} then {second.value}")

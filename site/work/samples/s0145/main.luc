@@ -1,0 +1,13 @@
+import std.files
+
+func main() -> !:
+    let text = files.read("absent.txt") catch "(default contents)"
+    print(text)
+
+    files.write("/nowhere/x", "data") catch:
+        print("the write did not land")
+
+    var greeting = "unset"
+    greeting = files.read("absent.txt") catch:
+        greeting = "(new file)"
+    print(greeting)

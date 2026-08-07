@@ -1,0 +1,13 @@
+enum Method:
+    stored
+    deflated
+
+struct Entry:
+    name: string
+    method: Method = Method.stored
+
+func main():
+    let plain = Entry(name = "notes.txt")
+    print(string(plain.method))
+    let packed = Entry(name = "big.log", method = Method.deflated)
+    print(string(packed.method))

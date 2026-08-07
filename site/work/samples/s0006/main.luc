@@ -1,0 +1,4 @@
+func main():
+    var full: byte = 255
+    print(string(full + 1))
+    print(string(full * full))

@@ -1,0 +1,4 @@
+func main():
+    var xs: list(long) = []
+    print("popping an empty list")
+    print(string(xs.pop()))

@@ -1,0 +1,4 @@
+func main(args: list(string)):
+    for name in args:
+        print(name)
+    # scope ends: the list is freed here, like any owned binding

@@ -1,0 +1,12 @@
+func classify(text: string) -> string:
+    let n = parse_int(text)
+    if n == none:
+        return f"{text} is not a number"
+    if n < 0:
+        return f"{text} is negative"
+    return f"{text} doubles to {n * 2}"
+
+func main():
+    print(classify("21"))
+    print(classify("-3"))
+    print(classify("x"))

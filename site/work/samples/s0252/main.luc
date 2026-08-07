@@ -1,0 +1,6 @@
+import std.zip
+
+func main() -> !:
+    let raw = zip.bytes("héllo")
+    print(string(len(raw)))
+    print(zip.text(raw) else "(not text)")

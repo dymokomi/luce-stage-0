@@ -1,0 +1,6 @@
+func main():
+    let count = 7                 # int
+    let ratio: double = 0.5        # said out loud
+    let ready = true              # bool
+    let name = "loom"             # string
+    print(f"{count} {ratio} {ready} {name}")

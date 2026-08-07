@@ -1,0 +1,11 @@
+struct Cell:
+    value: long
+
+func bump(cells: list(Cell)):
+    cells[0].value += 1
+
+func main():
+    let cells: list(Cell) = [Cell(value = 1)]
+    cells[0].value = 10
+    bump(cells)
+    print(string(cells[0].value))

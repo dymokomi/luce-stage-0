@@ -1,0 +1,11 @@
+import std.zip
+
+func main() -> !:
+    var text = ""
+    for step in range(0, 40):
+        text += "the quick brown fox jumps over the lazy dog. "
+    let plain = zip.bytes(text)
+    let squeezed = zip.deflate(plain)
+    print(string(len(plain)) + " -> " + string(len(squeezed)))
+    let back = try zip.inflate(squeezed)
+    print(string((zip.text(back) else "") == text))

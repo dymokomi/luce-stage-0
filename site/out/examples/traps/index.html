@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traps &middot; Luce</title>
+<meta name="description" content="What a bug looks like: a stable code, a line, and a call trace.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a class="here" href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>Luce by example</summary>
+<ul>
+<li><a href="../../examples/">Overview</a></li>
+<li><a href="../../examples/hello/">Hello and arguments</a></li>
+<li><a href="../../examples/loops/">Loops and ranges</a></li>
+<li><a href="../../examples/lists/">Lists</a></li>
+<li><a href="../../examples/maps/">Maps</a></li>
+<li><a href="../../examples/arrays/">Arrays and grids</a></li>
+<li><a href="../../examples/text/">Text processing</a></li>
+<li><a href="../../examples/structs/">Structs</a></li>
+<li><a href="../../examples/ownership/">give, copy and free</a></li>
+<li><a href="../../examples/optionals/">Optionals</a></li>
+<li><a href="../../examples/errors/">Errors</a></li>
+<li><a class="here" href="../../examples/traps/">Traps</a></li>
+<li><a href="../../examples/files/">Files</a></li>
+<li><a href="../../examples/programs/">The bundled programs</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Traps</h1>
+<p>A trap is a <strong>bug</strong>: deterministic, with a stable code, and it ends the program. Debug builds report <code>file:line:column</code> and the call trace, out of the machine code you ship.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">depth_three</span>(values: <span class="t">list</span>(<span class="t">long</span>)) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> values[<span class="n">10</span>]
+
+<span class="k">func</span> <span class="d">depth_two</span>(values: <span class="t">list</span>(<span class="t">long</span>)) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> depth_three(values)
+
+<span class="k">func</span> <span class="d">depth_one</span>(values: <span class="t">list</span>(<span class="t">long</span>)) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> depth_two(values)
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> values: <span class="t">list</span>(<span class="t">long</span>) = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="b">print</span>(<span class="s">&quot;before&quot;</span>)
+    <span class="b">print</span>(<span class="t">string</span>(depth_one(values)))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>before
+loom: trap: index out of bounds [index_bounds]
+    at depth_three (main.luc:2:5)
+    at depth_two (main.luc:5:5)
+    at depth_one (main.luc:8:5)
+    at main (main.luc:13:5)</samp></pre></div>
+</figure>
+<h2 id="arithmetic">Arithmetic<a class="anchor" href="#arithmetic" aria-label="link to this section">#</a></h2>
+<p><code>long</code> is checked. Overflow and division by zero are traps in every build mode — there is no <code>--release</code> that turns them off.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> a: <span class="t">long</span> = <span class="n">4611686018427387904</span>
+    <span class="b">print</span>(<span class="s">&quot;doubling&quot;</span>)
+    <span class="b">print</span>(<span class="t">string</span>(a * <span class="n">2</span>))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>doubling
+loom: trap: integer overflow [integer_overflow]
+    at main (main.luc:4:5)</samp></pre></div>
+</figure>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">ratio</span>(a: <span class="t">long</span>, b: <span class="t">long</span>) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> a // b
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(ratio(<span class="n">10</span>, <span class="n">2</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(ratio(<span class="n">10</span>, <span class="n">0</span>)))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>5
+loom: trap: division by zero [divide_by_zero]
+    at ratio (main.luc:2:5)
+    at main (main.luc:6:5)</samp></pre></div>
+</figure>
+<h2 id="bounds-and-keys">Bounds and keys<a class="anchor" href="#bounds-and-keys" aria-label="link to this section">#</a></h2>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs: <span class="t">list</span>(<span class="t">long</span>) = []
+    <span class="b">print</span>(<span class="s">&quot;popping an empty list&quot;</span>)
+    <span class="b">print</span>(<span class="t">string</span>(xs.<span class="b">pop</span>()))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>popping an empty list
+loom: trap: pop from an empty list [empty_collection]
+    at main (main.luc:4:5)</samp></pre></div>
+</figure>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> m = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">long</span>)
+    m[<span class="s">&quot;a&quot;</span>] = <span class="n">1</span>
+    <span class="b">print</span>(<span class="t">string</span>(m[<span class="s">&quot;b&quot;</span>]))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>loom: trap: key not found in map [key_missing]
+    at main (main.luc:4:5)</samp></pre></div>
+</figure>
+<h2 id="text">Text<a class="anchor" href="#text" aria-label="link to this section">#</a></h2>
+<p>Slicing a <code>string</code> checks UTF-8 boundaries, so a character cannot be cut in half.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> text = <span class="s">&quot;naïve&quot;</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(text)} bytes&quot;</span>)
+    <span class="b">print</span>(text[<span class="n">0</span>:<span class="n">3</span>])</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>6 bytes
+loom: trap: string slice splits a UTF-8 sequence [string_boundary]
+    at main (main.luc:4:5)</samp></pre></div>
+</figure>
+<h2 id="your-own">Your own<a class="anchor" href="#your-own" aria-label="link to this section">#</a></h2>
+<p><code>assert(condition)</code> and <code>trap(message)</code> are builtins. <code>trap</code> never returns, so it may stand where a value belongs — which is what makes <code>x else trap(&quot;…&quot;)</code> the assert-unwrap.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> expected = <span class="n">3</span>
+    <span class="k">let</span> actual = <span class="n">4</span>
+    <span class="b">print</span>(<span class="s">&quot;checking&quot;</span>)
+    <span class="b">assert</span>(expected == actual)</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>checking
+loom: trap: assertion failed [assertion_failed]
+    at main (main.luc:5:5)</samp></pre></div>
+</figure>
+<h2 id="runaway-recursion">Runaway recursion<a class="anchor" href="#runaway-recursion" aria-label="link to this section">#</a></h2>
+<p>Call depth is a <em>policy</em> limit rather than a native stack accident: compiled code carries its remaining depth as a hidden argument and refuses the call that would exhaust it. Runaway recursion is a trap with a message and a stack, never a segmentation fault. The trace keeps the innermost frames and counts the rest.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">forever</span>(n: <span class="t">long</span>) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> forever(n + <span class="n">1</span>)
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(forever(<span class="n">0</span>)))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>loom: trap: call depth exceeded [call_depth_exceeded]
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    at forever (main.luc:2:5)
+    ... 116 more frames</samp></pre></div>
+</figure>
+</article>
+<nav class="seq">
+<a class="back" href="../errors/"><span>Previous</span>Errors</a>
+<a class="on" href="../files/"><span>Next</span>Files</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#arithmetic">Arithmetic</a></li>
+<li class="h2"><a href="#bounds-and-keys">Bounds and keys</a></li>
+<li class="h2"><a href="#text">Text</a></li>
+<li class="h2"><a href="#your-own">Your own</a></li>
+<li class="h2"><a href="#runaway-recursion">Runaway recursion</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+import std.json
+
+func main() -> !:
+    let doc = try json.parse("{ \"a\" : [1, 2] , \"b\" : {} }")
+    print(doc.write(doc.root()))
+    print(doc.pretty(doc.root(), 2))
+    print(json.quote("say \"hi\""))
+    print(json.quote("line\nbreak"))
+    print(json.quote("caf" + chr(233)))
+    let dup = try json.parse("{\"a\": 1, \"a\": 2}")
+    let found = dup.get(dup.root(), "a")
+    if found != none:
+        print(string(found.as_long() else 0))
+    print(string(dup.root().count()))
+    print(dup.write(dup.root()))

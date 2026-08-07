@@ -10,7 +10,7 @@ ordinary files on Linux and macOS.
 **The documentation is [luce.luciaos.com](https://luce.luciaos.com)** —
 a tour, worked examples, a reference, and a status page that says out
 loud what the language cannot yet do.  It is built from
-[`site/`](site/) in this repository, and **every Luce sample on it is
+[`www/luce/`](www/luce/) in this repository, and **every Luce sample on it is
 compiled and run by the freshly built toolchain**, with the output on
 the page compared byte for byte against what the program actually
 printed.  A wrong claim fails the build.
@@ -178,12 +178,16 @@ programs/                 userland, written in Luce: the editor,
                           the oracle)
 bench/                    paired C/Luce benchmarks, same algorithm
                           and same output, cross-checked before timed
-site/                     luce.luciaos.com: the documentation, and the
+www/                      everything published to the web, one folder
+                          per site plus the shared publisher
+                          (www/README.md)
+  luce/                   luce.luciaos.com: the documentation, and the
                           generator that compiles and runs every
-                          sample on it (site/README.md)
-loomsite/                 loom.luciaos.com: the tool's own pages, one
+                          sample on it (www/luce/README.md)
+  loom/                   loom.luciaos.com: the tool's own pages, one
                           HTML fragment each, links and anchors checked
-www/                      the luciaos.com landing page, hand-written
+  luciaos/                the luciaos.com landing page, hand-written
+  deploy/                 publish.sh: the one rsync all three go out by
 tools/vscode-luce/        VS Code syntax highlighting for .luc,
                           generated from the compiler's own tables by
                           `zig build grammar` and pinned by a test

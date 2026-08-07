@@ -1,0 +1,11 @@
+import std.strings
+
+func main():
+    let text = "the cat sat on the mat the end"
+    var counts = new map(string, long)
+    for word in text.split(" "):
+        counts[word] += 1
+
+    for word, seen in counts:
+        if seen > 1:
+            print(f"{word}: {seen}")

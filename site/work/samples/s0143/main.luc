@@ -1,0 +1,14 @@
+func inner(n: long) -> long!:
+    if n == 0:
+        error("inner refuses zero")
+    return 100 // n
+
+func middle(n: long) -> long!:
+    return try inner(n) + 1
+
+func outer(n: long) -> long!:
+    return try middle(n) * 2
+
+func main() -> !:
+    print(string(try outer(5)))
+    print(string(outer(0) catch -1))

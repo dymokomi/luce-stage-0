@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello, Luce &middot; Luce</title>
+<meta name="description" content="Build the toolchain, compile a program, run it.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a class="here" href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>A tour of Luce</summary>
+<ul>
+<li><a href="../../tour/">Overview</a></li>
+<li><a class="here" href="../../tour/hello/">Hello, Luce</a></li>
+<li><a href="../../tour/values/">Values and types</a></li>
+<li><a href="../../tour/control/">Control flow</a></li>
+<li><a href="../../tour/functions/">Functions and structs</a></li>
+<li><a href="../../tour/enums/">Enums</a></li>
+<li><a href="../../tour/collections/">Lists, maps and arrays</a></li>
+<li><a href="../../tour/strings/">Strings</a></li>
+<li><a href="../../tour/ownership/">Memory</a></li>
+<li><a href="../../tour/absence/">Absence</a></li>
+<li><a href="../../tour/failure/">Failure</a></li>
+<li><a href="../../tour/modules/">Modules</a></li>
+<li><a href="../../tour/visibility/">Visibility</a></li>
+<li><a href="../../tour/host/">The outside world</a></li>
+<li><a href="../../tour/next/">Where to go next</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Hello, Luce</h1>
+<p>Luce comes as two programs. <code>luce</code> is the compiler: it turns <code>.luc</code> source into something you can run. <code>loom</code> is the terminal that runs it — an interactive shell, and a command line.</p>
+<h2 id="getting-the-toolchain">Getting the toolchain<a class="anchor" href="#getting-the-toolchain" aria-label="link to this section">#</a></h2>
+<p>There is no installer and no package. You build it from the repository, with <a href="https://ziglang.org/" rel="noreferrer">Zig 0.16</a> and LLVM:</p>
+<div class="code"><pre><code>git clone https://github.com/dymokomi/luciaos
+cd luciaos
+./build.sh
+</code></pre></div>
+<p>That writes <code>build/luce</code>, <code>build/loom</code> and <code>build/lib/libluce_rt.a</code>. LLVM is needed to build <code>luce</code>, because Luce&#39;s one code generator calls libLLVM in process — <code>brew install llvm</code> or <code>apt install llvm-dev</code> is enough, and <code>zig build -Dllvm-config=/path/to/llvm-config</code> points the build at an installation somewhere unusual. <code>loom</code> links no LLVM at all, so a machine that only <em>runs</em> Luce programs needs none.</p>
+<h2 id="the-smallest-program">The smallest program<a class="anchor" href="#the-smallest-program" aria-label="link to this section">#</a></h2>
+<p>A program is a file with a function called <code>main</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="s">&quot;hello, loom&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>hello, loom</samp></pre></div>
+</figure>
+<p>Blocks are introduced by <code>:</code> and marked by indentation, which is four spaces and nothing else — a tab or a three-space indent is a compile error naming the reason. There are no semicolons and no braces.</p>
+<h2 id="compiling-and-running-it">Compiling and running it<a class="anchor" href="#compiling-and-running-it" aria-label="link to this section">#</a></h2>
+<p>Put this in <code>hello.luc</code> and hand it to the compiler.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>hello.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>(args: <span class="t">list</span>(<span class="t">string</span>)):
+    <span class="k">var</span> name = <span class="s">&quot;loom&quot;</span>
+    <span class="k">if</span> <span class="b">len</span>(args) &gt; <span class="n">0</span>:
+        name = args[<span class="n">0</span>]
+    <span class="b">print</span>(<span class="s">&quot;hello, &quot;</span> + name)</code></pre></div>
+</figure>
+<figure class="sample">
+<figcaption class="cap shell">Shell</figcaption>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>luce build hello.luc</kbd>
+hello.luc -&gt; hello.lc
+<span class="prompt">$</span> <kbd>loom run hello.lc</kbd>
+hello, loom
+<span class="prompt">$</span> <kbd>loom run hello.lc world</kbd>
+hello, world</samp></pre></div>
+</figure>
+<p>That transcript is real: this site&#39;s build ran those three commands in a scratch directory and captured what they printed.</p>
+<p><code>luce build</code> writes <code>hello.lc</code>, and a <code>.lc</code> is machine code — a small shared library holding the compiled program and the runtime it calls. <code>loom run</code> opens it and calls it: nothing is compiled, nothing is interpreted, and the whole startup is a couple of milliseconds.</p>
+<p>While you are writing something, one command is shorter:</p>
+<figure class="sample">
+<figcaption class="cap shell">Shell</figcaption>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom luce hello.luc there</kbd>
+hello, there</samp></pre></div>
+</figure>
+<p><code>loom luce</code> compiles and runs in one step, always as a debug build, so a mistake reports the line it happened on.</p>
+<h2 id="the-compiler-s-three-commands">The compiler&#39;s three commands<a class="anchor" href="#the-compiler-s-three-commands" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Command</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>luce build FILE [-o OUT] [--release] [--emit=WHAT]</code></td><td>compile and write an artifact</td></tr>
+<tr><td><code>luce check FILE</code></td><td>compile, report problems, write nothing</td></tr>
+<tr><td><code>luce ir FILE [--full]</code></td><td>compile and print the readable intermediate form</td></tr>
+</tbody></table></div>
+<p><code>--emit</code> chooses which shape <code>build</code> writes — <code>library</code> (the default <code>.lc</code> that <code>loom</code> runs), <code>object</code> (a relocatable <code>.o</code>), or <code>exe</code> (a standalone binary that needs neither <code>loom</code> nor a runtime beside it). Nothing else differs between them; the same program walks the same pipeline either way.</p>
+<p>Builds are debug by default, which means the artifact carries source locations so a runtime failure can say <code>file:line:column</code>. <code>--release</code> strips those and changes nothing else — in particular it does not turn off a single safety check. See <a href="/guide/toolchain/">the compiler and the terminal</a>.</p>
+<h2 id="errors-at-compile-time">Errors, at compile time<a class="anchor" href="#errors-at-compile-time" aria-label="link to this section">#</a></h2>
+<p>Luce is statically typed with inference, and the only conversion it makes on its own is widening a <code>long</code> to a <code>double</code>. Mistakes are caught before anything runs, and the message tries to name the fix rather than the parser&#39;s predicament:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> n: <span class="t">long</span> = <span class="n">1</span>
+    <span class="k">let</span> s: <span class="t">string</span> = <span class="s">&quot;two&quot;</span>
+    <span class="b">print</span>(<span class="t">string</span>(n + s))</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:4:18: operands of + are long and string, and there is no conversion between them [luce.sema.type]
+        print(string(n + s))
+                     ^~~~~</samp></pre></div>
+</figure>
+<p>Every diagnostic carries a stable code — <code>luce.lex.*</code>, <code>luce.parse.*</code>, <code>luce.sema.*</code> — and a byte span, so tools can act on them and you can search for them.</p>
+<p>Next: what those types are.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../"><span>Previous</span>A tour of Luce</a>
+<a class="on" href="../values/"><span>Next</span>Values and types</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#getting-the-toolchain">Getting the toolchain</a></li>
+<li class="h2"><a href="#the-smallest-program">The smallest program</a></li>
+<li class="h2"><a href="#compiling-and-running-it">Compiling and running it</a></li>
+<li class="h2"><a href="#the-compiler-s-three-commands">The compiler&#39;s three commands</a></li>
+<li class="h2"><a href="#errors-at-compile-time">Errors, at compile time</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

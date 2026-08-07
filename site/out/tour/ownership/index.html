@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory &middot; Luce</title>
+<meta name="description" content="Scope ownership: no collector, no reference counting, and four words to learn.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a class="here" href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>A tour of Luce</summary>
+<ul>
+<li><a href="../../tour/">Overview</a></li>
+<li><a href="../../tour/hello/">Hello, Luce</a></li>
+<li><a href="../../tour/values/">Values and types</a></li>
+<li><a href="../../tour/control/">Control flow</a></li>
+<li><a href="../../tour/functions/">Functions and structs</a></li>
+<li><a href="../../tour/enums/">Enums</a></li>
+<li><a href="../../tour/collections/">Lists, maps and arrays</a></li>
+<li><a href="../../tour/strings/">Strings</a></li>
+<li><a class="here" href="../../tour/ownership/">Memory</a></li>
+<li><a href="../../tour/absence/">Absence</a></li>
+<li><a href="../../tour/failure/">Failure</a></li>
+<li><a href="../../tour/modules/">Modules</a></li>
+<li><a href="../../tour/visibility/">Visibility</a></li>
+<li><a href="../../tour/host/">The outside world</a></li>
+<li><a href="../../tour/next/">Where to go next</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Memory</h1>
+<p>Luce has no garbage collector. It has no reference counting — not in the language, not in the runtime, not hidden anywhere. And it has no <code>malloc</code>/<code>free</code> bookkeeping in ordinary code.</p>
+<p>What it has instead is <strong>scope ownership</strong>: the binding that received a fresh object owns it, and the owning scope frees it. Most programs never write a memory word.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]        <span class="c"># xs owns this list</span>
+    xs.<span class="b">append</span>(<span class="n">4</span>)
+    xs = [<span class="n">5</span>, <span class="n">6</span>]               <span class="c"># the old list is freed right here</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(xs)} elements&quot;</span>)
+    <span class="c"># the scope ends: everything owned here is freed</span></code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>2 elements</samp></pre></div>
+</figure>
+<p>The whole model is four words — <code>new</code>, <code>give</code>, <code>copy</code>, <code>free</code> — and three of them are needed only where the compiler genuinely cannot see what you mean. The full specification is <a href="/ref/ownership/">45 numbered situations</a>, each one addressable on its own, and the compiler quotes their numbers in its diagnostics.</p>
+<h2 id="what-owns-what">What owns what<a class="anchor" href="#what-owns-what" aria-label="link to this section">#</a></h2>
+<p>Only <strong>objects</strong> are owned: <code>list</code>, <code>map</code>, <code>array</code>, <code>builder</code>, and structs that transitively contain one. <strong>Values</strong> — <code>long</code>, <code>double</code>, <code>bool</code>, <code>string</code>, and plain structs — copy freely and are never verbed.</p>
+<p>An object is freed when its owner dies, and an owner is one of exactly three things: a binding, a container, or the statement that made it.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">for</span> round <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, <span class="n">3</span>):
+        <span class="k">var</span> row = <span class="v">new</span> <span class="t">array</span>(<span class="t">long</span>, <span class="n">4</span>)   <span class="c"># fresh every iteration</span>
+        row.<span class="b">fill</span>(round)
+        <span class="b">print</span>(<span class="s">f&quot;round {round} first {row[0]}&quot;</span>)
+        <span class="c"># row is freed here, every time around — memory stays flat</span>
+    <span class="k">for</span> word <span class="k">in</span> <span class="s">&quot;a b c&quot;</span>.split(<span class="s">&quot;&quot;</span>):    <span class="c"># never named: freed when the</span>
+        <span class="b">print</span>(word)                   <span class="c">#   for statement completes</span></code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>round 0 first 0
+round 1 first 1
+round 2 first 2
+a
+b
+c</samp></pre></div>
+</figure>
+<h2 id="aliasing-is-free">Aliasing is free<a class="anchor" href="#aliasing-is-free" aria-label="link to this section">#</a></h2>
+<p><code>let y = x</code> gives you a second name for the same object. Nothing is tracked and nothing is copied.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="k">let</span> view = xs             <span class="c"># an alias; xs still owns</span>
+    view.<span class="b">append</span>(<span class="n">4</span>)            <span class="c"># one list, two names</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(xs)} elements&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>4 elements</samp></pre></div>
+</figure>
+<p>The cost of that freedom is that an alias can outlive its owner. When it does, using it is a trap with a line number, not undefined behaviour:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = [<span class="n">1</span>, <span class="n">2</span>]
+    <span class="k">let</span> view = xs
+    <span class="v">free</span>(xs)                  <span class="c"># released early, on purpose</span>
+    <span class="b">print</span>(<span class="t">string</span>(view[<span class="n">0</span>]))</code></pre></div>
+<figcaption class="cap bad">Output — the program traps</figcaption>
+<div class="code result bad"><pre><samp>loom: trap: object used after free [use_after_free]
+    at main (main.luc:5:5)</samp></pre></div>
+</figure>
+<h2 id="keeping-something-needs-a-word">Keeping something needs a word<a class="anchor" href="#keeping-something-needs-a-word" aria-label="link to this section">#</a></h2>
+<p>Storing a <em>named</em> object into a container or a struct field, or handing it to a function that will keep it, is where the compiler stops guessing. It wants you to say which you meant.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> index = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">list</span>(<span class="t">long</span>))
+    <span class="k">var</span> hits = [<span class="n">12</span>, <span class="n">40</span>]
+    index[<span class="s">&quot;a.luc&quot;</span>] = hits</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:4:5: a container keeps its object elements; write give hits to hand it over, or copy hits to keep your own [OWNERSHIP.md S21] [luce.sema.own]
+        index[&quot;a.luc&quot;] = hits
+        ^~~~~~~~~~~~~~~~~~~~~</samp></pre></div>
+</figure>
+<p>The two answers are <code>give</code> and <code>copy</code>:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> index = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">list</span>(<span class="t">long</span>))
+
+    <span class="k">var</span> hits: <span class="t">list</span>(<span class="t">long</span>) = [<span class="n">12</span>, <span class="n">40</span>]
+    index[<span class="s">&quot;a.luc&quot;</span>] = <span class="v">give</span> hits      <span class="c"># transfer: the map owns it now</span>
+
+    <span class="k">var</span> template: <span class="t">list</span>(<span class="t">long</span>) = [<span class="n">0</span>, <span class="n">0</span>]
+    index[<span class="s">&quot;b.luc&quot;</span>] = <span class="v">copy</span> template  <span class="c"># a duplicate; template stays mine</span>
+    template.<span class="b">append</span>(<span class="n">1</span>)
+
+    index[<span class="s">&quot;c.luc&quot;</span>] = [<span class="n">7</span>, <span class="n">8</span>]         <span class="c"># fresh: nobody owned it, no word</span>
+
+    <span class="b">print</span>(<span class="s">f&quot;{len(index)} entries, template still has {len(template)}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3 entries, template still has 3</samp></pre></div>
+</figure>
+<p>After <code>give hits</code>, the name <code>hits</code> is <em>poisoned</em>: touching it is a compile error to the end of its scope. That rule is deliberately blunt — it is source-order and branch-insensitive, so you never have to reason about which arm of an <code>if</code> ran.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> sink = <span class="v">new</span> <span class="t">list</span>(<span class="t">list</span>(<span class="t">long</span>))
+    <span class="k">var</span> xs: <span class="t">list</span>(<span class="t">long</span>) = [<span class="n">1</span>]
+    <span class="k">if</span> <span class="b">len</span>(xs) &gt; <span class="n">0</span>:
+        sink.<span class="b">append</span>(<span class="v">give</span> xs)
+    <span class="b">print</span>(<span class="t">string</span>(<span class="b">len</span>(xs)))</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:6:22: xs was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29] [luce.sema.own]
+        print(string(len(xs)))
+                         ^~</samp></pre></div>
+</figure>
+<p>Because keeping always transfers, <strong>a container always owns its object elements</strong> — a dangling element is not something you can write. Freeing a container frees everything it owns, recursively.</p>
+<h2 id="calls-borrow">Calls borrow<a class="anchor" href="#calls-borrow" aria-label="link to this section">#</a></h2>
+<p>Passing an object to a function is a borrow, with no word at either end. A borrowed parameter may read and mutate contents freely; what it may not do is <em>keep</em> the object — store it, return it, give it away or free it.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">fill</span>(xs: <span class="t">list</span>(<span class="t">long</span>), upto: <span class="t">long</span>):
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, upto):
+        xs.<span class="b">append</span>(i * i)
+
+<span class="k">func</span> <span class="d">total</span>(values: <span class="t">list</span>(<span class="t">long</span>)) -&gt; <span class="t">long</span>:
+    <span class="k">var</span> sum: <span class="t">long</span> = <span class="n">0</span>
+    <span class="k">for</span> value <span class="k">in</span> values:
+        sum += value
+    <span class="k">return</span> sum
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> squares: <span class="t">list</span>(<span class="t">long</span>) = []
+    fill(squares, <span class="n">5</span>)                 <span class="c"># no word: a borrow</span>
+    <span class="b">print</span>(<span class="s">f&quot;{len(squares)} values totalling {total(squares)}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>5 values totalling 30</samp></pre></div>
+</figure>
+<p>A function that <em>does</em> want to keep says so in its signature, and the caller echoes it at the call site. Ownership handoffs are never invisible.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">stash</span>(index: <span class="t">map</span>(<span class="t">string</span>, <span class="t">list</span>(<span class="t">long</span>)), hits: <span class="v">give</span> <span class="t">list</span>(<span class="t">long</span>)):
+    index[<span class="s">&quot;latest&quot;</span>] = <span class="v">give</span> hits
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> index = <span class="v">new</span> <span class="t">map</span>(<span class="t">string</span>, <span class="t">list</span>(<span class="t">long</span>))
+    <span class="k">var</span> mine: <span class="t">list</span>(<span class="t">long</span>) = [<span class="n">1</span>, <span class="n">2</span>]
+    stash(index, <span class="v">give</span> mine)          <span class="c"># said at both ends</span>
+    stash(index, [<span class="n">3</span>, <span class="n">4</span>])             <span class="c"># fresh needs no word</span>
+    <span class="b">print</span>(<span class="s">f&quot;latest has {len(index[&quot;</span>latest<span class="s">&quot;])}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>latest has 2</samp></pre></div>
+</figure>
+<h2 id="return-moves">return moves<a class="anchor" href="#return-moves" aria-label="link to this section">#</a></h2>
+<p>Whatever a function returns, the caller owns. That is the one place a transfer needs no keyword, because there is nothing else it could mean — and it is why returning a <em>borrowed</em> parameter is a compile error.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">squares</span>(upto: <span class="t">long</span>) -&gt; <span class="t">list</span>(<span class="t">long</span>):
+    <span class="k">var</span> out: <span class="t">list</span>(<span class="t">long</span>) = []
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, upto):
+        out.<span class="b">append</span>(i * i)
+    <span class="k">return</span> out                    <span class="c"># moves out; the caller owns it</span>
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> values = squares(<span class="n">5</span>)
+    <span class="k">var</span> text: <span class="t">list</span>(<span class="t">string</span>) = []
+    <span class="k">for</span> value <span class="k">in</span> values:
+        text.<span class="b">append</span>(<span class="t">string</span>(value))
+    <span class="b">print</span>(text.join(<span class="s">&quot; &quot;</span>))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>0 1 4 9 16</samp></pre></div>
+</figure>
+<h2 id="free-for-when-you-want-the-memory-back-now">free, for when you want the memory back now<a class="anchor" href="#free-for-when-you-want-the-memory-back-now" aria-label="link to this section">#</a></h2>
+<p><code>free(x)</code> is legal on an owned name and poisons it exactly like <code>give</code>. Casual code never needs it; a program holding something large that it has finished with sometimes does.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> big = <span class="v">new</span> <span class="t">array</span>(<span class="t">long</span>, <span class="n">100000</span>)
+    big.<span class="b">fill</span>(<span class="n">7</span>)
+    <span class="k">let</span> sum = big[<span class="n">0</span>] + big[<span class="n">99999</span>]
+    <span class="v">free</span>(big)                     <span class="c"># done with it, on purpose</span>
+    <span class="b">print</span>(<span class="s">f&quot;sum {sum}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>sum 14</samp></pre></div>
+</figure>
+<h2 id="what-this-buys">What this buys<a class="anchor" href="#what-this-buys" aria-label="link to this section">#</a></h2>
+<p>Nothing can leak: every object is owned by a binding, a container, or a statement temporary, and all three have defined death points. There is no collector to pause, no reference count to increment on every assignment, and no cycle problem to have.</p>
+<p>What it costs is the one dynamic backstop you have met — an alias used after its owner released it traps <code>use_after_free</code> — plus the occasional <code>give</code> or <code>copy</code> on a line the compiler could not read your mind on.</p>
+<p><a href="/guide/memory/">Memory without a collector</a> is the long version, with the measurements and with the alternatives that were considered and refused.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../strings/"><span>Previous</span>Strings</a>
+<a class="on" href="../absence/"><span>Next</span>Absence</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#what-owns-what">What owns what</a></li>
+<li class="h2"><a href="#aliasing-is-free">Aliasing is free</a></li>
+<li class="h2"><a href="#keeping-something-needs-a-word">Keeping something needs a word</a></li>
+<li class="h2"><a href="#calls-borrow">Calls borrow</a></li>
+<li class="h2"><a href="#return-moves">return moves</a></li>
+<li class="h2"><a href="#free-for-when-you-want-the-memory-back-now">free, for when you want the memory back now</a></li>
+<li class="h2"><a href="#what-this-buys">What this buys</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

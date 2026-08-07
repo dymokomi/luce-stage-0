@@ -1,0 +1,5 @@
+func main():
+    var n: long = 9223372036854775807
+    print("about to add one")
+    n += 1
+    print(string(n))

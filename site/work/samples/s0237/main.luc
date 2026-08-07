@@ -1,0 +1,9 @@
+import std.strings
+
+func main():
+    let path = "src/luce/std/strings.luc"
+    print(string(path.find("/")))
+    print(string(path.find("/", 4)))
+    print(string(path.find("nowhere")))
+    print(f"{path.contains("std")} {path.starts_with("src")} {path.ends_with(".luc")}")
+    print(string(path.count("/")))

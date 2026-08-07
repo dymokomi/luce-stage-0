@@ -1,0 +1,8 @@
+private func helper() -> long:
+    return 41
+
+func visible() -> long:
+    return helper() + 1
+
+private let seed = 41
+let answer = seed + 1

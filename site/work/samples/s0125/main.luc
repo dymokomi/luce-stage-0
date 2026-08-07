@@ -1,0 +1,5 @@
+func main():
+    var index = new map(string, list(long))
+    var hits: list(long) = [12, 40]
+    index["a.luc"] = give hits    # the map owns it now
+    print(f"stored {len(index["a.luc"])}")

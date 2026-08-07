@@ -1,0 +1,8 @@
+func main():
+    var xs = [10, 20, 30, 40, 50]
+    let middle = xs[1:4]
+    let tail = xs[3:]
+    middle[0] = 999               # the copy changes; xs does not
+    print(f"middle {middle[0]} {middle[1]} {middle[2]}")
+    print(f"tail   {tail[0]} {tail[1]}")
+    print(f"source {xs[1]}")

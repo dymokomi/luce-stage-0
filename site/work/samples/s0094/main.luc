@@ -1,0 +1,4 @@
+func main(args: list(string)):
+    let times = parse_int(args[0]) else 1
+    for i in range(0, times):
+        print(f"line {i}")

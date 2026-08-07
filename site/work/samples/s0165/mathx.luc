@@ -1,0 +1,40 @@
+# A tiny math module: imported by stats.luc (`import mathx`).
+
+func mean(values: list(double)) -> double:
+    var total: double = 0.0
+    for value in values:
+        total = total + value
+    return total / double(len(values))
+
+# A sorted copy; whoever calls owns it.
+# The smallest and the largest, in one pass — where `sorted` was
+# called only to read its two ends (docs/RETURNS.md).
+func extremes(values: list(double)) -> (double, double):
+    if len(values) == 0:
+        trap("extremes needs at least one value")
+    var smallest = values[0]
+    var largest = values[0]
+    for value in values:
+        smallest = min(smallest, value)
+        largest = max(largest, value)
+    return smallest, largest
+
+private func sorted(values: list(double)) -> list(double):
+    var copied = values[0:]
+    copied.sort()
+    return copied
+
+func median(values: list(double)) -> double:
+    var ordered = sorted(values)
+    let count = len(ordered)
+    var middle = ordered[count // 2]
+    if count % 2 == 0:
+        middle = (ordered[count // 2 - 1] + ordered[count // 2]) / 2.0
+    return middle
+
+func deviation(values: list(double)) -> double:
+    let center = mean(values)
+    var spread: double = 0.0
+    for value in values:
+        spread = spread + (value - center) * (value - center)
+    return sqrt(spread / double(len(values)))

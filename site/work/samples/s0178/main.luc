@@ -1,0 +1,7 @@
+func main():
+    let flags = 0b1010
+    print(string(flags & 0b0010 != 0))
+    print(string(0xF0 | 0x0F))
+    print(string(~0))
+    print(string(-8 >> 1))
+    print(string(1_000_000 >> 3))

@@ -26,7 +26,7 @@ you want to know what is *not* here, [MISSING.md](MISSING.md).
 
 The prose that faces users lives on the documentation site instead —
 **[luce.luciaos.com](https://luce.luciaos.com)**, built from
-[`site/`](../site/) in this repository, where every Luce sample is
+[`www/luce/`](../www/luce/) in this repository, where every Luce sample is
 compiled and run by the freshly built toolchain and a wrong claim
 fails the build.  These files are the reasoning behind it.
 

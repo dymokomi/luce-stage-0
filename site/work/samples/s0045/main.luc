@@ -1,0 +1,9 @@
+import std.strings
+
+func main():
+    let mean = 23.998425
+    print(f"mean = {mean:.2f}")
+    let total = 74
+    let count = 20
+    print(f"{count} rolls, mean {total / count:.2f}")
+    print(f"{2.5:.0f} and {-2.5:.0f}")

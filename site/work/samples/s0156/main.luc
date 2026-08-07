@@ -1,0 +1,5 @@
+func forever(n: long) -> long:
+    return forever(n + 1)
+
+func main():
+    print(string(forever(0)))

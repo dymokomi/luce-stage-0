@@ -1,0 +1,12 @@
+enum Colour:
+    red
+    green
+    blue
+
+func main():
+    let c = Colour.red
+    match c:
+        red:
+            print("stop")
+        green:
+            print("go")

@@ -1,0 +1,10 @@
+func main():
+    for i in range(0, 3):
+        print(f"range {i}")
+
+    let words = ["fig", "pear", "plum"]
+    for word in words:
+        print(f"word {word}")
+
+    for index, word in words:
+        print(f"{index} is {word}")

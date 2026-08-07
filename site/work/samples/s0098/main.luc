@@ -1,0 +1,14 @@
+func find(grid: array(long, _, _), wanted: long) -> long:
+    for row in range(0, grid.dim(0)):
+        for column in range(0, grid.dim(1)):
+            if grid[row, column] == wanted:
+                return row * 100 + column
+    return -1
+
+func main():
+    var grid = new array(long, 3, 3)
+    for row in range(0, 3):
+        for column in range(0, 3):
+            grid[row, column] = row * 3 + column
+    print(string(find(grid, 5)))
+    print(string(find(grid, 99)))

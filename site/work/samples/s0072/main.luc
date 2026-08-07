@@ -1,0 +1,3 @@
+func main():
+    var results: list(long!) = []
+    print(string(len(results)))

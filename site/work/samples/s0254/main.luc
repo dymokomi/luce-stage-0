@@ -1,0 +1,14 @@
+import std.zip
+
+func main() -> !:
+    var writer = zip.writer()
+    try writer.add("greeting.txt", zip.bytes("hello, world\n"))
+    var raw: list(byte) = [0, 255, 128, 1]
+    try writer.add("every.bin", raw)
+    let archive = writer.finish()
+
+    let found = try zip.entries(archive)
+    for entry in found:
+        print(entry.name() + " " + string(entry.size()))
+    let first = try zip.extract(archive, found[0])
+    print(zip.text(first) else "(not text)")

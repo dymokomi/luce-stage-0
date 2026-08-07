@@ -1,0 +1,4 @@
+func main():
+    let a = true
+    let b = false
+    print(string(not a == b))

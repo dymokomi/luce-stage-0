@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expressions &middot; Luce</title>
+<meta name="description" content="Operators, precedence, calls, indexing, slicing, and the two refused shapes.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a class="here" href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The Luce reference</summary>
+<ul>
+<li><a href="../../ref/">Overview</a></li>
+<li><a href="../../ref/lexical/">Source text and lexical elements</a></li>
+<li><a href="../../ref/types/">Types</a></li>
+<li><a class="here" href="../../ref/expressions/">Expressions</a></li>
+<li><a href="../../ref/statements/">Statements and declarations</a></li>
+<li><a href="../../ref/ownership/">Ownership</a></li>
+<li><a href="../../ref/failure/">Traps and errors</a></li>
+<li><a href="../../ref/modules/">Modules</a></li>
+<li><a href="../../ref/builtins/">Builtins</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Expressions</h1>
+<h2 id="precedence">Precedence<a class="anchor" href="#precedence" aria-label="link to this section">#</a></h2>
+<p>Loosest to tightest:</p>
+<div class="table"><table>
+<thead><tr><th>Level</th><th>Operators</th><th>Associativity</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>or</code></td><td>left</td></tr>
+<tr><td>2</td><td><code>and</code></td><td>left</td></tr>
+<tr><td>3</td><td><code>==</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td><td><strong>non-associative</strong></td></tr>
+<tr><td>4</td><td><code>else</code>, <code>catch</code></td><td><strong>right</strong></td></tr>
+<tr><td>5</td><td><code>+</code> <code>-</code> `\</td><td><code> </code>^`</td><td>left</td></tr>
+<tr><td>6</td><td><code>*</code> <code>/</code> <code>//</code> <code>%</code> <code>&amp;</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code></td><td>left</td></tr>
+<tr><td>7</td><td>prefix <code>not</code> <code>-</code> <code>~</code> <code>give</code> <code>copy</code> <code>try</code></td><td>right</td></tr>
+<tr><td>8</td><td>postfix <code>.field</code> <code>[index]</code> <code>(call)</code></td><td>left</td></tr>
+</tbody></table></div>
+<p>So <code>x else 0 &gt; 5</code> compares the fallback, <code>x else n + 1</code> falls back to the sum, and <code>a else b else c</code> is a real chain.</p>
+<p>The bit set sits at Go&#39;s precedence rather than C&#39;s: <code>|</code> and <code>^</code> are additive, <code>&amp;</code> and the shifts are multiplicative. That is why <code>a &amp; b == c</code> is <code>a &amp; (b == c)</code> in C and a type error here, and why <code>x &amp; mask == 0</code> needs no parentheses in Luce.</p>
+<h2 id="the-two-shapes-the-parser-refuses">The two shapes the parser refuses<a class="anchor" href="#the-two-shapes-the-parser-refuses" aria-label="link to this section">#</a></h2>
+<p>Both are legal in a language Luce reads like and mean something different here. Rather than pick a winner the parser refuses them and names both readings. Both are fixed by one pair of parentheses.</p>
+<h3 id="not-in-front-of-a-comparison"><code>not</code> in front of a comparison<a class="anchor" href="#not-in-front-of-a-comparison" aria-label="link to this section">#</a></h3>
+<p><code>not</code> is a prefix operator, so it binds <em>tighter</em> than <code>==</code> — the C, Zig and Rust reading. Python&#39;s <code>not</code> binds <em>looser</em>, so a Python reader reads <code>not a == b</code> as <code>not (a == b)</code> and gets the opposite answer whenever both operands are <code>bool</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> a = <span class="k">true</span>
+    <span class="k">let</span> b = <span class="k">false</span>
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">not</span> a == b))</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:4:18: &#39;not&#39; binds tighter than &#39;==&#39;: write &#39;(not a) == …&#39; for this reading, or &#39;not (a == …)&#39; for Python&#39;s [luce.parse.precedence]
+        print(string(not a == b))
+                     ^~~</samp></pre></div>
+</figure>
+<h3 id="chained-comparison">Chained comparison<a class="anchor" href="#chained-comparison" aria-label="link to this section">#</a></h3>
+<p><code>a &lt; b &lt; c</code> is one comparison in Python and two in C. Luce has neither: the comparisons are non-associative.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(<span class="n">1</span> &lt; <span class="n">2</span> &lt; <span class="n">3</span>))</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:2:24: chained comparison: write &#39;1 &lt; 2 and 2 &lt; 3&#39; [luce.parse.chain]
+        print(string(1 &lt; 2 &lt; 3))
+                           ^</samp></pre></div>
+</figure>
+<p>This costs nothing — <code>(a &lt; b) &lt; c</code> was always a type error one stage later — and comparing two <code>bool</code>s with <code>(a &lt; b) == (c &lt; d)</code> is still legal, because the parentheses start a new chain.</p>
+<h2 id="arithmetic">Arithmetic<a class="anchor" href="#arithmetic" aria-label="link to this section">#</a></h2>
+<p><code>+ - * / // %</code> on <code>long</code> and on <code>double</code>. <code>+</code> also concatenates <code>string</code>s. Mixing a <code>long</code> and a <code>double</code> widens the <code>long</code>.</p>
+<p><code>//</code> is <strong>floor division</strong> and <code>%</code> is the modulus that pairs with it: they floor together, so <code>%</code> takes the sign of the divisor and <code>b * (a // b) + (a % b) == a</code> holds for every pair.</p>
+<div class="table"><table>
+<thead><tr><th><code>a</code></th><th><code>b</code></th><th><code>a // b</code></th><th><code>a % b</code></th></tr></thead>
+<tbody>
+<tr><td>7</td><td>3</td><td>2</td><td>1</td></tr>
+<tr><td>−7</td><td>3</td><td>−3</td><td>2</td></tr>
+<tr><td>7</td><td>−3</td><td>−3</td><td>−2</td></tr>
+<tr><td>−7</td><td>−3</td><td>2</td><td>−1</td></tr>
+</tbody></table></div>
+<p><code>long</code> arithmetic is checked: overflow, and <code>//</code> or <code>%</code> by zero, are traps in every build mode. <code>double</code> arithmetic is IEEE and does not trap.</p>
+<h2 id="comparison">Comparison<a class="anchor" href="#comparison" aria-label="link to this section">#</a></h2>
+<p><code>== != &lt; &lt;= &gt; &gt;=</code> order <code>long</code>, <code>double</code> and <code>string</code>. <code>==</code> and <code>!=</code> also apply to <code>bool</code> and to objects, where they compare identity.</p>
+<h2 id="logic">Logic<a class="anchor" href="#logic" aria-label="link to this section">#</a></h2>
+<p><code>and</code>, <code>or</code>, <code>not</code> take <code>bool</code> and only <code>bool</code>, and <code>and</code>/<code>or</code> short-circuit. There is no truthiness: no other type is a condition.</p>
+<h2 id="operators-luce-does-not-have">Operators Luce does not have<a class="anchor" href="#operators-luce-does-not-have" aria-label="link to this section">#</a></h2>
+<p>The table above is the whole set. The operators other languages have are answered by name, with the Luce spelling in the sentence rather than a complaint about the second character:</p>
+<div class="table"><table>
+<thead><tr><th>Written</th><th>Luce</th></tr></thead>
+<tbody>
+<tr><td><code>x++</code>, <code>x--</code></td><td><code>x += 1</code>, <code>x -= 1</code></td></tr>
+<tr><td><code>&amp;&amp;</code>, `\</td><td>\</td><td>`</td><td><code>and</code>, <code>or</code></td></tr>
+<tr><td><code>!x</code></td><td><code>not x</code></td></tr>
+<tr><td><code>===</code>, <code>!==</code></td><td><code>==</code>, <code>!=</code> — which already compare by value</td></tr>
+<tr><td><code>&lt;&gt;</code></td><td><code>!=</code></td></tr>
+<tr><td><code>**</code></td><td><code>math.pow(x, y)</code>, or <code>math.ipow(x, y)</code> for <code>long</code></td></tr>
+</tbody></table></div>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> i = <span class="n">0</span>
+    i++</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:3:6: there is no &#39;++&#39; operator: write &#39;x += 1&#39; to increment [luce.parse.expression]
+        i++
+         ^~</samp></pre></div>
+</figure>
+<p>Two of these are also legal expressions when they are spaced or followed by an operand, and there the existing reading wins: <code>a - -b</code> is a subtraction of a negation, <code>--a</code> is a double negation, and <code>a &lt; &gt; b</code> is not a <code>&lt;&gt;</code>.</p>
+<h2 id="calls">Calls<a class="anchor" href="#calls" aria-label="link to this section">#</a></h2>
+<p>Positional arguments fill parameters left to right, and a call site may <strong>name</strong> any argument: <code>size(3, height = 4)</code>. The first named argument ends the positional run — everything after it must be named — and named arguments may be written in any order. Names are never required. Arguments are evaluated in the order they are <em>written</em> and bound to the slots they <em>name</em>; the two differ only when a call reorders. A parameter may declare a trailing <strong>default</strong>, a compile-time constant filled in wherever a call omits the argument. There are no variadics. Functions are not values — a name in call position denotes a function, statically.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">grown</span>(base: <span class="t">long</span>, step: <span class="t">long</span> = <span class="n">5</span>, twice: <span class="t">bool</span> = <span class="k">false</span>) -&gt; <span class="t">long</span>:
+    <span class="k">var</span> total = base + step
+    <span class="k">if</span> twice:
+        total = total * <span class="n">2</span>
+    <span class="k">return</span> total
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="b">print</span>(<span class="t">string</span>(grown(<span class="n">1</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(grown(<span class="n">1</span>, twice = <span class="k">true</span>)))
+    <span class="b">print</span>(<span class="t">string</span>(grown(step = <span class="n">0</span>, base = <span class="n">2</span>)))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>6
+12
+2</samp></pre></div>
+</figure>
+<p>A positional argument may not follow a named one:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">size</span>(width: <span class="t">long</span>, height: <span class="t">long</span>) -&gt; <span class="t">long</span>:
+    <span class="k">return</span> width * height
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> a = size(width = <span class="n">1</span>, <span class="n">2</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:5:29: a positional argument cannot follow a named one; write height = … [luce.sema.call]
+        let a = size(width = 1, 2)
+                                ^</samp></pre></div>
+</figure>
+<p>Forms:</p>
+<div class="code"><pre><code>name(args)                  a function in this file
+module.name(args)           a function in an imported module
+Struct.name(args)           a function in a struct&#39;s namespace
+module.Struct.name(args)    both
+receiver.method(args)       sugar; see below
+</code></pre></div>
+<h2 id="calls-that-answer-more-than-one-value">Calls that answer more than one value<a class="anchor" href="#calls-that-answer-more-than-one-value" aria-label="link to this section">#</a></h2>
+<p>A call whose signature is a <a href="../types/#return-shapes">return shape</a> may stand in exactly two places:</p>
+<div class="code"><pre><code>let low, high = minmax(xs)      # the right of a destructuring bind
+rng.next()                      # a statement, all values discarded
+</code></pre></div>
+<p>Everywhere else is <code>luce.sema.call</code>, including <code>return minmax(xs)</code> from a function with the same shape. Go allows that pass-through and pays for it with a rule saying a multi-valued call used as arguments must be the only arguments; refusing it is what leaves this rule with no exceptions. Bind the values, then return them.</p>
+<p><code>catch</code> supplies one value and so cannot supply a shape: a fallible multi-return is propagated with <code>try</code>, or discarded as a statement.</p>
+<h2 id="method-sugar">Method sugar<a class="anchor" href="#method-sugar" aria-label="link to this section">#</a></h2>
+<p><code>receiver.method(args)</code> is resolved by the receiver&#39;s type into a plain function with the receiver first. It is sugar, not dispatch.</p>
+<p>That is true of a <strong>user</strong> method too: <code>p.length()</code> <em>means</em> <code>Point.length(p)</code>, resolved at compile time, and <code>Point.length(p)</code> stays callable. A function declared inside a struct is a method exactly when its first parameter is <code>self</code> (<a href="../statements/#methods">statements</a>).</p>
+<p>A namespaced <code>Struct.func</code> or <code>module.func</code> call shares the syntax and wins when the head names a declaration. The two are worth telling apart out loud, because a struct in Luce is used for both:</p>
+<blockquote><p><code>Struct.func(x)</code> is a <strong>namespace</strong> call — the struct is a folder and <code>x</code> is an ordinary first argument. <code>x.foo()</code> is a <strong>method</strong> call — the struct is a type and <code>x</code> is its receiver. The only thing that distinguishes them is whether the declaration&#39;s first parameter is the word <code>self</code>.</p></blockquote>
+<p>Methods on a <code>string</code> other than <code>byte_at</code> and <code>find_byte</code> route to the <code>strings</code> standard module: <code>s.split(&quot;,&quot;)</code> <em>is</em> <code>strings.split(s, &quot;,&quot;)</code> and needs <code>import std.strings</code> in scope, or it is a <code>luce.sema.import</code> diagnostic naming the missing import.</p>
+<p>Because a method is a function, its arguments are judged like a function&#39;s, and the two ways to get them wrong are two diagnostics. Too many or too few is a count, <code>luce.sema.method</code>, naming the method and both counts:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = <span class="v">new</span> <span class="t">list</span>(<span class="t">long</span>)
+    xs.<span class="b">append</span>(<span class="n">1</span>, <span class="n">2</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:3:5: append takes 1 argument, got 2 [luce.sema.method]
+        xs.append(1, 2)
+        ^~~~~~~~~~~~~~~</samp></pre></div>
+</figure>
+<p>A wrong type is <code>luce.sema.type</code>, naming the position, the type the method takes and the type it was handed — underlined at the argument rather than at the call:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = <span class="v">new</span> <span class="t">list</span>(<span class="t">long</span>)
+    xs.<span class="b">append</span>(<span class="s">&quot;hello&quot;</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:3:15: argument 1 of append is long, got string [luce.sema.type]
+        xs.append(&quot;hello&quot;)
+                  ^~~~~~~</samp></pre></div>
+</figure>
+<p>A method the receiver does not have names the receiver, and suggests a spelling when one is close enough:</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">var</span> xs = <span class="v">new</span> <span class="t">list</span>(<span class="t">long</span>)
+    <span class="k">let</span> found = xs.<span class="b">has</span>(<span class="n">1</span>)</code></pre></div>
+<figcaption class="cap bad">luce check — the program is refused</figcaption>
+<div class="code result bad"><pre><samp>luce: compile failed
+main.luc:3:17: list has no method has (has append insert remove pop sort reverse find contains clear; join lives in strings) [luce.sema.method]
+        let found = xs.has(1)
+                    ^~~~~~~~~</samp></pre></div>
+</figure>
+<h2 id="indexing-and-slicing">Indexing and slicing<a class="anchor" href="#indexing-and-slicing" aria-label="link to this section">#</a></h2>
+<div class="table"><table>
+<thead><tr><th>Form</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>xs[i]</code></td><td>list or rank-1 array element; bounds-checked</td></tr>
+<tr><td><code>grid[r, c]</code></td><td>multi-dimensional array element</td></tr>
+<tr><td><code>m[k]</code></td><td>map get; a missing key traps</td></tr>
+<tr><td><code>xs[a:b]</code></td><td>a <strong>new list</strong>, owned by the receiver; deep when elements are objects</td></tr>
+<tr><td><code>s[a:b]</code></td><td>a <code>string</code> slice; still a value; checks UTF-8 boundaries</td></tr>
+</tbody></table></div>
+<p>Open slice ends default to <code>0</code> and to the length.</p>
+<h2 id="construction">Construction<a class="anchor" href="#construction" aria-label="link to this section">#</a></h2>
+<div class="code"><pre><code>[1, 2, 3]                  a list literal; element type inferred
+[]                         empty; needs an annotated binding
+new list(T)
+new map(K, V)
+new array(T, size, ...)
+new builder()
+Struct(field = expr, ...)  every field, by name
+</code></pre></div>
+<h2 id="ownership-operators">Ownership operators<a class="anchor" href="#ownership-operators" aria-label="link to this section">#</a></h2>
+<p><code>give x</code> transfers ownership and poisons <code>x</code> to the end of its scope. <code>copy x</code> deep-copies. Both apply only to objects and to object-carrying structs; using one on a value is a compile error.</p>
+<p>A verb in a pure borrow position — a builtin argument, a non-adopting method argument, an operator operand — is refused: a <code>give</code> must always have an owner to receive it.</p>
+<h2 id="narrowing">Narrowing<a class="anchor" href="#narrowing" aria-label="link to this section">#</a></h2>
+<p>After a test on a <code>T?</code>, the name <em>is</em> its payload within the region the test dominates. Five shapes narrow:</p>
+<div class="code"><pre><code>if x != none:      ...    the then arm
+if x == none:      ...    the else arm
+if x == none: return      an early exit narrows everything below it
+if x != none and x &gt; 3:   the rest of the condition
+while x != none:   ...    the loop body
+</code></pre></div>
+<p>An assignment of a plain value narrows too.</p>
+<p>Narrowing applies to <strong>locals and parameters only</strong>, never to fields or elements, which can change between the test and the use. It stops at anything that could undo it: a loop body that assigns the name re-enters with whatever it left, so the name widens for the whole loop, and an <code>if</code> keeps only what both arms agree on.</p>
+<p>A test or a fallback that can never fire is a <code>luce.sema.absent</code> diagnostic: once a name is known to hold a value, saying so again is dead code, not caution.</p>
+<h2 id="else-the-null-coalescing-operator"><code>else</code> — the null-coalescing operator<a class="anchor" href="#else-the-null-coalescing-operator" aria-label="link to this section">#</a></h2>
+<p><code>a else b</code> yields <code>a</code>&#39;s payload when it is present and <code>b</code> otherwise, evaluating <code>b</code> only when needed. It associates to the right.</p>
+<p><code>trap(&quot;…&quot;)</code> and <code>error(&quot;…&quot;)</code> never return, so they may stand as the right operand: <code>x else trap(&quot;…&quot;)</code> is the assert-unwrap, and it is why there is no force-unwrap sigil.</p>
+<h2 id="try-and-catch"><code>try</code> and <code>catch</code><a class="anchor" href="#try-and-catch" aria-label="link to this section">#</a></h2>
+<p><code>try CALL</code> propagates a failure to the caller, releasing what this frame owns. It requires the enclosing function to declare <code>!</code>.</p>
+<p><code>catch</code> has three spellings:</p>
+<div class="code"><pre><code>EXPR catch FALLBACK        an expression; both sides must agree on ownership
+CALL catch:                a handler block, guarding exactly one call
+    ...
+CALL catch NAME:           the same block, with the error&#39;s message bound
+    ...
+</code></pre></div>
+<p>The block form attaches to a call written as a statement and to a plain assignment, and to nothing else. <code>NAME</code> is an immutable <code>string</code> scoped to the handler; the expression form takes no binding.</p>
+<p>A fallible call whose outcome is neither tried nor caught is <code>luce.sema.fallible</code>.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../types/"><span>Previous</span>Types</a>
+<a class="on" href="../statements/"><span>Next</span>Statements and declarations</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#precedence">Precedence</a></li>
+<li class="h2"><a href="#the-two-shapes-the-parser-refuses">The two shapes the parser refuses</a></li>
+<li class="h3"><a href="#not-in-front-of-a-comparison">`not` in front of a comparison</a></li>
+<li class="h3"><a href="#chained-comparison">Chained comparison</a></li>
+<li class="h2"><a href="#arithmetic">Arithmetic</a></li>
+<li class="h2"><a href="#comparison">Comparison</a></li>
+<li class="h2"><a href="#logic">Logic</a></li>
+<li class="h2"><a href="#operators-luce-does-not-have">Operators Luce does not have</a></li>
+<li class="h2"><a href="#calls">Calls</a></li>
+<li class="h2"><a href="#calls-that-answer-more-than-one-value">Calls that answer more than one value</a></li>
+<li class="h2"><a href="#method-sugar">Method sugar</a></li>
+<li class="h2"><a href="#indexing-and-slicing">Indexing and slicing</a></li>
+<li class="h2"><a href="#construction">Construction</a></li>
+<li class="h2"><a href="#ownership-operators">Ownership operators</a></li>
+<li class="h2"><a href="#narrowing">Narrowing</a></li>
+<li class="h2"><a href="#else-the-null-coalescing-operator">`else` — the null-coalescing operator</a></li>
+<li class="h2"><a href="#try-and-catch">`try` and `catch`</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

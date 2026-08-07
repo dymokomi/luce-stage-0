@@ -1,0 +1,7 @@
+func main():
+    let first = parse_int("x") else parse_int("y") else parse_int("3") else 0
+    print(string(first))
+
+    let n = parse_int("10")
+    print(string(n else 0 > 5))     # else binds tighter than comparison
+    print(string((n else 0) + 1))

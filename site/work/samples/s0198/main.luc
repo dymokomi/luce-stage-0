@@ -1,0 +1,7 @@
+struct Box:
+    private:
+        private value: long
+
+func main():
+    var b = Box(value = 1)
+    print(string(b.value))

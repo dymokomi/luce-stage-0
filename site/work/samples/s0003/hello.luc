@@ -1,0 +1,5 @@
+func main(args: list(string)):
+    var name = "loom"
+    if len(args) > 0:
+        name = args[0]
+    print("hello, " + name)

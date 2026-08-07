@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luce by example &middot; Luce</title>
+<meta name="description" content="Complete programs, each one compiled and run to produce the output printed beneath it. Read them in any order.">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../">Luce</a>
+<nav class="tabs">
+<a href="../tour/">Tour</a>
+<a class="here" href="../examples/">Examples</a>
+<a href="../guide/">Guides</a>
+<a href="../ref/">Reference</a>
+<a href="../std/">Library</a>
+<a href="../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>Luce by example</summary>
+<ul>
+<li><a class="here" href="../examples/">Overview</a></li>
+<li><a href="../examples/hello/">Hello and arguments</a></li>
+<li><a href="../examples/loops/">Loops and ranges</a></li>
+<li><a href="../examples/lists/">Lists</a></li>
+<li><a href="../examples/maps/">Maps</a></li>
+<li><a href="../examples/arrays/">Arrays and grids</a></li>
+<li><a href="../examples/text/">Text processing</a></li>
+<li><a href="../examples/structs/">Structs</a></li>
+<li><a href="../examples/ownership/">give, copy and free</a></li>
+<li><a href="../examples/optionals/">Optionals</a></li>
+<li><a href="../examples/errors/">Errors</a></li>
+<li><a href="../examples/traps/">Traps</a></li>
+<li><a href="../examples/files/">Files</a></li>
+<li><a href="../examples/programs/">The bundled programs</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>Luce by example</h1>
+<p>Complete programs, one idea at a time. Each one was compiled and run by the freshly built toolchain when this page was built, and the output shown under it is what it actually printed.</p>
+<p>Copy any of them into a file and run <code>loom luce thatfile.luc</code>.</p>
+<p>If you want the ideas explained rather than shown, read <a href="/tour/">the tour</a> instead; if you want the exact rules, read <a href="/ref/">the reference</a>.</p>
+<div class="cards">
+<a class="card" href="hello/"><strong>Hello and arguments</strong><span>The smallest program, and reading the command line.</span></a>
+<a class="card" href="loops/"><strong>Loops and ranges</strong><span>range, for over a collection, enumerate, while, break and continue.</span></a>
+<a class="card" href="lists/"><strong>Lists</strong><span>Building, sorting, searching, slicing.</span></a>
+<a class="card" href="maps/"><strong>Maps</strong><span>Insertion-ordered dictionaries with O(1) lookup.</span></a>
+<a class="card" href="arrays/"><strong>Arrays and grids</strong><span>Fixed-shape numeric storage, up to four dimensions.</span></a>
+<a class="card" href="text/"><strong>Text processing</strong><span>Splitting, joining, trimming and counting with std.strings.</span></a>
+<a class="card" href="structs/"><strong>Structs</strong><span>Value aggregates, namespaced functions, and structs that carry objects.</span></a>
+<a class="card" href="ownership/"><strong>give, copy and free</strong><span>The four situations where memory needs a word from you.</span></a>
+<a class="card" href="optionals/"><strong>Optionals</strong><span>parse_int, none, narrowing, and the else fallback.</span></a>
+<a class="card" href="errors/"><strong>Errors</strong><span>A fallible function, try, catch, and an uncaught error&#39;s one-line report.</span></a>
+<a class="card" href="traps/"><strong>Traps</strong><span>What a bug looks like: a stable code, a line, and a call trace.</span></a>
+<a class="card" href="files/"><strong>Files</strong><span>Reading and writing through std.files, with the failure handled.</span></a>
+<a class="card" href="programs/"><strong>The bundled programs</strong><span>The real userland in the repository, compiled and run from its own source.</span></a>
+</div>
+</article>
+<nav class="seq">
+<span></span>
+<a class="on" href="hello/"><span>Next</span>Hello and arguments</a>
+</nav>
+</main>
+<div class="rail"></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../assets/site.js" defer></script>
+<script src="../search-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The outside world &middot; Luce</title>
+<meta name="description" content="Printing, arguments, files, and the terminal — every effect is a host service.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a class="here" href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>A tour of Luce</summary>
+<ul>
+<li><a href="../../tour/">Overview</a></li>
+<li><a href="../../tour/hello/">Hello, Luce</a></li>
+<li><a href="../../tour/values/">Values and types</a></li>
+<li><a href="../../tour/control/">Control flow</a></li>
+<li><a href="../../tour/functions/">Functions and structs</a></li>
+<li><a href="../../tour/enums/">Enums</a></li>
+<li><a href="../../tour/collections/">Lists, maps and arrays</a></li>
+<li><a href="../../tour/strings/">Strings</a></li>
+<li><a href="../../tour/ownership/">Memory</a></li>
+<li><a href="../../tour/absence/">Absence</a></li>
+<li><a href="../../tour/failure/">Failure</a></li>
+<li><a href="../../tour/modules/">Modules</a></li>
+<li><a href="../../tour/visibility/">Visibility</a></li>
+<li><a class="here" href="../../tour/host/">The outside world</a></li>
+<li><a href="../../tour/next/">Where to go next</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>The outside world</h1>
+<p>The Luce language itself is pure. It cannot print, read a file, or touch a screen. Every effect is a <strong>host service</strong>, and the program that runs your code — <code>loom</code>, or a standalone executable built with <code>--emit=exe</code> — is the trusted boundary that implements them.</p>
+<p>A missing service does not silently do nothing: it traps <code>host_unavailable</code>. Effects fail closed.</p>
+<h2 id="printing-and-arguments">Printing and arguments<a class="anchor" href="#printing-and-arguments" aria-label="link to this section">#</a></h2>
+<p>The command line is not a service the program asks for: it is handed to it. A program that reads one declares <code>func main(args: list(string)):</code>, and <code>args</code> is an ordinary <code>list(string)</code> — <code>len</code>, indexing, slicing, <code>for … in</code>, everything. <code>args[0]</code> is the first word the person typed <strong>after</strong> the program&#39;s own name.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>(args: <span class="t">list</span>(<span class="t">string</span>)):
+    <span class="b">print</span>(<span class="s">f&quot;{len(args)} arguments&quot;</span>)
+    <span class="k">for</span> name <span class="k">in</span> args:
+        <span class="b">print</span>(<span class="s">f&quot;  {name}&quot;</span>)
+
+    <span class="k">let</span> count = <span class="b">parse_int</span>(args[<span class="n">0</span>]) <span class="k">else</span> <span class="n">1</span>
+    <span class="k">for</span> i <span class="k">in</span> <span class="b">range</span>(<span class="n">0</span>, count):
+        <span class="b">print</span>(args[<span class="n">1</span>])</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>2 arguments
+  3
+  fig
+fig
+fig
+fig</samp></pre></div>
+</figure>
+<p>A program that never reads a command line writes <code>func main():</code> and says nothing about one. Reading past the end of <code>args</code> is the language&#39;s own <code>index_bounds</code> trap — <code>len(args)</code> is right there to check against.</p>
+<h2 id="files">Files<a class="anchor" href="#files" aria-label="link to this section">#</a></h2>
+<p>The host&#39;s raw file builtins are <code>file_read</code>, <code>file_write</code>, <code>file_append</code>, <code>file_delete</code>, <code>file_rename</code>, <code>file_exists</code> and <code>dir_list</code>, and <a href="/std/files/"><code>std.files</code></a> is the honest layer over them. Everything that changes a file is <strong>fallible</strong>: the world decides whether it lands, so they answer <code>!</code> and you <code>try</code> or <code>catch</code>.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">try</span> files.<span class="b">write</span>(<span class="s">&quot;stock.txt&quot;</span>, <span class="s">&quot;fig\npear\nplum\n&quot;</span>)
+
+    <span class="k">let</span> lines = <span class="k">try</span> files.read_lines(<span class="s">&quot;stock.txt&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(lines)} lines&quot;</span>)
+    <span class="k">for</span> index, line <span class="k">in</span> lines:
+        <span class="b">print</span>(<span class="s">f&quot;  {index}: {line}&quot;</span>)
+
+    <span class="k">let</span> whole = <span class="k">try</span> files.<span class="b">read</span>(<span class="s">&quot;stock.txt&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(whole)} bytes on disk&quot;</span>)
+
+    <span class="b">print</span>(<span class="s">f&quot;exists: {files.exists(&quot;</span>stock.txt<span class="s">&quot;)}, missing: {files.exists(&quot;</span>nope.txt<span class="s">&quot;)}&quot;</span>)
+
+    <span class="k">let</span> text = files.<span class="b">read</span>(<span class="s">&quot;nope.txt&quot;</span>) <span class="k">catch</span> <span class="s">&quot;(could not read)&quot;</span>
+    <span class="b">print</span>(text)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3 lines
+  0: fig
+  1: pear
+  2: plum
+14 bytes on disk
+exists: true, missing: false
+(could not read)</samp></pre></div>
+</figure>
+<p><code>exists</code> answers a plain <code>bool</code> and is the exception — but it is a question about the past, never a guard for the call after it. Read the file and handle what the read says; that window is one nothing can close.</p>
+<p>Paths resolve relative to the current directory.</p>
+<h2 id="bytes-and-a-handle-that-closes-itself">Bytes, and a handle that closes itself<a class="anchor" href="#bytes-and-a-handle-that-closes-itself" aria-label="link to this section">#</a></h2>
+<p>Everything above is <em>text</em>, and a <code>string</code> is valid UTF-8 by construction — so <code>files.read</code> on a JPEG answers no, honestly, because it could not read it <em>as a string</em>. Underneath is a byte channel that has no opinion about encoding.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+<span class="k">import</span> std.strings
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">var</span> bytes = <span class="v">new</span> <span class="t">list</span>(<span class="t">byte</span>)
+    bytes.<span class="b">append</span>(<span class="t">byte</span>(<span class="n">0</span>x89))
+    bytes.<span class="b">append</span>(<span class="t">byte</span>(<span class="n">0</span>x50))
+    bytes.<span class="b">append</span>(<span class="t">byte</span>(<span class="n">0</span>x00))
+    <span class="k">try</span> files.write_bytes(<span class="s">&quot;image.bin&quot;</span>, bytes)
+
+    <span class="k">let</span> back = <span class="k">try</span> files.read_bytes(<span class="s">&quot;image.bin&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;{len(back)} bytes&quot;</span>)
+    <span class="b">print</span>(strings.from_bytes(back) <span class="k">else</span> <span class="s">&quot;(not text)&quot;</span>)
+    <span class="b">print</span>(files.<span class="b">read</span>(<span class="s">&quot;image.bin&quot;</span>) <span class="k">catch</span> <span class="s">&quot;(not text as a string either)&quot;</span>)
+    <span class="k">try</span> files.delete(<span class="s">&quot;image.bin&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>3 bytes
+(not text)
+(not text as a string either)</samp></pre></div>
+</figure>
+<p><code>files.open(path)</code> answers a <a href="/ref/types/#file"><code>file</code></a>, and a file is a <strong>scope-owned resource</strong>: the binding that received it owns it, the end of that scope closes it, <code>free(f)</code> closes it early, and using one after it is closed traps <code>use_after_free</code> — because it is the same mistake as any other use after free.</p>
+<p>There is deliberately no <code>close</code>. A file you have to remember to close is a file somebody will not, and <a href="/ref/ownership/">scope ownership</a> already knows where a name&#39;s life ends.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.files
+
+<span class="k">func</span> <span class="d">main</span>() -&gt; !:
+    <span class="k">try</span> files.<span class="b">write</span>(<span class="s">&quot;stock.txt&quot;</span>, <span class="s">&quot;fig\npear\nplum\n&quot;</span>)
+    <span class="k">var</span> f = <span class="k">try</span> files.open(<span class="s">&quot;stock.txt&quot;</span>)
+    <span class="k">var</span> buffer = <span class="v">new</span> <span class="t">array</span>(<span class="t">byte</span>, <span class="n">4</span>)
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> f.<span class="b">read</span>(buffer)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="k">try</span> f.<span class="b">read</span>(buffer)))
+    <span class="b">print</span>(<span class="t">string</span>(<span class="t">int</span>(buffer[<span class="n">0</span>])))</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>4
+4
+112</samp></pre></div>
+</figure>
+<p>A read fills the buffer and answers <strong>how many bytes landed</strong>; zero is the end of the file, and short is ordinary rather than a refusal. A write says the same thing in the other direction. That is the C shape on purpose — it is what a socket will want too — and <code>files.read_bytes</code> and its siblings are the loop over it, written once.</p>
+<h2 id="standard-input-standard-error-the-clock">Standard input, standard error, the clock<a class="anchor" href="#standard-input-standard-error-the-clock" aria-label="link to this section">#</a></h2>
+<p>Three more services, and each one&#39;s shape is a decision about what kind of fact it is reporting.</p>
+<p><code>read_line(prompt)</code> writes the prompt and answers <code>string?</code>. End of input is <strong>absence</strong>, not failure — nothing went wrong, there is just nothing more — so it is <code>T?</code> and not <code>T!</code>, and <code>else</code> is the whole handling.</p>
+<p><code>print_error(text)</code> writes a line to standard error. Unlike <code>print</code>, it is always sanitized: standard output is the program&#39;s own channel and may be a pipe, while standard error is shared with the runner.</p>
+<p><code>clock_ms()</code> reads a <strong>monotonic</strong> clock in milliseconds and <code>sleep_ms(ms)</code> waits. Neither can fail, and <code>sleep_ms</code> of an already-elapsed duration — zero, or the negative left by <code>deadline - clock_ms()</code> after a frame overran — simply returns. There is no time left to wait, so an animation loop subtracts without guarding. That is exactly what <code>programs/life.luc</code> does.</p>
+<p><code>env(name)</code> answers <code>string?</code>: one variable, or <code>none</code> when unset.</p>
+<p>The machine itself is a host service too — how much memory it has, how much is left, how many processors — read through <a href="/std/os/"><code>std.os</code></a>. Those are the one part of the surface that answers neither <code>?</code> nor <code>!</code>: a fact the host knows is a number, and a fact it does not know is a refusal, because a host is never made to invent one.</p>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> started = <span class="b">clock_ms</span>()
+    <span class="b">print</span>(<span class="s">f&quot;PATH is set: {env(&quot;</span><span class="t">PATH</span><span class="s">&quot;) != none}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;nonsense: {env(&quot;</span><span class="t">LUCE_NOT_A_REAL_VARIABLE</span><span class="s">&quot;) else &quot;</span>(unset)<span class="s">&quot;}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;typed: {read_line(&quot;</span><span class="s">&quot;) else &quot;</span>(end of input)<span class="s">&quot;}&quot;</span>)
+    <span class="b">sleep_ms</span>(started - <span class="b">clock_ms</span>())
+    <span class="b">print_error</span>(<span class="s">&quot;this line went to standard error&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>PATH is set: true
+nonsense: (unset)
+typed: (end of input)
+this line went to standard error</samp></pre></div>
+</figure>
+<p>The generator ran that program with nothing on standard input, which is why <code>read_line</code> answered <code>none</code>.</p>
+<h2 id="the-terminal">The terminal<a class="anchor" href="#the-terminal" aria-label="link to this section">#</a></h2>
+<p><code>loom</code> also offers a screen: <code>term_rows</code>, <code>term_cols</code>, <code>term_clear</code>, <code>term_move</code>, <code>term_style</code>, <code>term_write</code>, <code>term_flush</code>, plus <code>key_read</code> and <code>key_text</code> for input. The host owns raw mode, the alternate screen, frame buffering and every escape byte — <code>term_write</code> text is sanitized, so a Luce program can never emit a control sequence.</p>
+<p><code>key_read</code> presents the pending frame before it blocks, so a draw loop needs no explicit flush, and it returns stable key names — <code>&quot;text&quot;</code>, <code>&quot;enter&quot;</code>, <code>&quot;up&quot;</code>, <code>&quot;ctrl_s&quot;</code> — with <code>key_text()</code> carrying the payload when the name is <code>&quot;text&quot;</code>.</p>
+<p>It answers <code>string?</code>, not <code>string</code>. A keyboard runs dry when the pipe driving the program ends or the terminal closes, and that is the same &quot;nothing there&quot; <code>read_line</code> answers <code>none</code> for off the same input — so a draw loop writes <code>if name == none: break</code> and stops, instead of asking for the next key forever.</p>
+<p>Those cannot be demonstrated on a web page, because they need a real terminal. What they are enough for is the repository&#39;s <a href="/examples/programs/">flagship program</a>: a full-screen editor with scrolling, line numbers, a status bar and per-line Luce syntax highlighting, written entirely in Luce.</p>
+<div class="code"><pre><code>build/loom edit notes.txt
+</code></pre></div>
+<h2 id="the-host-gate">The host gate<a class="anchor" href="#the-host-gate" aria-label="link to this section">#</a></h2>
+<p>Every one of those builtins is gated. A program compiled with the gate off cannot name them at all, and saying one is a <code>luce.sema.host</code> diagnostic rather than a runtime surprise. That is what keeps &quot;the language is pure&quot; a statement about the language rather than about good behaviour.</p>
+<h2 id="what-is-missing">What is missing<a class="anchor" href="#what-is-missing" aria-label="link to this section">#</a></h2>
+<p>Three things, and each was left out on purpose rather than not reached.</p>
+<p><strong>A wall clock and a calendar.</strong> <code>clock_ms</code> is monotonic: it says only that differences mean something, which is what a frame timer and a benchmark need. Dates are a library rather than a builtin, and the library does not exist yet.</p>
+<p><strong>Setting an environment variable.</strong> <code>env(name)</code> reads; nothing writes. Process-global mutation is a large promise for a service no program here has asked for.</p>
+<p><strong>Reading the environment whole.</strong> <code>env</code> answers one name at a time. Enumerating every variable is a different shape — an owned <code>list(string)</code> of pairs — and it waits for a program that wants it.</p>
+<p>Two names that used to head this list have since shipped: <code>exit</code> is a gated builtin like any other, and path manipulation turned out never to be a host gap at all — joining and splitting a path is pure text, so it is <a href="/std/paths/"><code>std.paths</code></a> over <a href="/std/strings/"><code>std.strings</code></a>. The <a href="/status/">status page</a> keeps the current list.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../visibility/"><span>Previous</span>Visibility</a>
+<a class="on" href="../next/"><span>Next</span>Where to go next</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#printing-and-arguments">Printing and arguments</a></li>
+<li class="h2"><a href="#files">Files</a></li>
+<li class="h2"><a href="#bytes-and-a-handle-that-closes-itself">Bytes, and a handle that closes itself</a></li>
+<li class="h2"><a href="#standard-input-standard-error-the-clock">Standard input, standard error, the clock</a></li>
+<li class="h2"><a href="#the-terminal">The terminal</a></li>
+<li class="h2"><a href="#the-host-gate">The host gate</a></li>
+<li class="h2"><a href="#what-is-missing">What is missing</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>std.os &middot; Luce</title>
+<meta name="description" content="The machine&#39;s own facts: how much memory it has, how much is left, how many processors.">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="../../assets/mark.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("luce-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+<a class="mark" href="../../">Luce</a>
+<nav class="tabs">
+<a href="../../tour/">Tour</a>
+<a href="../../examples/">Examples</a>
+<a href="../../guide/">Guides</a>
+<a href="../../ref/">Reference</a>
+<a class="here" href="../../std/">Library</a>
+<a href="../../status/">Status</a>
+</nav>
+<div class="tools">
+<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<a class="cross" href="https://luciaos.com">LuciaOS</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
+</div>
+<div id="hits" hidden></div>
+</header>
+<div class="shell">
+<div class="side">
+<details class="nav" open>
+<summary>The standard library</summary>
+<ul>
+<li><a href="../../std/">Overview</a></li>
+<li><a href="../../std/math/">std.math</a></li>
+<li><a href="../../std/strings/">std.strings</a></li>
+<li><a href="../../std/files/">std.files</a></li>
+<li><a href="../../std/paths/">std.paths</a></li>
+<li><a class="here" href="../../std/os/">std.os</a></li>
+<li><a href="../../std/zip/">std.zip</a></li>
+<li><a href="../../std/json/">std.json</a></li>
+</ul>
+</details>
+</div>
+<main id="content">
+<article>
+<h1>std.os</h1>
+<p>What machine is this? Three numbers, over the three host builtins that ask for them.</p>
+<div class="code"><pre><code>import std.os
+</code></pre></div>
+<p>This module is <strong>hosted</strong>: how big the machine is belongs to the world and not to the program, so every function here sits behind the host gate exactly as <code>print</code> and <code>file_read</code> do. A program compiled without host access cannot call one, and the compiler says so where it is written rather than where it would run.</p>
+<div class="table"><table>
+<thead><tr><th>Signature</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>os.total_memory() -&gt; long</code></td><td>bytes of physical memory the machine has; fixed for the life of the run — the hardware&#39;s size, not a quota</td></tr>
+<tr><td><code>os.available_memory() -&gt; long</code></td><td>bytes it could still hand out. This one <strong>moves</strong>: ask twice and expect two answers</td></tr>
+<tr><td><code>os.cpu_count() -&gt; long</code></td><td>processors the host would schedule work onto — logical ones, so simultaneous multithreading counts threads</td></tr>
+<tr><td><code>os.used_memory() -&gt; long</code></td><td>total minus available; never negative</td></tr>
+</tbody></table></div>
+<figure class="sample">
+<figcaption class="cap luc"><cite>main.luc</cite></figcaption>
+<div class="code"><button class="copy" type="button">copy</button><pre><code><span class="k">import</span> std.os
+
+<span class="k">func</span> <span class="d">main</span>():
+    <span class="k">let</span> total = os.total_memory()
+    <span class="k">let</span> available = os.available_memory()
+    <span class="b">print</span>(<span class="s">f&quot;total is positive: {total &gt; 0}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;available fits inside it: {available &lt;= total}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;used is a part of the whole: {os.used_memory() &lt;= total}&quot;</span>)
+    <span class="b">print</span>(<span class="s">f&quot;at least one processor: {os.cpu_count() &gt;= 1}&quot;</span>)</code></pre></div>
+<figcaption class="cap out">Output</figcaption>
+<div class="code result out"><pre><samp>total is positive: true
+available fits inside it: true
+used is a part of the whole: true
+at least one processor: true</samp></pre></div>
+</figure>
+<p>The sample prints relations rather than numbers because this page is built on a real machine and yours is a different one. Everything above holds on every machine; the numbers hold on none but the one that printed them.</p>
+<p>Note what it does <em>not</em> claim: that <code>used_memory()</code> equals <code>total - available</code> for the <code>available</code> read a line earlier. It takes its own two readings, and the machine moved in between. This page said otherwise until the build ran the sample and disagreed with it.</p>
+<h2 id="nothing-here-fails-and-nothing-here-is-absent">Nothing here fails, and nothing here is absent<a class="anchor" href="#nothing-here-fails-and-nothing-here-is-absent" aria-label="link to this section">#</a></h2>
+<p>No function in this module answers <code>T?</code> or <code>T!</code>. A fact the host knows is a number. A fact it does not know is a <strong>refusal</strong> — <a href="/ref/failure/"><code>host_unavailable</code></a>, the same trap a service the host withheld would give.</p>
+<p>That is a deliberate third answer rather than a missing one. There is no <code>?</code> because &quot;this host cannot tell you how much memory the machine has&quot; is not the ordinary case a program plans around, the way an unset environment variable or the end of input is. There is no <code>!</code> because nothing failed; what happened is that the program asked the wrong host. And there is no zero, ever: a host that could not measure the machine is never made to invent a number, because a number a program cannot tell from a measurement is worse than a stop.</p>
+<h2 id="what-available-means">What &quot;available&quot; means<a class="anchor" href="#what-available-means" aria-label="link to this section">#</a></h2>
+<p>It is the host&#39;s word, and the hosts differ. Both meanings are written down rather than averaged into one:</p>
+<div class="table"><table>
+<thead><tr><th>Host</th><th>&quot;available&quot; is</th></tr></thead>
+<tbody>
+<tr><td>macOS</td><td>free, inactive and purgeable pages together — what the kernel can supply without swapping. Not <code>free</code> alone, which on macOS is close to meaningless: a 64 GiB machine reports about 3.7 GiB free and 38 GiB available, because almost nothing is kept idle and the difference is reclaimed on demand</td></tr>
+<tr><td>Linux</td><td>the kernel&#39;s own <code>MemAvailable</code>, published precisely so that userland stops adding up the wrong fields. Where <code>/proc</code> is not mounted, free plus buffers — an understatement, because it leaves out the reclaimable page cache</td></tr>
+<tr><td>anywhere else</td><td>nothing. The host answers that it cannot tell, and the program traps</td></tr>
+</tbody></table></div>
+<p>Neither is a promise. It is what was true at the moment of asking, and it moved while the answer was being carried back.</p>
+<h2 id="what-these-numbers-are-for">What these numbers are for<a class="anchor" href="#what-these-numbers-are-for" aria-label="link to this section">#</a></h2>
+<p><strong>Reporting and sizing, not deciding.</strong> Memory moves between the reading and the use of it, so <code>available_memory()</code> is a gauge and never a guarantee — a program that checks it and then allocates has checked nothing. Luce allocates through the runtime, which stops the run with a trap of its own when memory runs out; that is what a program is actually held up by, and this module is what a program <em>prints</em>.</p>
+<p><code>cpu_count()</code> is here although Luce has no threads. It is a fact to report rather than one to act on, and it is in the language because the machine&#39;s facts are one subject and one ABI version: asking for it a release later would have cost every compiled artifact a rebuild to learn one number.</p>
+<h2 id="the-builtins-underneath">The builtins underneath<a class="anchor" href="#the-builtins-underneath" aria-label="link to this section">#</a></h2>
+<p><code>os.total_memory()</code> is <code>os_total_memory()</code>, and so on down. The builtins are spelled in the <a href="/ref/builtins/">reference</a>; this module exists so that programs read the sentence rather than the slot name, the way <a href="/std/files/"><code>std.files</code></a> stands in front of <code>file_read</code>.</p>
+</article>
+<nav class="seq">
+<a class="back" href="../paths/"><span>Previous</span>std.paths</a>
+<a class="on" href="../zip/"><span>Next</span>std.zip</a>
+</nav>
+</main>
+<div class="rail"><nav aria-label="On this page">
+<h2>On this page</h2>
+<ul>
+<li class="h2"><a href="#nothing-here-fails-and-nothing-here-is-absent">Nothing here fails, and nothing here is absent</a></li>
+<li class="h2"><a href="#what-available-means">What &quot;available&quot; means</a></li>
+<li class="h2"><a href="#what-these-numbers-are-for">What these numbers are for</a></li>
+<li class="h2"><a href="#the-builtins-underneath">The builtins underneath</a></li>
+</ul>
+</nav></div>
+</div>
+<footer>
+<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+</footer>
+<script src="../../assets/site.js" defer></script>
+<script src="../../search-index.js" defer></script>
+</body>
+</html>

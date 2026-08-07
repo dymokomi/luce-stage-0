@@ -1,0 +1,15 @@
+struct Node:
+    value: long
+    next: Node?
+
+func main():
+    let third = Node(value = 3, next = none)
+    let second = Node(value = 2, next = third)
+    let first = Node(value = 1, next = second)
+
+    var here: Node? = first
+    var total: long = 0
+    while here != none:
+        total += here.value
+        here = here.next
+    print(f"sum {total}")

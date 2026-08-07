@@ -1,0 +1,8 @@
+enum Method(byte):
+    stored = 0
+    deflated = 8
+
+func main():
+    var seen = new list(Method)
+    seen.append(Method.deflated)
+    print(f"{seen[0]} is {int(seen[0])}, and 3 is {string(Method(3) != none)}")

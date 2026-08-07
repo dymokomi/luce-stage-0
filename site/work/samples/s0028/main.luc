@@ -1,0 +1,15 @@
+enum Cell(byte):
+    empty
+    wall
+    door
+
+func main():
+    var room = new array(Cell, 3, 3)
+    room[1, 1] = Cell.wall
+    room[0, 2] = Cell.door
+    var walls = 0
+    for row in range(0, 3):
+        for column in range(0, 3):
+            if room[row, column] == Cell.wall:
+                walls = walls + 1
+    print(f"{walls} wall, and room[0,2] is {room[0, 2]}")

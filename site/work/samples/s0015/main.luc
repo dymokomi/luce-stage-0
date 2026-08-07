@@ -1,0 +1,7 @@
+func label() -> string:
+    return "loom"
+
+let banner = label() + " v2"
+
+func main():
+    print(banner)

@@ -1,0 +1,8 @@
+func bad(xs: give list(long)) -> (list(long), list(long)):
+    return xs, xs
+
+func main():
+    var mine: list(long) = [1]
+    let a, b = bad(give mine)
+    free(a)
+    free(b)

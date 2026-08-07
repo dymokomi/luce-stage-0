@@ -1,0 +1,14 @@
+enum Method:
+    stored = 0
+    deflated = 8
+
+func read(raw: long) -> string:
+    let m = Method(raw)
+    if m == none:
+        return f"method {raw} is one I cannot read"
+    return f"method {raw} is {m}"
+
+func main():
+    print(read(0))
+    print(read(8))
+    print(read(14))

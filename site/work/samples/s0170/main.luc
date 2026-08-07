@@ -1,0 +1,9 @@
+func read_setting(text: string) -> long!:
+    return parse_int(text) else error(f"not a number: {text}")
+
+func configure(text: string) -> long!:
+    return try read_setting(text) * 2
+
+func main() -> !:
+    print(string(try configure("21")))
+    print(string(try configure("x")))

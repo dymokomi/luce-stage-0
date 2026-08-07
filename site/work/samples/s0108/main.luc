@@ -1,0 +1,13 @@
+func sum(grid: array(long, _, _)) -> long:
+    var total: long = 0
+    for row in range(0, grid.dim(0)):
+        for column in range(0, grid.dim(1)):
+            total += grid[row, column]
+    return total
+
+func main():
+    var grid = new array(long, 4, 4)
+    for row in range(0, 4):
+        for column in range(0, 4):
+            grid[row, column] = row * column
+    print(f"{grid.dim(0)}x{grid.dim(1)}, corner {grid[3, 3]}, total {sum(grid)}")
