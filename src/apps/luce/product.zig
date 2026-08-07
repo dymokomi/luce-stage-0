@@ -389,7 +389,9 @@ test "each --emit shape writes what it says, and the object links into a program
     try testing.expect(tree.exists("sums.o"));
 
     // Linked by hand, exactly as the documentation says to: the
-    // program's object, `main`, and the semantics.
+    // program's object, `main`, the semantics — and, where the C
+    // library keeps its math functions apart, the `-lm` float `%`
+    // needs.  Darwin gets those with libSystem.
     const object = try tree.at(gpa, "sums.o");
     defer gpa.free(object);
     const start = try tree.at(gpa, "lib/libluce_start.a");
@@ -398,7 +400,11 @@ test "each --emit shape writes what it says, and the object links into a program
     defer gpa.free(runtime);
     const linked = try tree.at(gpa, "byhand");
     defer gpa.free(linked);
-    var link = try tree.spawn(gpa, &.{ "cc", "-o", linked, object, start, runtime }, .{});
+    const by_hand: []const []const u8 = if (@import("builtin").os.tag.isDarwin())
+        &.{ "cc", "-o", linked, object, start, runtime }
+    else
+        &.{ "cc", "-o", linked, object, start, runtime, "-lm" };
+    var link = try tree.spawn(gpa, by_hand, .{});
     defer link.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), link.status);
 

@@ -390,6 +390,11 @@ pub fn link(
     try arguments.append(gpa, object_path);
     if (kind == .executable) try arguments.append(gpa, tools.start);
     try arguments.append(gpa, tools.runtime);
+    // Float `%` is `fmod`, so the runtime's semantics reach the C
+    // math functions.  Darwin keeps them in libSystem, which every
+    // link already gets; glibc keeps them in a library of their own
+    // and it has to be asked for, after the archive that wants it.
+    if (!@import("builtin").os.tag.isDarwin()) try arguments.append(gpa, "-lm");
 
     const ran = std.process.run(gpa, io, .{ .argv = arguments.items }) catch |mistake| switch (mistake) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -471,7 +476,21 @@ pub const OpenResult = union(enum) {
 /// its own layout, the ABI version, the machine, and — when the caller
 /// names one — the program it was built from.
 pub fn open(path: [:0]const u8, expect_hash: ?u64) OpenResult {
-    var library = std.DynLib.open(path) catch return .unopenable;
+    // A bare word is a *library name* to a platform loader, not a
+    // file: it is looked for where the system keeps libraries and
+    // never in the working directory.  `loom run sums.lc` means the
+    // file, so a path with no separator in it is spelled `./sums.lc`
+    // before the loader sees it.  (dyld happens to try the working
+    // directory last; nothing else does, and relying on that made
+    // `loom run sums.lc` a macOS-only spelling.)
+    var relative: [std.fs.max_path_bytes]u8 = undefined;
+    const named = if (std.mem.indexOfScalar(u8, path, std.fs.path.sep) != null)
+        path
+    else
+        std.fmt.bufPrintZ(&relative, ".{c}{s}", .{ std.fs.path.sep, path }) catch
+            return .unopenable;
+
+    var library = std.DynLib.open(named) catch return .unopenable;
     const tag = library.lookup(*const artifact.Artifact, artifact.symbol);
     if (artifact.check(tag, expect_hash)) |mismatch| {
         library.close();

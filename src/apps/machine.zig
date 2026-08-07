@@ -148,7 +148,7 @@ fn linuxAvailableMemory() ?i64 {
     // available, and the reason `MemAvailable` is asked for first.
     var info: std.os.linux.Sysinfo = undefined;
     const result = std.os.linux.sysinfo(&info);
-    if (std.os.linux.E.init(result) != .SUCCESS) return null;
+    if (std.os.linux.errno(result) != .SUCCESS) return null;
     const bytes = (@as(u64, info.freeram) + @as(u64, info.bufferram)) * info.mem_unit;
     return std.math.cast(i64, bytes);
 }
@@ -163,7 +163,7 @@ fn linuxAvailableMemory() ?i64 {
 fn readMemAvailable() ?u64 {
     const linux = std.os.linux;
     const opened = linux.open("/proc/meminfo", .{ .ACCMODE = .RDONLY }, 0);
-    if (linux.E.init(opened) != .SUCCESS) return null;
+    if (linux.errno(opened) != .SUCCESS) return null;
     const file: i32 = @intCast(opened);
     defer _ = linux.close(file);
 
@@ -171,7 +171,7 @@ fn readMemAvailable() ?u64 {
     // that has it, so one short read reaches it with room to spare.
     var text: [1024]u8 = undefined;
     const taken = linux.read(file, &text, text.len);
-    if (linux.E.init(taken) != .SUCCESS) return null;
+    if (linux.errno(taken) != .SUCCESS) return null;
 
     var lines = std.mem.splitScalar(u8, text[0..taken], '\n');
     while (lines.next()) |line| {

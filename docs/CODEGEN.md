@@ -47,6 +47,18 @@ symbols beyond `libluce_rt`.  That last claim is proved by the link
 itself, which is why linking is part of the shipped path rather than
 only of a test.
 
+`libluce_rt` in turn declares none beyond the C library — with one
+name worth saying out loud, because it decides a link line: float `%`
+is `fmod`, so the runtime calls the C math functions.  Darwin keeps
+them in libSystem and a bare `cc` link already has them; every other
+platform this builds for keeps them in a library of its own, so the
+link `luce` runs adds `-lm` there, and a link you write by hand out of
+`--emit=object` has to as well:
+
+```sh
+cc -o FILE FILE.o lib/libluce_start.a lib/libluce_rt.a -lm
+```
+
 ## Getting it to a person
 
 Three questions had to be answered, and the answers are all in
